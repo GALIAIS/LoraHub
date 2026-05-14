@@ -5,7 +5,7 @@ description = "Open-source LoRA training workbench for diffusion models"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "Apache-2.0" }
-authors = [{ name = "LoraHub Contributors" }]
+authors = [{ name = "GALIAIS", email = "GALIAIS@users.noreply.github.com" }]
 keywords = ["lora", "stable-diffusion", "sdxl", "kohya", "training", "ai"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -40,8 +40,10 @@ dev = [
 lorahub = "lorahub.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/lorahub/lorahub"
-Issues = "https://github.com/lorahub/lorahub/issues"
+Homepage = "https://github.com/GALIAIS/LoraHub"
+Repository = "https://github.com/GALIAIS/LoraHub"
+Issues = "https://github.com/GALIAIS/LoraHub/issues"
+Changelog = "https://github.com/GALIAIS/LoraHub/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling>=1.24"]

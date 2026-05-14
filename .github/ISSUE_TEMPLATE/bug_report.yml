@@ -1,0 +1,66 @@
+name: Bug report
+description: Something isn't working as expected
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. The fastest path to a fix is a minimal recipe + the exact command + the relevant lines from `events.jsonl`.
+
+  - type: input
+    id: version
+    attributes:
+      label: LoraHub version
+      placeholder: "0.1.0-dev0 (run `lorahub version`)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 10
+        - Windows 11
+        - Linux
+        - macOS
+        - WSL2
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU + driver
+      placeholder: "RTX 4070 Laptop, driver 596.36, 8GB"
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+      placeholder: "lorahub train my_recipe.yaml"
+    validations:
+      required: true
+
+  - type: textarea
+    id: recipe
+    attributes:
+      label: Recipe (or relevant excerpt)
+      render: yaml
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened (include error / events.jsonl tail)
+      render: shell
+    validations:
+      required: true

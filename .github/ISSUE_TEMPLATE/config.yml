@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/GALIAIS/LoraHub#readme
+    about: Quick start, install, and command reference live in the README.
+  - name: Discussions
+    url: https://github.com/GALIAIS/LoraHub/discussions
+    about: Questions, ideas, and recipes that aren't bugs go here.

@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new capability or improvement
+title: "[feature] "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What pain point or gap is driving this request?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Concrete behavior you'd like LoraHub to gain. Sketch the CLI/API surface if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Where would this live?
+      options:
+        - core (schema / events / backends)
+        - kohya backend
+        - CLI
+        - Web UI / API
+        - Recipes / templates
+        - Docs
+        - Other
