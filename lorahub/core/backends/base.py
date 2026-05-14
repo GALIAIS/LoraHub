@@ -11,8 +11,9 @@ import enum
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
+from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import TrainingEvent
 
 
@@ -61,10 +62,18 @@ class TrainingHandle:
     job_id: str
     pid: int | None = None
     _stop_fn: Callable[[bool], None] | None = field(default=None, repr=False)
+    _wait_fn: Callable[[float | None], int] | None = field(default=None, repr=False)
 
     def stop(self, *, graceful: bool = True) -> None:
         if self._stop_fn is not None:
             self._stop_fn(graceful)
+
+    def wait(self, timeout: float | None = None) -> int:
+        """Block until training exits and return the process returncode."""
+        if self._wait_fn is None:
+            msg = "this handle has no wait function"
+            raise RuntimeError(msg)
+        return self._wait_fn(timeout)
 
 
 @runtime_checkable
@@ -77,17 +86,17 @@ class TrainingBackend(Protocol):
     @property
     def supported_archs(self) -> set[ModelArch]: ...
 
-    def validate(self, cfg: dict[str, Any]) -> list[ValidationIssue]:
-        """Check config for errors before launching. `cfg` is the raw recipe dict."""
+    def validate(self, cfg: RecipeConfig) -> list[ValidationIssue]:
+        """Check config for errors before launching."""
         ...
 
-    def estimate_vram(self, cfg: dict[str, Any]) -> VRAMEstimate:
+    def estimate_vram(self, cfg: RecipeConfig) -> VRAMEstimate:
         """Estimate peak VRAM usage for the given config."""
         ...
 
     def launch(
         self,
-        cfg: dict[str, Any],
+        cfg: RecipeConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
     ) -> TrainingHandle:
