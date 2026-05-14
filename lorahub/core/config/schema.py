@@ -95,6 +95,8 @@ class OutputConfig(BaseModel):
 class BackendConfig(BaseModel):
     type: Literal["kohya", "diffusers"] = "kohya"
     pin_version: str | None = None
+    sd_scripts_path: Path | None = None
+    python_executable: Path | None = None
     extra_args: dict[str, Any] = Field(default_factory=dict)
 
 

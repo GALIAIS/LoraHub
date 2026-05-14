@@ -1,0 +1,85 @@
+"""Tests for kohya bootstrap (path resolution + health checks)."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+from lorahub.core.backends.kohya.bootstrap import (
+    BootstrapError,
+    KohyaEnv,
+    default_sd_scripts_path,
+    resolve,
+)
+
+
+def _make_fake_sd_scripts(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "train_network.py").write_text("# stub\n", encoding="utf-8")
+    (root / "sdxl_train_network.py").write_text("# stub\n", encoding="utf-8")
+    return root
+
+
+def test_resolve_with_explicit_recipe_path(tmp_path: Path) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    env = resolve(recipe_path=sd)
+    assert isinstance(env, KohyaEnv)
+    assert env.sd_scripts_path == sd.resolve()
+    assert env.python_executable == Path(sys.executable).resolve()
+
+
+def test_resolve_with_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    monkeypatch.setenv("LORAHUB_KOHYA_SD_SCRIPTS", str(sd))
+    env = resolve()
+    assert env.sd_scripts_path == sd.resolve()
+
+
+def test_recipe_path_overrides_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sd_a = _make_fake_sd_scripts(tmp_path / "a")
+    sd_b = _make_fake_sd_scripts(tmp_path / "b")
+    monkeypatch.setenv("LORAHUB_KOHYA_SD_SCRIPTS", str(sd_a))
+    env = resolve(recipe_path=sd_b)
+    assert env.sd_scripts_path == sd_b.resolve()
+
+
+def test_missing_path_gives_actionable_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
+    nonexistent = tmp_path / "nope"
+    with pytest.raises(BootstrapError, match="not found"):
+        resolve(recipe_path=nonexistent)
+
+
+def test_incomplete_checkout_rejected(tmp_path: Path) -> None:
+    sd = tmp_path / "sd-scripts"
+    sd.mkdir()
+    (sd / "train_network.py").write_text("# stub", encoding="utf-8")
+    with pytest.raises(BootstrapError, match="missing required files"):
+        resolve(recipe_path=sd)
+
+
+def test_invalid_python_executable_rejected(tmp_path: Path) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    bogus = tmp_path / "no_python"
+    with pytest.raises(BootstrapError, match="not found"):
+        resolve(recipe_path=sd, recipe_python=bogus)
+
+
+def test_kohya_env_script_returns_absolute_path(tmp_path: Path) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    env = resolve(recipe_path=sd)
+    script = env.script("sdxl_train_network.py")
+    assert script.is_absolute()
+    assert script.exists()
+
+
+def test_default_sd_scripts_path_is_under_user_data() -> None:
+    p = default_sd_scripts_path()
+    assert p.name == "sd-scripts"
+    assert "lorahub" in str(p).lower()
