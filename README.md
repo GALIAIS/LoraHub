@@ -25,19 +25,21 @@ LoraHub wraps mature training backends (currently [kohya-ss/sd-scripts](https://
 
 ## Status
 
-**Pre-alpha (v0.1).** What works today:
+**Pre-alpha (v0.2 workbench).** What works today:
 
 - Semantic recipe schema (Pydantic) → kohya argv compiler
-- KohyaBackend with subprocess management and structured event stream
-- CLI: `init`, `validate`, `info`, `train`, `version`
-- 60+ tests covering compiler, parser, runner, backend, CLI
+- KohyaBackend with subprocess management, SQLite job history, and event streaming
+- CLI: `init`, `bootstrap-kohya`, `fetch-bangumi`, `tag`, `validate`, `info`, `train`, `serve`, `version`
+- FastAPI server with settings, recipe browsing/editing, job CRUD, and WebSocket streams
+- React web UI for dashboard, jobs, recipes, visual recipe editing, and workbench settings
+- 140+ tests covering schema, compiler, parser, runner, backend, API, store, CLI, and tagger
 
 Not yet:
 
-- Web UI (planned for v0.2)
-- Dataset management & auto-tagging (v0.3 / v0.4)
-- Job queue & multi-GPU (v0.5)
-- Self-bootstrapping kohya install (today you point at an existing checkout)
+- Dataset management UI: import, thumbnails, and caption editor
+- Web auto-tagging workflow on top of the existing WD14 CLI/tagger
+- Job queue, multi-GPU scheduling, and resume orchestration
+- DiffusersBackend and non-kohya training backends
 
 See [Roadmap](#roadmap) for the full picture.
 
@@ -185,17 +187,21 @@ pip install lorahub[api]
 lorahub serve --port 18765
 ```
 
-Endpoints:
+Endpoints live under `/api`:
 
-- `GET /health` — server status + version
-- `GET /recipes/schema` — recipe JSON Schema (use it to render UI forms)
-- `GET /jobs` / `GET /jobs/{id}` — list / inspect training jobs
-- `POST /jobs` `{recipe, workspace?}` — start a job
-- `DELETE /jobs/{id}` — stop a running job
-- `GET /jobs/{id}/events` — recent events from the in-memory ring buffer
-- `WS /jobs/{id}/stream` — live event stream (replays the buffer first)
+- `GET /api/health` — server status, version, and backend probe
+- `GET /api/settings` / `PUT /api/settings` — workbench defaults for kohya and tagger device
+- `GET /api/recipes/schema` — recipe JSON Schema used by the visual editor
+- `GET /api/recipes` / `GET /api/recipes/{name}` — list and inspect recipe YAML files
+- `POST /api/recipes/validate` — validate an in-memory recipe and return field errors
+- `POST /api/recipes` — save a validated recipe to `recipes/<name>.yaml`
+- `GET /api/jobs` / `GET /api/jobs/{id}` — list / inspect training jobs
+- `POST /api/jobs` `{recipe, workspace?}` — start a job
+- `DELETE /api/jobs/{id}` — stop a running job
+- `GET /api/jobs/{id}/events` — recent events from the in-memory ring buffer
+- `WS /api/jobs/{id}/stream` — live event stream (replays the buffer first)
 
-The API binds to `127.0.0.1` by default and has no auth — safe for localhost only. Persistence (SQLite/Redis) and a Vue 3 frontend land in the next v0.2.x releases.
+The API binds to `127.0.0.1` by default and has no auth — safe for localhost only. Job metadata persists to SQLite at `runs/.lorahub.sqlite`; live handles and the recent event ring remain process-local.
 
 ## Project layout
 
@@ -207,7 +213,7 @@ lorahub/
     events.py    Structured training event bus + JSONL persistence
   cli/           typer + rich command line
   api/           FastAPI (v0.2+)
-  web/           Vue3 UI (v0.2+)
+  web/           React UI (v0.2+)
 recipes/         Built-in recipe library
 tests/           pytest suite
 ```
@@ -217,7 +223,7 @@ tests/           pytest suite
 | Version | Scope                                                                |
 | ------- | -------------------------------------------------------------------- |
 | v0.1    | CLI tracer bullet: recipe → kohya → LoRA file (this release)         |
-| v0.2    | FastAPI + minimal Vue UI, single-task form                            |
+| v0.2    | FastAPI + minimal React UI, recipe editor, settings, job monitor        |
 | v0.3    | Dataset module: import, thumbnails, caption editor                   |
 | v0.4    | Auto-taggers: WD14, JoyTag                                            |
 | v0.5    | Job queue + multi-GPU + resume from checkpoint                       |
