@@ -1021,3 +1021,122 @@ def test_import_recipe_from_yaml(
     # The persisted file is canonical YAML emitted by dump_recipe; just confirm
     # it loads back to an equivalent RecipeConfig.
     assert saved.read_text(encoding="utf-8").startswith("schema_version")
+
+
+# --------------------------------------------------------------------------- #
+# Backend catalog + multi-backend selection
+# --------------------------------------------------------------------------- #
+
+
+def test_get_backends_lists_kohya_and_diffusion_pipe(client: TestClient) -> None:
+    r = client.get("/api/backends")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    ids = [b["id"] for b in body["backends"]]
+    assert "kohya" in ids
+    assert "diffusion-pipe" in ids
+    # Default is kohya until the user picks otherwise.
+    assert body["default"] == "kohya"
+    # Each entry exposes UI metadata + a probe payload the UI can render.
+    for entry in body["backends"]:
+        for key in ("name", "description", "repo_url", "default_path", "ready", "status"):
+            assert key in entry, f"missing backend key {key} in {entry['id']}"
+
+
+def test_settings_can_set_default_backend(client: TestClient) -> None:
+    r = client.put("/api/settings", json={"default_backend": "diffusion-pipe"})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["default_backend"] == "diffusion-pipe"
+
+    # Round-trip: GET reflects the persisted choice.
+    r2 = client.get("/api/settings")
+    assert r2.json()["settings"]["default_backend"] == "diffusion-pipe"
+    # /api/backends advertises the same default.
+    assert client.get("/api/backends").json()["default"] == "diffusion-pipe"
+
+
+def test_settings_rejects_unknown_backend(client: TestClient) -> None:
+    r = client.put("/api/settings", json={"default_backend": "invalid"})
+    assert r.status_code == 422
+
+
+def test_bootstrap_with_diffusion_pipe_backend(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issuing a bootstrap with backend='diffusion-pipe' walks to succeeded."""
+    import time
+    from lorahub.api import app as app_mod
+    from lorahub.api.bootstrap_session import BootstrapRequest
+
+    captured: dict[str, Any] = {}
+
+    def builder(req: BootstrapRequest) -> Any:
+        captured["backend"] = req.backend
+
+        def runner(progress: Any) -> None:
+            progress("clone diffusion-pipe")
+            progress("install deepspeed")
+
+        return runner
+
+    monkeypatch.setattr(app_mod, "_build_bootstrap_runner", builder)
+
+    r = client.post(
+        "/api/backend/bootstrap",
+        json={"backend": "diffusion-pipe"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["backend"] == "diffusion-pipe"
+    assert captured["backend"] == "diffusion-pipe"
+
+    deadline = time.time() + 5
+    final: dict[str, Any] | None = None
+    while time.time() < deadline:
+        body = client.get("/api/backend/bootstrap/status").json()
+        if body["status"] in ("succeeded", "failed"):
+            final = body
+            break
+        time.sleep(0.05)
+
+    assert final is not None and final["status"] == "succeeded", final
+    assert final["backend"] == "diffusion-pipe"
+    levels = [e["level"] for e in final["events"]]
+    assert levels[-1] == "done"
+    # The completion message names the chosen backend.
+    assert "diffusion-pipe" in final["events"][-1]["message"]
+
+
+def test_recipe_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path) -> None:
+    """A recipe using backend.type='diffusion-pipe' must validate cleanly."""
+    recipe = _valid_recipe_dict(tmp_path)
+    recipe["backend"] = {"type": "diffusion-pipe"}
+
+    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["valid"] is True
+    assert body["normalized"]["backend"]["type"] == "diffusion-pipe"
+
+
+def test_diffusion_pipe_launch_raises_not_implemented(tmp_path: Path) -> None:
+    """The backend's launch() is intentionally unwired in v0.2."""
+    from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
+    from lorahub.core.config.schema import RecipeConfig
+
+    ckpt = tmp_path / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = tmp_path / "data"
+    data.mkdir()
+    cfg = RecipeConfig.model_validate(
+        {
+            "base_model": {"arch": "sdxl", "checkpoint": str(ckpt)},
+            "dataset": {"source": str(data)},
+            "schedule": {"epochs": 1, "batch_size": 1},
+            "sampling": {"enabled": False},
+            "backend": {"type": "diffusion-pipe"},
+        }
+    )
+
+    backend = DiffusionPipeBackend()
+    with pytest.raises(NotImplementedError, match="v0.3"):
+        backend.launch(cfg, tmp_path / "ws", on_event=lambda _ev: None)

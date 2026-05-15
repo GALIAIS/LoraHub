@@ -15,13 +15,19 @@ from pathlib import Path
 
 from platformdirs import user_data_path
 
+from lorahub.core.backends.errors import BootstrapError
+
 _ENV_SD_SCRIPTS = "LORAHUB_KOHYA_SD_SCRIPTS"
 _ENV_PYTHON = "LORAHUB_KOHYA_PYTHON"
 _REQUIRED_SCRIPTS = ("train_network.py", "sdxl_train_network.py")
 
 
-class BootstrapError(RuntimeError):
-    """Raised when the kohya backend cannot be located or is incomplete."""
+__all__ = [
+    "BootstrapError",
+    "KohyaEnv",
+    "default_sd_scripts_path",
+    "resolve",
+]
 
 
 @dataclass(frozen=True, slots=True)

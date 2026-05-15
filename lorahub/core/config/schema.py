@@ -93,7 +93,7 @@ class OutputConfig(BaseModel):
 
 
 class BackendConfig(BaseModel):
-    type: Literal["kohya", "diffusers"] = "kohya"
+    type: Literal["kohya", "diffusion-pipe"] = "kohya"
     pin_version: str | None = None
     sd_scripts_path: Path | None = None
     python_executable: Path | None = None

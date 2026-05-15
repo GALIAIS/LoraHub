@@ -14,18 +14,20 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 
 class BootstrapRequest(BaseModel):
+    backend: Literal["kohya", "diffusion-pipe"] = "kohya"
     target: str | None = None
     cuda: str = "cu124"
     torch_version: str = "2.6.0"
     torchvision_version: str = "0.21.0"
     install_xformers: bool = True
+    install_deepspeed: bool = True
     force: bool = False
 
 
@@ -42,8 +44,9 @@ class _BootstrapSession:
     _STATUS_SUCCEEDED = "succeeded"
     _STATUS_FAILED = "failed"
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, backend: str = "kohya") -> None:
         self.session_id = session_id
+        self.backend = backend
         self.status: str = self._STATUS_RUNNING
         self.events: list[dict[str, Any]] = []
         self._listeners: list[asyncio.Queue[dict[str, Any]]] = []
@@ -70,6 +73,7 @@ class _BootstrapSession:
             return {
                 "status": self.status,
                 "session_id": self.session_id,
+                "backend": self.backend,
                 "events": list(self.events),
             }
 
@@ -93,7 +97,7 @@ class _BootstrapSession:
             self._emit("error", step, message=str(exc))
             self._finalize(self._STATUS_FAILED)
             return
-        self._emit("done", "complete", message="kohya backend installed")
+        self._emit("done", "complete", message=f"{self.backend} backend installed")
         self._finalize(self._STATUS_SUCCEEDED)
 
     def _emit(self, level: str, step: str, *, message: str) -> None:
@@ -130,11 +134,19 @@ class _BootstrapSession:
 def default_build_bootstrap_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
-    """Produce a (progress_cb -> None) closure that runs the kohya installer.
+    """Produce a (progress_cb -> None) closure that runs the chosen installer.
 
     Factored out so tests can monkeypatch this builder with a stub runner that
     doesn't touch the network or the filesystem.
     """
+    if req.backend == "diffusion-pipe":
+        return _build_diffusion_pipe_runner(req)
+    return _build_kohya_runner(req)
+
+
+def _build_kohya_runner(
+    req: BootstrapRequest,
+) -> Callable[[Callable[[str], None]], None]:
     from lorahub.core.backends.kohya import installer  # noqa: PLC0415
 
     target_path = (
@@ -148,6 +160,40 @@ def default_build_bootstrap_runner(
         torch_version=req.torch_version,
         torchvision_version=req.torchvision_version,
         install_xformers=req.install_xformers,
+    )
+    if plan.target.exists() and any(plan.target.iterdir()):
+        if not req.force:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"target {plan.target} is not empty; "
+                    "pass force=true to wipe it first."
+                ),
+            )
+        installer.cleanup_partial(plan)
+
+    def runner(progress: Callable[[str], None]) -> None:
+        installer.bootstrap(plan, progress=progress)
+
+    return runner
+
+
+def _build_diffusion_pipe_runner(
+    req: BootstrapRequest,
+) -> Callable[[Callable[[str], None]], None]:
+    from lorahub.core.backends.diffusion_pipe import installer  # noqa: PLC0415
+
+    target_path = (
+        Path(req.target).expanduser().resolve()
+        if req.target
+        else (Path.cwd() / "diffusion-pipe").resolve()
+    )
+    plan = installer.BootstrapPlan(
+        target=target_path,
+        cuda_version=req.cuda,
+        torch_version=req.torch_version,
+        torchvision_version=req.torchvision_version,
+        install_deepspeed=req.install_deepspeed,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:

@@ -56,5 +56,5 @@ export const CAPTION_STRATEGY_OPTIONS = [
 
 export const BACKEND_OPTIONS = [
   { value: "kohya", label: "kohya-ss/sd-scripts" },
-  { value: "diffusers", label: "🤗 diffusers (planned)" },
+  { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe (scaffold)" },
 ] as const

@@ -31,7 +31,7 @@ export const BackendFields = memo(function BackendFields({
             onChange={(t) => set(["backend", "type"], t)}
             options={BACKEND_OPTIONS}
           />
-          {v.type === "diffusers" && (
+          {v.type === "diffusion-pipe" && (
             <Badge variant="outline" className="rounded-[2px] uppercase text-[10px]">
               v0.3
             </Badge>

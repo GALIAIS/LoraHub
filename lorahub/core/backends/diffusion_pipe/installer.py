@@ -1,9 +1,9 @@
-"""Automate the kohya-ss/sd-scripts install — clone + venv + PyTorch + requirements + xformers.
+"""Automate the tdrussell/diffusion-pipe install: clone + venv + requirements + deepspeed.
 
-Mirrors the steps from kohya's official Windows README so users don't have to
-shell out themselves. Each step is a stand-alone function that runs a single
-subprocess; on failure the exception bubbles up with the failing step name so
-callers can show a clear error.
+Mirrors the public surface of `lorahub.core.backends.kohya.installer` so the
+bootstrap session can drive either backend with the same plumbing. Each step
+runs a single subprocess; failure raises `BootstrapError` annotated with the
+step name and exit code.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from lorahub.core.backends.errors import BootstrapError
 
-KOHYA_REPO_URL = "https://github.com/kohya-ss/sd-scripts.git"
+DIFFUSION_PIPE_REPO_URL = "https://github.com/tdrussell/diffusion-pipe.git"
 DEFAULT_TORCH = "2.6.0"
 DEFAULT_TORCHVISION = "0.21.0"
 DEFAULT_CUDA = "cu124"
@@ -30,7 +30,7 @@ class BootstrapPlan:
     cuda_version: str = DEFAULT_CUDA
     torch_version: str = DEFAULT_TORCH
     torchvision_version: str = DEFAULT_TORCHVISION
-    install_xformers: bool = True
+    install_deepspeed: bool = True
     git_depth: int = DEFAULT_DEPTH
 
     @property
@@ -65,10 +65,10 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
         "clone",
         "--depth",
         str(plan.git_depth),
-        KOHYA_REPO_URL,
+        DIFFUSION_PIPE_REPO_URL,
         str(plan.target),
     ]
-    _run(cmd, f"clone kohya-ss/sd-scripts -> {plan.target}", progress)
+    _run(cmd, f"clone tdrussell/diffusion-pipe -> {plan.target}", progress)
 
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -77,7 +77,16 @@ def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None
 
 
 def upgrade_pip(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [str(plan.venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"]
+    cmd = [
+        str(plan.venv_python),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "pip",
+        "wheel",
+        "setuptools",
+    ]
     _run(cmd, "upgrade pip + wheel + setuptools", progress)
 
 
@@ -109,22 +118,14 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
         "-r",
         str(requirements),
     ]
-    _run(cmd, "install kohya requirements.txt", progress)
+    _run(cmd, "install diffusion-pipe requirements.txt", progress)
 
 
-def install_xformers(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    if not plan.install_xformers:
+def install_deepspeed(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
+    if not plan.install_deepspeed:
         return
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
-        "xformers",
-        "--index-url",
-        plan.torch_index,
-    ]
-    _run(cmd, f"install xformers ({plan.cuda_version})", progress)
+    cmd = [str(plan.venv_python), "-m", "pip", "install", "deepspeed"]
+    _run(cmd, "install deepspeed", progress)
 
 
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -134,10 +135,25 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
     upgrade_pip(plan, progress=progress)
     install_torch(plan, progress=progress)
     install_requirements(plan, progress=progress)
-    install_xformers(plan, progress=progress)
+    install_deepspeed(plan, progress=progress)
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
     """Remove a half-installed target so the user can retry."""
     if plan.target.exists():
         shutil.rmtree(plan.target, ignore_errors=True)
+
+
+__all__ = [
+    "BootstrapError",
+    "BootstrapPlan",
+    "DIFFUSION_PIPE_REPO_URL",
+    "bootstrap",
+    "cleanup_partial",
+    "clone",
+    "create_venv",
+    "install_deepspeed",
+    "install_requirements",
+    "install_torch",
+    "upgrade_pip",
+]

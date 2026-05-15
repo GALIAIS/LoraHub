@@ -43,9 +43,13 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
         # Resolve the runner first — this validates the target dir before we
         # spin a thread. HTTPException raised here surfaces as a 4xx directly.
         runner = app_module._build_bootstrap_runner(req)
-        sess = _BootstrapSession(session_id=str(ulid_new()))
+        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
         app_module._bootstrap_session = sess
 
     loop = asyncio.get_running_loop()
     sess.start(runner, loop)
-    return {"session_id": sess.session_id, "status": sess.status}
+    return {
+        "session_id": sess.session_id,
+        "status": sess.status,
+        "backend": sess.backend,
+    }

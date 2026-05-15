@@ -1,9 +1,10 @@
 """User-level Settings store.
 
-Persists workbench-wide defaults (kohya checkout, python, tagger device) to a
-single JSON file under the user's data directory. Env vars (LORAHUB_KOHYA_*)
-still take precedence at recipe-launch time — Settings are the *fallback*
-defaults the UI lets users override without touching their shell config.
+Persists workbench-wide defaults (per-backend checkout + python, default
+backend choice, tagger device) to a single JSON file under the user's data
+directory. Env vars (LORAHUB_*) still take precedence at recipe-launch
+time -- Settings are the *fallback* defaults the UI lets users override
+without touching their shell config.
 """
 
 from __future__ import annotations
@@ -16,13 +17,24 @@ from typing import Any
 
 from platformdirs import user_data_path
 
+from lorahub.core.backends.registry import known_ids
+
 
 @dataclass
 class Settings:
     """User-configurable defaults applied when a recipe doesn't specify them."""
 
+    # kohya backend
     sd_scripts_path: str | None = None
     python_executable: str | None = None
+
+    # diffusion-pipe backend
+    diffusion_pipe_repo_path: str | None = None
+    diffusion_pipe_python: str | None = None
+
+    # Which backend the UI defaults to when starting a fresh recipe.
+    default_backend: str = "kohya"
+
     tagger_device: str = "auto"  # "auto" | "cpu" | "cuda"
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -69,14 +81,14 @@ class SettingsStore:
         tmp.replace(self.path)
 
 
-def probe_backend(settings: Settings) -> dict[str, Any]:
-    """Inspect whether the configured kohya checkout looks usable.
+# --------------------------------------------------------------------------- #
+# Per-backend probes (pure read-only; never raise).
+# --------------------------------------------------------------------------- #
 
-    Pure read-only — never raises. Returns a dict the UI can render directly:
-        { sd_scripts_path, sd_scripts_ok, python, python_ok, venv_detected,
-          missing_scripts, source }
-    """
-    from lorahub.core.backends.kohya.bootstrap import (
+
+def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
+    """Inspect whether the configured kohya checkout looks usable."""
+    from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
         _ENV_PYTHON,
         _ENV_SD_SCRIPTS,
         _REQUIRED_SCRIPTS,
@@ -92,9 +104,11 @@ def probe_backend(settings: Settings) -> dict[str, Any]:
     sd_path = Path(sd_raw).expanduser()
 
     sd_ok = sd_path.is_dir()
-    missing = [
-        s for s in _REQUIRED_SCRIPTS if not (sd_path / s).is_file()
-    ] if sd_ok else list(_REQUIRED_SCRIPTS)
+    missing = (
+        [s for s in _REQUIRED_SCRIPTS if not (sd_path / s).is_file()]
+        if sd_ok
+        else list(_REQUIRED_SCRIPTS)
+    )
 
     py_raw = (
         os.environ.get(_ENV_PYTHON)
@@ -112,14 +126,97 @@ def probe_backend(settings: Settings) -> dict[str, Any]:
         source = "default"
 
     return {
+        "id": "kohya",
         "sd_scripts_path": str(sd_path),
         "sd_scripts_ok": sd_ok and not missing,
         "missing_scripts": missing,
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
         "venv_detected": _venv_python(sd_path) is not None if sd_ok else False,
+        "ready": (sd_ok and not missing) and py_ok,
         "source": source,
     }
 
 
-__all__ = ["Settings", "SettingsStore", "default_settings_path", "probe_backend"]
+def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
+    """Inspect whether the configured diffusion-pipe checkout looks usable."""
+    from lorahub.core.backends.diffusion_pipe.bootstrap import (  # noqa: PLC0415
+        _ENV_PYTHON,
+        _ENV_REPO,
+        _REQUIRED_FILES,
+        _venv_python,
+        default_repo_path,
+    )
+
+    repo_raw = (
+        os.environ.get(_ENV_REPO)
+        or settings.diffusion_pipe_repo_path
+        or str(default_repo_path())
+    )
+    repo_path = Path(repo_raw).expanduser()
+
+    repo_ok = repo_path.is_dir()
+    missing = (
+        [f for f in _REQUIRED_FILES if not (repo_path / f).is_file()]
+        if repo_ok
+        else list(_REQUIRED_FILES)
+    )
+
+    py_raw = (
+        os.environ.get(_ENV_PYTHON)
+        or settings.diffusion_pipe_python
+        or (str(_venv_python(repo_path)) if _venv_python(repo_path) else None)
+    )
+    py_path = Path(py_raw).expanduser() if py_raw else None
+    py_ok = bool(py_path and py_path.is_file())
+
+    if os.environ.get(_ENV_REPO):
+        source = "env"
+    elif settings.diffusion_pipe_repo_path:
+        source = "settings"
+    else:
+        source = "default"
+
+    return {
+        "id": "diffusion-pipe",
+        "repo_path": str(repo_path),
+        "repo_ok": repo_ok and not missing,
+        "missing_files": missing,
+        "python": str(py_path) if py_path else None,
+        "python_ok": py_ok,
+        "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
+        "ready": (repo_ok and not missing) and py_ok,
+        "source": source,
+    }
+
+
+def probe_all_backends(settings: Settings) -> dict[str, dict[str, Any]]:
+    """Return a probe payload for every backend in the registry."""
+    return {
+        "kohya": probe_kohya_backend(settings),
+        "diffusion-pipe": probe_diffusion_pipe_backend(settings),
+    }
+
+
+def probe_backend(settings: Settings) -> dict[str, Any]:
+    """Backwards-compatible probe -- returns the kohya status payload.
+
+    Kept so legacy callers (notably `/api/health`) keep working without
+    every site having to opt in to the multi-backend payload at once.
+    """
+    return probe_kohya_backend(settings)
+
+
+VALID_BACKEND_IDS: frozenset[str] = frozenset(known_ids())
+
+
+__all__ = [
+    "Settings",
+    "SettingsStore",
+    "VALID_BACKEND_IDS",
+    "default_settings_path",
+    "probe_all_backends",
+    "probe_backend",
+    "probe_diffusion_pipe_backend",
+    "probe_kohya_backend",
+]
