@@ -1,8 +1,53 @@
 import { useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { api, type JobSummary, type TrainingEvent } from "@/lib/api"
+import {
+  api,
+  useSystemStream,
+  type JobSummary,
+  type TrainingEvent,
+} from "@/lib/api"
 import { Stat } from "./stat"
+import {
+  EtaTile,
+  GpuLiveTile,
+  LossTrendTile,
+  ThroughputTile,
+} from "./realtime-tile"
 import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES } from "../utils"
+
+const THROUGHPUT_WINDOW = 60
+const LOSS_WINDOW = 100
+
+interface StepSample {
+  step: number
+  ts: number
+  totalSteps: number | null
+  loss: number | null
+}
+
+function extractStepSamples(events: TrainingEvent[]): StepSample[] {
+  const out: StepSample[] = []
+  for (const e of events) {
+    if (e.type !== "step") continue
+    const p = e.payload
+    const step = typeof p.step === "number" ? p.step : null
+    if (step === null) continue
+    const total = typeof p.total_steps === "number" ? p.total_steps : null
+    const loss = typeof p.loss === "number" ? p.loss : null
+    out.push({ step, ts: e.timestamp, totalSteps: total, loss })
+  }
+  return out
+}
+
+function computeItPerSec(samples: StepSample[]): number | null {
+  if (samples.length < 2) return null
+  const first = samples[0]
+  const last = samples[samples.length - 1]
+  const dSteps = last.step - first.step
+  const dT = last.ts - first.ts
+  if (dT <= 0 || dSteps <= 0) return null
+  return dSteps / dT
+}
 
 export function OverviewTab({
   jobId,
@@ -13,11 +58,18 @@ export function OverviewTab({
   job: JobSummary | undefined
   events: TrainingEvent[]
 }) {
+  const isTerminal = job ? TERMINAL_STATES.has(job.state) : false
+  const isRunning = job?.state === "running"
+
+  // Telemetry stream stays open whenever the user is on this tab so the cards
+  // refresh without waiting for a poll. Only opening it for live jobs would
+  // cost us a fresh handshake every time the job restarts.
+  const system = useSystemStream(true)
+
   const lastStep = useMemo(
     () => [...events].reverse().find((e) => e.type === "step"),
     [events],
   )
-  const isTerminal = job ? TERMINAL_STATES.has(job.state) : false
 
   // Metrics (first/last step ts, duration) are only meaningful once at least
   // one step has been recorded. Refetch while live so the panel stays fresh.
@@ -28,6 +80,91 @@ export function OverviewTab({
   })
 
   const m = metrics.data
+
+  const stepSamples = useMemo(() => extractStepSamples(events), [events])
+  const recentStepSamples = useMemo(
+    () =>
+      stepSamples.length <= THROUGHPUT_WINDOW
+        ? stepSamples
+        : stepSamples.slice(stepSamples.length - THROUGHPUT_WINDOW),
+    [stepSamples],
+  )
+
+  // Compute per-window it/s by sliding across the recent samples; this gives
+  // the sparkline some shape rather than a flat line at the running average.
+  const throughputHistory = useMemo(() => {
+    const out: number[] = []
+    if (recentStepSamples.length < 4) return out
+    const span = 4
+    for (let i = span; i < recentStepSamples.length; i += 1) {
+      const slice = recentStepSamples.slice(i - span, i + 1)
+      const v = computeItPerSec(slice)
+      if (v !== null) out.push(v)
+    }
+    return out
+  }, [recentStepSamples])
+
+  const itPerSecRecent = computeItPerSec(recentStepSamples)
+  const itPerSecAvg = computeItPerSec(stepSamples)
+
+  // ETA only makes sense once the recipe declared a total, otherwise we'd be
+  // dividing by zero. We prefer the most recent total_steps in case it grew.
+  const totalSteps = useMemo(() => {
+    for (let i = stepSamples.length - 1; i >= 0; i -= 1) {
+      const v = stepSamples[i].totalSteps
+      if (typeof v === "number" && v > 0) return v
+    }
+    return null
+  }, [stepSamples])
+
+  const currentStep =
+    stepSamples.length > 0 ? stepSamples[stepSamples.length - 1].step : null
+
+  const etaSeconds = useMemo(() => {
+    if (!isRunning) return null
+    if (itPerSecRecent === null || itPerSecRecent <= 0) return null
+    if (currentStep === null || totalSteps === null) return null
+    const remaining = totalSteps - currentStep
+    if (remaining <= 0) return 0
+    return remaining / itPerSecRecent
+  }, [isRunning, itPerSecRecent, currentStep, totalSteps])
+
+  const lossHistory = useMemo(() => {
+    const all = stepSamples
+      .map((s) => s.loss)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+    return all.length <= LOSS_WINDOW
+      ? all
+      : all.slice(all.length - LOSS_WINDOW)
+  }, [stepSamples])
+
+  const latestLoss = lossHistory.length
+    ? lossHistory[lossHistory.length - 1]
+    : null
+
+  const liveGpu = system.snapshot?.gpus?.[0] ?? null
+
+  // Final-stats tile values are derived once the run is done; they intentionally
+  // ignore the live stream so a re-render doesn't perturb completed numbers.
+  const finalDuration = m?.duration_s ?? null
+  const finalThroughput = useMemo(() => {
+    if (
+      m?.first_step_ts &&
+      m?.last_step_ts &&
+      m.last_step_ts > m.first_step_ts &&
+      m.loss.length > 1
+    ) {
+      const dT = m.last_step_ts - m.first_step_ts
+      const dSteps = m.loss[m.loss.length - 1].step - m.loss[0].step
+      if (dT > 0 && dSteps > 0) return dSteps / dT
+    }
+    return null
+  }, [m])
+  const finalLoss = useMemo(() => {
+    if (!m || m.loss.length === 0) return null
+    const last = m.loss[m.loss.length - 1].loss
+    return typeof last === "number" ? last : null
+  }, [m])
 
   return (
     <div className="space-y-5">
@@ -52,6 +189,51 @@ export function OverviewTab({
           }
         />
       </div>
+
+      {isRunning ? (
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
+            实时
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            <GpuLiveTile gpu={liveGpu} active={isRunning} />
+            <ThroughputTile
+              itPerSecRecent={itPerSecRecent}
+              itPerSecAvg={itPerSecAvg}
+              history={throughputHistory}
+            />
+            <EtaTile
+              etaSeconds={etaSeconds}
+              step={currentStep}
+              totalSteps={totalSteps}
+            />
+            <LossTrendTile history={lossHistory} latest={latestLoss} />
+          </div>
+        </div>
+      ) : isTerminal ? (
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
+            最终统计
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Stat label="总用时" value={fmtDuration(finalDuration)} />
+            <Stat
+              label="平均吞吐"
+              value={
+                finalThroughput !== null
+                  ? `${finalThroughput.toFixed(2)} it/s`
+                  : "—"
+              }
+            />
+            <Stat
+              label="最终损失"
+              value={
+                typeof finalLoss === "number" ? finalLoss.toFixed(4) : "—"
+              }
+            />
+          </div>
+        </div>
+      ) : null}
 
       <div>
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
