@@ -166,7 +166,15 @@ lorahub tag ./datasets/akagi --overwrite --general 0.45
 lorahub tag ./datasets/akagi --no-include-character
 ```
 
-The first run downloads ~400 MB of ONNX weights from Hugging Face (cached for subsequent runs). CPU inference is the default — usable for hundreds of images at ~1 s/image; switch to `onnxruntime-gpu` and pass a CUDA provider if you need batch throughput.
+The first run downloads ~400 MB of ONNX weights from Hugging Face (cached for subsequent runs). CPU inference handles hundreds of images at ~1 s/image; for batch throughput install the GPU runtime:
+
+```powershell
+pip uninstall onnxruntime
+pip install lorahub[gpu]              # or: pip install onnxruntime-gpu
+lorahub tag ./datasets/akagi --device cuda
+```
+
+`--device auto` picks GPU when `onnxruntime-gpu` and a CUDA 12.x runtime are present, otherwise falls back to CPU. `--device cuda` forces GPU and errors out with an actionable message if it isn't available.
 
 ## Project layout
 

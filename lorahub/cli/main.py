@@ -310,9 +310,16 @@ def tag(
             help="Include character tags in the caption. Default on.",
         ),
     ] = True,
+    device: Annotated[
+        str,
+        typer.Option(
+            "--device",
+            help="ONNX runtime: 'auto' (CUDA if available), 'cuda' (force GPU), or 'cpu'.",
+        ),
+    ] = "auto",
 ) -> None:
     """Auto-tag images with WD14 / WD-v3 and write kohya-style .txt captions."""
-    from lorahub.core.tagging.wd14 import WD14Tagger
+    from lorahub.core.tagging.wd14 import CudaUnavailableError, WD14Tagger
 
     if not directory.is_dir():
         err_console.print(f"[red]not a directory: {directory}[/red]")
@@ -322,10 +329,16 @@ def tag(
         model_id=model,
         general_threshold=general_threshold,
         character_threshold=character_threshold,
+        device=device,
     )
 
     console.print(f"[dim]loading {model} (first run downloads ~400MB)...[/dim]")
-    tagger.load()
+    try:
+        tagger.load()
+    except CudaUnavailableError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1) from e
+    console.print(f"[dim]running on {tagger.active_provider}[/dim]")
 
     def _on_progress(path: Path, _result: object) -> None:
         console.print(f"[dim]tagged[/dim] {path.name}")

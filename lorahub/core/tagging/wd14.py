@@ -27,6 +27,40 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _RATING_CATEGORY = 9
 _GENERAL_CATEGORY = 0
 _CHARACTER_CATEGORY = 4
+_CUDA_PROVIDER = "CUDAExecutionProvider"
+_CPU_PROVIDER = "CPUExecutionProvider"
+
+
+class CudaUnavailableError(RuntimeError):
+    """Raised when CUDA execution was requested explicitly but isn't available."""
+
+
+def _resolve_providers(device: str, available: list[str]) -> list[str]:
+    """Translate `device` ('auto'/'cpu'/'cuda') into an ONNX providers list.
+
+    `available` is what `ort.get_available_providers()` returns; we return a
+    list ordered by priority. CUDA falls through to CPU automatically in auto
+    mode, but raises in explicit `cuda` mode so the user notices a missing
+    `onnxruntime-gpu` install.
+    """
+    device = device.lower()
+    if device == "cpu":
+        return [_CPU_PROVIDER]
+    if device == "cuda":
+        if _CUDA_PROVIDER not in available:
+            msg = (
+                "device='cuda' was requested but CUDAExecutionProvider is not available. "
+                "Install onnxruntime-gpu (`pip uninstall onnxruntime` first, "
+                "then `pip install onnxruntime-gpu`) and ensure CUDA 12.x is on your system."
+            )
+            raise CudaUnavailableError(msg)
+        return [_CUDA_PROVIDER, _CPU_PROVIDER]
+    if device != "auto":
+        msg = f"unknown device {device!r}; expected 'auto', 'cpu', or 'cuda'"
+        raise ValueError(msg)
+    if _CUDA_PROVIDER in available:
+        return [_CUDA_PROVIDER, _CPU_PROVIDER]
+    return [_CPU_PROVIDER]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +90,7 @@ class WD14Tagger:
     model_id: str = DEFAULT_MODEL
     general_threshold: float = 0.35
     character_threshold: float = 0.85
-    providers: tuple[str, ...] = ("CPUExecutionProvider",)
+    device: str = "auto"  # auto | cpu | cuda
 
     _session: ort.InferenceSession | None = field(default=None, init=False, repr=False)
     _input_name: str = field(default="", init=False, repr=False)
@@ -65,6 +99,12 @@ class WD14Tagger:
     _tag_categories: np.ndarray = field(
         default_factory=lambda: np.zeros(0, dtype=np.int32), init=False, repr=False
     )
+    _active_provider: str = field(default="", init=False, repr=False)
+
+    @property
+    def active_provider(self) -> str:
+        """Which ExecutionProvider the loaded session is actually using."""
+        return self._active_provider
 
     def load(self) -> None:
         """Eagerly download and warm up the model. Called automatically on first tag."""
@@ -75,7 +115,9 @@ class WD14Tagger:
         model_path = hf_hub_download(repo_id=self.model_id, filename="model.onnx")
         labels_path = hf_hub_download(repo_id=self.model_id, filename="selected_tags.csv")
 
-        self._session = ort.InferenceSession(model_path, providers=list(self.providers))
+        providers = _resolve_providers(self.device, ort.get_available_providers())
+        self._session = ort.InferenceSession(model_path, providers=providers)
+        self._active_provider = self._session.get_providers()[0]
         spec = self._session.get_inputs()[0]
         self._input_name = spec.name
         # spec.shape is [N, H, W, 3]; second dim is the size we resize to.

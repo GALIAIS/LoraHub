@@ -27,6 +27,9 @@ class _FakeSession:
     def get_inputs(self) -> list[_FakeSpec]:
         return [_FakeSpec()]
 
+    def get_providers(self) -> list[str]:
+        return ["CPUExecutionProvider"]
+
     def run(self, _outs: Any, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
         self.calls.append(feeds["input"])
         return [self._probs[None, :]]
@@ -176,3 +179,42 @@ def test_progress_callback_invoked(tmp_path: Path, fake_tagger: wd14.WD14Tagger)
     seen: list[Path] = []
     fake_tagger.tag_directory(tmp_path, on_progress=lambda p, _r: seen.append(p))
     assert {p.name for p in seen} == {"a.png", "b.png"}
+
+
+# --- device / provider resolution -------------------------------------------------
+
+
+def test_resolve_providers_auto_picks_cuda_when_available() -> None:
+    p = wd14._resolve_providers(
+        "auto", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+    assert p == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_resolve_providers_auto_falls_back_to_cpu() -> None:
+    p = wd14._resolve_providers("auto", ["CPUExecutionProvider"])
+    assert p == ["CPUExecutionProvider"]
+
+
+def test_resolve_providers_cpu_forces_cpu_even_with_cuda() -> None:
+    p = wd14._resolve_providers(
+        "cpu", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+    assert p == ["CPUExecutionProvider"]
+
+
+def test_resolve_providers_cuda_explicit_works() -> None:
+    p = wd14._resolve_providers(
+        "cuda", ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+    assert p == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_resolve_providers_cuda_explicit_raises_when_missing() -> None:
+    with pytest.raises(wd14.CudaUnavailableError, match="onnxruntime-gpu"):
+        wd14._resolve_providers("cuda", ["CPUExecutionProvider"])
+
+
+def test_resolve_providers_unknown_device_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown device"):
+        wd14._resolve_providers("tpu", ["CPUExecutionProvider"])

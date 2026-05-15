@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **WD14 GPU acceleration** — `WD14Tagger` and `lorahub tag` accept `--device auto/cpu/cuda`. Auto picks `CUDAExecutionProvider` when available, falls back to CPU silently. Explicit `--device cuda` raises an actionable error pointing at `onnxruntime-gpu` install. The CLI prints which provider the session is actually using. `pip install lorahub[gpu]` opts into the GPU runtime.
 - **`lorahub bootstrap-kohya`** — one-shot kohya install. Clones `kohya-ss/sd-scripts`, creates a venv, installs PyTorch + torchvision (`--cuda cu121/cu124/cu128`, `--torch X.Y.Z`), runs `pip install -r requirements.txt`, and installs xformers (skip with `--no-xformers`). `--force` wipes a half-installed target. Replaces ~30 minutes of manual command typing.
 - **End-to-end smoke test passes** — full path from `fetch-bangumi` -> `tag` -> `train` produces a 21 MB SDXL LoRA file in under 3 minutes on an RTX 4070 Laptop (8 GB VRAM) using IllustriousXL as the base. Verified with 3 BangumiBase images of "laffey (azur lane)" at 512x512, 2 steps.
 - **WD14 / WD-v3 auto-tagger** (`lorahub.core.tagging.wd14`) — ONNX-based multi-label image classifier that produces Danbooru-style tags. Lazy-loads the model on first use, supports configurable `general` / `character` thresholds (defaults `0.35` / `0.85`), and writes kohya-style comma-separated `.txt` captions next to each image.
