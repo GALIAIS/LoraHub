@@ -5,8 +5,7 @@ import { Download, Pencil, Play } from "lucide-react"
 import { api, type RecipeListEntry } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { RecipeForm, type RecipeFormValue } from "@/components/recipe-form"
 import { applyOverrides, emptyOverrides, extractOverrides } from "../utils"
 import type { LaunchOverrides } from "../types"
 import { ErrorBanner } from "./error-banner"
@@ -79,7 +78,7 @@ export function RecipePreview({
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <header className="px-7 py-5 border-b border-border/60 flex items-start gap-4">
+      <header className="px-7 py-5 border-b border-border/60 flex items-start gap-4 shrink-0">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
             {entry?.arch && (
@@ -129,24 +128,25 @@ export function RecipePreview({
         </Button>
       </header>
 
-      {errorMsg && (
-        <ErrorBanner title="配方错误" message={errorMsg} />
-      )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="px-4 py-4 space-y-3">
+          {errorMsg && <ErrorBanner title="配方错误" message={errorMsg} />}
 
-      <Card className="m-4 mb-0 rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden flex-1 min-h-0 flex flex-col">
-        <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40">
-          <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            recipe.yaml
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0 flex-1 min-h-0">
-          <ScrollArea className="h-full">
-            <pre className="font-mono text-[12px] leading-relaxed px-4 py-3 whitespace-pre">
-              {detail.isLoading ? "加载中…" : data?.content ?? ""}
-            </pre>
-          </ScrollArea>
-        </CardContent>
-      </Card>
+          {detail.isLoading ? (
+            <div className="text-sm text-muted-foreground px-2 py-6">加载中…</div>
+          ) : data?.parsed ? (
+            <RecipeForm
+              value={data.parsed as unknown as RecipeFormValue}
+              onChange={() => {
+                /* read-only — the form is rendered as a structured overview */
+              }}
+              readOnly
+            />
+          ) : (
+            <div className="text-sm text-muted-foreground px-2 py-6">配方无法解析。</div>
+          )}
+        </div>
+      </div>
 
       <LaunchOverrideDialog
         open={dialogOpen}

@@ -1,7 +1,6 @@
 import { memo } from "react"
-import { Switch } from "@/components/ui/switch"
 import type { ErrorMap, RecipeFormValue, Setter } from "../types"
-import { IntInput, PathInput, ResolutionInput, Row } from "../widgets"
+import { IntInput, PathInput, ResolutionInput, Row, ToggleSwitch } from "../widgets"
 
 export const SamplingFields = memo(function SamplingFields({
   value = {},
@@ -17,7 +16,10 @@ export const SamplingFields = memo(function SamplingFields({
   return (
     <>
       <Row label="启用采样" description="训练过程中生成预览图。">
-        <Switch checked={enabled} onCheckedChange={(b) => set(["sampling", "enabled"], b)} />
+        <ToggleSwitch
+          checked={enabled}
+          onCheckedChange={(b) => set(["sampling", "enabled"], b)}
+        />
       </Row>
       {enabled && (
         <>

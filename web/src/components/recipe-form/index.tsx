@@ -29,7 +29,7 @@ import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
 import { buildErrorMap, setIn } from "./types"
 import type { RecipeFormValue } from "./types"
-import { Section } from "./widgets"
+import { ReadOnlyProvider, Section } from "./widgets"
 
 export type { RecipeFormValue } from "./types"
 
@@ -37,9 +37,16 @@ interface RecipeFormProps {
   value: RecipeFormValue
   onChange: (next: RecipeFormValue) => void
   errors?: ValidationFieldError[]
+  /**
+   * When true the form is rendered for browsing only — every input is
+   * disabled (via a wrapping <fieldset disabled> plus a context flag for the
+   * widgets that don't naturally inherit it). Used by RecipePreview so the
+   * recipe is rendered as a structured overview instead of raw YAML.
+   */
+  readOnly?: boolean
 }
 
-export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
+export function RecipeForm({ value, onChange, errors, readOnly = false }: RecipeFormProps) {
   const errorMap = useMemo(() => buildErrorMap(errors), [errors])
 
   // Stable updater factory to keep child callbacks identity-stable when
@@ -51,7 +58,7 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
     [value, onChange],
   )
 
-  return (
+  const body = (
     <div className="space-y-3">
       <Section
         icon={<Cpu className="size-3.5" />}
@@ -128,5 +135,17 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
         <BackendFields value={value.backend} set={set} errorMap={errorMap} />
       </Section>
     </div>
+  )
+
+  if (!readOnly) return <ReadOnlyProvider value={false}>{body}</ReadOnlyProvider>
+  return (
+    <ReadOnlyProvider value={true}>
+      <fieldset
+        disabled
+        className="border-0 p-0 m-0 min-w-0 disabled:opacity-100"
+      >
+        {body}
+      </fieldset>
+    </ReadOnlyProvider>
   )
 }

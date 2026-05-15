@@ -1,8 +1,7 @@
 import { memo } from "react"
-import { Switch } from "@/components/ui/switch"
 import { PRECISION_OPTIONS } from "../options"
 import type { ErrorMap, RecipeFormValue, Setter } from "../types"
-import { EnumSelect, Row } from "../widgets"
+import { EnumSelect, Row, ToggleSwitch } from "../widgets"
 
 export const PrecisionFields = memo(function PrecisionFields({
   value,
@@ -25,7 +24,7 @@ export const PrecisionFields = memo(function PrecisionFields({
         label="梯度检查点"
         description="以约 20% 吞吐为代价节省显存。8GB 显卡几乎必开。"
       >
-        <Switch
+        <ToggleSwitch
           checked={value.gradient_checkpointing ?? true}
           onCheckedChange={(b) => set(["gradient_checkpointing"], b)}
         />
@@ -34,7 +33,7 @@ export const PrecisionFields = memo(function PrecisionFields({
         label="缓存潜变量"
         description="提前用 VAE 编码图片并存盘，大幅提速但占额外硬盘。"
       >
-        <Switch
+        <ToggleSwitch
           checked={value.cache_latents ?? true}
           onCheckedChange={(b) => set(["cache_latents"], b)}
         />

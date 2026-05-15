@@ -1,8 +1,7 @@
 import { memo } from "react"
-import { Switch } from "@/components/ui/switch"
 import { NETWORK_TYPE_OPTIONS } from "../options"
 import type { ErrorMap, RecipeFormValue, Setter } from "../types"
-import { EnumSelect, IntInput, Row } from "../widgets"
+import { EnumSelect, IntInput, Row, ToggleSwitch } from "../widgets"
 
 export const NetworkFields = memo(function NetworkFields({
   value = {},
@@ -47,7 +46,7 @@ export const NetworkFields = memo(function NetworkFields({
         />
       </Row>
       <Row label="训练 U-Net" description="训练 U-Net（视觉变化所必需）。">
-        <Switch
+        <ToggleSwitch
           checked={v.target_unet ?? true}
           onCheckedChange={(b) => set(["network", "target_unet"], b)}
         />
@@ -56,7 +55,7 @@ export const NetworkFields = memo(function NetworkFields({
         label="训练文本编码器"
         description="一并训练文本编码器，速度更慢；有助于风格 / 概念的泛化。"
       >
-        <Switch
+        <ToggleSwitch
           checked={v.target_text_encoder ?? false}
           onCheckedChange={(b) => set(["network", "target_text_encoder"], b)}
         />

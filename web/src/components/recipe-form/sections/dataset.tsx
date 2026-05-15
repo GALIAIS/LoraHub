@@ -1,10 +1,17 @@
 import { memo } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { CAPTION_STRATEGY_OPTIONS } from "../options"
 import type { ErrorMap, RecipeFormValue, Setter } from "../types"
-import { EnumSelect, FloatInput, IntInput, PathInput, ResolutionInput, Row } from "../widgets"
+import {
+  EnumSelect,
+  FloatInput,
+  IntInput,
+  PathInput,
+  ResolutionInput,
+  Row,
+  ToggleSwitch,
+} from "../widgets"
 
 export const DatasetFields = memo(function DatasetFields({
   value,
@@ -45,7 +52,7 @@ export const DatasetFields = memo(function DatasetFields({
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em]">
             分桶 Bucket
           </span>
-          <Switch
+          <ToggleSwitch
             checked={bucket.enabled ?? true}
             onCheckedChange={(v) => set(["dataset", "bucket", "enabled"], v)}
           />
@@ -99,7 +106,7 @@ export const DatasetFields = memo(function DatasetFields({
           />
         </Row>
         <Row label="打乱标签" description="每步随机打乱以逗号分隔的标签。">
-          <Switch
+          <ToggleSwitch
             checked={caption.shuffle ?? true}
             onCheckedChange={(v) => set(["dataset", "caption", "shuffle"], v)}
           />
