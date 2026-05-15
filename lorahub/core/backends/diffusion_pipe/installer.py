@@ -198,11 +198,10 @@ def cleanup_partial(plan: BootstrapPlan) -> None:
         return
 
     def _force_writable(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
-        import os as _os  # noqa: PLC0415
         import stat as _stat  # noqa: PLC0415
 
         try:
-            _os.chmod(path, _stat.S_IWRITE | _stat.S_IREAD)
+            Path(path).chmod(_stat.S_IWRITE | _stat.S_IREAD)
             func(path)
         except OSError:
             pass

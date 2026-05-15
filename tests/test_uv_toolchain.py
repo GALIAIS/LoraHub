@@ -86,3 +86,31 @@ def test_create_venv_returns_python_path(
     expected_dir = target / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
     assert py.parent == expected_dir
     assert py.name in {"python.exe", "python"}
+
+
+def test_venv_python_picks_right_layout_per_platform(tmp_path: Path) -> None:
+    py = _uv.venv_python(tmp_path / "proj")
+    if sys.platform == "win32":
+        assert py.parts[-2:] == ("Scripts", "python.exe")
+    else:
+        assert py.parts[-2:] == ("bin", "python")
+
+
+def test_bootstrap_uv_translates_pep668_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Linux distros following PEP 668 should get an actionable hint."""
+    monkeypatch.setattr(_uv, "_local_uv_path", lambda: tmp_path / "bin" / "uv")
+    monkeypatch.setattr(_uv, "_bin_dir", lambda: tmp_path / "bin")
+
+    pep668_stderr = (
+        "error: externally-managed-environment\n"
+        "× This environment is externally managed\n"
+    )
+    monkeypatch.setattr(
+        _uv.subprocess,
+        "run",
+        MagicMock(return_value=MagicMock(returncode=1, stderr=pep668_stderr)),
+    )
+    with pytest.raises(RuntimeError, match="externally-managed"):
+        _uv._bootstrap_uv(progress=None)

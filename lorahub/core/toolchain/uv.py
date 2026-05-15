@@ -90,22 +90,47 @@ def _bootstrap_uv(progress: ProgressCallback | None) -> str:
     ]
     result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
-        tail = "\n".join((result.stderr or "").strip().splitlines()[-10:])
+        tail_text = (result.stderr or "").strip()
+        tail = "\n".join(tail_text.splitlines()[-10:])
+        # Linux distros following PEP 668 (Debian 12+, Ubuntu 23.04+, recent
+        # Fedora) refuse to `pip install` against the system interpreter even
+        # when --target is used. Translate the kernel of that error into
+        # something actionable instead of a generic exit-1 dump.
+        if "externally-managed-environment" in tail_text:
+            msg = (
+                "pip refused to install uv because this Python is marked as "
+                "externally-managed (PEP 668). Install uv on your system "
+                "first — the official one-liners are:\n"
+                "  Linux/macOS: curl -LsSf https://astral.sh/uv/install.sh | sh\n"
+                "  Windows:     irm https://astral.sh/uv/install.ps1 | iex\n"
+                "Then restart lorahub. Original pip error:\n" + tail
+            )
+            raise RuntimeError(msg)
         msg = f"failed to install uv via pip (exit {result.returncode}):\n{tail}"
         raise RuntimeError(msg)
 
-    # `uv` ships its console script under {site-packages}/bin or
-    # {site-packages}/Scripts depending on the platform; locate it and copy.
-    bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
+    # The uv wheel ships the binary in a few different locations depending on
+    # platform / wheel format / pip version. Probe the common ones first,
+    # then fall back to a recursive scan so we don't lock ourselves out of a
+    # working install just because the layout shifted between releases.
     script_name = "uv.exe" if sys.platform == "win32" else "uv"
-    src = target / bin_subdir / script_name
-    if not src.is_file():
-        # Fallback: scan target/bin for the binary.
+    candidates: list[Path] = [
+        # Layout when the script is installed via setuptools/console_scripts
+        target / ("Scripts" if sys.platform == "win32" else "bin") / script_name,
+        # Layout when the wheel ships the binary in {pkg}/data/{Scripts|bin}
+        target / "uv" / script_name,
+        target / "uv" / ("Scripts" if sys.platform == "win32" else "bin") / script_name,
+        # Some wheel formats drop binaries straight into the target root
+        target / script_name,
+    ]
+    src = next((p for p in candidates if p.is_file()), None)
+    if src is None:
+        # Recursive fallback — should always find it but is the slowest path.
         for p in target.rglob(script_name):
             if p.is_file():
                 src = p
                 break
-    if not src.is_file():
+    if src is None:
         msg = f"installed uv but couldn't locate its binary under {target}"
         raise RuntimeError(msg)
 
