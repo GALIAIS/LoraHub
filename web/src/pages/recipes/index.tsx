@@ -125,8 +125,8 @@ export function RecipesPage() {
   }
 
   return (
-    <div className="grid grid-cols-[minmax(320px,380px)_1fr] h-full">
-      <aside className="border-r border-border/60 flex flex-col min-h-0">
+    <div className="grid grid-cols-[minmax(320px,380px)_1fr] grid-rows-[1fr] h-full min-h-0 overflow-hidden">
+      <aside className="border-r border-border/60 flex flex-col min-h-0 min-w-0 overflow-hidden">
         <RecipesToolbar
           dir={list.data?.dir ?? null}
           total={recipes.length}
@@ -140,7 +140,7 @@ export function RecipesPage() {
           onCreate={() => setTemplateOpen(true)}
           onImport={() => setImportOpen(true)}
         />
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <ul className="divide-y divide-border/40">
             {list.isLoading && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
@@ -175,7 +175,7 @@ export function RecipesPage() {
         </ScrollArea>
       </aside>
 
-      <section className="min-w-0 flex flex-col bg-background/60">
+      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden">
         {mode === null ? (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
             从左侧选择一个配方查看，或创建新的。
