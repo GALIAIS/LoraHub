@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Database, FileText, Image, Search } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { Database, FileText, Image, Play, Search } from "lucide-react"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 export function DatasetsPage() {
   const [path, setPath] = useState("./datasets")
   const [submitted, setSubmitted] = useState("./datasets")
+  const navigate = useNavigate()
 
   const scan = useQuery({
     queryKey: ["dataset-scan", submitted],
@@ -18,6 +20,7 @@ export function DatasetsPage() {
   })
 
   const data = scan.data
+  const canTrain = !!data && data.exists && data.image_files > 0
 
   return (
     <div className="px-8 py-7 space-y-6 max-w-[1180px]">
@@ -119,6 +122,28 @@ export function DatasetsPage() {
                   ))}
                 </ul>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+            <CardContent className="px-4 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Train with this dataset</div>
+                <div className="text-xs text-muted-foreground">
+                  Jumps to Recipes, picks the first one, and pre-fills{" "}
+                  <code className="font-mono text-foreground">dataset.source</code> in the launch dialog.
+                </div>
+              </div>
+              <Button
+                disabled={!canTrain}
+                onClick={() =>
+                  navigate("/recipes", {
+                    state: { overrideDataset: data.path },
+                  })
+                }
+              >
+                <Play className="size-3.5" /> Train
+              </Button>
             </CardContent>
           </Card>
         </>
