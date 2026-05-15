@@ -7,7 +7,7 @@ import App from "./App"
 import { JobsPage } from "./pages/jobs"
 import { DashboardPage } from "./pages/dashboard"
 import { RecipesPage } from "./pages/recipes"
-import { ComingSoonPage } from "./pages/coming-soon"
+import { SettingsPage } from "./pages/settings"
 import "./index.css"
 
 const queryClient = new QueryClient({
@@ -28,7 +28,7 @@ createRoot(document.getElementById("root")!).render(
             <Route index element={<DashboardPage />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="recipes" element={<RecipesPage />} />
-            <Route path="settings" element={<ComingSoonPage title="Settings" />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
