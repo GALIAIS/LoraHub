@@ -117,7 +117,24 @@ lorahub fetch-bangumi azurlaneanime 5 --output ./datasets/akagi --limit 50
 lorahub fetch-bangumi azurlaneanime 5 --preview --output ./datasets/akagi
 ```
 
-Each image lands next to an empty `.txt` caption file — fill them in (or wait for the auto-tagger in v0.4) before training.
+Each image lands next to an empty `.txt` caption file — fill them in (or auto-tag with `lorahub tag`) before training.
+
+## Auto-tag a dataset
+
+`lorahub tag` runs the WD14 / WD-v3 ONNX tagger over a directory and writes kohya-style `.txt` captions next to each image.
+
+```powershell
+# Default thresholds (general=0.35, character=0.85), skips images that already have a non-empty caption
+lorahub tag ./datasets/akagi
+
+# Re-tag everything from scratch with a tighter general threshold
+lorahub tag ./datasets/akagi --overwrite --general 0.45
+
+# Skip the character tag if you're training a style or concept LoRA
+lorahub tag ./datasets/akagi --no-include-character
+```
+
+The first run downloads ~400 MB of ONNX weights from Hugging Face (cached for subsequent runs). CPU inference is the default — usable for hundreds of images at ~1 s/image; switch to `onnxruntime-gpu` and pass a CUDA provider if you need batch throughput.
 
 ## Project layout
 

@@ -26,6 +26,9 @@ dependencies = [
     "platformdirs>=4.2",
     "ulid-py>=1.1",
     "huggingface_hub>=0.24",
+    "onnxruntime>=1.18",
+    "pillow>=10.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

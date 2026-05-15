@@ -206,6 +206,70 @@ def fetch_bangumi(
         )
 
 
+@app.command()
+def tag(
+    directory: Annotated[
+        Path, typer.Argument(help="Directory of images to tag in place.")
+    ],
+    model: Annotated[
+        str, typer.Option(help="Hugging Face model id of the WD tagger.")
+    ] = "SmilingWolf/wd-v1-4-vit-tagger-v2",
+    general_threshold: Annotated[
+        float, typer.Option("--general", help="Score threshold for general tags.")
+    ] = 0.35,
+    character_threshold: Annotated[
+        float, typer.Option("--character", help="Score threshold for character tags.")
+    ] = 0.85,
+    recursive: Annotated[
+        bool,
+        typer.Option("--recursive", "-r", help="Recurse into subdirectories."),
+    ] = False,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Re-tag images that already have a non-empty caption.")
+    ] = False,
+    underscores: Annotated[
+        bool, typer.Option("--underscores", help="Keep underscores in tag names instead of spaces.")
+    ] = False,
+    include_character: Annotated[
+        bool,
+        typer.Option(
+            "--include-character/--no-include-character",
+            help="Include character tags in the caption. Default on.",
+        ),
+    ] = True,
+) -> None:
+    """Auto-tag images with WD14 / WD-v3 and write kohya-style .txt captions."""
+    from lorahub.core.tagging.wd14 import WD14Tagger
+
+    if not directory.is_dir():
+        err_console.print(f"[red]not a directory: {directory}[/red]")
+        raise typer.Exit(code=1)
+
+    tagger = WD14Tagger(
+        model_id=model,
+        general_threshold=general_threshold,
+        character_threshold=character_threshold,
+    )
+
+    console.print(f"[dim]loading {model} (first run downloads ~400MB)...[/dim]")
+    tagger.load()
+
+    def _on_progress(path: Path, _result: object) -> None:
+        console.print(f"[dim]tagged[/dim] {path.name}")
+
+    results = tagger.tag_directory(
+        directory,
+        recursive=recursive,
+        write_caption=True,
+        skip_existing=not overwrite,
+        underscores=underscores,
+        include_character=include_character,
+        on_progress=_on_progress,
+    )
+
+    console.print(f"[green]OK[/] tagged {len(results)} images")
+
+
 def _builtin_recipe(name: str) -> Path:
     package_root = Path(__file__).resolve().parent.parent.parent
     return package_root / "recipes" / f"{name}.yaml"
