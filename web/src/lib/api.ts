@@ -94,6 +94,23 @@ export interface ValidateResponse {
   }
 }
 
+export interface DatasetScanResponse {
+  path: string
+  exists: boolean
+  recursive: boolean
+  image_files: number
+  caption_files: number
+  missing_caption_files: string[]
+  missing_caption_files_truncated: boolean
+  samples: Array<{
+    name: string
+    path: string
+    relative_path: string
+    caption_exists: boolean
+    caption: string | null
+  }>
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -137,6 +154,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ recipe, workspace }),
     }),
+  scanDataset: (path: string, recursive = false, limit = 40) =>
+    http<DatasetScanResponse>(
+      `/datasets/scan?path=${encodeURIComponent(path)}&recursive=${recursive ? "true" : "false"}&limit=${limit}`,
+    ),
   getSettings: () => http<SettingsResponse>("/settings"),
   updateSettings: (patch: Partial<SettingsState>) =>
     http<SettingsResponse>("/settings", {

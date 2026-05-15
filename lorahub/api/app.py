@@ -389,6 +389,56 @@ def save_recipe(req: SaveRecipeRequest) -> dict[str, Any]:
     }
 
 
+def _scan_dataset_path(path: Path, *, recursive: bool = False, limit: int = 40) -> dict[str, Any]:
+    root = path.expanduser().resolve()
+    exists = root.is_dir()
+    image_files: list[Path] = []
+    caption_files = 0
+    missing_caption_files: list[str] = []
+    samples: list[dict[str, Any]] = []
+
+    if exists:
+        iterator = root.rglob("*") if recursive else root.iterdir()
+        image_files = sorted(
+            p for p in iterator if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+        )
+        for image in image_files:
+            caption_path = image.with_suffix(".txt")
+            caption: str | None = None
+            if caption_path.is_file():
+                caption_files += 1
+                with contextlib.suppress(Exception):
+                    caption = caption_path.read_text(encoding="utf-8").strip()
+            else:
+                missing_caption_files.append(image.relative_to(root).as_posix())
+            if len(samples) < max(limit, 0):
+                samples.append(
+                    {
+                        "name": image.name,
+                        "path": str(image),
+                        "relative_path": image.relative_to(root).as_posix(),
+                        "caption_exists": caption_path.is_file(),
+                        "caption": caption,
+                    }
+                )
+
+    return {
+        "path": str(root),
+        "exists": exists,
+        "recursive": recursive,
+        "image_files": len(image_files),
+        "caption_files": caption_files,
+        "missing_caption_files": missing_caption_files[: max(limit, 0)],
+        "missing_caption_files_truncated": len(missing_caption_files) > max(limit, 0),
+        "samples": samples,
+    }
+
+
+@api.get("/datasets/scan")
+def scan_dataset(path: str, recursive: bool = False, limit: int = 40) -> dict[str, Any]:
+    return _scan_dataset_path(Path(path), recursive=recursive, limit=limit)
+
+
 @api.get("/jobs")
 def list_jobs() -> dict[str, Any]:
     return {"jobs": [j.to_summary() for j in state.registry.list()]}

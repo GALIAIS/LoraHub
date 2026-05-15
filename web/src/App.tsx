@@ -1,11 +1,12 @@
 import { Outlet, NavLink } from "react-router-dom"
-import { Activity, ListTree, Layers, Settings } from "lucide-react"
+import { Activity, ListTree, Layers, Database, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: Activity },
   { to: "/jobs", label: "Jobs", icon: ListTree },
   { to: "/recipes", label: "Recipes", icon: Layers },
+  { to: "/datasets", label: "Datasets", icon: Database },
   { to: "/settings", label: "Settings", icon: Settings },
 ]
 

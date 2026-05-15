@@ -431,3 +431,36 @@ def test_put_settings_persists_and_reflects_in_get(
 def test_put_settings_rejects_bad_tagger_device(client: TestClient) -> None:
     r = client.put("/api/settings", json={"tagger_device": "tpu"})
     assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Dataset scanning
+# --------------------------------------------------------------------------- #
+
+
+def test_scan_dataset_summarizes_images_and_captions(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "one.png").write_bytes(b"image")
+    (data / "one.txt").write_text("blue hair, solo\n", encoding="utf-8")
+    (data / "two.jpg").write_bytes(b"image")
+    (data / "notes.txt").write_text("ignore me\n", encoding="utf-8")
+
+    r = client.get("/api/datasets/scan", params={"path": str(data)})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["exists"] is True
+    assert body["image_files"] == 2
+    assert body["caption_files"] == 1
+    assert body["missing_caption_files"] == ["two.jpg"]
+    assert body["samples"][0]["caption"] == "blue hair, solo"
+
+
+def test_scan_dataset_missing_path_returns_empty_summary(client: TestClient) -> None:
+    r = client.get("/api/datasets/scan", params={"path": "Z:/definitely/missing"})
+
+    assert r.status_code == 200
+    assert r.json()["exists"] is False
