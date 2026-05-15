@@ -23,6 +23,7 @@ from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.backends.kohya.compiler import compile_recipe
 from lorahub.core.config.loader import load_recipe
+from lorahub.core.dataset.sources import bangumi_base
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 app = typer.Typer(
@@ -52,7 +53,7 @@ def validate(
     _render_issues(issues)
     if any(i.severity is Severity.error for i in issues):
         raise typer.Exit(code=1)
-    console.print("[green]✓ recipe valid[/green]")
+    console.print("[green]OK[/] recipe valid")
 
 
 @app.command()
@@ -114,14 +115,14 @@ def train(
         try:
             rc = handle.wait()
         except KeyboardInterrupt:
-            console.print("\n[yellow]Ctrl+C — stopping training gracefully…[/yellow]")
+            console.print("\n[yellow]Ctrl+C - stopping training gracefully...[/yellow]")
             handle.stop(graceful=True)
             rc = handle.wait()
 
     if rc != 0:
         err_console.print(f"[red]training failed (rc={rc})[/red]")
         raise typer.Exit(code=rc)
-    console.print("[green]✓ training complete[/green]")
+    console.print("[green]OK[/] training complete")
 
 
 @app.command()
@@ -142,6 +143,67 @@ def init(
         raise typer.Exit(code=1)
     shutil.copy2(src, dst)
     console.print(f"[green]created[/green] {dst}")
+
+
+@app.command("fetch-bangumi")
+def fetch_bangumi(
+    repo: Annotated[
+        str,
+        typer.Argument(help="BangumiBase repo, e.g. 'azurlaneanime' or 'BangumiBase/azurlaneanime'."),
+    ],
+    character: Annotated[
+        str | None,
+        typer.Argument(help="Numeric character id (e.g. '3'). Omit to list characters."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option(help="Where to unpack images and caption files."),
+    ] = Path("./datasets/bangumi"),
+    limit: Annotated[
+        int | None,
+        typer.Option(help="Cap on number of images. Useful for smoke testing."),
+    ] = None,
+    preview: Annotated[
+        bool,
+        typer.Option(help="Download preview thumbnails 1-8 instead of dataset.zip."),
+    ] = False,
+    seed_captions: Annotated[
+        bool,
+        typer.Option(
+            "--seed-captions/--no-seed-captions",
+            help="Seed empty .txt caption files next to each image. Default on.",
+        ),
+    ] = True,
+) -> None:
+    """Download a single character's images from a BangumiBase HF dataset."""
+    if character is None:
+        chars = bangumi_base.list_characters(repo)
+        console.print(f"[bold]{len(chars)} characters[/] in {repo}: {', '.join(chars)}")
+        return
+
+    if preview:
+        for i in range(1, 9):
+            path = bangumi_base.download_preview(repo, character, output / character, index=i)
+            console.print(f"[dim]preview {i}[/dim]  {path}")
+        return
+
+    result = bangumi_base.fetch_character(
+        repo,
+        character,
+        output,
+        limit=limit,
+        seed_captions=seed_captions,
+        on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+    )
+    console.print(
+        f"[green]OK[/] {result.image_count} images -> {result.output_dir}"
+    )
+    if result.license:
+        console.print(f"[dim]license: {result.license}[/dim]")
+    if result.image_count and seed_captions:
+        console.print(
+            "[yellow]Seeded empty .txt captions - fill them in before training.[/yellow]"
+        )
 
 
 def _builtin_recipe(name: str) -> Path:

@@ -62,6 +62,7 @@ workspaces/
 runs/
 checkpoints/
 samples/
+_smoke/
 *.safetensors
 *.ckpt
 *.pt

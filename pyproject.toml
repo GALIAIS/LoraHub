@@ -25,6 +25,7 @@ dependencies = [
     "rich>=13.7",
     "platformdirs>=4.2",
     "ulid-py>=1.1",
+    "huggingface_hub>=0.24",
 ]
 
 [project.optional-dependencies]

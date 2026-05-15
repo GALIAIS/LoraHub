@@ -102,6 +102,23 @@ backend:
 
 See [`recipes/sdxl_character_8gb.yaml`](recipes/sdxl_character_8gb.yaml) for a fully annotated example.
 
+## Need test data fast?
+
+`lorahub fetch-bangumi` pulls a single character's image set from the [BangumiBase](https://huggingface.co/BangumiBase) Hugging Face datasets — pre-clustered, MIT-licensed, ready for smoke testing.
+
+```powershell
+# List characters in a show
+lorahub fetch-bangumi azurlaneanime
+
+# Grab character 5 with up to 50 images
+lorahub fetch-bangumi azurlaneanime 5 --output ./datasets/akagi --limit 50
+
+# Or pull the 8 preview thumbnails first to identify the character
+lorahub fetch-bangumi azurlaneanime 5 --preview --output ./datasets/akagi
+```
+
+Each image lands next to an empty `.txt` caption file — fill them in (or wait for the auto-tagger in v0.4) before training.
+
 ## Project layout
 
 ```
