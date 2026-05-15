@@ -1,6 +1,7 @@
 import { Outlet, NavLink } from "react-router-dom"
 import { Activity, ListTree, Layers, Database, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { GlobalStatusBar } from "@/components/global-status-bar"
 
 const NAV = [
   { to: "/", label: "数据面板", icon: Activity },
@@ -49,8 +50,11 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 h-full overflow-hidden">
-        <Outlet />
+      <main className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+        <GlobalStatusBar />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <Outlet />
+        </div>
       </main>
     </div>
   )

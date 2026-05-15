@@ -48,6 +48,10 @@ class Settings:
     modelscope_enabled: bool = False
     # Optional access token for private ModelScope models.
     modelscope_token: str | None = None
+    # Optional PyPI index URL (e.g. https://pypi.tuna.tsinghua.edu.cn/simple).
+    # Used by `uv pip install` when the caller hasn't pinned its own
+    # --index-url. Leaves wheel-store URLs (download.pytorch.org/...) alone.
+    pypi_index_url: str | None = None
 
     extra: dict[str, Any] = field(default_factory=dict)
 

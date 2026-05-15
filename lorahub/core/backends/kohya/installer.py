@@ -46,6 +46,11 @@ class BootstrapPlan:
     # left None, ``create_venv`` defers to uv's default (which falls back
     # to the interpreter currently running the API).
     base_python: Path | None = None
+    # Optional PyPI index URL for `uv pip install` (e.g. TUNA mirror).
+    # Only applied to plain dependency installs; torch / xformers keep
+    # their pinned --index-url because those wheels live on a separate
+    # CDN regardless of which PyPI mirror the user picked.
+    pypi_index: str | None = None
 
     @property
     def venv_python(self) -> Path:
@@ -136,6 +141,7 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
             ["-r", str(requirements)],
             step="install kohya requirements.txt",
             progress=progress,
+            pypi_index=plan.pypi_index,
         )
     except RuntimeError as exc:
         raise BootstrapError("install kohya requirements.txt", 1) from exc

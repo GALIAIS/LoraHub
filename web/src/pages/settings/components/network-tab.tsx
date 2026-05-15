@@ -34,6 +34,7 @@ type Draft = {
   huggingface_endpoint: string
   modelscope_enabled: boolean
   modelscope_token: string
+  pypi_index_url: string
 }
 
 function buildDraft(s: SettingsState): Draft {
@@ -42,6 +43,7 @@ function buildDraft(s: SettingsState): Draft {
     huggingface_endpoint: s.huggingface_endpoint ?? "",
     modelscope_enabled: s.modelscope_enabled,
     modelscope_token: s.modelscope_token ?? "",
+    pypi_index_url: s.pypi_index_url ?? "",
   }
 }
 
@@ -228,10 +230,12 @@ export function NetworkTab() {
     draft.github_proxy !== (saved.github_proxy ?? "") ||
     draft.huggingface_endpoint !== (saved.huggingface_endpoint ?? "") ||
     draft.modelscope_enabled !== saved.modelscope_enabled ||
-    draft.modelscope_token !== (saved.modelscope_token ?? "")
+    draft.modelscope_token !== (saved.modelscope_token ?? "") ||
+    draft.pypi_index_url !== (saved.pypi_index_url ?? "")
 
   const githubPresets = presetsQuery.data?.github_proxy ?? []
   const hfPresets = presetsQuery.data?.huggingface ?? []
+  const pypiPresets = presetsQuery.data?.pypi ?? []
 
   return (
     <div className="space-y-5">
@@ -342,6 +346,39 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
+      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Cloud className="size-4 text-muted-foreground" />
+            PyPI 镜像（pip 依赖源）
+          </CardTitle>
+          <CardDescription>
+            后端 venv 安装 Python 依赖（kohya / diffusion-pipe requirements、xformers
+            等普通包）时使用的 PyPI 索引。已显式指定的 wheel 源
+            （如 <code>download.pytorch.org</code>）不会被改写。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <MirrorSelector
+            category="pypi"
+            presets={pypiPresets}
+            current={draft.pypi_index_url}
+            onChoose={(v) => setDraft({ ...draft, pypi_index_url: v })}
+          />
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-center">
+            <Label className="text-xs">自定义</Label>
+            <Input
+              value={draft.pypi_index_url}
+              placeholder="https://pypi.tuna.tsinghua.edu.cn/simple（留空使用 pypi.org）"
+              onChange={(e) =>
+                setDraft({ ...draft, pypi_index_url: e.target.value })
+              }
+              className="font-mono"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center gap-3 sticky bottom-4 bg-background/80 backdrop-blur rounded-[4px] border border-border/60 px-4 py-3 shadow-[var(--panel-shadow)]">
         <Button
           size="sm"
@@ -352,6 +389,7 @@ export function NetworkTab() {
               huggingface_endpoint: draft.huggingface_endpoint || null,
               modelscope_enabled: draft.modelscope_enabled,
               modelscope_token: draft.modelscope_token || null,
+              pypi_index_url: draft.pypi_index_url || null,
             })
           }
         >

@@ -177,6 +177,7 @@ def _build_kohya_runner(
         install_xformers=req.install_xformers,
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
+        pypi_index=settings.pypi_index_url,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -227,6 +228,7 @@ def _build_diffusion_pipe_runner(
         install_deepspeed=req.install_deepspeed,
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
+        pypi_index=settings.pypi_index_url,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:

@@ -43,6 +43,8 @@ class BootstrapPlan:
     github_proxy: str | None = None
     # Optional path to a CPython executable used as the venv base.
     base_python: Path | None = None
+    # Optional PyPI index URL for `uv pip install`.
+    pypi_index: str | None = None
 
     @property
     def venv_python(self) -> Path:
@@ -149,6 +151,7 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
             ["-r", str(filtered)],
             step="install diffusion-pipe requirements.txt",
             progress=progress,
+            pypi_index=plan.pypi_index,
         )
     except RuntimeError as exc:
         raise BootstrapError("install diffusion-pipe requirements.txt", 1) from exc
@@ -172,6 +175,7 @@ def install_deepspeed(plan: BootstrapPlan, *, progress: ProgressCallback | None 
             ["deepspeed"],
             step="install deepspeed",
             progress=progress,
+            pypi_index=plan.pypi_index,
         )
     except RuntimeError as exc:
         raise BootstrapError("install deepspeed", 1) from exc

@@ -98,6 +98,7 @@ export interface SettingsState {
   huggingface_endpoint: string | null
   modelscope_enabled: boolean
   modelscope_token: string | null
+  pypi_index_url: string | null
   extra: Record<string, unknown>
 }
 

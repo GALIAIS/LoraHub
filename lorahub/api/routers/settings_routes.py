@@ -41,6 +41,7 @@ class UpdateSettingsRequest(BaseModel):
     huggingface_endpoint: str | None = None
     modelscope_enabled: bool | None = None
     modelscope_token: str | None = None
+    pypi_index_url: str | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -107,6 +108,7 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             else current.modelscope_enabled
         ),
         modelscope_token=_norm(req.modelscope_token),
+        pypi_index_url=_norm(req.pypi_index_url),
         extra=current.extra,
     )
     store.save(new)

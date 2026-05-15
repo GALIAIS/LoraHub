@@ -211,11 +211,27 @@ def pip_install(
     *,
     step: str,
     progress: ProgressCallback | None = None,
+    pypi_index: str | None = None,
 ) -> None:
-    """Run `uv pip install <args>` against the given venv interpreter."""
+    """Run `uv pip install <args>` against the given venv interpreter.
+
+    `pypi_index` overrides the default PyPI index — typically a Chinese
+    mirror like https://pypi.tuna.tsinghua.edu.cn/simple. It only takes
+    effect when the caller's `args` don't already specify `--index-url`
+    or `-i`, because pinned wheel-store URLs (e.g. download.pytorch.org)
+    must not be silently rewritten.
+    """
     uv = ensure_uv(progress)
-    cmd = [uv, "pip", "install", "--python", str(venv_py), *args]
+    cmd = [uv, "pip", "install", "--python", str(venv_py)]
+    if pypi_index and not _has_index_override(args):
+        cmd += ["--index-url", pypi_index]
+    cmd += args
     _capture(cmd, step, progress)
+
+
+def _has_index_override(args: list[str]) -> bool:
+    flag_indices = {"--index-url", "-i"}
+    return any(a in flag_indices or a.startswith("--index-url=") for a in args)
 
 
 __all__ = [
