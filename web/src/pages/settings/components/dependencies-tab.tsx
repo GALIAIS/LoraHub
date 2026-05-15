@@ -81,6 +81,39 @@ export function DependenciesTab() {
   const installed = status.data?.installed ?? []
   const active = status.data?.active
 
+  // uv lists every executable alias an interpreter exposes (python.exe,
+  // python3.exe, python3.11.exe …) as separate entries. Collapse them to one
+  // row per (version, arch, key) tuple, preferring the entry whose path
+  // matches the active runtime so the "当前使用" badge stays anchored.
+  const dedupedInstalled = useMemo(() => {
+    const groups = new Map<string, typeof installed[number]>()
+    for (const r of installed) {
+      const key = `${r.implementation}-${r.version}-${r.arch}-${r.os}-${r.key}`
+      const prev = groups.get(key)
+      const matchesActive =
+        active && active.version === r.version && active.path === r.path
+      if (!prev) {
+        groups.set(key, r)
+        continue
+      }
+      const prevMatches =
+        active && active.version === prev.version && active.path === prev.path
+      // Anchor on the active path, otherwise prefer the shortest path
+      // (typically the canonical executable instead of an alias symlink).
+      if (matchesActive && !prevMatches) {
+        groups.set(key, r)
+      } else if (
+        !prevMatches &&
+        !matchesActive &&
+        r.path &&
+        r.path.length < prev.path.length
+      ) {
+        groups.set(key, r)
+      }
+    }
+    return Array.from(groups.values())
+  }, [installed, active])
+
   const hasMatch = installed.some((r) => r.version.startsWith(effectiveVersion))
 
   return (
@@ -190,7 +223,7 @@ export function DependenciesTab() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {installed.length === 0 ? (
+          {dedupedInstalled.length === 0 ? (
             <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
               暂无便携 Python。点击上方
               <span className="text-foreground font-medium">「下载安装」</span>
@@ -198,7 +231,7 @@ export function DependenciesTab() {
             </div>
           ) : (
             <ul className="divide-y divide-border/40 rounded-[4px] border border-border/60 bg-muted/30">
-              {installed.map((r) => {
+              {dedupedInstalled.map((r) => {
                 const isActive =
                   active && active.version === r.version && active.path === r.path
                 return (
