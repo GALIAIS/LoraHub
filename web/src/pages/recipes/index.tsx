@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router-dom"
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type RecipeListEntry } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
 import { RecipeRow } from "./components/recipe-row"
 import { RecipePreview } from "./components/recipe-preview"
 import { RecipeEditor } from "./components/recipe-editor"
@@ -25,6 +28,8 @@ type RowDialogState = {
   recipe: RecipeListEntry
 } | null
 
+const SIDEBAR_KEY = "lorahub.recipes.sidebar"
+
 export function RecipesPage() {
   const list = useQuery({ queryKey: ["recipes"], queryFn: api.listRecipes })
   const recipes = list.data?.recipes ?? []
@@ -42,6 +47,15 @@ export function RecipesPage() {
   const [rowDialog, setRowDialog] = useState<RowDialogState>(null)
   const [templateOpen, setTemplateOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
+  })
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? "open" : "closed")
+  }, [sidebarOpen])
 
   const location = useLocation()
   const navigate = useNavigate()
@@ -125,8 +139,34 @@ export function RecipesPage() {
   }
 
   return (
-    <div className="grid grid-cols-[minmax(320px,380px)_1fr] grid-rows-[1fr] h-full min-h-0 overflow-hidden">
-      <aside className="border-r border-border/60 flex flex-col min-h-0 min-w-0 overflow-hidden">
+    <div
+      className={cn(
+        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
+        sidebarOpen
+          ? "grid-cols-[minmax(320px,380px)_1fr]"
+          : "grid-cols-[0px_1fr]",
+      )}
+    >
+      <aside
+        className={cn(
+          "border-r border-border/60 flex flex-col min-h-0 min-w-0 overflow-hidden",
+          !sidebarOpen && "pointer-events-none opacity-0",
+        )}
+        aria-hidden={!sidebarOpen}
+      >
+        <div className="flex items-center justify-between px-4 pt-3">
+          <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
+            训练配方
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSidebarOpen(false)}
+            title="收起侧栏"
+          >
+            <PanelLeftClose className="size-4" />
+          </Button>
+        </div>
         <RecipesToolbar
           dir={list.data?.dir ?? null}
           total={recipes.length}
@@ -175,7 +215,19 @@ export function RecipesPage() {
         </ScrollArea>
       </aside>
 
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden">
+      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+        {!sidebarOpen && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSidebarOpen(true)}
+            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            title="展开侧栏"
+          >
+            <PanelLeftOpen className="size-4" />
+            <span className="ml-1 text-xs">{recipes.length} 个配方</span>
+          </Button>
+        )}
         {mode === null ? (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
             从左侧选择一个配方查看，或创建新的。

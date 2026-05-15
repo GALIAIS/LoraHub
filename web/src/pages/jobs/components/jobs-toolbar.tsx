@@ -35,13 +35,8 @@ export function JobsToolbar({
 }) {
   return (
     <header className="px-5 py-4 border-b border-border/60 space-y-3">
-      <div>
-        <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-          训练任务
-        </div>
-        <div className="text-xs text-muted-foreground mt-0.5">
-          共 {total} 个 · 显示 {visibleCount} 个 · 每 2 秒刷新
-        </div>
+      <div className="text-xs text-muted-foreground">
+        共 {total} 个 · 显示 {visibleCount} 个 · 每 2 秒刷新
       </div>
 
       <div className="relative">

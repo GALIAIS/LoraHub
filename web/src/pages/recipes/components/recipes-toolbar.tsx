@@ -61,10 +61,7 @@ export function RecipesToolbar({
       </div>
 
       <div>
-        <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-          训练配方
-        </div>
-        <div className="text-xs text-muted-foreground mt-0.5">
+        <div className="text-xs text-muted-foreground">
           {filtered
             ? `共 ${total} 个 · 显示 ${visibleCount} 个`
             : `共 ${total} 个`}

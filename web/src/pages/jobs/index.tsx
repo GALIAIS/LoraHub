@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type JobSummary } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
 import { JobsToolbar } from "./components/jobs-toolbar"
 import { JobRow } from "./components/job-row"
 import { JobDetail } from "./components/job-detail"
@@ -22,6 +25,8 @@ const COMPLETED_STATES = new Set([
   "interrupted",
 ])
 
+const SIDEBAR_KEY = "lorahub.jobs.sidebar"
+
 function matchesQuery(job: JobSummary, query: string): boolean {
   if (!query) return true
   const q = query.trim().toLowerCase()
@@ -40,6 +45,15 @@ export function JobsPage() {
   const [hideCompleted, setHideCompleted] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
+  })
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? "open" : "closed")
+  }, [sidebarOpen])
 
   const jobs = useQuery({
     queryKey: ["jobs"],
@@ -91,8 +105,34 @@ export function JobsPage() {
   }
 
   return (
-    <div className="grid grid-cols-[minmax(360px,420px)_1fr] h-full">
-      <aside className="border-r border-border/60 flex flex-col min-h-0">
+    <div
+      className={cn(
+        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
+        sidebarOpen
+          ? "grid-cols-[minmax(360px,420px)_1fr]"
+          : "grid-cols-[0px_1fr]",
+      )}
+    >
+      <aside
+        className={cn(
+          "border-r border-border/60 flex flex-col min-h-0 min-w-0 overflow-hidden",
+          !sidebarOpen && "pointer-events-none opacity-0",
+        )}
+        aria-hidden={!sidebarOpen}
+      >
+        <div className="flex items-center justify-between px-4 pt-3">
+          <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
+            训练任务
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSidebarOpen(false)}
+            title="收起侧栏"
+          >
+            <PanelLeftClose className="size-4" />
+          </Button>
+        </div>
         <JobsToolbar
           total={list.length}
           visibleCount={visibleJobs.length}
@@ -111,7 +151,7 @@ export function JobsPage() {
             {compareIds.length >= COMPARE_LIMIT && " · 已达上限"}
           </div>
         )}
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <ul className="divide-y divide-border/40">
             {visibleJobs.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
@@ -139,7 +179,19 @@ export function JobsPage() {
         </ScrollArea>
       </aside>
 
-      <section className="min-w-0 flex flex-col bg-background/60">
+      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+        {!sidebarOpen && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSidebarOpen(true)}
+            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            title="展开侧栏"
+          >
+            <PanelLeftOpen className="size-4" />
+            <span className="ml-1 text-xs">{list.length} 个任务</span>
+          </Button>
+        )}
         {selected ? (
           <JobDetail
             jobId={selected.id}
