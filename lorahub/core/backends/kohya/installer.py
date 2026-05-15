@@ -14,6 +14,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from lorahub.core.backends.errors import BootstrapError
 
@@ -144,6 +145,28 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
-    """Remove a half-installed target so the user can retry."""
-    if plan.target.exists():
-        shutil.rmtree(plan.target, ignore_errors=True)
+    """Remove a half-installed target so the user can retry.
+
+    Git pack files inside `.git/objects/pack/*.idx` are written read-only on
+    Windows, so the default ``shutil.rmtree`` raises PermissionError on them.
+    Hook ``onexc`` (Python 3.12+) / ``onerror`` to flip the read-only bit and
+    retry, otherwise the user gets stuck in a 409 loop on every reinstall.
+    """
+    if not plan.target.exists():
+        return
+
+    def _force_writable(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
+        import os as _os  # noqa: PLC0415
+        import stat as _stat  # noqa: PLC0415
+
+        try:
+            _os.chmod(path, _stat.S_IWRITE | _stat.S_IREAD)
+            func(path)
+        except OSError:
+            pass
+
+    # `onexc` is the Python 3.12 replacement for the deprecated `onerror`.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(plan.target, onexc=_force_writable)
+    else:
+        shutil.rmtree(plan.target, onerror=_force_writable)

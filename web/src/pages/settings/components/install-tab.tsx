@@ -23,8 +23,6 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -268,8 +266,6 @@ export function InstallTab() {
     setSelected(backendsQuery.data.default)
   }, [backendsQuery.data, selected])
 
-  const [force, setForce] = useState(false)
-
   // While a session is running we always show the running backend, no matter
   // what the user previously picked — that's also what the action button
   // operates on, so the UX is unambiguous.
@@ -286,14 +282,14 @@ export function InstallTab() {
     streamedEvents.length > 0 ? streamedEvents : polled
 
   const start = useMutation({
-    mutationFn: ({ backend, force }: { backend: BackendId; force: boolean }) => {
-      console.info("[lorahub] startBootstrap", { backend, force })
-      return api.startBootstrap({ backend, force })
+    mutationFn: (backend: BackendId) => {
+      // Always force-overwrite. Users have repeatedly tripped on the
+      // "target not empty" 409 because the install panel's whole point is
+      // to wipe and re-install — there's no other meaningful intent.
+      console.info("[lorahub] startBootstrap", { backend, force: true })
+      return api.startBootstrap({ backend, force: true })
     },
     onSuccess: () => {
-      // Keep `force` flipped on so the user can re-trigger directly if the
-      // install hits an error mid-way; they'll explicitly turn it off when
-      // they no longer want to overwrite.
       qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
     },
   })
@@ -326,9 +322,10 @@ export function InstallTab() {
   const failedCount = states.filter((s) => s === "failed").length
   const showSteps = plan.length > 0 && (events.length > 0 || isRunning)
 
-  // Friendlier 409 conflict message: server reports "target ... is not empty".
+  // The only 409 case left after we always send force=true is "failed to
+  // clear" — surface that clearly so the user knows to free the locks.
   const startConflict =
-    startError && /409|not empty/i.test(startError.message)
+    startError && /failed to clear|some files may be locked/i.test(startError.message)
       ? startError.message
       : null
 
@@ -338,8 +335,9 @@ export function InstallTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">安装训练后端</CardTitle>
           <CardDescription>
-            克隆仓库、创建 venv，并安装 PyTorch 与依赖。与命令行 {" "}
-            <code className="text-foreground">lorahub bootstrap-*</code> 等价；
+            克隆仓库、创建 venv，并安装 PyTorch 与依赖。
+            <strong className="text-foreground">已存在的目标目录会被清空后重装</strong>。
+            与命令行 <code className="text-foreground">lorahub bootstrap-*</code> 等价；
             安装在后台运行，请保持本页打开。
           </CardDescription>
         </CardHeader>
@@ -362,17 +360,6 @@ export function InstallTab() {
                 ))}
               </SelectContent>
             </Select>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="install-force"
-                checked={force}
-                onCheckedChange={setForce}
-                disabled={isRunning}
-              />
-              <Label htmlFor="install-force" className="text-xs cursor-pointer">
-                强制重装（清空目标目录）
-              </Label>
-            </div>
             <Button
               size="sm"
               disabled={
@@ -381,9 +368,7 @@ export function InstallTab() {
                 !effective ||
                 !backendsQuery.data
               }
-              onClick={() =>
-                effective && start.mutate({ backend: effective as BackendId, force })
-              }
+              onClick={() => effective && start.mutate(effective as BackendId)}
             >
               {isRunning ? (
                 <Loader2 className="size-3 animate-spin" />
@@ -392,10 +377,10 @@ export function InstallTab() {
               )}
               {isRunning
                 ? "安装中…"
-                : force
-                  ? "强制重装"
-                  : status === "failed"
-                    ? "重试安装"
+                : status === "failed"
+                  ? "重试安装"
+                  : descriptor?.ready
+                    ? "重新安装"
                     : "安装"}
             </Button>
             <StatusBadge status={status} />
@@ -412,11 +397,11 @@ export function InstallTab() {
             <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
               <AlertTriangle className="size-4 shrink-0 mt-0.5" />
               <div>
-                <div className="font-semibold">目标目录已存在</div>
+                <div className="font-semibold">无法清空目标目录</div>
                 <div className="font-mono break-all mt-0.5">{startConflict}</div>
                 <div className="mt-1">
-                  打开 <span className="font-semibold">「强制重装」</span> 后再次点击
-                  「安装」可清空原目录。
+                  常见原因：进程仍持有该目录中的文件（如编辑器、文件管理器、
+                  早先的 venv）。关闭它们后再点「重试安装」，或手动删除目录。
                 </div>
               </div>
             </div>
