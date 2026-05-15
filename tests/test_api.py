@@ -1216,3 +1216,67 @@ def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     )
     assert r.status_code == 400
     assert "owner/name" in r.json()["detail"]
+
+
+def test_models_download_starts_session_and_reports_progress(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadProgress, DownloadResult
+
+    seen_threads: list[int] = []
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        seen_threads.append(req.threads)
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        if progress:
+            progress(DownloadProgress(message="listed files", percent=10, files_done=0, files_total=2))
+            progress(
+                DownloadProgress(
+                    message="downloaded weights",
+                    percent=55,
+                    files_done=1,
+                    files_total=2,
+                    bytes_done=4,
+                    bytes_total=8,
+                )
+            )
+        (target / "weights.bin").write_bytes(b"weights")
+        return DownloadResult(target=target, files=1, total_bytes=7)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    r = client.post(
+        "/api/models/download",
+        json={
+            "source": "modelscope",
+            "repo_id": "owner/name",
+            "target_dir": str(tmp_path / "downloaded"),
+            "threads": 3,
+        },
+    )
+
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] == "running"
+    assert body["session_id"]
+
+    status = {}
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get(f"/api/models/download/{body['session_id']}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "succeeded"
+    assert status["percent"] == 100
+    assert status["result"]["files"] == 1
+    assert status["events"][-1]["message"].startswith("download complete")
+    assert seen_threads == [3]
+
+
+def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
+    r = client.get("/api/models/download/missing")
+    assert r.status_code == 404

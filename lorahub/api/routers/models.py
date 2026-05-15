@@ -1,33 +1,108 @@
-"""Model download endpoint.
-
-POST /api/models/download starts a synchronous download. For small models or
-quick metadata checks it returns when finished; the route is kept simple
-since users typically run it once at setup time. Long-running downloads
-should be parallelised by the client (one request per model).
-"""
+"""Model download endpoints with progress-tracked background sessions."""
 
 from __future__ import annotations
 
+import threading
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.core.models.downloader import DownloadRequest, download
+from lorahub.core.models.downloader import (
+    DownloadProgress,
+    DownloadRequest,
+    DownloadResult,
+    download,
+)
 
 router = APIRouter(prefix="/api")
 
 
 class DownloadModelRequest(BaseModel):
     source: Literal["huggingface", "modelscope"]
-    repo_id: str  # "owner/name"
+    repo_id: str
     revision: str = "master"
-    target_dir: str | None = None  # absolute or workspace-relative
+    target_dir: str | None = None
+    threads: int = Field(default=4, ge=1, le=16)
 
 
-@router.post("/models/download")
+@dataclass(slots=True)
+class _DownloadSession:
+    session_id: str
+    source: str
+    repo_id: str
+    revision: str
+    target_dir: str | None
+    threads: int
+    status: Literal["running", "succeeded", "failed"] = "running"
+    percent: float = 0
+    events: list[dict[str, Any]] = field(default_factory=list)
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    started_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def add_progress(self, event: DownloadProgress) -> None:
+        with self.lock:
+            if event.percent is not None:
+                self.percent = max(self.percent, min(100, float(event.percent)))
+            self.events.append(asdict(event) | {"ts": time.time()})
+            self.events = self.events[-200:]
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "session_id": self.session_id,
+                "source": self.source,
+                "repo_id": self.repo_id,
+                "revision": self.revision,
+                "target_dir": self.target_dir,
+                "threads": self.threads,
+                "status": self.status,
+                "percent": self.percent,
+                "events": list(self.events),
+                "result": self.result,
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+
+_sessions: dict[str, _DownloadSession] = {}
+_sessions_lock = threading.Lock()
+
+
+def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[str, Any]:
+    return {
+        "source": req.source,
+        "repo_id": req.repo_id,
+        "revision": req.revision,
+        "target": str(result.target),
+        "files": result.files,
+        "total_bytes": result.total_bytes,
+    }
+
+
+def _store_session(session: _DownloadSession) -> None:
+    with _sessions_lock:
+        _sessions[session.session_id] = session
+
+
+def _get_session(session_id: str) -> _DownloadSession:
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="download session not found")
+    return session
+
+
+@router.post("/models/download", status_code=202)
 def download_model(req: DownloadModelRequest) -> dict[str, Any]:
     if not req.repo_id or "/" not in req.repo_id:
         raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
@@ -41,18 +116,40 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         target_dir=target,
         huggingface_endpoint=settings.huggingface_endpoint,
         modelscope_token=settings.modelscope_token,
+        threads=req.threads,
     )
+    session = _DownloadSession(
+        session_id=uuid.uuid4().hex,
+        source=req.source,
+        repo_id=req.repo_id,
+        revision=req.revision,
+        target_dir=str(target) if target else None,
+        threads=req.threads,
+    )
+    session.add_progress(DownloadProgress(message="download queued", percent=0))
+    _store_session(session)
 
-    try:
-        result = download(download_req)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    def run() -> None:
+        try:
+            result = download(download_req, session.add_progress)
+            with session.lock:
+                session.status = "succeeded"
+                session.percent = 100
+                session.result = _result_payload(req, result)
+                session.finished_at = time.time()
+            session.add_progress(DownloadProgress(message="download complete", percent=100))
+        except Exception as exc:  # noqa: BLE001
+            with session.lock:
+                session.status = "failed"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.add_progress(DownloadProgress(message=f"download failed: {exc}"))
 
-    return {
-        "source": req.source,
-        "repo_id": req.repo_id,
-        "revision": req.revision,
-        "target": str(result.target),
-        "files": result.files,
-        "total_bytes": result.total_bytes,
-    }
+    thread = threading.Thread(target=run, name=f"model-download-{session.session_id[:8]}", daemon=True)
+    thread.start()
+    return session.snapshot()
+
+
+@router.get("/models/download/{session_id}")
+def download_model_status(session_id: str) -> dict[str, Any]:
+    return _get_session(session_id).snapshot()

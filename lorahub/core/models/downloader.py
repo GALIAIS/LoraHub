@@ -1,41 +1,30 @@
-"""Model downloader supporting HuggingFace and ModelScope.
-
-HuggingFace: uses `huggingface_hub.snapshot_download`. The HF_ENDPOINT
-environment variable is honored when the user has configured a mirror in
-Settings — `lorahub.api.settings.env_overrides` injects it before the
-download starts.
-
-ModelScope: downloads files directly via the public HTTP API
-(https://modelscope.cn/api/v1/models/{owner}/{name}/repo?Revision=...&FilePath=...)
-so we don't need the heavyweight `modelscope` package as a runtime dependency.
-
-Both paths are designed to run in a worker thread and feed progress through
-a callback so the UI can stream events live.
-"""
+"""Model downloader supporting HuggingFace and ModelScope."""
 
 from __future__ import annotations
 
 import os
 import shutil
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-ProgressCallback = Callable[[str], None]
+ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
 
 
 @dataclass(frozen=True, slots=True)
 class DownloadRequest:
     source: Source
-    repo_id: str  # "owner/name"
-    revision: str = "master"  # ModelScope default; HF will be remapped to "main"
-    target_dir: Path | None = None  # default: <cwd>/models/<repo_id without slash>
+    repo_id: str
+    revision: str = "master"
+    target_dir: Path | None = None
     huggingface_endpoint: str | None = None
     modelscope_token: str | None = None
+    threads: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +32,29 @@ class DownloadResult:
     target: Path
     files: int
     total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadProgress:
+    message: str
+    percent: float | None = None
+    files_done: int = 0
+    files_total: int = 0
+    bytes_done: int = 0
+    bytes_total: int = 0
+
+
+def _emit(progress: ProgressCallback | None, event: DownloadProgress) -> None:
+    if progress:
+        progress(event)
+
+
+def _file_size(item: dict[str, Any]) -> int:
+    raw = item.get("Size") or item.get("size") or 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -59,20 +71,43 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
-    if progress:
-        endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
-        progress(f"hf: snapshot_download {req.repo_id} ({revision}) <- {endpoint}")
-    snapshot_download(
-        repo_id=req.repo_id,
-        revision=revision,
-        local_dir=str(target),
-        local_dir_use_symlinks=False,
+    endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"hf: snapshot_download {req.repo_id} ({revision}) <- {endpoint}",
+            percent=5,
+        ),
     )
+    kwargs: dict[str, Any] = {
+        "repo_id": req.repo_id,
+        "revision": revision,
+        "local_dir": str(target),
+        "local_dir_use_symlinks": False,
+    }
+    if req.threads > 0:
+        kwargs["max_workers"] = req.threads
+    try:
+        snapshot_download(**kwargs)
+    except TypeError:
+        # Older huggingface_hub versions do not expose max_workers.
+        kwargs.pop("max_workers", None)
+        snapshot_download(**kwargs)
     files = list(target.rglob("*"))
     total = sum(f.stat().st_size for f in files if f.is_file())
-    if progress:
-        progress(f"hf: done — {len([f for f in files if f.is_file()])} files, {total} bytes")
-    return DownloadResult(target=target, files=sum(1 for f in files if f.is_file()), total_bytes=total)
+    file_count = sum(1 for f in files if f.is_file())
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"hf: done - {file_count} files, {total} bytes",
+            percent=100,
+            files_done=file_count,
+            files_total=file_count,
+            bytes_done=total,
+            bytes_total=total,
+        ),
+    )
+    return DownloadResult(target=target, files=file_count, total_bytes=total)
 
 
 # --------------------------------------------------------------------------- #
@@ -83,12 +118,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
 _MS_BASE = "https://www.modelscope.cn/api/v1/models"
 
 
-def _ms_list_files(repo_id: str, revision: str, token: str | None) -> list[dict]:
-    """List repo files via ModelScope's tree API.
-
-    Returns a flat list of {Path, Size, Type} entries; directories are
-    skipped (we only download files).
-    """
+def _ms_list_files(repo_id: str, revision: str, token: str | None) -> list[dict[str, Any]]:
+    """List repo files via ModelScope's tree API."""
     import json  # noqa: PLC0415
 
     url = f"{_MS_BASE}/{repo_id}/repo/files?Revision={quote(revision)}&Recursive=True"
@@ -134,28 +165,68 @@ def _ms_download_file(
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
-    if progress:
-        progress(f"ms: list files for {req.repo_id} (rev={req.revision})")
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"ms: list files for {req.repo_id} (rev={req.revision})",
+            percent=2,
+        ),
+    )
     files = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
-    if progress:
-        progress(f"ms: {len(files)} files to download")
+    bytes_total = sum(_file_size(it) for it in files)
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"ms: {len(files)} files to download",
+            percent=5 if files else 100,
+            files_total=len(files),
+            bytes_total=bytes_total,
+        ),
+    )
     total = 0
-    for i, it in enumerate(files, start=1):
+    completed = 0
+    workers = max(1, min(req.threads, len(files) or 1))
+
+    def submit_file(it: dict[str, Any]) -> tuple[str, int]:
         path = str(it.get("Path") or it.get("FilePath") or "")
         if not path:
-            continue
+            return "", 0
         out = target / path
-        if progress:
-            progress(f"ms: [{i}/{len(files)}] {path}")
-        try:
-            n = _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
-            total += n
-        except Exception as exc:  # noqa: BLE001
-            if progress:
-                progress(f"ms: skip {path}: {exc}")
-            continue
-    if progress:
-        progress(f"ms: done — {len(files)} files, {total} bytes")
+        return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(submit_file, it) for it in files]
+        for future in as_completed(futures):
+            completed += 1
+            try:
+                path, n = future.result()
+                total += n
+                message = f"ms: [{completed}/{len(files)}] {path}"
+            except Exception as exc:  # noqa: BLE001
+                message = f"ms: [{completed}/{len(files)}] skip: {exc}"
+            percent = 5 + (completed / len(files) * 95) if files else 100
+            _emit(
+                progress,
+                DownloadProgress(
+                    message=message,
+                    percent=percent,
+                    files_done=completed,
+                    files_total=len(files),
+                    bytes_done=total,
+                    bytes_total=bytes_total,
+                ),
+            )
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"ms: done - {len(files)} files, {total} bytes",
+            percent=100,
+            files_done=len(files),
+            files_total=len(files),
+            bytes_done=total,
+            bytes_total=bytes_total or total,
+        ),
+    )
     return DownloadResult(target=target, files=len(files), total_bytes=total)
 
 
@@ -180,6 +251,7 @@ def cleanup_partial(target: Path) -> None:
 
 
 __all__ = [
+    "DownloadProgress",
     "DownloadRequest",
     "DownloadResult",
     "Source",
