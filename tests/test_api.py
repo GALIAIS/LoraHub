@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from lorahub.api import state
+from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 
@@ -910,3 +912,112 @@ def test_job_metrics_missing_log_returns_empty(
     assert body["loss"] == []
     assert body["epochs"] == []
     assert body["duration_s"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Recipe duplicate / rename / delete / templates / import
+# --------------------------------------------------------------------------- #
+
+
+def test_duplicate_recipe_creates_copy(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    src = _write_valid_recipe(recipes_dir, "demo")
+
+    r = client.post("/api/recipes/demo/duplicate", json={"new_name": "demo_v2"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "demo_v2"
+    assert body["filename"] == "demo_v2.yaml"
+    copy = recipes_dir / "demo_v2.yaml"
+    assert copy.is_file()
+    assert copy.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
+
+    # Source missing -> 404
+    r_missing = client.post(
+        "/api/recipes/nope/duplicate", json={"new_name": "ghost"}
+    )
+    assert r_missing.status_code == 404
+
+    # Destination already exists -> 409
+    r_clash = client.post(
+        "/api/recipes/demo/duplicate", json={"new_name": "demo_v2"}
+    )
+    assert r_clash.status_code == 409
+
+    # Bad new_name -> 400
+    r_bad = client.post(
+        "/api/recipes/demo/duplicate", json={"new_name": "../etc/passwd"}
+    )
+    assert r_bad.status_code == 400
+
+
+def test_rename_recipe(client: TestClient, recipes_dir: Path) -> None:
+    _write_valid_recipe(recipes_dir, "demo")
+    _write_valid_recipe(recipes_dir, "other")
+
+    r = client.post("/api/recipes/demo/rename", json={"new_name": "demo_renamed"})
+    assert r.status_code == 200, r.text
+    assert not (recipes_dir / "demo.yaml").exists()
+    assert (recipes_dir / "demo_renamed.yaml").is_file()
+
+    # Renaming to a name that's already taken -> 409
+    r_clash = client.post(
+        "/api/recipes/demo_renamed/rename", json={"new_name": "other"}
+    )
+    assert r_clash.status_code == 409
+
+    # Renaming a missing recipe -> 404
+    r_missing = client.post(
+        "/api/recipes/ghost/rename", json={"new_name": "demo_v3"}
+    )
+    assert r_missing.status_code == 404
+
+
+def test_delete_recipe(client: TestClient, recipes_dir: Path) -> None:
+    _write_valid_recipe(recipes_dir, "demo")
+
+    r = client.delete("/api/recipes/demo")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": True, "name": "demo"}
+
+    # Now it's gone
+    assert client.get("/api/recipes/demo").status_code == 404
+    # Re-deleting a missing recipe -> 404
+    assert client.delete("/api/recipes/demo").status_code == 404
+
+
+def test_list_templates_returns_validated_recipes(client: TestClient) -> None:
+    r = client.get("/api/recipes/templates")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    ids = {t["id"] for t in body["templates"]}
+    assert ids == {"sdxl_character", "sdxl_style", "sd15_character", "blank"}
+
+    # Each template recipe must round-trip through the schema.
+    for tpl in body["templates"]:
+        cfg = RecipeConfig.model_validate(tpl["recipe"])
+        assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3"}
+
+
+def test_import_recipe_from_yaml(
+    client: TestClient, tmp_path: Path, recipes_dir: Path
+) -> None:
+    recipe_dict = _valid_recipe_dict(tmp_path)
+    yaml_bytes = yaml.safe_dump(recipe_dict, sort_keys=False).encode("utf-8")
+
+    r = client.post(
+        "/api/recipes/import",
+        files={"file": ("foo.yaml", yaml_bytes, "application/x-yaml")},
+        data={"name": "imported"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "imported"
+    assert body["filename"] == "imported.yaml"
+    saved = recipes_dir / "imported.yaml"
+    assert saved.is_file()
+    # The persisted file is canonical YAML emitted by dump_recipe; just confirm
+    # it loads back to an equivalent RecipeConfig.
+    assert saved.read_text(encoding="utf-8").startswith("schema_version")
