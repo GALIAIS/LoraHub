@@ -138,6 +138,45 @@ export interface DatasetScanResponse {
   }>
 }
 
+export interface JobFile {
+  path: string
+  size_bytes: number
+  modified_at: number
+}
+
+export interface JobFilesResponse {
+  workspace: string
+  checkpoints: JobFile[]
+  samples: JobFile[]
+  logs: JobFile[]
+  other: JobFile[]
+}
+
+export interface JobMetricPoint {
+  step: number
+  epoch?: number | null
+  loss?: number | null
+  ts: number
+}
+
+export interface JobMetricsResponse {
+  loss: JobMetricPoint[]
+  epochs: Array<{ epoch: number; ts: number }>
+  checkpoints: Array<{ path: string; step: number; ts: number }>
+  samples: Array<{ path: string; ts: number }>
+  first_step_ts: number | null
+  last_step_ts: number | null
+  duration_s: number | null
+}
+
+export interface RecipeTemplate {
+  id: string
+  name: string
+  description: string
+  arch: string
+  recipe: Record<string, unknown>
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -208,6 +247,41 @@ export const api = {
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
+  getJobFiles: (id: string) => http<JobFilesResponse>(`/jobs/${id}/files`),
+  getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
+  jobFileUrl: (id: string, path: string) =>
+    `/api/jobs/${id}/files/raw?path=${encodeURIComponent(path)}`,
+  duplicateRecipe: (name: string, newName: string) =>
+    http<{ name: string; filename: string; path: string }>(
+      `/recipes/${encodeURIComponent(name)}/duplicate`,
+      { method: "POST", body: JSON.stringify({ new_name: newName }) },
+    ),
+  renameRecipe: (name: string, newName: string) =>
+    http<{ name: string; filename: string; path: string }>(
+      `/recipes/${encodeURIComponent(name)}/rename`,
+      { method: "POST", body: JSON.stringify({ new_name: newName }) },
+    ),
+  deleteRecipe: (name: string) =>
+    http<{ deleted: boolean; name: string }>(
+      `/recipes/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  listRecipeTemplates: () =>
+    http<{ templates: RecipeTemplate[] }>("/recipes/templates"),
+  importRecipe: async (name: string, file: File, overwrite = false) => {
+    const fd = new FormData()
+    fd.append("file", file)
+    fd.append("name", name)
+    fd.append("overwrite", overwrite ? "true" : "false")
+    const res = await fetch(`${API_BASE}/recipes/import`, {
+      method: "POST",
+      body: fd,
+    })
+    if (!res.ok) {
+      throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`)
+    }
+    return res.json() as Promise<{ name: string; filename: string; path: string }>
+  },
 }
 
 /**
