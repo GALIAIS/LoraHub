@@ -66,7 +66,7 @@ class SettingsStore:
             json.dumps(settings.to_dict(), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        os.replace(tmp, self.path)
+        tmp.replace(self.path)
 
 
 def probe_backend(settings: Settings) -> dict[str, Any]:

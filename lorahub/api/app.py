@@ -468,11 +468,12 @@ def _resolve_web_dist() -> Path | None:
 
 _WEB_DIST = _resolve_web_dist()
 if _WEB_DIST is not None:
-    _ASSETS_DIR = _WEB_DIST / "assets"
+    _WEB_ROOT = _WEB_DIST
+    _ASSETS_DIR = _WEB_ROOT / "assets"
     if _ASSETS_DIR.is_dir():
         app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
 
-    _INDEX = _WEB_DIST / "index.html"
+    _INDEX = _WEB_ROOT / "index.html"
 
     @app.get("/", include_in_schema=False)
     def _index() -> FileResponse:
@@ -485,9 +486,9 @@ if _WEB_DIST is not None:
             raise HTTPException(status_code=404, detail="not found")
         # Serve concrete static files from dist (favicon, robots.txt, …); else
         # fall back to index.html so React Router can take over.
-        candidate = (_WEB_DIST / full_path).resolve()
+        candidate = (_WEB_ROOT / full_path).resolve()
         try:
-            candidate.relative_to(_WEB_DIST)
+            candidate.relative_to(_WEB_ROOT)
         except ValueError:
             raise HTTPException(status_code=404, detail="not found") from None
         if candidate.is_file():
