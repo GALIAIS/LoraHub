@@ -129,6 +129,33 @@ def train(
 
 
 @app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8000,
+    reload: Annotated[
+        bool,
+        typer.Option("--reload", help="Auto-reload on code change (dev only)."),
+    ] = False,
+) -> None:
+    """Run the LoraHub HTTP API server (REST + WebSocket)."""
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError as exc:
+        err_console.print(
+            "[red]API extras not installed.[/red] Run: pip install lorahub[api]"
+        )
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[bold]LoraHub API[/bold] http://{host}:{port}  (Ctrl+C to stop)")
+    uvicorn.run(
+        "lorahub.api.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
+@app.command()
 def init(
     name: Annotated[str, typer.Argument(help="Name for the new recipe (no extension).")],
     template: Annotated[

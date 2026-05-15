@@ -58,6 +58,8 @@ class KohyaRunner:
 
         self._proc: subprocess.Popen[str] | None = None
         self._pump_threads: list[threading.Thread] = []
+        self._reaper_thread: threading.Thread | None = None
+        self._done_emitted: bool = False
         self._started_at: float | None = None
         self._lock = threading.RLock()
 
@@ -95,6 +97,7 @@ class KohyaRunner:
                 start_new_session=start_new_session,
             )
             self._spawn_pumps()
+            self._spawn_reaper()
 
     def _spawn_pumps(self) -> None:
         assert self._proc is not None
@@ -109,6 +112,39 @@ class KohyaRunner:
             )
             t.start()
             self._pump_threads.append(t)
+
+    def _spawn_reaper(self) -> None:
+        """Background thread that waits for the child and emits the `done` event.
+
+        Without this, callers that don't invoke `wait()` (e.g. an HTTP API that
+        fires-and-forgets) would never see job completion.
+        """
+        thread = threading.Thread(
+            target=self._reap,
+            name="kohya-reaper",
+            daemon=True,
+        )
+        thread.start()
+        self._reaper_thread = thread
+
+    def _reap(self) -> None:
+        assert self._proc is not None
+        assert self._started_at is not None
+        rc = self._proc.wait()
+        for t in self._pump_threads:
+            t.join(timeout=5.0)
+        with self._lock:
+            if self._done_emitted:
+                return
+            self._done_emitted = True
+        duration = time.time() - self._started_at
+        self._safe_emit(
+            TrainingEvent(
+                type=EventType.done,
+                payload={"returncode": rc, "duration_s": duration},
+                job_id=self._job_id,
+            )
+        )
 
     def _pump(self, stream: IO[str], source: str) -> None:
         try:
@@ -141,14 +177,9 @@ class KohyaRunner:
         rc = self._proc.wait(timeout=timeout)
         for t in self._pump_threads:
             t.join(timeout=5.0)
+        if self._reaper_thread is not None:
+            self._reaper_thread.join(timeout=5.0)
         duration = time.time() - self._started_at
-        self._on_event(
-            TrainingEvent(
-                type=EventType.done,
-                payload={"returncode": rc, "duration_s": duration},
-                job_id=self._job_id,
-            )
-        )
         return RunResult(returncode=rc, duration_s=duration)
 
     def stop(self, *, graceful: bool = True, timeout: float = 10.0) -> None:

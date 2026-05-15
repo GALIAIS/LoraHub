@@ -176,6 +176,27 @@ lorahub tag ./datasets/akagi --device cuda
 
 `--device auto` picks GPU when `onnxruntime-gpu` and a CUDA 12.x runtime are present, otherwise falls back to CPU. `--device cuda` forces GPU and errors out with an actionable message if it isn't available.
 
+## HTTP API (v0.2 starter)
+
+LoraHub ships a FastAPI server for programmatic access. Install API extras and start it:
+
+```powershell
+pip install lorahub[api]
+lorahub serve --port 18765
+```
+
+Endpoints:
+
+- `GET /health` — server status + version
+- `GET /recipes/schema` — recipe JSON Schema (use it to render UI forms)
+- `GET /jobs` / `GET /jobs/{id}` — list / inspect training jobs
+- `POST /jobs` `{recipe, workspace?}` — start a job
+- `DELETE /jobs/{id}` — stop a running job
+- `GET /jobs/{id}/events` — recent events from the in-memory ring buffer
+- `WS /jobs/{id}/stream` — live event stream (replays the buffer first)
+
+The API binds to `127.0.0.1` by default and has no auth — safe for localhost only. Persistence (SQLite/Redis) and a Vue 3 frontend land in the next v0.2.x releases.
+
 ## Project layout
 
 ```
