@@ -136,6 +136,21 @@ class BatteryStats:
 
 
 @dataclass
+class NetworkStats:
+    """Per-snapshot network throughput.
+
+    `bytes_*_total` is monotonically increasing across the host's lifetime;
+    `bytes_*_per_sec` is computed against the previous snapshot we emitted
+    so the dashboard can show rolling rate without keeping its own history.
+    """
+
+    bytes_sent_total: int
+    bytes_recv_total: int
+    bytes_sent_per_sec: float
+    bytes_recv_per_sec: float
+
+
+@dataclass
 class HostInfo:
     hostname: str
     system: str
@@ -154,6 +169,7 @@ class SystemSnapshot:
     has_psutil: bool
     has_nvidia_smi: bool
     battery: BatteryStats | None = None
+    network: NetworkStats | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,6 +182,7 @@ class SystemSnapshot:
             "disks": [d.__dict__ for d in self.disks],
             "gpus": [g.__dict__ for g in self.gpus],
             "battery": self.battery.__dict__ if self.battery is not None else None,
+            "network": self.network.__dict__ if self.network is not None else None,
         }
 
 
@@ -691,6 +708,43 @@ def _collect_host() -> HostInfo:
     )
 
 
+# Lightweight rolling state for network throughput. We snapshot the
+# psutil counters on every call and diff against the previous reading to
+# get a per-second rate. First call always returns a 0 rate (no prior).
+_last_net_sample: tuple[float, int, int] | None = None
+
+
+def _collect_network() -> NetworkStats | None:
+    if not _HAS_PSUTIL:
+        return None
+    try:
+        counters = psutil.net_io_counters()
+    except Exception:  # noqa: BLE001
+        return None
+
+    global _last_net_sample
+    now = time.monotonic()
+    sent = int(counters.bytes_sent)
+    recv = int(counters.bytes_recv)
+
+    rate_sent = 0.0
+    rate_recv = 0.0
+    if _last_net_sample is not None:
+        prev_t, prev_sent, prev_recv = _last_net_sample
+        dt = now - prev_t
+        if dt > 0:
+            rate_sent = max(0.0, (sent - prev_sent) / dt)
+            rate_recv = max(0.0, (recv - prev_recv) / dt)
+    _last_net_sample = (now, sent, recv)
+
+    return NetworkStats(
+        bytes_sent_total=sent,
+        bytes_recv_total=recv,
+        bytes_sent_per_sec=round(rate_sent, 2),
+        bytes_recv_per_sec=round(rate_recv, 2),
+    )
+
+
 def collect_snapshot(extra_disk_paths: list[Path] | None = None) -> SystemSnapshot:
     """Read every probe once and pack the result. Cheap (~10-100ms with GPU)."""
     return SystemSnapshot(
@@ -703,6 +757,7 @@ def collect_snapshot(extra_disk_paths: list[Path] | None = None) -> SystemSnapsh
         has_psutil=_HAS_PSUTIL,
         has_nvidia_smi=_find_nvidia_smi() is not None,
         battery=_collect_battery(),
+        network=_collect_network(),
     )
 
 

@@ -9,6 +9,8 @@ import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   BatteryCharging,
   BatteryFull,
   CheckCircle2,
@@ -17,6 +19,7 @@ import {
   HardDrive,
   Loader2,
   MemoryStick,
+  Network,
   Pause,
   Server,
   Thermometer,
@@ -116,6 +119,8 @@ export function DashboardPage() {
             )}
           </div>
         </header>
+
+        {snapshot && <StatusStrip snapshot={snapshot} runningJobs={stats.running} />}
 
         <JobStatGrid stats={stats} />
 
@@ -303,16 +308,21 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
             valueText={typeof cpuPercent === "number" ? `${cpuPercent.toFixed(1)}%` : "—"}
           />
           {cpu.per_core_percent.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-2">
-                每核利用率
+            <details className="group" open={cpu.per_core_percent.length <= 8}>
+              <summary className="flex items-center gap-2 cursor-pointer select-none list-none text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                <span className="size-3 grid place-items-center transition-transform group-open:rotate-90">
+                  ›
+                </span>
+                <span>每核利用率（{cpu.per_core_percent.length} 核）</span>
+              </summary>
+              <div className="mt-2 max-h-48 overflow-y-auto rounded-[4px] border border-border/40 bg-muted/20 p-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {cpu.per_core_percent.map((p, i) => (
+                    <CoreBar key={i} index={i} percent={p} />
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {cpu.per_core_percent.map((p, i) => (
-                  <CoreBar key={i} index={i} percent={p} />
-                ))}
-              </div>
-            </div>
+            </details>
           )}
         </CardContent>
       </Card>
@@ -770,6 +780,144 @@ export function StateBadge({ state }: { state: string }) {
       {STATE_LABELS[state] ?? state}
     </Badge>
   )
+}
+
+// =================================================== StatusStrip ===========
+
+/**
+ * Compact horizontal status strip pinned right below the page header. Shows
+ * the four numbers users care about most while running a training job: CPU,
+ * memory, the active GPU, and current network up/down rates.
+ */
+function StatusStrip({
+  snapshot,
+  runningJobs,
+}: {
+  snapshot: SystemSnapshot
+  runningJobs: number
+}) {
+  const cpu = snapshot.cpu.usage_percent
+  const mem = snapshot.memory.percent
+  const gpu = snapshot.gpus[0]
+  const gpuUtil = gpu?.utilization_percent ?? null
+  const gpuMem =
+    gpu && gpu.memory_total_bytes && typeof gpu.memory_used_bytes === "number"
+      ? (gpu.memory_used_bytes / gpu.memory_total_bytes) * 100
+      : null
+  const net = snapshot.network
+
+  return (
+    <div className="rounded-[6px] border border-border/70 bg-card/60 shadow-[var(--panel-shadow)] px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+      <StatusChip
+        icon={<Cpu className="size-3.5" />}
+        label="CPU"
+        value={typeof cpu === "number" ? `${cpu.toFixed(0)}%` : "—"}
+        sub={`${snapshot.cpu.cores_logical} 核`}
+        tone={toneForPercent(cpu)}
+      />
+      <StatusChip
+        icon={<MemoryStick className="size-3.5" />}
+        label="内存"
+        value={`${mem.toFixed(0)}%`}
+        sub={`${fmtBytes(snapshot.memory.used_bytes)} / ${fmtBytes(snapshot.memory.total_bytes)}`}
+        tone={toneForPercent(mem)}
+      />
+      {gpu && (
+        <StatusChip
+          icon={<Zap className="size-3.5" />}
+          label="GPU"
+          value={typeof gpuUtil === "number" ? `${gpuUtil.toFixed(0)}%` : "—"}
+          sub={
+            gpu.memory_total_bytes && typeof gpu.memory_used_bytes === "number"
+              ? `${fmtBytes(gpu.memory_used_bytes)} / ${fmtBytes(gpu.memory_total_bytes)}`
+              : gpu.name
+          }
+          tone={toneForPercent(gpuMem ?? gpuUtil)}
+        />
+      )}
+      {net && (
+        <>
+          <StatusChip
+            icon={<ArrowDown className="size-3.5" />}
+            label="下载"
+            value={fmtRate(net.bytes_recv_per_sec)}
+            sub={`累计 ${fmtBytes(net.bytes_recv_total)}`}
+            tone={{ text: "text-emerald-700 dark:text-emerald-400", bar: "" }}
+          />
+          <StatusChip
+            icon={<ArrowUp className="size-3.5" />}
+            label="上传"
+            value={fmtRate(net.bytes_sent_per_sec)}
+            sub={`累计 ${fmtBytes(net.bytes_sent_total)}`}
+            tone={{ text: "text-primary", bar: "" }}
+          />
+        </>
+      )}
+      {!net && (
+        <span className="text-muted-foreground/60 inline-flex items-center gap-1.5">
+          <Network className="size-3.5" />
+          网络指标不可用
+        </span>
+      )}
+      <StatusChip
+        icon={<Activity className="size-3.5" />}
+        label="训练中"
+        value={String(runningJobs)}
+        sub={runningJobs > 0 ? "实时事件流活跃" : "无运行任务"}
+        tone={
+          runningJobs > 0
+            ? { text: "text-primary", bar: "" }
+            : { text: "text-muted-foreground", bar: "" }
+        }
+      />
+    </div>
+  )
+}
+
+function StatusChip({
+  icon,
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  sub?: string
+  tone: { text: string; bar: string }
+}) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="text-muted-foreground/70 shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+            {label}
+          </span>
+          <span className={cn("font-mono tabular-nums font-semibold", tone.text)}>
+            {value}
+          </span>
+        </div>
+        {sub && (
+          <div className="text-[10px] text-muted-foreground/70 font-mono truncate">
+            {sub}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function fmtRate(bytesPerSec: number): string {
+  // Format network throughput in B/s, KB/s, MB/s. Always show one decimal so
+  // a flickering counter on a busy link reads more naturally.
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return "0 B/s"
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`
+  if (bytesPerSec < 1024 * 1024 * 1024)
+    return `${(bytesPerSec / 1024 / 1024).toFixed(1)} MB/s`
+  return `${(bytesPerSec / 1024 / 1024 / 1024).toFixed(2)} GB/s`
 }
 
 // =================================================== utils =================

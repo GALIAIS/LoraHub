@@ -16,6 +16,7 @@ from .datasets import router as datasets_router
 from .health import router as health_router
 from .jobs import router as jobs_router
 from .models import router as models_router
+from .network import router as network_router
 from .recipes import router as recipes_router
 from .runtime import router as runtime_router
 from .settings_routes import router as settings_router
@@ -30,6 +31,7 @@ all_routers: list[APIRouter] = [
     backends_router,
     bootstrap_router,
     models_router,
+    network_router,
     runtime_router,
     system_router,
 ]

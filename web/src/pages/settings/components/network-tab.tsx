@@ -1,7 +1,21 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Save, RotateCcw, Globe2, Github, Cloud } from "lucide-react"
-import { api, type SettingsState } from "@/lib/api"
+import {
+  Cloud,
+  Github,
+  Globe2,
+  Loader2,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Zap,
+} from "lucide-react"
+import {
+  api,
+  type MirrorPreset,
+  type ProbeResult,
+  type SettingsState,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,19 +27,7 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card"
-
-const GITHUB_PROXY_PRESETS = [
-  { label: "直连（不使用代理）", value: "" },
-  { label: "gh-proxy.org", value: "https://gh-proxy.org" },
-  { label: "hk.gh-proxy.org（香港节点）", value: "https://hk.gh-proxy.org" },
-  { label: "cdn.gh-proxy.org（CDN 节点）", value: "https://cdn.gh-proxy.org" },
-  { label: "edgeone.gh-proxy.org（EdgeOne 节点）", value: "https://edgeone.gh-proxy.org" },
-] as const
-
-const HF_PRESETS = [
-  { label: "huggingface.co（官方）", value: "" },
-  { label: "hf-mirror.com（国内镜像）", value: "https://hf-mirror.com" },
-] as const
+import { cn } from "@/lib/utils"
 
 type Draft = {
   github_proxy: string
@@ -43,17 +45,162 @@ function buildDraft(s: SettingsState): Draft {
   }
 }
 
+function formatLatency(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—"
+  if (ms < 100) return `${ms.toFixed(0)} ms`
+  if (ms < 1000) return `${ms.toFixed(0)} ms`
+  return `${(ms / 1000).toFixed(2)} s`
+}
+
+function latencyTone(ms: number | null | undefined, ok: boolean): string {
+  if (!ok || ms === null || ms === undefined) return "text-destructive"
+  if (ms < 200) return "text-emerald-600 dark:text-emerald-400"
+  if (ms < 500) return "text-primary"
+  if (ms < 1500) return "text-amber-600 dark:text-amber-400"
+  return "text-destructive"
+}
+
+interface MirrorSelectorProps {
+  category: "github_proxy" | "huggingface" | "pypi"
+  presets: MirrorPreset[]
+  current: string
+  onChoose: (value: string) => void
+  /** Called when the user clicks "测速并自动选用最快" with a fresh result. */
+  onAutoPick?: (result: ProbeResult) => void
+}
+
+function MirrorSelector({
+  category,
+  presets,
+  current,
+  onChoose,
+  onAutoPick,
+}: MirrorSelectorProps) {
+  const [results, setResults] = useState<ProbeResult[] | null>(null)
+
+  const probe = useMutation({
+    mutationFn: () => api.probeMirrors({ category }),
+    onSuccess: (rows) => setResults(rows),
+  })
+
+  // Auto-pick the fastest reachable mirror once the probe lands.
+  useEffect(() => {
+    if (!probe.isSuccess || !probe.data) return
+    const fastest = probe.data.find((r) => r.ok)
+    if (fastest) {
+      onChoose(fastest.value)
+      onAutoPick?.(fastest)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probe.isSuccess])
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+          可选镜像
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={probe.isPending}
+          onClick={() => {
+            setResults(null)
+            probe.mutate()
+          }}
+        >
+          {probe.isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <Zap className="size-3" />
+          )}
+          {probe.isPending ? "测速中…" : "测速并自动选用最快"}
+        </Button>
+      </div>
+
+      <div className="rounded-[4px] border border-border/60 divide-y divide-border/40 overflow-hidden">
+        {presets.map((p) => {
+          const r = results?.find((x) => x.value === p.value)
+          const fastest =
+            results !== null && results.length > 0 && results.find((x) => x.ok)?.value
+          const isCurrent = current === p.value
+          const isFastest = r && r.value === fastest && r.ok
+          return (
+            <button
+              key={p.label + p.value}
+              type="button"
+              onClick={() => onChoose(p.value)}
+              className={cn(
+                "w-full flex items-center gap-3 px-3 py-2 text-xs text-left transition-colors",
+                isCurrent
+                  ? "bg-primary/10 text-foreground"
+                  : "hover:bg-muted/50 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium truncate">{p.label}</span>
+                {p.value && (
+                  <span className="block text-[10px] font-mono text-muted-foreground/70 truncate">
+                    {p.value}
+                  </span>
+                )}
+              </span>
+              {r && (
+                <span
+                  className={cn(
+                    "text-[11px] font-mono tabular-nums shrink-0",
+                    latencyTone(r.latency_ms, r.ok),
+                  )}
+                  title={r.error ?? undefined}
+                >
+                  {r.ok ? formatLatency(r.latency_ms) : "不可达"}
+                </span>
+              )}
+              {isFastest && (
+                <span className="rounded-[2px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] shrink-0 inline-flex items-center gap-1">
+                  <Sparkles className="size-2.5" />
+                  最快
+                </span>
+              )}
+              {isCurrent && (
+                <span className="rounded-[2px] bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] shrink-0">
+                  已选
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {probe.isError && (
+        <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-1.5 text-xs font-mono text-destructive">
+          {(probe.error as Error).message}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * Network acceleration: GitHub proxy + HuggingFace mirror + ModelScope.
  *
- * The dirty state is local to this tab so saves don't collide with edits in
- * sibling tabs.
+ * Each mirror category supports a "test latency and pick the fastest"
+ * action backed by /api/network/probe; the user can also click any preset
+ * directly. The dirty state is local to this tab so saves don't collide
+ * with edits in sibling tabs.
  */
 export function NetworkTab() {
   const qc = useQueryClient()
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+  })
+
+  const presetsQuery = useQuery({
+    queryKey: ["mirror-presets"],
+    queryFn: api.listMirrorPresets,
+    staleTime: 60 * 60 * 1000, // 1h — preset list is effectively static
   })
 
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -83,6 +230,9 @@ export function NetworkTab() {
     draft.modelscope_enabled !== saved.modelscope_enabled ||
     draft.modelscope_token !== (saved.modelscope_token ?? "")
 
+  const githubPresets = presetsQuery.data?.github_proxy ?? []
+  const hfPresets = presetsQuery.data?.huggingface ?? []
+
   return (
     <div className="space-y-5">
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
@@ -98,19 +248,12 @@ export function NetworkTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {GITHUB_PROXY_PRESETS.map((p) => (
-              <Button
-                key={p.label}
-                type="button"
-                size="sm"
-                variant={draft.github_proxy === p.value ? "default" : "outline"}
-                onClick={() => setDraft({ ...draft, github_proxy: p.value })}
-              >
-                {p.label}
-              </Button>
-            ))}
-          </div>
+          <MirrorSelector
+            category="github_proxy"
+            presets={githubPresets}
+            current={draft.github_proxy}
+            onChoose={(v) => setDraft({ ...draft, github_proxy: v })}
+          />
           <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-center">
             <Label className="text-xs">自定义</Label>
             <Input
@@ -136,23 +279,12 @@ export function NetworkTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {HF_PRESETS.map((p) => (
-              <Button
-                key={p.label}
-                type="button"
-                size="sm"
-                variant={
-                  draft.huggingface_endpoint === p.value ? "default" : "outline"
-                }
-                onClick={() =>
-                  setDraft({ ...draft, huggingface_endpoint: p.value })
-                }
-              >
-                {p.label}
-              </Button>
-            ))}
-          </div>
+          <MirrorSelector
+            category="huggingface"
+            presets={hfPresets}
+            current={draft.huggingface_endpoint}
+            onChoose={(v) => setDraft({ ...draft, huggingface_endpoint: v })}
+          />
           <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-center">
             <Label className="text-xs">自定义</Label>
             <Input

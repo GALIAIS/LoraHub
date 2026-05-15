@@ -89,3 +89,6 @@ desktop.ini
 !.env.example
 tsconfig.tsbuildinfo
 diffusion-pipe/
+.cloud-*.sh
+.remote-*.sh
+.wsl-*.sh

@@ -349,6 +349,22 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
+  listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
+  probeMirrors: (
+    body: {
+      category?: string
+      urls?: string[]
+      timeout_ms?: number
+    },
+  ) =>
+    http<ProbeResult[]>("/network/probe", {
+      method: "POST",
+      body: JSON.stringify({
+        category: body.category,
+        urls: body.urls,
+        timeout_ms: body.timeout_ms ?? 4000,
+      }),
+    }),
   getJobFiles: (id: string) => http<JobFilesResponse>(`/jobs/${id}/files`),
   getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
   jobFileUrl: (id: string, path: string) =>
@@ -530,6 +546,28 @@ export interface SystemSnapshot {
   disks: SystemDisk[]
   gpus: SystemGpu[]
   battery: SystemBattery | null
+  network: {
+    bytes_sent_total: number
+    bytes_recv_total: number
+    bytes_sent_per_sec: number
+    bytes_recv_per_sec: number
+  } | null
+}
+
+export interface MirrorPreset {
+  label: string
+  value: string
+  probe: string
+}
+
+export interface ProbeResult {
+  label: string
+  value: string
+  probe: string
+  ok: boolean
+  status: number | null
+  latency_ms: number | null
+  error: string | null
 }
 
 /**
