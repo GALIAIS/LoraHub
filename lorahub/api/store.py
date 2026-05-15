@@ -101,6 +101,12 @@ class JobStore:
             ).fetchall()
         return [_row_to_record(r) for r in rows]
 
+    def delete(self, job_id: str) -> bool:
+        """Remove a job row. Returns True if a row was deleted."""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            return cur.rowcount > 0
+
     def mark_orphans_interrupted(self) -> int:
         """Convert any non-terminal jobs to `interrupted`. Returns rows affected.
 

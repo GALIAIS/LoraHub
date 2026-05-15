@@ -124,6 +124,16 @@ class JobRegistry:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def delete(self, job_id: str) -> bool:
+        """Drop a job from memory and the backing store. Returns True if removed."""
+        with self._lock:
+            removed = self._jobs.pop(job_id, None) is not None
+            self._listeners.pop(job_id, None)
+        if self._store is not None:
+            with contextlib.suppress(Exception):
+                self._store.delete(job_id)
+        return removed
+
     def list(self) -> list[JobRecord]:
         with self._lock:
             return list(self._jobs.values())

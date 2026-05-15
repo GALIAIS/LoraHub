@@ -464,3 +464,132 @@ def test_scan_dataset_missing_path_returns_empty_summary(client: TestClient) -> 
 
     assert r.status_code == 200
     assert r.json()["exists"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Rerun / reveal / archive
+# --------------------------------------------------------------------------- #
+
+
+def _wait_terminal(client: TestClient, job_id: str, timeout: float = 30.0) -> dict[str, Any]:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get(f"/api/jobs/{job_id}").json()
+        if s["state"] in ("succeeded", "failed", "canceled", "interrupted"):
+            return s
+        time.sleep(0.2)
+    return client.get(f"/api/jobs/{job_id}").json()
+
+
+def test_rerun_creates_new_job(client: TestClient, tmp_path: Path) -> None:
+    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    first = client.post("/api/jobs", json=payload).json()
+    first_id = first["id"]
+    final_first = _wait_terminal(client, first_id)
+    assert final_first["state"] == "succeeded", final_first
+
+    r = client.post(f"/api/jobs/{first_id}/rerun")
+    assert r.status_code == 202, r.text
+    fresh = r.json()
+    assert fresh["id"] != first_id
+    # The fresh job must land in its own workspace so the two runs don't fight
+    # over the same `events.jsonl`.
+    assert fresh["workspace"] != final_first["workspace"]
+
+    final_fresh = _wait_terminal(client, fresh["id"])
+    assert final_fresh["state"] == "succeeded", final_fresh
+    assert final_fresh["returncode"] == 0
+
+
+def test_rerun_unknown_job_404(client: TestClient) -> None:
+    r = client.post("/api/jobs/does-not-exist/rerun")
+    assert r.status_code == 404
+
+
+def test_reveal_unknown_job_404(client: TestClient) -> None:
+    r = client.post("/api/jobs/does-not-exist/reveal")
+    assert r.status_code == 404
+
+
+def test_reveal_existing_job_invokes_subprocess(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    captured: dict[str, Any] = {}
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> None:
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    r = client.post(f"/api/jobs/{job.id}/reveal")
+    assert r.status_code == 200, r.text
+    assert r.json()["opened"] == str(ws)
+    assert captured["argv"][-1] == str(ws)
+    # Never use shell=True — argv form only.
+    assert "shell" not in captured["kwargs"] or captured["kwargs"]["shell"] is False
+
+
+def test_reveal_returns_409_when_workspace_missing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    job = state.registry.create(
+        workspace=tmp_path / "gone", recipe_snapshot={}
+    )
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/reveal")
+    assert r.status_code == 409
+
+
+def test_archive_completed_job_moves_workspace(
+    client: TestClient, tmp_path: Path
+) -> None:
+    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+    final = _wait_terminal(client, job_id)
+    assert final["state"] == "succeeded", final
+    workspace = Path(final["workspace"])
+    assert workspace.exists()
+
+    r = client.delete(f"/api/jobs/{job_id}", params={"archive": "true"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["archived"] is True
+    assert body["warnings"] == []
+    moved_to = body["workspace_moved_to"]
+    assert moved_to is not None
+    moved = Path(moved_to)
+    assert moved.exists()
+    assert moved.parent.name == "_archive"
+    assert not workspace.exists()
+
+    # Job is gone from both registry and store.
+    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    r = client.delete(f"/api/jobs/{job.id}", params={"archive": "true"})
+    assert r.status_code == 409
+    # Job is still tracked.
+    assert client.get(f"/api/jobs/{job.id}").status_code == 200
+
+
+def test_archive_unknown_job_404(client: TestClient) -> None:
+    r = client.delete("/api/jobs/does-not-exist", params={"archive": "true"})
+    assert r.status_code == 404

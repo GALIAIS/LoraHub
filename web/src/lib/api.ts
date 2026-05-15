@@ -130,6 +130,16 @@ export const api = {
     http<{ events: TrainingEvent[] }>(`/jobs/${id}/events?limit=${limit}`),
   cancelJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}`, { method: "DELETE" }),
+  rerunJob: (id: string) =>
+    http<JobSummary>(`/jobs/${id}/rerun`, { method: "POST" }),
+  revealJob: (id: string) =>
+    http<{ opened: string }>(`/jobs/${id}/reveal`, { method: "POST" }),
+  archiveJob: (id: string) =>
+    http<{
+      archived: boolean
+      workspace_moved_to: string | null
+      warnings: string[]
+    }>(`/jobs/${id}?archive=true`, { method: "DELETE" }),
   recipeSchema: () => http<Record<string, unknown>>("/recipes/schema"),
   listRecipes: () =>
     http<{ dir: string; recipes: RecipeListEntry[] }>("/recipes"),

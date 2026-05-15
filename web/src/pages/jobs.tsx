@@ -1,13 +1,20 @@
 import { useState, useMemo } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { api, useJobStream, type TrainingEvent } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { StateBadge } from "./dashboard"
-import { Square } from "lucide-react"
+import { Square, RefreshCw, FolderOpen, Archive } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+const TERMINAL_STATES = new Set([
+  "succeeded",
+  "failed",
+  "canceled",
+  "interrupted",
+])
 
 export function JobsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -71,7 +78,7 @@ export function JobsPage() {
 
       <section className="min-w-0 flex flex-col bg-background/60">
         {selected ? (
-          <JobDetail jobId={selected.id} />
+          <JobDetail jobId={selected.id} onSelectJob={setSelectedId} />
         ) : (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
             Select a job from the list to inspect events.
@@ -82,13 +89,22 @@ export function JobsPage() {
   )
 }
 
-function JobDetail({ jobId }: { jobId: string }) {
+function JobDetail({
+  jobId,
+  onSelectJob,
+}: {
+  jobId: string
+  onSelectJob: (id: string | null) => void
+}) {
+  const queryClient = useQueryClient()
   const job = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => api.getJob(jobId),
     refetchInterval: 2000,
   })
   const stream = useJobStream(jobId)
+  const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive">(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const data = job.data
   const events = stream.events
@@ -97,11 +113,63 @@ function JobDetail({ jobId }: { jobId: string }) {
     [events],
   )
   const isLive = data?.state === "running"
+  const isTerminal = data ? TERMINAL_STATES.has(data.state) : false
 
   async function onCancel() {
     if (!data) return
     await api.cancelJob(data.id)
     job.refetch()
+  }
+
+  async function onRerun() {
+    if (!data) return
+    setBusy("rerun")
+    setActionError(null)
+    try {
+      const fresh = await api.rerunJob(data.id)
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      onSelectJob(fresh.id)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function onReveal() {
+    if (!data) return
+    setBusy("reveal")
+    setActionError(null)
+    try {
+      await api.revealJob(data.id)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function onArchive() {
+    if (!data) return
+    if (!window.confirm(
+      `Archive job ${data.id.slice(-8)}? Its workspace will be moved into _archive/ and the job record will be removed from the list.`,
+    )) {
+      return
+    }
+    setBusy("archive")
+    setActionError(null)
+    try {
+      const result = await api.archiveJob(data.id)
+      if (result.warnings.length > 0) {
+        setActionError(`Archived with warnings: ${result.warnings.join("; ")}`)
+      }
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      onSelectJob(null)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
@@ -122,12 +190,46 @@ function JobDetail({ jobId }: { jobId: string }) {
               {data.workspace}
             </div>
           )}
+          {actionError && (
+            <div className="text-[11px] text-destructive mt-2 break-all">
+              {actionError}
+            </div>
+          )}
         </div>
-        {isLive && (
-          <Button variant="destructive" size="sm" onClick={onCancel}>
-            <Square className="size-3" /> Cancel
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onReveal}
+            disabled={!data || busy !== null}
+            title="Open workspace in file manager"
+          >
+            <FolderOpen className="size-3" />
           </Button>
-        )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRerun}
+            disabled={!data || busy !== null}
+          >
+            <RefreshCw className={cn("size-3", busy === "rerun" && "animate-spin")} /> Rerun
+          </Button>
+          {isTerminal && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onArchive}
+              disabled={busy !== null}
+            >
+              <Archive className="size-3" /> Archive
+            </Button>
+          )}
+          {isLive && (
+            <Button variant="destructive" size="sm" onClick={onCancel}>
+              <Square className="size-3" /> Cancel
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="grid grid-cols-3 gap-3 px-7 py-4 border-b border-border/60">
