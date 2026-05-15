@@ -259,11 +259,11 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
   const mem = snapshot.memory
   const memPercent = Math.max(0, Math.min(100, mem.percent))
   const cpuPercent =
-    cpu.usage_percent !== null
+    typeof cpu.usage_percent === "number"
       ? Math.max(0, Math.min(100, cpu.usage_percent))
       : null
   const swapPercent =
-    mem.swap_total_bytes && mem.swap_used_bytes !== null
+    mem.swap_total_bytes && typeof mem.swap_used_bytes === "number"
       ? Math.max(
           0,
           Math.min(100, (mem.swap_used_bytes / Math.max(mem.swap_total_bytes, 1)) * 100),
@@ -274,10 +274,10 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
     `${cpu.cores_logical} 逻辑核`,
   ]
   if (cpu.cores_physical) cpuDescriptionParts.push(`${cpu.cores_physical} 物理核`)
-  if (cpu.frequency_mhz !== null) {
+  if (typeof cpu.frequency_mhz === "number") {
     cpuDescriptionParts.push(`${formatFrequency(cpu.frequency_mhz)}`)
   }
-  if (cpu.cpu_temperature_c !== null) {
+  if (typeof cpu.cpu_temperature_c === "number") {
     cpuDescriptionParts.push(`温度 ${cpu.cpu_temperature_c.toFixed(0)}°C`)
   }
   if (cpu.load_average) {
@@ -300,7 +300,7 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
           <UsageBar
             label="总体利用率"
             percent={cpuPercent}
-            valueText={cpuPercent !== null ? `${cpuPercent.toFixed(1)}%` : "—"}
+            valueText={typeof cpuPercent === "number" ? `${cpuPercent.toFixed(1)}%` : "—"}
           />
           {cpu.per_core_percent.length > 0 && (
             <div>
@@ -333,7 +333,7 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
             percent={memPercent}
             valueText={`${memPercent.toFixed(1)}%`}
           />
-          {swapPercent !== null && (
+          {typeof swapPercent === "number" && (
             <UsageBar
               label="交换分区"
               percent={swapPercent}
@@ -442,7 +442,7 @@ function GpuSection({
 
 function GpuCard({ gpu }: { gpu: SystemGpu }) {
   const memPercent =
-    gpu.memory_used_bytes !== null && gpu.memory_total_bytes
+    typeof gpu.memory_used_bytes === "number" && gpu.memory_total_bytes
       ? Math.max(0, Math.min(100, (gpu.memory_used_bytes / gpu.memory_total_bytes) * 100))
       : null
   const utilTone = toneForPercent(gpu.utilization_percent ?? 0)
@@ -468,12 +468,12 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
             <Badge className={cn("rounded-[2px] uppercase text-[10px] tracking-[0.1em]", vendor.className)}>
               {vendor.label}
             </Badge>
-            {gpu.temperature_c !== null && (
+            {typeof gpu.temperature_c === "number" && (
               <Badge variant="outline" className="rounded-[2px] gap-1">
                 <Thermometer className="size-3" /> {gpu.temperature_c.toFixed(0)}°C
               </Badge>
             )}
-            {gpu.fan_percent !== null && (
+            {typeof gpu.fan_percent === "number" && (
               <Badge variant="outline" className="rounded-[2px]">
                 风扇 {gpu.fan_percent.toFixed(0)}%
               </Badge>
@@ -486,14 +486,16 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
           label="计算利用率"
           percent={gpu.utilization_percent}
           valueText={
-            gpu.utilization_percent !== null ? `${gpu.utilization_percent.toFixed(0)}%` : "—"
+            typeof gpu.utilization_percent === "number"
+              ? `${gpu.utilization_percent.toFixed(0)}%`
+              : "—"
           }
         />
         <UsageBar
           label="显存"
           percent={memPercent}
           valueText={
-            gpu.memory_used_bytes !== null && gpu.memory_total_bytes
+            typeof gpu.memory_used_bytes === "number" && gpu.memory_total_bytes
               ? `${fmtBytes(gpu.memory_used_bytes)} / ${fmtBytes(gpu.memory_total_bytes)}`
               : gpu.memory_total_bytes
                 ? `— / ${fmtBytes(gpu.memory_total_bytes)}`
@@ -502,18 +504,25 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
         />
         <Separator />
         <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-xs">
-          <Metric label="功率" value={gpu.power_w !== null ? `${gpu.power_w.toFixed(0)} W` : "—"} />
+          <Metric
+            label="功率"
+            value={typeof gpu.power_w === "number" ? `${gpu.power_w.toFixed(0)} W` : "—"}
+          />
           <Metric
             label="功率上限"
-            value={gpu.power_limit_w !== null ? `${gpu.power_limit_w.toFixed(0)} W` : "—"}
+            value={
+              typeof gpu.power_limit_w === "number" ? `${gpu.power_limit_w.toFixed(0)} W` : "—"
+            }
           />
           <Metric
             label="可用显存"
-            value={gpu.memory_free_bytes !== null ? fmtBytes(gpu.memory_free_bytes) : "—"}
+            value={typeof gpu.memory_free_bytes === "number" ? fmtBytes(gpu.memory_free_bytes) : "—"}
           />
           <Metric
             label="温度"
-            value={gpu.temperature_c !== null ? `${gpu.temperature_c.toFixed(0)} °C` : "—"}
+            value={
+              typeof gpu.temperature_c === "number" ? `${gpu.temperature_c.toFixed(0)} °C` : "—"
+            }
           />
         </dl>
         <span className="sr-only">
@@ -578,7 +587,7 @@ function BatteryCard({ battery }: { battery: SystemBattery }) {
         : "text-foreground"
   const description = (() => {
     if (battery.plugged) return "电源已连接"
-    if (battery.secs_left !== null) return `预计剩余 ${formatSecs(battery.secs_left)}`
+    if (typeof battery.secs_left === "number") return `预计剩余 ${formatSecs(battery.secs_left)}`
     return "未连接电源"
   })()
   const barTone = toneForPercent(percent)

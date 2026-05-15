@@ -360,6 +360,12 @@ export interface SystemSnapshot {
  * Subscribe to /api/system/stream — the server pushes a fresh snapshot
  * every second. The most recent snapshot is returned alongside the WS state
  * so the dashboard can fall back to polling when the socket is down.
+ *
+ * The connection is opened lazily on a microtask so React 18 StrictMode's
+ * synchronous mount/unmount/mount cycle doesn't leave a half-opened socket
+ * behind (which prints a noisy "closed before the connection is established"
+ * warning in dev). On unmount we wait for `open` before calling `close()`,
+ * for the same reason.
  */
 export function useSystemStream(enabled = true) {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
@@ -368,23 +374,38 @@ export function useSystemStream(enabled = true) {
 
   useEffect(() => {
     if (!enabled) return
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const host = window.location.host || "127.0.0.1:18765"
-    const ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
-    wsRef.current = ws
+    let cancelled = false
+    let ws: WebSocket | null = null
 
-    ws.onopen = () => setStatus("open")
-    ws.onclose = () => setStatus("closed")
-    ws.onmessage = (msg) => {
-      try {
-        setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
-      } catch {
-        // ignore malformed frames
+    const timer = window.setTimeout(() => {
+      if (cancelled) return
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      const host = window.location.host || "127.0.0.1:18765"
+      ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
+      wsRef.current = ws
+
+      ws.onopen = () => setStatus("open")
+      ws.onclose = () => setStatus("closed")
+      ws.onerror = () => setStatus("closed")
+      ws.onmessage = (msg) => {
+        try {
+          setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
+        } catch {
+          // ignore malformed frames
+        }
       }
-    }
+    }, 30)
 
     return () => {
-      ws.close()
+      cancelled = true
+      window.clearTimeout(timer)
+      const sock = ws
+      if (!sock) return
+      if (sock.readyState === WebSocket.CONNECTING) {
+        sock.addEventListener("open", () => sock.close(), { once: true })
+      } else if (sock.readyState === WebSocket.OPEN) {
+        sock.close()
+      }
       wsRef.current = null
     }
   }, [enabled])
