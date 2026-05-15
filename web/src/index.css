@@ -1,0 +1,682 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto)); }
+  }
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height, var(--accordion-panel-height, auto)); }
+    to { height: 0; }
+  }
+}
+
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) { @slot; }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) { @slot; }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) { @slot; }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) { @slot; }
+}
+@custom-variant data-selected {
+  &:where([data-selected="true"]) { @slot; }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) { @slot; }
+}
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) { @slot; }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) { @slot; }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) { @slot; }
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+  --background: oklch(0.982 0.002 95);
+  --foreground: oklch(0.195 0.008 255);
+  --card: oklch(0.995 0.002 95);
+  --card-foreground: oklch(0.195 0.008 255);
+  --popover: oklch(0.995 0.002 95);
+  --popover-foreground: oklch(0.195 0.008 255);
+  --primary: oklch(0.165 0.012 255);
+  --primary-foreground: oklch(0.985 0.001 95);
+  --secondary: oklch(0.955 0.003 255);
+  --secondary-foreground: oklch(0.24 0.01 255);
+  --muted: oklch(0.965 0.003 255);
+  --muted-foreground: oklch(0.505 0.01 255);
+  --accent: oklch(0.945 0.004 240);
+  --accent-foreground: oklch(0.2 0.008 255);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.865 0.005 255);
+  --input: oklch(0.91 0.005 255);
+  --ring: oklch(0.575 0.016 250);
+  --chart-1: oklch(0.32 0.05 246);
+  --chart-2: oklch(0.42 0.03 210);
+  --chart-3: oklch(0.55 0.02 190);
+  --chart-4: oklch(0.68 0.015 160);
+  --chart-5: oklch(0.79 0.01 120);
+  --radius: 0.22rem;
+  --sidebar: oklch(0.972 0.003 255);
+  --sidebar-foreground: oklch(0.2 0.008 255);
+  --sidebar-primary: oklch(0.165 0.012 255);
+  --sidebar-primary-foreground: oklch(0.985 0.001 95);
+  --sidebar-accent: oklch(0.94 0.004 250);
+  --sidebar-accent-foreground: oklch(0.2 0.008 255);
+  --sidebar-border: oklch(0.84 0.006 255);
+  --sidebar-ring: oklch(0.575 0.016 250);
+  --shell-grid: oklch(0.26 0.01 255 / 0.08);
+  --shell-grid-strong: oklch(0.18 0.01 255 / 0.12);
+  --shell-glow: oklch(0.72 0.015 240 / 0.14);
+  --shell-dot: oklch(0.18 0.01 255 / 0.08);
+  --panel-line: oklch(0.2 0.01 255 / 0.14);
+  --panel-line-strong: oklch(0.18 0.01 255 / 0.28);
+  --panel-fill: color-mix(in oklab, var(--card) 96%, transparent);
+  --panel-fill-strong: color-mix(in oklab, var(--card) 90%, var(--background) 10%);
+  --warning-stripe: oklch(0.24 0.02 90 / 0.16);
+  --crosshair-line: oklch(0.18 0.01 255 / 0.16);
+  --shiro-cut: 14px;
+  --shiro-cut-sm: 10px;
+  --shell-shadow: 0 28px 60px -34px rgb(9 14 21 / 0.28);
+  --panel-shadow:
+    0 1px 0 rgb(255 255 255 / 0.58) inset,
+    0 0 0 1px rgb(15 23 42 / 0.04),
+    0 18px 40px -30px rgb(15 23 42 / 0.22);
+  --panel-shadow-strong:
+    0 1px 0 rgb(255 255 255 / 0.68) inset,
+    0 0 0 1px rgb(15 23 42 / 0.05),
+    0 24px 50px -28px rgb(15 23 42 / 0.28);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.75);
+  --radius-md: calc(var(--radius) * 0.875);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.25);
+  --radius-2xl: calc(var(--radius) * 1.5);
+  --radius-3xl: calc(var(--radius) * 1.75);
+  --radius-4xl: calc(var(--radius) * 2);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.145 0.008 255);
+  --foreground: oklch(0.965 0.004 95);
+  --card: oklch(0.182 0.01 255);
+  --card-foreground: oklch(0.965 0.004 95);
+  --popover: oklch(0.182 0.01 255);
+  --popover-foreground: oklch(0.965 0.004 95);
+  --primary: oklch(0.955 0.004 95);
+  --primary-foreground: oklch(0.16 0.008 255);
+  --secondary: oklch(0.23 0.01 255);
+  --secondary-foreground: oklch(0.95 0.004 95);
+  --muted: oklch(0.212 0.01 255);
+  --muted-foreground: oklch(0.72 0.008 255);
+  --accent: oklch(0.248 0.014 246);
+  --accent-foreground: oklch(0.97 0.004 95);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(0.32 0.01 255);
+  --input: oklch(0.29 0.012 255);
+  --ring: oklch(0.72 0.02 246);
+  --chart-1: oklch(0.82 0.03 246);
+  --chart-2: oklch(0.72 0.02 220);
+  --chart-3: oklch(0.62 0.018 190);
+  --chart-4: oklch(0.52 0.015 160);
+  --chart-5: oklch(0.42 0.01 120);
+  --sidebar: oklch(0.165 0.008 255);
+  --sidebar-foreground: oklch(0.965 0.004 95);
+  --sidebar-primary: oklch(0.955 0.004 95);
+  --sidebar-primary-foreground: oklch(0.16 0.008 255);
+  --sidebar-accent: oklch(0.228 0.012 246);
+  --sidebar-accent-foreground: oklch(0.965 0.004 95);
+  --sidebar-border: oklch(0.315 0.01 255);
+  --sidebar-ring: oklch(0.72 0.02 246);
+  --shell-grid: oklch(0.96 0.006 95 / 0.05);
+  --shell-grid-strong: oklch(0.96 0.006 95 / 0.08);
+  --shell-glow: oklch(0.68 0.02 240 / 0.12);
+  --shell-dot: oklch(0.98 0.006 95 / 0.08);
+  --panel-line: oklch(0.98 0.006 95 / 0.08);
+  --panel-line-strong: oklch(0.98 0.006 95 / 0.18);
+  --panel-fill: color-mix(in oklab, var(--card) 94%, transparent);
+  --panel-fill-strong: color-mix(in oklab, var(--card) 90%, black 10%);
+  --warning-stripe: oklch(0.86 0.01 95 / 0.14);
+  --crosshair-line: oklch(0.98 0.006 95 / 0.12);
+  --shiro-cut: 14px;
+  --shiro-cut-sm: 10px;
+  --shell-shadow: 0 30px 60px -34px rgb(0 0 0 / 0.5);
+  --panel-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    0 0 0 1px rgb(255 255 255 / 0.03),
+    0 18px 40px -30px rgb(0 0 0 / 0.5);
+  --panel-shadow-strong:
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 0 0 1px rgb(255 255 255 / 0.04),
+    0 24px 50px -28px rgb(0 0 0 / 0.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-image:
+      radial-gradient(circle at top left, var(--shell-glow), transparent 34%),
+      linear-gradient(to bottom, transparent, color-mix(in oklab, var(--background) 90%, black 10%));
+    background-attachment: fixed;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(circle at 50% 50%, var(--shell-dot) 0 0.75px, transparent 1px),
+      linear-gradient(90deg, transparent 0 calc(25% - 0.5px), var(--crosshair-line) calc(25% - 0.5px) calc(25% + 0.5px), transparent calc(25% + 0.5px) calc(75% - 0.5px), var(--crosshair-line) calc(75% - 0.5px) calc(75% + 0.5px), transparent calc(75% + 0.5px)),
+      linear-gradient(transparent 0 calc(25% - 0.5px), var(--crosshair-line) calc(25% - 0.5px) calc(25% + 0.5px), transparent calc(25% + 0.5px) calc(75% - 0.5px), var(--crosshair-line) calc(75% - 0.5px) calc(75% + 0.5px), transparent calc(75% + 0.5px)),
+      linear-gradient(var(--shell-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px),
+      linear-gradient(var(--shell-grid-strong) 1px, transparent 1px),
+      linear-gradient(90deg, var(--shell-grid-strong) 1px, transparent 1px);
+    background-size: 18px 18px, 120px 120px, 120px 120px, 24px 24px, 24px 24px, 96px 96px, 96px 96px;
+    background-position: 0 0, 0 0, 0 0, 0 0, 0 0, -1px -1px, -1px -1px;
+  }
+  html {
+    @apply font-sans;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 18%, transparent);
+  }
+}
+
+@layer components {
+  .shiro-shell-grid {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .shiro-shell-grid::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--background) 12%, transparent), transparent 14%),
+      radial-gradient(circle at top right, color-mix(in oklab, var(--shell-glow) 70%, transparent), transparent 30%);
+    opacity: 0.9;
+    z-index: -1;
+  }
+
+  .shiro-toolbar {
+    background:
+      linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--panel-fill) 96%, transparent) 10px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--card) 96%, white 4%), color-mix(in oklab, var(--card) 88%, var(--background) 12%));
+    box-shadow: var(--panel-shadow);
+  }
+
+  .dark .shiro-toolbar {
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--card) 92%, white 3%), color-mix(in oklab, var(--card) 88%, black 12%));
+  }
+
+  .shiro-panel-muted {
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--muted) 45%, transparent), transparent),
+      color-mix(in oklab, var(--panel-fill) 92%, transparent);
+  }
+
+  .shiro-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color:
+      color-mix(in oklab, var(--foreground) 22%, transparent)
+      color-mix(in oklab, var(--muted) 55%, transparent);
+    scrollbar-gutter: stable;
+  }
+
+  .shiro-scrollbar::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  .shiro-scrollbar::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--muted) 52%, transparent);
+    border-left: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+    border-radius: 999px;
+  }
+
+  .shiro-scrollbar::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--foreground) 22%, transparent),
+        color-mix(in oklab, var(--foreground) 34%, transparent)
+      )
+      padding-box;
+  }
+
+  .shiro-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .shiro-scrollbar:hover::-webkit-scrollbar-thumb {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--foreground) 30%, transparent),
+        color-mix(in oklab, var(--foreground) 42%, transparent)
+      )
+      padding-box;
+  }
+
+  .shiro-hero-panel {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 92%, transparent)),
+      linear-gradient(135deg, color-mix(in oklab, var(--shell-glow) 88%, transparent), transparent 48%);
+    box-shadow: var(--panel-shadow-strong);
+  }
+
+  .shiro-hero-panel::before,
+  .shiro-hero-panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .shiro-hero-panel::before {
+    background:
+      linear-gradient(135deg, transparent 0 calc(var(--shiro-cut) - 1px), color-mix(in oklab, var(--panel-line-strong) 100%, transparent) calc(var(--shiro-cut) - 1px) var(--shiro-cut), transparent var(--shiro-cut)) top left / calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px) no-repeat,
+      linear-gradient(315deg, transparent 0 calc(var(--shiro-cut) - 1px), color-mix(in oklab, var(--panel-line-strong) 100%, transparent) calc(var(--shiro-cut) - 1px) var(--shiro-cut), transparent var(--shiro-cut)) bottom right / calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px) no-repeat,
+      linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-line) 100%, transparent) 26%, transparent 65%),
+      linear-gradient(var(--shell-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px);
+    background-size:
+      calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px),
+      calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px),
+      100% 1px,
+      20px 20px,
+      20px 20px;
+    background-repeat: no-repeat, no-repeat, no-repeat, repeat, repeat;
+    background-position: top left, bottom right, bottom 18px left 0, 0 0, 0 0;
+    opacity: 0.92;
+  }
+
+  .shiro-hero-panel::after {
+    inset: 10px;
+    border: 1px solid color-mix(in oklab, var(--panel-line) 100%, transparent);
+    background:
+      repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--warning-stripe) 100%, transparent) 10px 12px),
+      linear-gradient(90deg, transparent 0 calc(100% - 8rem), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(100% - 8rem) calc(100% - 5rem), transparent calc(100% - 5rem));
+    background-size: 7rem 7rem, 100% 100%;
+    background-position: right 1.25rem bottom 1.25rem, 0 0;
+    background-repeat: no-repeat;
+    opacity: 0.52;
+  }
+
+  .shiro-hero-panel > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .shiro-hero-panel {
+    transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
+    max-height: 20rem;
+  }
+
+  .shiro-hero-panel[data-collapsed="true"] {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    overflow: hidden;
+    border-color: transparent;
+    margin-bottom: 0;
+  }
+
+  .shiro-kicker {
+    color: color-mix(in oklab, var(--muted-foreground) 88%, var(--foreground) 12%);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .shiro-title-balance {
+    text-wrap: balance;
+  }
+
+  .shiro-surface {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 90%, transparent)),
+      linear-gradient(90deg, transparent, color-mix(in oklab, var(--shell-grid) 60%, transparent) 50%, transparent);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-surface::before,
+  .shiro-surface::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    inset: 0;
+    contain: strict;
+  }
+
+  .shiro-surface::before {
+    background:
+      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(225deg, var(--panel-line-strong) 0 1px, transparent 1px) top right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(45deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(to right, transparent, var(--panel-line), transparent) top / 100% 1px no-repeat,
+      linear-gradient(to right, transparent, var(--panel-line), transparent) bottom / 100% 1px no-repeat;
+    opacity: 0.95;
+  }
+
+  .shiro-surface::after {
+    inset: 7px;
+    border: 1px solid color-mix(in oklab, var(--panel-line) 90%, transparent);
+    opacity: 0.65;
+    background:
+      linear-gradient(135deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) top left / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
+      linear-gradient(225deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) top right / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
+      linear-gradient(315deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) bottom right / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
+      linear-gradient(45deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) bottom left / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat;
+  }
+
+  .shiro-surface > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .shiro-panel-grid {
+    background-image:
+      linear-gradient(var(--shell-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px);
+    background-size: 18px 18px, 18px 18px;
+  }
+
+  .shiro-viewport {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--border) 94%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 90%, black 10%), color-mix(in oklab, var(--card) 74%, black 26%));
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-viewport::before,
+  .shiro-viewport::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    inset: 0;
+    z-index: 1;
+  }
+
+  .shiro-viewport::before {
+    inset: 10px;
+    border: 1px solid color-mix(in oklab, var(--panel-line) 100%, transparent);
+    opacity: 0.7;
+    background:
+      linear-gradient(to right, transparent 46%, color-mix(in oklab, var(--crosshair-line) 100%, transparent) 46% 54%, transparent 54%),
+      linear-gradient(transparent 46%, color-mix(in oklab, var(--crosshair-line) 100%, transparent) 46% 54%, transparent 54%);
+    background-size: 14px 1px, 1px 14px;
+    background-position: center center, center center;
+    background-repeat: no-repeat;
+  }
+
+  .shiro-viewport::after {
+    background:
+      linear-gradient(90deg, transparent 0 calc(100% - 32px), color-mix(in oklab, var(--warning-stripe) 100%, transparent) calc(100% - 32px)),
+      repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in oklab, var(--warning-stripe) 100%, transparent) 6px 8px);
+    background-size: 100% 100%, 26px 26px;
+    background-position: 0 0, right bottom;
+    background-repeat: no-repeat;
+    opacity: 0.4;
+  }
+
+  .shiro-viewport-video-stage {
+    background: #000;
+  }
+
+  .shiro-viewport-video-stage::before,
+  .shiro-viewport-video-stage::after {
+    display: none;
+  }
+
+  .shiro-viewport-video-stage video {
+    width: auto;
+    max-width: 100%;
+    max-height: min(68vh, calc(100dvh - 12rem));
+    background: #000;
+  }
+
+  .shiro-section-line {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .shiro-section-line::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background:
+      linear-gradient(to right, color-mix(in oklab, var(--panel-line-strong) 100%, transparent), color-mix(in oklab, var(--panel-line) 100%, transparent) 64%, transparent);
+  }
+
+  .shiro-microcopy {
+    color: color-mix(in oklab, var(--muted-foreground) 86%, var(--foreground) 14%);
+    font-size: 0.65rem;
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .shiro-icon-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 32%, transparent)),
+      linear-gradient(135deg, transparent 0 12px, color-mix(in oklab, var(--panel-line) 100%, transparent) 12px 13px, transparent 13px);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-stat-block {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 30%, transparent)),
+      linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-line) 100%, transparent) 50%, transparent);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-stat-block::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat;
+    opacity: 0.8;
+  }
+
+  .shiro-table-shell {
+    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    background: color-mix(in oklab, var(--panel-fill) 95%, transparent);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-scroll-shell {
+    border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--muted) 28%, transparent), transparent),
+      color-mix(in oklab, var(--panel-fill) 94%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in oklab, white 40%, transparent);
+  }
+
+  .dark .shiro-scroll-shell {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  }
+
+  .shiro-empty-state {
+    display: flex;
+    min-height: 18rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    text-align: center;
+  }
+
+  .shiro-data-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  }
+
+  .shiro-data-cell {
+    border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 28%, transparent)),
+      linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--panel-line) 100%, transparent) 10px 11px, transparent 11px);
+    box-shadow: var(--panel-shadow);
+  }
+
+  .shiro-code-shell {
+    border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--muted) 24%, transparent), transparent),
+      color-mix(in oklab, var(--panel-fill) 94%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in oklab, white 36%, transparent);
+  }
+
+  .dark .shiro-code-shell {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  }
+}
+
+/* Content density mode */
+:root {
+  --density-card-gap: 1rem;
+  --density-card-min: 18rem;
+  --density-row-py: 0.75rem;
+  --density-section-gap: 1.5rem;
+}
+
+:root[data-density="compact"] {
+  --density-card-gap: 0.5rem;
+  --density-card-min: 14rem;
+  --density-row-py: 0.375rem;
+  --density-section-gap: 1rem;
+}
+
+@layer components {
+  .shiro-card-grid {
+    display: grid;
+    gap: var(--density-card-gap);
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--density-card-min)), 1fr));
+  }
+
+  :root[data-density="compact"] .shiro-hero-panel {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    overflow: hidden;
+    border-color: transparent;
+    margin-bottom: 0;
+  }
+}

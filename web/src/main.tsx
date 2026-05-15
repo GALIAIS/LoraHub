@@ -1,0 +1,37 @@
+import { StrictMode } from "react"
+import { createRoot } from "react-dom/client"
+import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+
+import App from "./App"
+import { JobsPage } from "./pages/jobs"
+import { DashboardPage } from "./pages/dashboard"
+import { ComingSoonPage } from "./pages/coming-soon"
+import "./index.css"
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+})
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<App />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="jobs" element={<JobsPage />} />
+            <Route path="recipes" element={<ComingSoonPage title="Recipes" />} />
+            <Route path="settings" element={<ComingSoonPage title="Settings" />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  </StrictMode>,
+)
