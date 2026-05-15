@@ -734,3 +734,179 @@ def test_system_stats_includes_optional_fields(client: TestClient) -> None:
     for gpu in body["gpus"]:
         for key in ("index", "name", "driver", "vendor"):
             assert key in gpu, f"missing GPU key {key}"
+
+
+# ----------------------------------------------------------------------------
+# Job artifacts and metrics endpoints
+# ----------------------------------------------------------------------------
+
+
+def _make_job_with_workspace(ws: Path) -> str:
+    """Create a job record bound to `ws` and return its id.
+
+    The fixture in this module patches `state.registry`, so callers can keep
+    creating jobs without bleeding into other tests.
+    """
+    ws.mkdir(parents=True, exist_ok=True)
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    return job.id
+
+
+def test_job_files_lists_workspace_artifacts(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-1"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    (ws / "recipe.yaml").write_text("name: test\n", encoding="utf-8")
+    (ws / "events.jsonl").write_text("", encoding="utf-8")
+    out_dir = ws / "output"
+    out_dir.mkdir()
+    (out_dir / "sample-1.png").write_bytes(b"\x89PNG\r\n")
+    # Archive subdirs should be ignored.
+    archive = ws / "_archive" / "old"
+    archive.mkdir(parents=True)
+    (archive / "stale.safetensors").write_bytes(b"old")
+
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/jobs/{job_id}/files")
+    assert r.status_code == 200
+    body = r.json()
+
+    assert body["workspace"] == str(ws)
+
+    checkpoints = {e["path"] for e in body["checkpoints"]}
+    samples = {e["path"] for e in body["samples"]}
+    logs = {e["path"] for e in body["logs"]}
+    other = {e["path"] for e in body["other"]}
+
+    assert checkpoints == {"model.safetensors"}
+    assert samples == {"output/sample-1.png"}
+    assert logs == {"events.jsonl"}
+    assert "recipe.yaml" in other
+    # Archive contents must be filtered out entirely.
+    assert all("_archive" not in e["path"] for e in body["checkpoints"])
+    # Each entry carries size + mtime.
+    ckpt = body["checkpoints"][0]
+    assert ckpt["size_bytes"] == len(b"weights")
+    assert isinstance(ckpt["modified_at"], (int, float))
+
+
+def test_job_files_unknown_id_404(client: TestClient) -> None:
+    r = client.get("/api/jobs/does-not-exist/files")
+    assert r.status_code == 404
+
+
+def test_job_files_raw_blocks_traversal(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-2"
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw",
+        params={"path": "../../../etc/passwd"},
+    )
+    assert r.status_code == 400
+
+
+def test_job_files_raw_serves_workspace_file(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-3"
+    ws.mkdir()
+    (ws / "events.jsonl").write_bytes(b"hello\n")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw", params={"path": "events.jsonl"}
+    )
+    assert r.status_code == 200
+    assert r.content == b"hello\n"
+
+
+def test_job_metrics_parses_events_jsonl(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-metrics"
+    ws.mkdir()
+    log = ws / "events.jsonl"
+    lines = []
+    base_ts = 1_700_000_000.0
+    for step in range(1, 6):
+        ev = TrainingEvent(
+            type=EventType.step,
+            payload={"step": step, "total_steps": 100, "loss": 1.0 / step},
+            timestamp=base_ts + step,
+        )
+        lines.append(ev.to_json())
+    epoch_ev = TrainingEvent(
+        type=EventType.epoch_end,
+        payload={"epoch": 1, "total_epochs": 1},
+        timestamp=base_ts + 6,
+    )
+    lines.append(epoch_ev.to_json())
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/jobs/{job_id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+
+    assert len(body["loss"]) == 5
+    assert body["loss"][0]["step"] == 1
+    assert body["loss"][-1]["step"] == 5
+    assert body["loss"][0]["loss"] == pytest.approx(1.0)
+    assert len(body["epochs"]) == 1
+    assert body["epochs"][0]["epoch"] == 1
+    assert body["first_step_ts"] == pytest.approx(base_ts + 1)
+    assert body["last_step_ts"] == pytest.approx(base_ts + 5)
+    assert body["duration_s"] == pytest.approx(4.0)
+
+
+def test_job_metrics_handles_corrupt_lines(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-corrupt"
+    ws.mkdir()
+    log = ws / "events.jsonl"
+    base_ts = 1_700_000_100.0
+    good_lines = [
+        TrainingEvent(
+            type=EventType.step,
+            payload={"step": 1, "total_steps": 10, "loss": 0.5},
+            timestamp=base_ts + 1,
+        ).to_json(),
+        # Garbage line — must not break parsing of the rest.
+        "{not json at all",
+        TrainingEvent(
+            type=EventType.step,
+            payload={"step": 2, "total_steps": 10, "loss": 0.4},
+            timestamp=base_ts + 2,
+        ).to_json(),
+    ]
+    log.write_text("\n".join(good_lines) + "\n", encoding="utf-8")
+
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/jobs/{job_id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+    # Both valid step lines parse; the garbage line is skipped.
+    assert [p["step"] for p in body["loss"]] == [1, 2]
+
+
+def test_job_metrics_missing_log_returns_empty(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-empty"
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/jobs/{job_id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["loss"] == []
+    assert body["epochs"] == []
+    assert body["duration_s"] is None

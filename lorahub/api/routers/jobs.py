@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from lorahub.api import state
@@ -15,6 +16,10 @@ from lorahub.api.jobs_helpers import (
     _archive_workspace,
     _job_events,
     _launch_job,
+    _list_workspace_files,
+    _media_type_for,
+    _read_metrics,
+    _resolve_workspace_file,
 )
 from lorahub.api.state import JobState
 from lorahub.core.config.schema import RecipeConfig
@@ -126,6 +131,66 @@ def reveal_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {"opened": str(workspace)}
+
+
+@router.get("/jobs/{job_id}/files")
+def list_job_files(job_id: str) -> dict[str, Any]:
+    """List training artifacts in the job's workspace, classified by kind.
+
+    Pure read-only inspection — the helper walks the workspace, drops archive
+    and scratch entries, and groups the rest into checkpoints / samples /
+    logs / other so the dashboard can render distinct sections.
+    """
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    buckets = _list_workspace_files(job.workspace)
+    return {"workspace": str(job.workspace), **buckets}
+
+
+@router.get("/jobs/{job_id}/files/raw")
+def get_job_file(job_id: str, path: str) -> FileResponse:
+    """Stream a single workspace artifact for download or inline preview.
+
+    The caller-supplied `path` is resolved against the job workspace and the
+    result is required to stay inside it — anything that resolves outside
+    (`..` traversal, absolute paths, symlink escapes) is rejected with 400.
+    Images are served `inline` so the frontend can drop them straight into an
+    `<img>` tag; everything else is sent as an attachment download.
+    """
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    try:
+        target = _resolve_workspace_file(job.workspace, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+
+    media_type, disposition = _media_type_for(target)
+    return FileResponse(
+        target,
+        media_type=media_type,
+        filename=target.name,
+        content_disposition_type=disposition,
+    )
+
+
+@router.get("/jobs/{job_id}/metrics")
+def get_job_metrics(job_id: str) -> dict[str, Any]:
+    """Return chartable time-series extracted from `events.jsonl`.
+
+    Empty arrays + null duration when the log doesn't exist yet (the job has
+    not started or has not produced events). Long runs are downsampled to
+    keep the response bounded.
+    """
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _read_metrics(job.workspace)
 
 
 @router.delete("/jobs/{job_id}")
