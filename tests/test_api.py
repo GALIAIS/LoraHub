@@ -61,14 +61,14 @@ def _recipe_payload(tmp_path: Path) -> dict[str, Any]:
 
 
 def test_health_returns_version(client: TestClient) -> None:
-    r = client.get("/health")
+    r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
     assert "version" in r.json()
 
 
 def test_recipe_schema_is_valid_json_schema(client: TestClient) -> None:
-    r = client.get("/recipes/schema")
+    r = client.get("/api/recipes/schema")
     assert r.status_code == 200
     schema = r.json()
     assert schema["title"] == "RecipeConfig"
@@ -76,19 +76,19 @@ def test_recipe_schema_is_valid_json_schema(client: TestClient) -> None:
 
 
 def test_list_jobs_starts_empty(client: TestClient) -> None:
-    r = client.get("/jobs")
+    r = client.get("/api/jobs")
     assert r.status_code == 200
     assert r.json() == {"jobs": []}
 
 
 def test_get_unknown_job_returns_404(client: TestClient) -> None:
-    r = client.get("/jobs/does-not-exist")
+    r = client.get("/api/jobs/does-not-exist")
     assert r.status_code == 404
 
 
 def test_create_and_complete_job(client: TestClient, tmp_path: Path) -> None:
     payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
-    r = client.post("/jobs", json=payload)
+    r = client.post("/api/jobs", json=payload)
     assert r.status_code == 202, r.text
     summary = r.json()
     assert summary["state"] in ("queued", "running", "succeeded", "failed")
@@ -100,12 +100,12 @@ def test_create_and_complete_job(client: TestClient, tmp_path: Path) -> None:
 
     deadline = time.time() + 30
     while time.time() < deadline:
-        s = client.get(f"/jobs/{job_id}").json()
+        s = client.get(f"/api/jobs/{job_id}").json()
         if s["state"] in ("succeeded", "failed"):
             break
         time.sleep(0.2)
 
-    final = client.get(f"/jobs/{job_id}").json()
+    final = client.get(f"/api/jobs/{job_id}").json()
     assert final["state"] == "succeeded", final
     assert final["returncode"] == 0
 
@@ -114,22 +114,22 @@ def test_recent_events_returned_after_completion(
     client: TestClient, tmp_path: Path
 ) -> None:
     payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
-    job_id = client.post("/jobs", json=payload).json()["id"]
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
 
     import time
 
     deadline = time.time() + 30
     while time.time() < deadline:
-        if client.get(f"/jobs/{job_id}").json()["state"] in ("succeeded", "failed"):
+        if client.get(f"/api/jobs/{job_id}").json()["state"] in ("succeeded", "failed"):
             break
         time.sleep(0.2)
 
-    events = client.get(f"/jobs/{job_id}/events").json()["events"]
+    events = client.get(f"/api/jobs/{job_id}/events").json()["events"]
     assert any(e["type"] == "epoch_end" for e in events)
     assert any(e["type"] == "checkpoint_saved" for e in events)
     assert events[-1]["type"] == "done"
 
 
 def test_invalid_recipe_returns_422(client: TestClient) -> None:
-    r = client.post("/jobs", json={"recipe": {"missing": "everything"}})
+    r = client.post("/api/jobs", json={"recipe": {"missing": "everything"}})
     assert r.status_code == 422

@@ -3,6 +3,9 @@
 Run with `lorahub serve` (preferred) or `uvicorn lorahub.api.app:app`.
 The API surface is intentionally small for v0.2 — list/create/cancel jobs,
 read recipe schema, stream events. Auth is out of scope; bind to localhost.
+
+All API routes live under `/api`. The site root and `/{spa-path}` are reserved
+for the React frontend (mounted from `web/dist` when present).
 """
 
 from __future__ import annotations
@@ -10,13 +13,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from lorahub import __version__
@@ -64,29 +70,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+api = APIRouter(prefix="/api")
+
 
 class HealthResponse(BaseModel):
     status: str
     version: str
 
 
-@app.get("/health", response_model=HealthResponse)
+@api.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", version=__version__)
 
 
-@app.get("/recipes/schema")
+@api.get("/recipes/schema")
 def recipe_schema() -> dict[str, Any]:
     """JSON Schema for the recipe — used by the future UI to render forms."""
     return RecipeConfig.model_json_schema()
 
 
-@app.get("/jobs")
+@api.get("/jobs")
 def list_jobs() -> dict[str, Any]:
     return {"jobs": [j.to_summary() for j in state.registry.list()]}
 
 
-@app.get("/jobs/{job_id}")
+@api.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
@@ -94,7 +102,7 @@ def get_job(job_id: str) -> dict[str, Any]:
     return job.to_summary()
 
 
-@app.get("/jobs/{job_id}/events")
+@api.get("/jobs/{job_id}/events")
 def get_recent_events(job_id: str, limit: int = 100) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
@@ -108,7 +116,7 @@ class CreateJobRequest(BaseModel):
     workspace: str | None = None
 
 
-@app.post("/jobs", status_code=202)
+@api.post("/jobs", status_code=202)
 def create_job(req: CreateJobRequest) -> dict[str, Any]:
     try:
         cfg = RecipeConfig.model_validate(req.recipe)
@@ -152,7 +160,7 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
     return job.to_summary()
 
 
-@app.delete("/jobs/{job_id}")
+@api.delete("/jobs/{job_id}")
 def cancel_job(job_id: str) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
@@ -166,7 +174,10 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return job.to_summary()
 
 
-@app.websocket("/jobs/{job_id}/stream")
+app.include_router(api)
+
+
+@app.websocket("/api/jobs/{job_id}/stream")
 async def stream_events(ws: WebSocket, job_id: str) -> None:
     job = state.registry.get(job_id)
     if job is None:
@@ -190,3 +201,52 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
         state.registry.detach_listener(job_id, queue)
         with contextlib.suppress(Exception):
             await ws.close()
+
+
+def _resolve_web_dist() -> Path | None:
+    """Locate the built web frontend (`web/dist`).
+
+    Search order:
+      1. $LORAHUB_WEB_DIST (explicit override, e.g. for packaged installs)
+      2. <repo_root>/web/dist (development checkout)
+    """
+    override = os.environ.get("LORAHUB_WEB_DIST")
+    if override:
+        candidate = Path(override).expanduser().resolve()
+        return candidate if (candidate / "index.html").is_file() else None
+
+    repo_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    if (repo_dist / "index.html").is_file():
+        return repo_dist
+    return None
+
+
+_WEB_DIST = _resolve_web_dist()
+if _WEB_DIST is not None:
+    _ASSETS_DIR = _WEB_DIST / "assets"
+    if _ASSETS_DIR.is_dir():
+        app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
+
+    _INDEX = _WEB_DIST / "index.html"
+
+    @app.get("/", include_in_schema=False)
+    def _index() -> FileResponse:
+        return FileResponse(_INDEX)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str) -> Response:
+        # `/api`, `/docs`, etc. are owned by FastAPI — never shadow them.
+        if full_path.startswith(("api/", "docs", "openapi.json", "redoc")):
+            raise HTTPException(status_code=404, detail="not found")
+        # Serve concrete static files from dist (favicon, robots.txt, …); else
+        # fall back to index.html so React Router can take over.
+        candidate = (_WEB_DIST / full_path).resolve()
+        try:
+            candidate.relative_to(_WEB_DIST)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="not found") from None
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_INDEX)
+else:
+    log.info("web/dist not found — serving API only (run `npm run build` in web/)")
