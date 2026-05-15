@@ -207,6 +207,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
+  getSystemStats: () => http<SystemSnapshot>("/system/stats"),
 }
 
 /**
@@ -282,4 +283,101 @@ export function useBootstrapStream(enabled: boolean) {
   }, [enabled])
 
   return { events, status }
+}
+
+// ============================================ system telemetry =============
+
+export interface SystemHost {
+  hostname: string
+  system: string
+  release: string
+  python: string
+}
+
+export interface SystemCpu {
+  cores_logical: number
+  cores_physical: number | null
+  usage_percent: number | null
+  per_core_percent: number[]
+  load_average: number[] | null
+  arch: string
+}
+
+export interface SystemMemory {
+  total_bytes: number
+  used_bytes: number
+  available_bytes: number
+  percent: number
+  swap_total_bytes: number | null
+  swap_used_bytes: number | null
+}
+
+export interface SystemDisk {
+  path: string
+  label: string
+  total_bytes: number
+  used_bytes: number
+  free_bytes: number
+  percent: number
+}
+
+export interface SystemGpu {
+  index: number
+  name: string
+  driver: string | null
+  memory_total_bytes: number | null
+  memory_used_bytes: number | null
+  memory_free_bytes: number | null
+  utilization_percent: number | null
+  temperature_c: number | null
+  power_w: number | null
+  power_limit_w: number | null
+  fan_percent: number | null
+}
+
+export interface SystemSnapshot {
+  timestamp: number
+  has_psutil: boolean
+  has_nvidia_smi: boolean
+  host: SystemHost
+  cpu: SystemCpu
+  memory: SystemMemory
+  disks: SystemDisk[]
+  gpus: SystemGpu[]
+}
+
+/**
+ * Subscribe to /api/system/stream — the server pushes a fresh snapshot
+ * every second. The most recent snapshot is returned alongside the WS state
+ * so the dashboard can fall back to polling when the socket is down.
+ */
+export function useSystemStream(enabled = true) {
+  const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
+  const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+    if (!enabled) return
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const host = window.location.host || "127.0.0.1:18765"
+    const ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
+    wsRef.current = ws
+
+    ws.onopen = () => setStatus("open")
+    ws.onclose = () => setStatus("closed")
+    ws.onmessage = (msg) => {
+      try {
+        setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
+      } catch {
+        // ignore malformed frames
+      }
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [enabled])
+
+  return { snapshot, status }
 }

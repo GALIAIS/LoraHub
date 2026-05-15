@@ -169,6 +169,23 @@ async def stream_bootstrap(ws: WebSocket) -> None:
             await ws.close()
 
 
+@app.websocket("/api/system/stream")
+async def stream_system(ws: WebSocket) -> None:
+    """Push a hardware/host snapshot every second until the client disconnects."""
+    from lorahub.api.system_stats import collect_snapshot
+
+    await ws.accept()
+    try:
+        while True:
+            await ws.send_json(collect_snapshot().to_dict())
+            await asyncio.sleep(1.0)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close()
+
+
 _WEB_DIST = _resolve_web_dist()
 if _WEB_DIST is not None:
     _WEB_ROOT = _WEB_DIST

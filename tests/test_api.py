@@ -678,3 +678,33 @@ def test_bootstrap_succeeds_with_stub(
     levels = [e["level"] for e in final["events"]]
     assert levels[-1] == "done"
     assert "info" in levels  # at least one progress step was buffered
+
+
+# --------------------------------------------------------------------------- #
+# System telemetry
+# --------------------------------------------------------------------------- #
+
+
+def test_system_stats_returns_full_snapshot(client: TestClient) -> None:
+    r = client.get("/api/system/stats")
+    assert r.status_code == 200
+    body = r.json()
+    # Always-on fields, even if their probes degrade.
+    for key in ("timestamp", "host", "cpu", "memory", "disks", "gpus", "has_psutil", "has_nvidia_smi"):
+        assert key in body, f"missing top-level key {key}"
+    assert body["host"]["python"]
+    assert body["cpu"]["cores_logical"] >= 1
+    assert isinstance(body["disks"], list) and len(body["disks"]) >= 1
+    assert isinstance(body["gpus"], list)  # may be empty on non-NVIDIA hosts
+    # Memory shape — fall back to 0s rather than missing keys.
+    for key in ("total_bytes", "used_bytes", "available_bytes", "percent"):
+        assert key in body["memory"]
+
+
+def test_system_stats_disk_entry_has_paths_and_percentage(client: TestClient) -> None:
+    body = client.get("/api/system/stats").json()
+    disk = body["disks"][0]
+    assert disk["path"]
+    assert disk["label"]
+    assert 0.0 <= disk["percent"] <= 100.0
+    assert disk["total_bytes"] >= disk["used_bytes"]

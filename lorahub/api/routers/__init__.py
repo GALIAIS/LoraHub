@@ -16,6 +16,7 @@ from .health import router as health_router
 from .jobs import router as jobs_router
 from .recipes import router as recipes_router
 from .settings_routes import router as settings_router
+from .system import router as system_router
 
 all_routers: list[APIRouter] = [
     health_router,
@@ -24,6 +25,7 @@ all_routers: list[APIRouter] = [
     datasets_router,
     jobs_router,
     bootstrap_router,
+    system_router,
 ]
 
 __all__ = ["all_routers"]

@@ -38,6 +38,7 @@ api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "websockets>=12.0",
+    "psutil>=5.9",
 ]
 dev = [
     "pytest>=8.0",

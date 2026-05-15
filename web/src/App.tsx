@@ -3,11 +3,11 @@ import { Activity, ListTree, Layers, Database, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV = [
-  { to: "/", label: "Dashboard", icon: Activity },
-  { to: "/jobs", label: "Jobs", icon: ListTree },
-  { to: "/recipes", label: "Recipes", icon: Layers },
-  { to: "/datasets", label: "Datasets", icon: Database },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/", label: "数据面板", icon: Activity },
+  { to: "/jobs", label: "训练任务", icon: ListTree },
+  { to: "/recipes", label: "训练配方", icon: Layers },
+  { to: "/datasets", label: "数据集", icon: Database },
+  { to: "/settings", label: "设置", icon: Settings },
 ]
 
 export default function App() {
@@ -20,7 +20,7 @@ export default function App() {
           </div>
           <div className="flex-1">
             <div className="text-[13px] font-semibold leading-tight">LoraHub</div>
-            <div className="text-[11px] text-muted-foreground">Training Workbench</div>
+            <div className="text-[11px] text-muted-foreground">训练工作台</div>
           </div>
         </div>
         <nav className="flex flex-col gap-0.5">
