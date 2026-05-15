@@ -37,7 +37,24 @@ class KohyaEnv:
 
 
 def default_sd_scripts_path() -> Path:
-    return user_data_path("lorahub", "lorahub") / "backends" / "sd-scripts"
+    """Where lorahub looks for sd-scripts when nothing else is configured.
+
+    Priority order:
+      1. `<cwd>/sd-scripts` — the project-local convention `bootstrap-kohya`
+         creates and `lorahub init` recommends.
+      2. `<platformdirs user_data>/lorahub/lorahub/backends/sd-scripts` — the
+         OS-standard per-user data location.
+
+    The first existing path wins; if neither exists, the cwd-relative path
+    is returned so error messages point users at the conventional location.
+    """
+    cwd_local = Path.cwd() / "sd-scripts"
+    if cwd_local.is_dir():
+        return cwd_local
+    user_local = user_data_path("lorahub", "lorahub") / "backends" / "sd-scripts"
+    if user_local.is_dir():
+        return user_local
+    return cwd_local
 
 
 def resolve(

@@ -54,8 +54,15 @@ pip install -e ".[dev]"
 Tell LoraHub where your kohya checkout lives — either via env var or directly in your recipe:
 
 ```powershell
+# Option A: install kohya inside the LoraHub working tree (this is the default lookup path)
+lorahub bootstrap-kohya         # runs the kohya install steps for you (planned)
+
+# Option B: point at an existing checkout
 $env:LORAHUB_KOHYA_SD_SCRIPTS = "C:\path\to\sd-scripts"
+# or copy .env.example to .env and edit
 ```
+
+LoraHub auto-loads `.env` from the project root on startup, so once `.env` has `LORAHUB_KOHYA_SD_SCRIPTS=./sd-scripts` you don't need to export it in every shell.
 
 ## Quick start
 

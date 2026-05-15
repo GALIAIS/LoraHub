@@ -106,7 +106,19 @@ def test_recipe_python_overrides_venv(tmp_path: Path) -> None:
     assert env.python_executable == other.resolve()
 
 
-def test_default_sd_scripts_path_is_under_user_data() -> None:
+def test_default_path_prefers_cwd_local_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cwd_local = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    monkeypatch.chdir(tmp_path)
+    p = default_sd_scripts_path()
+    assert p.resolve() == cwd_local.resolve()
+
+
+def test_default_path_falls_back_to_cwd_local_name_when_neither_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     p = default_sd_scripts_path()
     assert p.name == "sd-scripts"
-    assert "lorahub" in str(p).lower()
+    assert (tmp_path / "sd-scripts").resolve() == p.resolve()
