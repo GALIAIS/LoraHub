@@ -41,10 +41,9 @@ export function LaunchOverrideDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[min(calc(100%-2rem),34rem)]">
         <DialogHeader>
-          <DialogTitle>Launch override</DialogTitle>
+          <DialogTitle>启动时覆盖</DialogTitle>
           <DialogDescription>
-            Tweak any field for this run only. Empty fields fall back to the recipe value.
-            The recipe file on disk is not touched.
+            仅对本次启动生效，留空则使用配方原值。磁盘上的配方文件不会被修改。
           </DialogDescription>
         </DialogHeader>
 
@@ -54,14 +53,14 @@ export function LaunchOverrideDialog({
             placeholder={defaults.datasetSource || "./datasets/my_character"}
             value={overrides.datasetSource}
             onChange={(v) => update("datasetSource", v)}
-            description="Image folder to train on."
+            description="本次训练使用的图片目录。"
           />
           <OverrideField
             label="output.name"
             placeholder={defaults.outputName || "my_character_v1"}
             value={overrides.outputName}
             onChange={(v) => update("outputName", v)}
-            description="Filename stem for the saved LoRA."
+            description="生成 LoRA 文件的名称前缀。"
           />
           <div className="grid grid-cols-3 gap-3">
             <OverrideField
@@ -82,7 +81,7 @@ export function LaunchOverrideDialog({
             />
             <OverrideField
               label="max_steps"
-              placeholder={defaults.maxSteps || "(unset)"}
+              placeholder={defaults.maxSteps || "(不限)"}
               value={overrides.maxSteps}
               onChange={(v) => update("maxSteps", v)}
               type="number"
@@ -99,11 +98,11 @@ export function LaunchOverrideDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={launching}>
-            Cancel
+            取消
           </Button>
           <Button onClick={onSubmit} disabled={launching}>
             <Play className="size-3" />
-            {launching ? "Launching…" : `Train ${recipeName}`}
+            {launching ? "启动中…" : `训练 ${recipeName}`}
           </Button>
         </DialogFooter>
       </DialogContent>

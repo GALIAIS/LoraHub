@@ -16,6 +16,18 @@ const TERMINAL_STATES = new Set([
   "interrupted",
 ])
 
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  step: "训练步",
+  epoch_end: "回合结束",
+  checkpoint_saved: "保存检查点",
+  sample_ready: "样本生成",
+  done: "完成",
+  error: "错误",
+  log: "日志",
+  start: "启动",
+  cancel: "取消",
+}
+
 export function JobsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -28,17 +40,17 @@ export function JobsPage() {
       <aside className="border-r border-border/60 flex flex-col min-h-0">
         <header className="px-5 py-4 border-b border-border/60">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            Jobs
+            训练任务
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {list.length} total • polling every 2s
+            共 {list.length} 个 · 每 2 秒刷新
           </div>
         </header>
         <ScrollArea className="flex-1">
           <ul className="divide-y divide-border/40">
             {list.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                No training jobs yet.
+                还没有训练任务。
               </li>
             )}
             {list.slice().reverse().map((j) => {
@@ -60,7 +72,7 @@ export function JobsPage() {
                       {j.id.slice(-8)}
                     </code>
                     {j.pid !== null && (
-                      <span className="text-[10px] text-muted-foreground/60">pid {j.pid}</span>
+                      <span className="text-[10px] text-muted-foreground/60">PID {j.pid}</span>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground truncate font-mono">
@@ -81,7 +93,7 @@ export function JobsPage() {
           <JobDetail jobId={selected.id} onSelectJob={setSelectedId} />
         ) : (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
-            Select a job from the list to inspect events.
+            从列表中选择一个任务以查看事件流。
           </div>
         )}
       </section>
@@ -152,7 +164,7 @@ function JobDetail({
   async function onArchive() {
     if (!data) return
     if (!window.confirm(
-      `Archive job ${data.id.slice(-8)}? Its workspace will be moved into _archive/ and the job record will be removed from the list.`,
+      `确定要归档任务 ${data.id.slice(-8)} 吗？工作区将被移到 _archive/，记录会从列表中移除。`,
     )) {
       return
     }
@@ -161,7 +173,7 @@ function JobDetail({
     try {
       const result = await api.archiveJob(data.id)
       if (result.warnings.length > 0) {
-        setActionError(`Archived with warnings: ${result.warnings.join("; ")}`)
+        setActionError(`归档完成，有警告：${result.warnings.join("；")}`)
       }
       await queryClient.invalidateQueries({ queryKey: ["jobs"] })
       onSelectJob(null)
@@ -179,7 +191,7 @@ function JobDetail({
           <div className="flex items-center gap-2 mb-1.5">
             {data && <StateBadge state={data.state} />}
             <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              ws {stream.status}
+              WS {stream.status === "open" ? "已连接" : stream.status === "closed" ? "已断开" : "等待中"}
             </span>
           </div>
           <div className="text-base font-semibold tracking-tight font-mono truncate">
@@ -202,7 +214,7 @@ function JobDetail({
             size="sm"
             onClick={onReveal}
             disabled={!data || busy !== null}
-            title="Open workspace in file manager"
+            title="在文件管理器中打开工作区"
           >
             <FolderOpen className="size-3" />
           </Button>
@@ -212,7 +224,7 @@ function JobDetail({
             onClick={onRerun}
             disabled={!data || busy !== null}
           >
-            <RefreshCw className={cn("size-3", busy === "rerun" && "animate-spin")} /> Rerun
+            <RefreshCw className={cn("size-3", busy === "rerun" && "animate-spin")} /> 再次运行
           </Button>
           {isTerminal && (
             <Button
@@ -221,21 +233,21 @@ function JobDetail({
               onClick={onArchive}
               disabled={busy !== null}
             >
-              <Archive className="size-3" /> Archive
+              <Archive className="size-3" /> 归档
             </Button>
           )}
           {isLive && (
             <Button variant="destructive" size="sm" onClick={onCancel}>
-              <Square className="size-3" /> Cancel
+              <Square className="size-3" /> 取消
             </Button>
           )}
         </div>
       </header>
 
       <div className="grid grid-cols-3 gap-3 px-7 py-4 border-b border-border/60">
-        <Stat label="State" value={data?.state ?? "—"} />
+        <Stat label="状态" value={data?.state ? stateLabel(data.state) : "—"} />
         <Stat
-          label="Step"
+          label="进度"
           value={
             lastStep
               ? `${lastStep.payload.step ?? "?"} / ${lastStep.payload.total_steps ?? "?"}`
@@ -243,7 +255,7 @@ function JobDetail({
           }
         />
         <Stat
-          label="Loss"
+          label="损失"
           value={
             typeof lastStep?.payload.loss === "number"
               ? (lastStep.payload.loss as number).toFixed(4)
@@ -255,7 +267,7 @@ function JobDetail({
       <Card className="m-4 mb-0 rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden flex-1 min-h-0 flex flex-col">
         <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            Events
+            事件流
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0 flex-1 min-h-0">
@@ -263,7 +275,7 @@ function JobDetail({
             <ul className="font-mono text-[12px] divide-y divide-border/30">
               {events.length === 0 && (
                 <li className="px-4 py-6 text-muted-foreground text-center">
-                  Waiting for events…
+                  正在等待事件…
                 </li>
               )}
               {events.map((e, i) => (
@@ -300,12 +312,13 @@ function EventRow({ event }: { event: TrainingEvent }) {
     sample_ready: "text-fuchsia-700 dark:text-fuchsia-400",
     epoch_end: "text-primary",
   }[event.type] ?? "text-foreground"
+  const label = EVENT_TYPE_LABELS[event.type] ?? event.type
 
   return (
     <li className="px-4 py-1.5 flex gap-3 items-baseline hover:bg-muted/30">
       <span className="text-muted-foreground/60 shrink-0 text-[11px]">{time}</span>
-      <span className={cn("shrink-0 w-[120px] text-[11px] uppercase tracking-wide", tone)}>
-        {event.type}
+      <span className={cn("shrink-0 w-[120px] text-[11px] tracking-wide", tone)}>
+        {label}
       </span>
       <span className="text-foreground/80 truncate">{summary}</span>
     </li>
@@ -316,18 +329,32 @@ function renderPayload(e: TrainingEvent): string {
   const p = e.payload
   switch (e.type) {
     case "step":
-      return `step ${p.step}/${p.total_steps}${p.loss !== undefined ? `  loss=${(p.loss as number).toFixed(4)}` : ""}`
+      return `第 ${p.step}/${p.total_steps} 步${p.loss !== undefined ? ` · 损失 ${(p.loss as number).toFixed(4)}` : ""}`
     case "epoch_end":
-      return `epoch ${p.epoch}/${p.total_epochs}`
+      return `第 ${p.epoch}/${p.total_epochs} 回合结束`
     case "checkpoint_saved":
       return String(p.path ?? "")
     case "sample_ready":
       return String(p.path ?? "")
     case "done":
-      return `rc=${p.returncode} duration=${(p.duration_s as number)?.toFixed?.(1) ?? "?"}s`
+      return `返回码 ${p.returncode} · 用时 ${(p.duration_s as number)?.toFixed?.(1) ?? "?"}s`
     case "log":
       return String(p.message ?? "")
     default:
       return JSON.stringify(p)
   }
+}
+
+const STATE_LABELS: Record<string, string> = {
+  running: "运行中",
+  succeeded: "已完成",
+  failed: "失败",
+  canceled: "已取消",
+  canceling: "取消中",
+  queued: "排队中",
+  interrupted: "已中断",
+}
+
+function stateLabel(state: string): string {
+  return STATE_LABELS[state] ?? state
 }

@@ -55,8 +55,8 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
     <div className="space-y-3">
       <Section
         icon={<Cpu className="size-3.5" />}
-        title="Base model"
-        subtitle="Architecture and checkpoint to fine-tune"
+        title="基础模型"
+        subtitle="选择架构与待微调的 .safetensors 检查点"
         defaultOpen
       >
         <BaseModelFields value={value.base_model} set={set} errorMap={errorMap} />
@@ -64,8 +64,8 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
 
       <Section
         icon={<FileImage className="size-3.5" />}
-        title="Dataset"
-        subtitle="Where the training images live and how they're loaded"
+        title="数据集"
+        subtitle="训练图片的位置与加载方式"
         defaultOpen
       >
         <DatasetFields value={value.dataset} set={set} errorMap={errorMap} />
@@ -73,24 +73,24 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
 
       <Section
         icon={<Layers className="size-3.5" />}
-        title="Network"
-        subtitle="LoRA structure: rank, alpha, target modules"
+        title="网络"
+        subtitle="LoRA 结构：rank、alpha、目标模块"
       >
         <NetworkFields value={value.network} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
         icon={<SlidersHorizontal className="size-3.5" />}
-        title="Optimizer & learning rate"
-        subtitle="How weights move during training"
+        title="优化器与学习率"
+        subtitle="权重的更新策略"
       >
         <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
         icon={<Settings2 className="size-3.5" />}
-        title="Schedule"
-        subtitle="Epochs, batch size, gradient accumulation"
+        title="训练计划"
+        subtitle="回合数、批大小、梯度累积"
         defaultOpen
       >
         <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} />
@@ -98,32 +98,32 @@ export function RecipeForm({ value, onChange, errors }: RecipeFormProps) {
 
       <Section
         icon={<PaintBucket className="size-3.5" />}
-        title="Precision & memory"
-        subtitle="Mixed precision, gradient checkpointing, latent cache"
+        title="精度与显存"
+        subtitle="混合精度、梯度检查点、潜变量缓存"
       >
         <PrecisionFields value={value} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
         icon={<Image className="size-3.5" />}
-        title="Sampling"
-        subtitle="Generate preview images during training"
+        title="采样预览"
+        subtitle="训练过程中定期生成预览图"
       >
         <SamplingFields value={value.sampling} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
         icon={<Folder className="size-3.5" />}
-        title="Output"
-        subtitle="Filename, save cadence, dtype"
+        title="输出"
+        subtitle="文件名、保存频率、保存精度"
       >
         <OutputFields value={value.output} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
         icon={<Wand2 className="size-3.5" />}
-        title="Backend"
-        subtitle="Override the kohya checkout / Python on a per-recipe basis"
+        title="后端覆盖"
+        subtitle="按配方覆盖 kohya 检出目录与 Python 解释器"
       >
         <BackendFields value={value.backend} set={set} errorMap={errorMap} />
       </Section>

@@ -18,10 +18,10 @@ export const BackendFields = memo(function BackendFields({
   return (
     <>
       <Row
-        label="Backend"
+        label="后端"
         description={
           <>
-            Settings &gt; Kohya backend handles the workspace-wide default; this overrides per recipe.
+            「设置 &gt; Kohya 后端」管理工作区级默认值；此处按配方覆盖。
           </>
         }
       >
@@ -38,26 +38,26 @@ export const BackendFields = memo(function BackendFields({
           )}
         </div>
       </Row>
-      <Row label="sd-scripts path" errors={errorMap.get("backend.sd_scripts_path")}>
+      <Row label="sd-scripts 路径" errors={errorMap.get("backend.sd_scripts_path")}>
         <PathInput
           value={v.sd_scripts_path ?? ""}
           onChange={(s) => set(["backend", "sd_scripts_path"], s || null)}
-          placeholder="(use Settings default)"
+          placeholder="（使用设置中的默认值）"
         />
       </Row>
-      <Row label="Python executable" errors={errorMap.get("backend.python_executable")}>
+      <Row label="Python 解释器" errors={errorMap.get("backend.python_executable")}>
         <PathInput
           value={v.python_executable ?? ""}
           onChange={(s) => set(["backend", "python_executable"], s || null)}
-          placeholder="(use Settings default)"
+          placeholder="（使用设置中的默认值）"
         />
       </Row>
-      <Row label="Pin version" description="Optional git ref / tag of sd-scripts to lock to.">
+      <Row label="锁定版本" description="可选。锁定 sd-scripts 的 git ref / tag。">
         <Input
           value={v.pin_version ?? ""}
           className="font-mono w-64"
           onChange={(e) => set(["backend", "pin_version"], e.target.value || null)}
-          placeholder="e.g. main, sdxl, 0.8.4"
+          placeholder="例如 main、sdxl、0.8.4"
         />
       </Row>
     </>

@@ -14,7 +14,7 @@ export const BaseModelFields = memo(function BaseModelFields({
 }) {
   return (
     <>
-      <Row label="Architecture" required errors={errorMap.get("base_model.arch")}>
+      <Row label="架构" required errors={errorMap.get("base_model.arch")}>
         <EnumSelect
           value={value.arch}
           onChange={(v) => set(["base_model", "arch"], v)}
@@ -22,9 +22,9 @@ export const BaseModelFields = memo(function BaseModelFields({
         />
       </Row>
       <Row
-        label="Checkpoint"
+        label="基础模型"
         required
-        description="Absolute path to the base model .safetensors file."
+        description="基础模型 .safetensors 文件的绝对路径。"
         errors={errorMap.get("base_model.checkpoint")}
       >
         <PathInput
@@ -34,14 +34,14 @@ export const BaseModelFields = memo(function BaseModelFields({
         />
       </Row>
       <Row
-        label="VAE override"
-        description="Optional. Use a custom VAE instead of the one bundled with the checkpoint."
+        label="VAE 覆盖"
+        description="可选。使用自定义 VAE 替代基础模型自带的。"
         errors={errorMap.get("base_model.vae")}
       >
         <PathInput
           value={value.vae ?? ""}
           onChange={(v) => set(["base_model", "vae"], v || null)}
-          placeholder="./models/sdxl_vae.safetensors (optional)"
+          placeholder="./models/sdxl_vae.safetensors（可选）"
         />
       </Row>
     </>

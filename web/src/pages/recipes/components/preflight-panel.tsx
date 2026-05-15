@@ -17,15 +17,15 @@ export function PreflightPanel({
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-              Preflight
+              起飞前自检
             </div>
             <div className="mt-1 text-sm font-medium">
-              {warnings.length === 0 ? "Ready to launch" : `${warnings.length} item(s) need attention`}
+              {warnings.length === 0 ? "可以启动训练" : `还有 ${warnings.length} 项需要关注`}
             </div>
           </div>
           <div className="rounded-[4px] border border-border/70 px-3 py-2 text-right">
             <div className="flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              <Gauge className="size-3" /> VRAM estimate
+              <Gauge className="size-3" /> 显存预估
             </div>
             <div className="font-mono text-lg leading-none mt-1">
               {preflight.vram.total_gib.toFixed(2)} GiB
@@ -35,17 +35,17 @@ export function PreflightPanel({
 
         <div className="mt-4 grid gap-2 md:grid-cols-3">
           <PreflightMetric
-            label="Checkpoint"
-            value={preflight.paths.checkpoint_exists ? "Found" : "Missing"}
+            label="模型"
+            value={preflight.paths.checkpoint_exists ? "已就绪" : "缺失"}
             ok={preflight.paths.checkpoint_exists}
           />
           <PreflightMetric
-            label="Dataset"
-            value={`${preflight.paths.image_files} image(s)`}
+            label="数据集"
+            value={`${preflight.paths.image_files} 张图片`}
             ok={preflight.paths.dataset_exists && preflight.paths.image_files > 0}
           />
           <PreflightMetric
-            label="Captions"
+            label="标注"
             value={`${preflight.paths.caption_files}/${preflight.paths.image_files}`}
             ok={missingCaptions.length === 0}
           />
@@ -66,10 +66,10 @@ export function PreflightPanel({
 
         {missingCaptions.length > 0 && (
           <div className="mt-3 rounded-[4px] bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-            Missing captions:{" "}
+            缺失标注：
             <span className="font-mono text-foreground">
               {missingCaptions.join(", ")}
-              {preflight.paths.missing_caption_files_truncated ? ", ..." : ""}
+              {preflight.paths.missing_caption_files_truncated ? "，…" : ""}
             </span>
           </div>
         )}

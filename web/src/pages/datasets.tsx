@@ -27,18 +27,18 @@ export function DatasetsPage() {
       <div className="px-8 py-7 space-y-6 max-w-[1180px]">
       <header className="space-y-1">
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-          Dataset manager
+          数据集管理
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">Datasets</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">数据集</h1>
         <p className="text-sm text-muted-foreground">
-          Scan an image folder before training and spot missing kohya caption files.
+          训练前先扫描图片目录，预览样本并核对每张图是否都有 kohya 标注文件。
         </p>
       </header>
 
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Scan folder</CardTitle>
-          <CardDescription>Use the same path you put in `dataset.source`.</CardDescription>
+          <CardTitle className="text-base">扫描目录</CardTitle>
+          <CardDescription>使用与 <code className="font-mono">dataset.source</code> 相同的路径。</CardDescription>
         </CardHeader>
         <CardContent>
           <form
@@ -55,7 +55,7 @@ export function DatasetsPage() {
               placeholder="./datasets/my_character"
             />
             <Button type="submit" disabled={scan.isFetching}>
-              <Search className="size-3.5" /> {scan.isFetching ? "Scanning..." : "Scan"}
+              <Search className="size-3.5" /> {scan.isFetching ? "扫描中…" : "扫描"}
             </Button>
           </form>
         </CardContent>
@@ -72,18 +72,18 @@ export function DatasetsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <DatasetStat
               icon={<Database className="size-3.5" />}
-              label="Folder"
-              value={data.exists ? "found" : "missing"}
+              label="目录"
+              value={data.exists ? "存在" : "未找到"}
               tone={data.exists ? "default" : "warning"}
             />
             <DatasetStat
               icon={<Image className="size-3.5" />}
-              label="Images"
+              label="图片数量"
               value={data.image_files.toString()}
             />
             <DatasetStat
               icon={<FileText className="size-3.5" />}
-              label="Captions"
+              label="标注覆盖"
               value={`${data.caption_files}/${data.image_files}`}
               tone={data.caption_files === data.image_files ? "default" : "warning"}
             />
@@ -93,18 +93,18 @@ export function DatasetsPage() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <CardTitle className="text-base">Samples</CardTitle>
+                  <CardTitle className="text-base">样本预览</CardTitle>
                   <CardDescription className="font-mono break-all">{data.path}</CardDescription>
                 </div>
                 <Badge variant={data.missing_caption_files.length ? "outline" : "secondary"} className="rounded-[2px]">
-                  {data.missing_caption_files.length} missing captions
+                  缺失标注 {data.missing_caption_files.length} 张
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
               {data.samples.length === 0 ? (
                 <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-                  No image samples found in this folder.
+                  此目录下未发现图片样本。
                 </div>
               ) : (
                 <ul className="divide-y divide-border/50">
@@ -113,11 +113,11 @@ export function DatasetsPage() {
                       <div className="min-w-0">
                         <div className="font-mono text-xs truncate">{sample.relative_path}</div>
                         <div className="mt-1 text-xs text-muted-foreground truncate">
-                          {sample.caption ?? "No caption file yet"}
+                          {sample.caption ?? "暂无标注文件"}
                         </div>
                       </div>
                       <Badge variant={sample.caption_exists ? "secondary" : "outline"} className="rounded-[2px] self-start">
-                        {sample.caption_exists ? "captioned" : "missing .txt"}
+                        {sample.caption_exists ? "已标注" : "缺 .txt"}
                       </Badge>
                     </li>
                   ))}
@@ -129,10 +129,10 @@ export function DatasetsPage() {
           <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
             <CardContent className="px-4 py-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-sm font-medium">Train with this dataset</div>
+                <div className="text-sm font-medium">用此数据集训练</div>
                 <div className="text-xs text-muted-foreground">
-                  Jumps to Recipes, picks the first one, and pre-fills{" "}
-                  <code className="font-mono text-foreground">dataset.source</code> in the launch dialog.
+                  跳转到训练配方页，自动选首个配方并预填{" "}
+                  <code className="font-mono text-foreground">dataset.source</code>。
                 </div>
               </div>
               <Button
@@ -143,7 +143,7 @@ export function DatasetsPage() {
                   })
                 }
               >
-                <Play className="size-3.5" /> Train
+                <Play className="size-3.5" /> 训练
               </Button>
             </CardContent>
           </Card>

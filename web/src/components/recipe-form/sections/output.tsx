@@ -16,7 +16,7 @@ export const OutputFields = memo(function OutputFields({
   const v = value ?? {}
   return (
     <>
-      <Row label="Name" description="Used as the LoRA filename and run identifier.">
+      <Row label="名称" description="作为 LoRA 文件名和任务标识。">
         <Input
           value={v.name ?? ""}
           className="font-mono w-64"
@@ -24,25 +24,25 @@ export const OutputFields = memo(function OutputFields({
           placeholder="my_character"
         />
       </Row>
-      <Row label="Save every N epochs">
+      <Row label="每 N 回合保存一次">
         <IntInput
           min={1}
           value={v.save_every_n_epochs ?? 1}
           onChange={(n) => set(["output", "save_every_n_epochs"], n ?? 1)}
         />
       </Row>
-      <Row label="Save dtype" description="fp16 keeps file size small; bf16 needs Ampere+.">
+      <Row label="保存精度" description="fp16 文件更小；bf16 需要 Ampere 及以上。">
         <EnumSelect
           value={v.save_dtype ?? "fp16"}
           onChange={(d) => set(["output", "save_dtype"], d)}
           options={SAVE_DTYPE_OPTIONS}
         />
       </Row>
-      <Row label="Output dir" description="Defaults to <workspace>/output." errors={errorMap.get("output.output_dir")}>
+      <Row label="输出目录" description="默认 <workspace>/output。" errors={errorMap.get("output.output_dir")}>
         <PathInput
           value={v.output_dir ?? ""}
           onChange={(s) => set(["output", "output_dir"], s || null)}
-          placeholder="(default: workspace/output)"
+          placeholder="（默认 workspace/output）"
         />
       </Row>
     </>

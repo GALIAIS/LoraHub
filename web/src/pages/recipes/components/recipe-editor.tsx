@@ -50,15 +50,15 @@ export function RecipeEditor({
 
   const save = useMutation({
     mutationFn: async (opts: { overwrite: boolean; thenLaunch: boolean }) => {
-      if (!draft) throw new Error("no draft")
+      if (!draft) throw new Error("当前没有草稿可保存")
       const payload = draft as unknown as Record<string, unknown>
       const v = await api.validateRecipe(payload)
       if (!v.valid) {
         setErrors(v.errors ?? [])
-        throw new Error("recipe has validation errors")
+        throw new Error("配方校验未通过")
       }
       const cleanName = name.trim()
-      if (!cleanName) throw new Error("name is required")
+      if (!cleanName) throw new Error("配方名称不能为空")
       const saved = await api.saveRecipe(cleanName, payload, opts.overwrite || !isNew)
       qc.invalidateQueries({ queryKey: ["recipes"] })
       qc.invalidateQueries({ queryKey: ["recipe", cleanName] })
@@ -89,11 +89,11 @@ export function RecipeEditor({
             )
           }
         >
-          <ArrowLeft className="size-3" /> Back
+          <ArrowLeft className="size-3" /> 返回
         </Button>
         <div className="flex-1 min-w-0">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-1">
-            {isNew ? "New recipe" : "Edit recipe"}
+            {isNew ? "新建配方" : "编辑配方"}
           </div>
           {isNew ? (
             <Input
@@ -114,7 +114,7 @@ export function RecipeEditor({
           onClick={() => validate.mutate()}
           disabled={!draft || validate.isPending}
         >
-          <CheckCheck className="size-3" /> Validate
+          <CheckCheck className="size-3" /> 校验
         </Button>
         <Button
           size="sm"
@@ -122,14 +122,14 @@ export function RecipeEditor({
           onClick={() => save.mutate({ overwrite: !isNew, thenLaunch: false })}
           disabled={!draft || save.isPending}
         >
-          <Save className="size-3" /> {save.isPending ? "Saving…" : "Save"}
+          <Save className="size-3" /> {save.isPending ? "保存中…" : "保存"}
         </Button>
         <Button
           size="sm"
           onClick={() => save.mutate({ overwrite: !isNew, thenLaunch: true })}
           disabled={!draft || save.isPending}
         >
-          <Play className="size-3" /> Save & Train
+          <Play className="size-3" /> 保存并训练
         </Button>
       </header>
 
@@ -137,7 +137,7 @@ export function RecipeEditor({
         <div className="px-4 pb-4 pt-3 space-y-3">
           {validate.data?.valid === true && (
             <div className="rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-              Recipe is valid.
+              配方校验通过。
             </div>
           )}
           {validate.data?.preflight && (
@@ -146,7 +146,7 @@ export function RecipeEditor({
           {errors.length > 0 && (
             <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3">
               <div className="text-[10px] uppercase tracking-[0.18em] text-destructive font-semibold flex items-center gap-1.5">
-                <XCircle className="size-3" /> {errors.length} validation error(s)
+                <XCircle className="size-3" /> 发现 {errors.length} 处校验错误
               </div>
               <ul className="mt-2 text-xs font-mono text-destructive space-y-0.5">
                 {errors.slice(0, 8).map((e, i) => (
@@ -155,17 +155,17 @@ export function RecipeEditor({
                   </li>
                 ))}
                 {errors.length > 8 && (
-                  <li className="text-muted-foreground">…and {errors.length - 8} more</li>
+                  <li className="text-muted-foreground">…还有 {errors.length - 8} 处未列出</li>
                 )}
               </ul>
             </div>
           )}
           {save.isError && (
-            <ErrorBanner title="Save failed" message={(save.error as Error).message} />
+            <ErrorBanner title="保存失败" message={(save.error as Error).message} />
           )}
 
           {loading || !draft ? (
-            <div className="text-sm text-muted-foreground px-2 py-6">Loading…</div>
+            <div className="text-sm text-muted-foreground px-2 py-6">加载中…</div>
           ) : (
             <RecipeForm value={draft} onChange={setDraft} errors={errors} />
           )}

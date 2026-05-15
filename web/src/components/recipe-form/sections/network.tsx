@@ -16,7 +16,7 @@ export const NetworkFields = memo(function NetworkFields({
   const v = value ?? {}
   return (
     <>
-      <Row label="Type">
+      <Row label="网络类型">
         <EnumSelect
           value={v.type ?? "lora"}
           onChange={(t) => set(["network", "type"], t)}
@@ -24,8 +24,8 @@ export const NetworkFields = memo(function NetworkFields({
         />
       </Row>
       <Row
-        label="Rank"
-        description="Higher = more capacity, more VRAM. 32 is a strong default for SDXL characters."
+        label="Rank（秩）"
+        description="越高容量越大，显存占用也越大。SDXL 角色推荐 32。"
         errors={errorMap.get("network.rank")}
       >
         <IntInput
@@ -36,8 +36,8 @@ export const NetworkFields = memo(function NetworkFields({
         />
       </Row>
       <Row
-        label="Alpha"
-        description="Effective LR scaler. Many people set alpha = rank/2."
+        label="Alpha（缩放）"
+        description="实际学习率缩放因子。常见做法是 alpha = rank / 2。"
         errors={errorMap.get("network.alpha")}
       >
         <IntInput
@@ -46,15 +46,15 @@ export const NetworkFields = memo(function NetworkFields({
           onChange={(n) => set(["network", "alpha"], n ?? 16)}
         />
       </Row>
-      <Row label="Target U-Net" description="Train the U-Net (required for visual change).">
+      <Row label="训练 U-Net" description="训练 U-Net（视觉变化所必需）。">
         <Switch
           checked={v.target_unet ?? true}
           onCheckedChange={(b) => set(["network", "target_unet"], b)}
         />
       </Row>
       <Row
-        label="Target text encoder"
-        description="Train the text encoder too. Slower; helps style/concept generalization."
+        label="训练文本编码器"
+        description="一并训练文本编码器，速度更慢；有助于风格 / 概念的泛化。"
       >
         <Switch
           checked={v.target_text_encoder ?? false}

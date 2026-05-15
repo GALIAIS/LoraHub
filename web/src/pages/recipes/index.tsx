@@ -61,30 +61,30 @@ export function RecipesPage() {
         <header className="px-5 py-4 border-b border-border/60 flex items-start gap-2">
           <div className="flex-1 min-w-0">
             <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              Recipes
+              训练配方
             </div>
             <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
               <Folder className="size-3" />
               <span className="font-mono truncate" title={list.data?.dir ?? ""}>
-                {list.data?.dir ? shortenPath(list.data.dir) : "loading…"}
+                {list.data?.dir ? shortenPath(list.data.dir) : "加载中…"}
               </span>
             </div>
           </div>
           <Button size="sm" variant="outline" onClick={() => setMode({ kind: "new" })}>
-            <Plus className="size-3" /> New
+            <Plus className="size-3" /> 新建
           </Button>
         </header>
         <ScrollArea className="flex-1">
           <ul className="divide-y divide-border/40">
             {list.isLoading && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                Loading…
+                加载中…
               </li>
             )}
             {!list.isLoading && recipes.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                No recipes yet. Click <span className="text-foreground font-medium">+ New</span> to
-                create one, or run <code className="text-foreground">lorahub init</code>.
+                还没有配方。点击 <span className="text-foreground font-medium">+ 新建</span> 创建一个，或运行
+                <code className="text-foreground"> lorahub init</code>。
               </li>
             )}
             {recipes.map((r) => {
@@ -106,7 +106,7 @@ export function RecipesPage() {
       <section className="min-w-0 flex flex-col bg-background/60">
         {mode === null ? (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
-            Select a recipe to preview, or create a new one.
+            从左侧选择一个配方查看，或创建新的。
           </div>
         ) : mode.kind === "preview" ? (
           <RecipePreview

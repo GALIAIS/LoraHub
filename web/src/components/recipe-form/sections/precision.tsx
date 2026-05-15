@@ -14,7 +14,7 @@ export const PrecisionFields = memo(function PrecisionFields({
 }) {
   return (
     <>
-      <Row label="Precision" description="bf16 needs Ampere+ (RTX 30/40, A100, H100).">
+      <Row label="精度" description="bf16 需要 Ampere 及以上（RTX 30/40、A100、H100）。">
         <EnumSelect
           value={value.precision ?? "bf16"}
           onChange={(p) => set(["precision"], p)}
@@ -22,8 +22,8 @@ export const PrecisionFields = memo(function PrecisionFields({
         />
       </Row>
       <Row
-        label="Gradient checkpointing"
-        description="Cuts VRAM at the cost of ~20% throughput. Almost always on for 8GB cards."
+        label="梯度检查点"
+        description="以约 20% 吞吐为代价节省显存。8GB 显卡几乎必开。"
       >
         <Switch
           checked={value.gradient_checkpointing ?? true}
@@ -31,8 +31,8 @@ export const PrecisionFields = memo(function PrecisionFields({
         />
       </Row>
       <Row
-        label="Cache latents"
-        description="Pre-encode images via VAE, store on disk. Big speedup; needs disk space."
+        label="缓存潜变量"
+        description="提前用 VAE 编码图片并存盘，大幅提速但占额外硬盘。"
       >
         <Switch
           checked={value.cache_latents ?? true}

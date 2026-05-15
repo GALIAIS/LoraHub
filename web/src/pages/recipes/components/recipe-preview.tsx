@@ -97,7 +97,7 @@ export function RecipePreview({
           )}
         </div>
         <Button size="sm" variant="outline" onClick={onEdit}>
-          <Pencil className="size-3" /> Edit
+          <Pencil className="size-3" /> 编辑
         </Button>
         <Button
           size="sm"
@@ -105,12 +105,12 @@ export function RecipePreview({
           onClick={() => setDialogOpen(true)}
         >
           <Play className="size-3" />
-          {launch.isPending ? "Launching…" : "Train"}
+          {launch.isPending ? "启动中…" : "训练"}
         </Button>
       </header>
 
       {errorMsg && (
-        <ErrorBanner title="Recipe error" message={errorMsg} />
+        <ErrorBanner title="配方错误" message={errorMsg} />
       )}
 
       <Card className="m-4 mb-0 rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden flex-1 min-h-0 flex flex-col">
@@ -122,7 +122,7 @@ export function RecipePreview({
         <CardContent className="p-0 flex-1 min-h-0">
           <ScrollArea className="h-full">
             <pre className="font-mono text-[12px] leading-relaxed px-4 py-3 whitespace-pre">
-              {detail.isLoading ? "Loading…" : data?.content ?? ""}
+              {detail.isLoading ? "加载中…" : data?.content ?? ""}
             </pre>
           </ScrollArea>
         </CardContent>

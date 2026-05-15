@@ -50,7 +50,7 @@ export function SettingsPage() {
   if (!draft || !settingsQuery.data) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="px-8 py-7 text-sm text-muted-foreground">Loading settings…</div>
+        <div className="px-8 py-7 text-sm text-muted-foreground">正在加载设置…</div>
       </div>
     )
   }
@@ -66,12 +66,12 @@ export function SettingsPage() {
       <div className="px-8 py-7 space-y-6 max-w-[900px]">
       <header className="space-y-1">
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-          Workbench
+          工作台
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="text-sm text-muted-foreground">
-          Workspace-wide defaults. Recipe files override these per-job; environment
-          variables (LORAHUB_KOHYA_*) take the highest precedence.
+          工作区级别的默认值。配方文件中的同名字段会按任务覆盖；环境变量
+          (LORAHUB_KOHYA_*) 优先级最高。
         </p>
       </header>
 
@@ -80,23 +80,22 @@ export function SettingsPage() {
 
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Kohya backend</CardTitle>
+          <CardTitle className="text-base">Kohya 后端</CardTitle>
           <CardDescription>
-            Where lorahub looks for the kohya-ss/sd-scripts checkout and the Python
-            interpreter that runs it.
+            指定 kohya-ss/sd-scripts 检出目录与运行它的 Python 解释器。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Field
-            label="sd-scripts path"
-            description="Absolute path to the kohya-ss/sd-scripts checkout. Leave empty to use ./sd-scripts (project) or platformdirs (user)."
+            label="sd-scripts 路径"
+            description="kohya-ss/sd-scripts 检出目录的绝对路径。留空则使用 ./sd-scripts（项目内）或 platformdirs 用户目录。"
             value={draft.sd_scripts_path ?? ""}
             placeholder="C:\\path\\to\\sd-scripts"
             onChange={(v) => setDraft({ ...draft, sd_scripts_path: v || null })}
           />
           <Field
-            label="Python executable"
-            description="Optional. Defaults to <sd-scripts>/venv/Scripts/python.exe (Windows) or .../bin/python (Unix) when present."
+            label="Python 解释器"
+            description="可选。默认使用 <sd-scripts>/venv/Scripts/python.exe（Windows）或 .../bin/python（Unix）。"
             value={draft.python_executable ?? ""}
             placeholder="<sd-scripts>/venv/Scripts/python.exe"
             onChange={(v) => setDraft({ ...draft, python_executable: v || null })}
@@ -106,15 +105,14 @@ export function SettingsPage() {
 
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Tagging</CardTitle>
+          <CardTitle className="text-base">自动标注</CardTitle>
           <CardDescription>
-            Default device used by <code className="text-foreground">lorahub tag</code> and the
-            web tagger when not specified per-call.
+            <code className="text-foreground">lorahub tag</code> 与 Web 标注器在未显式指定时使用的默认设备。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-[10rem_1fr] gap-x-4 items-center">
-            <Label className="text-xs">WD14 device</Label>
+            <Label className="text-xs">WD14 设备</Label>
             <div className="flex gap-2">
               {(["auto", "cpu", "cuda"] as const).map((d) => (
                 <Button
@@ -124,7 +122,7 @@ export function SettingsPage() {
                   variant={draft.tagger_device === d ? "default" : "outline"}
                   onClick={() => setDraft({ ...draft, tagger_device: d })}
                 >
-                  {d}
+                  {d === "auto" ? "自动" : d.toUpperCase()}
                 </Button>
               ))}
             </div>
@@ -145,7 +143,7 @@ export function SettingsPage() {
           }
         >
           <Save className="size-3" />
-          {update.isPending ? "Saving…" : "Save"}
+          {update.isPending ? "保存中…" : "保存"}
         </Button>
         <Button
           size="sm"
@@ -154,7 +152,7 @@ export function SettingsPage() {
           onClick={() => settingsQuery.data && setDraft(settingsQuery.data.settings)}
         >
           <RotateCcw className="size-3" />
-          Reset
+          重置
         </Button>
         {update.isError && (
           <span className="text-xs text-destructive font-mono">
@@ -162,7 +160,7 @@ export function SettingsPage() {
           </span>
         )}
         {update.isSuccess && !dirty && (
-          <span className="text-xs text-emerald-600 dark:text-emerald-400">Saved.</span>
+          <span className="text-xs text-emerald-600 dark:text-emerald-400">已保存。</span>
         )}
         <span className="ml-auto text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70 font-mono truncate">
           {settingsQuery.data.path}
@@ -196,9 +194,9 @@ function BackendStatusCard({ backend }: { backend: BackendStatus }) {
       <StatusIcon ok={backend.sd_scripts_ok && backend.python_ok} warn={overall === "no-python"} />
       <div className="flex-1 min-w-0 space-y-1.5">
         <div className="text-sm font-semibold tracking-tight">
-          {overall === "ready" && "Backend ready"}
-          {overall === "no-python" && "Backend reachable, Python not detected"}
-          {overall === "broken" && "Backend not configured"}
+          {overall === "ready" && "后端就绪"}
+          {overall === "no-python" && "找到 sd-scripts，但未检测到 Python"}
+          {overall === "broken" && "后端未配置"}
         </div>
         <dl className="text-xs grid grid-cols-[8rem_1fr] gap-x-3 gap-y-0.5 font-mono">
           <dt className="text-muted-foreground">sd-scripts</dt>
@@ -214,7 +212,7 @@ function BackendStatusCard({ backend }: { backend: BackendStatus }) {
         </dl>
         {backend.missing_scripts.length > 0 && (
           <div className="text-[11px] text-destructive">
-            Missing: {backend.missing_scripts.join(", ")}
+            缺失文件：{backend.missing_scripts.join(", ")}
           </div>
         )}
       </div>
@@ -302,12 +300,11 @@ function BootstrapPanel() {
   return (
     <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Install kohya backend</CardTitle>
+        <CardTitle className="text-base">安装 Kohya 后端</CardTitle>
         <CardDescription>
-          Clone <code className="text-foreground">kohya-ss/sd-scripts</code>, create
-          its venv, and install PyTorch + requirements + xformers. Same flow as
-          <code className="text-foreground"> lorahub bootstrap-kohya</code>; runs
-          in the background — leave this page open.
+          克隆 <code className="text-foreground">kohya-ss/sd-scripts</code>、创建 venv，并安装
+          PyTorch、依赖和 xformers。与命令行
+          <code className="text-foreground"> lorahub bootstrap-kohya</code> 等价；安装在后台运行，请保持本页打开。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -322,7 +319,7 @@ function BootstrapPanel() {
             ) : (
               <Download className="size-3" />
             )}
-            {isRunning ? "Installing…" : "Install kohya backend"}
+            {isRunning ? "安装中…" : "安装 Kohya 后端"}
           </Button>
           <BootstrapStatusBadge status={status} />
           {startError && (
