@@ -54,8 +54,13 @@ ProgressCallback = Callable[[str], None]
 def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
     if progress is not None:
         progress(step)
-    result = subprocess.run(cmd, check=False)
+    # Capture stderr so the API event log carries the real failure reason —
+    # without this the frontend only sees "exit code 1".
+    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
+        if progress is not None and result.stderr:
+            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
+            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
         raise BootstrapError(step, result.returncode)
 
 
@@ -116,6 +121,26 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
     if not requirements.is_file():
         msg = f"missing {requirements} - clone may have failed"
         raise BootstrapError("install requirements", 1) from FileNotFoundError(msg)
+
+    # diffusion-pipe pins `deepspeed` in requirements.txt, but DeepSpeed
+    # ships no Windows wheel — pip then tries to build from source which
+    # needs CUDA toolkit + MSVC and almost always fails. Strip every line
+    # that mentions deepspeed and run the rest; the dedicated
+    # install_deepspeed step takes care of it (and skips on Windows).
+    filtered = plan.target / "requirements.lorahub.txt"
+    raw = requirements.read_text(encoding="utf-8")
+    kept: list[str] = []
+    skipped: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "deepspeed" in stripped.lower():
+            skipped.append(stripped)
+            continue
+        kept.append(line)
+    filtered.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    if progress is not None and skipped:
+        progress(f"skipping from requirements: {', '.join(skipped)} (handled separately)")
+
     cmd = [
         str(plan.venv_python),
         "-m",
@@ -123,13 +148,22 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
         "install",
         "--upgrade",
         "-r",
-        str(requirements),
+        str(filtered),
     ]
     _run(cmd, "install diffusion-pipe requirements.txt", progress)
 
 
 def install_deepspeed(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     if not plan.install_deepspeed:
+        return
+    if sys.platform == "win32":
+        if progress is not None:
+            progress(
+                "skip deepspeed: no Windows wheel available. "
+                "DeepSpeed needs CUDA toolkit + MSVC to build from source. "
+                "Install manually (e.g. `pip install deepspeed`) once your "
+                "build environment is ready, or run training under WSL2/Linux."
+            )
         return
     cmd = [str(plan.venv_python), "-m", "pip", "install", "deepspeed"]
     _run(cmd, "install deepspeed", progress)

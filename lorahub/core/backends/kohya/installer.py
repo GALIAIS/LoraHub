@@ -54,8 +54,14 @@ ProgressCallback = Callable[[str], None]
 def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
     if progress is not None:
         progress(step)
-    result = subprocess.run(cmd, check=False)
+    # Capture stderr so the API event log can carry the real failure reason —
+    # without this the frontend only sees "exit code 1". stdout still streams
+    # to the parent terminal so `lorahub bootstrap-*` keeps working as before.
+    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
+        if progress is not None and result.stderr:
+            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
+            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
         raise BootstrapError(step, result.returncode)
 
 
