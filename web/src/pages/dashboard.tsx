@@ -9,6 +9,8 @@ import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   AlertTriangle,
+  BatteryCharging,
+  BatteryFull,
   CheckCircle2,
   CircleX,
   Cpu,
@@ -24,6 +26,7 @@ import {
   api,
   useSystemStream,
   type JobSummary,
+  type SystemBattery,
   type SystemDisk,
   type SystemGpu,
   type SystemSnapshot,
@@ -120,7 +123,12 @@ export function DashboardPage() {
           <>
             <HostInfoCard snapshot={snapshot} />
             <CpuMemoryCard snapshot={snapshot} />
-            <GpuSection gpus={snapshot.gpus} hasNvidiaSmi={snapshot.has_nvidia_smi} />
+            {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
+            <GpuSection
+              gpus={snapshot.gpus}
+              hasNvidiaSmi={snapshot.has_nvidia_smi}
+              system={snapshot.host.system}
+            />
             <DiskSection disks={snapshot.disks} />
           </>
         ) : (
@@ -262,6 +270,20 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
         )
       : null
 
+  const cpuDescriptionParts: string[] = [
+    `${cpu.cores_logical} 逻辑核`,
+  ]
+  if (cpu.cores_physical) cpuDescriptionParts.push(`${cpu.cores_physical} 物理核`)
+  if (cpu.frequency_mhz !== null) {
+    cpuDescriptionParts.push(`${formatFrequency(cpu.frequency_mhz)}`)
+  }
+  if (cpu.cpu_temperature_c !== null) {
+    cpuDescriptionParts.push(`温度 ${cpu.cpu_temperature_c.toFixed(0)}°C`)
+  }
+  if (cpu.load_average) {
+    cpuDescriptionParts.push(`负载 ${cpu.load_average.map((n) => n.toFixed(2)).join(" / ")}`)
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
@@ -271,8 +293,7 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
             CPU
           </CardTitle>
           <CardDescription className="text-xs">
-            {cpu.cores_logical} 逻辑核{cpu.cores_physical ? ` · ${cpu.cores_physical} 物理核` : ""}
-            {cpu.load_average ? ` · 负载 ${cpu.load_average.map((n) => n.toFixed(2)).join(" / ")}` : ""}
+            {cpuDescriptionParts.join(" · ")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -373,10 +394,29 @@ function CoreBar({ index, percent }: { index: number; percent: number }) {
 function GpuSection({
   gpus,
   hasNvidiaSmi,
+  system,
 }: {
   gpus: SystemGpu[]
   hasNvidiaSmi: boolean
+  system: string
 }) {
+  // 已经探测到设备时直接渲染，让多源 GPU 都有展示。
+  if (gpus.length > 0) {
+    return (
+      <div className="space-y-3">
+        {gpus.map((gpu) => (
+          <GpuCard key={gpu.index} gpu={gpu} />
+        ))}
+      </div>
+    )
+  }
+
+  const isMac = system === "Darwin"
+  const description = isMac
+    ? "Apple Silicon / Apple GPU 不支持详细计量，已切换到仅展示型号。本机未检测到独立 GPU。"
+    : "未检测到 nvidia-smi。AMD / Apple 设备或 CPU-only 主机可忽略此项。"
+
+  // 没有任何 GPU 数据 - 给个友好提示。
   if (!hasNvidiaSmi) {
     return (
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
@@ -385,29 +425,18 @@ function GpuSection({
             <Zap className="size-4 text-muted-foreground" />
             GPU
           </CardTitle>
-          <CardDescription className="text-xs">
-            未检测到 nvidia-smi。AMD / Apple 设备或 CPU-only 主机可忽略此项。
-          </CardDescription>
+          <CardDescription className="text-xs">{description}</CardDescription>
         </CardHeader>
       </Card>
     )
   }
-  if (gpus.length === 0) {
-    return (
-      <Card className="rounded-[6px] border-amber-500/30 bg-amber-500/5 shadow-[var(--panel-shadow)]">
-        <CardContent className="px-4 py-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
-          <AlertTriangle className="size-4" />
-          nvidia-smi 已安装但未返回任何设备信息。
-        </CardContent>
-      </Card>
-    )
-  }
   return (
-    <div className="space-y-3">
-      {gpus.map((gpu) => (
-        <GpuCard key={gpu.index} gpu={gpu} />
-      ))}
-    </div>
+    <Card className="rounded-[6px] border-amber-500/30 bg-amber-500/5 shadow-[var(--panel-shadow)]">
+      <CardContent className="px-4 py-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
+        <AlertTriangle className="size-4" />
+        nvidia-smi 已安装但未返回任何设备信息。
+      </CardContent>
+    </Card>
   )
 }
 
@@ -418,6 +447,8 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
       : null
   const utilTone = toneForPercent(gpu.utilization_percent ?? 0)
   const memTone = toneForPercent(memPercent)
+  const vendor = vendorBadge(gpu)
+  const isAppleSilicon = gpu.vendor === "apple"
   return (
     <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
       <CardHeader className="pb-3">
@@ -428,10 +459,15 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
               GPU #{gpu.index} · {gpu.name}
             </CardTitle>
             <CardDescription className="text-xs">
-              驱动 {gpu.driver ?? "—"}
+              {isAppleSilicon
+                ? "Apple GPU 暂不开放计量接口，仅显示型号"
+                : `驱动 ${gpu.driver ?? "—"}`}
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
+            <Badge className={cn("rounded-[2px] uppercase text-[10px] tracking-[0.1em]", vendor.className)}>
+              {vendor.label}
+            </Badge>
             {gpu.temperature_c !== null && (
               <Badge variant="outline" className="rounded-[2px] gap-1">
                 <Thermometer className="size-3" /> {gpu.temperature_c.toFixed(0)}°C
@@ -459,7 +495,9 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
           valueText={
             gpu.memory_used_bytes !== null && gpu.memory_total_bytes
               ? `${fmtBytes(gpu.memory_used_bytes)} / ${fmtBytes(gpu.memory_total_bytes)}`
-              : "—"
+              : gpu.memory_total_bytes
+                ? `— / ${fmtBytes(gpu.memory_total_bytes)}`
+                : "—"
           }
         />
         <Separator />
@@ -487,12 +525,88 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
   )
 }
 
+function vendorBadge(gpu: SystemGpu): { label: string; className: string } {
+  switch (gpu.vendor) {
+    case "nvidia":
+      return {
+        label: "NVIDIA",
+        className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40",
+      }
+    case "amd":
+      return {
+        label: "AMD",
+        className: "bg-red-500/15 text-red-700 dark:text-red-300 border border-red-500/40",
+      }
+    case "intel":
+      return {
+        label: "Intel",
+        className: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/40",
+      }
+    case "apple":
+      return {
+        label: "Apple",
+        className: "bg-slate-500/15 text-slate-700 dark:text-slate-200 border border-slate-500/40",
+      }
+    default:
+      return {
+        label: gpu.vendor ? gpu.vendor.toUpperCase() : "GPU",
+        className: "bg-muted text-foreground border border-border/70",
+      }
+  }
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <dt className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 font-mono tabular-nums">{value}</dd>
     </div>
+  )
+}
+
+// =================================================== 电池 ===================
+
+function BatteryCard({ battery }: { battery: SystemBattery }) {
+  const percent = Math.max(0, Math.min(100, battery.percent))
+  const Icon = battery.plugged ? BatteryCharging : BatteryFull
+  const tone = battery.plugged
+    ? "text-emerald-700 dark:text-emerald-400"
+    : percent <= 15
+      ? "text-destructive"
+      : percent <= 30
+        ? "text-amber-700 dark:text-amber-400"
+        : "text-foreground"
+  const description = (() => {
+    if (battery.plugged) return "电源已连接"
+    if (battery.secs_left !== null) return `预计剩余 ${formatSecs(battery.secs_left)}`
+    return "未连接电源"
+  })()
+  const barTone = toneForPercent(percent)
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Icon className={cn("size-4", tone)} />
+              电池
+            </CardTitle>
+            <CardDescription className="text-xs">{description}</CardDescription>
+          </div>
+          <div className={cn("text-2xl font-semibold tabular-nums", tone)}>
+            {percent.toFixed(0)}%
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+          <div
+            className={cn("h-full transition-[width]", barTone.bar)}
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -661,6 +775,20 @@ function fmtBytes(n: number): string {
     i += 1
   }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`
+}
+
+function formatFrequency(mhz: number): string {
+  if (!Number.isFinite(mhz) || mhz <= 0) return "—"
+  if (mhz >= 1000) return `${(mhz / 1000).toFixed(2)} GHz`
+  return `${mhz.toFixed(0)} MHz`
+}
+
+function formatSecs(secs: number): string {
+  if (!Number.isFinite(secs) || secs <= 0) return "—"
+  const hours = Math.floor(secs / 3600)
+  const minutes = Math.floor((secs % 3600) / 60)
+  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`
+  return `${minutes} 分钟`
 }
 
 function toneForPercent(percent: number | null): { text: string; bar: string } {

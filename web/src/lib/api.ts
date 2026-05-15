@@ -301,6 +301,8 @@ export interface SystemCpu {
   per_core_percent: number[]
   load_average: number[] | null
   arch: string
+  frequency_mhz: number | null
+  cpu_temperature_c: number | null
 }
 
 export interface SystemMemory {
@@ -333,6 +335,13 @@ export interface SystemGpu {
   power_w: number | null
   power_limit_w: number | null
   fan_percent: number | null
+  vendor: "nvidia" | "amd" | "intel" | "apple" | "qemu" | "unknown" | string
+}
+
+export interface SystemBattery {
+  percent: number
+  plugged: boolean | null
+  secs_left: number | null
 }
 
 export interface SystemSnapshot {
@@ -344,6 +353,7 @@ export interface SystemSnapshot {
   memory: SystemMemory
   disks: SystemDisk[]
   gpus: SystemGpu[]
+  battery: SystemBattery | null
 }
 
 /**

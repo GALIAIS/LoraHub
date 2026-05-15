@@ -708,3 +708,29 @@ def test_system_stats_disk_entry_has_paths_and_percentage(client: TestClient) ->
     assert disk["label"]
     assert 0.0 <= disk["percent"] <= 100.0
     assert disk["total_bytes"] >= disk["used_bytes"]
+
+
+def test_system_stats_includes_optional_fields(client: TestClient) -> None:
+    """New cross-platform fields must be present (value may be None where the
+    host does not expose them) and existing GPU shape must stay backwards
+    compatible.
+    """
+    body = client.get("/api/system/stats").json()
+
+    # CPU: new fields exist on the dict, may be None on Windows / minimal hosts.
+    cpu = body["cpu"]
+    assert "frequency_mhz" in cpu
+    assert "cpu_temperature_c" in cpu
+    assert cpu["frequency_mhz"] is None or isinstance(cpu["frequency_mhz"], (int, float))
+    assert cpu["cpu_temperature_c"] is None or isinstance(cpu["cpu_temperature_c"], (int, float))
+
+    # Battery is a top-level key; None on desktops/servers, dict on laptops.
+    assert "battery" in body
+    if body["battery"] is not None:
+        for key in ("percent", "plugged", "secs_left"):
+            assert key in body["battery"]
+
+    # GPU shape: legacy callers still get index/name/driver.
+    for gpu in body["gpus"]:
+        for key in ("index", "name", "driver", "vendor"):
+            assert key in gpu, f"missing GPU key {key}"
