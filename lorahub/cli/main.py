@@ -148,6 +148,76 @@ def init(
     console.print(f"[green]created[/green] {dst}")
 
 
+@app.command("bootstrap-kohya")
+def bootstrap_kohya(
+    target: Annotated[
+        Path,
+        typer.Option(help="Where to clone sd-scripts and create its venv."),
+    ] = Path("./sd-scripts"),
+    cuda: Annotated[
+        str, typer.Option("--cuda", help="CUDA wheel suffix (cu118 / cu121 / cu124 / cu128).")
+    ] = "cu124",
+    torch_version: Annotated[
+        str, typer.Option("--torch", help="PyTorch version to install.")
+    ] = "2.6.0",
+    torchvision_version: Annotated[
+        str, typer.Option("--torchvision", help="torchvision version to install.")
+    ] = "0.21.0",
+    no_xformers: Annotated[
+        bool,
+        typer.Option("--no-xformers", help="Skip the optional xformers install."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Wipe target if it already exists."),
+    ] = False,
+) -> None:
+    """One-shot install of kohya-ss/sd-scripts (clone + venv + PyTorch + deps + xformers)."""
+    from lorahub.core.backends.kohya import installer
+
+    plan = installer.BootstrapPlan(
+        target=target.resolve(),
+        cuda_version=cuda,
+        torch_version=torch_version,
+        torchvision_version=torchvision_version,
+        install_xformers=not no_xformers,
+    )
+
+    if plan.target.exists() and any(plan.target.iterdir()):
+        if not force:
+            err_console.print(
+                f"[red]target {plan.target} is not empty.[/red] "
+                "Pass --force to wipe it first, or pick another path with --target."
+            )
+            raise typer.Exit(code=1)
+        installer.cleanup_partial(plan)
+
+    console.print(
+        f"[bold]Installing kohya into[/bold] {plan.target}\n"
+        f"[dim]CUDA[/dim] {plan.cuda_version}  "
+        f"[dim]torch[/dim] {plan.torch_version}  "
+        f"[dim]xformers[/dim] {plan.install_xformers}"
+    )
+
+    try:
+        installer.bootstrap(
+            plan,
+            progress=lambda step: console.print(f"[cyan]>[/cyan] {step}"),
+        )
+    except installer.BootstrapError as e:
+        err_console.print(
+            f"[red]bootstrap failed at step:[/red] {e.step} "
+            f"[dim](exit {e.returncode})[/dim]\n"
+            f"Run [bold]lorahub bootstrap-kohya --force[/bold] to retry from scratch."
+        )
+        raise typer.Exit(code=1) from e
+
+    console.print(f"[green]OK[/] kohya installed at {plan.target}")
+    console.print(
+        f"[dim]Set LORAHUB_KOHYA_SD_SCRIPTS={plan.target} (or copy .env.example to .env).[/dim]"
+    )
+
+
 @app.command("fetch-bangumi")
 def fetch_bangumi(
     repo: Annotated[

@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **End-to-end smoke test passes** — full path from `fetch-bangumi` -> `tag` -> `train` produces a 42 MB SDXL LoRA file in 20 minutes on an RTX 4070 Laptop (8 GB VRAM) using IllustriousXL as the base. Verified with 10 BangumiBase images of "laffey (azur lane)".
+- **`lorahub bootstrap-kohya`** — one-shot kohya install. Clones `kohya-ss/sd-scripts`, creates a venv, installs PyTorch + torchvision (`--cuda cu121/cu124/cu128`, `--torch X.Y.Z`), runs `pip install -r requirements.txt`, and installs xformers (skip with `--no-xformers`). `--force` wipes a half-installed target. Replaces ~30 minutes of manual command typing.
+- **End-to-end smoke test passes** — full path from `fetch-bangumi` -> `tag` -> `train` produces a 21 MB SDXL LoRA file in under 3 minutes on an RTX 4070 Laptop (8 GB VRAM) using IllustriousXL as the base. Verified with 3 BangumiBase images of "laffey (azur lane)" at 512x512, 2 steps.
 - **WD14 / WD-v3 auto-tagger** (`lorahub.core.tagging.wd14`) — ONNX-based multi-label image classifier that produces Danbooru-style tags. Lazy-loads the model on first use, supports configurable `general` / `character` thresholds (defaults `0.35` / `0.85`), and writes kohya-style comma-separated `.txt` captions next to each image.
 - **CLI: `lorahub tag`** — auto-tag a directory of images. Skips images that already have non-empty captions unless `--overwrite` is passed; supports `--recursive`, `--include-character / --no-include-character`, and threshold overrides.
 - **BangumiBase fetcher** (`lorahub.core.dataset.sources.bangumi_base`) — pulls a single character's image set from a Hugging Face BangumiBase dataset, unpacks `dataset.zip`, and seeds empty caption files for kohya tag-file mode.

@@ -55,12 +55,14 @@ Tell LoraHub where your kohya checkout lives — either via env var or directly 
 
 ```powershell
 # Option A: install kohya inside the LoraHub working tree (this is the default lookup path)
-lorahub bootstrap-kohya         # runs the kohya install steps for you (planned)
+lorahub bootstrap-kohya         # clones sd-scripts and installs PyTorch + deps in ~10 min
 
 # Option B: point at an existing checkout
 $env:LORAHUB_KOHYA_SD_SCRIPTS = "C:\path\to\sd-scripts"
 # or copy .env.example to .env and edit
 ```
+
+`lorahub bootstrap-kohya` defaults to PyTorch 2.6.0 + CUDA 12.4. Use `--cuda cu121` (or `cu118` / `cu128`) and `--torch 2.6.0` to switch versions, `--no-xformers` to skip the optional xformers install, or `--force` to wipe a half-installed target.
 
 LoraHub auto-loads `.env` from the project root on startup, so once `.env` has `LORAHUB_KOHYA_SD_SCRIPTS=./sd-scripts` you don't need to export it in every shell.
 
