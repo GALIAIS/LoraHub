@@ -583,19 +583,18 @@ function Metric({ label, value }: { label: string; value: string }) {
 function BatteryCard({ battery }: { battery: SystemBattery }) {
   const percent = Math.max(0, Math.min(100, battery.percent))
   const Icon = battery.plugged ? BatteryCharging : BatteryFull
+  // Battery uses inverted tone semantics: 满 = 绿 / 中 = 黄 / 低 = 红.
+  // (Don't reuse toneForPercent — that one tints "high" red because it's
+  // built for utilisation metrics where high is bad.)
+  const batteryTone = batteryToneForPercent(percent)
   const tone = battery.plugged
     ? "text-emerald-700 dark:text-emerald-400"
-    : percent <= 15
-      ? "text-destructive"
-      : percent <= 30
-        ? "text-amber-700 dark:text-amber-400"
-        : "text-foreground"
+    : batteryTone.text
   const description = (() => {
     if (battery.plugged) return "电源已连接"
     if (typeof battery.secs_left === "number") return `预计剩余 ${formatSecs(battery.secs_left)}`
     return "未连接电源"
   })()
-  const barTone = toneForPercent(percent)
   return (
     <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
       <CardHeader className="pb-3">
@@ -615,13 +614,33 @@ function BatteryCard({ battery }: { battery: SystemBattery }) {
       <CardContent>
         <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
           <div
-            className={cn("h-full transition-[width]", barTone.bar)}
+            className={cn("h-full transition-[width]", batteryTone.bar)}
             style={{ width: `${percent}%` }}
           />
         </div>
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * Battery-flavoured percent → tone: full reads green, mid amber, low red.
+ * Thresholds match the macOS / Windows convention (≤ 20% low warning).
+ */
+function batteryToneForPercent(percent: number): { text: string; bar: string } {
+  if (percent <= 20) {
+    return { text: "text-destructive", bar: "bg-destructive" }
+  }
+  if (percent <= 50) {
+    return {
+      text: "text-amber-700 dark:text-amber-400",
+      bar: "bg-amber-500",
+    }
+  }
+  return {
+    text: "text-emerald-700 dark:text-emerald-400",
+    bar: "bg-emerald-500",
+  }
 }
 
 // =================================================== 磁盘 ===================
