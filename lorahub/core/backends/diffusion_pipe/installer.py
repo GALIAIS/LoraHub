@@ -32,6 +32,9 @@ class BootstrapPlan:
     torchvision_version: str = DEFAULT_TORCHVISION
     install_deepspeed: bool = True
     git_depth: int = DEFAULT_DEPTH
+    # Optional HTTPS prefix that rewrites `https://github.com/...` URLs at
+    # clone time (e.g. "https://gh-proxy.org"). Empty means direct.
+    github_proxy: str | None = None
 
     @property
     def venv_python(self) -> Path:
@@ -60,12 +63,15 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
         msg = f"target directory is not empty: {plan.target}"
         raise BootstrapError("clone", 1) from FileExistsError(msg)
     plan.target.parent.mkdir(parents=True, exist_ok=True)
+    from lorahub.api.settings import apply_github_proxy  # noqa: PLC0415
+
+    repo_url = apply_github_proxy(DIFFUSION_PIPE_REPO_URL, plan.github_proxy)
     cmd = [
         "git",
         "clone",
         "--depth",
         str(plan.git_depth),
-        DIFFUSION_PIPE_REPO_URL,
+        repo_url,
         str(plan.target),
     ]
     _run(cmd, f"clone tdrussell/diffusion-pipe -> {plan.target}", progress)

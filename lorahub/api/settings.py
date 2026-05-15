@@ -36,6 +36,19 @@ class Settings:
     default_backend: str = "kohya"
 
     tagger_device: str = "auto"  # "auto" | "cpu" | "cuda"
+
+    # --- Network acceleration ---
+    # Optional GitHub mirror prefix (e.g. "https://gh-proxy.org") rewriting
+    # `https://github.com/...` URLs at clone time. Leave empty for direct.
+    github_proxy: str | None = None
+    # HuggingFace endpoint mirror (set as HF_ENDPOINT env var on subprocess
+    # launches). Leave empty for the official site.
+    huggingface_endpoint: str | None = None
+    # When true, downloads default to ModelScope where applicable.
+    modelscope_enabled: bool = False
+    # Optional access token for private ModelScope models.
+    modelscope_token: str | None = None
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -210,11 +223,52 @@ def probe_backend(settings: Settings) -> dict[str, Any]:
 VALID_BACKEND_IDS: frozenset[str] = frozenset(known_ids())
 
 
+# --------------------------------------------------------------------------- #
+# Network acceleration helpers (consumed by the installer + subprocess launch)
+# --------------------------------------------------------------------------- #
+
+
+def apply_github_proxy(url: str, proxy: str | None) -> str:
+    """Rewrite a github.com URL through `proxy` (e.g. "https://gh-proxy.org").
+
+    No-op when `proxy` is empty or when the URL doesn't point at github.com.
+    Strips the trailing slash from `proxy` so callers can paste either form.
+    """
+    if not proxy:
+        return url
+    p = proxy.strip().rstrip("/")
+    if not p:
+        return url
+    if not url.startswith(("https://github.com/", "http://github.com/")):
+        return url
+    return f"{p}/{url}"
+
+
+def env_overrides(settings: Settings) -> dict[str, str]:
+    """Environment variables to inject into subprocesses started by lorahub.
+
+    Currently routes HuggingFace traffic through a mirror when configured.
+    The shell environment still wins — these are defaults applied only when
+    the user hasn't set the variable themselves.
+    """
+    overrides: dict[str, str] = {}
+    hf = (settings.huggingface_endpoint or "").strip().rstrip("/")
+    if hf and "HF_ENDPOINT" not in os.environ:
+        overrides["HF_ENDPOINT"] = hf
+        # huggingface_hub also reads HUGGINGFACE_HUB_ENDPOINT historically.
+        overrides["HUGGINGFACE_HUB_ENDPOINT"] = hf
+    if settings.modelscope_token and "MODELSCOPE_API_TOKEN" not in os.environ:
+        overrides["MODELSCOPE_API_TOKEN"] = settings.modelscope_token
+    return overrides
+
+
 __all__ = [
     "Settings",
     "SettingsStore",
     "VALID_BACKEND_IDS",
+    "apply_github_proxy",
     "default_settings_path",
+    "env_overrides",
     "probe_all_backends",
     "probe_backend",
     "probe_diffusion_pipe_backend",

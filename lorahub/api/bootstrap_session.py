@@ -147,6 +147,7 @@ def default_build_bootstrap_runner(
 def _build_kohya_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
+    from lorahub.api import app as app_module  # noqa: PLC0415
     from lorahub.core.backends.kohya import installer  # noqa: PLC0415
 
     target_path = (
@@ -154,12 +155,14 @@ def _build_kohya_runner(
         if req.target
         else (Path.cwd() / "sd-scripts").resolve()
     )
+    settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
         cuda_version=req.cuda,
         torch_version=req.torch_version,
         torchvision_version=req.torchvision_version,
         install_xformers=req.install_xformers,
+        github_proxy=settings.github_proxy,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -181,6 +184,7 @@ def _build_kohya_runner(
 def _build_diffusion_pipe_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
+    from lorahub.api import app as app_module  # noqa: PLC0415
     from lorahub.core.backends.diffusion_pipe import installer  # noqa: PLC0415
 
     target_path = (
@@ -188,12 +192,14 @@ def _build_diffusion_pipe_runner(
         if req.target
         else (Path.cwd() / "diffusion-pipe").resolve()
     )
+    settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
         cuda_version=req.cuda,
         torch_version=req.torch_version,
         torchvision_version=req.torchvision_version,
         install_deepspeed=req.install_deepspeed,
+        github_proxy=settings.github_proxy,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:

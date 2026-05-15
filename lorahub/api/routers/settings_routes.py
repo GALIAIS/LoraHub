@@ -37,6 +37,10 @@ class UpdateSettingsRequest(BaseModel):
     diffusion_pipe_python: str | None = None
     default_backend: str | None = None
     tagger_device: str | None = None
+    github_proxy: str | None = None
+    huggingface_endpoint: str | None = None
+    modelscope_enabled: bool | None = None
+    modelscope_token: str | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -95,6 +99,14 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
         diffusion_pipe_python=_norm(req.diffusion_pipe_python),
         default_backend=default_backend,
         tagger_device=tagger_device,
+        github_proxy=_norm(req.github_proxy),
+        huggingface_endpoint=_norm(req.huggingface_endpoint),
+        modelscope_enabled=(
+            req.modelscope_enabled
+            if req.modelscope_enabled is not None
+            else current.modelscope_enabled
+        ),
+        modelscope_token=_norm(req.modelscope_token),
         extra=current.extra,
     )
     store.save(new)

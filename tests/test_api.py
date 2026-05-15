@@ -1140,3 +1140,79 @@ def test_diffusion_pipe_launch_raises_not_implemented(tmp_path: Path) -> None:
     backend = DiffusionPipeBackend()
     with pytest.raises(NotImplementedError, match="v0.3"):
         backend.launch(cfg, tmp_path / "ws", on_event=lambda _ev: None)
+
+
+# --------------------------------------------------------------------------- #
+# Network acceleration: github proxy + huggingface mirror + modelscope        #
+# --------------------------------------------------------------------------- #
+
+
+def test_apply_github_proxy_rewrites_only_github_urls() -> None:
+    from lorahub.api.settings import apply_github_proxy
+
+    proxy = "https://gh-proxy.org"
+    assert apply_github_proxy(
+        "https://github.com/foo/bar.git", proxy
+    ) == "https://gh-proxy.org/https://github.com/foo/bar.git"
+    # Trailing slash on the proxy is normalised.
+    assert apply_github_proxy(
+        "https://github.com/foo/bar.git", "https://gh-proxy.org/"
+    ) == "https://gh-proxy.org/https://github.com/foo/bar.git"
+    # Empty proxy → identity.
+    assert (
+        apply_github_proxy("https://github.com/foo/bar.git", None)
+        == "https://github.com/foo/bar.git"
+    )
+    assert (
+        apply_github_proxy("https://github.com/foo/bar.git", "  ")
+        == "https://github.com/foo/bar.git"
+    )
+    # Non-github URLs untouched.
+    assert (
+        apply_github_proxy("https://gitlab.com/foo/bar.git", proxy)
+        == "https://gitlab.com/foo/bar.git"
+    )
+
+
+def test_settings_persists_network_fields(client: TestClient) -> None:
+    payload = {
+        "github_proxy": "https://gh-proxy.org",
+        "huggingface_endpoint": "https://hf-mirror.com",
+        "modelscope_enabled": True,
+        "modelscope_token": "secret",
+    }
+    r = client.put("/api/settings", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["settings"]["github_proxy"] == "https://gh-proxy.org"
+    assert body["settings"]["huggingface_endpoint"] == "https://hf-mirror.com"
+    assert body["settings"]["modelscope_enabled"] is True
+    assert body["settings"]["modelscope_token"] == "secret"
+
+    # GET round-trips them.
+    r2 = client.get("/api/settings")
+    assert r2.json()["settings"]["github_proxy"] == "https://gh-proxy.org"
+
+
+def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.settings import Settings, env_overrides
+
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_ENDPOINT", raising=False)
+    s = Settings(huggingface_endpoint="https://hf-mirror.com")
+    out = env_overrides(s)
+    assert out["HF_ENDPOINT"] == "https://hf-mirror.com"
+    assert out["HUGGINGFACE_HUB_ENDPOINT"] == "https://hf-mirror.com"
+
+    # When the user already exported HF_ENDPOINT we don't overwrite it.
+    monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")
+    assert "HF_ENDPOINT" not in env_overrides(s)
+
+
+def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
+    r = client.post(
+        "/api/models/download",
+        json={"source": "huggingface", "repo_id": "no-slash"},
+    )
+    assert r.status_code == 400
+    assert "owner/name" in r.json()["detail"]

@@ -94,6 +94,10 @@ export interface SettingsState {
   diffusion_pipe_python: string | null
   default_backend: BackendId
   tagger_device: "auto" | "cpu" | "cuda"
+  github_proxy: string | null
+  huggingface_endpoint: string | null
+  modelscope_enabled: boolean
+  modelscope_token: string | null
   extra: Record<string, unknown>
 }
 
@@ -293,6 +297,25 @@ export const api = {
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
+  downloadModel: (
+    body: {
+      source: "huggingface" | "modelscope"
+      repo_id: string
+      revision?: string
+      target_dir?: string | null
+    },
+  ) =>
+    http<{
+      source: string
+      repo_id: string
+      revision: string
+      target: string
+      files: number
+      total_bytes: number
+    }>("/models/download", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   getJobFiles: (id: string) => http<JobFilesResponse>(`/jobs/${id}/files`),
   getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
