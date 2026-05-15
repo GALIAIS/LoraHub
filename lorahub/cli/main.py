@@ -132,17 +132,67 @@ def train(
 def init(
     name: Annotated[str, typer.Argument(help="Name for the new recipe (no extension).")],
     template: Annotated[
-        str, typer.Option(help="Built-in template to copy.")
+        str, typer.Option(help="Built-in template to copy. Ignored when --auto is used.")
     ] = "sdxl_character_8gb",
+    auto: Annotated[
+        bool,
+        typer.Option(
+            "--auto",
+            help="Probe the GPU + dataset and write a recipe tuned to this machine.",
+        ),
+    ] = False,
+    checkpoint: Annotated[
+        Path | None,
+        typer.Option("--checkpoint", help="Base model .safetensors (required for --auto)."),
+    ] = None,
+    dataset: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Dataset directory (required for --auto)."),
+    ] = None,
+    vram_mib: Annotated[
+        int | None,
+        typer.Option(
+            "--vram-mib",
+            help="Override detected VRAM in MiB (e.g. 8192). Skips nvidia-smi.",
+        ),
+    ] = None,
 ) -> None:
     """Scaffold a starter recipe in the current directory."""
-    src = _builtin_recipe(template)
-    if not src.exists():
-        err_console.print(f"[red]unknown template: {template}[/red]")
-        raise typer.Exit(code=1)
     dst = Path.cwd() / f"{name}.yaml"
     if dst.exists():
         err_console.print(f"[red]{dst} already exists[/red]")
+        raise typer.Exit(code=1)
+
+    if auto:
+        if checkpoint is None or dataset is None:
+            err_console.print(
+                "[red]--auto requires --checkpoint and --dataset[/red]"
+            )
+            raise typer.Exit(code=1)
+        from lorahub.core.config import scaffold
+        from lorahub.core.config.loader import dump_recipe
+
+        cfg = scaffold.auto_scaffold(
+            name=name,
+            checkpoint=checkpoint.resolve(),
+            dataset=dataset.resolve(),
+            vram_mib=vram_mib,
+        )
+        dump_recipe(cfg, dst)
+        images = scaffold.count_images(dataset.resolve())
+        console.print(
+            f"[green]created[/green] {dst}\n"
+            f"[dim]arch[/dim] {cfg.base_model.arch}  "
+            f"[dim]rank[/dim] {cfg.network.rank}  "
+            f"[dim]batch[/dim] {cfg.schedule.batch_size}x{cfg.schedule.grad_accum}  "
+            f"[dim]images[/dim] {images}  "
+            f"[dim]repeats[/dim] {cfg.dataset.num_repeats}"
+        )
+        return
+
+    src = _builtin_recipe(template)
+    if not src.exists():
+        err_console.print(f"[red]unknown template: {template}[/red]")
         raise typer.Exit(code=1)
     shutil.copy2(src, dst)
     console.print(f"[green]created[/green] {dst}")
