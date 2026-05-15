@@ -26,7 +26,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
   DialogContent,
@@ -35,11 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  SchemaForm,
-  type RecipeSchema,
-  type JsonValue,
-} from "@/components/schema-form"
+import { RecipeForm, type RecipeFormValue } from "@/components/recipe-form"
 import { cn } from "@/lib/utils"
 
 type Mode = { kind: "preview"; name: string } | { kind: "edit"; name: string } | { kind: "new" }
@@ -489,18 +484,12 @@ function RecipeEditor({
   const navigate = useNavigate()
   const qc = useQueryClient()
 
-  const schemaQuery = useQuery({
-    queryKey: ["recipe-schema"],
-    queryFn: api.recipeSchema,
-    staleTime: Infinity,
-  })
-
   const sourceQuery = useQuery({
     queryKey: ["recipe", isNew ? "__new__" : mode.name],
     queryFn: () => (isNew ? Promise.resolve(null) : api.getRecipe(mode.name)),
   })
 
-  const [draft, setDraft] = useState<Record<string, JsonValue> | null>(null)
+  const [draft, setDraft] = useState<RecipeFormValue | null>(null)
   const [name, setName] = useState<string>(isNew ? "" : mode.name)
   const [errors, setErrors] = useState<ValidationFieldError[]>([])
 
@@ -510,31 +499,33 @@ function RecipeEditor({
       setDraft(buildDefaults())
       setName("")
     } else if (sourceQuery.data?.parsed) {
-      setDraft(sourceQuery.data.parsed as Record<string, JsonValue>)
+      setDraft(sourceQuery.data.parsed as unknown as RecipeFormValue)
       setName(mode.name)
     }
   }, [isNew, sourceQuery.data, mode])
 
   const validate = useMutation({
-    mutationFn: () => api.validateRecipe(draft ?? {}),
+    mutationFn: () =>
+      api.validateRecipe((draft ?? {}) as unknown as Record<string, unknown>),
     onSuccess: (resp) => setErrors(resp.errors ?? []),
   })
 
   const save = useMutation({
     mutationFn: async (opts: { overwrite: boolean; thenLaunch: boolean }) => {
       if (!draft) throw new Error("no draft")
-      const v = await api.validateRecipe(draft)
+      const payload = draft as unknown as Record<string, unknown>
+      const v = await api.validateRecipe(payload)
       if (!v.valid) {
         setErrors(v.errors ?? [])
         throw new Error("recipe has validation errors")
       }
       const cleanName = name.trim()
       if (!cleanName) throw new Error("name is required")
-      const saved = await api.saveRecipe(cleanName, draft, opts.overwrite || !isNew)
+      const saved = await api.saveRecipe(cleanName, payload, opts.overwrite || !isNew)
       qc.invalidateQueries({ queryKey: ["recipes"] })
       qc.invalidateQueries({ queryKey: ["recipe", cleanName] })
       if (opts.thenLaunch) {
-        const job = await api.createJob(draft)
+        const job = await api.createJob(payload)
         qc.invalidateQueries({ queryKey: ["jobs"] })
         navigate("/jobs")
         return { saved, job }
@@ -544,16 +535,21 @@ function RecipeEditor({
     },
   })
 
-  const schema = schemaQuery.data as RecipeSchema | undefined
-  const loading = (!isNew && sourceQuery.isLoading) || schemaQuery.isLoading
+  const loading = !isNew && sourceQuery.isLoading
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <header className="px-7 py-5 border-b border-border/60 flex items-start gap-3">
+      <header className="px-7 py-5 border-b border-border/60 flex items-start gap-3 shrink-0">
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => setMode(isNew ? ({ kind: "preview", name: "" } as Mode) : { kind: "preview", name: mode.name })}
+          onClick={() =>
+            setMode(
+              isNew
+                ? ({ kind: "preview", name: "" } as Mode)
+                : { kind: "preview", name: mode.name },
+            )
+          }
         >
           <ArrowLeft className="size-3" /> Back
         </Button>
@@ -569,7 +565,9 @@ function RecipeEditor({
               className="font-mono w-64 h-8"
             />
           ) : (
-            <div className="text-base font-semibold tracking-tight font-mono truncate">{name}</div>
+            <div className="text-base font-semibold tracking-tight font-mono truncate">
+              {name}
+            </div>
           )}
         </div>
         <Button
@@ -597,80 +595,43 @@ function RecipeEditor({
         </Button>
       </header>
 
-      {validate.data?.valid === true && (
-        <div className="mx-4 mt-4 rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-          Recipe is valid.
-        </div>
-      )}
-      {validate.data?.preflight && (
-        <PreflightPanel preflight={validate.data.preflight} />
-      )}
-      {errors.length > 0 && (
-        <div className="mx-4 mt-4 rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-destructive font-semibold flex items-center gap-1.5">
-            <XCircle className="size-3" /> {errors.length} validation error(s)
-          </div>
-          <ul className="mt-2 text-xs font-mono text-destructive space-y-0.5">
-            {errors.slice(0, 8).map((e, i) => (
-              <li key={i}>
-                <span className="text-muted-foreground">{e.loc.join(".")}</span>: {e.msg}
-              </li>
-            ))}
-            {errors.length > 8 && (
-              <li className="text-muted-foreground">…and {errors.length - 8} more</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {save.isError && (
-        <ErrorBanner title="Save failed" message={(save.error as Error).message} />
-      )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="px-4 pb-4 pt-3 space-y-3">
+          {validate.data?.valid === true && (
+            <div className="rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+              Recipe is valid.
+            </div>
+          )}
+          {validate.data?.preflight && (
+            <PreflightPanel preflight={validate.data.preflight} />
+          )}
+          {errors.length > 0 && (
+            <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-destructive font-semibold flex items-center gap-1.5">
+                <XCircle className="size-3" /> {errors.length} validation error(s)
+              </div>
+              <ul className="mt-2 text-xs font-mono text-destructive space-y-0.5">
+                {errors.slice(0, 8).map((e, i) => (
+                  <li key={i}>
+                    <span className="text-muted-foreground">{e.loc.join(".")}</span>: {e.msg}
+                  </li>
+                ))}
+                {errors.length > 8 && (
+                  <li className="text-muted-foreground">…and {errors.length - 8} more</li>
+                )}
+              </ul>
+            </div>
+          )}
+          {save.isError && (
+            <ErrorBanner title="Save failed" message={(save.error as Error).message} />
+          )}
 
-      <div className="flex-1 min-h-0 px-4 pb-4 pt-4">
-        <Tabs defaultValue="form" className="h-full flex flex-col">
-          <TabsList className="self-start">
-            <TabsTrigger value="form">Form</TabsTrigger>
-            <TabsTrigger value="json">JSON</TabsTrigger>
-          </TabsList>
-          <TabsContent value="form" className="flex-1 min-h-0 mt-3">
-            <Card className="h-full rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] flex flex-col">
-              <CardContent className="flex-1 min-h-0 p-0">
-                <ScrollArea className="h-full">
-                  <div className="px-5 py-5">
-                    {loading || !schema || !draft ? (
-                      <div className="text-sm text-muted-foreground">Loading…</div>
-                    ) : (
-                      <SchemaForm
-                        schema={schema}
-                        value={draft}
-                        errors={errors}
-                        onChange={setDraft}
-                      />
-                    )}
-                  </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          </TabsContent>
-          <TabsContent value="json" className="flex-1 min-h-0 mt-3">
-            <Card className="h-full rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
-              <CardContent className="p-0 h-full">
-                <textarea
-                  value={draft ? JSON.stringify(draft, null, 2) : ""}
-                  onChange={(e) => {
-                    try {
-                      setDraft(JSON.parse(e.target.value))
-                    } catch {
-                      // ignore parse errors mid-typing
-                    }
-                  }}
-                  spellCheck={false}
-                  className="w-full h-full font-mono text-xs p-4 bg-transparent resize-none outline-none"
-                />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+          {loading || !draft ? (
+            <div className="text-sm text-muted-foreground px-2 py-6">Loading…</div>
+          ) : (
+            <RecipeForm value={draft} onChange={setDraft} errors={errors} />
+          )}
+        </div>
       </div>
     </div>
   )
@@ -783,13 +744,13 @@ function ErrorBanner({ title, message }: { title: string; message: string }) {
   )
 }
 
-function buildDefaults(): Record<string, JsonValue> {
+function buildDefaults(): RecipeFormValue {
   // Minimal valid skeleton — enough that the form renders with sensible
   // starting values; the user only has to fill in the two paths.
   return {
     schema_version: "1.0",
     base_model: { arch: "sdxl", checkpoint: "" },
-    dataset: { source: "" },
+    dataset: { source: "", resolution: [1024, 1024] },
   }
 }
 
