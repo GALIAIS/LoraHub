@@ -25,6 +25,7 @@ export interface RecipeListEntry {
   name: string
   filename: string
   size: number
+  modified_at: number
   valid: boolean
   arch: string | null
   summary: string | null

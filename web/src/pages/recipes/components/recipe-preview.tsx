@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { Pencil, Play } from "lucide-react"
+import { Download, Pencil, Play } from "lucide-react"
 import { api, type RecipeListEntry } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -98,6 +98,26 @@ export function RecipePreview({
         </div>
         <Button size="sm" variant="outline" onClick={onEdit}>
           <Pencil className="size-3" /> 编辑
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            const content = data?.content
+            if (!content) return
+            const blob = new Blob([content], { type: "text/yaml" })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = `${name}.yaml`
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+          }}
+          disabled={!data?.content}
+        >
+          <Download className="size-3" /> 导出
         </Button>
         <Button
           size="sm"

@@ -116,10 +116,12 @@ def list_recipes() -> dict[str, Any]:
     for p in sorted(base.glob("*.y*ml")):
         if p.suffix.lower() not in {".yaml", ".yml"}:
             continue
+        stat = p.stat()
         entry: dict[str, Any] = {
             "name": p.stem,
             "filename": p.name,
-            "size": p.stat().st_size,
+            "size": stat.st_size,
+            "modified_at": stat.st_mtime,
             "valid": False,
             "arch": None,
             "summary": None,

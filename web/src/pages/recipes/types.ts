@@ -10,3 +10,9 @@ export type LaunchOverrides = {
   epochs: string
   maxSteps: string
 }
+
+export type ArchFilter = "all" | "sdxl" | "sd15" | "flux" | "sd3"
+
+export type SortOrder = "name-asc" | "name-desc" | "modified-desc"
+
+export type RowAction = "duplicate" | "rename" | "delete"
