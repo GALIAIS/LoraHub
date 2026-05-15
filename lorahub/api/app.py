@@ -347,12 +347,24 @@ def get_job(job_id: str) -> dict[str, Any]:
     return job.to_summary()
 
 
+def _job_events(job: state.JobRecord, limit: int | None = None) -> list[TrainingEvent]:
+    events = list(job.events)
+    if not events:
+        event_log = job.workspace / "events.jsonl"
+        if event_log.is_file():
+            with contextlib.suppress(Exception):
+                events = list(JsonlEventSink.replay(event_log))
+    if limit is not None:
+        events = events[-max(limit, 0) :]
+    return events
+
+
 @api.get("/jobs/{job_id}/events")
 def get_recent_events(job_id: str, limit: int = 100) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    events = list(job.events)[-limit:]
+    events = _job_events(job, limit)
     return {"events": [e.to_dict() for e in events]}
 
 
@@ -433,9 +445,17 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
     queue: asyncio.Queue[TrainingEvent] = asyncio.Queue(maxsize=512)
     state.registry.attach_listener(job_id, queue)
     try:
-        for ev in list(job.events):  # replay buffered events
+        replayed_terminal = False
+        for ev in _job_events(job):  # replay buffered or persisted events
             await ws.send_json(ev.to_dict())
-        while True:
+            replayed_terminal = ev.type is EventType.done
+        terminal_state = job.state in {
+            JobState.succeeded,
+            JobState.failed,
+            JobState.canceled,
+            JobState.interrupted,
+        }
+        while not replayed_terminal and not terminal_state:
             ev = await queue.get()
             await ws.send_json(ev.to_dict())
             if ev.type is EventType.done:

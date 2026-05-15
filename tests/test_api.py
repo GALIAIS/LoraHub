@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import textwrap
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lorahub.api import state
+from lorahub.core.events import EventType, TrainingEvent
 
 
 def _make_stub_sd_scripts(root: Path) -> Path:
@@ -142,6 +144,51 @@ def test_recent_events_returned_after_completion(
     assert any(e["type"] == "epoch_end" for e in events)
     assert any(e["type"] == "checkpoint_saved" for e in events)
     assert events[-1]["type"] == "done"
+
+
+def test_recent_events_replay_from_workspace_jsonl(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.succeeded
+    job.started_at = datetime.now(UTC)
+    job.finished_at = datetime.now(UTC)
+    state.registry.update(job)
+
+    expected = TrainingEvent(
+        type=EventType.log,
+        payload={"message": "from disk"},
+        job_id=job.id,
+    )
+    (ws / "events.jsonl").write_text(expected.to_json() + "\n", encoding="utf-8")
+
+    events = client.get(f"/api/jobs/{job.id}/events").json()["events"]
+
+    assert events == [expected.to_dict()]
+
+
+def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    done = TrainingEvent(
+        type=EventType.done,
+        payload={"returncode": 0},
+        job_id=job.id,
+    )
+    (ws / "events.jsonl").write_text(done.to_json() + "\n", encoding="utf-8")
+
+    with client.websocket_connect(f"/api/jobs/{job.id}/stream") as websocket:
+        event = websocket.receive_json()
+
+    assert event == done.to_dict()
 
 
 def test_invalid_recipe_returns_422(client: TestClient) -> None:
