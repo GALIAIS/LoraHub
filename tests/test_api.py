@@ -133,3 +133,101 @@ def test_recent_events_returned_after_completion(
 def test_invalid_recipe_returns_422(client: TestClient) -> None:
     r = client.post("/api/jobs", json={"recipe": {"missing": "everything"}})
     assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Recipe template browsing
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def recipes_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point the API at an isolated recipes directory."""
+    rdir = tmp_path / "recipes"
+    rdir.mkdir()
+    monkeypatch.setenv("LORAHUB_RECIPES_DIR", str(rdir))
+    return rdir
+
+
+def _write_valid_recipe(rdir: Path, name: str = "demo") -> Path:
+    ckpt = rdir.parent / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = rdir.parent / "data"
+    data.mkdir(exist_ok=True)
+    body = textwrap.dedent(
+        f"""
+        base_model:
+          arch: sdxl
+          checkpoint: {ckpt!s}
+        dataset:
+          source: {data!s}
+        schedule:
+          epochs: 2
+          batch_size: 1
+        sampling:
+          enabled: false
+        """
+    ).strip() + "\n"
+    p = rdir / f"{name}.yaml"
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_list_recipes_returns_valid_and_invalid(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    _write_valid_recipe(recipes_dir, "good")
+    (recipes_dir / "broken.yaml").write_text("base_model: {}\n", encoding="utf-8")
+    (recipes_dir / "ignore-me.txt").write_text("not yaml", encoding="utf-8")
+
+    r = client.get("/api/recipes")
+    assert r.status_code == 200
+    body = r.json()
+    names = {it["name"] for it in body["recipes"]}
+    assert names == {"good", "broken"}
+
+    good = next(it for it in body["recipes"] if it["name"] == "good")
+    assert good["valid"] is True
+    assert good["arch"] == "sdxl"
+    assert "epoch" in good["summary"]
+
+    broken = next(it for it in body["recipes"] if it["name"] == "broken")
+    assert broken["valid"] is False
+    assert broken["error"]
+
+
+def test_get_recipe_returns_content_and_parsed(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    _write_valid_recipe(recipes_dir, "good")
+    r = client.get("/api/recipes/good")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "good"
+    assert "base_model:" in body["content"]
+    assert body["parsed"]["base_model"]["arch"] == "sdxl"
+    assert body["error"] is None
+
+
+def test_get_recipe_missing_returns_404(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    r = client.get("/api/recipes/nope")
+    assert r.status_code == 404
+
+
+def test_get_recipe_blocks_path_traversal(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    r = client.get("/api/recipes/..%2Fpasswd")
+    # FastAPI normalizes %2F into /, our handler rejects bare names with slashes
+    assert r.status_code in (400, 404)
+
+
+def test_recipe_schema_still_resolves_under_recipes_prefix(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    # /recipes/schema must keep working alongside /recipes/{name}
+    r = client.get("/api/recipes/schema")
+    assert r.status_code == 200
+    assert r.json()["title"] == "RecipeConfig"

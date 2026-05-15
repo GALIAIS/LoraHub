@@ -89,6 +89,99 @@ def recipe_schema() -> dict[str, Any]:
     return RecipeConfig.model_json_schema()
 
 
+def _recipes_dir() -> Path:
+    """Resolve the recipes/ directory.
+
+    Honors $LORAHUB_RECIPES_DIR (absolute path); otherwise looks at
+    `<cwd>/recipes` so users get whatever templates ship with their checkout
+    when running `lorahub serve` from the repo root.
+    """
+    override = os.environ.get("LORAHUB_RECIPES_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.cwd() / "recipes").resolve()
+
+
+def _recipe_path(name: str) -> Path:
+    """Resolve a recipe by name within the recipes/ dir, blocking traversal."""
+    if not name or "/" in name or "\\" in name or name.startswith(".."):
+        raise HTTPException(status_code=400, detail="invalid recipe name")
+    base = _recipes_dir()
+    # Accept "foo" or "foo.yaml"
+    candidates = [base / name, base / f"{name}.yaml", base / f"{name}.yml"]
+    for c in candidates:
+        c_resolved = c.resolve()
+        try:
+            c_resolved.relative_to(base)
+        except ValueError:
+            continue
+        if c_resolved.is_file():
+            return c_resolved
+    raise HTTPException(status_code=404, detail="recipe not found")
+
+
+@api.get("/recipes")
+def list_recipes() -> dict[str, Any]:
+    """List YAML recipe templates discovered under the recipes/ directory."""
+    base = _recipes_dir()
+    if not base.is_dir():
+        return {"dir": str(base), "recipes": []}
+
+    from lorahub.core.config.loader import load_recipe  # noqa: PLC0415
+
+    items: list[dict[str, Any]] = []
+    for p in sorted(base.glob("*.y*ml")):
+        if p.suffix.lower() not in {".yaml", ".yml"}:
+            continue
+        entry: dict[str, Any] = {
+            "name": p.stem,
+            "filename": p.name,
+            "size": p.stat().st_size,
+            "valid": False,
+            "arch": None,
+            "summary": None,
+            "error": None,
+        }
+        try:
+            cfg = load_recipe(p)
+            entry["valid"] = True
+            entry["arch"] = cfg.base_model.arch
+            entry["summary"] = (
+                f"{cfg.base_model.arch} · "
+                f"{cfg.schedule.epochs} epoch(s) × bs {cfg.schedule.batch_size}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            entry["error"] = str(exc).splitlines()[0][:200]
+        items.append(entry)
+    return {"dir": str(base), "recipes": items}
+
+
+@api.get("/recipes/{name}")
+def get_recipe(name: str) -> dict[str, Any]:
+    """Return a recipe's raw YAML and parsed dict (for previewing or launching)."""
+    if name == "schema":  # /recipes/schema is a sibling endpoint
+        raise HTTPException(status_code=404, detail="recipe not found")
+    path = _recipe_path(name)
+
+    from lorahub.core.config.loader import load_recipe  # noqa: PLC0415
+
+    raw = path.read_text(encoding="utf-8")
+    parsed: dict[str, Any] | None = None
+    error: str | None = None
+    try:
+        parsed = load_recipe(path).model_dump(mode="json")
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+    return {
+        "name": path.stem,
+        "filename": path.name,
+        "path": str(path),
+        "content": raw,
+        "parsed": parsed,
+        "error": error,
+    }
+
+
 @api.get("/jobs")
 def list_jobs() -> dict[str, Any]:
     return {"jobs": [j.to_summary() for j in state.registry.list()]}

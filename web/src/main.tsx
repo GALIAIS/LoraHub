@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import App from "./App"
 import { JobsPage } from "./pages/jobs"
 import { DashboardPage } from "./pages/dashboard"
+import { RecipesPage } from "./pages/recipes"
 import { ComingSoonPage } from "./pages/coming-soon"
 import "./index.css"
 
@@ -26,7 +27,7 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<App />}>
             <Route index element={<DashboardPage />} />
             <Route path="jobs" element={<JobsPage />} />
-            <Route path="recipes" element={<ComingSoonPage title="Recipes" />} />
+            <Route path="recipes" element={<RecipesPage />} />
             <Route path="settings" element={<ComingSoonPage title="Settings" />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

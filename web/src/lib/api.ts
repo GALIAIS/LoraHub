@@ -21,6 +21,25 @@ export interface TrainingEvent {
   job_id: string | null
 }
 
+export interface RecipeListEntry {
+  name: string
+  filename: string
+  size: number
+  valid: boolean
+  arch: string | null
+  summary: string | null
+  error: string | null
+}
+
+export interface RecipeDetail {
+  name: string
+  filename: string
+  path: string
+  content: string
+  parsed: Record<string, unknown> | null
+  error: string | null
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -41,6 +60,15 @@ export const api = {
   cancelJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}`, { method: "DELETE" }),
   recipeSchema: () => http<Record<string, unknown>>("/recipes/schema"),
+  listRecipes: () =>
+    http<{ dir: string; recipes: RecipeListEntry[] }>("/recipes"),
+  getRecipe: (name: string) =>
+    http<RecipeDetail>(`/recipes/${encodeURIComponent(name)}`),
+  createJob: (recipe: Record<string, unknown>, workspace?: string) =>
+    http<JobSummary>("/jobs", {
+      method: "POST",
+      body: JSON.stringify({ recipe, workspace }),
+    }),
 }
 
 /**
