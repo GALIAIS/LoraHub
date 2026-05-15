@@ -32,6 +32,21 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+    from lorahub.api.store import JobStore, default_store_path
+
+    if state.registry.store is None:
+        store_path = default_store_path()
+        store = JobStore(store_path)
+        state.registry = state.JobRegistry(store=store)
+        orphans = store.mark_orphans_interrupted()
+        if orphans > 0:
+            log.info(
+                "marked %d orphaned job(s) from a previous session as interrupted",
+                orphans,
+            )
+        loaded = state.registry.load_persisted()
+        if loaded > 0:
+            log.info("loaded %d job record(s) from %s", loaded, store_path)
     yield
 
 
@@ -124,6 +139,7 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
                 j.returncode = rc
                 j.state = JobState.succeeded if rc == 0 else JobState.failed
                 j.finished_at = datetime.now(UTC)
+                state.registry.update(j)
             sink.__exit__(None, None, None)
 
     handle = backend.launch(cfg, workspace=workspace, on_event=on_event)
@@ -131,6 +147,7 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
     job.pid = handle.pid
     job.state = JobState.running
     job.started_at = datetime.now(UTC)
+    state.registry.update(job)
 
     return job.to_summary()
 
@@ -140,9 +157,10 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    if job.state in (JobState.succeeded, JobState.failed, JobState.canceled):
+    if job.state in (JobState.succeeded, JobState.failed, JobState.canceled, JobState.interrupted):
         return job.to_summary()
     job.state = JobState.canceling
+    state.registry.update(job)
     if job.handle is not None:
         job.handle.stop(graceful=True)
     return job.to_summary()

@@ -35,6 +35,7 @@ class JobState(StrEnum):
     succeeded = "succeeded"
     failed = "failed"
     canceled = "canceled"
+    interrupted = "interrupted"  # process was lost (e.g. server restart)
 
 
 @dataclass(slots=True)
@@ -68,12 +69,38 @@ class JobRecord:
 
 
 class JobRegistry:
-    """Thread-safe in-memory job store with WS subscription fan-out."""
+    """Thread-safe in-memory job store with WS subscription fan-out.
 
-    def __init__(self) -> None:
+    Optionally backed by a `JobStore` for SQLite persistence: every state
+    mutation is mirrored to the store, and `load_persisted()` rehydrates the
+    in-memory dict from disk on startup.
+    """
+
+    def __init__(self, store: Any | None = None) -> None:
         self._jobs: dict[str, JobRecord] = {}
         self._listeners: dict[str, list[Any]] = {}  # job_id -> list of asyncio.Queue
         self._lock = threading.RLock()
+        self._store = store
+
+    @property
+    def store(self) -> Any | None:
+        return self._store
+
+    def load_persisted(self) -> int:
+        """Hydrate the in-memory dict from the store. Returns rows loaded."""
+        if self._store is None:
+            return 0
+        with self._lock:
+            for record in self._store.list():
+                self._jobs[record.id] = record
+                self._listeners.setdefault(record.id, [])
+            return len(self._jobs)
+
+    def _persist(self, record: JobRecord) -> None:
+        if self._store is None:
+            return
+        with contextlib.suppress(Exception):
+            self._store.upsert(record)
 
     def create(self, workspace: Path, recipe_snapshot: dict[str, Any]) -> JobRecord:
         with self._lock:
@@ -86,7 +113,12 @@ class JobRegistry:
             )
             self._jobs[job.id] = job
             self._listeners[job.id] = []
-            return job
+        self._persist(job)
+        return job
+
+    def update(self, job: JobRecord) -> None:
+        """Persist mutations made on the live `JobRecord` (state, returncode, ...)."""
+        self._persist(job)
 
     def get(self, job_id: str) -> JobRecord | None:
         with self._lock:
