@@ -97,7 +97,7 @@ export function RecipesPage() {
   }, [mode, recipes, autoOpenLaunch])
 
   return (
-    <div className="grid grid-cols-[minmax(320px,380px)_1fr] h-screen">
+    <div className="grid grid-cols-[minmax(320px,380px)_1fr] h-full">
       <aside className="border-r border-border/60 flex flex-col min-h-0">
         <header className="px-5 py-4 border-b border-border/60 flex items-start gap-2">
           <div className="flex-1 min-w-0">

@@ -49,7 +49,9 @@ export function SettingsPage() {
 
   if (!draft || !settingsQuery.data) {
     return (
-      <div className="px-8 py-7 text-sm text-muted-foreground">Loading settings…</div>
+      <div className="h-full overflow-y-auto">
+        <div className="px-8 py-7 text-sm text-muted-foreground">Loading settings…</div>
+      </div>
     )
   }
 
@@ -60,7 +62,8 @@ export function SettingsPage() {
     draft.tagger_device !== settingsQuery.data.settings.tagger_device
 
   return (
-    <div className="px-8 py-7 space-y-6 max-w-[900px]">
+    <div className="h-full overflow-y-auto">
+      <div className="px-8 py-7 space-y-6 max-w-[900px]">
       <header className="space-y-1">
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
           Workbench
@@ -164,6 +167,7 @@ export function SettingsPage() {
         <span className="ml-auto text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70 font-mono truncate">
           {settingsQuery.data.path}
         </span>
+      </div>
       </div>
     </div>
   )

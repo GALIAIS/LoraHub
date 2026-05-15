@@ -12,8 +12,8 @@ const NAV = [
 
 export default function App() {
   return (
-    <div className="min-h-screen flex bg-background text-foreground">
-      <aside className="w-56 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1">
+    <div className="h-screen flex bg-background text-foreground overflow-hidden">
+      <aside className="w-56 shrink-0 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1 overflow-y-auto">
         <div className="px-2 mb-5 flex items-center gap-2">
           <div className="size-8 rounded-[6px] bg-primary text-primary-foreground grid place-items-center font-semibold tracking-tight text-sm">
             L
@@ -49,7 +49,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0">
+      <main className="flex-1 min-w-0 h-full overflow-hidden">
         <Outlet />
       </main>
     </div>

@@ -23,7 +23,8 @@ export function DatasetsPage() {
   const canTrain = !!data && data.exists && data.image_files > 0
 
   return (
-    <div className="px-8 py-7 space-y-6 max-w-[1180px]">
+    <div className="h-full overflow-y-auto">
+      <div className="px-8 py-7 space-y-6 max-w-[1180px]">
       <header className="space-y-1">
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
           Dataset manager
@@ -148,6 +149,7 @@ export function DatasetsPage() {
           </Card>
         </>
       )}
+      </div>
     </div>
   )
 }

@@ -24,7 +24,7 @@ export function JobsPage() {
   const selected = selectedId ? list.find((j) => j.id === selectedId) : null
 
   return (
-    <div className="grid grid-cols-[minmax(360px,420px)_1fr] h-screen">
+    <div className="grid grid-cols-[minmax(360px,420px)_1fr] h-full">
       <aside className="border-r border-border/60 flex flex-col min-h-0">
         <header className="px-5 py-4 border-b border-border/60">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
