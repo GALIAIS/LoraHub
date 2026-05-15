@@ -36,10 +36,21 @@ def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistr
 
 
 @pytest.fixture
-def client() -> TestClient:
-    from lorahub.api.app import app
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    from lorahub.api import app as app_mod
+    from lorahub.api.settings import SettingsStore
 
-    return TestClient(app)
+    # Isolate the settings store so tests don't read or write the real
+    # user-data file. Patch on the imported `app` module — that's the symbol
+    # the request handlers resolve at call time.
+    monkeypatch.setattr(
+        app_mod, "_settings_store", SettingsStore(tmp_path / "settings.json")
+    )
+    # Don't let a developer's .env (LORAHUB_KOHYA_*) leak into backend probes —
+    # those env vars are valid in production but confuse settings tests.
+    monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
+    monkeypatch.delenv("LORAHUB_KOHYA_PYTHON", raising=False)
+    return TestClient(app_mod.app)
 
 
 def _recipe_payload(tmp_path: Path) -> dict[str, Any]:
@@ -63,8 +74,11 @@ def _recipe_payload(tmp_path: Path) -> dict[str, Any]:
 def test_health_returns_version(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
-    assert "version" in r.json()
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "version" in body
+    assert "backend" in body
+    assert "sd_scripts_path" in body["backend"]
 
 
 def test_recipe_schema_is_valid_json_schema(client: TestClient) -> None:
@@ -231,3 +245,122 @@ def test_recipe_schema_still_resolves_under_recipes_prefix(
     r = client.get("/api/recipes/schema")
     assert r.status_code == 200
     assert r.json()["title"] == "RecipeConfig"
+
+
+# --------------------------------------------------------------------------- #
+# Recipe validate + save
+# --------------------------------------------------------------------------- #
+
+
+def _valid_recipe_dict(tmp_path: Path) -> dict[str, Any]:
+    ckpt = tmp_path / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    return {
+        "base_model": {"arch": "sdxl", "checkpoint": str(ckpt)},
+        "dataset": {"source": str(data)},
+        "schedule": {"epochs": 2, "batch_size": 1},
+        "sampling": {"enabled": False},
+    }
+
+
+def test_validate_recipe_returns_normalized_payload(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.post("/api/recipes/validate", json={"recipe": _valid_recipe_dict(tmp_path)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is True
+    assert body["normalized"]["base_model"]["arch"] == "sdxl"
+    # defaults should be filled in
+    assert body["normalized"]["network"]["rank"] >= 1
+
+
+def test_validate_recipe_returns_structured_errors(client: TestClient) -> None:
+    r = client.post("/api/recipes/validate", json={"recipe": {}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False
+    assert len(body["errors"]) >= 1
+    # each error should include a loc list
+    assert all("loc" in e for e in body["errors"])
+
+
+def test_save_recipe_writes_file_and_blocks_overwrite(
+    client: TestClient, tmp_path: Path, recipes_dir: Path
+) -> None:
+    payload = {"name": "demo", "recipe": _valid_recipe_dict(tmp_path)}
+    r = client.post("/api/recipes", json=payload)
+    assert r.status_code == 201, r.text
+    saved = r.json()
+    assert saved["filename"] == "demo.yaml"
+    assert (recipes_dir / "demo.yaml").is_file()
+
+    # Repeat without overwrite — should 409
+    r2 = client.post("/api/recipes", json=payload)
+    assert r2.status_code == 409
+
+    # With overwrite — should 201
+    r3 = client.post("/api/recipes", json={**payload, "overwrite": True})
+    assert r3.status_code == 201
+
+
+def test_save_recipe_rejects_invalid_name(
+    client: TestClient, tmp_path: Path, recipes_dir: Path
+) -> None:
+    r = client.post(
+        "/api/recipes",
+        json={"name": "../etc/passwd", "recipe": _valid_recipe_dict(tmp_path)},
+    )
+    assert r.status_code == 400
+
+
+def test_save_recipe_rejects_invalid_recipe(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    r = client.post("/api/recipes", json={"name": "bad", "recipe": {}})
+    assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+
+
+def test_get_settings_returns_defaults(client: TestClient) -> None:
+    r = client.get("/api/settings")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["settings"]["sd_scripts_path"] is None
+    assert body["settings"]["tagger_device"] == "auto"
+    assert "sd_scripts_path" in body["backend"]
+    assert body["path"].endswith("settings.json")
+
+
+def test_put_settings_persists_and_reflects_in_get(
+    client: TestClient, tmp_path: Path
+) -> None:
+    sd = tmp_path / "fake-sd-scripts"
+    sd.mkdir()
+    payload = {
+        "sd_scripts_path": str(sd),
+        "python_executable": "",  # empty -> clear
+        "tagger_device": "cpu",
+    }
+    r = client.put("/api/settings", json=payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["settings"]["sd_scripts_path"] == str(sd)
+    assert body["settings"]["python_executable"] is None
+    assert body["settings"]["tagger_device"] == "cpu"
+
+    # GET should round-trip the same values
+    r2 = client.get("/api/settings")
+    assert r2.json()["settings"]["sd_scripts_path"] == str(sd)
+    assert r2.json()["backend"]["sd_scripts_path"] == str(sd)
+
+
+def test_put_settings_rejects_bad_tagger_device(client: TestClient) -> None:
+    r = client.put("/api/settings", json={"tagger_device": "tpu"})
+    assert r.status_code == 422

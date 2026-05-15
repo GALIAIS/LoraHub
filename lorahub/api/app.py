@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from lorahub import __version__
 from lorahub.api import state
+from lorahub.api.settings import Settings, SettingsStore, probe_backend
 from lorahub.api.state import JobState
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.config.loader import dump_recipe
@@ -73,14 +74,82 @@ app.add_middleware(
 api = APIRouter(prefix="/api")
 
 
+# Module-level so tests can monkeypatch in an isolated SettingsStore via
+# `app._settings_store = SettingsStore(tmp_path)` before issuing requests.
+_settings_store: SettingsStore = SettingsStore()
+
+
+def _store() -> SettingsStore:
+    return _settings_store
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
+    backend: dict[str, Any]
 
 
 @api.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", version=__version__)
+    return HealthResponse(
+        status="ok",
+        version=__version__,
+        backend=probe_backend(_store().load()),
+    )
+
+
+class SettingsResponse(BaseModel):
+    settings: dict[str, Any]
+    backend: dict[str, Any]
+    path: str
+
+
+@api.get("/settings", response_model=SettingsResponse)
+def get_settings() -> SettingsResponse:
+    store = _store()
+    s = store.load()
+    return SettingsResponse(
+        settings=s.to_dict(),
+        backend=probe_backend(s),
+        path=str(store.path),
+    )
+
+
+class UpdateSettingsRequest(BaseModel):
+    sd_scripts_path: str | None = None
+    python_executable: str | None = None
+    tagger_device: str | None = None
+
+
+@api.put("/settings", response_model=SettingsResponse)
+def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
+    store = _store()
+    current = store.load()
+
+    # Treat empty strings as "clear this field".
+    def _norm(v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+    new = Settings(
+        sd_scripts_path=_norm(req.sd_scripts_path),
+        python_executable=_norm(req.python_executable),
+        tagger_device=(req.tagger_device or current.tagger_device or "auto").strip() or "auto",
+        extra=current.extra,
+    )
+    if new.tagger_device not in {"auto", "cpu", "cuda"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"tagger_device must be auto/cpu/cuda, got {new.tagger_device!r}",
+        )
+    store.save(new)
+    return SettingsResponse(
+        settings=new.to_dict(),
+        backend=probe_backend(new),
+        path=str(store.path),
+    )
 
 
 @api.get("/recipes/schema")
@@ -159,7 +228,7 @@ def list_recipes() -> dict[str, Any]:
 @api.get("/recipes/{name}")
 def get_recipe(name: str) -> dict[str, Any]:
     """Return a recipe's raw YAML and parsed dict (for previewing or launching)."""
-    if name == "schema":  # /recipes/schema is a sibling endpoint
+    if name in {"schema", "validate"}:  # sibling endpoints share the prefix
         raise HTTPException(status_code=404, detail="recipe not found")
     path = _recipe_path(name)
 
@@ -179,6 +248,89 @@ def get_recipe(name: str) -> dict[str, Any]:
         "content": raw,
         "parsed": parsed,
         "error": error,
+    }
+
+
+class ValidateRecipeRequest(BaseModel):
+    recipe: dict[str, Any]
+
+
+@api.post("/recipes/validate")
+def validate_recipe(req: ValidateRecipeRequest) -> dict[str, Any]:
+    """Validate a recipe payload without persisting or training.
+
+    Always returns 200 — the response carries `valid: bool` and a list of
+    structured field errors. This lets the form highlight bad fields without
+    interpreting HTTP status codes.
+    """
+    from pydantic import ValidationError as _PydanticValidationError  # noqa: PLC0415
+
+    try:
+        cfg = RecipeConfig.model_validate(req.recipe)
+    except _PydanticValidationError as exc:
+        return {
+            "valid": False,
+            "errors": [
+                {
+                    "loc": list(e.get("loc", [])),
+                    "msg": e.get("msg", ""),
+                    "type": e.get("type", ""),
+                }
+                for e in exc.errors()
+            ],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"valid": False, "errors": [{"loc": [], "msg": str(exc), "type": "internal"}]}
+
+    return {"valid": True, "normalized": cfg.model_dump(mode="json")}
+
+
+_NAME_RE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+
+
+class SaveRecipeRequest(BaseModel):
+    name: str
+    recipe: dict[str, Any]
+    overwrite: bool = False
+
+
+@api.post("/recipes", status_code=201)
+def save_recipe(req: SaveRecipeRequest) -> dict[str, Any]:
+    """Validate and persist a recipe to recipes/<name>.yaml."""
+    import re  # noqa: PLC0415
+
+    name = req.name.strip().removesuffix(".yaml").removesuffix(".yml")
+    if not re.match(_NAME_RE_PATTERN, name):
+        raise HTTPException(
+            status_code=400,
+            detail="name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}",
+        )
+
+    try:
+        cfg = RecipeConfig.model_validate(req.recipe)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    base = _recipes_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    target = (base / f"{name}.yaml").resolve()
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid name") from exc
+
+    if target.exists() and not req.overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=f"recipe {name!r} already exists; pass overwrite=true to replace",
+        )
+
+    dump_recipe(cfg, target)
+    return {
+        "name": name,
+        "filename": target.name,
+        "path": str(target),
+        "overwritten": target.exists(),
     }
 
 
