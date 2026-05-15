@@ -44,7 +44,12 @@ def resolve(
     recipe_path: Path | None = None,
     recipe_python: Path | None = None,
 ) -> KohyaEnv:
-    """Resolve the kohya environment using recipe → env var → default."""
+    """Resolve the kohya environment using recipe → env var → default.
+
+    For the Python interpreter, after exhausting the recipe field and env var
+    we look for a `venv/` next to sd-scripts (the layout kohya's README sets
+    up). Only if none is present do we fall back to the current interpreter.
+    """
     sd_scripts = (
         recipe_path
         or _path_from_env(_ENV_SD_SCRIPTS)
@@ -53,6 +58,7 @@ def resolve(
     python = (
         recipe_python
         or _path_from_env(_ENV_PYTHON)
+        or _venv_python(sd_scripts)
         or Path(sys.executable)
     )
 
@@ -60,6 +66,20 @@ def resolve(
     _check_python(python)
 
     return KohyaEnv(sd_scripts_path=sd_scripts.resolve(), python_executable=python.resolve())
+
+
+def _venv_python(sd_scripts: Path) -> Path | None:
+    """Look for the venv python kohya's README sets up next to its checkout."""
+    candidates = (
+        sd_scripts / "venv" / "Scripts" / "python.exe",
+        sd_scripts / "venv" / "bin" / "python",
+        sd_scripts / ".venv" / "Scripts" / "python.exe",
+        sd_scripts / ".venv" / "bin" / "python",
+    )
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
 
 
 def _path_from_env(name: str) -> Path | None:

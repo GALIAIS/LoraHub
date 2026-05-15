@@ -79,6 +79,33 @@ def test_kohya_env_script_returns_absolute_path(tmp_path: Path) -> None:
     assert script.exists()
 
 
+def test_resolve_picks_up_local_venv_python(tmp_path: Path) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    venv_python = sd / "venv" / ("Scripts" if sys.platform == "win32" else "bin") / (
+        "python.exe" if sys.platform == "win32" else "python"
+    )
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("# pretend interpreter\n", encoding="utf-8")
+
+    env = resolve(recipe_path=sd)
+    assert env.python_executable == venv_python.resolve()
+
+
+def test_recipe_python_overrides_venv(tmp_path: Path) -> None:
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    venv_python = sd / "venv" / ("Scripts" if sys.platform == "win32" else "bin") / (
+        "python.exe" if sys.platform == "win32" else "python"
+    )
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("# venv\n", encoding="utf-8")
+
+    other = tmp_path / "other_python"
+    other.write_text("# other\n", encoding="utf-8")
+
+    env = resolve(recipe_path=sd, recipe_python=other)
+    assert env.python_executable == other.resolve()
+
+
 def test_default_sd_scripts_path_is_under_user_data() -> None:
     p = default_sd_scripts_path()
     assert p.name == "sd-scripts"
