@@ -322,6 +322,26 @@ def test_validate_recipe_returns_normalized_payload(
     assert body["normalized"]["base_model"]["arch"] == "sdxl"
     # defaults should be filled in
     assert body["normalized"]["network"]["rank"] >= 1
+    assert body["preflight"]["paths"]["checkpoint_exists"] is True
+    assert body["preflight"]["paths"]["dataset_exists"] is True
+    assert body["preflight"]["vram"]["total_mib"] > 0
+    assert isinstance(body["preflight"]["issues"], list)
+
+
+def test_validate_recipe_reports_dataset_caption_preflight(
+    client: TestClient, tmp_path: Path
+) -> None:
+    recipe = _valid_recipe_dict(tmp_path)
+    data = Path(str(recipe["dataset"]["source"]))
+    (data / "sample.png").write_bytes(b"fake image bytes")
+
+    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+
+    assert r.status_code == 200
+    paths = r.json()["preflight"]["paths"]
+    assert paths["image_files"] == 1
+    assert paths["caption_files"] == 0
+    assert paths["missing_caption_files"] == ["sample.png"]
 
 
 def test_validate_recipe_returns_structured_errors(client: TestClient) -> None:

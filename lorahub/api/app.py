@@ -15,6 +15,7 @@ import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -255,6 +256,56 @@ class ValidateRecipeRequest(BaseModel):
     recipe: dict[str, Any]
 
 
+_IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+
+def _preflight_recipe(cfg: RecipeConfig) -> dict[str, Any]:
+    backend = KohyaBackend()
+    issues = [
+        {
+            **asdict(issue),
+            "severity": issue.severity.value,
+        }
+        for issue in backend.validate(cfg)
+    ]
+    estimate = backend.estimate_vram(cfg)
+
+    image_files: list[Path] = []
+    caption_files = 0
+    missing_caption_files: list[str] = []
+    if cfg.dataset.source.is_dir():
+        image_files = sorted(
+            p
+            for p in cfg.dataset.source.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+        )
+        for image in image_files:
+            if image.with_suffix(".txt").is_file():
+                caption_files += 1
+            else:
+                missing_caption_files.append(image.name)
+
+    return {
+        "issues": issues,
+        "vram": {
+            "model_mib": estimate.model_mib,
+            "optimizer_mib": estimate.optimizer_mib,
+            "activations_mib": estimate.activations_mib,
+            "overhead_mib": estimate.overhead_mib,
+            "total_mib": estimate.total_mib,
+            "total_gib": round(estimate.total_gib, 2),
+        },
+        "paths": {
+            "checkpoint_exists": cfg.base_model.checkpoint.is_file(),
+            "dataset_exists": cfg.dataset.source.is_dir(),
+            "image_files": len(image_files),
+            "caption_files": caption_files,
+            "missing_caption_files": missing_caption_files[:20],
+            "missing_caption_files_truncated": len(missing_caption_files) > 20,
+        },
+    }
+
+
 @api.post("/recipes/validate")
 def validate_recipe(req: ValidateRecipeRequest) -> dict[str, Any]:
     """Validate a recipe payload without persisting or training.
@@ -282,7 +333,11 @@ def validate_recipe(req: ValidateRecipeRequest) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return {"valid": False, "errors": [{"loc": [], "msg": str(exc), "type": "internal"}]}
 
-    return {"valid": True, "normalized": cfg.model_dump(mode="json")}
+    return {
+        "valid": True,
+        "normalized": cfg.model_dump(mode="json"),
+        "preflight": _preflight_recipe(cfg),
+    }
 
 
 _NAME_RE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"

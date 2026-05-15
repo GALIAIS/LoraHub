@@ -73,6 +73,25 @@ export interface ValidateResponse {
   valid: boolean
   normalized?: Record<string, unknown>
   errors?: ValidationFieldError[]
+  preflight?: {
+    issues: Array<{ severity: string; field: string; message: string }>
+    vram: {
+      model_mib: number
+      optimizer_mib: number
+      activations_mib: number
+      overhead_mib: number
+      total_mib: number
+      total_gib: number
+    }
+    paths: {
+      checkpoint_exists: boolean
+      dataset_exists: boolean
+      image_files: number
+      caption_files: number
+      missing_caption_files: string[]
+      missing_caption_files_truncated: boolean
+    }
+  }
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
