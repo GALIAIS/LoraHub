@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import Any
 
 try:  # optional - gives us per-cpu utilization, load, swap, freq, temps, battery.
-    import psutil  # type: ignore[import-not-found]
+    import psutil
 
     _HAS_PSUTIL = True
 except Exception:  # noqa: BLE001
-    psutil = None  # type: ignore[assignment]
+    psutil = None
     _HAS_PSUTIL = False
 
 
@@ -252,10 +252,12 @@ def _collect_cpu() -> CpuStats:
     if _HAS_PSUTIL:
         per = psutil.cpu_percent(interval=None, percpu=True)
         load: list[float] | None = None
-        try:
-            load = list(os.getloadavg())  # 1/5/15 min - Linux + recent macOS.
-        except (AttributeError, OSError):
-            load = None
+        getloadavg = getattr(os, "getloadavg", None)
+        if getloadavg is not None:
+            try:
+                load = list(getloadavg())  # 1/5/15 min - Linux + recent macOS.
+            except OSError:
+                load = None
         return CpuStats(
             cores_logical=psutil.cpu_count(logical=True) or os.cpu_count() or 0,
             cores_physical=psutil.cpu_count(logical=False),

@@ -88,7 +88,7 @@ export function DashboardPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-6 max-w-[1280px]">
+      <div className="px-8 py-7 space-y-6 w-full">
         <header className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">

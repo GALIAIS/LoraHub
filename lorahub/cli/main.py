@@ -250,6 +250,7 @@ def bootstrap_kohya(
     ] = False,
 ) -> None:
     """One-shot install of kohya-ss/sd-scripts (clone + venv + PyTorch + deps + xformers)."""
+    from lorahub.core.backends.errors import BootstrapError
     from lorahub.core.backends.kohya import installer
 
     plan = installer.BootstrapPlan(
@@ -281,7 +282,7 @@ def bootstrap_kohya(
             plan,
             progress=lambda step: console.print(f"[cyan]>[/cyan] {step}"),
         )
-    except installer.BootstrapError as e:
+    except BootstrapError as e:
         err_console.print(
             f"[red]bootstrap failed at step:[/red] {e.step} "
             f"[dim](exit {e.returncode})[/dim]\n"

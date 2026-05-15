@@ -228,6 +228,39 @@ export interface RecipeTemplate {
   recipe: Record<string, unknown>
 }
 
+export interface ModelDownloadEvent {
+  message: string
+  percent: number | null
+  files_done: number
+  files_total: number
+  bytes_done: number
+  bytes_total: number
+  ts: number
+}
+
+export interface ModelDownloadSession {
+  session_id: string
+  source: "huggingface" | "modelscope"
+  repo_id: string
+  revision: string
+  target_dir: string | null
+  threads: number
+  status: "running" | "succeeded" | "failed"
+  percent: number
+  events: ModelDownloadEvent[]
+  result: {
+    source: string
+    repo_id: string
+    revision: string
+    target: string
+    files: number
+    total_bytes: number
+  } | null
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -336,19 +369,15 @@ export const api = {
       repo_id: string
       revision?: string
       target_dir?: string | null
+      threads?: number
     },
   ) =>
-    http<{
-      source: string
-      repo_id: string
-      revision: string
-      target: string
-      files: number
-      total_bytes: number
-    }>("/models/download", {
+    http<ModelDownloadSession>("/models/download", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  getModelDownload: (sessionId: string) =>
+    http<ModelDownloadSession>(`/models/download/${sessionId}`),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
   probeMirrors: (

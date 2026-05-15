@@ -618,6 +618,7 @@ def test_bootstrap_concurrent_returns_409(
 ) -> None:
     """A second POST while one install is running must 409 instead of racing."""
     import threading
+
     from lorahub.api import app as app_mod
 
     release = threading.Event()
@@ -648,6 +649,7 @@ def test_bootstrap_succeeds_with_stub(
 ) -> None:
     """A fast stubbed install should walk to status=succeeded and emit events."""
     import time
+
     from lorahub.api import app as app_mod
 
     def builder(_req: object) -> Any:
@@ -1065,6 +1067,7 @@ def test_bootstrap_with_diffusion_pipe_backend(
 ) -> None:
     """Issuing a bootstrap with backend='diffusion-pipe' walks to succeeded."""
     import time
+
     from lorahub.api import app as app_mod
     from lorahub.api.bootstrap_session import BootstrapRequest
 
@@ -1222,6 +1225,7 @@ def test_models_download_starts_session_and_reports_progress(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import time
+
     from lorahub.api.routers import models as models_router
     from lorahub.core.models.downloader import DownloadProgress, DownloadResult
 

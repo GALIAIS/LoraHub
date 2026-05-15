@@ -16,7 +16,6 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel

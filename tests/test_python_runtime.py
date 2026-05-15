@@ -130,6 +130,7 @@ def test_status_payload_has_required_keys(monkeypatch: pytest.MonkeyPatch) -> No
 @pytest.fixture
 def runtime_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fastapi.testclient import TestClient
+
     from lorahub.api import app as app_mod
     from lorahub.api.settings import SettingsStore
 

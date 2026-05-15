@@ -62,49 +62,49 @@ export function SettingsPage() {
         <div className="flex-1 min-h-0 overflow-hidden">
           <TabsContent value="overview" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[1100px]">
+              <div className="px-8 py-6 w-full">
                 <OverviewTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="dependencies" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[1000px]">
+              <div className="px-8 py-6 w-full">
                 <DependenciesTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="backends" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[900px]">
+              <div className="px-8 py-6 w-full">
                 <BackendsTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="install" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[1100px]">
+              <div className="px-8 py-6 w-full">
                 <InstallTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="network" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[900px]">
+              <div className="px-8 py-6 w-full">
                 <NetworkTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="models" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[1000px]">
+              <div className="px-8 py-6 w-full">
                 <ModelsTab />
               </div>
             </div>
           </TabsContent>
           <TabsContent value="tagging" className="h-full">
             <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 max-w-[900px]">
+              <div className="px-8 py-6 w-full">
                 <TaggingTab />
               </div>
             </div>
