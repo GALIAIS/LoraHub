@@ -63,6 +63,33 @@ export interface SettingsResponse {
   path: string
 }
 
+export interface BootstrapEvent {
+  step: string
+  level: "info" | "done" | "error" | string
+  message: string
+  ts: number
+}
+
+export interface BootstrapStatus {
+  status: "idle" | "running" | "succeeded" | "failed"
+  session_id: string | null
+  events: BootstrapEvent[]
+}
+
+export interface BootstrapStartResponse {
+  session_id: string
+  status: string
+}
+
+export interface BootstrapRequestBody {
+  target?: string | null
+  cuda?: string
+  torch_version?: string
+  torchvision_version?: string
+  install_xformers?: boolean
+  force?: boolean
+}
+
 export interface ValidationFieldError {
   loc: (string | number)[]
   msg: string
@@ -174,6 +201,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  startBootstrap: (body: BootstrapRequestBody = {}) =>
+    http<BootstrapStartResponse>("/backend/bootstrap", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
 }
 
 /**
@@ -209,6 +242,44 @@ export function useJobStream(jobId: string | null) {
       wsRef.current = null
     }
   }, [jobId])
+
+  return { events, status }
+}
+
+/**
+ * Live bootstrap event stream over WebSocket. Mirrors `useJobStream` but talks
+ * to the singleton backend-install session — it doesn't take an id because at
+ * most one bootstrap can run at a time.
+ */
+export function useBootstrapStream(enabled: boolean) {
+  const [events, setEvents] = useState<BootstrapEvent[]>([])
+  const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+    if (!enabled) return
+    setEvents([])
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const host = window.location.host || "127.0.0.1:18765"
+    const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
+    wsRef.current = ws
+
+    ws.onopen = () => setStatus("open")
+    ws.onclose = () => setStatus("closed")
+    ws.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data) as BootstrapEvent
+        setEvents((prev) => [...prev, event].slice(-200))
+      } catch {
+        // ignore malformed frames
+      }
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [enabled])
 
   return { events, status }
 }

@@ -14,6 +14,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import threading
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -675,6 +677,196 @@ def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
     return job.to_summary()
 
 
+# --------------------------------------------------------------------------- #
+# Backend bootstrap (one-click kohya install)
+# --------------------------------------------------------------------------- #
+
+
+class _BootstrapSession:
+    """Singleton wrapper around `installer.bootstrap` running on a worker thread.
+
+    The session buffers structured events for late-joining HTTP polls and fans
+    them out to attached `asyncio.Queue` listeners for the WebSocket stream.
+    Each install step turns into one event; a final `done` or `error` event
+    marks the terminal state and triggers listener wake-ups so they can close.
+    """
+
+    _STATUS_RUNNING = "running"
+    _STATUS_SUCCEEDED = "succeeded"
+    _STATUS_FAILED = "failed"
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.status: str = self._STATUS_RUNNING
+        self.events: list[dict[str, Any]] = []
+        self._listeners: list[asyncio.Queue[dict[str, Any]]] = []
+        self._lock = threading.RLock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def attach(self, queue: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Register a listener and return the buffered backlog atomically."""
+        with self._lock:
+            self._listeners.append(queue)
+            return list(self.events)
+
+    def detach(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        with self._lock:
+            if queue in self._listeners:
+                self._listeners.remove(queue)
+
+    def is_running(self) -> bool:
+        return self.status == self._STATUS_RUNNING
+
+    def to_status_payload(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "status": self.status,
+                "session_id": self.session_id,
+                "events": list(self.events),
+            }
+
+    def start(
+        self,
+        runner: Callable[[Callable[[str], None]], None],
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> None:
+        """Spawn the worker thread that calls `runner(progress_cb)`."""
+        self._loop = loop
+        self._thread = threading.Thread(
+            target=self._run, args=(runner,), name="lorahub-bootstrap", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self, runner: Callable[[Callable[[str], None]], None]) -> None:
+        try:
+            runner(lambda step: self._emit("info", step, message=step))
+        except Exception as exc:  # noqa: BLE001 — surface any installer failure
+            step = getattr(exc, "step", "bootstrap")
+            self._emit("error", step, message=str(exc))
+            self._finalize(self._STATUS_FAILED)
+            return
+        self._emit("done", "complete", message="kohya backend installed")
+        self._finalize(self._STATUS_SUCCEEDED)
+
+    def _emit(self, level: str, step: str, *, message: str) -> None:
+        event = {
+            "step": step,
+            "level": level,
+            "message": message,
+            "ts": datetime.now(UTC).timestamp(),
+        }
+        with self._lock:
+            self.events.append(event)
+            listeners = list(self._listeners)
+        for queue in listeners:
+            self._dispatch(queue, event)
+
+    def _finalize(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            listeners = list(self._listeners)
+        # Wake any listener still parked on `queue.get()` so it can close.
+        sentinel: dict[str, Any] = {"step": "__terminal__", "level": status}
+        for queue in listeners:
+            self._dispatch(queue, sentinel)
+
+    def _dispatch(self, queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+        except RuntimeError:
+            # Loop already torn down — listener is gone, drop the event.
+            pass
+
+
+_bootstrap_session: _BootstrapSession | None = None
+_bootstrap_lock = threading.Lock()
+
+
+class BootstrapRequest(BaseModel):
+    target: str | None = None
+    cuda: str = "cu124"
+    torch_version: str = "2.6.0"
+    torchvision_version: str = "0.21.0"
+    install_xformers: bool = True
+    force: bool = False
+
+
+def _build_bootstrap_runner(req: BootstrapRequest) -> Callable[[Callable[[str], None]], None]:
+    """Produce a (progress_cb -> None) closure that runs the kohya installer.
+
+    Factored out so tests can monkeypatch this builder with a stub runner that
+    doesn't touch the network or the filesystem.
+    """
+    from lorahub.core.backends.kohya import installer  # noqa: PLC0415
+
+    target_path = (
+        Path(req.target).expanduser().resolve()
+        if req.target
+        else (Path.cwd() / "sd-scripts").resolve()
+    )
+    plan = installer.BootstrapPlan(
+        target=target_path,
+        cuda_version=req.cuda,
+        torch_version=req.torch_version,
+        torchvision_version=req.torchvision_version,
+        install_xformers=req.install_xformers,
+    )
+    if plan.target.exists() and any(plan.target.iterdir()):
+        if not req.force:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"target {plan.target} is not empty; "
+                    "pass force=true to wipe it first."
+                ),
+            )
+        installer.cleanup_partial(plan)
+
+    def runner(progress: Callable[[str], None]) -> None:
+        installer.bootstrap(plan, progress=progress)
+
+    return runner
+
+
+@api.get("/backend/bootstrap/status")
+def bootstrap_status() -> dict[str, Any]:
+    sess = _bootstrap_session
+    if sess is None:
+        return {"status": "idle", "session_id": None, "events": []}
+    return sess.to_status_payload()
+
+
+@api.post("/backend/bootstrap", status_code=202)
+async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
+    global _bootstrap_session
+    with _bootstrap_lock:
+        existing = _bootstrap_session
+        if existing is not None and existing.is_running():
+            raise HTTPException(
+                status_code=409, detail="a bootstrap session is already running"
+            )
+        # Resolve the runner first — this validates the target dir before we
+        # spin a thread. HTTPException raised here surfaces as a 4xx directly.
+        runner = _build_bootstrap_runner(req)
+        sess = _BootstrapSession(session_id=str(ulid_new()))
+        _bootstrap_session = sess
+
+    loop = asyncio.get_running_loop()
+    sess.start(runner, loop)
+    return {"session_id": sess.session_id, "status": sess.status}
+
+
+def ulid_new() -> Any:
+    """Wrapper so tests can patch ULID generation if needed."""
+    import ulid  # noqa: PLC0415
+
+    return ulid.new()
+
+
 app.include_router(api)
 
 
@@ -708,6 +900,36 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
         pass
     finally:
         state.registry.detach_listener(job_id, queue)
+        with contextlib.suppress(Exception):
+            await ws.close()
+
+
+@app.websocket("/api/backend/bootstrap/stream")
+async def stream_bootstrap(ws: WebSocket) -> None:
+    sess = _bootstrap_session
+    if sess is None:
+        await ws.close(code=4404)
+        return
+    await ws.accept()
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
+    backlog = sess.attach(queue)
+    try:
+        for event in backlog:
+            await ws.send_json(event)
+        if not sess.is_running():
+            return
+        while True:
+            event = await queue.get()
+            if event.get("step") == "__terminal__":
+                break
+            await ws.send_json(event)
+            if event.get("level") in {"done", "error"}:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        sess.detach(queue)
         with contextlib.suppress(Exception):
             await ws.close()
 

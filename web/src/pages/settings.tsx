@@ -1,7 +1,21 @@
 import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2, XCircle, AlertTriangle, Save, RotateCcw } from "lucide-react"
-import { api, type BackendStatus, type SettingsState } from "@/lib/api"
+import {
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Save,
+  RotateCcw,
+  Download,
+  Loader2,
+} from "lucide-react"
+import {
+  api,
+  useBootstrapStream,
+  type BackendStatus,
+  type BootstrapEvent,
+  type SettingsState,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -59,6 +73,7 @@ export function SettingsPage() {
       </header>
 
       <BackendStatusCard backend={backend} />
+      <BootstrapPanel />
 
       <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
         <CardHeader className="pb-3">
@@ -234,6 +249,136 @@ function Field({
         />
         <p className="text-[11px] text-muted-foreground/80 mt-1">{description}</p>
       </div>
+    </div>
+  )
+}
+
+function BootstrapPanel() {
+  const qc = useQueryClient()
+  // Poll status as a fallback so the panel survives a page reload while an
+  // install is mid-flight, and so we never miss a terminal frame the WS may
+  // have sent before we attached.
+  const statusQuery = useQuery({
+    queryKey: ["backend-bootstrap-status"],
+    queryFn: api.getBootstrapStatus,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1500 : false,
+  })
+
+  const status = statusQuery.data?.status ?? "idle"
+  const isRunning = status === "running"
+
+  // Stream live events while a session is active. Prefer the streamed events
+  // when the WS has produced any (it's lower latency than the poll); otherwise
+  // fall back to the buffered events the polling query carries.
+  const { events: streamedEvents } = useBootstrapStream(isRunning)
+  const polled = statusQuery.data?.events ?? []
+  const events: BootstrapEvent[] =
+    streamedEvents.length > 0 ? streamedEvents : polled
+
+  const start = useMutation({
+    mutationFn: () => api.startBootstrap({}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
+    },
+  })
+
+  // When an install transitions to a terminal state, refresh the backend
+  // status card so the user sees their new sd-scripts checkout immediately.
+  useEffect(() => {
+    if (status === "succeeded" || status === "failed") {
+      qc.invalidateQueries({ queryKey: ["settings"] })
+      qc.invalidateQueries({ queryKey: ["health"] })
+    }
+  }, [status, qc])
+
+  const startError = start.error as Error | null
+  const lastError = events.find((e) => e.level === "error")
+
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Install kohya backend</CardTitle>
+        <CardDescription>
+          Clone <code className="text-foreground">kohya-ss/sd-scripts</code>, create
+          its venv, and install PyTorch + requirements + xformers. Same flow as
+          <code className="text-foreground"> lorahub bootstrap-kohya</code>; runs
+          in the background — leave this page open.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            size="sm"
+            disabled={isRunning || start.isPending}
+            onClick={() => start.mutate()}
+          >
+            {isRunning ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Download className="size-3" />
+            )}
+            {isRunning ? "Installing…" : "Install kohya backend"}
+          </Button>
+          <BootstrapStatusBadge status={status} />
+          {startError && (
+            <span className="text-xs text-destructive font-mono truncate max-w-md">
+              {startError.message}
+            </span>
+          )}
+          {!startError && status === "failed" && lastError && (
+            <span className="text-xs text-destructive font-mono truncate max-w-md">
+              {lastError.message}
+            </span>
+          )}
+        </div>
+        {events.length > 0 && <BootstrapEventLog events={events} />}
+      </CardContent>
+    </Card>
+  )
+}
+
+function BootstrapStatusBadge({ status }: { status: string }) {
+  const tone =
+    status === "succeeded"
+      ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/5"
+      : status === "failed"
+        ? "text-destructive border-destructive/40 bg-destructive/5"
+        : status === "running"
+          ? "text-amber-600 dark:text-amber-400 border-amber-500/40 bg-amber-500/5"
+          : "text-muted-foreground border-border/60 bg-muted/30"
+  return (
+    <span
+      className={cn(
+        "px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] rounded-[3px] border font-mono",
+        tone,
+      )}
+    >
+      {status}
+    </span>
+  )
+}
+
+function BootstrapEventLog({ events }: { events: BootstrapEvent[] }) {
+  return (
+    <div className="rounded-[4px] border border-border/60 bg-muted/30 max-h-64 overflow-y-auto">
+      <ol className="divide-y divide-border/40 font-mono text-[11px]">
+        {events.map((ev, idx) => (
+          <li
+            key={`${ev.ts}-${idx}`}
+            className={cn(
+              "px-3 py-1.5 flex items-start gap-2",
+              ev.level === "error" && "text-destructive",
+              ev.level === "done" && "text-emerald-600 dark:text-emerald-400",
+            )}
+          >
+            <span className="text-[9px] uppercase tracking-[0.18em] text-muted-foreground/70 w-12 shrink-0 pt-0.5">
+              {ev.level}
+            </span>
+            <span className="break-all">{ev.message}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }

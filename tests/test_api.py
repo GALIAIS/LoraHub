@@ -52,6 +52,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # those env vars are valid in production but confuse settings tests.
     monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
     monkeypatch.delenv("LORAHUB_KOHYA_PYTHON", raising=False)
+    # Reset the singleton bootstrap session so tests can't leak state into
+    # one another (each test starts from "idle").
+    monkeypatch.setattr(app_mod, "_bootstrap_session", None)
     return TestClient(app_mod.app)
 
 
@@ -593,3 +596,85 @@ def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> 
 def test_archive_unknown_job_404(client: TestClient) -> None:
     r = client.delete("/api/jobs/does-not-exist", params={"archive": "true"})
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Backend bootstrap (one-click kohya install)
+# --------------------------------------------------------------------------- #
+
+
+def test_bootstrap_status_when_idle(client: TestClient) -> None:
+    r = client.get("/api/backend/bootstrap/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "idle"
+    assert body["events"] == []
+
+
+def test_bootstrap_concurrent_returns_409(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second POST while one install is running must 409 instead of racing."""
+    import threading
+    from lorahub.api import app as app_mod
+
+    release = threading.Event()
+
+    def builder(_req: object) -> Any:
+        def runner(progress: Any) -> None:
+            progress("clone")
+            # Block here so the session stays in `running` while we issue the
+            # second POST below — this is the whole point of the test.
+            release.wait(timeout=5.0)
+
+        return runner
+
+    monkeypatch.setattr(app_mod, "_build_bootstrap_runner", builder)
+
+    first = client.post("/api/backend/bootstrap", json={"target": str(tmp_path / "sd")})
+    assert first.status_code == 202, first.text
+
+    second = client.post("/api/backend/bootstrap", json={"target": str(tmp_path / "sd")})
+    assert second.status_code == 409
+
+    # Let the first install finish so the test doesn't hang the worker thread.
+    release.set()
+
+
+def test_bootstrap_succeeds_with_stub(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fast stubbed install should walk to status=succeeded and emit events."""
+    import time
+    from lorahub.api import app as app_mod
+
+    def builder(_req: object) -> Any:
+        def runner(progress: Any) -> None:
+            progress("clone")
+            progress("create venv")
+            progress("install xformers")
+
+        return runner
+
+    monkeypatch.setattr(app_mod, "_build_bootstrap_runner", builder)
+
+    r = client.post("/api/backend/bootstrap", json={})
+    assert r.status_code == 202, r.text
+    # The POST returns as soon as the worker thread is spawned; for very fast
+    # stubs the install may already be done — both running and succeeded are OK.
+    assert r.json()["status"] in ("running", "succeeded")
+
+    deadline = time.time() + 5
+    final: dict[str, Any] | None = None
+    while time.time() < deadline:
+        body = client.get("/api/backend/bootstrap/status").json()
+        if body["status"] in ("succeeded", "failed"):
+            final = body
+            break
+        time.sleep(0.05)
+
+    assert final is not None, "bootstrap did not reach a terminal state"
+    assert final["status"] == "succeeded", final
+    levels = [e["level"] for e in final["events"]]
+    assert levels[-1] == "done"
+    assert "info" in levels  # at least one progress step was buffered
