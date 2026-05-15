@@ -42,6 +42,10 @@ class BootstrapPlan:
     # Optional HTTPS prefix that rewrites `https://github.com/...` URLs at
     # clone time (e.g. "https://gh-proxy.org"). Empty means direct.
     github_proxy: str | None = None
+    # Optional path to a CPython executable used as the venv base. When
+    # left None, ``create_venv`` defers to uv's default (which falls back
+    # to the interpreter currently running the API).
+    base_python: Path | None = None
 
     @property
     def venv_python(self) -> Path:
@@ -88,7 +92,7 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     try:
-        _uv.create_venv(plan.target, progress=progress)
+        _uv.create_venv(plan.target, python=plan.base_python, progress=progress)
     except RuntimeError as exc:
         raise BootstrapError("create venv", 1) from exc
 

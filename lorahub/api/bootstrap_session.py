@@ -144,6 +144,19 @@ def default_build_bootstrap_runner(
     return _build_kohya_runner(req)
 
 
+def _resolve_base_python() -> Path | None:
+    """Return the portable Python uv has cached for us, if any.
+
+    None means "let uv pick whatever interpreter created it" — i.e. the
+    interpreter running the API. The Settings UI's Dependencies tab makes
+    sure a portable runtime is always installed before the user gets here,
+    so this fallback only fires for scripted / power-user flows.
+    """
+    from lorahub.core.toolchain import python_runtime  # noqa: PLC0415
+
+    return python_runtime.runtime_python(python_runtime.DEFAULT_VERSION)
+
+
 def _build_kohya_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
@@ -163,6 +176,7 @@ def _build_kohya_runner(
         torchvision_version=req.torchvision_version,
         install_xformers=req.install_xformers,
         github_proxy=settings.github_proxy,
+        base_python=_resolve_base_python(),
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -212,6 +226,7 @@ def _build_diffusion_pipe_runner(
         torchvision_version=req.torchvision_version,
         install_deepspeed=req.install_deepspeed,
         github_proxy=settings.github_proxy,
+        base_python=_resolve_base_python(),
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:

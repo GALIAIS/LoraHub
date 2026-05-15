@@ -297,6 +297,38 @@ export const api = {
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
+  getRuntimeStatus: () =>
+    http<{
+      default_version: string
+      recommended_versions: string[]
+      install_dir: string
+      platform: { system: string; machine: string; release: string }
+      installed: Array<{
+        version: string
+        implementation: string
+        arch: string
+        os: string
+        path: string
+        key: string
+        installed: boolean
+      }>
+      active: {
+        version: string
+        path: string
+      } | null
+    }>("/runtime/python"),
+  installRuntime: (version?: string) =>
+    http<{
+      installed: { version: string; path: string }
+      status: {
+        default_version: string
+        installed: Array<{ version: string; path: string }>
+        active: { version: string; path: string } | null
+      }
+    }>("/runtime/python/install", {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    }),
   downloadModel: (
     body: {
       source: "huggingface" | "modelscope"

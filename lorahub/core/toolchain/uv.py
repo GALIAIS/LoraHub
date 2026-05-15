@@ -174,13 +174,28 @@ def _capture(cmd: list[str], step: str, progress: ProgressCallback | None) -> No
 
 
 def create_venv(
-    target: Path, *, progress: ProgressCallback | None = None
+    target: Path,
+    *,
+    python: Path | str | None = None,
+    progress: ProgressCallback | None = None,
 ) -> Path:
-    """Create ``<target>/venv`` using `uv venv` and return the python path."""
+    """Create ``<target>/venv`` using `uv venv` and return the python path.
+
+    When ``python`` is provided it's passed to ``uv venv --python``, so the
+    venv is built on top of a portable runtime managed by
+    ``lorahub.core.toolchain.python_runtime`` instead of whatever
+    interpreter happens to be running the API.
+    """
     uv = ensure_uv(progress)
     venv_dir = target / "venv"
-    cmd = [uv, "venv", str(venv_dir)]
-    _capture(cmd, f"uv venv -> {venv_dir}", progress)
+    cmd: list[str] = [uv, "venv"]
+    if python is not None:
+        cmd += ["--python", str(python)]
+    cmd.append(str(venv_dir))
+    label = f"uv venv -> {venv_dir}"
+    if python is not None:
+        label += f" (python={python})"
+    _capture(cmd, label, progress)
     return venv_python(target)
 
 
