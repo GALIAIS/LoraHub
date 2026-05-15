@@ -115,11 +115,15 @@ export interface BootstrapStatus {
   status: "idle" | "running" | "succeeded" | "failed"
   session_id: string | null
   events: BootstrapEvent[]
+  // Present when a session has been started; absent on the synthetic
+  // idle response the server emits before the first bootstrap.
+  backend?: BackendId
 }
 
 export interface BootstrapStartResponse {
   session_id: string
   status: string
+  backend?: BackendId
 }
 
 export interface BootstrapRequestBody {
