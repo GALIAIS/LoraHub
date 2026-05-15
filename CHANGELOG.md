@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **End-to-end smoke test passes** — full path from `fetch-bangumi` -> `tag` -> `train` produces a 42 MB SDXL LoRA file in 20 minutes on an RTX 4070 Laptop (8 GB VRAM) using IllustriousXL as the base. Verified with 10 BangumiBase images of "laffey (azur lane)".
 - **WD14 / WD-v3 auto-tagger** (`lorahub.core.tagging.wd14`) — ONNX-based multi-label image classifier that produces Danbooru-style tags. Lazy-loads the model on first use, supports configurable `general` / `character` thresholds (defaults `0.35` / `0.85`), and writes kohya-style comma-separated `.txt` captions next to each image.
 - **CLI: `lorahub tag`** — auto-tag a directory of images. Skips images that already have non-empty captions unless `--overwrite` is passed; supports `--recursive`, `--include-character / --no-include-character`, and threshold overrides.
 - **BangumiBase fetcher** (`lorahub.core.dataset.sources.bangumi_base`) — pulls a single character's image set from a Hugging Face BangumiBase dataset, unpacks `dataset.zip`, and seeds empty caption files for kohya tag-file mode.
@@ -17,8 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Recipe -> kohya translation now goes through `dataset.toml`** instead of `--train_data_dir` plus a slew of resolution/bucket/caption flags. kohya's flat-dir `--train_data_dir` mode requires `<n>_<concept>/` subdirectories, which the recipe schema doesn't model; switching to the TOML config lets users keep flat directories and works with `num_repeats` directly. `compile_recipe()` now returns `(script, argv, files_to_write)`.
+- `KohyaBackend.launch()` and the `train` CLI now resolve the workspace path to absolute, so kohya output never accidentally lands under the sd-scripts checkout.
+- The kohya stdout parser handles checkpoint and sample paths that contain spaces (Windows install paths like `E:\WorkSpace\Lora Scripts\...`) and supports `at`/`as`/`to` keyword separators in addition to colon-prefixed paths.
 - CLI uses ASCII status markers (`OK`, `->`) instead of Unicode glyphs for Windows GBK console compatibility.
-- Added runtime dependencies: `huggingface_hub`, `onnxruntime`, `pillow`, `numpy`.
+- Added runtime dependencies: `huggingface_hub`, `onnxruntime`, `pillow`, `numpy`, `python-dotenv`.
 
 ## [0.1.0-dev] - 2026-05-15
 

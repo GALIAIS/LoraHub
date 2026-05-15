@@ -43,6 +43,22 @@ def test_epoch_case_insensitive() -> None:
     assert ev.type is EventType.epoch_end
 
 
+def test_checkpoint_saved_with_spaces_in_path() -> None:
+    line = r"saving checkpoint: E:\WorkSpace\Lora Scripts\out\smoke.safetensors"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.checkpoint_saved
+    assert ev.payload["path"] == r"E:\WorkSpace\Lora Scripts\out\smoke.safetensors"
+
+
+def test_sample_saved_with_spaces_in_path() -> None:
+    line = "sample saved at: C:\\My Models\\sample.png"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.sample_ready
+    assert ev.payload["path"] == "C:\\My Models\\sample.png"
+
+
 def test_checkpoint_saved_parsed() -> None:
     ev = parse_line("saving checkpoint: /out/my_lora-000003.safetensors")
     assert ev is not None

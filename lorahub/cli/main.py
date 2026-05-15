@@ -67,7 +67,7 @@ def info(
     cfg = load_recipe(recipe)
     backend = KohyaBackend()
 
-    script, argv = compile_recipe(cfg, workspace=Path.cwd() / "_dryrun")
+    script, argv, _files = compile_recipe(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
     table = Table(title="Recipe summary", show_header=False, expand=False)
@@ -102,7 +102,7 @@ def train(
     if any(i.severity is Severity.error for i in issues):
         raise typer.Exit(code=1)
 
-    ws = workspace or (Path.cwd() / "runs" / cfg.output.name)
+    ws = (workspace or (Path.cwd() / "runs" / cfg.output.name)).resolve()
     ws.mkdir(parents=True, exist_ok=True)
     console.print(f"[dim]workspace:[/dim] {ws}")
 

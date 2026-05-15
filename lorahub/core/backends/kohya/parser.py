@@ -19,12 +19,16 @@ _STEP_RE = re.compile(
 _EPOCH_RE = re.compile(r"^epoch\s+(?P<cur>\d+)\s*/\s*(?P<total>\d+)\s*$", re.IGNORECASE)
 
 _SAVE_RE = re.compile(
-    r"\b(?:saving|saved)\b.*?(?P<path>\S+\.safetensors)\b",
+    r"\b(?:saving|saved)\b[^:\n]*?"
+    r"(?::\s*|\sat\s+|\sas\s+|\sto\s+)"
+    r"(?P<path>[^\n]+?\.safetensors)\b",
     re.IGNORECASE,
 )
 
 _SAMPLE_RE = re.compile(
-    r"\bsample\b.*?(?P<path>\S+\.(?:png|jpg|jpeg|webp))\b",
+    r"\bsample\b[^:\n]*?"
+    r"(?::\s*|\sat\s+|\sas\s+|\sto\s+)"
+    r"(?P<path>[^\n]+?\.(?:png|jpg|jpeg|webp))\b",
     re.IGNORECASE,
 )
 

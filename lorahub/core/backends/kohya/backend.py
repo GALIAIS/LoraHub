@@ -101,7 +101,12 @@ class KohyaBackend:
             recipe_path=cfg.backend.sd_scripts_path,
             recipe_python=cfg.backend.python_executable,
         )
-        script_name, argv = compile_recipe(cfg, workspace)
+        workspace = workspace.resolve()
+        script_name, argv, files = compile_recipe(cfg, workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
         script = env.script(script_name)
 
         job_id = str(ulid.new())

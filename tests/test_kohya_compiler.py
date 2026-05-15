@@ -20,8 +20,17 @@ def _recipe(**overrides: object) -> RecipeConfig:
 
 
 def _argv(recipe: RecipeConfig, ws: Path = Path("/ws")) -> list[str]:
-    _, args = compile_recipe(recipe, ws)
+    _, args, _files = compile_recipe(recipe, ws)
     return args
+
+
+def _files(recipe: RecipeConfig, ws: Path = Path("/ws")) -> dict[Path, str]:
+    _, _args, files = compile_recipe(recipe, ws)
+    return files
+
+
+def _dataset_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
+    return next(iter(_files(recipe, ws).values()))
 
 
 def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
@@ -37,33 +46,59 @@ def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
                 "dataset": {"source": "/d"},
             }
         )
-        s, _ = compile_recipe(cfg, tmp_path)
+        s, _, _ = compile_recipe(cfg, tmp_path)
         assert s == script
+
+
+def test_dataset_toml_emitted_with_dataset_config() -> None:
+    args = _argv(_recipe())
+    assert any(a.startswith("--dataset_config=") for a in args)
+    assert not any(a.startswith("--train_data_dir=") for a in args)
+    assert not any(a.startswith("--resolution=") for a in args)
+    assert "--enable_bucket" not in args
 
 
 def test_dataset_resolution_single_value() -> None:
     cfg = _recipe(dataset={"source": "/d", "resolution": [768]})
-    args = _argv(cfg)
-    assert "--resolution=768" in args
+    toml = _dataset_toml(cfg)
+    assert "resolution = 768" in toml
 
 
 def test_dataset_resolution_pair() -> None:
     cfg = _recipe(dataset={"source": "/d", "resolution": [1024, 768]})
-    args = _argv(cfg)
-    assert "--resolution=1024,768" in args
+    toml = _dataset_toml(cfg)
+    assert "resolution = [1024, 768]" in toml
 
 
 def test_bucket_args_when_enabled() -> None:
-    args = _argv(_recipe())
-    assert "--enable_bucket" in args
-    assert any(a.startswith("--min_bucket_reso=") for a in args)
-    assert any(a.startswith("--max_bucket_reso=") for a in args)
+    toml = _dataset_toml(_recipe())
+    assert "enable_bucket = true" in toml
+    assert "min_bucket_reso" in toml
+    assert "max_bucket_reso" in toml
 
 
 def test_bucket_args_omitted_when_disabled() -> None:
     cfg = _recipe(dataset={"source": "/d", "bucket": {"enabled": False}})
-    args = _argv(cfg)
-    assert "--enable_bucket" not in args
+    toml = _dataset_toml(cfg)
+    assert "enable_bucket" not in toml
+
+
+def test_dataset_subset_includes_image_dir_and_repeats(tmp_path: Path) -> None:
+    src = tmp_path / "imgs"
+    src.mkdir()
+    cfg = _recipe(dataset={"source": str(src), "num_repeats": 5})
+    toml = _dataset_toml(cfg)
+    # path is escaped for TOML; just confirm the basename appears and num_repeats lines up.
+    assert "imgs" in toml
+    assert "num_repeats = 5" in toml
+
+
+def test_dataset_toml_path_is_under_workspace(tmp_path: Path) -> None:
+    files = _files(_recipe(), ws=tmp_path)
+    assert len(files) == 1
+    toml_path = next(iter(files.keys()))
+    assert toml_path.name == "dataset.toml"
+    assert tmp_path.resolve() in toml_path.parents
 
 
 def test_network_lora_default() -> None:

@@ -37,18 +37,20 @@ class CompilationError(ValueError):
 def compile_recipe(
     recipe: RecipeConfig,
     workspace: Path,
-) -> tuple[str, list[str]]:
-    """Translate a recipe into (script_name, argv_for_subprocess).
+) -> tuple[str, list[str], dict[Path, str]]:
+    """Translate a recipe into (script_name, argv, files_to_write).
 
-    `script_name` is the kohya entry script to run (e.g. `sdxl_train_network.py`).
-    `argv` is the full argument list, paths already resolved relative to
-    `workspace` where appropriate.
+    `files_to_write` is a mapping of absolute path to file content that the
+    caller must write before launching the subprocess (currently just
+    `<workspace>/dataset.toml`). Returning it instead of writing it ourselves
+    keeps the compiler a pure function.
     """
     script = _pick_script(recipe.base_model.arch)
     args: list[str] = []
+    files: dict[Path, str] = {}
 
     _emit_model_args(recipe, args)
-    _emit_dataset_args(recipe, args)
+    _emit_dataset_args(recipe, workspace, args, files)
     _emit_network_args(recipe, args)
     _emit_optimizer_args(recipe, args)
     _emit_schedule_args(recipe, args)
@@ -57,7 +59,7 @@ def compile_recipe(
     _emit_sampling_args(recipe, workspace, args)
     _emit_extra_args(recipe, args)
 
-    return script, args
+    return script, args, files
 
 
 def _pick_script(arch: str) -> str:
@@ -81,29 +83,66 @@ def _emit_model_args(recipe: RecipeConfig, args: list[str]) -> None:
         args += [f"--vae={recipe.base_model.vae}"]
 
 
-def _emit_dataset_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_dataset_args(
+    recipe: RecipeConfig,
+    workspace: Path,
+    args: list[str],
+    files: dict[Path, str],
+) -> None:
+    """Generate a kohya dataset.toml + point the CLI at it.
+
+    kohya's plain `--train_data_dir` mode expects images under `<n>_<concept>/`
+    subdirectories. Our recipes describe a flat directory plus a num_repeats
+    field, so we emit a dataset.toml (which supports flat dirs) and stop
+    passing the legacy resolution/bucket/caption flags that conflict with it.
+    """
+    toml_path = (workspace / "dataset.toml").resolve()
+    files[toml_path] = _build_dataset_toml(recipe)
+    args.append(f"--dataset_config={toml_path}")
+
+
+def _build_dataset_toml(recipe: RecipeConfig) -> str:
     ds = recipe.dataset
-    args += [f"--train_data_dir={ds.source}"]
+    res = (
+        f"{ds.resolution[0]}"
+        if len(ds.resolution) == 1
+        else f"[{ds.resolution[0]}, {ds.resolution[1]}]"
+    )
 
-    if len(ds.resolution) == 1:
-        args += [f"--resolution={ds.resolution[0]}"]
-    else:
-        args += [f"--resolution={ds.resolution[0]},{ds.resolution[1]}"]
-
+    parts = [
+        "[general]",
+        f"shuffle_caption = {str(ds.caption.shuffle).lower()}",
+        f'caption_extension = "{ds.caption.ext}"',
+        "keep_tokens = 0",
+        "",
+        "[[datasets]]",
+        f"resolution = {res}",
+        f"batch_size = {recipe.schedule.batch_size}",
+    ]
     if ds.bucket.enabled:
-        args += [
-            "--enable_bucket",
-            f"--min_bucket_reso={ds.bucket.min_size}",
-            f"--max_bucket_reso={ds.bucket.max_size}",
-            f"--bucket_reso_steps={ds.bucket.step}",
+        parts += [
+            "enable_bucket = true",
+            f"min_bucket_reso = {ds.bucket.min_size}",
+            f"max_bucket_reso = {ds.bucket.max_size}",
+            f"bucket_reso_steps = {ds.bucket.step}",
         ]
-
-    if ds.caption.shuffle:
-        args += ["--shuffle_caption"]
     if ds.caption.drop_rate > 0:
-        args += [f"--caption_dropout_rate={ds.caption.drop_rate}"]
-    if ds.caption.ext != ".txt":
-        args += [f"--caption_extension={ds.caption.ext}"]
+        parts.append(f"caption_dropout_rate = {ds.caption.drop_rate}")
+
+    parts += [
+        "",
+        "  [[datasets.subsets]]",
+        f'  image_dir = "{_toml_escape(ds.source)}"',
+        f"  num_repeats = {ds.num_repeats}",
+        f'  caption_extension = "{ds.caption.ext}"',
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def _toml_escape(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
 
 
 def _emit_network_args(recipe: RecipeConfig, args: list[str]) -> None:
