@@ -174,6 +174,18 @@ def _build_kohya_runner(
                 ),
             )
         installer.cleanup_partial(plan)
+        # cleanup_partial swallows individual file errors (e.g. Windows file
+        # locks); double-check the directory is actually gone before we tell
+        # the runner to clone into it.
+        if plan.target.exists() and any(plan.target.iterdir()):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"failed to clear {plan.target}; some files may be locked. "
+                    "Close any tools using the directory and retry, or delete "
+                    "it manually."
+                ),
+            )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)
@@ -211,6 +223,18 @@ def _build_diffusion_pipe_runner(
                 ),
             )
         installer.cleanup_partial(plan)
+        # cleanup_partial swallows individual file errors (e.g. Windows file
+        # locks); double-check the directory is actually gone before we tell
+        # the runner to clone into it.
+        if plan.target.exists() and any(plan.target.iterdir()):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"failed to clear {plan.target}; some files may be locked. "
+                    "Close any tools using the directory and retry, or delete "
+                    "it manually."
+                ),
+            )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)

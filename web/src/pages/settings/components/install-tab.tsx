@@ -286,10 +286,14 @@ export function InstallTab() {
     streamedEvents.length > 0 ? streamedEvents : polled
 
   const start = useMutation({
-    mutationFn: ({ backend, force }: { backend: BackendId; force: boolean }) =>
-      api.startBootstrap({ backend, force }),
+    mutationFn: ({ backend, force }: { backend: BackendId; force: boolean }) => {
+      console.info("[lorahub] startBootstrap", { backend, force })
+      return api.startBootstrap({ backend, force })
+    },
     onSuccess: () => {
-      setForce(false)
+      // Keep `force` flipped on so the user can re-trigger directly if the
+      // install hits an error mid-way; they'll explicitly turn it off when
+      // they no longer want to overwrite.
       qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
     },
   })
@@ -386,7 +390,13 @@ export function InstallTab() {
               ) : (
                 <Download className="size-3" />
               )}
-              {isRunning ? "安装中…" : force ? "强制重装" : "安装"}
+              {isRunning
+                ? "安装中…"
+                : force
+                  ? "强制重装"
+                  : status === "failed"
+                    ? "重试安装"
+                    : "安装"}
             </Button>
             <StatusBadge status={status} />
             {isOtherSessionRunning && (
