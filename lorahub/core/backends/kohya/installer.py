@@ -4,6 +4,11 @@ Mirrors the steps from kohya's official Windows README so users don't have to
 shell out themselves. Each step is a stand-alone function that runs a single
 subprocess; on failure the exception bubbles up with the failing step name so
 callers can show a clear error.
+
+All package operations go through ``lorahub.core.toolchain.uv`` (uv venv + uv
+pip install). uv is hard-link-aware and shares its global wheel cache across
+every venv we ever build, so installing a 6 GB torch into both kohya and
+diffusion-pipe costs roughly the size of one install on disk.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from lorahub.core.backends.errors import BootstrapError
+from lorahub.core.toolchain import uv as _uv
 
 KOHYA_REPO_URL = "https://github.com/kohya-ss/sd-scripts.git"
 DEFAULT_TORCH = "2.6.0"
@@ -39,9 +45,7 @@ class BootstrapPlan:
 
     @property
     def venv_python(self) -> Path:
-        if sys.platform == "win32":
-            return self.target / "venv" / "Scripts" / "python.exe"
-        return self.target / "venv" / "bin" / "python"
+        return _uv.venv_python(self.target)
 
     @property
     def torch_index(self) -> str:
@@ -52,11 +56,9 @@ ProgressCallback = Callable[[str], None]
 
 
 def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
+    """Run a non-package command (git clone, etc.) with stderr capture."""
     if progress is not None:
         progress(step)
-    # Capture stderr so the API event log can carry the real failure reason —
-    # without this the frontend only sees "exit code 1". stdout still streams
-    # to the parent terminal so `lorahub bootstrap-*` keeps working as before.
     result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         if progress is not None and result.stderr:
@@ -85,27 +87,38 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
 
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [sys.executable, "-m", "venv", str(plan.target / "venv")]
-    _run(cmd, "create venv", progress)
+    try:
+        _uv.create_venv(plan.target, progress=progress)
+    except RuntimeError as exc:
+        raise BootstrapError("create venv", 1) from exc
 
 
 def upgrade_pip(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [str(plan.venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"]
-    _run(cmd, "upgrade pip + wheel + setuptools", progress)
+    """No-op under uv — uv ships its own resolver and doesn't need pip+wheel.
+
+    Kept on the bootstrap plan so the per-step progress UI keeps lining up;
+    we just emit a status line and move on.
+    """
+    if progress is not None:
+        progress("upgrade pip + wheel + setuptools (skipped under uv)")
 
 
 def install_torch(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
+    args = [
         f"torch=={plan.torch_version}",
         f"torchvision=={plan.torchvision_version}",
         "--index-url",
         plan.torch_index,
     ]
-    _run(cmd, f"install torch=={plan.torch_version} ({plan.cuda_version})", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            args,
+            step=f"install torch=={plan.torch_version} ({plan.cuda_version})",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError(f"install torch=={plan.torch_version}", 1) from exc
 
 
 def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -113,35 +126,34 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
     if not requirements.is_file():
         msg = f"missing {requirements} - clone may have failed"
         raise BootstrapError("install requirements", 1) from FileNotFoundError(msg)
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "-r",
-        str(requirements),
-    ]
-    _run(cmd, "install kohya requirements.txt", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["-r", str(requirements)],
+            step="install kohya requirements.txt",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError("install kohya requirements.txt", 1) from exc
 
 
 def install_xformers(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     if not plan.install_xformers:
         return
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
-        "xformers",
-        "--index-url",
-        plan.torch_index,
-    ]
-    _run(cmd, f"install xformers ({plan.cuda_version})", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["xformers", "--index-url", plan.torch_index],
+            step=f"install xformers ({plan.cuda_version})",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError(f"install xformers ({plan.cuda_version})", 1) from exc
 
 
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     """Execute every install step in order."""
+    _uv.ensure_uv(progress)
     clone(plan, progress=progress)
     create_venv(plan, progress=progress)
     upgrade_pip(plan, progress=progress)

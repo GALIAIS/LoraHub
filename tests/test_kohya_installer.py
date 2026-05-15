@@ -10,12 +10,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from lorahub.core.backends.kohya import installer
+from lorahub.core.toolchain import uv as _uv
 
 
 @pytest.fixture
 def fake_run(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    mock = MagicMock(return_value=MagicMock(returncode=0))
+    """Patch every subprocess.run we shell out to (installer git + uv)."""
+    mock = MagicMock(return_value=MagicMock(returncode=0, stderr=""))
     monkeypatch.setattr(installer.subprocess, "run", mock)
+    monkeypatch.setattr(_uv.subprocess, "run", mock)
+    # Pretend uv is already on PATH so ensure_uv() doesn't try to bootstrap it.
+    monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
     return mock
 
 
@@ -109,13 +114,15 @@ def test_bootstrap_orchestrates_every_step(tmp_path: Path, fake_run: MagicMock) 
         if cmd[:2] == ["git", "clone"]:
             target.mkdir(parents=True, exist_ok=True)
             (target / "requirements.txt").write_text("accelerate\n", encoding="utf-8")
-        return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stderr="")
 
     fake_run.side_effect = fake_subprocess_run
 
     seen_steps: list[str] = []
     installer.bootstrap(plan, progress=seen_steps.append)
 
+    # Six progress lines, one per logical step. The "upgrade pip" step is a
+    # no-op under uv but still emits a status line.
     assert len(seen_steps) == 6
     assert "clone" in seen_steps[0]
     assert "venv" in seen_steps[1]

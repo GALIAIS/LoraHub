@@ -24,7 +24,6 @@ from typing import Literal
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-
 ProgressCallback = Callable[[str], None]
 Source = Literal["huggingface", "modelscope"]
 

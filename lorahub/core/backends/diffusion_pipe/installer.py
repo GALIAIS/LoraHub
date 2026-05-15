@@ -4,6 +4,10 @@ Mirrors the public surface of `lorahub.core.backends.kohya.installer` so the
 bootstrap session can drive either backend with the same plumbing. Each step
 runs a single subprocess; failure raises `BootstrapError` annotated with the
 step name and exit code.
+
+All package operations go through ``lorahub.core.toolchain.uv``, so torch and
+its sibling wheels are hard-linked from the shared uv cache instead of
+re-downloaded into every backend's venv.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from lorahub.core.backends.errors import BootstrapError
+from lorahub.core.toolchain import uv as _uv
 
 DIFFUSION_PIPE_REPO_URL = "https://github.com/tdrussell/diffusion-pipe.git"
 DEFAULT_TORCH = "2.6.0"
@@ -39,9 +44,7 @@ class BootstrapPlan:
 
     @property
     def venv_python(self) -> Path:
-        if sys.platform == "win32":
-            return self.target / "venv" / "Scripts" / "python.exe"
-        return self.target / "venv" / "bin" / "python"
+        return _uv.venv_python(self.target)
 
     @property
     def torch_index(self) -> str:
@@ -52,10 +55,9 @@ ProgressCallback = Callable[[str], None]
 
 
 def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
+    """Run a non-package command (git clone, etc.) with stderr capture."""
     if progress is not None:
         progress(step)
-    # Capture stderr so the API event log carries the real failure reason —
-    # without this the frontend only sees "exit code 1".
     result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         if progress is not None and result.stderr:
@@ -84,36 +86,34 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
 
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [sys.executable, "-m", "venv", str(plan.target / "venv")]
-    _run(cmd, "create venv", progress)
+    try:
+        _uv.create_venv(plan.target, progress=progress)
+    except RuntimeError as exc:
+        raise BootstrapError("create venv", 1) from exc
 
 
 def upgrade_pip(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "pip",
-        "wheel",
-        "setuptools",
-    ]
-    _run(cmd, "upgrade pip + wheel + setuptools", progress)
+    """No-op under uv."""
+    if progress is not None:
+        progress("upgrade pip + wheel + setuptools (skipped under uv)")
 
 
 def install_torch(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
+    args = [
         f"torch=={plan.torch_version}",
         f"torchvision=={plan.torchvision_version}",
         "--index-url",
         plan.torch_index,
     ]
-    _run(cmd, f"install torch=={plan.torch_version} ({plan.cuda_version})", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            args,
+            step=f"install torch=={plan.torch_version} ({plan.cuda_version})",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError(f"install torch=={plan.torch_version}", 1) from exc
 
 
 def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -141,16 +141,15 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
     if progress is not None and skipped:
         progress(f"skipping from requirements: {', '.join(skipped)} (handled separately)")
 
-    cmd = [
-        str(plan.venv_python),
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "-r",
-        str(filtered),
-    ]
-    _run(cmd, "install diffusion-pipe requirements.txt", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["-r", str(filtered)],
+            step="install diffusion-pipe requirements.txt",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError("install diffusion-pipe requirements.txt", 1) from exc
 
 
 def install_deepspeed(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -161,16 +160,24 @@ def install_deepspeed(plan: BootstrapPlan, *, progress: ProgressCallback | None 
             progress(
                 "skip deepspeed: no Windows wheel available. "
                 "DeepSpeed needs CUDA toolkit + MSVC to build from source. "
-                "Install manually (e.g. `pip install deepspeed`) once your "
-                "build environment is ready, or run training under WSL2/Linux."
+                "Install manually once your build environment is ready, "
+                "or run training under WSL2/Linux."
             )
         return
-    cmd = [str(plan.venv_python), "-m", "pip", "install", "deepspeed"]
-    _run(cmd, "install deepspeed", progress)
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["deepspeed"],
+            step="install deepspeed",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError("install deepspeed", 1) from exc
 
 
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     """Execute every install step in order."""
+    _uv.ensure_uv(progress)
     clone(plan, progress=progress)
     create_venv(plan, progress=progress)
     upgrade_pip(plan, progress=progress)
