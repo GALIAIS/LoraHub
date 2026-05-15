@@ -12,7 +12,7 @@ import {
 import {
   api,
   useBootstrapStream,
-  type BackendStatus,
+  type KohyaBackendStatus,
   type BootstrapEvent,
   type SettingsState,
 } from "@/lib/api"
@@ -55,7 +55,7 @@ export function SettingsPage() {
     )
   }
 
-  const backend = settingsQuery.data.backend
+  const backend = settingsQuery.data.backends.kohya as KohyaBackendStatus
   const dirty =
     draft.sd_scripts_path !== settingsQuery.data.settings.sd_scripts_path ||
     draft.python_executable !== settingsQuery.data.settings.python_executable ||
@@ -171,7 +171,7 @@ export function SettingsPage() {
   )
 }
 
-function BackendStatusCard({ backend }: { backend: BackendStatus }) {
+function BackendStatusCard({ backend }: { backend: KohyaBackendStatus }) {
   const overall =
     backend.sd_scripts_ok && backend.python_ok
       ? "ready"

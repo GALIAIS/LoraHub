@@ -41,26 +41,66 @@ export interface RecipeDetail {
   error: string | null
 }
 
-export interface BackendStatus {
+export interface KohyaBackendStatus {
+  id: "kohya"
   sd_scripts_path: string
   sd_scripts_ok: boolean
   missing_scripts: string[]
   python: string | null
   python_ok: boolean
   venv_detected: boolean
+  ready: boolean
   source: "env" | "settings" | "default"
+}
+
+export interface DiffusionPipeBackendStatus {
+  id: "diffusion-pipe"
+  repo_path: string
+  repo_ok: boolean
+  missing_files: string[]
+  python: string | null
+  python_ok: boolean
+  venv_detected: boolean
+  ready: boolean
+  source: "env" | "settings" | "default"
+}
+
+export type AnyBackendStatus = KohyaBackendStatus | DiffusionPipeBackendStatus
+
+// Legacy alias still used in older components — points at kohya for now.
+export type BackendStatus = KohyaBackendStatus
+
+export type BackendId = "kohya" | "diffusion-pipe"
+
+export interface BackendDescriptor {
+  id: BackendId
+  name: string
+  description: string
+  repo_url: string
+  default_path: string
+  ready: boolean
+  status: AnyBackendStatus
+}
+
+export interface BackendsResponse {
+  backends: BackendDescriptor[]
+  default: BackendId
 }
 
 export interface SettingsState {
   sd_scripts_path: string | null
   python_executable: string | null
+  diffusion_pipe_repo_path: string | null
+  diffusion_pipe_python: string | null
+  default_backend: BackendId
   tagger_device: "auto" | "cpu" | "cuda"
   extra: Record<string, unknown>
 }
 
 export interface SettingsResponse {
   settings: SettingsState
-  backend: BackendStatus
+  backend: AnyBackendStatus
+  backends: Record<BackendId, AnyBackendStatus>
   path: string
 }
 
@@ -83,6 +123,7 @@ export interface BootstrapStartResponse {
 }
 
 export interface BootstrapRequestBody {
+  backend?: BackendId
   target?: string | null
   cuda?: string
   torch_version?: string
@@ -247,6 +288,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
+  listBackends: () => http<BackendsResponse>("/backends"),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   getJobFiles: (id: string) => http<JobFilesResponse>(`/jobs/${id}/files`),
   getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
