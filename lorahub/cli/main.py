@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
@@ -25,6 +26,8 @@ from lorahub.core.backends.kohya.compiler import compile_recipe
 from lorahub.core.config.loader import load_recipe
 from lorahub.core.dataset.sources import bangumi_base
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
+
+load_dotenv()  # picks up .env from cwd; existing env vars take precedence
 
 app = typer.Typer(
     name="lorahub",

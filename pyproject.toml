@@ -29,6 +29,7 @@ dependencies = [
     "onnxruntime>=1.18",
     "pillow>=10.0",
     "numpy>=1.26",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

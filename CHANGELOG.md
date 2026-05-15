@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CLI: `lorahub tag`** — auto-tag a directory of images. Skips images that already have non-empty captions unless `--overwrite` is passed; supports `--recursive`, `--include-character / --no-include-character`, and threshold overrides.
 - **BangumiBase fetcher** (`lorahub.core.dataset.sources.bangumi_base`) — pulls a single character's image set from a Hugging Face BangumiBase dataset, unpacks `dataset.zip`, and seeds empty caption files for kohya tag-file mode.
 - **CLI: `lorahub fetch-bangumi`** — list characters, download previews, or grab a character's full image set with `--limit` capping.
+- **`.env` auto-loading** — the CLI reads variables from a `.env` file in the working directory on startup, so `LORAHUB_KOHYA_SD_SCRIPTS` and similar settings persist without exports. `.env.example` ships as a template.
+- **kohya venv auto-detection** — `bootstrap.resolve()` now finds `<sd-scripts>/venv/Scripts/python.exe` (Windows) or `<sd-scripts>/venv/bin/python` (Unix) automatically, matching kohya's official install layout.
 
 ### Changed
 

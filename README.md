@@ -102,6 +102,29 @@ backend:
 
 See [`recipes/sdxl_character_8gb.yaml`](recipes/sdxl_character_8gb.yaml) for a fully annotated example.
 
+## End-to-end smoke test
+
+Once you have kohya-ss/sd-scripts installed (set `LORAHUB_KOHYA_SD_SCRIPTS` or copy `.env.example`) and an SDXL base model on disk, the full path from zero to a trained LoRA looks like this:
+
+```powershell
+# 1. Pull a character's images from BangumiBase
+lorahub fetch-bangumi azurlaneanime 5 --output ./datasets/laffey --limit 50
+
+# 2. Auto-tag every image
+lorahub tag ./datasets/laffey
+
+# 3. Scaffold a recipe and edit it (point base_model.checkpoint at your SDXL .safetensors)
+lorahub init smoke
+notepad smoke.yaml
+
+# 4. Sanity check
+lorahub validate smoke.yaml
+lorahub info     smoke.yaml
+
+# 5. Train
+lorahub train    smoke.yaml
+```
+
 ## Need test data fast?
 
 `lorahub fetch-bangumi` pulls a single character's image set from the [BangumiBase](https://huggingface.co/BangumiBase) Hugging Face datasets — pre-clustered, MIT-licensed, ready for smoke testing.
