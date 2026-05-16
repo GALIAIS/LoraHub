@@ -317,8 +317,66 @@ def _collect_memory() -> MemoryStats:
     return MemoryStats(total_bytes=0, used_bytes=0, available_bytes=0, percent=0.0)
 
 
+# Pseudo / virtual filesystems we never want to report as a "disk" - they
+# are not backed by real storage so their used/free numbers are misleading.
+_VIRTUAL_FSTYPES = frozenset(
+    {
+        "tmpfs",
+        "devtmpfs",
+        "overlay",
+        "overlay2",
+        "squashfs",
+        "proc",
+        "sysfs",
+        "cgroup",
+        "cgroup2",
+        "autofs",
+        "fusectl",
+        "pstore",
+        "efivarfs",
+        "mqueue",
+        "devpts",
+        "binfmt_misc",
+        "tracefs",
+        "debugfs",
+        "configfs",
+        "hugetlbfs",
+    }
+)
+
+
+def _iter_real_mounts() -> list[tuple[str, Path]]:
+    """Return `(label, mount_point)` for every real (non-virtual) partition.
+
+    Uses ``psutil.disk_partitions(all=False)`` so the kernel-level virtual
+    filesystems are mostly skipped already; we still defensively filter the
+    fstype against :data:`_VIRTUAL_FSTYPES` for cases where the host reports
+    overlays / tmpfs as "physical" (Docker, WSL, snap mounts).
+    """
+    if not _HAS_PSUTIL:
+        return []
+    try:
+        partitions = psutil.disk_partitions(all=False)
+    except (OSError, RuntimeError):
+        return []
+    out: list[tuple[str, Path]] = []
+    for part in partitions:
+        fstype = (getattr(part, "fstype", "") or "").lower()
+        if fstype in _VIRTUAL_FSTYPES:
+            continue
+        mount_raw = getattr(part, "mountpoint", None)
+        if not mount_raw:
+            continue
+        try:
+            mount = Path(mount_raw)
+        except (TypeError, ValueError):
+            continue
+        out.append((mount.as_posix(), mount))
+    return out
+
+
 def _collect_disks(extra_paths: list[Path] | None = None) -> list[DiskUsage]:
-    """Report the workspace's disk plus any extras the caller cares about."""
+    """Report cwd / home / extras *plus* every real mount point on the host."""
     seen: set[str] = set()
     out: list[DiskUsage] = []
     targets: list[tuple[str, Path]] = []
@@ -333,6 +391,8 @@ def _collect_disks(extra_paths: list[Path] | None = None) -> list[DiskUsage]:
                     targets.append((p.as_posix(), p))
             except OSError:
                 continue
+    # All real mount points come last so cwd / home keep their friendly labels.
+    targets.extend(_iter_real_mounts())
 
     for label, path in targets:
         try:
