@@ -25,6 +25,8 @@ LoraHub wraps mature training backends (currently [kohya-ss/sd-scripts](https://
 
 ## Status
 
+Docs: <https://galiais.github.io/LoraHub/>
+
 **Pre-alpha (v0.2 workbench).** What works today:
 
 - Semantic recipe schema (Pydantic) → kohya argv compiler
