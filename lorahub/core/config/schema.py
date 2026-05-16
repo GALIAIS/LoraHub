@@ -75,10 +75,43 @@ class LRConfig(BaseModel):
 
 
 class OptimizerConfig(BaseModel):
+    """Optimizer hyperparameters consumed by both kohya and diffusion-pipe.
+
+    `betas`, `weight_decay`, and `eps` map to the standard AdamW-style knobs;
+    `optimizer_args` is a free-form `key=value` bag for backend-specific
+    extensions (e.g. Lion's `momentum`, Prodigy's `decouple`). User-provided
+    `optimizer_args` keys win over the dedicated `betas`/`weight_decay`/`eps`
+    when names collide on the kohya `--optimizer_args` line.
+    """
+
     type: str = "adamw8bit"
     lr: LRConfig = Field(default_factory=lambda: LRConfig())
     schedule: str = "cosine_with_restarts"
     warmup_steps: int = 100
+    betas: tuple[float, float] = (0.9, 0.999)
+    weight_decay: float = Field(0.0, ge=0.0)
+    eps: float = Field(1e-8, gt=0)
+    optimizer_args: dict[str, str] = Field(default_factory=dict)
+
+
+class LossConfig(BaseModel):
+    """Loss-shaping hyperparameters for diffusion training.
+
+    Currently only the kohya backend consumes this section; the diffusion-pipe
+    backend ignores it because its loss settings live under that backend's own
+    `[model]` toml block and are not generally portable. None-valued fields are
+    omitted from kohya argv entirely so sd-scripts falls back to its defaults.
+    """
+
+    min_snr_gamma: float | None = Field(default=None, gt=0)
+    noise_offset: float = Field(0.0, ge=0)
+    ip_noise_gamma: float | None = Field(default=None, gt=0)
+    prior_loss_weight: float = Field(1.0, ge=0)
+    loss_type: Literal["l2", "huber", "smooth_l1"] = "l2"
+    debiased_estimation: bool = False
+    masked_loss: bool = False
+    scale_v_pred_loss_like_noise_pred: bool = False
+    v_parameterization: bool = False
 
 
 class ScheduleConfig(BaseModel):
@@ -146,6 +179,7 @@ class RecipeConfig(BaseModel):
     dataset: DatasetConfig
     network: NetworkConfig = Field(default_factory=lambda: NetworkConfig())
     optimizer: OptimizerConfig = Field(default_factory=lambda: OptimizerConfig())
+    loss: LossConfig = Field(default_factory=lambda: LossConfig())
     schedule: ScheduleConfig = Field(default_factory=lambda: ScheduleConfig())
     precision: Literal["fp16", "bf16", "fp32"] = "bf16"
     gradient_checkpointing: bool = True
