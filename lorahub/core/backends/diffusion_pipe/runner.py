@@ -21,7 +21,7 @@ __all__ = ["DiffusionPipeRunner", "RunResult"]
 
 
 class DiffusionPipeRunner(SubprocessRunner):
-    """Runs `python <repo>/train.py --deepspeed --config <toml> ...`."""
+    """Runs `<venv>/bin/deepspeed train.py --deepspeed --config <toml> ...`."""
 
     def __init__(
         self,
@@ -35,8 +35,19 @@ class DiffusionPipeRunner(SubprocessRunner):
         env: dict[str, str] | None = None,
     ) -> None:
         train_py = repo / "train.py"
+        # Use the venv's `deepspeed` launcher rather than plain `python`.
+        # Direct `python train.py --deepspeed` makes deepspeed think there
+        # is no launcher, so it falls back to MPI discovery and crashes
+        # with `ModuleNotFoundError: mpi4py` when MPI isn't installed.
+        # The launcher sets the env vars deepspeed expects (LOCAL_RANK,
+        # RANK, WORLD_SIZE, MASTER_ADDR, ...) and skips MPI entirely.
+        deepspeed_bin = python.parent / "deepspeed"
+        if not deepspeed_bin.is_file():
+            deepspeed_bin = python.parent / "deepspeed.exe"  # Windows fallback
+        # `train.py` re-parses `--deepspeed` itself for compat with both
+        # launch styles, so we keep the recipe argv as-is.
         super().__init__(
-            argv=[str(python), str(train_py), *argv],
+            argv=[str(deepspeed_bin), str(train_py), *argv],
             workspace=workspace,
             on_event=on_event,
             parse_line=parse_line,

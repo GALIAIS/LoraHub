@@ -31,6 +31,45 @@ def _make_stub_repo(root: Path) -> Path:
     return root
 
 
+def _make_stub_python_with_deepspeed(tmp_path: Path) -> Path:
+    """Create a fake `<venv>/bin/python` plus a `deepspeed` launcher next to it.
+
+    The runner now invokes `<python>.parent / 'deepspeed'` instead of plain
+    `python` (so deepspeed.init_distributed() doesn't fall back to MPI),
+    so tests that exercise launch need a stub deepspeed shim that just
+    forwards argv to the real interpreter.
+    """
+    bindir = tmp_path / "venv" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    python = bindir / "python"
+    deepspeed = bindir / "deepspeed"
+    if sys.platform == "win32":
+        # On Windows the runner falls back to deepspeed.exe; we keep tests
+        # POSIX-only by skipping there. Backends test runs on linux CI.
+        pass
+    python.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/bin/sh
+            exec "{sys.executable}" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    deepspeed.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/bin/sh
+            exec "{sys.executable}" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    deepspeed.chmod(0o755)
+    return python
+
+
 def _make_recipe(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> TrainingConfig:
     ckpt = tmp_path / ("model.safetensors" if arch == "sdxl" else "diffusers")
     if arch == "sdxl":
@@ -224,8 +263,23 @@ def test_estimate_vram_activations_scale_with_batch_size(
 def test_launch_writes_toml_files_and_runs_subprocess(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("shell-script stubs only work on POSIX")
     repo = _make_stub_repo(tmp_path / "dp")
-    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
+    stub_python = _make_stub_python_with_deepspeed(tmp_path / "dp")
+    recipe = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "sdxl", "checkpoint": str(_make_recipe(tmp_path, repo, arch="sdxl").base_model.checkpoint)},
+            "dataset": {"source": str((tmp_path / "data"))},
+            "schedule": {"epochs": 1, "batch_size": 1},
+            "sampling": {"enabled": False},
+            "backend": {
+                "type": "diffusion-pipe",
+                "sd_scripts_path": str(repo),
+                "python_executable": str(stub_python),
+            },
+        }
+    )
     workspace = tmp_path / "ws"
 
     events: list[TrainingEvent] = []

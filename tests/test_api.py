@@ -1613,6 +1613,10 @@ def test_config_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path
 def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path) -> None:
     """launch() compiles the recipe to TOML and spawns train.py."""
     import sys
+    import textwrap
+
+    if sys.platform == "win32":
+        pytest.skip("shell-script stubs only work on POSIX")
 
     from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
     from lorahub.core.config.schema import TrainingConfig
@@ -1629,6 +1633,21 @@ def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path)
         "import sys\nprint('loaded'); sys.exit(0)\n", encoding="utf-8"
     )
 
+    # Stub `<venv>/bin/{python,deepspeed}` next to repo so the runner has a
+    # `deepspeed` launcher to call (it now uses that instead of plain python).
+    bindir = repo / "venv" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    stub = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        exec "{sys.executable}" "$@"
+        """
+    )
+    for name in ("python", "deepspeed"):
+        p = bindir / name
+        p.write_text(stub, encoding="utf-8")
+        p.chmod(0o755)
+
     cfg = TrainingConfig.model_validate(
         {
             "base_model": {"arch": "sdxl", "checkpoint": str(ckpt)},
@@ -1638,7 +1657,7 @@ def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path)
             "backend": {
                 "type": "diffusion-pipe",
                 "sd_scripts_path": str(repo),
-                "python_executable": sys.executable,
+                "python_executable": str(bindir / "python"),
             },
         }
     )
