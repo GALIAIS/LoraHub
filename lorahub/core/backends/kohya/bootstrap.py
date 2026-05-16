@@ -93,5 +93,8 @@ def resolve(
 
     return KohyaEnv(
         sd_scripts_path=sd_scripts.resolve(),
-        python_executable=python.resolve(),
+        # NB: `absolute()`, not `resolve()`. A venv's `bin/python` is
+        # typically a symlink to the system interpreter; resolving it would
+        # bypass the venv and load the system site-packages instead.
+        python_executable=python.absolute(),
     )

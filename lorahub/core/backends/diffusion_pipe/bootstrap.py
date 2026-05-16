@@ -72,7 +72,11 @@ def resolve(
 
     return DiffusionPipeEnv(
         repo_path=repo.resolve(),
-        python_executable=python.resolve(),
+        # NB: `absolute()`, not `resolve()`. A venv's `bin/python` is
+        # typically a symlink to the system interpreter; resolving it would
+        # bypass the venv and load the system site-packages instead, so
+        # `import wandb` inside the venv would fail.
+        python_executable=python.absolute(),
     )
 
 

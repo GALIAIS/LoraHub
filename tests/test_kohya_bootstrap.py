@@ -100,7 +100,27 @@ def test_resolve_picks_up_local_venv_python(tmp_path: Path) -> None:
     venv_python.write_text("# pretend interpreter\n", encoding="utf-8")
 
     env = resolve(config_path=sd)
-    assert env.python_executable == venv_python.resolve()
+    assert env.python_executable == venv_python.absolute()
+
+
+def test_resolve_does_not_follow_venv_symlink(tmp_path: Path) -> None:
+    """venv `bin/python` is usually a symlink to /usr/bin/python — we must
+    keep the venv path or the spawned process loses access to the venv's
+    site-packages (e.g. `import wandb` fails).
+    """
+    if sys.platform == "win32":
+        pytest.skip("symlink semantics differ on Windows")
+    sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
+    real_python = tmp_path / "real_python"
+    real_python.write_text("# real\n", encoding="utf-8")
+    venv_python = sd / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.symlink_to(real_python)
+
+    env = resolve(config_path=sd)
+    # We should keep the venv path, not collapse it onto real_python.
+    assert env.python_executable == venv_python.absolute()
+    assert env.python_executable != real_python.resolve()
 
 
 def test_config_python_overrides_venv(tmp_path: Path) -> None:
@@ -115,7 +135,7 @@ def test_config_python_overrides_venv(tmp_path: Path) -> None:
     other.write_text("# other\n", encoding="utf-8")
 
     env = resolve(config_path=sd, config_python=other)
-    assert env.python_executable == other.resolve()
+    assert env.python_executable == other.absolute()
 
 
 def test_default_path_prefers_cwd_local_when_present(
