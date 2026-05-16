@@ -15,6 +15,11 @@ from pydantic import BaseModel, Field, model_validator
 
 class BaseModelConfig(BaseModel):
     arch: Literal["sd15", "sdxl", "flux", "sd3"] = "sdxl"
+    # SDXL sub-architectures sharing the SDXL backbone but trained on
+    # different finetune lineages (Pony/Illustrious/NoobAI/Animagine).
+    # Backends still treat these as SDXL; the variant only nudges
+    # default learning rates and a couple of CLI flags.
+    arch_variant: Literal["", "pony", "illustrious", "noobai", "animagine"] = ""
     checkpoint: Path
     vae: Path | None = None
 
@@ -132,3 +137,15 @@ class RecipeConfig(BaseModel):
     resume: ResumeConfig = Field(default_factory=lambda: ResumeConfig())
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _validate_arch_variant(self) -> RecipeConfig:
+        """SDXL sub-variants only make sense on the SDXL backbone."""
+        if self.base_model.arch_variant and self.base_model.arch != "sdxl":
+            msg = (
+                "base_model.arch_variant requires base_model.arch == 'sdxl' "
+                f"(got arch={self.base_model.arch!r}, "
+                f"arch_variant={self.base_model.arch_variant!r})"
+            )
+            raise ValueError(msg)
+        return self

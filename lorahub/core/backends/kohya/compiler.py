@@ -58,6 +58,7 @@ def compile_recipe(
     _emit_output_args(recipe, workspace, args)
     _emit_sampling_args(recipe, workspace, args)
     _emit_resume_args(recipe, args)
+    _emit_variant_args(recipe, args)
     _emit_extra_args(recipe, args)
 
     return script, args, files
@@ -252,6 +253,21 @@ def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
         args.append("--save_state_on_train_end")
     if r.save_state_every_n_epochs is not None:
         args.append(f"--save_state_every_n_epochs={r.save_state_every_n_epochs}")
+
+
+def _emit_variant_args(recipe: RecipeConfig, args: list[str]) -> None:
+    """Inject argv tweaks specific to an SDXL sub-architecture.
+
+    Conservative for now: only the Pony lineage gets `--clip_skip=2`,
+    which matches how Pony was trained and is the most-cited recipe
+    delta the community converges on. Illustrious/NoobAI/Animagine
+    don't add argv yet - their tuning lives in the scaffolder's LR
+    defaults. User overrides via `backend.extra_args` win because
+    `_emit_extra_args` runs after this hook.
+    """
+    variant = recipe.base_model.arch_variant
+    if variant == "pony":
+        args.append("--clip_skip=2")
 
 
 def _emit_extra_args(recipe: RecipeConfig, args: list[str]) -> None:

@@ -492,6 +492,31 @@ def test_validate_recipe_returns_structured_errors(client: TestClient) -> None:
     assert all("loc" in e for e in body["errors"])
 
 
+def test_validate_recipe_rejects_sd15_with_arch_variant(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """arch_variant only makes sense on the SDXL backbone."""
+    recipe = _valid_recipe_dict(tmp_path)
+    recipe["base_model"]["arch"] = "sd15"
+    recipe["base_model"]["arch_variant"] = "pony"
+
+    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+    # The validate route always returns 200; the rejection surfaces via
+    # `valid=false` plus a structured error mentioning arch_variant.
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False
+    assert any("arch_variant" in (e.get("msg") or "") for e in body["errors"])
+
+    # The save route validates the same way and returns 422 outright.
+    r2 = client.post(
+        "/api/recipes",
+        json={"name": "bad-variant", "recipe": recipe},
+    )
+    assert r2.status_code == 422
+    assert "arch_variant" in r2.json()["detail"]
+
+
 def test_save_recipe_writes_file_and_blocks_overwrite(
     client: TestClient, tmp_path: Path, recipes_dir: Path
 ) -> None:
