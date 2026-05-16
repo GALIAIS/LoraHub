@@ -1564,6 +1564,21 @@ def test_settings_persists_network_fields(client: TestClient) -> None:
     assert r2.json()["settings"]["github_proxy"] == "https://gh-proxy.org"
 
 
+def test_settings_persists_max_concurrent_jobs(client: TestClient) -> None:
+    """`max_concurrent_jobs` round-trips through PUT/GET and rejects bad values."""
+    r = client.put("/api/settings", json={"max_concurrent_jobs": 4})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["max_concurrent_jobs"] == 4
+
+    # GET round-trips it.
+    assert client.get("/api/settings").json()["settings"]["max_concurrent_jobs"] == 4
+
+    # 0 / negative is rejected.
+    r_bad = client.put("/api/settings", json={"max_concurrent_jobs": 0})
+    assert r_bad.status_code == 422
+    assert "max_concurrent_jobs" in r_bad.json()["detail"]
+
+
 def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     from lorahub.api.settings import Settings, env_overrides
 
