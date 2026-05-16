@@ -79,6 +79,9 @@ sd-scripts/
 *.log
 logs/
 
+# mkdocs build output
+site/
+
 # OS
 Thumbs.db
 desktop.ini

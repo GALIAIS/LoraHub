@@ -59,6 +59,10 @@ dev = [
     "httpx>=0.27",
     "python-multipart>=0.0.9",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 
 [project.scripts]
 lorahub = "lorahub.cli.main:app"
