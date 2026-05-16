@@ -765,8 +765,9 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
         <CardDescription className="text-xs">工作目录与用户目录所在卷的实时容量。</CardDescription>
       </CardHeader>
       <CardContent>
+        <div className="max-h-[16rem] overflow-y-auto">
         <Table>
-          <TableHeader>
+          <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>
               <TableHead>用途</TableHead>
               <TableHead>路径</TableHead>
@@ -808,6 +809,7 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
             })}
           </TableBody>
         </Table>
+        </div>
       </CardContent>
     </Card>
   )
@@ -836,8 +838,9 @@ function TopProcessesCard({ processes }: { processes: ProcessInfo[] }) {
             无可显示的进程
           </div>
         ) : (
+          <div className="max-h-[14rem] overflow-y-auto">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-card z-10">
               <TableRow>
                 <TableHead className="w-[80px]">PID</TableHead>
                 <TableHead>名称</TableHead>
@@ -866,6 +869,7 @@ function TopProcessesCard({ processes }: { processes: ProcessInfo[] }) {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -892,8 +896,9 @@ function GpuProcessesCard({ processes }: { processes: GpuProcessInfo[] }) {
             当前无 GPU 计算进程
           </div>
         ) : (
+          <div className="max-h-[12rem] overflow-y-auto">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-card z-10">
               <TableRow>
                 <TableHead className="w-[60px]">GPU</TableHead>
                 <TableHead className="w-[80px]">PID</TableHead>
@@ -924,6 +929,7 @@ function GpuProcessesCard({ processes }: { processes: GpuProcessInfo[] }) {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -967,8 +973,9 @@ function DiskIoCard({ io }: { io: DiskIoStats | null }) {
               当前未观察到设备级 IO
             </div>
           ) : (
+            <div className="max-h-[14rem] overflow-y-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 bg-card z-10">
                 <TableRow>
                   <TableHead>设备</TableHead>
                   <TableHead className="text-right whitespace-nowrap min-w-[10ch]">读</TableHead>
@@ -997,6 +1004,7 @@ function DiskIoCard({ io }: { io: DiskIoStats | null }) {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       )}
@@ -1048,8 +1056,9 @@ function NetworkInterfacesCard({ interfaces }: { interfaces: NetworkInterfaceSta
             当前没有可显示的接口
           </div>
         ) : (
+          <div className="max-h-[16rem] overflow-y-auto">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-card z-10">
               <TableRow>
                 <TableHead>名称</TableHead>
                 <TableHead>类型</TableHead>
@@ -1089,6 +1098,7 @@ function NetworkInterfacesCard({ interfaces }: { interfaces: NetworkInterfaceSta
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
