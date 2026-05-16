@@ -103,12 +103,53 @@ class OutputConfig(BaseModel):
     output_dir: Path | None = None
 
 
+class DiffusionPipeOptions(BaseModel):
+    """diffusion-pipe specific knobs.
+
+    Only consumed when ``backend.type == "diffusion-pipe"``; other backends
+    (kohya) ignore this field entirely. Defaults reproduce the previous
+    hard-coded values in the dp compiler so existing recipes keep producing
+    the same TOML.
+    """
+
+    # ---- Top-level [general] knobs ----
+    pipeline_stages: int = Field(1, ge=1)
+    gradient_clipping: float = Field(1.0, gt=0)
+    partition_method: Literal[
+        "parameters", "uniform", "type:transformer_layer"
+    ] = "parameters"
+    caching_batch_size: int = Field(1, ge=1)
+    steps_per_print: int = Field(1, ge=1)
+    blocks_to_swap: int = Field(0, ge=0)
+    compile: bool = False
+
+    # ---- [eval] section ----
+    eval_every_n_epochs: int | None = Field(default=None, ge=1)
+    eval_before_first_step: bool = False
+    eval_micro_batch_size_per_gpu: int = Field(1, ge=1)
+
+    # ---- [monitoring] section ----
+    enable_wandb: bool = False
+    tracker_name: str | None = None
+    run_name: str | None = None
+
+    # ---- Dataset bucketing knobs (dp only) ----
+    min_ar: float = Field(0.5, gt=0)
+    max_ar: float = Field(2.0, gt=0)
+    num_ar_buckets: int = Field(7, ge=1)
+    cache_shuffle_num: int = Field(0, ge=0)  # 0 = preserve original order
+    skip_empty_caption: bool = True
+
+
 class BackendConfig(BaseModel):
     type: Literal["kohya", "diffusion-pipe"] = "kohya"
     pin_version: str | None = None
     sd_scripts_path: Path | None = None
     python_executable: Path | None = None
     extra_args: dict[str, Any] = Field(default_factory=dict)
+    # Optional, dp-specific knobs. None means "use library defaults" so kohya
+    # users never need to touch this field.
+    diffusion_pipe: DiffusionPipeOptions | None = None
 
 
 class ResumeConfig(BaseModel):

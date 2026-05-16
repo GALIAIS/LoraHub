@@ -31,8 +31,12 @@ _EPOCH_RE = re.compile(
     r"^Started new epoch:\s*(?P<epoch>\d+)\s*$",
     re.IGNORECASE,
 )
+# dp emits two phrasings for checkpoint saves: ``Saving model to directory <p>``
+# (utils/saver.py before write) and ``Saved model to <p>`` (after write). We
+# recognise both so the caller sees a checkpoint_saved event regardless of
+# which one the upstream version logs.
 _SAVE_RE = re.compile(
-    r"^Saving model to directory\s+(?P<path>.+?)\s*$",
+    r"^Sav(?:ing model to directory|ed model to)\s+(?P<path>.+?)\s*$",
     re.IGNORECASE,
 )
 # Loss is reported on a separate `train/loss <value>` line by some

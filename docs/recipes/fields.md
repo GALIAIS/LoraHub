@@ -106,6 +106,36 @@ code as of this writing.
 | `sd_scripts_path` | `Path \| None` | `None` | Override for the kohya checkout path. |
 | `python_executable` | `Path \| None` | `None` | Override for the kohya venv Python. |
 | `extra_args` | `dict[str, Any]` | `{}` | Escape hatch for raw kohya CLI flags. |
+| `diffusion_pipe` | `DiffusionPipeOptions \| None` | `None` | dp-specific knobs (see below). Ignored by kohya. |
+
+## `backend.diffusion_pipe`
+
+Only consumed when `backend.type == "diffusion-pipe"`. `None` means
+"use library defaults" so kohya users never need to touch this field.
+
+| Field | Type | Default | Notes |
+| ----- | ---- | ------- | ----- |
+| `pipeline_stages` | `int (>=1)` | `1` | DeepSpeed pipeline parallelism degree. |
+| `gradient_clipping` | `float (>0)` | `1.0` | Grad-norm clip value. |
+| `partition_method` | `Literal["parameters", "uniform", "type:transformer_layer"]` | `parameters` | DeepSpeed partition strategy. |
+| `caching_batch_size` | `int (>=1)` | `1` | Batch size while caching latents/text embeddings. |
+| `steps_per_print` | `int (>=1)` | `1` | DeepSpeed log cadence. |
+| `blocks_to_swap` | `int (>=0)` | `0` | Blocks offloaded to RAM (0 = disabled). |
+| `compile` | `bool` | `false` | Run the model under `torch.compile`. |
+| `eval_every_n_epochs` | `int (>=1) \| None` | `None` | Run validation every N epochs. `None` disables the `[eval]` block. |
+| `eval_before_first_step` | `bool` | `false` | Evaluate once before training starts. |
+| `eval_micro_batch_size_per_gpu` | `int (>=1)` | `1` | Per-GPU eval batch size. |
+| `enable_wandb` | `bool` | `false` | Toggle the `[monitoring]` wandb integration. |
+| `tracker_name` | `str \| None` | `None` | wandb project / tracker name. |
+| `run_name` | `str \| None` | `None` | wandb run name. |
+| `min_ar` | `float (>0)` | `0.5` | Minimum aspect ratio bucket. |
+| `max_ar` | `float (>0)` | `2.0` | Maximum aspect ratio bucket. |
+| `num_ar_buckets` | `int (>=1)` | `7` | Number of aspect-ratio buckets. |
+| `cache_shuffle_num` | `int (>=0)` | `0` | Shuffle the first N tags during caching (0 keeps order). |
+| `skip_empty_caption` | `bool` | `true` | Skip images without caption files; `false` trains them with an empty caption. |
+
+`wandb_api_key` is intentionally absent from the recipe; diffusion-pipe reads
+`$WANDB_API_KEY` directly so secrets stay out of the on-disk TOML.
 
 ## `resume`
 
