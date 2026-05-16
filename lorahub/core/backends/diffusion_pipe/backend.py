@@ -1,15 +1,22 @@
-"""DiffusionPipeBackend: scaffold implementation of the `TrainingBackend` Protocol.
+"""DiffusionPipeBackend: wraps tdrussell/diffusion-pipe as a TrainingBackend.
 
-v0.2 wires up validation, VRAM estimation, and bootstrap so the user can
-install + select diffusion-pipe from the UI today. Actually compiling a
-recipe into diffusion-pipe's deepspeed-driven argv and launching the job is
-deferred to v0.3 -- `launch()` raises `NotImplementedError` until then.
+Translates a ``RecipeConfig`` into the TOML config files diffusion-pipe expects
+(see `compiler.py`), writes them under the workspace, and launches
+``python train.py --deepspeed --config <toml>`` through the shared
+``SubprocessRunner`` (see `runner.py`).
+
+We deliberately keep the supported arch set narrower than kohya's: upstream
+diffusion-pipe doesn't ship an SD1.5 trainer, so SDXL / Flux / SD3 is the
+honest list. Recipes that target sd15 fail validation with a clear pointer
+back to the kohya backend.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+
+import ulid
 
 from lorahub.core.backends.base import (
     ModelArch,
@@ -19,17 +26,22 @@ from lorahub.core.backends.base import (
     VRAMEstimate,
 )
 from lorahub.core.backends.diffusion_pipe import bootstrap as _bootstrap
+from lorahub.core.backends.diffusion_pipe.compiler import (
+    CompilationError,
+    compile_recipe,
+)
+from lorahub.core.backends.diffusion_pipe.runner import DiffusionPipeRunner
 from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import TrainingEvent
 
-# diffusion-pipe focuses on Flux/SD3-class video & image diffusion models.
-# The set is intentionally narrower than kohya's; we'll widen it as the
-# compiler in v0.3 adds support per-arch.
+# diffusion-pipe focuses on Flux/SD3-class image diffusion models plus
+# SDXL. SD1.5 is intentionally not supported -- upstream's
+# `docs/supported_models.md` doesn't ship a trainer for it.
 _SUPPORTED: set[ModelArch] = {ModelArch.flux, ModelArch.sd3, ModelArch.sdxl}
 
 
 class DiffusionPipeBackend:
-    """Wraps tdrussell/diffusion-pipe as a TrainingBackend (scaffold only)."""
+    """Wraps tdrussell/diffusion-pipe as a TrainingBackend."""
 
     @property
     def name(self) -> str:
@@ -40,13 +52,21 @@ class DiffusionPipeBackend:
         return set(_SUPPORTED)
 
     def validate(self, cfg: RecipeConfig) -> list[ValidationIssue]:
-        """Best-effort preflight: surfaces missing checkout / paths up-front.
-
-        The real recipe -> argv compiler isn't wired up until v0.3, so we
-        deliberately avoid asserting backend-specific recipe shape here
-        beyond what the schema already enforces.
-        """
         issues: list[ValidationIssue] = []
+
+        if cfg.base_model.arch not in {a.value for a in _SUPPORTED}:
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "base_model.arch",
+                    (
+                        f"diffusion-pipe does not support arch "
+                        f"{cfg.base_model.arch!r}; supported: "
+                        f"{sorted(a.value for a in _SUPPORTED)}. "
+                        "Switch backend.type to 'kohya' for sd15."
+                    ),
+                )
+            )
 
         try:
             _bootstrap.resolve(
@@ -55,6 +75,11 @@ class DiffusionPipeBackend:
             )
         except _bootstrap.BootstrapError as e:
             issues.append(ValidationIssue(Severity.error, "backend.repo_path", str(e)))
+
+        try:
+            compile_recipe(cfg, workspace=Path("/"))
+        except CompilationError as e:
+            issues.append(ValidationIssue(Severity.error, "recipe", str(e)))
 
         if not cfg.base_model.checkpoint.exists():
             issues.append(
@@ -72,15 +97,6 @@ class DiffusionPipeBackend:
                     f"dataset directory does not exist: {cfg.dataset.source}",
                 )
             )
-
-        issues.append(
-            ValidationIssue(
-                Severity.info,
-                "backend.type",
-                "diffusion-pipe backend is scaffold-only in v0.2; "
-                "training launch ships in v0.3.",
-            )
-        )
 
         return issues
 
@@ -113,15 +129,38 @@ class DiffusionPipeBackend:
 
     def launch(
         self,
-        cfg: RecipeConfig,  # noqa: ARG002 - scaffold; signature must match Protocol
-        workspace: Path,  # noqa: ARG002
-        on_event: Callable[[TrainingEvent], None],  # noqa: ARG002
+        cfg: RecipeConfig,
+        workspace: Path,
+        on_event: Callable[[TrainingEvent], None],
     ) -> TrainingHandle:
-        msg = (
-            "diffusion-pipe backend launch is not yet wired -- "
-            "install the backend, then check back in v0.3"
+        env = _bootstrap.resolve(
+            recipe_path=cfg.backend.sd_scripts_path,
+            recipe_python=cfg.backend.python_executable,
         )
-        raise NotImplementedError(msg)
+        workspace = workspace.resolve()
+        argv, files = compile_recipe(cfg, workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        job_id = str(ulid.new())
+        runner = DiffusionPipeRunner(
+            python=env.python_executable,
+            repo=env.repo_path,
+            argv=argv,
+            workspace=workspace,
+            on_event=on_event,
+            job_id=job_id,
+        )
+        runner.start()
+
+        return TrainingHandle(
+            job_id=job_id,
+            pid=runner.pid,
+            _stop_fn=lambda graceful: runner.stop(graceful=graceful),
+            _wait_fn=lambda timeout: runner.wait(timeout=timeout).returncode,
+        )
 
 
 __all__ = ["DiffusionPipeBackend"]

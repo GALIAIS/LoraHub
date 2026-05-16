@@ -1,34 +1,35 @@
-"""Automate the kohya-ss/sd-scripts install — clone + venv + PyTorch + requirements + xformers.
+"""Automate the kohya-ss/sd-scripts install: clone + venv + torch + requirements + xformers.
 
 Mirrors the steps from kohya's official Windows README so users don't have to
-shell out themselves. Each step is a stand-alone function that runs a single
-subprocess; on failure the exception bubbles up with the failing step name so
-callers can show a clear error.
+shell out themselves. The plumbing for clone/venv/torch is shared with the
+diffusion-pipe backend through ``lorahub.core.backends._common.installer``;
+this module only carries kohya-specific knobs (the repo URL, xformers, the
+location of requirements.txt).
 
-All package operations go through ``lorahub.core.toolchain.uv`` (uv venv + uv
-pip install). uv is hard-link-aware and shares its global wheel cache across
-every venv we ever build, so installing a 6 GB torch into both kohya and
-diffusion-pipe costs roughly the size of one install on disk.
+All package operations go through ``lorahub.core.toolchain.uv`` (uv venv +
+uv pip install). uv is hard-link-aware and shares its global wheel cache
+across every venv we ever build, so installing a 6 GB torch into both kohya
+and diffusion-pipe costs roughly the size of one install on disk.
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-import sys
-from collections.abc import Callable
+import subprocess  # noqa: F401  -- re-exported for tests that monkeypatch it
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from lorahub.core.backends._common import installer as _common
+from lorahub.core.backends._common.installer import (
+    DEFAULT_CUDA,
+    DEFAULT_DEPTH,
+    DEFAULT_TORCH,
+    DEFAULT_TORCHVISION,
+    ProgressCallback,
+)
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.toolchain import uv as _uv
 
 KOHYA_REPO_URL = "https://github.com/kohya-ss/sd-scripts.git"
-DEFAULT_TORCH = "2.6.0"
-DEFAULT_TORCHVISION = "0.21.0"
-DEFAULT_CUDA = "cu124"
-DEFAULT_DEPTH = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,73 +62,25 @@ class BootstrapPlan:
         return f"https://download.pytorch.org/whl/{self.cuda_version}"
 
 
-ProgressCallback = Callable[[str], None]
-
-
-def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
-    """Run a non-package command (git clone, etc.) with stderr capture."""
-    if progress is not None:
-        progress(step)
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        if progress is not None and result.stderr:
-            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
-            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
-        raise BootstrapError(step, result.returncode)
-
-
 def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    if plan.target.exists() and any(plan.target.iterdir()):
-        msg = f"target directory is not empty: {plan.target}"
-        raise BootstrapError("clone", 1) from FileExistsError(msg)
-    plan.target.parent.mkdir(parents=True, exist_ok=True)
-    from lorahub.api.settings import apply_github_proxy  # noqa: PLC0415
-
-    repo_url = apply_github_proxy(KOHYA_REPO_URL, plan.github_proxy)
-    cmd = [
-        "git",
-        "clone",
-        "--depth",
-        str(plan.git_depth),
-        repo_url,
-        str(plan.target),
-    ]
-    _run(cmd, f"clone kohya-ss/sd-scripts -> {plan.target}", progress)
+    _common.clone_repo(
+        plan,
+        repo_url=KOHYA_REPO_URL,
+        label="kohya-ss/sd-scripts",
+        progress=progress,
+    )
 
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    try:
-        _uv.create_venv(plan.target, python=plan.base_python, progress=progress)
-    except RuntimeError as exc:
-        raise BootstrapError("create venv", 1) from exc
+    _common.create_venv(plan, progress=progress)
 
 
 def upgrade_pip(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    """No-op under uv — uv ships its own resolver and doesn't need pip+wheel.
-
-    Kept on the bootstrap plan so the per-step progress UI keeps lining up;
-    we just emit a status line and move on.
-    """
-    if progress is not None:
-        progress("upgrade pip + wheel + setuptools (skipped under uv)")
+    _common.upgrade_pip(plan, progress=progress)
 
 
 def install_torch(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    args = [
-        f"torch=={plan.torch_version}",
-        f"torchvision=={plan.torchvision_version}",
-        "--index-url",
-        plan.torch_index,
-    ]
-    try:
-        _uv.pip_install(
-            plan.venv_python,
-            args,
-            step=f"install torch=={plan.torch_version} ({plan.cuda_version})",
-            progress=progress,
-        )
-    except RuntimeError as exc:
-        raise BootstrapError(f"install torch=={plan.torch_version}", 1) from exc
+    _common.install_torch(plan, progress=progress)
 
 
 def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -173,27 +126,25 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
-    """Remove a half-installed target so the user can retry.
+    """Remove a half-installed target so the user can retry."""
+    _common.cleanup_partial(plan.target)
 
-    Git pack files inside `.git/objects/pack/*.idx` are written read-only on
-    Windows, so the default ``shutil.rmtree`` raises PermissionError on them.
-    Hook ``onexc`` (Python 3.12+) / ``onerror`` to flip the read-only bit and
-    retry, otherwise the user gets stuck in a 409 loop on every reinstall.
-    """
-    if not plan.target.exists():
-        return
 
-    def _force_writable(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
-        import stat as _stat  # noqa: PLC0415
-
-        try:
-            Path(path).chmod(_stat.S_IWRITE | _stat.S_IREAD)
-            func(path)
-        except OSError:
-            pass
-
-    # `onexc` is the Python 3.12 replacement for the deprecated `onerror`.
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(plan.target, onexc=_force_writable)
-    else:
-        shutil.rmtree(plan.target, onerror=_force_writable)
+__all__ = [
+    "DEFAULT_CUDA",
+    "DEFAULT_DEPTH",
+    "DEFAULT_TORCH",
+    "DEFAULT_TORCHVISION",
+    "KOHYA_REPO_URL",
+    "BootstrapError",
+    "BootstrapPlan",
+    "ProgressCallback",
+    "bootstrap",
+    "cleanup_partial",
+    "clone",
+    "create_venv",
+    "install_requirements",
+    "install_torch",
+    "install_xformers",
+    "upgrade_pip",
+]

@@ -1,0 +1,204 @@
+"""Tests for the diffusion-pipe compiler.
+
+The compiler is a pure function: take a RecipeConfig + workspace, give back
+``(argv, files_to_write)``. We exercise that contract by inspecting the TOML
+strings we'd write to disk; we never actually shell out to diffusion-pipe.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from lorahub.core.backends.diffusion_pipe.compiler import (
+    CompilationError,
+    compile_recipe,
+)
+from lorahub.core.config.schema import RecipeConfig
+
+
+def _recipe(**overrides: object) -> RecipeConfig:
+    base = {
+        "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
+        "dataset": {"source": "/d/imgs"},
+    }
+    base.update(overrides)  # type: ignore[arg-type]
+    return RecipeConfig.model_validate(base)
+
+
+def _toml_repr(p: str | Path) -> str:
+    """Mirror the compiler's TOML escaping so cross-platform tests work."""
+    raw = str(Path(p))
+    return raw.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _compile(recipe: RecipeConfig, ws: Path = Path("/ws")) -> tuple[list[str], dict[Path, str]]:
+    return compile_recipe(recipe, ws)
+
+
+def _main_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
+    _argv, files = _compile(recipe, ws)
+    main_path = ws.resolve() / "diffusion_pipe.toml"
+    return files[main_path]
+
+
+def _dataset_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
+    _argv, files = _compile(recipe, ws)
+    ds_path = ws.resolve() / "dataset.toml"
+    return files[ds_path]
+
+
+def test_argv_uses_deepspeed_and_workspace_config(tmp_path: Path) -> None:
+    argv, files = _compile(_recipe(), tmp_path)
+    assert argv[0] == "--deepspeed"
+    assert "--config" in argv
+    cfg_path = Path(argv[argv.index("--config") + 1])
+    assert cfg_path.is_absolute()
+    assert cfg_path.name == "diffusion_pipe.toml"
+    assert cfg_path in files
+
+
+def test_two_files_written_under_workspace(tmp_path: Path) -> None:
+    _argv, files = _compile(_recipe(), tmp_path)
+    assert set(p.name for p in files) == {"diffusion_pipe.toml", "dataset.toml"}
+    for p in files:
+        assert tmp_path.resolve() in p.parents
+
+
+def test_flux_recipe_emits_diffusers_path() -> None:
+    cfg = _recipe(base_model={"arch": "flux", "checkpoint": "/models/FLUX.1-dev"})
+    main = _main_toml(cfg)
+    assert "type = \"flux\"" in main
+    assert f'diffusers_path = "{_toml_repr("/models/FLUX.1-dev")}"' in main
+    assert "checkpoint_path" not in main
+
+
+def test_sdxl_recipe_emits_checkpoint_path() -> None:
+    cfg = _recipe(base_model={"arch": "sdxl", "checkpoint": "/models/sdxl.safetensors"})
+    main = _main_toml(cfg)
+    assert "type = \"sdxl\"" in main
+    assert f'checkpoint_path = "{_toml_repr("/models/sdxl.safetensors")}"' in main
+    assert "diffusers_path" not in main
+
+
+def test_sd3_recipe_emits_diffusers_path() -> None:
+    cfg = _recipe(base_model={"arch": "sd3", "checkpoint": "/models/sd3"})
+    main = _main_toml(cfg)
+    assert "type = \"sd3\"" in main
+    assert f'diffusers_path = "{_toml_repr("/models/sd3")}"' in main
+
+
+def test_sd15_rejected_with_actionable_error() -> None:
+    cfg = _recipe(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
+    with pytest.raises(CompilationError, match="does not support arch"):
+        _compile(cfg)
+
+
+def test_adapter_section_uses_lora_with_rank() -> None:
+    cfg = _recipe(network={"type": "lora", "rank": 64, "alpha": 32})
+    main = _main_toml(cfg)
+    assert "[adapter]" in main
+    assert "type = 'lora'" in main
+    assert "rank = 64" in main
+    # diffusion-pipe forbids `alpha` in the toml; it forces alpha=rank.
+    assert "alpha" not in main
+
+
+def test_non_lora_network_rejected() -> None:
+    cfg = _recipe(network={"type": "locon"})
+    with pytest.raises(CompilationError, match="only supports network.type='lora'"):
+        _compile(cfg)
+
+
+def test_optimizer_maps_known_names() -> None:
+    cfg = _recipe(optimizer={"type": "adamw_optimi", "lr": {"unet": 2e-5}})
+    main = _main_toml(cfg)
+    assert 'type = "adamw_optimi"' in main
+    assert "lr = 2e-05" in main
+
+
+def test_optimizer_unknown_passes_through_for_pytorch_optimizer() -> None:
+    # diffusion-pipe falls back to pytorch_optimizer for unknown types,
+    # so we shouldn't reject them at compile time.
+    cfg = _recipe(optimizer={"type": "Lamb"})
+    main = _main_toml(cfg)
+    assert 'type = "Lamb"' in main
+
+
+def test_schedule_cosine_with_restarts_collapses_to_cosine() -> None:
+    cfg = _recipe(optimizer={"schedule": "cosine_with_restarts"})
+    main = _main_toml(cfg)
+    assert 'lr_scheduler = "cosine"' in main
+
+
+def test_schedule_constant_omits_lr_scheduler_field() -> None:
+    cfg = _recipe(optimizer={"schedule": "constant"})
+    main = _main_toml(cfg)
+    # diffusion-pipe defaults to constant when the field is absent.
+    assert "lr_scheduler" not in main
+
+
+def test_schedule_max_steps_passthrough() -> None:
+    cfg = _recipe(schedule={"epochs": 5, "max_steps": 1234})
+    main = _main_toml(cfg)
+    assert "max_steps = 1234" in main
+
+
+def test_save_dtype_translates_to_diffusion_pipe_names() -> None:
+    cfg = _recipe(output={"name": "x", "save_dtype": "bf16"})
+    main = _main_toml(cfg)
+    assert 'save_dtype = "bfloat16"' in main
+
+
+def test_dataset_resolution_single_value() -> None:
+    cfg = _recipe(dataset={"source": "/d", "resolution": [512]})
+    ds = _dataset_toml(cfg)
+    assert "resolutions = [512]" in ds
+
+
+def test_dataset_resolution_pair_uses_nested_array() -> None:
+    cfg = _recipe(dataset={"source": "/d", "resolution": [1024, 768]})
+    ds = _dataset_toml(cfg)
+    assert "resolutions = [[1024, 768]]" in ds
+
+
+def test_dataset_directory_section_includes_path_and_repeats() -> None:
+    cfg = _recipe(dataset={"source": "/d/imgs", "num_repeats": 3})
+    ds = _dataset_toml(cfg)
+    assert "[[directory]]" in ds
+    assert f'path = "{_toml_repr("/d/imgs")}"' in ds
+    assert "num_repeats = 3" in ds
+
+
+def test_dataset_ar_bucket_toggle() -> None:
+    on = _dataset_toml(_recipe())
+    assert "enable_ar_bucket = true" in on
+    assert "min_ar = 0.5" in on
+    cfg = _recipe(dataset={"source": "/d", "bucket": {"enabled": False}})
+    off = _dataset_toml(cfg)
+    assert "enable_ar_bucket = false" in off
+    assert "min_ar" not in off
+
+
+def test_main_toml_points_at_dataset_toml(tmp_path: Path) -> None:
+    main = _main_toml(_recipe(), ws=tmp_path)
+    expected = tmp_path.resolve() / "dataset.toml"
+    # Path is escaped for TOML; check the basename + parent appear.
+    assert "dataset.toml" in main
+    assert str(expected.parent).replace("\\", "\\\\") in main or str(
+        expected.parent
+    ) in main
+
+
+def test_output_dir_defaults_under_workspace(tmp_path: Path) -> None:
+    main = _main_toml(_recipe(), ws=tmp_path)
+    assert "output_dir" in main
+    assert "output" in main
+
+
+def test_activation_checkpointing_follows_recipe_flag() -> None:
+    on = _main_toml(_recipe(gradient_checkpointing=True))
+    assert "activation_checkpointing = true" in on
+    off = _main_toml(_recipe(gradient_checkpointing=False))
+    assert "activation_checkpointing = false" in off
