@@ -261,6 +261,11 @@ export interface ModelDownloadSession {
   finished_at: number | null
 }
 
+export interface DatasetCaptionResponse {
+  path: string
+  caption: string | null
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -318,6 +323,17 @@ export const api = {
     http<DatasetScanResponse>(
       `/datasets/scan?path=${encodeURIComponent(path)}&recursive=${recursive ? "true" : "false"}&limit=${limit}`,
     ),
+  datasetThumbUrl: (path: string, size = 256) =>
+    `/api/datasets/thumb?path=${encodeURIComponent(path)}&size=${size}`,
+  getCaption: (path: string) =>
+    http<DatasetCaptionResponse>(
+      `/datasets/caption?path=${encodeURIComponent(path)}`,
+    ),
+  putCaption: (path: string, caption: string) =>
+    http<DatasetCaptionResponse & { bytes: number }>("/datasets/caption", {
+      method: "PUT",
+      body: JSON.stringify({ path, caption }),
+    }),
   getSettings: () => http<SettingsResponse>("/settings"),
   updateSettings: (patch: Partial<SettingsState>) =>
     http<SettingsResponse>("/settings", {
