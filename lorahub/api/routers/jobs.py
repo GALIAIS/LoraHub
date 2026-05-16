@@ -14,6 +14,8 @@ from lorahub.api import state
 from lorahub.api.jobs_helpers import (
     _TERMINAL_STATES,
     _archive_workspace,
+    _find_latest_safetensors,
+    _find_latest_state_dir,
     _job_events,
     _launch_job,
     _list_workspace_files,
@@ -25,6 +27,12 @@ from lorahub.api.state import JobState
 from lorahub.core.config.schema import RecipeConfig
 
 router = APIRouter(prefix="/api")
+
+_RESUMABLE_STATES = (
+    JobState.interrupted,
+    JobState.failed,
+    JobState.canceled,
+)
 
 
 class CreateJobRequest(BaseModel):
@@ -90,6 +98,73 @@ def rerun_job(job_id: str) -> dict[str, Any]:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     workspace = (base.parent / f"{base.name}-rerun-{stamp}").resolve()
     return _launch_job(cfg, workspace)
+
+
+@router.post("/jobs/{job_id}/resume", status_code=202)
+def resume_job(job_id: str) -> dict[str, Any]:
+    """Resume an interrupted/failed/canceled job from its last `--save_state`.
+
+    Creates a NEW JobRecord in a fresh sibling workspace, replays the
+    original recipe snapshot, and injects `--resume=<state_dir>` and
+    `--network_weights=<latest.safetensors>` after the compiler's argv.
+    The original record is left untouched so /resume can be called again
+    if the resumed run also fails.
+
+    Errors:
+      404 — original job id not found
+      409 — original is not in a resumable state, or no `*-state*` /
+            `*.safetensors` artifact was produced (run never reached a
+            checkpoint)
+      422 — recipe snapshot no longer matches the current schema
+    """
+    original = state.registry.get(job_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if original.state not in _RESUMABLE_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"job state {original.state.value!r} is not resumable; "
+                f"expected one of {[s.value for s in _RESUMABLE_STATES]}"
+            ),
+        )
+
+    state_dir = _find_latest_state_dir(original.workspace)
+    if state_dir is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"no kohya state directory found under {original.workspace}; "
+                "resume requires --save_state to have produced at least one snapshot"
+            ),
+        )
+    weights = _find_latest_safetensors(original.workspace)
+    if weights is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"no .safetensors weights found under {original.workspace}; "
+                "cannot seed --network_weights"
+            ),
+        )
+
+    try:
+        cfg = RecipeConfig.model_validate(original.recipe_snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    base = original.workspace.resolve()
+    workspace = (base.parent / f"{base.name}-resume").resolve()
+    suffix = 1
+    while workspace.exists():
+        suffix += 1
+        workspace = (base.parent / f"{base.name}-resume-{suffix}").resolve()
+
+    extra_argv = [
+        f"--resume={state_dir}",
+        f"--network_weights={weights}",
+    ]
+    return _launch_job(cfg, workspace, extra_argv=extra_argv)
 
 
 @router.post("/jobs/{job_id}/reveal")
@@ -214,6 +289,13 @@ def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
         }
 
     if job.state in _TERMINAL_STATES:
+        return job.to_summary()
+    if job.state is JobState.queued:
+        # Worker hasn't claimed it yet — flip directly so the closure
+        # short-circuits when its slot eventually pops the deque.
+        job.state = JobState.canceled
+        job.finished_at = datetime.now(UTC)
+        state.registry.update(job)
         return job.to_summary()
     job.state = JobState.canceling
     state.registry.update(job)

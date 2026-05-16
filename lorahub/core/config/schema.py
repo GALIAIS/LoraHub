@@ -100,6 +100,20 @@ class BackendConfig(BaseModel):
     extra_args: dict[str, Any] = Field(default_factory=dict)
 
 
+class ResumeConfig(BaseModel):
+    """Checkpoint state writing for resume support.
+
+    When `save_state=True`, kohya writes optimizer + scheduler state next
+    to the safetensors so a later run can pick up exactly where the
+    interrupted one left off. State directories are large; use
+    `save_state_every_n_epochs` to throttle writes if disk is tight.
+    """
+
+    save_state: bool = True
+    save_state_at_end: bool = True
+    save_state_every_n_epochs: int | None = Field(default=None, ge=1)
+
+
 class RecipeConfig(BaseModel):
     """Top-level recipe configuration. One YAML file = one RecipeConfig."""
 
@@ -115,5 +129,6 @@ class RecipeConfig(BaseModel):
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig())
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     backend: BackendConfig = Field(default_factory=lambda: BackendConfig())
+    resume: ResumeConfig = Field(default_factory=lambda: ResumeConfig())
 
     model_config = {"extra": "forbid"}

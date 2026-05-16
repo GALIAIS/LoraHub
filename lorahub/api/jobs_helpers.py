@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from lorahub.api import scheduler as sched
 from lorahub.api import state
-from lorahub.api.state import JobState
+from lorahub.api.state import JobRecord, JobState
+from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.config.loader import dump_recipe
 from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
+
+log = logging.getLogger(__name__)
 
 _TERMINAL_STATES = (
     JobState.succeeded,
@@ -246,12 +251,32 @@ def _job_events(job: state.JobRecord, limit: int | None = None) -> list[Training
     return events
 
 
-def _launch_job(cfg: RecipeConfig, workspace: Path) -> dict[str, Any]:
-    """Materialize a workspace, register a job, and start the kohya backend.
+def _select_backend(cfg: RecipeConfig):  # type: ignore[no-untyped-def]
+    """Pick the training backend implementation that the recipe asks for."""
+    backend_type = cfg.backend.type
+    if backend_type == "kohya":
+        return KohyaBackend()
+    if backend_type == "diffusion-pipe":
+        return DiffusionPipeBackend()
+    msg = f"unsupported backend type: {backend_type!r}"
+    raise ValueError(msg)
 
-    Shared by both `POST /jobs` (fresh) and `POST /jobs/{id}/rerun`. The caller
-    is responsible for resolving `workspace` (the rerun path needs a fresh dir
-    so it doesn't collide with the original run's artifacts).
+
+def _launch_job(
+    cfg: RecipeConfig,
+    workspace: Path,
+    *,
+    extra_argv: list[str] | None = None,
+) -> dict[str, Any]:
+    """Materialize a workspace, register a queued job, and hand it to the scheduler.
+
+    Returns immediately after enqueueing. The actual `backend.launch()` call
+    runs on the scheduler worker thread, which holds its slot until the
+    subprocess exits — that is what makes `concurrency=1` actually serialise
+    runs instead of fan-out racing.
+
+    `extra_argv` is appended after the compiler's argv (used by `/jobs/{id}/resume`
+    to inject `--resume=<state>` and `--network_weights=<safetensors>`).
     """
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -259,10 +284,27 @@ def _launch_job(cfg: RecipeConfig, workspace: Path) -> dict[str, Any]:
     job = state.registry.create(workspace=workspace, recipe_snapshot=snapshot)
     dump_recipe(cfg, workspace / "recipe.yaml")
 
-    backend = KohyaBackend()
+    _enqueue_launch(job, cfg, extra_argv=extra_argv)
+    return job.to_summary()
 
+
+def _enqueue_launch(
+    job: JobRecord,
+    cfg: RecipeConfig,
+    *,
+    extra_argv: list[str] | None = None,
+) -> None:
+    """Wire a JobRecord up to the process-wide scheduler.
+
+    The closure runs on a worker thread: it opens an events sink, calls
+    `backend.launch`, then blocks until the subprocess exits so the slot
+    is held for the entire run. If the job was canceled while still queued,
+    the closure is a no-op so cancellation is observably instant for
+    queued jobs.
+    """
+    workspace = job.workspace
+    backend = _select_backend(cfg)
     sink = JsonlEventSink(workspace / "events.jsonl")
-    sink.__enter__()
 
     def on_event(ev: TrainingEvent) -> None:
         sink(ev)
@@ -272,19 +314,76 @@ def _launch_job(cfg: RecipeConfig, workspace: Path) -> dict[str, Any]:
             if j is not None:
                 rc = ev.payload.get("returncode")
                 j.returncode = rc
-                j.state = JobState.succeeded if rc == 0 else JobState.failed
+                if j.state is JobState.canceling:
+                    j.state = JobState.canceled
+                else:
+                    j.state = JobState.succeeded if rc == 0 else JobState.failed
                 j.finished_at = datetime.now(UTC)
                 state.registry.update(j)
             sink.__exit__(None, None, None)
 
-    handle = backend.launch(cfg, workspace=workspace, on_event=on_event)
-    job.handle = handle
-    job.pid = handle.pid
-    job.state = JobState.running
-    job.started_at = datetime.now(UTC)
-    state.registry.update(job)
+    def task(_slot: int) -> None:
+        current = state.registry.get(job.id)
+        if current is None or current.state is not JobState.queued:
+            return
+        sink.__enter__()
+        try:
+            handle = backend.launch(
+                cfg,
+                workspace=workspace,
+                on_event=on_event,
+                extra_argv=extra_argv,
+            )
+        except Exception as exc:  # noqa: BLE001
+            j = state.registry.get(job.id)
+            if j is not None:
+                j.state = JobState.failed
+                j.error = repr(exc)
+                j.finished_at = datetime.now(UTC)
+                state.registry.update(j)
+            with contextlib.suppress(Exception):
+                sink.__exit__(None, None, None)
+            return
+        j = state.registry.get(job.id)
+        if j is not None:
+            j.handle = handle
+            j.pid = handle.pid
+            j.state = JobState.running
+            j.started_at = datetime.now(UTC)
+            state.registry.update(j)
+        try:
+            handle.wait(timeout=None)
+        except Exception:  # noqa: BLE001
+            log.exception("worker wait() failed for job %s", job.id)
 
-    return job.to_summary()
+    sched.scheduler.submit(job.id, task)
+
+
+def _find_latest_state_dir(workspace: Path) -> Path | None:
+    """Most recently modified `*-state*` directory under the job workspace.
+
+    sd-scripts writes state directories like `<output_name>-state` at the
+    end of a run and `<output_name>-state-step<N>` at each interval. We
+    look under the workspace tree (kohya defaults `--output_dir` to the
+    workspace) and pick the freshest match — that is what `/resume`
+    feeds into `--resume=<dir>`.
+    """
+    if not workspace.is_dir():
+        return None
+    candidates = [p for p in workspace.rglob("*-state*") if p.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def _find_latest_safetensors(workspace: Path) -> Path | None:
+    """Most recently modified `*.safetensors` under the workspace tree."""
+    if not workspace.is_dir():
+        return None
+    files = list(workspace.rglob("*.safetensors"))
+    if not files:
+        return None
+    return max(files, key=lambda p: p.stat().st_mtime)
 
 
 def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[str]]:

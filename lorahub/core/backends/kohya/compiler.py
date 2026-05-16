@@ -57,6 +57,7 @@ def compile_recipe(
     _emit_precision_args(recipe, args)
     _emit_output_args(recipe, workspace, args)
     _emit_sampling_args(recipe, workspace, args)
+    _emit_resume_args(recipe, args)
     _emit_extra_args(recipe, args)
 
     return script, args, files
@@ -234,6 +235,23 @@ def _emit_sampling_args(recipe: RecipeConfig, workspace: Path, args: list[str]) 
         f"--sample_prompts={s.prompts_file}",
         "--sample_sampler=euler_a",
     ]
+
+
+def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
+    """Emit the kohya `--save_state*` flags so a run can be resumed.
+
+    sd-scripts writes the state directory inside `--output_dir` next to
+    the safetensors as `<output_name>-state`. We only enable local state
+    saving here; the resume route scans the same directory at restart
+    time. `--save_state_to_huggingface` is intentionally not surfaced.
+    """
+    r = recipe.resume
+    if r.save_state:
+        args.append("--save_state")
+    if r.save_state_at_end:
+        args.append("--save_state_on_train_end")
+    if r.save_state_every_n_epochs is not None:
+        args.append(f"--save_state_every_n_epochs={r.save_state_every_n_epochs}")
 
 
 def _emit_extra_args(recipe: RecipeConfig, args: list[str]) -> None:

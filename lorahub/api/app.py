@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from lorahub import __version__
+from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.bootstrap_session import (
     _BootstrapSession,
@@ -79,7 +80,9 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         loaded = state.registry.load_persisted()
         if loaded > 0:
             log.info("loaded %d job record(s) from %s", loaded, store_path)
+    sched.scheduler.start()
     yield
+    sched.scheduler.stop(timeout=2.0)
 
 
 app = FastAPI(

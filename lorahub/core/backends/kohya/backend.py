@@ -96,6 +96,8 @@ class KohyaBackend:
         cfg: RecipeConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
+        *,
+        extra_argv: list[str] | None = None,
     ) -> TrainingHandle:
         env = _bootstrap.resolve(
             recipe_path=cfg.backend.sd_scripts_path,
@@ -103,6 +105,8 @@ class KohyaBackend:
         )
         workspace = workspace.resolve()
         script_name, argv, files = compile_recipe(cfg, workspace)
+        if extra_argv:
+            argv = [*argv, *extra_argv]
         workspace.mkdir(parents=True, exist_ok=True)
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -34,9 +34,18 @@ def _make_stub_sd_scripts(root: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistry]:
+    """Isolate registry + scheduler per-test so threads don't bleed across cases."""
+    from lorahub.api import scheduler as sched_module
+
     fresh = state.JobRegistry()
     monkeypatch.setattr(state, "registry", fresh)
-    yield fresh
+    fresh_sched = sched_module.JobScheduler(concurrency=1)
+    monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
+    fresh_sched.start()
+    try:
+        yield fresh
+    finally:
+        fresh_sched.stop(timeout=2.0)
 
 
 @pytest.fixture
@@ -199,6 +208,74 @@ def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
 def test_invalid_recipe_returns_422(client: TestClient) -> None:
     r = client.post("/api/jobs", json={"recipe": {"missing": "everything"}})
     assert r.status_code == 422
+
+
+def test_resume_unknown_job_returns_404(client: TestClient) -> None:
+    r = client.post("/api/jobs/no-such-id/resume")
+    assert r.status_code == 404
+
+
+def test_resume_running_job_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Resume only makes sense for terminated runs; running jobs must 409."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "not resumable" in r.json()["detail"]
+
+
+def test_resume_without_state_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """No `*-state*` directory => no checkpoint to resume from."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.failed
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "state directory" in r.json()["detail"]
+
+
+def test_resume_without_weights_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A state dir without any safetensors next to it => 409."""
+    ws = tmp_path / "ws"
+    (ws / "out").mkdir(parents=True)
+    (ws / "out" / "lora-state").mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job.state = state.JobState.interrupted
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "safetensors" in r.json()["detail"]
+
+
+def test_cancel_queued_job_short_circuits_to_canceled(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A job pending on the worker deque must cancel without launching."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    # Default state is 'queued'.
+    assert job.state is state.JobState.queued
+
+    r = client.delete(f"/api/jobs/{job.id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "canceled"
+    assert body["finished_at"] is not None
 
 
 # --------------------------------------------------------------------------- #
