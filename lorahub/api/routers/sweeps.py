@@ -193,14 +193,20 @@ def get_sweep(sweep_id: str) -> dict[str, Any]:
 
     Returns a per-state count plus a list of job summaries so the future
     UI can render a grouped progress bar without paginating ``/api/jobs``.
-    A 404 is returned if no job carries the requested ``sweep_id``.
+    Falls back to the SweepStore so a sweep whose every child job has
+    been deleted/archived still surfaces with its plan and known
+    ``job_ids`` — useful for re-spawning lost variants. A 404 is returned
+    only when neither the registry nor the store has heard of it.
     """
     matched = [
         j
         for j in state.registry.list()
         if j.metadata is not None and j.metadata.get("sweep_id") == sweep_id
     ]
-    if not matched:
+
+    record = _load_sweep_record(sweep_id)
+
+    if not matched and record is None:
         raise HTTPException(status_code=404, detail="sweep not found")
 
     counts = {s.value: 0 for s in JobState}
@@ -208,7 +214,7 @@ def get_sweep(sweep_id: str) -> dict[str, Any]:
         counts[j.state.value] += 1
 
     matched.sort(key=lambda j: j.created_at)
-    return {
+    payload: dict[str, Any] = {
         "sweep_id": sweep_id,
         "total": len(matched),
         "queued": counts[JobState.queued.value],
@@ -220,21 +226,27 @@ def get_sweep(sweep_id: str) -> dict[str, Any]:
         "canceling": counts[JobState.canceling.value],
         "jobs": [j.to_summary() for j in matched],
     }
+    if record is not None:
+        # Surface the immutable plan (axes, name template, base config)
+        # alongside the live aggregate so the UI can show the recipe even
+        # when every child job is gone.
+        payload["plan"] = record.plan
+        payload["name"] = record.name
+        payload["name_prefix"] = record.name_prefix
+        payload["created_at"] = record.created_at.isoformat()
+        payload["known_job_ids"] = list(record.job_ids)
+    return payload
 
 
 @router.get("/sweeps")
 def list_sweeps() -> dict[str, Any]:
-    """List every sweep currently known in memory, with rolled-up counts.
+    """List every sweep, merging the in-registry view with persisted records.
 
-    We don't keep a separate sweep table — sweeps live as a tag on
-    ``JobRecord.metadata``. So the list is computed from a single scan over
-    the registry, grouping by ``sweep_id`` and aggregating state counts plus
-    activity timestamps. The returned ``name_prefix`` is the longest shared
-    head across the variants' ``output.name`` (which the sweep CLI/router
-    stamps as ``{base}-{i:03d}``), giving the UI a stable group label.
-
-    The list is sorted newest-first by ``latest_modified_at`` so freshly-touched
-    sweeps surface at the top of the UI.
+    Sweeps whose child jobs are still in the registry surface their live
+    counts; sweeps whose jobs have all been archived still surface from
+    the SweepStore so the user can rerun the plan or grep history. The
+    list is sorted newest-first by ``latest_modified_at`` (live activity)
+    then by ``created_at`` (sweep birth) for store-only entries.
     """
     groups: dict[str, list[JobRecord]] = defaultdict(list)
     for job in state.registry.list():
@@ -276,5 +288,53 @@ def list_sweeps() -> dict[str, Any]:
             }
         )
 
+    # Merge in store-only sweeps (every child job archived/deleted).
+    seen = {s["sweep_id"] for s in summaries}
+    for record in _list_sweep_records():
+        if record.id in seen:
+            continue
+        summaries.append(
+            {
+                "sweep_id": record.id,
+                "name_prefix": record.name_prefix or record.name,
+                "total": len(record.job_ids),
+                "queued": 0,
+                "running": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "canceled": 0,
+                "interrupted": 0,
+                "canceling": 0,
+                "earliest_created_at": record.created_at.isoformat(),
+                "latest_modified_at": record.created_at.isoformat(),
+                "archived": True,
+            }
+        )
+
     summaries.sort(key=lambda s: s["latest_modified_at"], reverse=True)
     return {"sweeps": summaries}
+
+
+def _load_sweep_record(sweep_id: str):  # type: ignore[no-untyped-def]
+    """Best-effort SweepStore lookup; tolerates store=None for tests."""
+    from lorahub.api import app as app_module  # noqa: PLC0415
+
+    store = getattr(app_module, "_sweep_store", None)
+    if store is None:
+        return None
+    try:
+        return store.get(sweep_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _list_sweep_records():  # type: ignore[no-untyped-def]
+    from lorahub.api import app as app_module  # noqa: PLC0415
+
+    store = getattr(app_module, "_sweep_store", None)
+    if store is None:
+        return []
+    try:
+        return store.list()
+    except Exception:  # noqa: BLE001
+        return []

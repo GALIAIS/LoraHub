@@ -102,7 +102,10 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # default in either direction; sweep children are always declined.
     try:
         _settings = _settings_store.load()
-        from lorahub.api.jobs_helpers import _attempt_auto_resume  # noqa: PLC0415
+        from lorahub.api.jobs_helpers import (  # noqa: PLC0415
+            _attempt_auto_resume,
+            _requeue_pending_jobs,
+        )
 
         resumed = _attempt_auto_resume(
             max_attempts=max(1, int(_settings.auto_resume_max_attempts)),
@@ -110,6 +113,11 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         )
         if resumed > 0:
             log.info("auto-resumed %d interrupted job(s) on startup", resumed)
+        # Queued jobs (never started before the previous shutdown) need
+        # their scheduler closure rebuilt; rows alone aren't enough.
+        requeued = _requeue_pending_jobs()
+        if requeued > 0:
+            log.info("re-enqueued %d pending job(s) on startup", requeued)
     except Exception:  # noqa: BLE001
         log.exception("auto-resume hook failed; continuing startup")
 

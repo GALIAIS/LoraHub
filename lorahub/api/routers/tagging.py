@@ -114,6 +114,28 @@ def _get(session_id: str) -> _TaggingSession:
     return session
 
 
+def _get_persisted_tagging(session_id: str) -> dict[str, Any] | None:
+    """Look up a tagging session in `sessions.sqlite`.
+
+    Both wd14/joytag tagging runs and the anima caption rewriter persist
+    into the same `tagging` table — the snapshot blob carries the kind
+    information for the caller to dispatch on.
+    """
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is None:
+            return None
+        row = store.get("tagging", session_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None:
+        return None
+    snap = row.get("snapshot")
+    return snap if isinstance(snap, dict) else None
+
+
 def _persist_tagging_snapshot(session: Any) -> None:
     """Best-effort flush of a session snapshot to the SessionStore."""
     try:
@@ -235,7 +257,40 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
 
 @router.get("/tagging/tag/{session_id}")
 def tag_dataset_status(session_id: str) -> dict[str, Any]:
-    return _get(session_id).snapshot()
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _get_persisted_tagging(session_id)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(status_code=404, detail="tagging session not found")
+
+
+@router.get("/tagging/tag")
+def list_tagging_sessions(limit: int = 50) -> dict[str, Any]:
+    """Recent tagging runs — live in-memory take precedence over persisted."""
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is not None:
+            for row in store.list_recent("tagging", limit=limit):
+                snap = row.get("snapshot")
+                if isinstance(snap, dict):
+                    out[snap["session_id"]] = snap
+    except Exception:  # noqa: BLE001
+        pass
+    with _sessions_lock:
+        for sid, sess in _sessions.items():
+            out[sid] = sess.snapshot()
+    sessions = sorted(
+        out.values(),
+        key=lambda s: s.get("started_at") or 0,
+        reverse=True,
+    )[:limit]
+    return {"sessions": sessions}
 
 
 # --------------------------------------------------------------------------- #
@@ -411,4 +466,11 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
 
 @router.get("/anima/caption/{session_id}")
 def anima_caption_status(session_id: str) -> dict[str, Any]:
-    return _get_anima(session_id).snapshot()
+    with _anima_sessions_lock:
+        session = _anima_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _get_persisted_tagging(session_id)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(status_code=404, detail="anima caption session not found")

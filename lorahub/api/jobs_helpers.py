@@ -736,6 +736,48 @@ def _attempt_auto_resume(*, max_attempts: int, global_default: bool) -> int:
     return resumed
 
 
+def _requeue_pending_jobs() -> int:
+    """Re-submit any persisted ``queued`` jobs into the scheduler.
+
+    A queued JobRecord that survives a restart still has its config
+    snapshot on disk but no scheduler task waiting for it. This helper
+    re-validates the snapshot and pushes a fresh worker closure into
+    ``sched.scheduler`` so the row eventually transitions out of
+    ``queued`` instead of sitting there forever.
+
+    Snapshot validation failures (stale schema) flip the row to
+    ``failed`` rather than silently abandon it — operators see a real
+    diagnostic on /jobs.
+    """
+    from lorahub.api import state as _state  # noqa: PLC0415
+
+    requeued = 0
+    for job in list(_state.registry.list()):
+        if job.state is not JobState.queued:
+            continue
+        try:
+            cfg = TrainingConfig.model_validate(job.config_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "requeue: queued job %s has stale snapshot — marking failed: %s",
+                job.id,
+                exc,
+            )
+            job.state = JobState.failed
+            job.error = f"stale config snapshot on restart: {exc}"
+            job.finished_at = datetime.now(UTC)
+            _state.registry.update(job)
+            continue
+        try:
+            _enqueue_launch(job, cfg)
+        except Exception:  # noqa: BLE001
+            log.exception("requeue: failed to re-enqueue queued job %s", job.id)
+            continue
+        requeued += 1
+        log.info("requeue: re-submitted queued job %s to scheduler", job.id)
+    return requeued
+
+
 def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[str]]:
     """Move `workspace` under `<parent>/_archive/<name>-<short_id>`.
 

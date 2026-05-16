@@ -123,13 +123,18 @@ class JobStore:
     def mark_orphans_interrupted(self) -> int:
         """Convert any non-terminal jobs to `interrupted`. Returns rows affected.
 
-        Run this once at server startup: any job that was running, queued, or
+        Run this once at server startup: any job that was running or
         canceling when the previous process died is no longer reachable —
         unless its PID is still alive on this host. Training subprocesses
         spawned via deepspeed launch can outlive the API process (especially
         when uvicorn is killed without graceful shutdown), so we probe each
         live job's PID with `os.kill(pid, 0)` first and skip the row if the
         kernel reports it's still running.
+
+        Queued jobs are intentionally left alone — they never started, so
+        they have no PID and no checkpoint to resume from. The lifespan
+        hook re-enqueues them into the scheduler so they pick up where
+        they were waiting (see ``requeue_pending`` below).
         """
         import os  # noqa: PLC0415
 
@@ -186,7 +191,6 @@ def _pid_alive(pid: int) -> bool:
 
 
 _LIVE_STATES: tuple[JobState, ...] = (
-    JobState.queued,
     JobState.running,
     JobState.canceling,
 )

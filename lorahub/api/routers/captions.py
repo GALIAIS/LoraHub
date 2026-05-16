@@ -114,6 +114,29 @@ def _get(session_id: str) -> _CaptionsSession:
     return session
 
 
+def _get_persisted(session_id: str) -> dict[str, Any] | None:
+    """Look up a captions session in the on-disk store.
+
+    The in-memory `_sessions` dict only carries runs from this process.
+    Older finished runs persisted in `sessions.sqlite` (via the try/finally
+    in `run()`) are recovered through this lookup so a server restart
+    doesn't make completed sessions vanish from the API.
+    """
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is None:
+            return None
+        row = store.get("captions", session_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None:
+        return None
+    snap = row.get("snapshot")
+    return snap if isinstance(snap, dict) else None
+
+
 def _persist_captions_snapshot(session: _CaptionsSession) -> None:
     """Best-effort flush of a captions snapshot to the SessionStore."""
     try:
@@ -200,4 +223,43 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
 
 @router.get("/captions/normalize/{session_id}")
 def normalize_captions_status(session_id: str) -> dict[str, Any]:
-    return _get(session_id).snapshot()
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _get_persisted(session_id)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(status_code=404, detail="captions session not found")
+
+
+@router.get("/captions/normalize")
+def list_captions_sessions(limit: int = 50) -> dict[str, Any]:
+    """Return recent captions sessions, merging in-memory + persisted rows.
+
+    Live sessions take precedence over their persisted snapshots so a
+    running session's progress doesn't get masked by an older finished
+    state with the same id (which can happen briefly between
+    `_persist_captions_snapshot` flushes).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is not None:
+            for row in store.list_recent("captions", limit=limit):
+                snap = row.get("snapshot")
+                if isinstance(snap, dict):
+                    out[snap["session_id"]] = snap
+    except Exception:  # noqa: BLE001
+        pass
+    with _sessions_lock:
+        for sid, sess in _sessions.items():
+            out[sid] = sess.snapshot()
+    sessions = sorted(
+        out.values(),
+        key=lambda s: s.get("started_at") or 0,
+        reverse=True,
+    )[:limit]
+    return {"sessions": sessions}

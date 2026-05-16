@@ -73,10 +73,12 @@ def test_mark_orphans_interrupted_only_touches_live_states(tmp_path: Path) -> No
     s.upsert(_job("failed", state.JobState.failed))
 
     affected = s.mark_orphans_interrupted()
-    assert affected == 3
+    # queued rows are intentionally untouched — they never had a PID and
+    # the lifespan re-enqueue hook resubmits them to the scheduler.
+    assert affected == 2
 
     states = {r.id: r.state for r in s.list()}
-    assert states["queued"] is state.JobState.interrupted
+    assert states["queued"] is state.JobState.queued
     assert states["running"] is state.JobState.interrupted
     assert states["canceling"] is state.JobState.interrupted
     assert states["succeeded"] is state.JobState.succeeded

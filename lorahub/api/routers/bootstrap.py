@@ -28,9 +28,43 @@ router = APIRouter(prefix="/api")
 @router.get("/backend/bootstrap/status")
 def bootstrap_status() -> dict[str, Any]:
     sess = app_module._bootstrap_session
-    if sess is None:
-        return {"status": "idle", "session_id": None, "events": []}
-    return sess.to_status_payload()
+    if sess is not None:
+        return sess.to_status_payload()
+    # Fallback: surface the most recent persisted bootstrap session so a
+    # restart doesn't make a finished install vanish from the UI. This
+    # only fires when no live session is in progress.
+    persisted = _latest_persisted_bootstrap()
+    if persisted is not None:
+        return persisted
+    return {"status": "idle", "session_id": None, "events": []}
+
+
+@router.get("/backend/bootstrap/sessions")
+def list_bootstrap_sessions(limit: int = 20) -> dict[str, Any]:
+    """Recent bootstrap sessions persisted in `sessions.sqlite`."""
+    try:
+        store = getattr(app_module, "_session_store", None)
+        if store is None:
+            return {"sessions": []}
+        rows = store.list_recent("bootstrap", limit=limit)
+    except Exception:  # noqa: BLE001
+        return {"sessions": []}
+    sessions = [r["snapshot"] for r in rows if isinstance(r.get("snapshot"), dict)]
+    return {"sessions": sessions}
+
+
+def _latest_persisted_bootstrap() -> dict[str, Any] | None:
+    try:
+        store = getattr(app_module, "_session_store", None)
+        if store is None:
+            return None
+        rows = store.list_recent("bootstrap", limit=1)
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    snap = rows[0].get("snapshot")
+    return snap if isinstance(snap, dict) else None
 
 
 @router.post("/backend/bootstrap", status_code=202)
