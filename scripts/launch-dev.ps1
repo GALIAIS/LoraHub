@@ -14,13 +14,13 @@
   Default 18765.
 
 .PARAMETER WebPort
-  Default 5173.
+  Default 6006.
 #>
 
 [CmdletBinding()]
 param(
   [int]$ApiPort = 18765,
-  [int]$WebPort = 5173
+  [int]$WebPort = 6006
 )
 
 $ErrorActionPreference = 'Stop'

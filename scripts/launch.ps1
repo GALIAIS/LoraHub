@@ -22,7 +22,7 @@
   TCP port for the API. Default 18765.
 
 .PARAMETER WebPort
-  TCP port for Vite. Default 5173.
+  TCP port for Vite. Default 6006.
 
 .PARAMETER Reload
   Pass --reload to uvicorn so backend code changes trigger a restart.
@@ -43,7 +43,7 @@ param(
   [string]$Mode = 'dev',
   [string]$ApiHost = '127.0.0.1',
   [int]$ApiPort = 18765,
-  [int]$WebPort = 5173,
+  [int]$WebPort = 6006,
   [switch]$Reload,
   [switch]$NoInstall
 )

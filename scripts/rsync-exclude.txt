@@ -1,0 +1,33 @@
+.venv/
+.venv-*/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tsbuildinfo
+*.tsbuildinfo
+web/dist/
+# Anchor these to the repo root so we don't accidentally exclude
+# packages with the same basename (lorahub/core/models, etc.).
+/runs/
+/sd-scripts/
+/diffusion-pipe/
+/models/
+/datasets/
+.claude/worktrees/
+.claude/projects/
+.git/
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+*.pth
+.DS_Store
+Thumbs.db
+.env
+.env.local
+.idea/
+.vscode/

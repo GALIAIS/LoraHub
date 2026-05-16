@@ -13,7 +13,11 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 6006,
+    // Accept any Host header so the Vite dev server is reachable through
+    // SSH/k8s/cloud port-forwards (e.g. damodel maps 6006 -> external 48357,
+    // and vite would otherwise 403 the external hostname).
+    allowedHosts: true,
     proxy: {
       "/api": {
         target: API_TARGET,
