@@ -23,7 +23,6 @@ Source: fancyfeast/joytag — Models.py (Apache-2.0).
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import torch
@@ -133,8 +132,7 @@ class MLPBlock(nn.Module):
         x = self.activation(x)
         if self.stochdepth is not None:
             x = self.stochdepth(x)
-        x = self.linear2(x)
-        return x
+        return self.linear2(x)
 
 
 class ViTBlock(nn.Module):
@@ -213,8 +211,7 @@ class CNNLayerNorm(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.transpose(1, 3)
         x = self.norm(x)
-        x = x.transpose(1, 3)
-        return x
+        return x.transpose(1, 3)
 
 
 class CNNStem(nn.Module):
