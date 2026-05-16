@@ -202,3 +202,142 @@ def test_activation_checkpointing_follows_recipe_flag() -> None:
     assert "activation_checkpointing = true" in on
     off = _main_toml(_recipe(gradient_checkpointing=False))
     assert "activation_checkpointing = false" in off
+
+
+# --------------------------------------------------------------------------- #
+# DiffusionPipeOptions: backwards compat snapshot + per-field coverage
+# --------------------------------------------------------------------------- #
+
+
+def test_default_options_preserve_legacy_general_fields() -> None:
+    """Without `backend.diffusion_pipe`, the toml retains the old hard-coded knobs."""
+    main = _main_toml(_recipe())
+    assert "pipeline_stages = 1" in main
+    assert "gradient_clipping = 1.0" in main
+    assert 'partition_method = "parameters"' in main
+    assert "caching_batch_size = 1" in main
+    assert "steps_per_print = 1" in main
+    # Optional knobs default to off and should not appear.
+    assert "blocks_to_swap" not in main
+    assert "compile = " not in main
+
+
+def test_blocks_to_swap_emitted_when_positive() -> None:
+    cfg = _recipe(backend={"type": "diffusion-pipe", "diffusion_pipe": {"blocks_to_swap": 20}})
+    main = _main_toml(cfg)
+    assert "blocks_to_swap = 20" in main
+
+
+def test_compile_flag_emitted_when_true() -> None:
+    cfg = _recipe(backend={"type": "diffusion-pipe", "diffusion_pipe": {"compile": True}})
+    main = _main_toml(cfg)
+    assert "compile = true" in main
+
+
+def test_partition_method_uniform_overrides_default() -> None:
+    cfg = _recipe(
+        backend={"type": "diffusion-pipe", "diffusion_pipe": {"partition_method": "uniform"}}
+    )
+    main = _main_toml(cfg)
+    assert 'partition_method = "uniform"' in main
+
+
+def test_eval_section_absent_by_default() -> None:
+    main = _main_toml(_recipe())
+    assert "eval_every_n_epochs" not in main
+    assert "eval_before_first_step" not in main
+
+
+def test_eval_section_emitted_when_every_n_epochs_set() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "eval_every_n_epochs": 2,
+                "eval_before_first_step": True,
+                "eval_micro_batch_size_per_gpu": 4,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "eval_every_n_epochs = 2" in main
+    assert "eval_before_first_step = true" in main
+    assert "eval_micro_batch_size_per_gpu = 4" in main
+
+
+def test_monitoring_section_disabled_by_default() -> None:
+    main = _main_toml(_recipe())
+    assert "[monitoring]" in main
+    assert "enable_wandb = false" in main
+    # Optional sub-keys absent.
+    assert "wandb_tracker_name" not in main
+    assert "wandb_run_name" not in main
+
+
+def test_monitoring_section_with_wandb_keys() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "enable_wandb": True,
+                "tracker_name": "lorahub_runs",
+                "run_name": "exp-42",
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "enable_wandb = true" in main
+    assert 'wandb_tracker_name = "lorahub_runs"' in main
+    assert 'wandb_run_name = "exp-42"' in main
+    # Secret intentionally not in the recipe.
+    assert "wandb_api_key" not in main
+
+
+# --------------------------------------------------------------------------- #
+# Dataset-level dp options
+# --------------------------------------------------------------------------- #
+
+
+def test_dataset_ar_defaults_match_legacy_values() -> None:
+    ds = _dataset_toml(_recipe())
+    assert "min_ar = 0.5" in ds
+    assert "max_ar = 2.0" in ds
+    assert "num_ar_buckets = 7" in ds
+
+
+def test_dataset_ar_overrides_via_options() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "min_ar": 0.25,
+                "max_ar": 4.0,
+                "num_ar_buckets": 9,
+            },
+        }
+    )
+    ds = _dataset_toml(cfg)
+    assert "min_ar = 0.25" in ds
+    assert "max_ar = 4.0" in ds
+    assert "num_ar_buckets = 9" in ds
+
+
+def test_dataset_cache_shuffle_and_skip_empty_caption_defaults() -> None:
+    ds = _dataset_toml(_recipe())
+    assert "cache_shuffle_num = 0" in ds
+    assert "skip_empty_caption = true" in ds
+
+
+def test_dataset_cache_shuffle_override() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "cache_shuffle_num": 10,
+                "skip_empty_caption": False,
+            },
+        }
+    )
+    ds = _dataset_toml(cfg)
+    assert "cache_shuffle_num = 10" in ds
+    assert "skip_empty_caption = false" in ds
