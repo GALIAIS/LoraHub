@@ -393,6 +393,51 @@ def _launch_job(
     return job.to_summary()
 
 
+def _relaunch_job_in_place(
+    job: JobRecord,
+    cfg: TrainingConfig,
+    *,
+    extra_argv: list[str] | None = None,
+    metadata_patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reset an existing JobRecord and re-enqueue it on its original workspace.
+
+    Used by both ``/rerun`` (no extra_argv) and ``/resume`` (resume argv +
+    cfg overrides applied upstream). The id, workspace, and event log are
+    preserved so the user keeps a single timeline per logical job; only
+    the runtime fields (state, started_at, finished_at, returncode, error,
+    pid, handle) are wiped.
+
+    ``metadata_patch`` is shallow-merged onto the existing metadata bag
+    so callers can stamp things like ``last_resumed_at`` / ``rerun_count``
+    without clobbering sweep tags or auto-resume counters.
+
+    The on-disk ``events.jsonl`` is left in place — the new run appends to
+    it. If you need a fresh log, archive the workspace first.
+    """
+    workspace = job.workspace
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    snapshot = cfg.model_dump(mode="json")
+    job.config_snapshot = snapshot
+    job.state = JobState.queued
+    job.started_at = None
+    job.finished_at = None
+    job.returncode = None
+    job.error = None
+    job.pid = None
+    job.handle = None
+    if metadata_patch:
+        merged = dict(job.metadata or {})
+        merged.update(metadata_patch)
+        job.metadata = merged
+    state.registry.update(job)
+    dump_config(cfg, workspace / "config.yaml")
+
+    _enqueue_launch(job, cfg, extra_argv=extra_argv)
+    return job.to_summary()
+
+
 def _enqueue_launch(
     job: JobRecord,
     cfg: TrainingConfig,
@@ -706,32 +751,25 @@ def _attempt_auto_resume(*, max_attempts: int, global_default: bool) -> int:
             log.info("auto-resume: skipping job %s — %s", job.id, exc)
             continue
         cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
-        base = job.workspace.resolve()
-        target = (base.parent / f"{base.name}-resume").resolve()
-        suffix = 1
-        while target.exists():
-            suffix += 1
-            target = (base.parent / f"{base.name}-resume-{suffix}").resolve()
         try:
-            _launch_job(
+            _relaunch_job_in_place(
+                job,
                 cfg,
-                target,
                 extra_argv=spec.extra_argv,
-                metadata={
-                    "resumed_from": job.id,
+                metadata_patch={
                     "auto_resume": True,
                     "auto_resume_attempts": attempts + 1,
+                    "last_resumed_at": datetime.now(UTC).isoformat(),
                 },
             )
         except Exception:  # noqa: BLE001
-            log.exception("auto-resume: failed to launch resume for job %s", job.id)
+            log.exception("auto-resume: failed to relaunch job %s", job.id)
             continue
         resumed += 1
         log.info(
-            "auto-resume: enqueued resume for job %s (attempt %d) at %s",
+            "auto-resume: re-enqueued job %s in place (attempt %d)",
             job.id,
             attempts + 1,
-            target,
         )
     return resumed
 

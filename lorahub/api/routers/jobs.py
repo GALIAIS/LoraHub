@@ -21,6 +21,7 @@ from lorahub.api.jobs_helpers import (
     _list_workspace_files,
     _media_type_for,
     _read_metrics,
+    _relaunch_job_in_place,
     _resolve_workspace_file,
     ResumeNotReady,
 )
@@ -81,15 +82,21 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/rerun", status_code=202)
 def rerun_job(job_id: str) -> dict[str, Any]:
-    """Start a fresh job from an existing job's config snapshot.
+    """Re-launch the existing job in place using its config snapshot.
 
-    The original job is left untouched. The new run gets its own workspace
-    sibling to the original (suffixed with a short timestamp so the two never
-    fight over the same `events.jsonl`).
+    Resets state to ``queued`` and re-submits the same JobRecord+workspace
+    to the scheduler. The id and event log are preserved so the user keeps
+    a single timeline per logical job. Refuses to clobber a job that's
+    still active (queued / running / canceling) — cancel first.
     """
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if job.state not in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job is {job.state.value}; cancel before rerunning",
+        )
 
     try:
         cfg = TrainingConfig.model_validate(job.config_snapshot)
@@ -98,10 +105,11 @@ def rerun_job(job_id: str) -> dict[str, Any]:
             status_code=422, detail=f"config snapshot is no longer valid: {exc}"
         ) from exc
 
-    base = job.workspace.resolve()
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    workspace = (base.parent / f"{base.name}-rerun-{stamp}").resolve()
-    return _launch_job(cfg, workspace)
+    return _relaunch_job_in_place(
+        job,
+        cfg,
+        metadata_patch={"last_rerun_at": datetime.now(UTC).isoformat()},
+    )
 
 
 @router.post("/jobs/{job_id}/resume", status_code=202)
@@ -114,8 +122,9 @@ def resume_job(job_id: str) -> dict[str, Any]:
     pinned to the original run's output dir so dp's checkpoint discovery
     finds the same `global_step*` folders.
 
-    Always creates a NEW JobRecord in a fresh sibling workspace and stamps
-    `metadata.resumed_from = <original_id>` so the lineage is queryable.
+    Re-launches the SAME JobRecord in place (id and workspace preserved)
+    so a job's history stays as one timeline regardless of how many times
+    it gets resumed.
 
     Errors:
       404 — original job id not found
@@ -148,18 +157,11 @@ def resume_job(job_id: str) -> dict[str, Any]:
 
     cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
 
-    base = original.workspace.resolve()
-    workspace = (base.parent / f"{base.name}-resume").resolve()
-    suffix = 1
-    while workspace.exists():
-        suffix += 1
-        workspace = (base.parent / f"{base.name}-resume-{suffix}").resolve()
-
-    return _launch_job(
+    return _relaunch_job_in_place(
+        original,
         cfg,
-        workspace,
         extra_argv=spec.extra_argv,
-        metadata={"resumed_from": original.id},
+        metadata_patch={"last_resumed_at": datetime.now(UTC).isoformat()},
     )
 
 

@@ -82,7 +82,7 @@ def test_auto_resume_disabled_by_default_skips_everything(
     assert stub_enqueue == []
 
 
-def test_auto_resume_enqueues_with_resumed_from_metadata(
+def test_auto_resume_relaunches_in_place_with_metadata(
     tmp_path: Path, stub_enqueue: list[dict[str, Any]]
 ) -> None:
     ws = tmp_path / "ws"
@@ -98,11 +98,17 @@ def test_auto_resume_enqueues_with_resumed_from_metadata(
     assert resumed == 1
     assert len(stub_enqueue) == 1
     rec = stub_enqueue[0]
-    assert rec["metadata"]["resumed_from"] == original.id
+    # Same id — in-place relaunch.
+    assert rec["job_id"] == original.id
     assert rec["metadata"]["auto_resume"] is True
     assert rec["metadata"]["auto_resume_attempts"] == 1
+    assert "last_resumed_at" in rec["metadata"]
     assert any(a.startswith("--resume=") for a in rec["extra_argv"])
     assert any(a.startswith("--network_weights=") for a in rec["extra_argv"])
+    # And the registry now sees the original record back in queued state.
+    refreshed = state.registry.get(original.id)
+    assert refreshed is not None
+    assert refreshed.state is state.JobState.queued
 
 
 def test_auto_resume_skips_jobs_without_artifacts(
