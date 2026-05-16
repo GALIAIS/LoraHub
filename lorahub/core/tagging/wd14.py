@@ -141,6 +141,11 @@ class WD14Tagger:
         probs = self._session.run(None, {self._input_name: arr})[0][0]
         return self._select_tags(image_path, probs)
 
+    def predict_tags(self, image_path: Path) -> list[str]:
+        """`BaseTagger` adapter — flat tag list with characters first."""
+        result = self.tag_image(image_path)
+        return [t.name for t in result.character] + [t.name for t in result.general]
+
     def tag_directory(
         self,
         directory: Path,
