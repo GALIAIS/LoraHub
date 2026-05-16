@@ -4,7 +4,7 @@
  * 通过 WebSocket /api/system/stream 每秒接收一次系统快照；WS 不可用时回退到
  * 5 秒一次的 REST 轮询。任务统计仍走 /api/jobs（3 秒轮询）。
  */
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
@@ -14,22 +14,32 @@ import {
   CheckCircle2,
   CircleX,
   Cpu,
+  Globe,
   HardDrive,
+  ListChecks,
   Loader2,
   MemoryStick,
+  Network,
   Pause,
   Server,
   Thermometer,
+  Wifi,
   Zap,
 } from "lucide-react"
 import {
   api,
   useSystemStream,
+  type DiskIoStats,
+  type GpuProcessInfo,
   type JobSummary,
+  type NetworkInterfaceStats,
+  type ProcessInfo,
+  type PublicIpInfo,
   type SystemBattery,
   type SystemDisk,
   type SystemGpu,
   type SystemSnapshot,
+  type TcpConnectionStats,
 } from "@/lib/api"
 import {
   Card,
@@ -123,13 +133,32 @@ export function DashboardPage() {
           <>
             <HostInfoCard snapshot={snapshot} />
             <CpuMemoryCard snapshot={snapshot} />
+            {snapshot.processes !== undefined && (
+              <TopProcessesCard processes={snapshot.processes ?? []} />
+            )}
             {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
             <GpuSection
               gpus={snapshot.gpus}
               hasNvidiaSmi={snapshot.has_nvidia_smi}
               system={snapshot.host.system}
             />
+            {snapshot.gpu_processes !== undefined && (
+              <GpuProcessesCard processes={snapshot.gpu_processes ?? []} />
+            )}
             <DiskSection disks={snapshot.disks} />
+            {snapshot.disk_io !== undefined && (
+              <DiskIoCard io={snapshot.disk_io ?? null} />
+            )}
+            {snapshot.network?.interfaces !== undefined && (
+              <NetworkInterfacesCard interfaces={snapshot.network?.interfaces ?? []} />
+            )}
+            {(snapshot.network?.tcp_connections !== undefined ||
+              snapshot.network?.public_ip !== undefined) && (
+              <NetworkSummaryCard
+                tcp={snapshot.network?.tcp_connections ?? null}
+                publicIp={snapshot.network?.public_ip ?? null}
+              />
+            )}
           </>
         ) : (
           <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
@@ -270,19 +299,29 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
         )
       : null
 
-  const cpuDescriptionParts: string[] = [
-    `${cpu.cores_logical} 逻辑核`,
-  ]
-  if (cpu.cores_physical) cpuDescriptionParts.push(`${cpu.cores_physical} 物理核`)
-  if (typeof cpu.frequency_mhz === "number") {
-    cpuDescriptionParts.push(`${formatFrequency(cpu.frequency_mhz)}`)
-  }
+  // CPU model goes in the description; "current / min-max" frequency, temp,
+  // load average follow as space-separated meta. Each piece is optional so
+  // older snapshots still render cleanly.
+  const coreText = (() => {
+    const parts: string[] = [`${cpu.cores_logical} 逻辑核`]
+    if (cpu.cores_physical) parts.unshift(`${cpu.cores_physical} 物理核`)
+    return parts.join(" / ")
+  })()
+  const description: string[] = [coreText]
+  const freqStr = formatFreqRange(
+    cpu.frequency_mhz ?? null,
+    cpu.frequency_min_mhz ?? null,
+    cpu.frequency_max_mhz ?? null,
+  )
+  if (freqStr) description.push(freqStr)
   if (typeof cpu.cpu_temperature_c === "number") {
-    cpuDescriptionParts.push(`温度 ${cpu.cpu_temperature_c.toFixed(0)}°C`)
+    description.push(`温度 ${cpu.cpu_temperature_c.toFixed(0)}°C`)
   }
   if (cpu.load_average) {
-    cpuDescriptionParts.push(`负载 ${cpu.load_average.map((n) => n.toFixed(2)).join(" / ")}`)
+    description.push(`负载 ${cpu.load_average.map((n) => n.toFixed(2)).join(" / ")}`)
   }
+
+  const perCoreFreq = cpu.frequency_per_core_mhz ?? []
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -292,8 +331,13 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
             <Cpu className="size-4 text-muted-foreground" />
             CPU
           </CardTitle>
-          <CardDescription className="text-xs">
-            {cpuDescriptionParts.join(" · ")}
+          <CardDescription className="text-xs space-y-0.5">
+            {cpu.model ? (
+              <div className="font-mono text-foreground/80 truncate" title={cpu.model}>
+                {cpu.model}
+              </div>
+            ) : null}
+            <div>{description.join(" · ")}</div>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -313,7 +357,12 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
               <div className="mt-2 max-h-48 overflow-y-auto rounded-[4px] border border-border/40 bg-muted/20 p-2">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {cpu.per_core_percent.map((p, i) => (
-                    <CoreBar key={i} index={i} percent={p} />
+                    <CoreBar
+                      key={i}
+                      index={i}
+                      percent={p}
+                      freqMhz={perCoreFreq[i] ?? null}
+                    />
                   ))}
                 </div>
               </div>
@@ -385,7 +434,15 @@ function UsageBar({
   )
 }
 
-function CoreBar({ index, percent }: { index: number; percent: number }) {
+function CoreBar({
+  index,
+  percent,
+  freqMhz,
+}: {
+  index: number
+  percent: number
+  freqMhz?: number | null
+}) {
   const tone = toneForPercent(percent)
   return (
     <div className="flex items-center gap-2 text-[11px]">
@@ -397,6 +454,14 @@ function CoreBar({ index, percent }: { index: number; percent: number }) {
         />
       </div>
       <span className="w-10 text-right font-mono tabular-nums">{percent.toFixed(0)}%</span>
+      {typeof freqMhz === "number" && freqMhz > 0 && (
+        <span
+          className="w-16 text-right font-mono tabular-nums text-muted-foreground/70"
+          title="当前频率"
+        >
+          {formatFrequency(freqMhz)}
+        </span>
+      )}
     </div>
   )
 }
@@ -537,6 +602,43 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
             }
           />
         </dl>
+        {(gpu.pcie_gen_current != null ||
+          gpu.pcie_width_current != null ||
+          gpu.pcie_gen_max != null ||
+          gpu.pcie_width_max != null ||
+          gpu.sm_clock_mhz != null ||
+          gpu.sm_clock_max_mhz != null ||
+          gpu.mem_clock_mhz != null ||
+          gpu.mem_clock_max_mhz != null) && (
+          <>
+            <Separator />
+            <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+              <Metric
+                label="PCIe 链路"
+                value={formatPcieLink(
+                  gpu.pcie_gen_current ?? null,
+                  gpu.pcie_width_current ?? null,
+                  gpu.pcie_gen_max ?? null,
+                  gpu.pcie_width_max ?? null,
+                )}
+              />
+              <Metric
+                label="SM 时钟"
+                value={formatClockPair(
+                  gpu.sm_clock_mhz ?? null,
+                  gpu.sm_clock_max_mhz ?? null,
+                )}
+              />
+              <Metric
+                label="Mem 时钟"
+                value={formatClockPair(
+                  gpu.mem_clock_mhz ?? null,
+                  gpu.mem_clock_max_mhz ?? null,
+                )}
+              />
+            </dl>
+          </>
+        )}
         <span className="sr-only">
           {utilTone.text}
           {memTone.text}
@@ -711,6 +813,432 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
   )
 }
 
+// =================================================== Top 进程 ==============
+
+function TopProcessesCard({ processes }: { processes: ProcessInfo[] }) {
+  // Backend already sorts by cpu_percent desc; we still slice defensively
+  // so a runaway list can't blow the layout.
+  const rows = processes.slice(0, 10)
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <ListChecks className="size-4 text-muted-foreground" />
+          Top 进程
+        </CardTitle>
+        <CardDescription className="text-xs">
+          按 CPU 占用排序的前 {rows.length || 0} 个进程。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+            无可显示的进程
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[80px]">PID</TableHead>
+                <TableHead>名称</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[8ch]">CPU%</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[8ch]">内存%</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[10ch]">RSS</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((p) => (
+                <TableRow key={p.pid}>
+                  <TableCell className="font-mono text-xs tabular-nums">{p.pid}</TableCell>
+                  <TableCell className="font-mono text-xs truncate max-w-md" title={p.name}>
+                    {p.name || "—"}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-xs">
+                    {p.cpu_percent.toFixed(1)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-xs">
+                    {p.memory_percent.toFixed(1)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                    {fmtBytes(p.memory_rss_bytes)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// =================================================== GPU 进程 ===============
+
+function GpuProcessesCard({ processes }: { processes: GpuProcessInfo[] }) {
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Zap className="size-4 text-muted-foreground" />
+          GPU 进程
+        </CardTitle>
+        <CardDescription className="text-xs">
+          nvidia-smi 当前观察到的进程列表。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {processes.length === 0 ? (
+          <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+            当前无 GPU 计算进程
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[60px]">GPU</TableHead>
+                <TableHead className="w-[80px]">PID</TableHead>
+                <TableHead>进程</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[10ch]">显存 MiB</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {processes.map((p) => (
+                <TableRow key={`${p.gpu_index}-${p.pid}`}>
+                  <TableCell className="font-mono text-xs tabular-nums">
+                    #{p.gpu_index}
+                    <Badge
+                      variant="outline"
+                      className="ml-2 rounded-[2px] uppercase text-[9px] tracking-[0.1em]"
+                    >
+                      {p.type}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">{p.pid}</TableCell>
+                  <TableCell className="font-mono text-xs truncate max-w-md" title={p.process_name}>
+                    {p.process_name || "—"}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums text-xs">
+                    {p.used_memory_mib.toFixed(0)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// =================================================== 磁盘 IO ================
+
+function DiskIoCard({ io }: { io: DiskIoStats | null }) {
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <HardDrive className="size-4 text-muted-foreground" />
+              磁盘 IO
+            </CardTitle>
+            <CardDescription className="text-xs">
+              {io
+                ? "聚合速率 + 各设备明细。"
+                : "未读取到 IO 计数器（容器可能屏蔽）。"}
+            </CardDescription>
+          </div>
+          {io && (
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="rounded-[2px] gap-1 font-mono">
+                ↓ {formatRate(io.read_bytes_per_sec)}
+              </Badge>
+              <Badge variant="outline" className="rounded-[2px] gap-1 font-mono">
+                ↑ {formatRate(io.write_bytes_per_sec)}
+              </Badge>
+            </div>
+          )}
+        </div>
+      </CardHeader>
+      {io && (
+        <CardContent>
+          {io.per_device.length === 0 ? (
+            <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+              当前未观察到设备级 IO
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>设备</TableHead>
+                  <TableHead className="text-right whitespace-nowrap min-w-[10ch]">读</TableHead>
+                  <TableHead className="text-right whitespace-nowrap min-w-[10ch]">写</TableHead>
+                  <TableHead className="text-right whitespace-nowrap min-w-[10ch]">读 ops</TableHead>
+                  <TableHead className="text-right whitespace-nowrap min-w-[10ch]">写 ops</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {io.per_device.map((d) => (
+                  <TableRow key={d.device}>
+                    <TableCell className="font-mono text-xs">{d.device}</TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                      {formatRate(d.read_bytes_per_sec)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                      {formatRate(d.write_bytes_per_sec)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs">
+                      {d.read_ops_per_sec.toFixed(1)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs">
+                      {d.write_ops_per_sec.toFixed(1)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// =================================================== 网络 NIC ===============
+
+function NetworkInterfacesCard({ interfaces }: { interfaces: NetworkInterfaceStats[] }) {
+  const [showAll, setShowAll] = useState(false)
+  // Loopback / virtual NICs add noise on most workstations; hide them by
+  // default and let the user opt in with the toggle. We keep them in the
+  // dataset so kind counts in the badge are accurate.
+  const filtered = useMemo(() => {
+    if (showAll) return interfaces
+    return interfaces.filter((nic) => nic.kind !== "loopback" && nic.kind !== "virtual")
+  }, [interfaces, showAll])
+  const hiddenCount = interfaces.length - filtered.length
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Network className="size-4 text-muted-foreground" />
+              网络接口
+            </CardTitle>
+            <CardDescription className="text-xs">
+              {showAll
+                ? `共 ${interfaces.length} 张网卡（含回环 / 虚拟）。`
+                : `显示 ${filtered.length} 张${
+                    hiddenCount > 0 ? `（已隐藏 ${hiddenCount} 张回环 / 虚拟）` : ""
+                  }`}
+            </CardDescription>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="rounded-[2px] border border-border/80 bg-background/78 px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] text-foreground transition-colors hover:bg-muted"
+          >
+            {showAll ? "仅物理" : "显示全部"}
+          </button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {filtered.length === 0 ? (
+          <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+            当前没有可显示的接口
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>类型</TableHead>
+                <TableHead>IPv4</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[8ch]">链路</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[10ch]">入</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[10ch]">出</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((nic) => {
+                const ipv4 = nic.addresses.find(
+                  (a) => a.family === "AF_INET" || a.family === "ipv4" || a.family === "IPv4",
+                )
+                return (
+                  <TableRow key={nic.name} className={cn(!nic.is_up && "opacity-60")}>
+                    <TableCell className="font-mono text-xs">{nic.name}</TableCell>
+                    <TableCell>
+                      <NicKindBadge kind={nic.kind} isUp={nic.is_up} />
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {ipv4 ? ipv4.address : "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                      {typeof nic.speed_mbps === "number" && nic.speed_mbps > 0
+                        ? `${nic.speed_mbps} Mb/s`
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                      {formatRate(nic.bytes_recv_per_sec)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                      {formatRate(nic.bytes_sent_per_sec)}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function NicKindBadge({
+  kind,
+  isUp,
+}: {
+  kind: NetworkInterfaceStats["kind"]
+  isUp: boolean
+}) {
+  // physical=primary, wireless=secondary, virtual=outline, loopback=ghost.
+  const variant = ({
+    physical: "default",
+    wireless: "secondary",
+    virtual: "outline",
+    loopback: "ghost",
+  } as const)[kind] ?? "outline"
+  const label = {
+    physical: "Physical",
+    wireless: "Wireless",
+    virtual: "Virtual",
+    loopback: "Loopback",
+  }[kind] ?? kind
+  return (
+    <div className="flex items-center gap-1.5">
+      <Badge variant={variant} className="rounded-[2px] gap-1">
+        {kind === "wireless" ? <Wifi className="size-3" /> : null}
+        {label}
+      </Badge>
+      {!isUp && (
+        <Badge variant="outline" className="rounded-[2px] text-[9px]">
+          DOWN
+        </Badge>
+      )}
+    </div>
+  )
+}
+
+// =================================================== TCP / 公网 IP =========
+
+function NetworkSummaryCard({
+  tcp,
+  publicIp,
+}: {
+  tcp: TcpConnectionStats | null
+  publicIp: PublicIpInfo | null
+}) {
+  return (
+    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Globe className="size-4 text-muted-foreground" />
+          网络概览
+        </CardTitle>
+        <CardDescription className="text-xs">
+          公网 IP 与 TCP 连接状态聚合。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              公网 IP
+            </div>
+            {publicIp ? (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-sm">
+                  {publicIp.ip ?? "—"}
+                </span>
+                <PublicIpSourceBadge source={publicIp.source} />
+                {publicIp.fetched_at > 0 && (
+                  <span
+                    className="text-[10px] text-muted-foreground tabular-nums"
+                    title={new Date(publicIp.fetched_at * 1000).toLocaleString()}
+                  >
+                    {new Date(publicIp.fetched_at * 1000).toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">—</div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              TCP 连接
+            </div>
+            {tcp ? (
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 text-xs font-mono tabular-nums">
+                <TcpStat label="已建立" value={tcp.established} />
+                <TcpStat label="监听" value={tcp.listen} />
+                <TcpStat label="TIME_WAIT" value={tcp.time_wait} />
+                <TcpStat label="CLOSE_WAIT" value={tcp.close_wait} />
+                <TcpStat label="其它" value={tcp.other} />
+                <TcpStat label="合计" value={tcp.total} highlight />
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">—</div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function TcpStat({
+  label,
+  value,
+  highlight,
+}: {
+  label: string
+  value: number
+  highlight?: boolean
+}) {
+  return (
+    <div>
+      <div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "tabular-nums",
+          highlight ? "text-foreground font-semibold" : "text-foreground/85",
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function PublicIpSourceBadge({ source }: { source: PublicIpInfo["source"] }) {
+  const map: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
+    "ip.sb": { label: "ip.sb", variant: "secondary" },
+    "ipinfo.io": { label: "ipinfo.io", variant: "secondary" },
+    cached: { label: "cached", variant: "outline" },
+    unreachable: { label: "unreachable", variant: "destructive" },
+  }
+  const meta = map[source] ?? { label: String(source), variant: "outline" as const }
+  return (
+    <Badge variant={meta.variant} className="rounded-[2px] gap-1 font-mono lowercase">
+      {meta.label}
+    </Badge>
+  )
+}
+
 // =================================================== 最近任务 ===============
 
 function RecentJobsCard({ jobs }: { jobs: JobSummary[] }) {
@@ -805,6 +1333,31 @@ export function StateBadge({ state }: { state: string }) {
 
 // =================================================== utils =================
 
+function formatPcieLink(
+  gen: number | null,
+  width: number | null,
+  genMax: number | null,
+  widthMax: number | null,
+): string {
+  const cur = gen != null && width != null ? `Gen ${gen} ×${width}` : "—"
+  const max =
+    genMax != null && widthMax != null ? `max Gen ${genMax} ×${widthMax}` : null
+  return max ? `${cur} / ${max}` : cur
+}
+
+function formatClockPair(current: number | null, max: number | null): string {
+  const cur =
+    typeof current === "number" && current > 0 ? `${current.toFixed(0)} MHz` : "—"
+  const mx = typeof max === "number" && max > 0 ? ` / max ${max.toFixed(0)} MHz` : ""
+  return `${cur}${mx}`
+}
+
+function formatRate(bps: number): string {
+  // Network/disk per-second rate. fmtBytes already does adaptive units.
+  if (!Number.isFinite(bps) || bps <= 0) return "0 B/s"
+  return `${fmtBytes(bps)}/s`
+}
+
 function fmtBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B"
   const units = ["B", "KB", "MB", "GB", "TB", "PB"]
@@ -821,6 +1374,34 @@ function formatFrequency(mhz: number): string {
   if (!Number.isFinite(mhz) || mhz <= 0) return "—"
   if (mhz >= 1000) return `${(mhz / 1000).toFixed(2)} GHz`
   return `${mhz.toFixed(0)} MHz`
+}
+
+/**
+ * Format CPU frequency as "current · min-max GHz" when range is known,
+ * else fall back to just the current value. Returns null when there is
+ * nothing meaningful to show so the caller can hide the line entirely.
+ */
+function formatFreqRange(
+  current: number | null,
+  min: number | null,
+  max: number | null,
+): string | null {
+  const hasCurrent = typeof current === "number" && current > 0
+  const hasMin = typeof min === "number" && min > 0
+  const hasMax = typeof max === "number" && max > 0
+  if (!hasCurrent && !hasMin && !hasMax) return null
+  const fmt = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)}` : `${v.toFixed(0)}`)
+  const unit = (current ?? max ?? min ?? 0) >= 1000 ? "GHz" : "MHz"
+  if (hasCurrent && (hasMin || hasMax)) {
+    const lo = hasMin ? fmt(min) : "—"
+    const hi = hasMax ? fmt(max) : "—"
+    return `${fmt(current)} ${unit} · ${lo}-${hi}`
+  }
+  if (hasCurrent) return `${formatFrequency(current)}`
+  // Range only.
+  const lo = hasMin ? fmt(min) : "—"
+  const hi = hasMax ? fmt(max) : "—"
+  return `${lo}-${hi} ${unit}`
 }
 
 function formatSecs(secs: number): string {
