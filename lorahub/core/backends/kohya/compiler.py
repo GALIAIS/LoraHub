@@ -55,6 +55,7 @@ def compile_recipe(
     _emit_optimizer_args(recipe, args)
     _emit_schedule_args(recipe, args)
     _emit_precision_args(recipe, args)
+    _emit_loss_args(recipe, args)
     _emit_output_args(recipe, workspace, args)
     _emit_sampling_args(recipe, workspace, args)
     _emit_resume_args(recipe, args)
@@ -194,6 +195,19 @@ def _emit_optimizer_args(recipe: RecipeConfig, args: list[str]) -> None:
         f"--lr_warmup_steps={o.warmup_steps}",
     ]
 
+    # kohya's `--optimizer_args` takes a sequence of `key=value` tokens after
+    # the flag. We always render betas / weight_decay / eps so the YAML stays
+    # the source of truth, then merge any free-form `optimizer_args` items
+    # (user keys win over the dedicated fields when names collide).
+    extra: dict[str, str] = {
+        "betas": f"{o.betas[0]},{o.betas[1]}",
+        "weight_decay": str(o.weight_decay),
+        "eps": str(o.eps),
+    }
+    extra.update(o.optimizer_args)
+    args.append("--optimizer_args")
+    args += [f"{k}={v}" for k, v in extra.items()]
+
 
 def _emit_schedule_args(recipe: RecipeConfig, args: list[str]) -> None:
     s = recipe.schedule
@@ -213,6 +227,34 @@ def _emit_precision_args(recipe: RecipeConfig, args: list[str]) -> None:
         args += ["--gradient_checkpointing"]
     if recipe.cache_latents:
         args += ["--cache_latents"]
+
+
+def _emit_loss_args(recipe: RecipeConfig, args: list[str]) -> None:
+    """Emit loss-shaping flags (--min_snr_gamma, --noise_offset, etc).
+
+    None-valued / zero-valued / sd-scripts-default-valued fields are omitted
+    so the user's recipe stays additive over the kohya defaults: writing
+    `loss: {}` keeps every behaviour kohya ships with.
+    """
+    loss = recipe.loss
+    if loss.min_snr_gamma is not None:
+        args.append(f"--min_snr_gamma={loss.min_snr_gamma}")
+    if loss.noise_offset > 0:
+        args.append(f"--noise_offset={loss.noise_offset}")
+    if loss.ip_noise_gamma is not None:
+        args.append(f"--ip_noise_gamma={loss.ip_noise_gamma}")
+    if loss.prior_loss_weight != 1.0:
+        args.append(f"--prior_loss_weight={loss.prior_loss_weight}")
+    if loss.loss_type != "l2":
+        args.append(f"--loss_type={loss.loss_type}")
+    if loss.debiased_estimation:
+        args.append("--debiased_estimation_loss")
+    if loss.masked_loss:
+        args.append("--masked_loss")
+    if loss.scale_v_pred_loss_like_noise_pred:
+        args.append("--scale_v_pred_loss_like_noise_pred")
+    if loss.v_parameterization:
+        args.append("--v_parameterization")
 
 
 def _emit_output_args(recipe: RecipeConfig, workspace: Path, args: list[str]) -> None:

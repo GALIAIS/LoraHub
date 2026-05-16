@@ -217,3 +217,87 @@ def test_validation_split_too_large_rejected() -> None:
                 "dataset": {"source": "/d", "val_split": 0.6},
             }
         )
+
+
+def test_loss_default_emits_no_flags() -> None:
+    """A bare LossConfig() is identity — sd-scripts keeps its own defaults."""
+    args = _argv(_recipe())
+    for flag in (
+        "--min_snr_gamma",
+        "--noise_offset",
+        "--ip_noise_gamma",
+        "--prior_loss_weight",
+        "--loss_type",
+        "--debiased_estimation_loss",
+        "--masked_loss",
+        "--scale_v_pred_loss_like_noise_pred",
+        "--v_parameterization",
+    ):
+        assert not any(a.startswith(flag) for a in args), flag
+
+
+def test_loss_min_snr_gamma_only() -> None:
+    cfg = _recipe(loss={"min_snr_gamma": 5})
+    args = _argv(cfg)
+    assert "--min_snr_gamma=5.0" in args
+    # noise_offset stayed default → still absent
+    assert not any(a.startswith("--noise_offset") for a in args)
+
+
+def test_loss_full_kitchen_sink() -> None:
+    cfg = _recipe(
+        loss={
+            "min_snr_gamma": 5,
+            "noise_offset": 0.05,
+            "ip_noise_gamma": 0.1,
+            "prior_loss_weight": 0.5,
+            "loss_type": "huber",
+            "debiased_estimation": True,
+            "masked_loss": True,
+            "scale_v_pred_loss_like_noise_pred": True,
+            "v_parameterization": True,
+        }
+    )
+    args = _argv(cfg)
+    assert "--min_snr_gamma=5.0" in args
+    assert "--noise_offset=0.05" in args
+    assert "--ip_noise_gamma=0.1" in args
+    assert "--prior_loss_weight=0.5" in args
+    assert "--loss_type=huber" in args
+    assert "--debiased_estimation_loss" in args
+    assert "--masked_loss" in args
+    assert "--scale_v_pred_loss_like_noise_pred" in args
+    assert "--v_parameterization" in args
+
+
+def test_loss_prior_weight_default_one_omitted() -> None:
+    """prior_loss_weight=1.0 matches sd-scripts default → omit to keep argv tight."""
+    args = _argv(_recipe(loss={"prior_loss_weight": 1.0}))
+    assert not any(a.startswith("--prior_loss_weight") for a in args)
+
+
+def test_optimizer_args_emit_betas_weight_decay_eps() -> None:
+    args = _argv(_recipe(optimizer={"betas": [0.95, 0.999], "weight_decay": 0.1, "eps": 1e-7}))
+    idx = args.index("--optimizer_args")
+    tail = args[idx + 1 :]
+    assert "betas=0.95,0.999" in tail
+    assert "weight_decay=0.1" in tail
+    assert "eps=1e-07" in tail
+
+
+def test_optimizer_args_user_overrides_dedicated_fields() -> None:
+    """Free-form `optimizer_args` keys win over the dedicated betas/eps."""
+    args = _argv(
+        _recipe(optimizer={"optimizer_args": {"betas": "0.5,0.5", "use_bias_correction": "True"}})
+    )
+    idx = args.index("--optimizer_args")
+    tail = args[idx + 1 :]
+    # Both the dedicated default and the override are present; the override
+    # comes after, and kohya's last-wins semantics promote it. We allow either
+    # ordering as long as the override sits after the default.
+    assert "betas=0.5,0.5" in tail
+    assert "use_bias_correction=True" in tail
+    default_idx = tail.index("betas=0.9,0.999") if "betas=0.9,0.999" in tail else -1
+    user_idx = tail.index("betas=0.5,0.5")
+    if default_idx != -1:
+        assert default_idx < user_idx

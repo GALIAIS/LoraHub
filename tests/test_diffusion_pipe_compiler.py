@@ -202,3 +202,20 @@ def test_activation_checkpointing_follows_recipe_flag() -> None:
     assert "activation_checkpointing = true" in on
     off = _main_toml(_recipe(gradient_checkpointing=False))
     assert "activation_checkpointing = false" in off
+
+
+def test_optimizer_betas_weight_decay_eps_render_to_toml() -> None:
+    main = _main_toml(
+        _recipe(optimizer={"betas": [0.95, 0.98], "weight_decay": 0.05, "eps": 1e-7})
+    )
+    assert "betas = [0.95, 0.98]" in main
+    assert "weight_decay = 0.05" in main
+    assert "eps = 1e-07" in main or "eps = 0.0000001" in main
+
+
+def test_optimizer_args_extra_keys_render_to_toml() -> None:
+    main = _main_toml(
+        _recipe(optimizer={"optimizer_args": {"foreach": "true", "amsgrad": "false"}})
+    )
+    assert "foreach =" in main
+    assert "amsgrad =" in main

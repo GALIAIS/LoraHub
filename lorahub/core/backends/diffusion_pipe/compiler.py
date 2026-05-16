@@ -175,14 +175,23 @@ def _adapter_section(recipe: RecipeConfig) -> list[str]:
 def _optimizer_section(recipe: RecipeConfig) -> list[str]:
     o = recipe.optimizer
     opt_type = _OPTIMIZER_MAP.get(o.type.lower(), o.type)
-    return [
+    parts = [
         "[optimizer]",
         f"type = {_toml_str(opt_type)}",
         f"lr = {o.lr.unet}",
-        "betas = [0.9, 0.99]",
-        "weight_decay = 0.01",
-        "eps = 1e-8",
+        f"betas = [{o.betas[0]}, {o.betas[1]}]",
+        f"weight_decay = {o.weight_decay}",
+        f"eps = {o.eps}",
     ]
+    # Free-form optimizer_args -> toml lines. Keys win over the dedicated
+    # fields when names collide (matches the kohya backend's behaviour).
+    seen = {"type", "lr", "betas", "weight_decay", "eps"}
+    for key, value in o.optimizer_args.items():
+        if key in seen:
+            # Replace the prior entry instead of appending a duplicate.
+            parts = [p for p in parts if not p.startswith(f"{key} =")]
+        parts.append(f"{key} = {_toml_str(value)}")
+    return parts
 
 
 def _scheduler_for(name: str) -> str:
