@@ -17,7 +17,7 @@ from lorahub.api.helpers import (
     _recipe_path,
     _recipes_dir,
 )
-from lorahub.api.recipe_templates import TEMPLATES
+from lorahub.api import recipe_templates as recipe_templates_module
 from lorahub.core.config.loader import dump_recipe, load_recipe
 from lorahub.core.config.schema import RecipeConfig
 
@@ -169,8 +169,13 @@ def save_recipe(req: SaveRecipeRequest) -> dict[str, Any]:
 
 @router.get("/recipes/templates")
 def list_recipe_templates() -> dict[str, Any]:
-    """Return the built-in recipe templates the UI can spawn from."""
-    return {"templates": TEMPLATES}
+    """Return the built-in recipe templates the UI can spawn from.
+
+    Re-reads the YAML directory on every call so newly dropped or edited
+    files show up without restarting the server. Cost is trivial: 4-ish
+    small files parsed once per request.
+    """
+    return {"templates": recipe_templates_module.load_templates()}
 
 
 @router.post("/recipes/import", status_code=201)
