@@ -98,6 +98,19 @@ class SubprocessRunner:
                 creationflags=creationflags,
                 start_new_session=start_new_session,
             )
+            # Log the actual argv we spawned so post-mortems can answer
+            # "which interpreter ran my job?" without re-running the job.
+            self._safe_emit(
+                TrainingEvent(
+                    type=EventType.log,
+                    payload={
+                        "level": "info",
+                        "source": "runner",
+                        "message": "spawn: " + " ".join(self._argv),
+                    },
+                    job_id=self._job_id,
+                )
+            )
             self._spawn_pumps()
             self._spawn_reaper()
 
