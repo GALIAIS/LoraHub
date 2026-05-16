@@ -114,6 +114,18 @@ def _get(session_id: str) -> _TaggingSession:
     return session
 
 
+def _persist_tagging_snapshot(session: Any) -> None:
+    """Best-effort flush of a session snapshot to the SessionStore."""
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is not None:
+            store.upsert_tagging(session.snapshot())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Indirection so tests can monkeypatch the tagger class without touching the
 # concrete implementations. Returns a `BaseTagger`-conformant instance so the
 # session loop is backend-agnostic.
@@ -212,6 +224,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"tagging failed: {exc}")
+        finally:
+            _persist_tagging_snapshot(session)
 
     threading.Thread(
         target=run, name=f"tag-{req.tagger}-{session.session_id[:8]}", daemon=True
@@ -386,6 +400,8 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"anima caption failed: {exc}")
+        finally:
+            _persist_tagging_snapshot(session)
 
     threading.Thread(
         target=run, name=f"anima-{session.session_id[:8]}", daemon=True

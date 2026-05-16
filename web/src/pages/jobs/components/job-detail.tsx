@@ -1,6 +1,16 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { api, useJobStream } from "@/lib/api"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -9,6 +19,7 @@ import { cn } from "@/lib/utils"
 
 import { StateBadge } from "../../dashboard"
 import { TERMINAL_STATES } from "../utils"
+import { expectedTotalSteps } from "../utils"
 import { OverviewTab } from "./overview-tab"
 import { EventsTab } from "./events-tab"
 import { MetricsTab } from "./metrics-tab"
@@ -38,6 +49,30 @@ export function JobDetail({
   const stream = useJobStream(jobId)
   const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive">(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [archiveOpen, setArchiveOpen] = useState(false)
+
+  // Fall back to a config-derived total step count when the backend hasn't
+  // yet emitted a `total_steps` payload. We need the dataset image count,
+  // which we lazily fetch via /datasets/scan against `config.dataset.source`.
+  const datasetSource = useMemo(() => {
+    const cfg = (job.data as { config_snapshot?: Record<string, unknown> } | undefined)
+      ?.config_snapshot
+    const ds = cfg?.["dataset"] as Record<string, unknown> | undefined
+    const src = ds?.["source"]
+    return typeof src === "string" ? src : null
+  }, [job.data])
+  const datasetScan = useQuery({
+    queryKey: ["dataset-scan", datasetSource, false],
+    queryFn: () => api.scanDataset(datasetSource!, false, 0),
+    enabled: !!datasetSource,
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  })
+  const fallbackTotalSteps = useMemo(() => {
+    const cfg = (job.data as { config_snapshot?: Record<string, unknown> } | undefined)
+      ?.config_snapshot
+    return expectedTotalSteps(cfg, datasetScan.data?.image_files ?? null)
+  }, [job.data, datasetScan.data])
 
   const data = job.data
   const events = stream.events
@@ -81,13 +116,7 @@ export function JobDetail({
 
   async function onArchive() {
     if (!data) return
-    if (
-      !window.confirm(
-        `确定要归档任务 ${data.id.slice(-8)} 吗？工作区将被移到 _archive/，记录会从列表中移除。`,
-      )
-    ) {
-      return
-    }
+    setArchiveOpen(false)
     setBusy("archive")
     setActionError(null)
     try {
@@ -158,7 +187,7 @@ export function JobDetail({
             <Button
               variant="outline"
               size="sm"
-              onClick={onArchive}
+              onClick={() => setArchiveOpen(true)}
               disabled={busy !== null}
             >
               <Archive className="size-3" /> 归档
@@ -197,7 +226,11 @@ export function JobDetail({
           </TabsContent>
           <TabsContent value="events" className="h-full">
             <div className="px-7 py-5 h-full min-h-0 flex flex-col">
-              <EventsTab events={events} status={stream.status} />
+              <EventsTab
+                events={events}
+                status={stream.status}
+                fallbackTotalSteps={fallbackTotalSteps}
+              />
             </div>
           </TabsContent>
           <TabsContent value="metrics" className="h-full">
@@ -225,6 +258,34 @@ export function JobDetail({
           )}
         </div>
       </Tabs>
+      <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>归档训练任务</AlertDialogTitle>
+            <AlertDialogDescription>
+              工作区将被移动到 <code className="font-mono">_archive/</code>，
+              记录会从列表中移除。
+              {data && (
+                <>
+                  {" "}任务 ID:{" "}
+                  <code className="font-mono">{data.id.slice(-8)}</code>。
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                onArchive()
+              }}
+            >
+              <Archive className="size-3" /> 确认归档
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

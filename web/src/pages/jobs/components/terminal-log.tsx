@@ -30,19 +30,27 @@ function formatTime(ts: number): string {
   return `${h}:${m}:${s}`
 }
 
-function eventToLine(event: TrainingEvent, index: number): LogLine {
+function eventToLine(
+  event: TrainingEvent,
+  index: number,
+  fallbackTotalSteps: number | null,
+): LogLine {
   const p = event.payload
+  const stepTotal =
+    typeof p.total_steps === "number" && p.total_steps > 0
+      ? (p.total_steps as number)
+      : fallbackTotalSteps
   const rawMessage =
     typeof p.message === "string"
       ? (p.message as string)
       : event.type === "step"
-        ? `第 ${p.step}/${p.total_steps} 步${
+        ? `第 ${p.step}/${stepTotal ?? "?"} 步${
             typeof p.loss === "number"
               ? ` · loss=${(p.loss as number).toFixed(4)}`
               : ""
           }`
         : event.type === "epoch_end"
-          ? `第 ${p.epoch}/${p.total_epochs} 回合结束`
+          ? `第 ${p.epoch}/${p.total_epochs ?? "?"} 回合结束`
           : event.type === "checkpoint_saved"
             ? `保存检查点：${p.path ?? ""}`
             : event.type === "sample_ready"
@@ -142,7 +150,13 @@ function highlightChunk(
   return out
 }
 
-export function TerminalLog({ events }: { events: TrainingEvent[] }) {
+export function TerminalLog({
+  events,
+  fallbackTotalSteps = null,
+}: {
+  events: TrainingEvent[]
+  fallbackTotalSteps?: number | null
+}) {
   const [query, setQuery] = useState("")
   const [autoScroll, setAutoScroll] = useState(true)
   const [clearAfter, setClearAfter] = useState(0)
@@ -161,8 +175,8 @@ export function TerminalLog({ events }: { events: TrainingEvent[] }) {
       visibleEvents.length > MAX_LINES
         ? visibleEvents.slice(visibleEvents.length - MAX_LINES)
         : visibleEvents
-    return sliced.map((e, i) => eventToLine(e, i))
-  }, [visibleEvents])
+    return sliced.map((e, i) => eventToLine(e, i, fallbackTotalSteps))
+  }, [visibleEvents, fallbackTotalSteps])
 
   const filteredLines = useMemo(() => {
     if (!query) return lines

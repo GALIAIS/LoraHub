@@ -190,7 +190,17 @@ def _parse_dt_optional(s: str | None) -> datetime | None:
 
 
 def default_store_path() -> Path:
-    return Path.cwd() / "runs" / ".lorahub.sqlite"
+    """Where lorahub keeps the jobs DB.
+
+    Returns ``runs/jobs.sqlite`` going forward. If a legacy
+    ``runs/.lorahub.sqlite`` exists from an older release we keep using it
+    so users don't lose history on upgrade.
+    """
+    runs = Path.cwd() / "runs"
+    legacy = runs / ".lorahub.sqlite"
+    if legacy.is_file():
+        return legacy
+    return runs / "jobs.sqlite"
 
 
 __all__ = ["JobStore", "default_store_path"]

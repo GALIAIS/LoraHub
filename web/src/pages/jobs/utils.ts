@@ -97,3 +97,55 @@ export function downsamplePoints<T>(points: T[], maxPoints: number): T[] {
   }
   return out
 }
+
+/**
+ * Derive an expected `total_steps` from a job's config_snapshot.
+ *
+ * Priority:
+ *   1. `schedule.max_steps` if explicitly set in the recipe.
+ *   2. `epochs * dataset.num_repeats * image_files / (batch_size * grad_accum)`
+ *      if we have an image count from the latest preflight.
+ *   3. `null` (fall back to `?`) — backend events with `total_steps` will
+ *      override this anyway as soon as the trainer reports them.
+ *
+ * The result is intentionally an over-estimate when bucketing is on, but the
+ * UI just needs *a* denominator so progress bars and "第 X/N 步" tags don't
+ * render `undefined`.
+ */
+export function expectedTotalSteps(
+  configSnapshot: Record<string, unknown> | null | undefined,
+  imageFiles?: number | null,
+): number | null {
+  if (!configSnapshot || typeof configSnapshot !== "object") return null
+  const schedule = (configSnapshot as Record<string, unknown>)["schedule"]
+  const dataset = (configSnapshot as Record<string, unknown>)["dataset"]
+  if (
+    schedule &&
+    typeof schedule === "object" &&
+    typeof (schedule as Record<string, unknown>)["max_steps"] === "number"
+  ) {
+    const m = (schedule as Record<string, number>)["max_steps"]
+    if (m > 0) return m
+  }
+  if (
+    schedule &&
+    typeof schedule === "object" &&
+    dataset &&
+    typeof dataset === "object" &&
+    typeof imageFiles === "number" &&
+    imageFiles > 0
+  ) {
+    const s = schedule as Record<string, unknown>
+    const d = dataset as Record<string, unknown>
+    const epochs = typeof s["epochs"] === "number" ? (s["epochs"] as number) : 1
+    const batch =
+      typeof s["batch_size"] === "number" ? (s["batch_size"] as number) : 1
+    const accum =
+      typeof s["grad_accum"] === "number" ? (s["grad_accum"] as number) : 1
+    const repeats =
+      typeof d["num_repeats"] === "number" ? (d["num_repeats"] as number) : 1
+    const denom = Math.max(1, batch * accum)
+    return Math.max(1, Math.ceil((epochs * repeats * imageFiles) / denom))
+  }
+  return null
+}

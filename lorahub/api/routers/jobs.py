@@ -50,7 +50,9 @@ def get_job(job_id: str) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    return job.to_summary()
+    # Detail view bundles the config snapshot so the UI can derive
+    # things like expected total step count without a second round-trip.
+    return {**job.to_summary(), "config_snapshot": job.config_snapshot}
 
 
 @router.get("/jobs/{job_id}/events")

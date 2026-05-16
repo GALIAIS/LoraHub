@@ -121,6 +121,17 @@ class _BootstrapSession:
         sentinel: dict[str, Any] = {"step": "__terminal__", "level": status}
         for queue in listeners:
             self._dispatch(queue, sentinel)
+        # Persist the terminal snapshot so a server restart can still
+        # show "what happened" to past installs. Best-effort — a corrupt
+        # session DB must never sink the live install.
+        try:
+            from lorahub.api import app as _app  # noqa: PLC0415
+
+            store = getattr(_app, "_session_store", None)
+            if store is not None:
+                store.upsert_bootstrap(self.to_status_payload())
+        except Exception:  # noqa: BLE001
+            pass
 
     def _dispatch(self, queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
         loop = self._loop

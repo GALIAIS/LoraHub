@@ -2,15 +2,21 @@ import { cn } from "@/lib/utils"
 import type { TrainingEvent } from "@/lib/api"
 import { EVENT_TYPE_LABELS } from "../utils"
 
-function renderPayload(e: TrainingEvent): string {
+function renderPayload(e: TrainingEvent, fallbackTotalSteps: number | null): string {
   const p = e.payload
   switch (e.type) {
-    case "step":
-      return `第 ${p.step}/${p.total_steps} 步${
+    case "step": {
+      const total =
+        typeof p.total_steps === "number" && p.total_steps > 0
+          ? (p.total_steps as number)
+          : fallbackTotalSteps
+      const totalLabel = total ?? "?"
+      return `第 ${p.step}/${totalLabel} 步${
         p.loss !== undefined ? ` · 损失 ${(p.loss as number).toFixed(4)}` : ""
       }`
+    }
     case "epoch_end":
-      return `第 ${p.epoch}/${p.total_epochs} 回合结束`
+      return `第 ${p.epoch}/${p.total_epochs ?? "?"} 回合结束`
     case "checkpoint_saved":
       return String(p.path ?? "")
     case "sample_ready":
@@ -26,9 +32,15 @@ function renderPayload(e: TrainingEvent): string {
   }
 }
 
-export function EventRow({ event }: { event: TrainingEvent }) {
+export function EventRow({
+  event,
+  fallbackTotalSteps = null,
+}: {
+  event: TrainingEvent
+  fallbackTotalSteps?: number | null
+}) {
   const time = new Date(event.timestamp * 1000).toLocaleTimeString()
-  const summary = renderPayload(event)
+  const summary = renderPayload(event, fallbackTotalSteps)
   const tone =
     {
       error: "text-destructive",

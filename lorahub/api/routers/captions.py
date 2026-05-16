@@ -114,6 +114,18 @@ def _get(session_id: str) -> _CaptionsSession:
     return session
 
 
+def _persist_captions_snapshot(session: _CaptionsSession) -> None:
+    """Best-effort flush of a captions snapshot to the SessionStore."""
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        store = getattr(_app, "_session_store", None)
+        if store is not None:
+            store.upsert_captions(session.snapshot())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Indirection so tests can monkeypatch the pipeline class without touching
 # the concrete implementation. This mirrors the tagging router's
 # `_build_tagger`.
@@ -175,6 +187,8 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"normalize failed: {exc}")
+        finally:
+            _persist_captions_snapshot(session)
 
     threading.Thread(
         target=run,

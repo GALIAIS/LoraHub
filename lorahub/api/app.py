@@ -43,8 +43,10 @@ from lorahub.api.bootstrap_session import (
 )
 from lorahub.api.helpers import _resolve_web_dist
 from lorahub.api.jobs_helpers import _job_events
+from lorahub.api.session_store import SessionStore, default_session_store_path
 from lorahub.api.settings import SettingsStore
 from lorahub.api.state import JobState
+from lorahub.api.sweep_store import SweepStore, default_sweep_store_path
 from lorahub.core.events import EventType, TrainingEvent
 
 log = logging.getLogger(__name__)
@@ -61,6 +63,10 @@ log = logging.getLogger(__name__)
 _settings_store: SettingsStore = SettingsStore()
 _build_bootstrap_runner = default_build_bootstrap_runner
 _bootstrap_session: _BootstrapSession | None = None
+# Persistence stores. The lifespan hook lazily points these at on-disk
+# SQLite files; tests monkeypatch them to in-memory or per-test paths.
+_sweep_store: SweepStore | None = None
+_session_store: SessionStore | None = None
 
 
 @asynccontextmanager
@@ -80,6 +86,15 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         loaded = state.registry.load_persisted()
         if loaded > 0:
             log.info("loaded %d job record(s) from %s", loaded, store_path)
+
+    # Sibling stores: sweeps and sessions. Each gets its own SQLite file
+    # so a corrupt or aggressively-locked DB on one side doesn't take
+    # the rest of the API offline.
+    global _sweep_store, _session_store  # noqa: PLW0603
+    if _sweep_store is None:
+        _sweep_store = SweepStore(default_sweep_store_path())
+    if _session_store is None:
+        _session_store = SessionStore(default_session_store_path())
 
     # Resize the module-level scheduler from persisted Settings before
     # workers start. We reach for the *current* `_settings_store` symbol

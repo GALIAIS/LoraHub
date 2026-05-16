@@ -11,9 +11,11 @@ type SubView = "structured" | "raw"
 export function EventsTab({
   events,
   status,
+  fallbackTotalSteps = null,
 }: {
   events: TrainingEvent[]
   status: "idle" | "open" | "closed"
+  fallbackTotalSteps?: number | null
 }) {
   const [sub, setSub] = useState<SubView>("structured")
   return (
@@ -65,13 +67,13 @@ export function EventsTab({
                 </li>
               )}
               {events.map((e, i) => (
-                <EventRow key={i} event={e} />
+                <EventRow key={i} event={e} fallbackTotalSteps={fallbackTotalSteps} />
               ))}
             </ul>
           </ScrollArea>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col p-3">
-            <TerminalLog events={events} />
+            <TerminalLog events={events} fallbackTotalSteps={fallbackTotalSteps} />
           </div>
         )}
       </CardContent>

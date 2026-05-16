@@ -14,6 +14,11 @@ export interface JobSummary {
   pid: number | null
 }
 
+/** /jobs/{id} returns the summary plus the config snapshot. */
+export interface JobDetail extends JobSummary {
+  config_snapshot?: Record<string, unknown>
+}
+
 export interface TrainingEvent {
   type: string
   payload: Record<string, unknown>
@@ -466,7 +471,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => http<{ status: string; version: string }>("/health"),
   listJobs: () => http<{ jobs: JobSummary[] }>("/jobs"),
-  getJob: (id: string) => http<JobSummary>(`/jobs/${id}`),
+  getJob: (id: string) => http<JobDetail>(`/jobs/${id}`),
   getEvents: (id: string, limit = 200) =>
     http<{ events: TrainingEvent[] }>(`/jobs/${id}/events?limit=${limit}`),
   cancelJob: (id: string) =>

@@ -157,6 +157,29 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
             }
         )
 
+    # Persist the sweep descriptor so a server restart can still recover
+    # the original axes / base_config / job_ids — jobs.metadata only
+    # carries the per-variant axis_values.
+    from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.sweep_store import SweepRecord  # noqa: PLC0415
+
+    sweep_store = getattr(app_module, "_sweep_store", None)
+    if sweep_store is not None:
+        sweep_store.upsert(
+            SweepRecord(
+                id=sweep_id,
+                name=req.name_template,
+                name_prefix=_common_prefix([v["name"] for v in summary_variants]),
+                plan={
+                    "axes": [{"path": a.path, "values": a.values} for a in req.axes],
+                    "name_template": req.name_template,
+                    "workspace_root": str(workspace_root),
+                },
+                base_config=req.base_config,
+                job_ids=job_ids,
+            )
+        )
+
     return {
         "sweep_id": sweep_id,
         "job_ids": job_ids,

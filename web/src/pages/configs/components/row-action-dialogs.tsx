@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Copy, Pencil, Trash2 } from "lucide-react"
+import { Copy, Loader2, Pencil, Trash2 } from "lucide-react"
 import { api, type ConfigListEntry } from "@/lib/api"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -198,33 +208,36 @@ export function DeleteDialog({ open, onOpenChange, config, onSuccess }: DialogPr
   })
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>删除配置</DialogTitle>
-          <DialogDescription>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>删除配置</AlertDialogTitle>
+          <AlertDialogDescription>
             将永久删除 <span className="font-mono">{config?.filename ?? ""}</span>，无法撤销。
-          </DialogDescription>
-        </DialogHeader>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
         <ErrorLine message={errorMsg} />
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending}
-          >
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={mutation.isPending}>
             取消
-          </Button>
-          <Button
+          </AlertDialogCancel>
+          <AlertDialogAction
             variant="destructive"
-            onClick={() => mutation.mutate()}
             disabled={mutation.isPending}
+            onClick={(e) => {
+              e.preventDefault()
+              mutation.mutate()
+            }}
           >
-            <Trash2 className="size-3" />
+            {mutation.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Trash2 className="size-3" />
+            )}
             {mutation.isPending ? "删除中…" : "确认删除"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
