@@ -12,6 +12,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.core.dataset.anima import AnimaDatasetTransformer
 from lorahub.core.tagging.base import BaseTagger
 from lorahub.core.tagging.joytag import DEFAULT_THRESHOLD as JOYTAG_DEFAULT_THRESHOLD
 from lorahub.core.tagging.joytag import JoyTagger
@@ -221,3 +222,177 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
 @router.get("/tagging/tag/{session_id}")
 def tag_dataset_status(session_id: str) -> dict[str, Any]:
     return _get(session_id).snapshot()
+
+
+# --------------------------------------------------------------------------- #
+# Anima caption rewriter (text-only — no tagger inference)
+# --------------------------------------------------------------------------- #
+
+
+class AnimaCaptionRequest(BaseModel):
+    path: str
+    dataset_tag: str | None = None
+    quality: list[str] | None = None
+    score: list[str] | None = None
+    year: list[str] | None = None
+    safety: str | None = "safe"
+    overwrite: bool = False
+    recursive: bool = False
+
+
+@dataclass(slots=True)
+class _AnimaSession:
+    session_id: str
+    path: str
+    dataset_tag: str | None
+    quality: list[str] | None
+    score: list[str] | None
+    year: list[str] | None
+    safety: str | None
+    overwrite: bool
+    recursive: bool
+    status: Literal["running", "succeeded", "failed"] = "running"
+    percent: float = 0.0
+    events: list[dict[str, Any]] = field(default_factory=list)
+    written: int = 0
+    total: int | None = None
+    error: str | None = None
+    started_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def push(self, message: str, *, percent: float | None = None, file: str | None = None) -> None:
+        with self.lock:
+            if percent is not None:
+                self.percent = max(self.percent, min(100.0, float(percent)))
+            self.events.append(
+                {"ts": time.time(), "message": message, "percent": self.percent, "file": file}
+            )
+            self.events = self.events[-200:]
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "session_id": self.session_id,
+                "path": self.path,
+                "dataset_tag": self.dataset_tag,
+                "quality": self.quality,
+                "score": self.score,
+                "year": self.year,
+                "safety": self.safety,
+                "overwrite": self.overwrite,
+                "recursive": self.recursive,
+                "status": self.status,
+                "percent": self.percent,
+                "events": list(self.events),
+                "written": self.written,
+                "total": self.total,
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+
+_anima_sessions: dict[str, _AnimaSession] = {}
+_anima_sessions_lock = threading.Lock()
+
+
+def _store_anima(session: _AnimaSession) -> None:
+    with _anima_sessions_lock:
+        _anima_sessions[session.session_id] = session
+
+
+def _get_anima(session_id: str) -> _AnimaSession:
+    with _anima_sessions_lock:
+        session = _anima_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="anima caption session not found")
+    return session
+
+
+# Indirection for tests so they can swap the transformer without monkey-patching
+# the dataset module directly.
+def _build_anima_transformer(req: AnimaCaptionRequest) -> AnimaDatasetTransformer:
+    return AnimaDatasetTransformer(
+        default_quality=req.quality,
+        default_score=req.score,
+        default_year=req.year,
+        default_safety=req.safety,
+        dataset_tag=req.dataset_tag,
+    )
+
+
+@router.post("/anima/caption", status_code=202)
+def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
+    target = Path(req.path).expanduser()
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"not a directory: {target}")
+
+    session = _AnimaSession(
+        session_id=uuid.uuid4().hex,
+        path=str(target),
+        dataset_tag=req.dataset_tag,
+        quality=req.quality,
+        score=req.score,
+        year=req.year,
+        safety=req.safety,
+        overwrite=req.overwrite,
+        recursive=req.recursive,
+    )
+    session.push("anima caption queued", percent=0)
+    _store_anima(session)
+
+    def run() -> None:
+        try:
+            transformer = _build_anima_transformer(req)
+
+            # Pre-count for percent display.
+            pattern = "**/*.txt" if req.recursive else "*.txt"
+            captions = sorted(p for p in target.glob(pattern) if p.is_file())
+            with session.lock:
+                session.total = len(captions)
+
+            if not captions:
+                session.push("no caption files found", percent=100)
+                with session.lock:
+                    session.status = "succeeded"
+                    session.percent = 100
+                    session.finished_at = time.time()
+                return
+
+            total = len(captions)
+
+            def on_progress(path: Path) -> None:
+                with session.lock:
+                    session.written += 1
+                    pct = min(100.0, 2 + 98 * session.written / max(total, 1))
+                session.push(f"rewrote {path.name}", percent=pct, file=str(path))
+
+            written = transformer.transform_directory(
+                target,
+                recursive=req.recursive,
+                overwrite=req.overwrite,
+                progress=on_progress,
+            )
+            with session.lock:
+                session.written = written
+                session.status = "succeeded"
+                session.percent = 100
+                session.finished_at = time.time()
+            session.push(f"done — wrote {written} caption(s)", percent=100)
+        except Exception as exc:  # noqa: BLE001
+            with session.lock:
+                session.status = "failed"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.push(f"anima caption failed: {exc}")
+
+    threading.Thread(
+        target=run, name=f"anima-{session.session_id[:8]}", daemon=True
+    ).start()
+    return session.snapshot()
+
+
+@router.get("/anima/caption/{session_id}")
+def anima_caption_status(session_id: str) -> dict[str, Any]:
+    return _get_anima(session_id).snapshot()
