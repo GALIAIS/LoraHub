@@ -11,13 +11,21 @@ Path-bearing fields (``checkpoint`` / ``dataset.source``) are intentionally
 left blank: ``pathlib.Path("")`` is a valid Path, so the schema accepts it,
 and the user is expected to fill the real path in the form before saving.
 
-Each template YAML may carry an optional ``_template`` mapping at the top
-level with ``name``, ``description``, and ``arch`` — these drive the UI card
-and are stripped before validation (RecipeConfig has ``extra="forbid"``).
+Each template YAML may carry two optional top-level metadata blocks:
+
+* ``_template``: ``{name, description, arch}`` — UI card metadata.
+* ``_placeholders``: a list of ``{key, label, path_field, placeholder}`` entries
+  describing the values the user must supply when instantiating the template
+  (e.g. ``base_model.checkpoint``). The web UI renders these as a fill-in
+  form before saving the recipe so users no longer hand-edit YAML.
+
+Both blocks are stripped before validation because :class:`RecipeConfig` has
+``extra="forbid"``.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -60,6 +68,93 @@ def _coerce_meta(stem: str, meta: Any, recipe: dict[str, Any]) -> dict[str, Any]
     return {"name": name, "description": description, "arch": arch}
 
 
+def _coerce_placeholders(raw: Any) -> list[dict[str, str]]:
+    """Normalise the optional ``_placeholders`` list.
+
+    Each entry must have ``key``, ``label``, ``path_field`` and (optionally)
+    ``placeholder``. Anything else is dropped silently — placeholders are
+    purely a UI affordance, so a malformed entry should not break the
+    template; it just won't render an extra input field.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        label = item.get("label")
+        path_field = item.get("path_field")
+        if not isinstance(key, str) or not key.strip():
+            continue
+        if not isinstance(path_field, str) or not path_field.strip():
+            continue
+        out.append(
+            {
+                "key": key.strip(),
+                "label": str(label or key).strip(),
+                "path_field": path_field.strip(),
+                "placeholder": str(item.get("placeholder") or ""),
+            }
+        )
+    return out
+
+
+def _set_by_path(target: dict[str, Any], dotted: str, value: Any) -> None:
+    """Walk ``dotted`` (``a.b.c``) into ``target`` and set the leaf to ``value``.
+
+    Intermediate mappings are created if they don't exist; non-mapping
+    intermediates raise ``ValueError`` so we don't silently overwrite scalar
+    data sitting where a sub-tree should be. This is the tiny dotted-path
+    setter the placeholder system needs — no jsonpath dependency.
+    """
+    if not dotted:
+        msg = "path_field must not be empty"
+        raise ValueError(msg)
+    parts = dotted.split(".")
+    cursor: Any = target
+    for part in parts[:-1]:
+        if not isinstance(cursor, dict):
+            msg = f"path {dotted!r} traverses non-mapping at {part!r}"
+            raise ValueError(msg)
+        nxt = cursor.get(part)
+        if nxt is None:
+            nxt = {}
+            cursor[part] = nxt
+        cursor = nxt
+    if not isinstance(cursor, dict):
+        msg = f"path {dotted!r} traverses non-mapping leaf"
+        raise ValueError(msg)
+    cursor[parts[-1]] = value
+
+
+def apply_placeholders(
+    recipe: dict[str, Any],
+    placeholders: list[dict[str, str]],
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a deep copy of ``recipe`` with placeholder values substituted.
+
+    Only declared placeholder keys are honoured — extra keys in ``values``
+    are ignored so the caller can reuse a single dict across templates.
+    Empty / missing values leave the field untouched, which is fine because
+    the schema accepts empty strings for path-shaped fields.
+    """
+    out = copy.deepcopy(recipe)
+    for ph in placeholders:
+        key = ph["key"]
+        if key not in values:
+            continue
+        raw = values[key]
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        _set_by_path(out, ph["path_field"], text)
+    return out
+
+
 def _load_one(path: Path) -> dict[str, Any] | None:
     """Parse + validate a single template YAML.
 
@@ -81,6 +176,7 @@ def _load_one(path: Path) -> dict[str, Any] | None:
 
     # Pop metadata before validation — RecipeConfig has extra="forbid".
     meta = data.pop("_template", None)
+    placeholders_raw = data.pop("_placeholders", None)
     try:
         RecipeConfig.model_validate(data)
     except Exception as exc:  # noqa: BLE001
@@ -88,11 +184,13 @@ def _load_one(path: Path) -> dict[str, Any] | None:
         return None
 
     info = _coerce_meta(path.stem, meta, data)
+    placeholders = _coerce_placeholders(placeholders_raw)
     return {
         "id": path.stem,
         "name": info["name"],
         "description": info["description"],
         "arch": info["arch"],
+        "placeholders": placeholders,
         "recipe": data,
     }
 
@@ -126,4 +224,4 @@ def load_templates(directory: Path | None = None) -> list[dict[str, Any]]:
 TEMPLATES: list[dict[str, Any]] = load_templates()
 
 
-__all__ = ["TEMPLATES", "load_templates"]
+__all__ = ["TEMPLATES", "apply_placeholders", "load_templates"]

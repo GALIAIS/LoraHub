@@ -8,6 +8,20 @@ _template:
   description: Lower-rank SDXL style LoRA, trains the text encoder for 20 epochs.
   arch: sdxl
 
+_placeholders:
+  - key: name
+    label: Recipe / output name
+    path_field: output.name
+    placeholder: my_style_v1
+  - key: checkpoint
+    label: SDXL base model checkpoint
+    path_field: base_model.checkpoint
+    placeholder: C:\models\sdxl_base.safetensors
+  - key: dataset
+    label: Dataset directory
+    path_field: dataset.source
+    placeholder: ./datasets/my_style
+
 base_model:
   arch: sdxl
   checkpoint: ""
