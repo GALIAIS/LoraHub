@@ -1,4 +1,4 @@
-import { memo } from "react"
+﻿import { memo } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { BACKEND_OPTIONS } from "../options"
@@ -21,7 +21,7 @@ export const BackendFields = memo(function BackendFields({
         label="后端"
         description={
           <>
-            「设置 &gt; Kohya 后端」管理工作区级默认值；此处按配方覆盖。
+            「设置 &gt; Kohya 后端」管理工作区级默认值；此处按配置覆盖。
           </>
         }
       >

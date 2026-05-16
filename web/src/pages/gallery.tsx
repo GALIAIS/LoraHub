@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+﻿import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ChevronRight, ExternalLink, Images, X } from "lucide-react"
@@ -264,7 +264,7 @@ function SampleLightbox({
               <Stat label="任务" value={item.job_id.slice(-8)} />
               <Stat label="工作区" value={item.job_name} />
               <Stat
-                label="配方"
+                label="配置"
                 value={item.recipe_name ?? "—"}
               />
               <Stat

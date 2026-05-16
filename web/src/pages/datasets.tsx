@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
@@ -178,7 +178,7 @@ export function DatasetsPage() {
                 <div className="min-w-0">
                   <div className="text-sm font-medium">用此数据集训练</div>
                   <div className="text-xs text-muted-foreground">
-                    跳转到训练配方页，自动预填{" "}
+                    跳转到训练配置页，自动预填{" "}
                     <code className="font-mono text-foreground">dataset.source</code>。
                   </div>
                 </div>

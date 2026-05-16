@@ -156,7 +156,7 @@ export function RecipesPage() {
       >
         <div className="flex items-center justify-between px-4 pt-3">
           <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            训练配方
+            训练配置
           </span>
           <Button
             size="sm"
@@ -189,13 +189,13 @@ export function RecipesPage() {
             )}
             {!list.isLoading && recipes.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                还没有配方。点击 <span className="text-foreground font-medium">+ 新建</span> 创建一个，或运行
+                还没有配置。点击 <span className="text-foreground font-medium">+ 新建</span> 创建一个，或运行
                 <code className="text-foreground"> lorahub init</code>。
               </li>
             )}
             {!list.isLoading && recipes.length > 0 && visibleRecipes.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                没有匹配的配方。
+                没有匹配的配置。
               </li>
             )}
             {visibleRecipes.map((r) => {
@@ -225,12 +225,12 @@ export function RecipesPage() {
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
-            <span className="ml-1 text-xs">{recipes.length} 个配方</span>
+            <span className="ml-1 text-xs">{recipes.length} 个配置</span>
           </Button>
         )}
         {mode === null ? (
           <div className="flex-1 grid place-items-center text-sm text-muted-foreground">
-            从左侧选择一个配方查看，或创建新的。
+            从左侧选择一个配置查看，或创建新的。
           </div>
         ) : mode.kind === "preview" ? (
           <RecipePreview

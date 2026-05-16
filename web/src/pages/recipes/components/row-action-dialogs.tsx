@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Copy, Pencil, Trash2 } from "lucide-react"
 import { api, type RecipeListEntry } from "@/lib/api"
@@ -63,7 +63,7 @@ export function DuplicateDialog({ open, onOpenChange, recipe, onSuccess }: Dialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>复制配方</DialogTitle>
+          <DialogTitle>复制配置</DialogTitle>
           <DialogDescription>
             从 <span className="font-mono">{recipe?.name ?? ""}</span> 创建一份副本。
           </DialogDescription>
@@ -136,7 +136,7 @@ export function RenameDialog({ open, onOpenChange, recipe, onSuccess }: DialogPr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>重命名配方</DialogTitle>
+          <DialogTitle>重命名配置</DialogTitle>
           <DialogDescription>
             修改 <span className="font-mono">{recipe?.name ?? ""}</span> 的文件名。
           </DialogDescription>
@@ -201,7 +201,7 @@ export function DeleteDialog({ open, onOpenChange, recipe, onSuccess }: DialogPr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>删除配方</DialogTitle>
+          <DialogTitle>删除配置</DialogTitle>
           <DialogDescription>
             将永久删除 <span className="font-mono">{recipe?.filename ?? ""}</span>，无法撤销。
           </DialogDescription>

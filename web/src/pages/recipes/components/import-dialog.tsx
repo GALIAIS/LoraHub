@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+﻿import { useEffect, useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Upload } from "lucide-react"
 import { api } from "@/lib/api"
@@ -72,9 +72,9 @@ export function ImportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>导入配方</DialogTitle>
+          <DialogTitle>导入配置</DialogTitle>
           <DialogDescription>
-            上传一个 YAML 文件并保存到本地配方目录。文件大小上限 1 MiB。
+            上传一个 YAML 文件并保存到本地配置目录。文件大小上限 1 MiB。
           </DialogDescription>
         </DialogHeader>
 

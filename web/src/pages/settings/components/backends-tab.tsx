@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+﻿import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Save, RotateCcw, Wand2 } from "lucide-react"
 import {
@@ -170,7 +170,7 @@ export function BackendsTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">默认后端</CardTitle>
           <CardDescription>
-            未在配方或命令行中显式指定时使用的后端。
+            未在配置或命令行中显式指定时使用的后端。
           </CardDescription>
         </CardHeader>
         <CardContent>

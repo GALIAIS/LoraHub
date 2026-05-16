@@ -1,11 +1,11 @@
 """LoraHub CLI entry point.
 
 Commands:
-    lorahub validate <recipe>   Check a recipe without launching training.
-    lorahub info <recipe>       Show compiled argv and VRAM estimate (dry run).
-    lorahub train <recipe>      Run training to completion.
-    lorahub sweep <recipe>      Expand a grid sweep into per-variant recipes.
-    lorahub init <name>         Scaffold a starter recipe in the current dir.
+    lorahub validate <config>   Check a config without launching training.
+    lorahub info <config>       Show compiled argv and VRAM estimate (dry run).
+    lorahub train <config>      Run training to completion.
+    lorahub sweep <config>      Expand a grid sweep into per-variant configs.
+    lorahub init <name>         Scaffold a starter config in the current dir.
 """
 
 from __future__ import annotations
@@ -49,31 +49,31 @@ def version() -> None:
 
 @app.command()
 def validate(
-    recipe: Annotated[Path, typer.Argument(help="Path to a recipe YAML file.")],
+    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
 ) -> None:
-    """Validate a recipe without running training."""
+    """Validate a config without running training."""
     cfg = load_recipe(recipe)
     backend = KohyaBackend()
     issues = backend.validate(cfg)
     _render_issues(issues)
     if any(i.severity is Severity.error for i in issues):
         raise typer.Exit(code=1)
-    console.print("[green]OK[/] recipe valid")
+    console.print("[green]OK[/] config valid")
 
 
 @app.command()
 def info(
-    recipe: Annotated[Path, typer.Argument(help="Path to a recipe YAML file.")],
+    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
 ) -> None:
-    """Show what a recipe would compile to, plus VRAM estimate (no training)."""
+    """Show what a config would compile to, plus VRAM estimate (no training)."""
     cfg = load_recipe(recipe)
     backend = KohyaBackend()
 
     script, argv, _files = compile_recipe(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
-    table = Table(title="Recipe summary", show_header=False, expand=False)
-    table.add_row("recipe", str(recipe))
+    table = Table(title="Config summary", show_header=False, expand=False)
+    table.add_row("config", str(recipe))
     table.add_row("arch", cfg.base_model.arch)
     table.add_row("network", f"{cfg.network.type} rank={cfg.network.rank} alpha={cfg.network.alpha}")
     table.add_row("schedule", f"{cfg.schedule.epochs} epochs x bs={cfg.schedule.batch_size}")
@@ -89,7 +89,7 @@ def info(
 
 @app.command()
 def train(
-    recipe: Annotated[Path, typer.Argument(help="Path to a recipe YAML file.")],
+    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
     workspace: Annotated[
         Path | None,
         typer.Option(help="Where to write logs/checkpoints/samples."),
@@ -132,7 +132,7 @@ def train(
 
 @app.command()
 def sweep(
-    recipe: Annotated[Path, typer.Argument(help="Path to the base recipe YAML file.")],
+    recipe: Annotated[Path, typer.Argument(help="Path to the base config YAML file.")],
     axis: Annotated[
         list[str],
         typer.Option(
@@ -155,7 +155,7 @@ def sweep(
         Path,
         typer.Option(
             "--workspace-root",
-            help="Where each materialised variant recipe should record its workspace.",
+            help="Where each materialised variant config should record its workspace.",
         ),
     ] = Path("./runs"),
     output_dir: Annotated[
@@ -172,11 +172,11 @@ def sweep(
         bool,
         typer.Option(
             "--dry-run",
-            help="Print each variant name and recipe diff; do not write any files.",
+            help="Print each variant name and config diff; do not write any files.",
         ),
     ] = False,
 ) -> None:
-    """Expand a grid sweep into per-variant recipe files.
+    """Expand a grid sweep into per-variant config files.
 
     The CLI never spawns training subprocesses for sweeps — running N kohya
     or diffusion-pipe processes in parallel would deadlock most workstations.
@@ -328,7 +328,7 @@ def serve(
 
 @app.command()
 def init(
-    name: Annotated[str, typer.Argument(help="Name for the new recipe (no extension).")],
+    name: Annotated[str, typer.Argument(help="Name for the new config (no extension).")],
     template: Annotated[
         str, typer.Option(help="Built-in template to copy. Ignored when --auto is used.")
     ] = "sdxl_character_8gb",
@@ -336,7 +336,7 @@ def init(
         bool,
         typer.Option(
             "--auto",
-            help="Probe the GPU + dataset and write a recipe tuned to this machine.",
+            help="Probe the GPU + dataset and write a config tuned to this machine.",
         ),
     ] = False,
     checkpoint: Annotated[
@@ -355,7 +355,7 @@ def init(
         ),
     ] = None,
 ) -> None:
-    """Scaffold a starter recipe in the current directory."""
+    """Scaffold a starter config in the current directory."""
     dst = Path.cwd() / f"{name}.yaml"
     if dst.exists():
         err_console.print(f"[red]{dst} already exists[/red]")

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+﻿import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, FilePlus2 } from "lucide-react"
 import { api, type RecipeTemplate } from "@/lib/api"
@@ -148,8 +148,8 @@ export function TemplateLibraryDialog({
           </DialogTitle>
           <DialogDescription>
             {stage === "fill"
-              ? "填入此模板需要的关键路径，提交后会写入新的配方文件。"
-              : "从模板创建新配方，或选择「Blank」从空白表单开始。"}
+              ? "填入此模板需要的关键路径，提交后会写入新的配置文件。"
+              : "从模板创建新配置，或选择「Blank」从空白表单开始。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -213,7 +213,7 @@ export function TemplateLibraryDialog({
                 ? "进入空白表单"
                 : stage === "pick" && hasPlaceholders
                   ? "下一步"
-                  : "创建配方"}
+                  : "创建配置"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -270,7 +270,7 @@ function PickStage({
       {showNameInput && (
         <div className="flex flex-col gap-1.5">
           <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-            新配方名称
+            新配置名称
           </Label>
           <Input
             value={name}
@@ -301,7 +301,7 @@ function FillStage({
     <div className="space-y-3">
       <div className="flex flex-col gap-1.5">
         <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-          新配方名称
+          新配置名称
         </Label>
         <Input
           value={name}

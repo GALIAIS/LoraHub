@@ -1,4 +1,4 @@
-import { Play } from "lucide-react"
+﻿import { Play } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -43,7 +43,7 @@ export function LaunchOverrideDialog({
         <DialogHeader>
           <DialogTitle>启动时覆盖</DialogTitle>
           <DialogDescription>
-            仅对本次启动生效，留空则使用配方原值。磁盘上的配方文件不会被修改。
+            仅对本次启动生效，留空则使用配置原值。磁盘上的配置文件不会被修改。
           </DialogDescription>
         </DialogHeader>
 

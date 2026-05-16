@@ -55,10 +55,10 @@ export function RecipeEditor({
       const v = await api.validateRecipe(payload)
       if (!v.valid) {
         setErrors(v.errors ?? [])
-        throw new Error("配方校验未通过")
+        throw new Error("配置校验未通过")
       }
       const cleanName = name.trim()
-      if (!cleanName) throw new Error("配方名称不能为空")
+      if (!cleanName) throw new Error("配置名称不能为空")
       const saved = await api.saveRecipe(cleanName, payload, opts.overwrite || !isNew)
       qc.invalidateQueries({ queryKey: ["recipes"] })
       qc.invalidateQueries({ queryKey: ["recipe", cleanName] })
@@ -93,7 +93,7 @@ export function RecipeEditor({
         </Button>
         <div className="flex-1 min-w-0">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-1">
-            {isNew ? "新建配方" : "编辑配方"}
+            {isNew ? "新建配置" : "编辑配置"}
           </div>
           {isNew ? (
             <Input
@@ -137,7 +137,7 @@ export function RecipeEditor({
         <div className="px-4 pb-4 pt-3 space-y-3">
           {validate.data?.valid === true && (
             <div className="rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-              配方校验通过。
+              配置校验通过。
             </div>
           )}
           {validate.data?.preflight && (

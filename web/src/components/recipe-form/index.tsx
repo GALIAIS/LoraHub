@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Visual recipe editor — covers every field that influences training.
  *
  * Built directly against RecipeConfig (lorahub/core/config/schema.py) so each
@@ -164,7 +164,7 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
       <Section
         icon={<Wand2 className="size-3.5" />}
         title="后端覆盖"
-        subtitle="按配方覆盖 kohya 检出目录与 Python 解释器"
+        subtitle="按配置覆盖 kohya 检出目录与 Python 解释器"
       >
         <BackendFields value={value.backend} set={set} errorMap={errorMap} />
       </Section>

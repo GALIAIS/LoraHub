@@ -1,4 +1,4 @@
-import { useState } from "react"
+﻿import { useState } from "react"
 import {
   Tabs,
   TabsContent,
@@ -37,7 +37,7 @@ export function SettingsPage() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="text-sm text-muted-foreground">
-          工作区级别的默认值。配方文件中的同名字段会按任务覆盖；环境变量
+          工作区级别的默认值。配置文件中的同名字段会按任务覆盖；环境变量
           (LORAHUB_*) 优先级最高。
         </p>
       </header>

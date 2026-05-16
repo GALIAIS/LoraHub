@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+﻿import { useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Download, Pencil, Play } from "lucide-react"
@@ -130,7 +130,7 @@ export function RecipePreview({
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="px-4 py-4 space-y-3">
-          {errorMsg && <ErrorBanner title="配方错误" message={errorMsg} />}
+          {errorMsg && <ErrorBanner title="配置错误" message={errorMsg} />}
 
           {detail.isLoading ? (
             <div className="text-sm text-muted-foreground px-2 py-6">加载中…</div>
@@ -143,7 +143,7 @@ export function RecipePreview({
               readOnly
             />
           ) : (
-            <div className="text-sm text-muted-foreground px-2 py-6">配方无法解析。</div>
+            <div className="text-sm text-muted-foreground px-2 py-6">配置无法解析。</div>
           )}
         </div>
       </div>
