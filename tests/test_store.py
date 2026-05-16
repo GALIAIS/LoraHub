@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -127,3 +128,92 @@ def test_default_store_path_under_runs() -> None:
     p = default_store_path()
     assert p.name == ".lorahub.sqlite"
     assert p.parent.name == "runs"
+
+
+def test_save_and_load_job_with_metadata(tmp_path: Path) -> None:
+    """Sweep metadata round-trips through SQLite serialization."""
+    db = tmp_path / "sweep.sqlite"
+    rec = _job("sweep-job")
+    rec.metadata = {
+        "sweep_id": "abc",
+        "axis_values": {"network.rank": 16},
+    }
+
+    s = JobStore(db)
+    s.upsert(rec)
+
+    # Reopen to prove the value comes off disk, not in-memory.
+    s2 = JobStore(db)
+    out = s2.get("sweep-job")
+    assert out is not None
+    assert out.metadata == {
+        "sweep_id": "abc",
+        "axis_values": {"network.rank": 16},
+    }
+
+
+def test_save_job_without_metadata_is_none(tmp_path: Path) -> None:
+    """No metadata set on the record stores SQL NULL and loads back as None."""
+    db = tmp_path / "nometa.sqlite"
+    s = JobStore(db)
+    s.upsert(_job("plain"))
+
+    out = JobStore(db).get("plain")
+    assert out is not None
+    assert out.metadata is None
+
+
+def test_legacy_db_without_metadata_column_migrates(tmp_path: Path) -> None:
+    """An older DB created before metadata existed must migrate transparently."""
+    db = tmp_path / "legacy.sqlite"
+    # Hand-create a pre-metadata schema and seed one row directly. This mirrors
+    # what users upgrading from a v0.4 install will hit on next launch.
+    raw = sqlite3.connect(str(db))
+    raw.executescript(
+        """
+        CREATE TABLE jobs (
+            id              TEXT PRIMARY KEY,
+            state           TEXT NOT NULL,
+            workspace       TEXT NOT NULL,
+            recipe_snapshot TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            started_at      TEXT,
+            finished_at     TEXT,
+            returncode      INTEGER,
+            error           TEXT,
+            pid             INTEGER
+        );
+        """
+    )
+    raw.execute(
+        """
+        INSERT INTO jobs (id, state, workspace, recipe_snapshot, created_at,
+                          started_at, finished_at, returncode, error, pid)
+        VALUES ('legacy-1', 'succeeded', '/tmp/ws/legacy-1',
+                '{"base_model": {"checkpoint": "/m.safetensors"}}',
+                '2026-05-15T12:00:00+00:00',
+                NULL, NULL, NULL, NULL, NULL)
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    # Opening JobStore must trigger the ADD COLUMN migration without erroring,
+    # and the legacy row must continue to load with metadata=None.
+    s = JobStore(db)
+    out = s.get("legacy-1")
+    assert out is not None
+    assert out.metadata is None
+    assert out.state is state.JobState.succeeded
+
+    # Fresh writes that include metadata work post-migration.
+    new_rec = _job("fresh")
+    new_rec.metadata = {"sweep_id": "post-migrate"}
+    s.upsert(new_rec)
+    assert s.get("fresh").metadata == {"sweep_id": "post-migrate"}
+
+    # Re-opening the migrated DB is a no-op (idempotent ALTER guard).
+    JobStore(db)
+    cols = sqlite3.connect(str(db)).execute("PRAGMA table_info(jobs)").fetchall()
+    metadata_cols = [c for c in cols if c[1] == "metadata"]
+    assert len(metadata_cols) == 1

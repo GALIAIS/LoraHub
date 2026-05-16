@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at     TEXT,
     returncode      INTEGER,
     error           TEXT,
-    pid             INTEGER
+    pid             INTEGER,
+    metadata        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -55,6 +56,15 @@ class JobStore:
                 "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
                 (_SCHEMA_VERSION,),
             )
+            # Idempotent migration: legacy databases created before the
+            # `metadata` column existed need an in-place ADD COLUMN. SQLite's
+            # ALTER doesn't support IF NOT EXISTS for columns, so we sniff
+            # `PRAGMA table_info` first and only ALTER when missing. Safe to
+            # run on fresh DBs (the column is already there from _SCHEMA).
+            cur = conn.execute("PRAGMA table_info(jobs)")
+            cols = {row[1] for row in cur.fetchall()}
+            if "metadata" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN metadata TEXT")
             conn.commit()
 
     @property
@@ -73,9 +83,11 @@ class JobStore:
             conn.execute(
                 """
                 INSERT INTO jobs (id, state, workspace, recipe_snapshot, created_at,
-                                  started_at, finished_at, returncode, error, pid)
+                                  started_at, finished_at, returncode, error, pid,
+                                  metadata)
                 VALUES (:id, :state, :workspace, :recipe_snapshot, :created_at,
-                        :started_at, :finished_at, :returncode, :error, :pid)
+                        :started_at, :finished_at, :returncode, :error, :pid,
+                        :metadata)
                 ON CONFLICT(id) DO UPDATE SET
                     state           = excluded.state,
                     workspace       = excluded.workspace,
@@ -84,7 +96,8 @@ class JobStore:
                     finished_at     = excluded.finished_at,
                     returncode      = excluded.returncode,
                     error           = excluded.error,
-                    pid             = excluded.pid
+                    pid             = excluded.pid,
+                    metadata        = excluded.metadata
                 """,
                 _record_to_row(record),
             )
@@ -141,10 +154,18 @@ def _record_to_row(r: JobRecord) -> dict[str, Any]:
         "returncode": r.returncode,
         "error": r.error,
         "pid": r.pid,
+        "metadata": (
+            json.dumps(r.metadata, ensure_ascii=False) if r.metadata is not None else None
+        ),
     }
 
 
 def _row_to_record(row: sqlite3.Row) -> JobRecord:
+    # Legacy rows (pre-metadata migration) won't have the column even after
+    # the ALTER; sqlite3.Row.keys() reflects the SELECT *, so guard the lookup.
+    metadata: dict[str, Any] | None = None
+    if "metadata" in row.keys() and row["metadata"] is not None:
+        metadata = json.loads(row["metadata"])
     return JobRecord(
         id=row["id"],
         state=JobState(row["state"]),
@@ -156,6 +177,7 @@ def _row_to_record(row: sqlite3.Row) -> JobRecord:
         returncode=row["returncode"],
         error=row["error"],
         pid=row["pid"],
+        metadata=metadata,
     )
 
 
