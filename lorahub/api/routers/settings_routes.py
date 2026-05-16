@@ -38,6 +38,7 @@ class UpdateSettingsRequest(BaseModel):
     default_backend: str | None = None
     tagger_device: str | None = None
     default_tagger: str | None = None
+    max_concurrent_jobs: int | None = None
     github_proxy: str | None = None
     huggingface_endpoint: str | None = None
     modelscope_enabled: bool | None = None
@@ -101,6 +102,20 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             detail=f"default_tagger must be wd14/joytag, got {default_tagger!r}",
         )
 
+    max_concurrent_jobs = (
+        req.max_concurrent_jobs
+        if req.max_concurrent_jobs is not None
+        else current.max_concurrent_jobs
+    )
+    if not isinstance(max_concurrent_jobs, int) or max_concurrent_jobs < 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "max_concurrent_jobs must be a positive integer; "
+                f"got {max_concurrent_jobs!r}"
+            ),
+        )
+
     new = Settings(
         sd_scripts_path=_norm(req.sd_scripts_path),
         python_executable=_norm(req.python_executable),
@@ -109,6 +124,7 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
         default_backend=default_backend,
         tagger_device=tagger_device,
         default_tagger=default_tagger,
+        max_concurrent_jobs=max_concurrent_jobs,
         github_proxy=_norm(req.github_proxy),
         huggingface_endpoint=_norm(req.huggingface_endpoint),
         modelscope_enabled=(

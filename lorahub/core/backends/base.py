@@ -99,11 +99,19 @@ class TrainingBackend(Protocol):
         cfg: RecipeConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
+        *,
+        extra_argv: list[str] | None = None,
+        env: dict[str, str] | None = None,
     ) -> TrainingHandle:
         """Start training. Returns immediately with a handle.
 
         `workspace` is a directory where the backend writes checkpoints,
         samples, and logs. `on_event` is called from a background thread
         whenever the backend has something to report.
+
+        `extra_argv` is appended after the compiler-produced argv (used by
+        `/jobs/{id}/resume`). `env` is merged into the subprocess env on top
+        of the parent process environment so the scheduler can pin a worker
+        to a specific GPU via `CUDA_VISIBLE_DEVICES`.
         """
         ...

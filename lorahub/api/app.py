@@ -80,6 +80,27 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         loaded = state.registry.load_persisted()
         if loaded > 0:
             log.info("loaded %d job record(s) from %s", loaded, store_path)
+
+    # Resize the module-level scheduler from persisted Settings before
+    # workers start. We reach for the *current* `_settings_store` symbol
+    # rather than a captured reference so test monkeypatches still apply.
+    try:
+        desired = max(1, int(_settings_store.load().max_concurrent_jobs))
+    except Exception:  # noqa: BLE001
+        desired = 1
+    if desired != sched.scheduler.concurrency:
+        log.info(
+            "scheduler concurrency: %d -> %d (from settings.max_concurrent_jobs)",
+            sched.scheduler.concurrency,
+            desired,
+        )
+        # The default scheduler hasn't been start()-ed yet, but stop() is a
+        # safe no-op when no workers exist, so it's harmless to call here.
+        sched.scheduler.stop(timeout=2.0)
+        sched.scheduler = sched.JobScheduler(
+            concurrency=desired,
+            available_slots=list(range(desired)),
+        )
     sched.scheduler.start()
     yield
     sched.scheduler.stop(timeout=2.0)

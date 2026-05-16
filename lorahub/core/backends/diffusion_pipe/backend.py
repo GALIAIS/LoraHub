@@ -132,13 +132,18 @@ class DiffusionPipeBackend:
         cfg: RecipeConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
+        *,
+        extra_argv: list[str] | None = None,
+        env: dict[str, str] | None = None,
     ) -> TrainingHandle:
-        env = _bootstrap.resolve(
+        bootstrap_env = _bootstrap.resolve(
             recipe_path=cfg.backend.sd_scripts_path,
             recipe_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()
         argv, files = compile_recipe(cfg, workspace)
+        if extra_argv:
+            argv = [*argv, *extra_argv]
         workspace.mkdir(parents=True, exist_ok=True)
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,12 +151,13 @@ class DiffusionPipeBackend:
 
         job_id = str(ulid.new())
         runner = DiffusionPipeRunner(
-            python=env.python_executable,
-            repo=env.repo_path,
+            python=bootstrap_env.python_executable,
+            repo=bootstrap_env.repo_path,
             argv=argv,
             workspace=workspace,
             on_event=on_event,
             job_id=job_id,
+            env=env,
         )
         runner.start()
 

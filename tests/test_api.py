@@ -278,6 +278,62 @@ def test_cancel_queued_job_short_circuits_to_canceled(
     assert body["finished_at"] is not None
 
 
+def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker slot -> `CUDA_VISIBLE_DEVICES` env var on backend.launch()."""
+    from lorahub.api import jobs_helpers
+    from lorahub.api import scheduler as sched_module
+    from lorahub.core.backends.base import TrainingHandle
+
+    captured: dict[str, Any] = {}
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+        ) -> TrainingHandle:
+            captured["env"] = env
+            captured["workspace"] = workspace
+            captured["extra_argv"] = extra_argv
+            return TrainingHandle(
+                job_id="fake",
+                pid=0,
+                _stop_fn=lambda _g: None,
+                _wait_fn=lambda _t: 0,
+            )
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    # Use a 2-slot scheduler so we exercise a non-zero slot id (slot=7).
+    fresh_sched = sched_module.JobScheduler(concurrency=1, available_slots=[7])
+    monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
+    fresh_sched.start()
+    try:
+        payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+        r = client.post("/api/jobs", json=payload)
+        assert r.status_code == 202, r.text
+        job_id = r.json()["id"]
+
+        import time as _time
+
+        deadline = _time.time() + 5.0
+        while _time.time() < deadline and "env" not in captured:
+            _time.sleep(0.02)
+    finally:
+        fresh_sched.stop(timeout=2.0)
+
+    assert "env" in captured, "FakeBackend.launch was never invoked"
+    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "7"}
+
+
 # --------------------------------------------------------------------------- #
 # Recipe template browsing
 # --------------------------------------------------------------------------- #
@@ -1561,6 +1617,21 @@ def test_settings_persists_network_fields(client: TestClient) -> None:
     # GET round-trips them.
     r2 = client.get("/api/settings")
     assert r2.json()["settings"]["github_proxy"] == "https://gh-proxy.org"
+
+
+def test_settings_persists_max_concurrent_jobs(client: TestClient) -> None:
+    """`max_concurrent_jobs` round-trips through PUT/GET and rejects bad values."""
+    r = client.put("/api/settings", json={"max_concurrent_jobs": 4})
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"]["max_concurrent_jobs"] == 4
+
+    # GET round-trips it.
+    assert client.get("/api/settings").json()["settings"]["max_concurrent_jobs"] == 4
+
+    # 0 / negative is rejected.
+    r_bad = client.put("/api/settings", json={"max_concurrent_jobs": 0})
+    assert r_bad.status_code == 422
+    assert "max_concurrent_jobs" in r_bad.json()["detail"]
 
 
 def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

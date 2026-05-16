@@ -38,6 +38,14 @@ class Settings:
     tagger_device: str = "auto"  # "auto" | "cpu" | "cuda"
     default_tagger: str = "wd14"  # "wd14" | "joytag"
 
+    # Maximum number of training jobs the scheduler can run concurrently.
+    # Slot id == GPU index, so this maps directly onto `CUDA_VISIBLE_DEVICES`
+    # for each worker. Default 1 preserves the historical single-slot queue.
+    # NOTE: changing this value does NOT hot-reload the live scheduler — it
+    # is read once at server startup. Restart `lorahub serve` for the new
+    # value to take effect.
+    max_concurrent_jobs: int = 1
+
     # --- Network acceleration ---
     # Optional GitHub mirror prefix (e.g. "https://gh-proxy.org") rewriting
     # `https://github.com/...` URLs at clone time. Leave empty for direct.
