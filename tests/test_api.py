@@ -1700,3 +1700,83 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
 def test_tagging_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/tagging/tag/does-not-exist")
     assert r.status_code == 404
+
+
+def test_tagging_dispatches_to_joytag_when_requested(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`tagger='joytag'` must reach `_build_tagger` and instantiate JoyTagger.
+
+    The real `JoyTagger.load()` raises today, so we monkeypatch the class on
+    the router module to a stub that records construction kwargs and runs
+    cleanly to completion."""
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "ds"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake")
+
+    captured: dict[str, Any] = {}
+
+    class FakeJoyTagger:
+        def __init__(self, *, predict_threshold: float, device: str) -> None:
+            captured["init"] = {"predict_threshold": predict_threshold, "device": device}
+            self.active_provider = "cpu"
+
+        def load(self) -> None:
+            captured["loaded"] = True
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            captured["tag_directory_kwargs"] = kwargs
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=kwargs["recursive"]):
+                if kwargs["write_caption"]:
+                    image.with_suffix(".txt").write_text("1girl", encoding="utf-8")
+                if kwargs.get("on_progress") is not None:
+                    kwargs["on_progress"](image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "JoyTagger", FakeJoyTagger)
+
+    r = client.post(
+        "/api/tagging/tag",
+        json={
+            "path": str(data),
+            "tagger": "joytag",
+            "joytag_threshold": 0.55,
+            "device": "cpu",
+        },
+    )
+    assert r.status_code == 202, r.text
+    sid = r.json()["session_id"]
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/tagging/tag/{sid}").json()
+        if final["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+
+    assert final["status"] == "succeeded", final
+    assert final["tagger"] == "joytag"
+    assert final["active_provider"] == "cpu"
+    assert captured["init"] == {"predict_threshold": 0.55, "device": "cpu"}
+    assert captured["loaded"] is True
+    assert captured["tag_directory_kwargs"]["skip_existing"] is True
+    assert (data / "a.txt").read_text(encoding="utf-8") == "1girl"
+
+
+def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) -> None:
+    data = tmp_path / "ds"
+    data.mkdir()
+    r = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "tagger": "blip"},
+    )
+    assert r.status_code == 422

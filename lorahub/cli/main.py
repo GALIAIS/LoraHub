@@ -427,7 +427,7 @@ def tag(
 
     instance: BaseTagger
     if kind == "joytag":
-        from lorahub.core.tagging.joytag import JoyTagModelError, JoyTagger  # noqa: PLC0415
+        from lorahub.core.tagging.joytag import JoyTagger, JoyTagModelError  # noqa: PLC0415
 
         instance = JoyTagger(predict_threshold=joytag_threshold, device=device)
         console.print("[dim]loading fancyfeast/joytag (first run downloads ~1.2GB)...[/dim]")
