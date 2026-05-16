@@ -1,4 +1,4 @@
-"""Tests for the LoraHub HTTP API."""
+﻿"""Tests for the LoraHub HTTP API."""
 
 from __future__ import annotations
 
@@ -62,13 +62,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api.settings import SettingsStore
 
     # Isolate the settings store so tests don't read or write the real
-    # user-data file. Patch on the imported `app` module — that's the symbol
+    # user-data file. Patch on the imported `app` module 鈥?that's the symbol
     # the request handlers resolve at call time.
     monkeypatch.setattr(
         app_mod, "_settings_store", SettingsStore(tmp_path / "settings.json")
     )
-    # Don't let a developer's .env (LORAHUB_KOHYA_*) leak into backend probes —
-    # those env vars are valid in production but confuse settings tests.
+    # Don't let a developer's .env (LORAHUB_KOHYA_*) leak into backend probes 鈥?    # those env vars are valid in production but confuse settings tests.
     monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
     monkeypatch.delenv("LORAHUB_KOHYA_PYTHON", raising=False)
     # Reset the singleton bootstrap session so tests can't leak state into
@@ -535,11 +534,11 @@ def test_save_recipe_writes_file_and_blocks_overwrite(
     assert saved["filename"] == "demo.yaml"
     assert (recipes_dir / "demo.yaml").is_file()
 
-    # Repeat without overwrite — should 409
+    # Repeat without overwrite 鈥?should 409
     r2 = client.post("/api/recipes", json=payload)
     assert r2.status_code == 409
 
-    # With overwrite — should 201
+    # With overwrite 鈥?should 201
     r3 = client.post("/api/recipes", json={**payload, "overwrite": True})
     assert r3.status_code == 201
 
@@ -738,7 +737,7 @@ def test_thumb_size_bounds_enforced(
 def test_thumb_corrupt_image_returns_404(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pillow can't decode a `.png` of arbitrary bytes — we surface 404."""
+    """Pillow can't decode a `.png` of arbitrary bytes 鈥?we surface 404."""
     monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     bad = tmp_path / "broken.png"
@@ -766,7 +765,7 @@ def test_get_caption_returns_existing_text(
 def test_get_caption_missing_returns_null(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A missing companion is `caption=null`, not an error — there's nothing
+    """A missing companion is `caption=null`, not an error 鈥?there's nothing
     wrong with an unlabeled image, that's just the pre-tagging state."""
     monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -920,7 +919,7 @@ def test_reveal_existing_job_invokes_subprocess(
     assert r.status_code == 200, r.text
     assert r.json()["opened"] == str(ws)
     assert captured["argv"][-1] == str(ws)
-    # Never use shell=True — argv form only.
+    # Never use shell=True 鈥?argv form only.
     assert "shell" not in captured["kwargs"] or captured["kwargs"]["shell"] is False
 
 
@@ -1008,7 +1007,7 @@ def test_bootstrap_concurrent_returns_409(
         def runner(progress: Any) -> None:
             progress("clone")
             # Block here so the session stays in `running` while we issue the
-            # second POST below — this is the whole point of the test.
+            # second POST below 鈥?this is the whole point of the test.
             release.wait(timeout=5.0)
 
         return runner
@@ -1046,7 +1045,7 @@ def test_bootstrap_succeeds_with_stub(
     r = client.post("/api/backend/bootstrap", json={})
     assert r.status_code == 202, r.text
     # The POST returns as soon as the worker thread is spawned; for very fast
-    # stubs the install may already be done — both running and succeeded are OK.
+    # stubs the install may already be done 鈥?both running and succeeded are OK.
     assert r.json()["status"] in ("running", "succeeded")
 
     deadline = time.time() + 5
@@ -1081,7 +1080,7 @@ def test_system_stats_returns_full_snapshot(client: TestClient) -> None:
     assert body["cpu"]["cores_logical"] >= 1
     assert isinstance(body["disks"], list) and len(body["disks"]) >= 1
     assert isinstance(body["gpus"], list)  # may be empty on non-NVIDIA hosts
-    # Memory shape — fall back to 0s rather than missing keys.
+    # Memory shape 鈥?fall back to 0s rather than missing keys.
     for key in ("total_bytes", "used_bytes", "available_bytes", "percent"):
         assert key in body["memory"]
 
@@ -1264,7 +1263,7 @@ def test_job_metrics_handles_corrupt_lines(
             payload={"step": 1, "total_steps": 10, "loss": 0.5},
             timestamp=base_ts + 1,
         ).to_json(),
-        # Garbage line — must not break parsing of the rest.
+        # Garbage line 鈥?must not break parsing of the rest.
         "{not json at all",
         TrainingEvent(
             type=EventType.step,
@@ -1312,7 +1311,7 @@ def test_job_metrics_returns_val_loss_and_overfit_signal(
     base_ts = 1_700_000_500.0
 
     lines: list[str] = []
-    # Train loss decreasing — 5 step events.
+    # Train loss decreasing 鈥?5 step events.
     train_losses = [0.50, 0.40, 0.30, 0.22, 0.18]
     for i, tl in enumerate(train_losses, start=1):
         lines.append(
@@ -1322,7 +1321,7 @@ def test_job_metrics_returns_val_loss_and_overfit_signal(
                 timestamp=base_ts + i,
             ).to_json()
         )
-    # Validation loss going up — classic overfit signature.
+    # Validation loss going up 鈥?classic overfit signature.
     val_losses = [(1, 0.45), (2, 0.50), (3, 0.58)]
     for ep, vl in val_losses:
         lines.append(
@@ -1670,7 +1669,7 @@ def test_apply_github_proxy_rewrites_only_github_urls() -> None:
     assert apply_github_proxy(
         "https://github.com/foo/bar.git", "https://gh-proxy.org/"
     ) == "https://gh-proxy.org/https://github.com/foo/bar.git"
-    # Empty proxy → identity.
+    # Empty proxy 鈫?identity.
     assert (
         apply_github_proxy("https://github.com/foo/bar.git", None)
         == "https://github.com/foo/bar.git"
@@ -2159,7 +2158,7 @@ def test_samples_aggregates_across_jobs(
     )
 
     # The raw_url should resolve to an actual byte stream from the existing
-    # per-job endpoint — that is the reuse story we promised.
+    # per-job endpoint 鈥?that is the reuse story we promised.
     raw = client.get(
         f"/api/jobs/{job_b.id}/files/raw", params={"path": "out/sample-2.jpg"}
     )
@@ -2365,7 +2364,7 @@ def test_instantiate_template_conflict_without_overwrite(
 
 
 def test_apply_placeholders_creates_intermediate_dicts() -> None:
-    """The dotted-path setter is the load-bearing piece — make sure it
+    """The dotted-path setter is the load-bearing piece 鈥?make sure it
     creates missing intermediates and rejects non-mapping traversal."""
     from lorahub.api.recipe_templates import apply_placeholders
 
@@ -2525,3 +2524,72 @@ def test_sweep_metadata_persists_across_restart(
         "sweep_id": sweep_id,
         "axis_values": {"network.rank": 16},
     }
+def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
+    """GET /api/sweeps groups every metadata-tagged job by ``sweep_id``.
+
+    We register two sibling sweeps with distinct prefixes plus an untagged
+    job (which must be ignored). The endpoint is expected to bubble up a
+    rolled-up count per sweep and a ``name_prefix`` derived from the common
+    head of every variant's ``output.name``.
+    """
+    # Sweep A 鈥?three variants in mixed states; the shared name prefix is
+    # ``alpha-`` (the trailing dash is stripped by ``_common_prefix``).
+    sweep_a = "01SWEEPALPHA00000000000000"
+    a_states: list[state.JobState] = [
+        state.JobState.queued,
+        state.JobState.running,
+        state.JobState.succeeded,
+    ]
+    for i, st in enumerate(a_states, start=1):
+        ws = tmp_path / f"alpha-{i:03d}"
+        ws.mkdir()
+        rec = state.registry.create(
+            workspace=ws,
+            recipe_snapshot={"output": {"name": f"alpha-{i:03d}"}},
+        )
+        rec.state = st
+        rec.metadata = {
+            "sweep_id": sweep_a,
+            "variant_name": f"alpha-{i:03d}",
+            "axis_values": {"network.rank": [16, 32, 64][i - 1]},
+        }
+        state.registry.update(rec)
+
+    # Sweep B 鈥?two failed variants under a different prefix.
+    sweep_b = "01SWEEPBRAVO00000000000000"
+    for i in range(1, 3):
+        ws = tmp_path / f"bravo-{i:03d}"
+        ws.mkdir()
+        rec = state.registry.create(
+            workspace=ws,
+            recipe_snapshot={"output": {"name": f"bravo-{i:03d}"}},
+        )
+        rec.state = state.JobState.failed
+        rec.metadata = {"sweep_id": sweep_b}
+        state.registry.update(rec)
+
+    # Stray job without a sweep tag 鈥?must not appear in the response.
+    stray = tmp_path / "stray"
+    stray.mkdir()
+    state.registry.create(workspace=stray, recipe_snapshot={})
+
+    r = client.get("/api/sweeps")
+    assert r.status_code == 200, r.text
+    sweeps = r.json()["sweeps"]
+    assert len(sweeps) == 2
+
+    by_id = {s["sweep_id"]: s for s in sweeps}
+    a = by_id[sweep_a]
+    assert a["total"] == 3
+    assert a["queued"] == 1
+    assert a["running"] == 1
+    assert a["succeeded"] == 1
+    assert a["failed"] == 0
+    assert a["name_prefix"] == "alpha"
+    assert "earliest_created_at" in a
+    assert "latest_modified_at" in a
+
+    b = by_id[sweep_b]
+    assert b["total"] == 2
+    assert b["failed"] == 2
+    assert b["name_prefix"] == "bravo"

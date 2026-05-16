@@ -14,6 +14,7 @@ the job row in SQLite, so sweep_id grouping survives a server restart.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from lorahub.api import state
 from lorahub.api.jobs_helpers import _launch_job
-from lorahub.api.state import JobState
+from lorahub.api.state import JobRecord, JobState
 from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.sweep import (
     SweepAxis,
@@ -33,6 +34,45 @@ from lorahub.core.sweep import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+def _common_prefix(names: list[str]) -> str:
+    """Longest shared leading substring across `names`, trimmed to a sane stem.
+
+    The sweep router stamps each variant's ``output.name`` with the template
+    ``{base}-{i:03d}``, so the shared prefix is normally ``{base}-``. Naïve
+    char-by-char prefix matching would also keep a few digits when the index
+    happens to be zero-padded (``alpha-001``, ``alpha-002`` → ``alpha-00``),
+    so we strip trailing digits and separators (``-_./``) until we land on a
+    clean stem. Falls back to the first non-empty name when only one variant
+    has been registered.
+    """
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    shortest = min(names, key=len)
+    cutoff = len(shortest)
+    for i, ch in enumerate(shortest):
+        if any(name[i] != ch for name in names):
+            cutoff = i
+            break
+    prefix = shortest[:cutoff]
+    # Drop the structural suffix the sweep template injects (``-001`` etc.).
+    while prefix and (prefix[-1].isdigit() or prefix[-1] in "-_./"):
+        prefix = prefix[:-1]
+    return prefix or shortest
+
+
+def _job_name(job: JobRecord) -> str | None:
+    """Pull the human-readable variant name from the job's recipe snapshot."""
+    snap = job.recipe_snapshot or {}
+    output = snap.get("output") if isinstance(snap, dict) else None
+    if isinstance(output, dict):
+        name = output.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
 
 
 class SweepAxisRequest(BaseModel):
@@ -157,3 +197,61 @@ def get_sweep(sweep_id: str) -> dict[str, Any]:
         "canceling": counts[JobState.canceling.value],
         "jobs": [j.to_summary() for j in matched],
     }
+
+
+@router.get("/sweeps")
+def list_sweeps() -> dict[str, Any]:
+    """List every sweep currently known in memory, with rolled-up counts.
+
+    We don't keep a separate sweep table — sweeps live as a tag on
+    ``JobRecord.metadata``. So the list is computed from a single scan over
+    the registry, grouping by ``sweep_id`` and aggregating state counts plus
+    activity timestamps. The returned ``name_prefix`` is the longest shared
+    head across the variants' ``output.name`` (which the sweep CLI/router
+    stamps as ``{base}-{i:03d}``), giving the UI a stable group label.
+
+    The list is sorted newest-first by ``latest_modified_at`` so freshly-touched
+    sweeps surface at the top of the UI.
+    """
+    groups: dict[str, list[JobRecord]] = defaultdict(list)
+    for job in state.registry.list():
+        meta = job.metadata
+        if not isinstance(meta, dict):
+            continue
+        sweep_id = meta.get("sweep_id")
+        if not isinstance(sweep_id, str) or not sweep_id:
+            continue
+        groups[sweep_id].append(job)
+
+    summaries: list[dict[str, Any]] = []
+    for sweep_id, jobs in groups.items():
+        counts = {s.value: 0 for s in JobState}
+        for j in jobs:
+            counts[j.state.value] += 1
+        names = [n for n in (_job_name(j) for j in jobs) if n]
+        prefix = _common_prefix(names) if names else sweep_id[-8:]
+        # ``earliest_created_at`` anchors the sweep on a timeline; the latest
+        # mod time is used to surface still-active sweeps at the top.
+        earliest = min(j.created_at for j in jobs)
+        latest = max(
+            (j.finished_at or j.started_at or j.created_at) for j in jobs
+        )
+        summaries.append(
+            {
+                "sweep_id": sweep_id,
+                "name_prefix": prefix,
+                "total": len(jobs),
+                "queued": counts[JobState.queued.value],
+                "running": counts[JobState.running.value],
+                "succeeded": counts[JobState.succeeded.value],
+                "failed": counts[JobState.failed.value],
+                "canceled": counts[JobState.canceled.value],
+                "interrupted": counts[JobState.interrupted.value],
+                "canceling": counts[JobState.canceling.value],
+                "earliest_created_at": earliest.isoformat(),
+                "latest_modified_at": latest.isoformat(),
+            }
+        )
+
+    summaries.sort(key=lambda s: s["latest_modified_at"], reverse=True)
+    return {"sweeps": summaries}

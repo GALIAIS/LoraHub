@@ -350,6 +350,51 @@ export interface TagDatasetRequest {
   underscores?: boolean
 }
 
+export interface SweepSummary {
+  sweep_id: string
+  name_prefix: string
+  total: number
+  queued: number
+  running: number
+  succeeded: number
+  failed: number
+  canceled: number
+  interrupted: number
+  canceling: number
+  earliest_created_at: string
+  latest_modified_at: string
+}
+
+export interface SweepJobSummary {
+  id: string
+  state: string
+  workspace: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  returncode: number | null
+  error: string | null
+  pid: number | null
+  metadata: {
+    sweep_id?: string
+    variant_name?: string
+    axis_values?: Record<string, unknown>
+  } | null
+}
+
+export interface SweepDetail {
+  sweep_id: string
+  total: number
+  queued: number
+  running: number
+  succeeded: number
+  failed: number
+  canceled: number
+  interrupted: number
+  canceling: number
+  jobs: SweepJobSummary[]
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
@@ -570,6 +615,9 @@ export const api = {
     }
     return res.json() as Promise<{ name: string; filename: string; path: string }>
   },
+  listSweeps: () => http<{ sweeps: SweepSummary[] }>("/sweeps"),
+  getSweep: (sweep_id: string) =>
+    http<SweepDetail>(`/sweeps/${encodeURIComponent(sweep_id)}`),
 }
 
 /**

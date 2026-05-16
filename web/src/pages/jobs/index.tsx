@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useSearchParams } from "react-router-dom"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type JobSummary } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -49,6 +50,44 @@ export function JobsPage() {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
   })
+
+  // Honor ?id=<jobId> and ?compare=<id1>,<id2>,... handed in by the sweeps
+  // page (or any external link). We consume the query string exactly once
+  // and then strip it so a refresh doesn't fight the user's later choices.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const consumedQueryRef = useRef(false)
+  useEffect(() => {
+    if (consumedQueryRef.current) return
+    const idParam = searchParams.get("id")
+    const compareParam = searchParams.get("compare")
+    let touched = false
+    if (idParam) {
+      setSelectedId(idParam)
+      touched = true
+    }
+    if (compareParam) {
+      const ids = compareParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, COMPARE_LIMIT)
+      if (ids.length > 0) {
+        setCompareMode(true)
+        setCompareIds(ids)
+        if (!idParam) setSelectedId(ids[0])
+        touched = true
+      }
+    }
+    if (touched) {
+      consumedQueryRef.current = true
+      const next = new URLSearchParams(searchParams)
+      next.delete("id")
+      next.delete("compare")
+      setSearchParams(next, { replace: true })
+    } else {
+      consumedQueryRef.current = true
+    }
+  }, [searchParams, setSearchParams])
 
   useEffect(() => {
     if (typeof window === "undefined") return
