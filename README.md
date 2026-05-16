@@ -178,6 +178,17 @@ lorahub tag ./datasets/akagi --device cuda
 
 `--device auto` picks GPU when `onnxruntime-gpu` and a CUDA 12.x runtime are present, otherwise falls back to CPU. `--device cuda` forces GPU and errors out with an actionable message if it isn't available.
 
+### JoyTag (PyTorch backend)
+
+LoraHub also ships a JoyTag adapter that hosts the [`fancyfeast/joytag`](https://huggingface.co/fancyfeast/joytag) ViT model end-to-end in PyTorch — useful when you want richer booru tags (~5800-tag vocabulary, default 0.4 threshold) than WD14. The architecture is vendored under `lorahub/core/tagging/_joytag_model.py` so no `timm`/`einops`/`transformers` extras are pulled in. Install the optional `tagging` extras to get PyTorch + safetensors:
+
+```powershell
+pip install "lorahub[tagging]"
+# or pick a CUDA wheel manually from https://pytorch.org/get-started/locally/
+```
+
+The first run downloads ~700 MB of safetensors weights plus `config.json` and `top_tags.txt` from the Hub.
+
 ## HTTP API (v0.2 starter)
 
 LoraHub ships a FastAPI server for programmatic access. Install API extras and start it:
