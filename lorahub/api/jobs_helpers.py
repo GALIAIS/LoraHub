@@ -364,6 +364,7 @@ def _launch_job(
     workspace: Path,
     *,
     extra_argv: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Materialize a workspace, register a queued job, and hand it to the scheduler.
 
@@ -374,11 +375,17 @@ def _launch_job(
 
     `extra_argv` is appended after the compiler's argv (used by `/jobs/{id}/resume`
     to inject `--resume=<state>` and `--network_weights=<safetensors>`).
+
+    `metadata` is stamped onto the JobRecord so callers like the sweep
+    router can later filter / aggregate jobs by their orchestrator id.
     """
     workspace.mkdir(parents=True, exist_ok=True)
 
     snapshot = cfg.model_dump(mode="json")
     job = state.registry.create(workspace=workspace, recipe_snapshot=snapshot)
+    if metadata is not None:
+        job.metadata = metadata
+        state.registry.update(job)
     dump_recipe(cfg, workspace / "recipe.yaml")
 
     _enqueue_launch(job, cfg, extra_argv=extra_argv)

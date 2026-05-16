@@ -52,6 +52,12 @@ class JobRecord:
     pid: int | None = None
     handle: TrainingHandle | None = field(default=None, repr=False)
     events: deque[TrainingEvent] = field(default_factory=lambda: deque(maxlen=_DEFAULT_RING_SIZE))
+    # Free-form metadata bag set by callers that orchestrate jobs (e.g. the
+    # sweep router stamps `{"sweep_id": ..., "axis_values": {...}}` here so
+    # later GETs can group jobs by their parent sweep). In-memory only —
+    # the SQLite store does not currently persist this; if a server restart
+    # rehydrates jobs they'll come back with metadata=None until re-tagged.
+    metadata: dict[str, Any] | None = None
 
     def to_summary(self) -> dict[str, Any]:
         """Serializable view that the API returns. Strips the live handle."""
@@ -65,6 +71,7 @@ class JobRecord:
             "returncode": self.returncode,
             "error": self.error,
             "pid": self.pid,
+            "metadata": self.metadata,
         }
 
 
