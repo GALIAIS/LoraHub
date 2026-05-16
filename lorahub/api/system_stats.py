@@ -20,8 +20,11 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -136,18 +139,71 @@ class BatteryStats:
 
 
 @dataclass
+class InterfaceAddress:
+    family: str   # 'IPv4' | 'IPv6' | 'MAC' | other
+    address: str
+    netmask: str | None = None
+    broadcast: str | None = None
+
+
+@dataclass
+class NetworkInterfaceStats:
+    name: str                       # eth0 / wlan0 / en0
+    is_up: bool                     # link up
+    speed_mbps: int | None          # negotiated link speed (psutil.net_if_stats().speed)
+    mtu: int | None
+    addresses: list[InterfaceAddress]
+    bytes_sent_total: int
+    bytes_recv_total: int
+    bytes_sent_per_sec: float
+    bytes_recv_per_sec: float
+    packets_sent_total: int
+    packets_recv_total: int
+    errors_in: int
+    errors_out: int
+    drops_in: int
+    drops_out: int
+    # 'physical' | 'loopback' | 'virtual' | 'wireless'
+    kind: str = "physical"
+
+
+@dataclass
+class TcpConnectionStats:
+    total: int
+    established: int
+    listen: int
+    time_wait: int
+    close_wait: int
+    other: int  # all other states summed
+
+
+@dataclass
+class PublicIpInfo:
+    ip: str | None       # e.g. '203.0.113.42'; None when unreachable
+    fetched_at: float    # epoch seconds when we resolved it (for "5 minutes ago" UI)
+    source: str          # 'ip.sb' | 'ipinfo.io' | 'cached' | 'unreachable'
+
+
+@dataclass
 class NetworkStats:
     """Per-snapshot network throughput.
 
     `bytes_*_total` is monotonically increasing across the host's lifetime;
     `bytes_*_per_sec` is computed against the previous snapshot we emitted
     so the dashboard can show rolling rate without keeping its own history.
+
+    The aggregate fields here include *all* interfaces (loopback, virtual,
+    wireless, physical). The `interfaces` list lets the frontend filter by
+    `kind` and re-aggregate however it wants.
     """
 
     bytes_sent_total: int
     bytes_recv_total: int
     bytes_sent_per_sec: float
     bytes_recv_per_sec: float
+    interfaces: list[NetworkInterfaceStats] = field(default_factory=list)
+    tcp_connections: TcpConnectionStats | None = None
+    public_ip: PublicIpInfo | None = None
 
 
 @dataclass
@@ -182,7 +238,7 @@ class SystemSnapshot:
             "disks": [d.__dict__ for d in self.disks],
             "gpus": [g.__dict__ for g in self.gpus],
             "battery": self.battery.__dict__ if self.battery is not None else None,
-            "network": self.network.__dict__ if self.network is not None else None,
+            "network": _network_to_dict(self.network),
         }
 
 
@@ -715,6 +771,265 @@ def _collect_host() -> HostInfo:
 # get a per-second rate. First call always returns a 0 rate (no prior).
 _last_net_sample: tuple[float, int, int] | None = None
 
+# Per-NIC rolling state, keyed by interface name. Same shape: (t, sent, recv).
+_last_pernic_sample: dict[str, tuple[float, int, int]] = {}
+
+# Public-IP cache. We hit the network at most once every 5 minutes; failures
+# are cached too so we don't hammer external endpoints when offline.
+_PUBLIC_IP_TTL_SECONDS = 300.0
+_public_ip_cache: PublicIpInfo | None = None
+_public_ip_cache_monotonic: float | None = None
+
+
+_VIRTUAL_PREFIXES = ("docker", "veth", "br-", "virbr", "tun", "tap", "wg")
+_WIRELESS_PREFIXES = ("wlan", "wifi", "wlp")
+
+
+def _classify_interface(name: str) -> str:
+    """Heuristic kind for an interface name.
+
+    'lo*'                       -> 'loopback'
+    docker / veth / br- / virbr / tun / tap / wg prefixes -> 'virtual'
+    wlan / wifi / wlp prefixes  -> 'wireless'
+    everything else             -> 'physical'
+    """
+    lname = name.lower()
+    if lname == "lo" or lname.startswith("lo"):
+        # Be careful: 'lo' alone, 'lo0' on macOS, 'Loopback Pseudo-Interface' on
+        # Windows all count. Real NICs rarely start with 'lo' - 'localhost'-ish
+        # adapter names on Windows include the word 'Loopback' too.
+        return "loopback"
+    if "loopback" in lname:
+        return "loopback"
+    if lname.startswith(_VIRTUAL_PREFIXES):
+        return "virtual"
+    if lname.startswith(_WIRELESS_PREFIXES):
+        return "wireless"
+    return "physical"
+
+
+def _address_family_label(family: Any) -> str:
+    if family == socket.AF_INET:
+        return "IPv4"
+    if family == socket.AF_INET6:
+        return "IPv6"
+    af_link = getattr(psutil, "AF_LINK", None) if _HAS_PSUTIL else None
+    if af_link is not None and family == af_link:
+        return "MAC"
+    return str(family)
+
+
+def _collect_network_interfaces() -> list[NetworkInterfaceStats]:
+    """Per-NIC counters + addresses + link state + rolling per-NIC rate."""
+    if not _HAS_PSUTIL:
+        return []
+    try:
+        per_io = psutil.net_io_counters(pernic=True)
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        per_if_stats = psutil.net_if_stats()
+    except Exception:  # noqa: BLE001
+        per_if_stats = {}
+    try:
+        per_if_addrs = psutil.net_if_addrs()
+    except Exception:  # noqa: BLE001
+        per_if_addrs = {}
+
+    now = time.monotonic()
+    out: list[NetworkInterfaceStats] = []
+    seen_names: set[str] = set()
+    for name, counters in per_io.items():
+        seen_names.add(name)
+        sent = int(getattr(counters, "bytes_sent", 0) or 0)
+        recv = int(getattr(counters, "bytes_recv", 0) or 0)
+
+        rate_sent = 0.0
+        rate_recv = 0.0
+        prev = _last_pernic_sample.get(name)
+        if prev is not None:
+            prev_t, prev_sent, prev_recv = prev
+            dt = now - prev_t
+            if dt > 0:
+                rate_sent = max(0.0, (sent - prev_sent) / dt)
+                rate_recv = max(0.0, (recv - prev_recv) / dt)
+        _last_pernic_sample[name] = (now, sent, recv)
+
+        if_stats = per_if_stats.get(name)
+        is_up = bool(getattr(if_stats, "isup", False)) if if_stats is not None else False
+        speed_raw = getattr(if_stats, "speed", None) if if_stats is not None else None
+        try:
+            speed_mbps = int(speed_raw) if speed_raw is not None else None
+        except (TypeError, ValueError):
+            speed_mbps = None
+        # psutil reports 0 when speed is unknown - normalise that to None.
+        if speed_mbps == 0:
+            speed_mbps = None
+        mtu_raw = getattr(if_stats, "mtu", None) if if_stats is not None else None
+        try:
+            mtu = int(mtu_raw) if mtu_raw is not None else None
+        except (TypeError, ValueError):
+            mtu = None
+
+        addresses: list[InterfaceAddress] = []
+        for addr in per_if_addrs.get(name, []):
+            family = getattr(addr, "family", None)
+            address = getattr(addr, "address", None)
+            if not address:
+                continue
+            addresses.append(
+                InterfaceAddress(
+                    family=_address_family_label(family),
+                    address=str(address),
+                    netmask=getattr(addr, "netmask", None) or None,
+                    broadcast=getattr(addr, "broadcast", None) or None,
+                )
+            )
+
+        out.append(
+            NetworkInterfaceStats(
+                name=name,
+                is_up=is_up,
+                speed_mbps=speed_mbps,
+                mtu=mtu,
+                addresses=addresses,
+                bytes_sent_total=sent,
+                bytes_recv_total=recv,
+                bytes_sent_per_sec=round(rate_sent, 2),
+                bytes_recv_per_sec=round(rate_recv, 2),
+                packets_sent_total=int(getattr(counters, "packets_sent", 0) or 0),
+                packets_recv_total=int(getattr(counters, "packets_recv", 0) or 0),
+                errors_in=int(getattr(counters, "errin", 0) or 0),
+                errors_out=int(getattr(counters, "errout", 0) or 0),
+                drops_in=int(getattr(counters, "dropin", 0) or 0),
+                drops_out=int(getattr(counters, "dropout", 0) or 0),
+                kind=_classify_interface(name),
+            )
+        )
+
+    # Drop disappeared NICs from the rolling state so the dict can't grow
+    # forever on long-lived processes.
+    stale = [k for k in _last_pernic_sample if k not in seen_names]
+    for k in stale:
+        _last_pernic_sample.pop(k, None)
+    return out
+
+
+def _collect_tcp_connections() -> TcpConnectionStats | None:
+    """Aggregate TCP connection states.
+
+    On Linux/macOS, non-root processes only see their own connections via
+    psutil.net_connections(); we still return what's visible rather than
+    erroring out. PermissionError / OSError are swallowed and become None.
+    """
+    if not _HAS_PSUTIL:
+        return None
+    try:
+        conns = psutil.net_connections(kind="tcp")
+    except (PermissionError, OSError, RuntimeError, NotImplementedError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+    established = 0
+    listen = 0
+    time_wait = 0
+    close_wait = 0
+    other = 0
+    total = 0
+    for c in conns:
+        total += 1
+        status = (getattr(c, "status", "") or "").upper()
+        if status == "ESTABLISHED":
+            established += 1
+        elif status == "LISTEN":
+            listen += 1
+        elif status == "TIME_WAIT":
+            time_wait += 1
+        elif status == "CLOSE_WAIT":
+            close_wait += 1
+        else:
+            other += 1
+    return TcpConnectionStats(
+        total=total,
+        established=established,
+        listen=listen,
+        time_wait=time_wait,
+        close_wait=close_wait,
+        other=other,
+    )
+
+
+_PUBLIC_IP_ENDPOINTS: tuple[tuple[str, str], ...] = (
+    ("ip.sb", "https://api.ip.sb/ip"),
+    ("ipinfo.io", "https://ipinfo.io/ip"),
+)
+
+
+def _fetch_public_ip_once(url: str) -> str | None:
+    """Hit a single endpoint with a short timeout and return one IP line."""
+    try:
+        req = urllib.request.Request(  # noqa: S310 - https only, see endpoints tuple
+            url,
+            headers={"User-Agent": "lorahub-system-stats/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310
+            raw = resp.read()
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return None
+    line = text.strip().splitlines()[0].strip() if text.strip() else ""
+    if not line:
+        return None
+    # Loose sanity: strip anything that obviously isn't an IP. We keep it
+    # forgiving because IPv6 contains colons and ipinfo plain endpoint is
+    # text/plain anyway.
+    if len(line) > 64:
+        return None
+    return line
+
+
+def _collect_public_ip() -> PublicIpInfo | None:
+    """Resolve the host's public IP, cached for 5 minutes (success or failure).
+
+    Returns None only if psutil is missing - actually that's irrelevant here,
+    public IP is independent. We keep returning None as a sentinel so callers
+    can drop the field when caching has never run.
+    """
+    global _public_ip_cache, _public_ip_cache_monotonic
+    now_mono = time.monotonic()
+    if (
+        _public_ip_cache is not None
+        and _public_ip_cache_monotonic is not None
+        and (now_mono - _public_ip_cache_monotonic) < _PUBLIC_IP_TTL_SECONDS
+    ):
+        # Return a copy so callers can't mutate our cache.
+        cached = _public_ip_cache
+        return PublicIpInfo(
+            ip=cached.ip,
+            fetched_at=cached.fetched_at,
+            source="cached",
+        )
+
+    fetched_at = time.time()
+    for source, url in _PUBLIC_IP_ENDPOINTS:
+        ip = _fetch_public_ip_once(url)
+        if ip:
+            info = PublicIpInfo(ip=ip, fetched_at=fetched_at, source=source)
+            _public_ip_cache = info
+            _public_ip_cache_monotonic = now_mono
+            return info
+
+    info = PublicIpInfo(ip=None, fetched_at=fetched_at, source="unreachable")
+    _public_ip_cache = info
+    _public_ip_cache_monotonic = now_mono
+    return info
+
 
 def _collect_network() -> NetworkStats | None:
     if not _HAS_PSUTIL:
@@ -739,12 +1054,39 @@ def _collect_network() -> NetworkStats | None:
             rate_recv = max(0.0, (recv - prev_recv) / dt)
     _last_net_sample = (now, sent, recv)
 
+    interfaces = _collect_network_interfaces()
+    tcp = _collect_tcp_connections()
+    public_ip = _collect_public_ip()
+
     return NetworkStats(
         bytes_sent_total=sent,
         bytes_recv_total=recv,
         bytes_sent_per_sec=round(rate_sent, 2),
         bytes_recv_per_sec=round(rate_recv, 2),
+        interfaces=interfaces,
+        tcp_connections=tcp,
+        public_ip=public_ip,
     )
+
+
+def _network_to_dict(net: NetworkStats | None) -> dict[str, Any] | None:
+    if net is None:
+        return None
+    return {
+        "bytes_sent_total": net.bytes_sent_total,
+        "bytes_recv_total": net.bytes_recv_total,
+        "bytes_sent_per_sec": net.bytes_sent_per_sec,
+        "bytes_recv_per_sec": net.bytes_recv_per_sec,
+        "interfaces": [
+            {
+                **{k: v for k, v in iface.__dict__.items() if k != "addresses"},
+                "addresses": [a.__dict__ for a in iface.addresses],
+            }
+            for iface in net.interfaces
+        ],
+        "tcp_connections": net.tcp_connections.__dict__ if net.tcp_connections is not None else None,
+        "public_ip": net.public_ip.__dict__ if net.public_ip is not None else None,
+    }
 
 
 def collect_snapshot(extra_disk_paths: list[Path] | None = None) -> SystemSnapshot:
@@ -767,6 +1109,11 @@ __all__ = [
     "BatteryStats",
     "CpuStats",
     "GpuStats",
+    "InterfaceAddress",
+    "NetworkInterfaceStats",
+    "NetworkStats",
+    "PublicIpInfo",
     "SystemSnapshot",
+    "TcpConnectionStats",
     "collect_snapshot",
 ]
