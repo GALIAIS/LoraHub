@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
@@ -20,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Pagination } from "@/components/ui/pagination"
 import { CaptionEditorModal } from "./components/caption-editor-modal"
 import { PathBar } from "./components/path-bar"
 import { SampleGallery } from "./components/sample-gallery"
@@ -27,17 +28,28 @@ import { TaggingDialog } from "./components/tagging-dialog"
 
 type Sample = DatasetScanResponse["samples"][number]
 
+const PAGE_SIZE_OPTIONS = [24, 48, 96, 192]
+
 export function DatasetsPage() {
   const [path, setPath] = useState("./datasets")
   const [submitted, setSubmitted] = useState("./datasets")
   const [recursive, setRecursive] = useState(false)
   const [tagOpen, setTagOpen] = useState(false)
   const [editor, setEditor] = useState<{ imagePath: string } | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(48)
   const navigate = useNavigate()
 
+  // Reset to page 1 whenever the scan target changes — otherwise the user
+  // can land on an out-of-range page after switching directories.
+  useEffect(() => {
+    setPage(1)
+  }, [submitted, recursive, pageSize])
+
+  const offset = (page - 1) * pageSize
   const scan = useQuery({
-    queryKey: ["dataset-scan", submitted, recursive],
-    queryFn: () => api.scanDataset(submitted, recursive),
+    queryKey: ["dataset-scan", submitted, recursive, pageSize, offset],
+    queryFn: () => api.scanDataset(submitted, recursive, pageSize, offset),
     enabled: submitted.trim().length > 0,
   })
 
@@ -159,10 +171,12 @@ export function DatasetsPage() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 {data.samples.length === 0 ? (
                   <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-                    此目录下未发现图片样本。
+                    {data.image_files > 0
+                      ? "本页没有样本(可能在其它分页)。"
+                      : "此目录下未发现图片样本。"}
                   </div>
                 ) : (
                   <SampleGallery
@@ -175,6 +189,14 @@ export function DatasetsPage() {
                     }
                   />
                 )}
+                <Pagination
+                  total={data.image_files}
+                  pageSize={pageSize}
+                  page={page}
+                  onPageChange={setPage}
+                  pageSizeOptions={PAGE_SIZE_OPTIONS}
+                  onPageSizeChange={setPageSize}
+                />
               </CardContent>
             </Card>
 

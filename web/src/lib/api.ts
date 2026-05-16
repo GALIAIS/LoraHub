@@ -197,6 +197,8 @@ export interface DatasetScanResponse {
     caption_exists: boolean
     caption: string | null
   }>
+  limit: number
+  offset: number
 }
 
 export interface JobFile {
@@ -458,9 +460,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ config, workspace }),
     }),
-  scanDataset: (path: string, recursive = false, limit = 40) =>
+  scanDataset: (
+    path: string,
+    recursive = false,
+    limit = 40,
+    offset = 0,
+  ) =>
     http<DatasetScanResponse>(
-      `/datasets/scan?path=${encodeURIComponent(path)}&recursive=${recursive ? "true" : "false"}&limit=${limit}`,
+      `/datasets/scan?path=${encodeURIComponent(path)}&recursive=${
+        recursive ? "true" : "false"
+      }&limit=${limit}&offset=${offset}`,
     ),
   datasetThumbUrl: (path: string, size = 256) =>
     `/api/datasets/thumb?path=${encodeURIComponent(path)}&size=${size}`,

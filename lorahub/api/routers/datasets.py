@@ -20,8 +20,15 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/datasets/scan")
-def scan_dataset(path: str, recursive: bool = False, limit: int = 40) -> dict[str, Any]:
-    return _scan_dataset_path(Path(path), recursive=recursive, limit=limit)
+def scan_dataset(
+    path: str,
+    recursive: bool = False,
+    limit: int = 40,
+    offset: int = 0,
+) -> dict[str, Any]:
+    return _scan_dataset_path(
+        Path(path), recursive=recursive, limit=limit, offset=offset
+    )
 
 
 @router.get("/datasets/thumb")

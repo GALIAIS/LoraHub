@@ -103,7 +103,7 @@ def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
 
 
 def _scan_dataset_path(
-    path: Path, *, recursive: bool = False, limit: int = 40
+    path: Path, *, recursive: bool = False, limit: int = 40, offset: int = 0
 ) -> dict[str, Any]:
     root = path.expanduser().resolve()
     exists = root.is_dir()
@@ -111,28 +111,35 @@ def _scan_dataset_path(
     caption_files = 0
     missing_caption_files: list[str] = []
     samples: list[dict[str, Any]] = []
+    capped_limit = max(int(limit), 0)
+    capped_offset = max(int(offset), 0)
 
     if exists:
         iterator = root.rglob("*") if recursive else root.iterdir()
         image_files = sorted(
             p for p in iterator if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
         )
-        for image in image_files:
+        # Walk every image so we have an honest caption coverage count,
+        # but only build sample dicts for the requested page slice.
+        for index, image in enumerate(image_files):
             caption_path = image.with_suffix(".txt")
+            has_caption = caption_path.is_file()
             caption: str | None = None
-            if caption_path.is_file():
+            if has_caption:
                 caption_files += 1
-                with contextlib.suppress(Exception):
-                    caption = caption_path.read_text(encoding="utf-8").strip()
             else:
                 missing_caption_files.append(image.relative_to(root).as_posix())
-            if len(samples) < max(limit, 0):
+            in_page = capped_offset <= index < capped_offset + capped_limit
+            if in_page:
+                if has_caption:
+                    with contextlib.suppress(Exception):
+                        caption = caption_path.read_text(encoding="utf-8").strip()
                 samples.append(
                     {
                         "name": image.name,
                         "path": str(image),
                         "relative_path": image.relative_to(root).as_posix(),
-                        "caption_exists": caption_path.is_file(),
+                        "caption_exists": has_caption,
                         "caption": caption,
                     }
                 )
@@ -143,9 +150,11 @@ def _scan_dataset_path(
         "recursive": recursive,
         "image_files": len(image_files),
         "caption_files": caption_files,
-        "missing_caption_files": missing_caption_files[: max(limit, 0)],
-        "missing_caption_files_truncated": len(missing_caption_files) > max(limit, 0),
+        "missing_caption_files": missing_caption_files[:capped_limit],
+        "missing_caption_files_truncated": len(missing_caption_files) > capped_limit,
         "samples": samples,
+        "limit": capped_limit,
+        "offset": capped_offset,
     }
 
 

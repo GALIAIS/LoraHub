@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ChevronRight, ExternalLink, Images, X } from "lucide-react"
@@ -16,14 +16,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Pagination } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
 import { fmtBytes, fmtUnixSeconds } from "./jobs/utils"
 
-const PAGE_LIMIT = 200
+const PAGE_SIZE_OPTIONS = [24, 48, 96, 192]
 
 export function GalleryPage() {
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([])
   const [active, setActive] = useState<SampleGalleryItem | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(48)
+
+  // Reset to page 1 whenever the filter changes — otherwise the user can
+  // be parked on page 5 of an empty filter result.
+  useEffect(() => {
+    setPage(1)
+  }, [selectedJobIds, pageSize])
 
   const jobs = useQuery({
     queryKey: ["jobs"],
@@ -34,11 +43,13 @@ export function GalleryPage() {
   // Refresh the gallery on a slow cadence so freshly produced samples
   // appear without forcing a manual reload, but not so fast that every
   // mouse-move re-fetches the entire feed.
+  const offset = (page - 1) * pageSize
   const samples = useQuery({
-    queryKey: ["samples", selectedJobIds],
+    queryKey: ["samples", selectedJobIds, pageSize, offset],
     queryFn: () =>
       api.listSamples({
-        limit: PAGE_LIMIT,
+        limit: pageSize,
+        offset,
         jobIds: selectedJobIds.length > 0 ? selectedJobIds : undefined,
       }),
     refetchInterval: 6000,
@@ -66,10 +77,16 @@ export function GalleryPage() {
 
         <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
           <CardContent className="px-4 py-3 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-muted-foreground tabular-nums">
-                共 {total} 张 · 显示 {items.length} 张
-              </div>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Pagination
+                total={total}
+                pageSize={pageSize}
+                page={page}
+                onPageChange={setPage}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageSizeChange={setPageSize}
+                className="flex-1"
+              />
               {selectedJobIds.length > 0 && (
                 <Button
                   size="sm"
@@ -119,15 +136,25 @@ export function GalleryPage() {
         )}
 
         {items.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-            {items.map((item) => (
-              <SampleTile
-                key={`${item.job_id}:${item.path}`}
-                item={item}
-                onOpen={() => setActive(item)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+              {items.map((item) => (
+                <SampleTile
+                  key={`${item.job_id}:${item.path}`}
+                  item={item}
+                  onOpen={() => setActive(item)}
+                />
+              ))}
+            </div>
+            <Pagination
+              total={total}
+              pageSize={pageSize}
+              page={page}
+              onPageChange={setPage}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </div>
 
