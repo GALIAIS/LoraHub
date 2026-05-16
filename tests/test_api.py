@@ -2478,3 +2478,74 @@ def test_get_sweep_aggregates_job_states(
     assert len(body["jobs"]) == 3
     # Sibling sweep is filtered out.
     assert all(j["metadata"]["sweep_id"] == sweep_id for j in body["jobs"])
+
+
+def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
+    """GET /api/sweeps groups every metadata-tagged job by ``sweep_id``.
+
+    We register two sibling sweeps with distinct prefixes plus an untagged
+    job (which must be ignored). The endpoint is expected to bubble up a
+    rolled-up count per sweep and a ``name_prefix`` derived from the common
+    head of every variant's ``output.name``.
+    """
+    # Sweep A — three variants in mixed states; the shared name prefix is
+    # ``alpha-`` (the trailing dash is stripped by ``_common_prefix``).
+    sweep_a = "01SWEEPALPHA00000000000000"
+    a_states: list[state.JobState] = [
+        state.JobState.queued,
+        state.JobState.running,
+        state.JobState.succeeded,
+    ]
+    for i, st in enumerate(a_states, start=1):
+        ws = tmp_path / f"alpha-{i:03d}"
+        ws.mkdir()
+        rec = state.registry.create(
+            workspace=ws,
+            recipe_snapshot={"output": {"name": f"alpha-{i:03d}"}},
+        )
+        rec.state = st
+        rec.metadata = {
+            "sweep_id": sweep_a,
+            "variant_name": f"alpha-{i:03d}",
+            "axis_values": {"network.rank": [16, 32, 64][i - 1]},
+        }
+        state.registry.update(rec)
+
+    # Sweep B — two failed variants under a different prefix.
+    sweep_b = "01SWEEPBRAVO00000000000000"
+    for i in range(1, 3):
+        ws = tmp_path / f"bravo-{i:03d}"
+        ws.mkdir()
+        rec = state.registry.create(
+            workspace=ws,
+            recipe_snapshot={"output": {"name": f"bravo-{i:03d}"}},
+        )
+        rec.state = state.JobState.failed
+        rec.metadata = {"sweep_id": sweep_b}
+        state.registry.update(rec)
+
+    # Stray job without a sweep tag — must not appear in the response.
+    stray = tmp_path / "stray"
+    stray.mkdir()
+    state.registry.create(workspace=stray, recipe_snapshot={})
+
+    r = client.get("/api/sweeps")
+    assert r.status_code == 200, r.text
+    sweeps = r.json()["sweeps"]
+    assert len(sweeps) == 2
+
+    by_id = {s["sweep_id"]: s for s in sweeps}
+    a = by_id[sweep_a]
+    assert a["total"] == 3
+    assert a["queued"] == 1
+    assert a["running"] == 1
+    assert a["succeeded"] == 1
+    assert a["failed"] == 0
+    assert a["name_prefix"] == "alpha"
+    assert "earliest_created_at" in a
+    assert "latest_modified_at" in a
+
+    b = by_id[sweep_b]
+    assert b["total"] == 2
+    assert b["failed"] == 2
+    assert b["name_prefix"] == "bravo"
