@@ -7,26 +7,34 @@
  */
 import { useCallback, useMemo } from "react"
 import {
+  Activity,
   Cpu,
   FileImage,
   Folder,
+  Gauge,
+  History,
   Image,
   Layers,
   PaintBucket,
   Settings2,
   SlidersHorizontal,
   Wand2,
+  Workflow,
 } from "lucide-react"
 import type { ValidationFieldError } from "@/lib/api"
 import { BaseModelFields } from "./sections/base-model"
 import { DatasetFields } from "./sections/dataset"
 import { NetworkFields } from "./sections/network"
 import { OptimizerFields } from "./sections/optimizer"
+import { LossFields } from "./sections/loss"
 import { ScheduleFields } from "./sections/schedule"
 import { PrecisionFields } from "./sections/precision"
 import { SamplingFields } from "./sections/sampling"
 import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
+import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
+import { ValidationFields } from "./sections/validation"
+import { ResumeFields } from "./sections/resume"
 import { buildErrorMap, setIn } from "./types"
 import type { RecipeFormValue } from "./types"
 import { ReadOnlyProvider, Section } from "./widgets"
@@ -82,6 +90,7 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
         icon={<Layers className="size-3.5" />}
         title="网络"
         subtitle="LoRA 结构：rank、alpha、目标模块"
+        defaultOpen
       >
         <NetworkFields value={value.network} set={set} errorMap={errorMap} />
       </Section>
@@ -92,6 +101,14 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
         subtitle="权重的更新策略"
       >
         <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
+        icon={<Activity className="size-3.5" />}
+        title="损失整形"
+        subtitle="Min-SNR、噪声偏移、loss_type 等"
+      >
+        <LossFields value={value.loss} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
@@ -112,6 +129,14 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
       </Section>
 
       <Section
+        icon={<Gauge className="size-3.5" />}
+        title="验证"
+        subtitle="留出比例与验证频率"
+      >
+        <ValidationFields value={value} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
         icon={<Image className="size-3.5" />}
         title="采样预览"
         subtitle="训练过程中定期生成预览图"
@@ -123,8 +148,17 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
         icon={<Folder className="size-3.5" />}
         title="输出"
         subtitle="文件名、保存频率、保存精度"
+        defaultOpen
       >
         <OutputFields value={value.output} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
+        icon={<History className="size-3.5" />}
+        title="断点续训"
+        subtitle="optimizer / scheduler state 落盘策略"
+      >
+        <ResumeFields value={value.resume} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
@@ -134,6 +168,20 @@ export function RecipeForm({ value, onChange, errors, readOnly = false }: Recipe
       >
         <BackendFields value={value.backend} set={set} errorMap={errorMap} />
       </Section>
+
+      {value.backend?.type === "diffusion-pipe" && (
+        <Section
+          icon={<Workflow className="size-3.5" />}
+          title="diffusion-pipe 选项"
+          subtitle="仅在 diffusion-pipe 后端下生效"
+        >
+          <BackendDiffusionPipeFields
+            value={value.backend?.diffusion_pipe}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
     </div>
   )
 
