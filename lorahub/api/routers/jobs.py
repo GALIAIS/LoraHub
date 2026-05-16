@@ -24,6 +24,7 @@ from lorahub.api.jobs_helpers import (
     _resolve_workspace_file,
 )
 from lorahub.api.state import JobState
+from lorahub.api.store import _pid_alive
 from lorahub.core.config.schema import TrainingConfig
 
 router = APIRouter(prefix="/api")
@@ -281,6 +282,25 @@ def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
             raise HTTPException(
                 status_code=409,
                 detail=f"job is {job.state.value}; cancel before archiving",
+            )
+        # `interrupted` is the one terminal state where the OS process
+        # might still be alive (e.g. uvicorn was kill -9'd while a
+        # detached deepspeed launcher kept running, then mark_orphans
+        # flipped this row to interrupted on restart). For other terminal
+        # states the reaper has already observed `done`, so the PID is
+        # irrelevant even if reused. Only probe for `interrupted`.
+        if (
+            job.state is JobState.interrupted
+            and job.pid is not None
+            and _pid_alive(job.pid)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"job process pid={job.pid} is still alive even though "
+                    f"state is interrupted; cancel it explicitly before "
+                    "archiving (the workspace mv would crash the running run)"
+                ),
             )
         moved, warnings = _archive_workspace(job.workspace, job.id)
         state.registry.delete(job.id)

@@ -962,6 +962,40 @@ def test_archive_completed_job_moves_workspace(
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
 
 
+def test_archive_refuses_when_interrupted_job_pid_still_alive(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An `interrupted` job whose process is still running (uvicorn restart
+    while the deepspeed launcher kept going) must NOT be archivable: the
+    workspace `mv` would yank the directory out from under tensorboard.
+    """
+    import os
+
+    from lorahub.api import state as state_mod
+    from lorahub.api.state import JobRecord, JobState
+
+    # Hand-craft an interrupted job whose PID is the test process itself —
+    # which is guaranteed alive for the duration of the assertion.
+    workspace = tmp_path / "ws-interrupted"
+    workspace.mkdir(parents=True)
+    record = JobRecord(
+        id="01TEST_INTERRUPTED",
+        state=JobState.interrupted,
+        workspace=workspace,
+        config_snapshot={},
+        created_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+        pid=os.getpid(),
+    )
+    state_mod.registry._jobs[record.id] = record  # noqa: SLF001
+    state_mod.registry._listeners[record.id] = []  # noqa: SLF001
+
+    r = client.delete(f"/api/jobs/{record.id}", params={"archive": "true"})
+    assert r.status_code == 409, r.text
+    assert "still alive" in r.json()["detail"]
+    # Workspace must still be in place — the mv was refused.
+    assert workspace.exists()
+
+
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

@@ -124,15 +124,65 @@ class JobStore:
         """Convert any non-terminal jobs to `interrupted`. Returns rows affected.
 
         Run this once at server startup: any job that was running, queued, or
-        canceling when the previous process died is no longer reachable.
+        canceling when the previous process died is no longer reachable —
+        unless its PID is still alive on this host. Training subprocesses
+        spawned via deepspeed launch can outlive the API process (especially
+        when uvicorn is killed without graceful shutdown), so we probe each
+        live job's PID with `os.kill(pid, 0)` first and skip the row if the
+        kernel reports it's still running.
         """
-        live = ", ".join(f"'{s.value}'" for s in _LIVE_STATES)
+        import os  # noqa: PLC0415
+
         with self._lock, self._connect() as conn:
-            cur = conn.execute(
-                f"UPDATE jobs SET state = ? WHERE state IN ({live})",  # noqa: S608
-                (JobState.interrupted.value,),
+            rows = conn.execute(
+                "SELECT id, pid FROM jobs WHERE state IN ({})".format(  # noqa: S608, UP032
+                    ", ".join(f"'{s.value}'" for s in _LIVE_STATES)
+                ),
+            ).fetchall()
+            stale_ids: list[str] = []
+            survivors: list[str] = []
+            for row in rows:
+                pid = row["pid"]
+                if pid is None or not _pid_alive(pid):
+                    stale_ids.append(row["id"])
+                else:
+                    survivors.append(row["id"])
+            if not stale_ids:
+                return 0
+            placeholders = ", ".join("?" * len(stale_ids))
+            conn.execute(
+                f"UPDATE jobs SET state = ? WHERE id IN ({placeholders})",  # noqa: S608
+                (JobState.interrupted.value, *stale_ids),
             )
-            return cur.rowcount
+            if survivors:
+                # Best-effort log so operators can see why some interrupted
+                # jobs didn't get re-marked. Print rather than `log.info` to
+                # avoid coupling the store to a logger config.
+                print(
+                    f"[store] kept {len(survivors)} job(s) marked running because "
+                    f"their PID was still alive: {survivors}",
+                    flush=True,
+                )
+            return len(stale_ids)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if the OS still has a process with this PID."""
+    import os  # noqa: PLC0415
+
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but is owned by another user; treat as alive
+        # rather than risk reaping a real run.
+        return True
+    except OSError:
+        return False
+    return True
 
 
 _LIVE_STATES: tuple[JobState, ...] = (
