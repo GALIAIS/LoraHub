@@ -890,15 +890,12 @@ export interface ProbeResult {
 }
 
 /**
- * Subscribe to /api/system/stream — the server pushes a fresh snapshot
- * every second. The most recent snapshot is returned alongside the WS state
- * so the dashboard can fall back to polling when the socket is down.
+ * Subscribe to /api/system/stream with automatic reconnection.
  *
- * The connection is opened lazily on a microtask so React 18 StrictMode's
- * synchronous mount/unmount/mount cycle doesn't leave a half-opened socket
- * behind (which prints a noisy "closed before the connection is established"
- * warning in dev). On unmount we wait for `open` before calling `close()`,
- * for the same reason.
+ * On unexpected close the hook retries with exponential backoff (1s -> 2s -> 4s,
+ * capped at 10s). A successful open resets the backoff. The 30ms initial delay
+ * avoids the React StrictMode double-mount race. On unmount we cancel any
+ * pending retry and close the socket.
  */
 export function useSystemStream(enabled = true) {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
@@ -909,17 +906,27 @@ export function useSystemStream(enabled = true) {
     if (!enabled) return
     let cancelled = false
     let ws: WebSocket | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let backoff = 1000
 
-    const timer = window.setTimeout(() => {
+    function connect() {
       if (cancelled) return
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
       const host = window.location.host || "127.0.0.1:18765"
       ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
       wsRef.current = ws
 
-      ws.onopen = () => setStatus("open")
-      ws.onclose = () => setStatus("closed")
-      ws.onerror = () => setStatus("closed")
+      ws.onopen = () => {
+        backoff = 1000
+        setStatus("open")
+      }
+      ws.onclose = () => {
+        setStatus("closed")
+        scheduleRetry()
+      }
+      ws.onerror = () => {
+        // onclose fires after onerror — retry handled there
+      }
       ws.onmessage = (msg) => {
         try {
           setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
@@ -927,13 +934,27 @@ export function useSystemStream(enabled = true) {
           // ignore malformed frames
         }
       }
-    }, 30)
+    }
+
+    function scheduleRetry() {
+      if (cancelled) return
+      retryTimer = setTimeout(() => {
+        retryTimer = null
+        connect()
+      }, backoff)
+      backoff = Math.min(backoff * 2, 10000)
+    }
+
+    // Initial connect with small delay to dodge StrictMode double-mount
+    retryTimer = setTimeout(connect, 30)
 
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
+      if (retryTimer !== null) clearTimeout(retryTimer)
       const sock = ws
       if (!sock) return
+      sock.onclose = null
+      sock.onerror = null
       if (sock.readyState === WebSocket.CONNECTING) {
         sock.addEventListener("open", () => sock.close(), { once: true })
       } else if (sock.readyState === WebSocket.OPEN) {

@@ -196,12 +196,17 @@ async def stream_bootstrap(ws: WebSocket) -> None:
 @app.websocket("/api/system/stream")
 async def stream_system(ws: WebSocket) -> None:
     """Push a hardware/host snapshot every second until the client disconnects."""
-    from lorahub.api.system_stats import collect_snapshot
+    from lorahub.api.system_stats import collect_snapshot  # noqa: PLC0415
 
     await ws.accept()
     try:
         while True:
-            await ws.send_json(collect_snapshot().to_dict())
+            try:
+                await ws.send_json(collect_snapshot().to_dict())
+            except WebSocketDisconnect:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
