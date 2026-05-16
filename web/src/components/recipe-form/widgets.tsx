@@ -4,7 +4,7 @@
  * Each widget is memoized so identity is stable across parent rerenders when
  * its props don't change.
  */
-import { createContext, memo, useContext } from "react"
+import { createContext, memo, useContext, useEffect, useRef, useState } from "react"
 import { ChevronDown } from "lucide-react"
 import {
   Select,
@@ -337,3 +337,97 @@ export const TextInput = memo(function TextInput({
     />
   )
 })
+
+// ====================================================== KeyValueTextArea ====
+
+interface KeyValueTextAreaProps {
+  value: Record<string, string> | undefined
+  onChange: (next: Record<string, string>) => void
+  placeholder?: string
+  rows?: number
+}
+
+/**
+ * Free-form `key=value` editor backed by a textarea. One pair per line;
+ * blank lines and lines without `=` are ignored. The textarea keeps its own
+ * draft text so partially-typed lines don't get clobbered as the user types,
+ * and only emits a fresh map upstream when parsing succeeds. External value
+ * changes (e.g. loading a different recipe) reset the draft.
+ *
+ * Used by:
+ *   - optimizer.optimizer_args (Record<str, str>)
+ *   - backend.diffusion_pipe.model_paths (Record<str, str>)
+ *
+ * Kept deliberately simple: per the spec we don't need a chip / table UI here.
+ */
+export const KeyValueTextArea = memo(function KeyValueTextArea({
+  value,
+  onChange,
+  placeholder,
+  rows = 4,
+}: KeyValueTextAreaProps) {
+  const readOnly = useReadOnly()
+  // Track the canonical serialization of the upstream value so we only reset
+  // the draft when the *external* value really changes (preventing the user's
+  // unfinished line from snapping back after a parent rerender).
+  const upstream = serialize(value ?? {})
+  const lastUpstream = useRef(upstream)
+  const [draft, setDraft] = useState(upstream)
+  useEffect(() => {
+    if (upstream !== lastUpstream.current) {
+      lastUpstream.current = upstream
+      setDraft(upstream)
+    }
+  }, [upstream])
+  return (
+    <textarea
+      value={draft}
+      placeholder={placeholder}
+      disabled={readOnly}
+      rows={rows}
+      onChange={(e) => {
+        const next = e.target.value
+        setDraft(next)
+        const parsed = parse(next)
+        const serialized = serialize(parsed)
+        // Only push upstream when the parsed map's canonical form differs
+        // from what we last received — keeps redundant onChange calls out
+        // of the parent's reducer.
+        if (serialized !== lastUpstream.current) {
+          lastUpstream.current = serialized
+          onChange(parsed)
+        }
+      }}
+      className={cn(
+        // Mirror Input visuals; textarea is plain HTML so we restate base
+        // classes rather than depend on the Input primitive (which is
+        // single-line). Width spans the row so long paths stay legible.
+        "font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none",
+        "placeholder:text-muted-foreground/60",
+        "focus-visible:ring-1 focus-visible:ring-ring",
+        "disabled:cursor-not-allowed disabled:opacity-60",
+      )}
+    />
+  )
+})
+
+function serialize(map: Record<string, string>): string {
+  return Object.entries(map)
+    .map(([k, v]) => `${k} = ${v}`)
+    .join("\n")
+}
+
+function parse(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    if (!line) continue
+    const eq = line.indexOf("=")
+    if (eq <= 0) continue
+    const key = line.slice(0, eq).trim()
+    const val = line.slice(eq + 1).trim()
+    if (!key) continue
+    out[key] = val
+  }
+  return out
+}

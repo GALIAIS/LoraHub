@@ -4,11 +4,47 @@
  * Hoisted so they're allocated once (rerender-defer-reads, js-cache-storage).
  */
 
+// Mirrors BaseModelConfig.arch in lorahub/core/config/schema.py.
+// Order: 常用静态图 → 其他主流静态图 → 动漫子族 → 视频 → 其它 / 实验性。
 export const ARCH_OPTIONS = [
-  { value: "sdxl", label: "SDXL (1024)" },
-  { value: "sd15", label: "SD 1.5 (512/768)" },
-  { value: "flux", label: "Flux" },
-  { value: "sd3", label: "SD 3" },
+  // 常用静态图
+  { value: "sdxl", label: "SDXL · Stable Diffusion XL (1024)" },
+  { value: "sd15", label: "SD 1.5 · Stable Diffusion 1.5 (512/768)" },
+  { value: "sd3", label: "SD 3 · Stable Diffusion 3" },
+  { value: "flux", label: "FLUX.1 · black-forest-labs" },
+  // 其他主流静态图
+  { value: "sd2", label: "SD 2 · Stable Diffusion 2.x" },
+  { value: "flux2", label: "FLUX 2 · black-forest-labs (next-gen)" },
+  { value: "qwen_image", label: "Qwen-Image · 阿里通义" },
+  { value: "hidream", label: "HiDream · I1 系列" },
+  // 动漫子族
+  { value: "anima", label: "Anima · circlestone-labs" },
+  { value: "lumina", label: "Lumina · Lumina-Next" },
+  { value: "hunyuan_image", label: "HunyuanImage · 腾讯混元图像" },
+  // 视频
+  { value: "hunyuan_video", label: "HunyuanVideo · 腾讯混元视频" },
+  { value: "hunyuan_video_15", label: "HunyuanVideo 1.5 · 腾讯混元视频 v1.5" },
+  { value: "wan", label: "Wan2.1 / Wan2.2 · 阿里万相 (视频)" },
+  { value: "ltx_video", label: "LTX-Video · Lightricks (视频)" },
+  { value: "ltx2", label: "LTX2 · Lightricks 新代 (视频)" },
+  { value: "cosmos", label: "Cosmos · NVIDIA (视频)" },
+  { value: "cosmos_predict2", label: "Cosmos Predict2 · NVIDIA (视频)" },
+  // 其它 / 实验性
+  { value: "chroma", label: "Chroma · lodestones" },
+  { value: "omnigen2", label: "OmniGen2 · VectorSpaceLab" },
+  { value: "auraflow", label: "AuraFlow · fal.ai" },
+  { value: "z_image", label: "Z-Image · zentropy-ai" },
+  { value: "ernie_image", label: "ERNIE Image · 百度文心" },
+] as const
+
+// SDXL sub-architectures sharing the SDXL backbone but trained on different
+// finetune lineages. Empty string == 「无」(plain SDXL, no variant).
+export const ARCH_VARIANT_OPTIONS = [
+  { value: "", label: "无（标准 SDXL）" },
+  { value: "pony", label: "Pony Diffusion v6" },
+  { value: "illustrious", label: "Illustrious XL" },
+  { value: "noobai", label: "NoobAI XL" },
+  { value: "animagine", label: "Animagine XL" },
 ] as const
 
 export const NETWORK_TYPE_OPTIONS = [
@@ -57,4 +93,16 @@ export const CAPTION_STRATEGY_OPTIONS = [
 export const BACKEND_OPTIONS = [
   { value: "kohya", label: "kohya-ss/sd-scripts" },
   { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe (scaffold)" },
+] as const
+
+export const LOSS_TYPE_OPTIONS = [
+  { value: "l2", label: "l2 (默认 MSE)" },
+  { value: "huber", label: "huber (鲁棒)" },
+  { value: "smooth_l1", label: "smooth_l1" },
+] as const
+
+export const PARTITION_METHOD_OPTIONS = [
+  { value: "parameters", label: "parameters (按参数数均分)" },
+  { value: "uniform", label: "uniform (按层数均分)" },
+  { value: "type:transformer_layer", label: "type:transformer_layer" },
 ] as const
