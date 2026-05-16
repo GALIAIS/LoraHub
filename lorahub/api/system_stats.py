@@ -91,7 +91,11 @@ class CpuStats:
     per_core_percent: list[float] = field(default_factory=list)
     load_average: list[float] | None = None
     arch: str = ""
+    model: str = ""
     frequency_mhz: float | None = None
+    frequency_min_mhz: float | None = None
+    frequency_max_mhz: float | None = None
+    frequency_per_core_mhz: list[float] = field(default_factory=list)
     cpu_temperature_c: float | None = None
 
 
@@ -215,6 +219,15 @@ class HostInfo:
 
 
 @dataclass
+class ProcessInfo:
+    pid: int
+    name: str
+    cpu_percent: float
+    memory_rss_bytes: int
+    memory_percent: float
+
+
+@dataclass
 class SystemSnapshot:
     timestamp: float
     host: HostInfo
@@ -226,6 +239,7 @@ class SystemSnapshot:
     has_nvidia_smi: bool
     battery: BatteryStats | None = None
     network: NetworkStats | None = None
+    processes: list[ProcessInfo] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -239,6 +253,7 @@ class SystemSnapshot:
             "gpus": [g.__dict__ for g in self.gpus],
             "battery": self.battery.__dict__ if self.battery is not None else None,
             "network": _network_to_dict(self.network),
+            "processes": [p.__dict__ for p in self.processes],
         }
 
 
@@ -247,22 +262,99 @@ class SystemSnapshot:
 # --------------------------------------------------------------------------- #
 
 
-def _collect_cpu_frequency() -> float | None:
+def _collect_cpu_frequency() -> tuple[float | None, float | None, float | None, list[float]]:
+    """Return (current_mean, min, max, per_core_currents).
+
+    Per-core values come from `psutil.cpu_freq(percpu=True)` and we average
+    them so the headline number is more representative than a single-shot
+    `cpu_freq().current` (which often returns the base clock inside containers).
+    Hosts where per-core readings are unavailable (commonly macOS) fall back
+    to the single-value `cpu_freq()` reading and an empty per-core list.
+    """
     if not _HAS_PSUTIL:
-        return None
+        return None, None, None, []
+
+    per_core: list[float] = []
     try:
-        freq = psutil.cpu_freq()
+        per = psutil.cpu_freq(percpu=True)
     except (OSError, NotImplementedError, AttributeError):
-        return None
-    if freq is None:
-        return None
-    current = getattr(freq, "current", None)
-    if current is None:
-        return None
+        per = None
+    if per:
+        for entry in per:
+            current = getattr(entry, "current", None)
+            try:
+                per_core.append(float(current))
+            except (TypeError, ValueError):
+                continue
+
     try:
-        return float(current)
-    except (TypeError, ValueError):
-        return None
+        agg = psutil.cpu_freq()
+    except (OSError, NotImplementedError, AttributeError):
+        agg = None
+
+    def _opt_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return None
+        # psutil reports 0.0 when min/max are not exposed - treat that as unknown.
+        if f == 0.0:
+            return None
+        return f
+
+    freq_min = _opt_float(getattr(agg, "min", None)) if agg is not None else None
+    freq_max = _opt_float(getattr(agg, "max", None)) if agg is not None else None
+
+    current_mean: float | None
+    if per_core:
+        current_mean = sum(per_core) / len(per_core)
+    elif agg is not None:
+        current_mean = _opt_float(getattr(agg, "current", None))
+    else:
+        current_mean = None
+
+    return current_mean, freq_min, freq_max, per_core
+
+
+_CPUINFO_MODEL_RE = re.compile(r"^\s*model name\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _collect_cpu_model() -> str:
+    """Best-effort CPU brand string. Returns empty string on failure.
+
+    Order: Linux ``/proc/cpuinfo`` -> macOS ``sysctl machdep.cpu.brand_string``
+    -> ``platform.processor()`` (Windows / fallback).
+    """
+    system = platform.system()
+    if system == "Linux":
+        try:
+            text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if text:
+            m = _CPUINFO_MODEL_RE.search(text)
+            if m:
+                return m.group(1).strip()
+    if system == "Darwin":
+        try:
+            proc = subprocess.run(  # noqa: S603, S607
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            value = (proc.stdout or "").strip()
+            if value:
+                return value
+    # Windows + final fallback. platform.processor() is sometimes empty in venvs.
+    fallback = platform.processor() or ""
+    return fallback.strip()
 
 
 def _collect_cpu_temperature() -> float | None:
@@ -305,6 +397,8 @@ def _collect_cpu_temperature() -> float | None:
 
 
 def _collect_cpu() -> CpuStats:
+    freq_mean, freq_min, freq_max, freq_per_core = _collect_cpu_frequency()
+    model = _collect_cpu_model()
     if _HAS_PSUTIL:
         per = psutil.cpu_percent(interval=None, percpu=True)
         load: list[float] | None = None
@@ -321,7 +415,11 @@ def _collect_cpu() -> CpuStats:
             per_core_percent=[float(p) for p in per],
             load_average=load,
             arch=platform.machine(),
-            frequency_mhz=_collect_cpu_frequency(),
+            model=model,
+            frequency_mhz=freq_mean,
+            frequency_min_mhz=freq_min,
+            frequency_max_mhz=freq_max,
+            frequency_per_core_mhz=freq_per_core,
             cpu_temperature_c=_collect_cpu_temperature(),
         )
     return CpuStats(
@@ -331,7 +429,11 @@ def _collect_cpu() -> CpuStats:
         per_core_percent=[],
         load_average=None,
         arch=platform.machine(),
-        frequency_mhz=None,
+        model=model,
+        frequency_mhz=freq_mean,
+        frequency_min_mhz=freq_min,
+        frequency_max_mhz=freq_max,
+        frequency_per_core_mhz=freq_per_core,
         cpu_temperature_c=None,
     )
 
@@ -1089,7 +1191,99 @@ def _network_to_dict(net: NetworkStats | None) -> dict[str, Any] | None:
     }
 
 
-def collect_snapshot(extra_disk_paths: list[Path] | None = None) -> SystemSnapshot:
+# Cache the most recent cpu_percent reading per pid so that the very first
+# `process_iter` call (which always emits 0.0 because psutil needs two samples
+# to compute a delta) can fall back to whatever we measured last time.
+_last_process_cpu: dict[int, float] = {}
+
+
+def _is_kernel_thread_name(name: str) -> bool:
+    # Linux kernel threads expose their comm wrapped in square brackets
+    # (e.g. "[kthreadd]", "[ksoftirqd/0]"). They have no meaningful RSS so
+    # we skip them - they only clutter a top-N list.
+    return name.startswith("[") and name.endswith("]")
+
+
+def _collect_top_processes(n: int = 5) -> list[ProcessInfo]:
+    """Return the top ``n`` processes ranked by RSS (descending).
+
+    psutil quirks we paper over here:
+    * The first ``cpu_percent()`` reading per process is always ``0.0``
+      because psutil needs two samples - we cache the previous reading and
+      reuse it when the new one is zero but a prior one exists.
+    * Processes can disappear mid-iteration; ``NoSuchProcess`` /
+      ``AccessDenied`` simply skip that pid.
+    """
+    if not _HAS_PSUTIL:
+        return []
+
+    NoSuchProcess = getattr(psutil, "NoSuchProcess", Exception)
+    AccessDenied = getattr(psutil, "AccessDenied", Exception)
+    ZombieProcess = getattr(psutil, "ZombieProcess", Exception)
+
+    rows: list[ProcessInfo] = []
+    new_cache: dict[int, float] = {}
+    try:
+        iterator = psutil.process_iter(
+            ["pid", "name", "cpu_percent", "memory_percent", "memory_info"]
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+    for proc in iterator:
+        try:
+            info = proc.info
+            pid = int(info.get("pid") or 0)
+            if pid <= 1:
+                continue
+            name = info.get("name") or ""
+            if _is_kernel_thread_name(name):
+                continue
+            mem_info = info.get("memory_info")
+            rss = int(getattr(mem_info, "rss", 0) or 0)
+            mem_pct_raw = info.get("memory_percent")
+            try:
+                mem_pct = float(mem_pct_raw) if mem_pct_raw is not None else 0.0
+            except (TypeError, ValueError):
+                mem_pct = 0.0
+            cpu_pct_raw = info.get("cpu_percent")
+            try:
+                cpu_pct = float(cpu_pct_raw) if cpu_pct_raw is not None else 0.0
+            except (TypeError, ValueError):
+                cpu_pct = 0.0
+            # First sample per pid is always 0.0; reuse the previous reading
+            # so the dashboard does not look universally idle.
+            if cpu_pct == 0.0 and pid in _last_process_cpu:
+                cpu_pct = _last_process_cpu[pid]
+            new_cache[pid] = cpu_pct
+        except (NoSuchProcess, AccessDenied, ZombieProcess):
+            continue
+        except Exception:  # noqa: BLE001
+            # Any other oddity from a single process must not break the snapshot.
+            continue
+        rows.append(
+            ProcessInfo(
+                pid=pid,
+                name=name,
+                cpu_percent=cpu_pct,
+                memory_rss_bytes=rss,
+                memory_percent=mem_pct,
+            )
+        )
+
+    _last_process_cpu.clear()
+    _last_process_cpu.update(new_cache)
+
+    rows.sort(key=lambda p: p.memory_rss_bytes, reverse=True)
+    if n <= 0:
+        return []
+    return rows[:n]
+
+
+def collect_snapshot(
+    extra_disk_paths: list[Path] | None = None,
+    top_processes_n: int = 5,
+) -> SystemSnapshot:
     """Read every probe once and pack the result. Cheap (~10-100ms with GPU)."""
     return SystemSnapshot(
         timestamp=time.time(),
@@ -1102,6 +1296,7 @@ def collect_snapshot(extra_disk_paths: list[Path] | None = None) -> SystemSnapsh
         has_nvidia_smi=_find_nvidia_smi() is not None,
         battery=_collect_battery(),
         network=_collect_network(),
+        processes=_collect_top_processes(top_processes_n),
     )
 
 
@@ -1112,6 +1307,7 @@ __all__ = [
     "InterfaceAddress",
     "NetworkInterfaceStats",
     "NetworkStats",
+    "ProcessInfo",
     "PublicIpInfo",
     "SystemSnapshot",
     "TcpConnectionStats",
