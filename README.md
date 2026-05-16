@@ -3,7 +3,7 @@
 [![CI](https://github.com/GALIAIS/LoraHub/actions/workflows/ci.yml/badge.svg)](https://github.com/GALIAIS/LoraHub/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#status)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-yellow.svg)](#status)
 
 **An open-source LoRA training workbench for diffusion models** — data, training, evaluation, and recipes in one workflow.
 
@@ -27,21 +27,25 @@ LoraHub wraps mature training backends (currently [kohya-ss/sd-scripts](https://
 
 Docs: <https://galiais.github.io/LoraHub/>
 
-**Pre-alpha (v0.2 workbench).** What works today:
+**v0.2.0 — usable.** What works today:
 
-- Semantic recipe schema (Pydantic) → kohya argv compiler
-- KohyaBackend with subprocess management, SQLite job history, and event streaming
-- CLI: `init`, `bootstrap-kohya`, `fetch-bangumi`, `tag`, `validate`, `info`, `train`, `serve`, `version`
-- FastAPI server with settings, recipe browsing/editing, job CRUD, and WebSocket streams
-- React web UI for dashboard, jobs, recipes, visual recipe editing, and workbench settings
-- 140+ tests covering schema, compiler, parser, runner, backend, API, store, CLI, and tagger
+- React + FastAPI workbench: Dashboard, Jobs, Recipes, Datasets, Settings, Sample Gallery, Sweeps (zh-CN UI)
+- Two training backends behind a single recipe schema: kohya `sd-scripts` (8 archs) and `diffusion-pipe` (21 archs, including SDXL/SD3/Flux/HunyuanVideo/Wan2.1/LTX/Cosmos/Lumina/Chroma)
+- Visual recipe editor exposing every advanced field (loss, validation, resume, conv/dropout, optimizer betas/eps/weight_decay, dp options) plus a wizard for parameterized templates
+- Dataset pipeline: BangumiBase fetch, WD14 + JoyTag taggers, Anima caption formatter, generic caption transforms with batch I/O
+- Job queue with `max_concurrent_jobs`, multi-GPU via per-slot `CUDA_VISIBLE_DEVICES`, checkpoint resume, persisted event replay
+- Hyperparameter sweep grid via `lorahub sweep` and `POST /api/sweeps`, train/val loss chart with overfit signal
+- One-click kohya bootstrap, uv-based dependency installs, portable CPython runtime, HF/ModelScope model downloader, PyPI mirror probing
+- Cross-platform launcher (`scripts/launch.{ps1,bat,sh}`) and a published mkdocs-material documentation site
+- 474 tests green across schema, compilers, parsers, runners, API routers, scheduler, sweeps, taggers, and CLI
 
 Not yet:
 
-- Dataset management UI: import, thumbnails, and caption editor
-- Web auto-tagging workflow on top of the existing WD14 CLI/tagger
-- Job queue, multi-GPU scheduling, and resume orchestration
-- DiffusersBackend and non-kohya training backends
+- Random / Bayesian sweep strategies on top of the existing grid expander
+- Embedded Weights & Biases dashboard
+- CI that runs an end-to-end LoRA training (currently only unit/integration tests)
+- Linux and macOS smoke-test coverage at parity with Windows
+- Optional auth / multi-user mode for the API
 
 See [Roadmap](#roadmap) for the full picture.
 
@@ -257,17 +261,19 @@ tests/           pytest suite
 
 ## Roadmap
 
-| Version | Scope                                                                |
-| ------- | -------------------------------------------------------------------- |
-| v0.1    | CLI tracer bullet: recipe → kohya → LoRA file (this release)         |
-| v0.2    | FastAPI + minimal React UI, recipe editor, settings, job monitor        |
-| v0.3    | Dataset module: import, thumbnails, caption editor                   |
-| v0.4    | Auto-taggers: WD14, JoyTag                                            |
-| v0.5    | Job queue + multi-GPU + resume from checkpoint                       |
-| v0.6    | Recipe library + sample image gallery                                |
-| v0.7    | SD1.5 + Pony/Illustrious; DiffusersBackend (self-written) starts     |
-| v0.8    | Flux / SD3 support                                                    |
-| v1.0    | Hyperparameter sweeps, overfit detection, docs site                  |
+| Version  | Scope                                                                       | Status |
+| -------- | --------------------------------------------------------------------------- | ------ |
+| v0.1     | CLI tracer bullet: recipe -> kohya -> LoRA file                             | done   |
+| v0.2     | FastAPI + React UI, recipe editor, settings, job monitor                    | done   |
+| v0.3     | Dataset module: import, thumbnails, caption editor                          | done   |
+| v0.4     | Auto-taggers: WD14, JoyTag                                                  | done   |
+| v0.5     | Job queue + multi-GPU + resume from checkpoint                              | done   |
+| v0.6     | Recipe library + sample image gallery                                       | done   |
+| v0.7     | SD1.5 + Pony/Illustrious; second backend (diffusion-pipe shipped instead)   | done   |
+| v0.8     | Flux / SD3 support                                                          | done   |
+| v1.0     | Hyperparameter sweeps, overfit detection, docs site                         | done   |
+| v0.2.x   | Maintenance: install/launcher hardening, parser regressions, doc polish     | active |
+| v0.3.x   | Random/Bayesian sweeps, wandb integration, CI end-to-end LoRA, Linux/macOS smoke | next   |
 
 ## Contributing
 
