@@ -1,4 +1,4 @@
-"""WD14 auto-tagging endpoints with progress-tracked background sessions."""
+"""WD14 / JoyTag auto-tagging endpoints with progress-tracked background sessions."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.core.tagging.base import BaseTagger
+from lorahub.core.tagging.joytag import DEFAULT_THRESHOLD as JOYTAG_DEFAULT_THRESHOLD
+from lorahub.core.tagging.joytag import JoyTagger
 from lorahub.core.tagging.wd14 import DEFAULT_MODEL, CudaUnavailableError, WD14Tagger
 
 router = APIRouter(prefix="/api")
@@ -19,9 +22,12 @@ router = APIRouter(prefix="/api")
 
 class TagDatasetRequest(BaseModel):
     path: str
+    tagger: Literal["wd14", "joytag"] = "wd14"
     model_id: str = DEFAULT_MODEL
     general: float = Field(default=0.35, ge=0.0, le=1.0)
     character: float = Field(default=0.85, ge=0.0, le=1.0)
+    # JoyTag's single threshold; ignored when tagger='wd14'.
+    joytag_threshold: float = Field(default=JOYTAG_DEFAULT_THRESHOLD, ge=0.0, le=1.0)
     device: Literal["auto", "cpu", "cuda"] = "auto"
     overwrite: bool = False
     recursive: bool = False
@@ -33,10 +39,12 @@ class TagDatasetRequest(BaseModel):
 class _TaggingSession:
     session_id: str
     path: str
+    tagger: str
     model_id: str
     device: str
     general: float
     character: float
+    joytag_threshold: float
     overwrite: bool
     recursive: bool
     include_character: bool
@@ -66,10 +74,12 @@ class _TaggingSession:
             return {
                 "session_id": self.session_id,
                 "path": self.path,
+                "tagger": self.tagger,
                 "model_id": self.model_id,
                 "device": self.device,
                 "general": self.general,
                 "character": self.character,
+                "joytag_threshold": self.joytag_threshold,
                 "overwrite": self.overwrite,
                 "recursive": self.recursive,
                 "include_character": self.include_character,
@@ -103,8 +113,15 @@ def _get(session_id: str) -> _TaggingSession:
     return session
 
 
-# Indirection so tests can monkeypatch the tagger class without touching wd14.
-def _build_tagger(req: TagDatasetRequest) -> WD14Tagger:
+# Indirection so tests can monkeypatch the tagger class without touching the
+# concrete implementations. Returns a `BaseTagger`-conformant instance so the
+# session loop is backend-agnostic.
+def _build_tagger(req: TagDatasetRequest) -> BaseTagger:
+    if req.tagger == "joytag":
+        return JoyTagger(
+            predict_threshold=req.joytag_threshold,
+            device=req.device,
+        )
     return WD14Tagger(
         model_id=req.model_id,
         general_threshold=req.general,
@@ -122,10 +139,12 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
     session = _TaggingSession(
         session_id=uuid.uuid4().hex,
         path=str(target),
+        tagger=req.tagger,
         model_id=req.model_id,
         device=req.device,
         general=req.general,
         character=req.character,
+        joytag_threshold=req.joytag_threshold,
         overwrite=req.overwrite,
         recursive=req.recursive,
         include_character=req.include_character,
@@ -137,13 +156,14 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
     def run() -> None:
         try:
             tagger = _build_tagger(req)
-            session.push(f"loading {req.model_id}")
+            session.push(f"loading {req.tagger}")
             tagger.load()
             with session.lock:
                 session.active_provider = tagger.active_provider
             session.push(f"running on {tagger.active_provider}", percent=2)
 
-            # Pre-count for percent. _iter_images is cheap (sorted glob).
+            # Pre-count for percent. Use the WD14 helper since both taggers
+            # consume the same image extension set; this is just a glob.
             from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
 
             all_images = list(_iter_images(target, recursive=req.recursive))
@@ -193,7 +213,7 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             session.push(f"tagging failed: {exc}")
 
     threading.Thread(
-        target=run, name=f"wd14-tag-{session.session_id[:8]}", daemon=True
+        target=run, name=f"tag-{req.tagger}-{session.session_id[:8]}", daemon=True
     ).start()
     return session.snapshot()
 

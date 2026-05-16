@@ -36,6 +36,7 @@ class Settings:
     default_backend: str = "kohya"
 
     tagger_device: str = "auto"  # "auto" | "cpu" | "cuda"
+    default_tagger: str = "wd14"  # "wd14" | "joytag"
 
     # --- Network acceleration ---
     # Optional GitHub mirror prefix (e.g. "https://gh-proxy.org") rewriting

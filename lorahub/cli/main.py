@@ -362,15 +362,29 @@ def tag(
     directory: Annotated[
         Path, typer.Argument(help="Directory of images to tag in place.")
     ],
+    tagger: Annotated[
+        str,
+        typer.Option(
+            "--tagger",
+            help="Which auto-tagger to use: 'wd14' (default) or 'joytag'.",
+        ),
+    ] = "wd14",
     model: Annotated[
-        str, typer.Option(help="Hugging Face model id of the WD tagger.")
+        str, typer.Option(help="Hugging Face model id of the WD tagger (ignored for joytag).")
     ] = "SmilingWolf/wd-v1-4-vit-tagger-v2",
     general_threshold: Annotated[
-        float, typer.Option("--general", help="Score threshold for general tags.")
+        float, typer.Option("--general", help="WD14 general-tag score threshold.")
     ] = 0.35,
     character_threshold: Annotated[
-        float, typer.Option("--character", help="Score threshold for character tags.")
+        float, typer.Option("--character", help="WD14 character-tag score threshold.")
     ] = 0.85,
+    joytag_threshold: Annotated[
+        float,
+        typer.Option(
+            "--joytag-threshold",
+            help="JoyTag predict threshold (single value across all tags).",
+        ),
+    ] = 0.4,
     recursive: Annotated[
         bool,
         typer.Option("--recursive", "-r", help="Recurse into subdirectories."),
@@ -385,43 +399,65 @@ def tag(
         bool,
         typer.Option(
             "--include-character/--no-include-character",
-            help="Include character tags in the caption. Default on.",
+            help="Include character tags in the caption (WD14 only). Default on.",
         ),
     ] = True,
     device: Annotated[
         str,
         typer.Option(
             "--device",
-            help="ONNX runtime: 'auto' (CUDA if available), 'cuda' (force GPU), or 'cpu'.",
+            help="Runtime: 'auto' (CUDA if available), 'cuda' (force GPU), or 'cpu'.",
         ),
     ] = "auto",
 ) -> None:
-    """Auto-tag images with WD14 / WD-v3 and write kohya-style .txt captions."""
-    from lorahub.core.tagging.wd14 import CudaUnavailableError, WD14Tagger
+    """Auto-tag images and write kohya-style .txt captions.
+
+    Supports WD14/WD-v3 (ONNX) and JoyTag (PyTorch). Default is WD14.
+    """
+    from lorahub.core.tagging.base import BaseTagger  # noqa: PLC0415
 
     if not directory.is_dir():
         err_console.print(f"[red]not a directory: {directory}[/red]")
         raise typer.Exit(code=1)
 
-    tagger = WD14Tagger(
-        model_id=model,
-        general_threshold=general_threshold,
-        character_threshold=character_threshold,
-        device=device,
-    )
+    kind = tagger.lower()
+    if kind not in {"wd14", "joytag"}:
+        err_console.print(f"[red]unknown tagger {tagger!r}; expected wd14 or joytag[/red]")
+        raise typer.Exit(code=1)
 
-    console.print(f"[dim]loading {model} (first run downloads ~400MB)...[/dim]")
-    try:
-        tagger.load()
-    except CudaUnavailableError as e:
-        err_console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1) from e
-    console.print(f"[dim]running on {tagger.active_provider}[/dim]")
+    instance: BaseTagger
+    if kind == "joytag":
+        from lorahub.core.tagging.joytag import JoyTagger, JoyTagModelError  # noqa: PLC0415
+
+        instance = JoyTagger(predict_threshold=joytag_threshold, device=device)
+        console.print("[dim]loading fancyfeast/joytag (first run downloads ~1.2GB)...[/dim]")
+        try:
+            instance.load()
+        except JoyTagModelError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    else:
+        from lorahub.core.tagging.wd14 import CudaUnavailableError, WD14Tagger  # noqa: PLC0415
+
+        instance = WD14Tagger(
+            model_id=model,
+            general_threshold=general_threshold,
+            character_threshold=character_threshold,
+            device=device,
+        )
+        console.print(f"[dim]loading {model} (first run downloads ~400MB)...[/dim]")
+        try:
+            instance.load()
+        except CudaUnavailableError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=1) from e
+
+    console.print(f"[dim]running on {instance.active_provider}[/dim]")
 
     def _on_progress(path: Path, _result: object) -> None:
         console.print(f"[dim]tagged[/dim] {path.name}")
 
-    results = tagger.tag_directory(
+    results = instance.tag_directory(
         directory,
         recursive=recursive,
         write_caption=True,

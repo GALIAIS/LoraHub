@@ -37,6 +37,7 @@ class UpdateSettingsRequest(BaseModel):
     diffusion_pipe_python: str | None = None
     default_backend: str | None = None
     tagger_device: str | None = None
+    default_tagger: str | None = None
     github_proxy: str | None = None
     huggingface_endpoint: str | None = None
     modelscope_enabled: bool | None = None
@@ -93,6 +94,13 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             detail=f"tagger_device must be auto/cpu/cuda, got {tagger_device!r}",
         )
 
+    default_tagger = (req.default_tagger or current.default_tagger or "wd14").strip() or "wd14"
+    if default_tagger not in {"wd14", "joytag"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"default_tagger must be wd14/joytag, got {default_tagger!r}",
+        )
+
     new = Settings(
         sd_scripts_path=_norm(req.sd_scripts_path),
         python_executable=_norm(req.python_executable),
@@ -100,6 +108,7 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
         diffusion_pipe_python=_norm(req.diffusion_pipe_python),
         default_backend=default_backend,
         tagger_device=tagger_device,
+        default_tagger=default_tagger,
         github_proxy=_norm(req.github_proxy),
         huggingface_endpoint=_norm(req.huggingface_endpoint),
         modelscope_enabled=(
