@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { FilePlus2 } from "lucide-react"
+import { ArrowLeft, FilePlus2 } from "lucide-react"
 import { api, type RecipeTemplate } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+
+type Stage = "pick" | "fill"
 
 export function TemplateLibraryDialog({
   open,
@@ -37,31 +39,47 @@ export function TemplateLibraryDialog({
     enabled: open,
   })
 
+  const [stage, setStage] = useState<Stage>("pick")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [name, setName] = useState("")
+  const [values, setValues] = useState<Record<string, string>>({})
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   // Reset internal state on every open so the dialog feels fresh.
   useEffect(() => {
     if (!open) {
+      setStage("pick")
       setSelectedId(null)
       setName("")
+      setValues({})
       setErrorMsg(null)
     }
   }, [open])
 
   const list = templates.data?.templates ?? []
-  const selected = list.find((t) => t.id === selectedId) ?? null
+  const selected = useMemo(
+    () => list.find((t) => t.id === selectedId) ?? null,
+    [list, selectedId],
+  )
+
+  const hasPlaceholders = (selected?.placeholders?.length ?? 0) > 0
 
   // When the user picks a template, default the name to "<id>_v1".
   useEffect(() => {
     if (selected) {
       setName(`${selected.id}_v1`)
+      // Seed each placeholder field with its placeholder hint so the user
+      // sees concrete examples instead of empty inputs.
+      const seeded: Record<string, string> = {}
+      for (const ph of selected.placeholders ?? []) {
+        seeded[ph.key] = ""
+      }
+      setValues(seeded)
       setErrorMsg(null)
     }
   }, [selected])
 
-  const mutation = useMutation({
+  const saveBlankCopy = useMutation({
     mutationFn: async () => {
       if (!selected) throw new Error("请先选择模板")
       const trimmed = name.trim()
@@ -78,6 +96,28 @@ export function TemplateLibraryDialog({
     },
   })
 
+  const instantiate = useMutation({
+    mutationFn: async () => {
+      if (!selected) throw new Error("请先选择模板")
+      const trimmed = name.trim()
+      if (!trimmed) throw new Error("名称不能为空")
+      return api.instantiateRecipeTemplate(selected.id, {
+        name: trimmed,
+        values,
+      })
+    },
+    onSuccess: (resp) => {
+      qc.invalidateQueries({ queryKey: ["recipes"] })
+      onOpenChange(false)
+      onCreated(resp.name)
+    },
+    onError: (err) => {
+      setErrorMsg(err instanceof Error ? err.message : String(err))
+    },
+  })
+
+  const pending = instantiate.isPending || saveBlankCopy.isPending
+
   const handleConfirm = () => {
     if (!selected) return
     if (selected.id === "blank") {
@@ -85,54 +125,54 @@ export function TemplateLibraryDialog({
       onUseBlank()
       return
     }
-    mutation.mutate()
+    if (stage === "pick") {
+      // Templates without placeholders skip the fill stage and write the
+      // body verbatim — preserves the old behaviour for stripped-down YAMLs.
+      if (!hasPlaceholders) {
+        saveBlankCopy.mutate()
+        return
+      }
+      setErrorMsg(null)
+      setStage("fill")
+      return
+    }
+    instantiate.mutate()
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[min(calc(100%-2rem),48rem)]">
         <DialogHeader>
-          <DialogTitle>模板库</DialogTitle>
+          <DialogTitle>
+            {stage === "fill" && selected ? `参数化模板：${selected.name}` : "模板库"}
+          </DialogTitle>
           <DialogDescription>
-            从模板创建新配方，或选择「Blank」从空白表单开始。
+            {stage === "fill"
+              ? "填入此模板需要的关键路径，提交后会写入新的配方文件。"
+              : "从模板创建新配方，或选择「Blank」从空白表单开始。"}
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="max-h-[50vh]">
-          {templates.isLoading && (
-            <div className="text-sm text-muted-foreground px-1 py-6 text-center">加载中…</div>
-          )}
-          {templates.isError && (
-            <div className="text-sm text-destructive px-1 py-6 text-center">
-              模板加载失败：{(templates.error as Error).message}
-            </div>
-          )}
-          {!templates.isLoading && list.length > 0 && (
-            <div className="grid grid-cols-2 gap-3 p-1">
-              {list.map((tpl) => (
-                <TemplateCard
-                  key={tpl.id}
-                  template={tpl}
-                  active={selectedId === tpl.id}
-                  onSelect={() => setSelectedId(tpl.id)}
-                />
-              ))}
-            </div>
-          )}
-        </ScrollArea>
-
-        {selected && selected.id !== "blank" && (
-          <div className="flex flex-col gap-1.5">
-            <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              新配方名称
-            </Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="font-mono"
-              placeholder="my_recipe_v1"
+        {stage === "pick" ? (
+          <PickStage
+            templates={templates}
+            list={list}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            selected={selected}
+            name={name}
+            onNameChange={setName}
+          />
+        ) : (
+          selected && (
+            <FillStage
+              template={selected}
+              name={name}
+              onNameChange={setName}
+              values={values}
+              onValuesChange={setValues}
             />
-          </div>
+          )
         )}
 
         {errorMsg && (
@@ -142,10 +182,19 @@ export function TemplateLibraryDialog({
         )}
 
         <DialogFooter>
+          {stage === "fill" && (
+            <Button
+              variant="ghost"
+              onClick={() => setStage("pick")}
+              disabled={pending}
+            >
+              <ArrowLeft className="size-3" /> 返回
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending}
+            disabled={pending}
           >
             取消
           </Button>
@@ -153,20 +202,141 @@ export function TemplateLibraryDialog({
             onClick={handleConfirm}
             disabled={
               !selected ||
-              mutation.isPending ||
+              pending ||
               (selected.id !== "blank" && !name.trim())
             }
           >
             <FilePlus2 className="size-3" />
-            {mutation.isPending
+            {pending
               ? "创建中…"
               : selected?.id === "blank"
                 ? "进入空白表单"
-                : "创建配方"}
+                : stage === "pick" && hasPlaceholders
+                  ? "下一步"
+                  : "创建配方"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function PickStage({
+  templates,
+  list,
+  selectedId,
+  onSelect,
+  selected,
+  name,
+  onNameChange,
+}: {
+  templates: ReturnType<typeof useQuery<{ templates: RecipeTemplate[] }>>
+  list: RecipeTemplate[]
+  selectedId: string | null
+  onSelect: (id: string) => void
+  selected: RecipeTemplate | null
+  name: string
+  onNameChange: (next: string) => void
+}) {
+  const showNameInput =
+    selected !== null &&
+    selected.id !== "blank" &&
+    (selected.placeholders?.length ?? 0) === 0
+  return (
+    <>
+      <ScrollArea className="max-h-[50vh]">
+        {templates.isLoading && (
+          <div className="text-sm text-muted-foreground px-1 py-6 text-center">加载中…</div>
+        )}
+        {templates.isError && (
+          <div className="text-sm text-destructive px-1 py-6 text-center">
+            模板加载失败：{(templates.error as Error).message}
+          </div>
+        )}
+        {!templates.isLoading && list.length > 0 && (
+          <div className="grid grid-cols-2 gap-3 p-1">
+            {list.map((tpl) => (
+              <TemplateCard
+                key={tpl.id}
+                template={tpl}
+                active={selectedId === tpl.id}
+                onSelect={() => onSelect(tpl.id)}
+              />
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+
+      {showNameInput && (
+        <div className="flex flex-col gap-1.5">
+          <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+            新配方名称
+          </Label>
+          <Input
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            className="font-mono"
+            placeholder="my_recipe_v1"
+          />
+        </div>
+      )}
+    </>
+  )
+}
+
+function FillStage({
+  template,
+  name,
+  onNameChange,
+  values,
+  onValuesChange,
+}: {
+  template: RecipeTemplate
+  name: string
+  onNameChange: (next: string) => void
+  values: Record<string, string>
+  onValuesChange: (next: Record<string, string>) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col gap-1.5">
+        <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+          新配方名称
+        </Label>
+        <Input
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          className="font-mono"
+          placeholder="my_recipe_v1"
+        />
+      </div>
+
+      <ScrollArea className="max-h-[40vh]">
+        <div className="space-y-3 p-1">
+          {template.placeholders.map((ph) => (
+            <div key={ph.key} className="flex flex-col gap-1.5">
+              <Label className="text-[12px] flex items-center justify-between gap-2">
+                <span>{ph.label}</span>
+                <code className="font-mono text-[10px] text-muted-foreground">
+                  {ph.path_field}
+                </code>
+              </Label>
+              <Input
+                value={values[ph.key] ?? ""}
+                onChange={(e) =>
+                  onValuesChange({ ...values, [ph.key]: e.target.value })
+                }
+                className="font-mono text-[12px]"
+                placeholder={ph.placeholder}
+              />
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+      <p className="text-[11px] text-muted-foreground">
+        留空的字段保持模板默认值。提交时后端会用 RecipeConfig 重新校验。
+      </p>
+    </div>
   )
 }
 
@@ -198,6 +368,14 @@ function TemplateCard({
         >
           {template.arch}
         </Badge>
+        {(template.placeholders?.length ?? 0) > 0 && (
+          <Badge
+            variant="secondary"
+            className="rounded-[2px] text-[10px] py-0 px-1.5"
+          >
+            {template.placeholders.length} 项参数
+          </Badge>
+        )}
       </div>
       <div className="text-xs text-muted-foreground leading-relaxed">
         {template.description}

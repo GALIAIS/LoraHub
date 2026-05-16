@@ -42,6 +42,12 @@ class RenameRecipeRequest(BaseModel):
     new_name: str
 
 
+class InstantiateTemplateRequest(BaseModel):
+    name: str
+    values: dict[str, Any] = {}
+    overwrite: bool = False
+
+
 def _validate_recipe_name(name: str) -> str:
     """Strip extension, run through the shared name regex, return canonical form."""
     canonical = name.strip().removesuffix(".yaml").removesuffix(".yml")
@@ -176,6 +182,56 @@ def list_recipe_templates() -> dict[str, Any]:
     small files parsed once per request.
     """
     return {"templates": recipe_templates_module.load_templates()}
+
+
+@router.post("/recipes/templates/{template_id}/instantiate", status_code=201)
+def instantiate_recipe_template(
+    template_id: str,
+    req: InstantiateTemplateRequest,
+) -> dict[str, Any]:
+    """Materialise a template into a fresh recipe at ``recipes/<name>.yaml``.
+
+    Steps:
+      1. Look up the template by id (404 if absent).
+      2. Apply the user-supplied placeholder values onto a deep copy of the
+         template body via dotted-path setters.
+      3. Validate the result through ``RecipeConfig`` (422 on failure).
+      4. Persist using the same name validation / overwrite guard the regular
+         save endpoint uses (400 / 409 on conflicts).
+    """
+    name = _validate_recipe_name(req.name)
+
+    templates = recipe_templates_module.load_templates()
+    template = next((t for t in templates if t["id"] == template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail="template not found")
+
+    try:
+        body = recipe_templates_module.apply_placeholders(
+            template["recipe"], template.get("placeholders", []), req.values
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        cfg = RecipeConfig.model_validate(body)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    target = _new_recipe_target(name)
+    if target.exists() and not req.overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=f"recipe {name!r} already exists; pass overwrite=true to replace",
+        )
+
+    dump_recipe(cfg, target)
+    return {
+        "name": name,
+        "filename": target.name,
+        "path": str(target),
+        "template_id": template_id,
+    }
 
 
 @router.post("/recipes/import", status_code=201)

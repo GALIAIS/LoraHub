@@ -1931,3 +1931,289 @@ def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) ->
         json={"path": str(data), "tagger": "blip"},
     )
     assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Cross-job sample gallery (/api/samples)
+# --------------------------------------------------------------------------- #
+
+
+def _png_bytes() -> bytes:
+    """Return a tiny but valid-enough PNG header for tests."""
+    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def test_samples_aggregates_across_jobs(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Two jobs each produce one sample image -> /api/samples returns both
+    items with raw_url pointing at the existing per-job inline endpoint."""
+    ws_a = tmp_path / "run-a"
+    ws_a.mkdir()
+    (ws_a / "sample-1.png").write_bytes(_png_bytes())
+    job_a = state.registry.create(
+        workspace=ws_a, recipe_snapshot={"output": {"name": "alpha"}}
+    )
+
+    ws_b = tmp_path / "run-b"
+    ws_b.mkdir()
+    out = ws_b / "out"
+    out.mkdir()
+    (out / "sample-2.jpg").write_bytes(_png_bytes())
+    job_b = state.registry.create(
+        workspace=ws_b, recipe_snapshot={"output": {"name": "beta"}}
+    )
+
+    r = client.get("/api/samples")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 2
+    assert body["limit"] == 200
+    assert body["offset"] == 0
+
+    by_job = {item["job_id"]: item for item in body["items"]}
+    assert set(by_job.keys()) == {job_a.id, job_b.id}
+
+    item_a = by_job[job_a.id]
+    assert item_a["path"] == "sample-1.png"
+    assert item_a["recipe_name"] == "alpha"
+    assert item_a["job_name"] == "run-a"
+    assert item_a["raw_url"] == (
+        f"/api/jobs/{job_a.id}/files/raw?path=sample-1.png"
+    )
+
+    item_b = by_job[job_b.id]
+    assert item_b["path"] == "out/sample-2.jpg"
+    # URL-encoded slash so the path stays a single query-string value.
+    assert item_b["raw_url"] == (
+        f"/api/jobs/{job_b.id}/files/raw?path=out%2Fsample-2.jpg"
+    )
+
+    # The raw_url should resolve to an actual byte stream from the existing
+    # per-job endpoint — that is the reuse story we promised.
+    raw = client.get(
+        f"/api/jobs/{job_b.id}/files/raw", params={"path": "out/sample-2.jpg"}
+    )
+    assert raw.status_code == 200
+    assert raw.content == _png_bytes()
+
+
+def test_samples_filter_by_job_ids(client: TestClient, tmp_path: Path) -> None:
+    ws_a = tmp_path / "run-a"
+    ws_a.mkdir()
+    (ws_a / "a.png").write_bytes(_png_bytes())
+    job_a = state.registry.create(workspace=ws_a, recipe_snapshot={})
+
+    ws_b = tmp_path / "run-b"
+    ws_b.mkdir()
+    (ws_b / "b.png").write_bytes(_png_bytes())
+    state.registry.create(workspace=ws_b, recipe_snapshot={})
+
+    r = client.get("/api/samples", params={"job_ids": job_a.id})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["job_id"] == job_a.id
+
+    # Unknown job id -> 404 so the UI can flag stale filter chips.
+    r_missing = client.get("/api/samples", params={"job_ids": "ghost-id"})
+    assert r_missing.status_code == 404
+
+
+def test_samples_empty_when_no_jobs(client: TestClient) -> None:
+    r = client.get("/api/samples")
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "total": 0, "limit": 200, "offset": 0}
+
+
+def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None:
+    import os
+
+    ws = tmp_path / "run"
+    ws.mkdir()
+    (ws / "old.png").write_bytes(_png_bytes())
+    (ws / "new.png").write_bytes(_png_bytes())
+    # Force an older mtime on old.png so sorting has something to chew on.
+    old_ts = (ws / "new.png").stat().st_mtime - 60
+    os.utime(ws / "old.png", (old_ts, old_ts))
+    state.registry.create(workspace=ws, recipe_snapshot={})
+
+    r = client.get("/api/samples")
+    paths = [item["path"] for item in r.json()["items"]]
+    assert paths == ["new.png", "old.png"]
+
+
+# --------------------------------------------------------------------------- #
+# Recipe template instantiate (POST /api/recipes/templates/{id}/instantiate)
+# --------------------------------------------------------------------------- #
+
+
+def test_instantiate_template_substitutes_placeholders(
+    client: TestClient,
+    recipes_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Placeholders applied by dotted-path setter, recipe validates, and the
+    persisted YAML carries the substituted values."""
+    from lorahub.api import recipe_templates as recipe_templates_module
+
+    builtin_dir = tmp_path / "builtin"
+    builtin_dir.mkdir()
+    ckpt = tmp_path / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = tmp_path / "data"
+    data.mkdir()
+
+    template_yaml = {
+        "_template": {
+            "name": "Test SDXL",
+            "description": "x",
+            "arch": "sdxl",
+        },
+        "_placeholders": [
+            {
+                "key": "checkpoint",
+                "label": "ckpt",
+                "path_field": "base_model.checkpoint",
+                "placeholder": "ckpt.safetensors",
+            },
+            {
+                "key": "dataset",
+                "label": "ds",
+                "path_field": "dataset.source",
+                "placeholder": "./datasets/x",
+            },
+            {
+                "key": "name",
+                "label": "name",
+                "path_field": "output.name",
+                "placeholder": "out_v1",
+            },
+        ],
+        "base_model": {"arch": "sdxl", "checkpoint": ""},
+        "dataset": {"source": ""},
+        "schedule": {"epochs": 3, "batch_size": 1},
+        "sampling": {"enabled": False},
+    }
+    (builtin_dir / "test.yaml").write_text(
+        yaml.safe_dump(template_yaml, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+    )
+
+    # Confirm the listing exposes the new placeholders array.
+    listed = client.get("/api/recipes/templates").json()["templates"]
+    assert len(listed) == 1
+    assert [p["key"] for p in listed[0]["placeholders"]] == [
+        "checkpoint",
+        "dataset",
+        "name",
+    ]
+
+    r = client.post(
+        "/api/recipes/templates/test/instantiate",
+        json={
+            "name": "myrun",
+            "values": {
+                "checkpoint": str(ckpt),
+                "dataset": str(data),
+                "name": "myrun_out",
+            },
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "myrun"
+    assert body["template_id"] == "test"
+
+    saved = recipes_dir / "myrun.yaml"
+    assert saved.is_file()
+    parsed = yaml.safe_load(saved.read_text(encoding="utf-8"))
+    assert parsed["base_model"]["checkpoint"] == str(ckpt)
+    assert parsed["dataset"]["source"] == str(data)
+    assert parsed["output"]["name"] == "myrun_out"
+    # Sanity: the schedule values from the template survived.
+    assert parsed["schedule"]["epochs"] == 3
+    # The metadata blocks are stripped from what gets persisted.
+    assert "_template" not in parsed
+    assert "_placeholders" not in parsed
+
+
+def test_instantiate_template_unknown_id_returns_404(
+    client: TestClient, recipes_dir: Path
+) -> None:
+    r = client.post(
+        "/api/recipes/templates/does-not-exist/instantiate",
+        json={"name": "anything", "values": {}},
+    )
+    assert r.status_code == 404
+
+
+def test_instantiate_template_conflict_without_overwrite(
+    client: TestClient,
+    recipes_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import recipe_templates as recipe_templates_module
+
+    builtin_dir = tmp_path / "builtin"
+    builtin_dir.mkdir()
+    (builtin_dir / "skel.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "_template": {"name": "Skel", "arch": "sdxl"},
+                "base_model": {"arch": "sdxl", "checkpoint": ""},
+                "dataset": {"source": ""},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+    )
+
+    first = client.post(
+        "/api/recipes/templates/skel/instantiate",
+        json={"name": "dup", "values": {}},
+    )
+    assert first.status_code == 201, first.text
+
+    clash = client.post(
+        "/api/recipes/templates/skel/instantiate",
+        json={"name": "dup", "values": {}},
+    )
+    assert clash.status_code == 409
+
+    overwrite = client.post(
+        "/api/recipes/templates/skel/instantiate",
+        json={"name": "dup", "values": {}, "overwrite": True},
+    )
+    assert overwrite.status_code == 201, overwrite.text
+
+
+def test_apply_placeholders_creates_intermediate_dicts() -> None:
+    """The dotted-path setter is the load-bearing piece — make sure it
+    creates missing intermediates and rejects non-mapping traversal."""
+    from lorahub.api.recipe_templates import apply_placeholders
+
+    placeholders = [
+        {
+            "key": "name",
+            "label": "name",
+            "path_field": "output.name",
+            "placeholder": "",
+        }
+    ]
+    out = apply_placeholders({}, placeholders, {"name": "v1"})
+    assert out == {"output": {"name": "v1"}}
+
+    # Empty values are no-ops so callers can submit a half-filled form.
+    untouched = apply_placeholders(
+        {"output": {"name": "old"}}, placeholders, {"name": ""}
+    )
+    assert untouched == {"output": {"name": "old"}}
+

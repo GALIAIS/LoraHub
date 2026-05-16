@@ -220,12 +220,37 @@ export interface JobMetricsResponse {
   duration_s: number | null
 }
 
+export interface RecipeTemplatePlaceholder {
+  key: string
+  label: string
+  path_field: string
+  placeholder: string
+}
+
 export interface RecipeTemplate {
   id: string
   name: string
   description: string
   arch: string
+  placeholders: RecipeTemplatePlaceholder[]
   recipe: Record<string, unknown>
+}
+
+export interface SampleGalleryItem {
+  job_id: string
+  job_name: string
+  recipe_name: string | null
+  path: string
+  size_bytes: number
+  modified_at: number
+  raw_url: string
+}
+
+export interface SampleGalleryResponse {
+  items: SampleGalleryItem[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface ModelDownloadEvent {
@@ -480,6 +505,39 @@ export const api = {
     ),
   listRecipeTemplates: () =>
     http<{ templates: RecipeTemplate[] }>("/recipes/templates"),
+  instantiateRecipeTemplate: (
+    templateId: string,
+    body: {
+      name: string
+      values: Record<string, string>
+      overwrite?: boolean
+    },
+  ) =>
+    http<{
+      name: string
+      filename: string
+      path: string
+      template_id: string
+    }>(`/recipes/templates/${encodeURIComponent(templateId)}/instantiate`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: body.name,
+        values: body.values,
+        overwrite: body.overwrite ?? false,
+      }),
+    }),
+  listSamples: (
+    params: { limit?: number; offset?: number; jobIds?: string[] } = {},
+  ) => {
+    const search = new URLSearchParams()
+    if (params.limit !== undefined) search.set("limit", String(params.limit))
+    if (params.offset !== undefined) search.set("offset", String(params.offset))
+    if (params.jobIds && params.jobIds.length > 0) {
+      search.set("job_ids", params.jobIds.join(","))
+    }
+    const qs = search.toString()
+    return http<SampleGalleryResponse>(`/samples${qs ? `?${qs}` : ""}`)
+  },
   importRecipe: async (name: string, file: File, overwrite = false) => {
     const fd = new FormData()
     fd.append("file", file)
