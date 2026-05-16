@@ -1,4 +1,4 @@
-﻿import { useState } from "react"
+import { useState } from "react"
 import {
   Tabs,
   TabsContent,
@@ -22,11 +22,11 @@ type TabKey =
   | "network"
   | "models"
   | "tagging"
-  | "about"
 
 /**
- * Settings page shell. Each tab is independently scrollable so a long log
- * in the install tab never pushes the header off-screen.
+ * Settings page shell. The active tab's content scrolls together with a
+ * page-wide About footer below it, so users always have the project
+ * intro and links a scroll away regardless of which tab they're on.
  */
 export function SettingsPage() {
   const [tab, setTab] = useState<TabKey>("overview")
@@ -39,7 +39,7 @@ export function SettingsPage() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="text-sm text-muted-foreground">
-          工作区级别的默认值。配置文件中的同名字段会按任务覆盖；环境变量
+          工作区级别的默认值。配置文件中的同名字段会按任务覆盖;环境变量
           (LORAHUB_*) 优先级最高。
         </p>
       </header>
@@ -58,67 +58,23 @@ export function SettingsPage() {
             <TabsTrigger value="network">网络加速</TabsTrigger>
             <TabsTrigger value="models">模型下载</TabsTrigger>
             <TabsTrigger value="tagging">标注</TabsTrigger>
-            <TabsTrigger value="about">关于</TabsTrigger>
           </TabsList>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <TabsContent value="overview" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <OverviewTab />
-              </div>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="px-8 py-6 w-full space-y-8">
+            <TabsContent value="overview"><OverviewTab /></TabsContent>
+            <TabsContent value="dependencies"><DependenciesTab /></TabsContent>
+            <TabsContent value="backends"><BackendsTab /></TabsContent>
+            <TabsContent value="install"><InstallTab /></TabsContent>
+            <TabsContent value="network"><NetworkTab /></TabsContent>
+            <TabsContent value="models"><ModelsTab /></TabsContent>
+            <TabsContent value="tagging"><TaggingTab /></TabsContent>
+
+            <div className="pt-4 border-t border-border/50">
+              <AboutTab />
             </div>
-          </TabsContent>
-          <TabsContent value="dependencies" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <DependenciesTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="backends" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <BackendsTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="install" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <InstallTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="network" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <NetworkTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="models" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <ModelsTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="tagging" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <TaggingTab />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="about" className="h-full">
-            <div className="h-full overflow-y-auto">
-              <div className="px-8 py-6 w-full">
-                <AboutTab />
-              </div>
-            </div>
-          </TabsContent>
+          </div>
         </div>
       </Tabs>
     </div>
