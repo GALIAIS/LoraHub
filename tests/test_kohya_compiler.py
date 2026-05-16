@@ -185,3 +185,35 @@ def test_non_pony_variants_dont_emit_clip_skip() -> None:
         )
         argv = _argv(cfg)
         assert not any(a.startswith("--clip_skip") for a in argv), variant
+
+
+def test_validation_default_off() -> None:
+    """val_split=0 (default) keeps validation argv off entirely."""
+    args = _argv(_recipe())
+    assert not any(a.startswith("--validation_split_percentage") for a in args)
+    assert not any(a.startswith("--validate_every_n_epochs") for a in args)
+    assert not any(a.startswith("--max_validation_steps") for a in args)
+
+
+def test_validation_split_emits_kohya_flags() -> None:
+    cfg = _recipe(
+        dataset={"source": "/d", "val_split": 0.1},
+        validation={"every_n_epochs": 2, "max_samples": 50},
+    )
+    args = _argv(cfg)
+    assert "--validation_split_percentage=10" in args
+    assert "--validate_every_n_epochs=2" in args
+    assert "--max_validation_steps=50" in args
+
+
+def test_validation_split_too_large_rejected() -> None:
+    """val_split must stay strictly below 0.5 — pydantic rejects bigger values."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RecipeConfig.model_validate(
+            {
+                "base_model": {"checkpoint": "/m.safetensors"},
+                "dataset": {"source": "/d", "val_split": 0.6},
+            }
+        )

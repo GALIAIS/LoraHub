@@ -98,3 +98,13 @@ def test_traceback_line_flagged() -> None:
     ev = parse_line("Traceback (most recent call last):")
     assert ev is not None
     assert ev.payload["level"] == "error"
+
+
+def test_validation_loss_emits_validation_event() -> None:
+    """sd-scripts' eval print becomes a structured `validation` event."""
+    ev = parse_line("epoch 3 validation loss: 0.5237", job_id="J1")
+    assert ev is not None
+    assert ev.type is EventType.validation
+    assert ev.payload["val_loss"] == 0.5237
+    assert ev.payload.get("epoch") == 3
+    assert ev.job_id == "J1"

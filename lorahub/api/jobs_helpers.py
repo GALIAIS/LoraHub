@@ -149,17 +149,20 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     log = workspace / "events.jsonl"
     empty: dict[str, Any] = {
         "loss": [],
+        "val_loss": [],
         "epochs": [],
         "checkpoints": [],
         "samples": [],
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
+        "overfit_signal": _empty_overfit_signal(),
     }
     if not log.is_file():
         return empty
 
     loss: list[dict[str, Any]] = []
+    val_loss: list[dict[str, Any]] = []
     epochs: list[dict[str, Any]] = []
     checkpoints: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
@@ -191,6 +194,18 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
             elif etype == EventType.epoch_end.value:
                 epoch_counter += 1
                 epochs.append({"epoch": payload.get("epoch"), "ts": ts})
+            elif etype == EventType.validation.value:
+                if "val_loss" in payload:
+                    entry: dict[str, Any] = {
+                        # Fall back to the running epoch counter when sd-scripts
+                        # forgot to print one on the same line.
+                        "epoch": payload.get("epoch", epoch_counter),
+                        "val_loss": payload.get("val_loss"),
+                        "ts": ts,
+                    }
+                    if "step" in payload:
+                        entry["step"] = payload.get("step")
+                    val_loss.append(entry)
             elif etype == EventType.checkpoint_saved.value:
                 checkpoints.append(
                     {
@@ -213,15 +228,97 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     if len(loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
         loss = _downsample(loss, _METRICS_MAX_POINTS)
 
+    overfit_signal = _compute_overfit_signal(loss, val_loss)
+
     return {
         "loss": loss,
+        "val_loss": val_loss,
         "epochs": epochs,
         "checkpoints": checkpoints,
         "samples": samples,
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,
+        "overfit_signal": overfit_signal,
     }
+
+
+def _empty_overfit_signal() -> dict[str, Any]:
+    return {
+        "latest_train": None,
+        "latest_val": None,
+        "gap": None,
+        "trend": None,
+    }
+
+
+# Slope thresholds (loss units per index) used to bucket the heuristic.
+# A series whose absolute slope falls below this is considered "flat".
+_OVERFIT_FLAT_EPS = 1e-4
+
+
+def _compute_overfit_signal(
+    loss: list[dict[str, Any]],
+    val_loss: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Crude overfit detector that compares train vs val loss slopes.
+
+    Heuristic (only fires when we have >= 2 val points and >= 2 train points):
+        * `val_slope > +eps` and `train_slope < -eps`  ->  "overfitting"
+        * `val_slope < -eps` and `train_slope < -eps`  ->  "improving"
+        * everything else (mixed, both flat, etc.)     ->  "flat"
+
+    `eps` is `_OVERFIT_FLAT_EPS = 1e-4` loss units per sample index. Slopes
+    are computed over the *last 3 points* of each series (or fewer if the
+    history is shorter) using a simple linear fit through the means — good
+    enough for an early-warning UI badge without dragging in numpy.
+    """
+    out = _empty_overfit_signal()
+
+    train_points = [p["loss"] for p in loss if isinstance(p.get("loss"), (int, float))]
+    val_points = [
+        p["val_loss"] for p in val_loss if isinstance(p.get("val_loss"), (int, float))
+    ]
+
+    if train_points:
+        out["latest_train"] = float(train_points[-1])
+    if val_points:
+        out["latest_val"] = float(val_points[-1])
+    if train_points and val_points:
+        out["gap"] = float(val_points[-1] - train_points[-1])
+
+    if len(val_points) < 2 or len(train_points) < 2:
+        return out
+
+    train_slope = _tail_slope(train_points, window=3)
+    val_slope = _tail_slope(val_points, window=3)
+
+    if val_slope > _OVERFIT_FLAT_EPS and train_slope < -_OVERFIT_FLAT_EPS:
+        out["trend"] = "overfitting"
+    elif val_slope < -_OVERFIT_FLAT_EPS and train_slope < -_OVERFIT_FLAT_EPS:
+        out["trend"] = "improving"
+    else:
+        out["trend"] = "flat"
+    return out
+
+
+def _tail_slope(values: list[float], *, window: int) -> float:
+    """Return a simple least-squares slope over the last `window` samples.
+
+    Indices are treated as the x-axis (0..n-1) so the result is in "loss
+    units per sample". The classic closed-form is fine here — N is at most 3.
+    """
+    tail = [float(v) for v in values[-window:]]
+    n = len(tail)
+    if n < 2:
+        return 0.0
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(tail) / n
+    num = sum((i - mean_x) * (tail[i] - mean_y) for i in range(n))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    if den == 0:
+        return 0.0
+    return num / den
 
 
 def _downsample(points: list[dict[str, Any]], target: int) -> list[dict[str, Any]]:
