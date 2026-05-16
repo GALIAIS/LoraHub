@@ -69,7 +69,24 @@ def backend() -> KohyaBackend:
 
 def test_supported_archs_cover_main_models(backend: KohyaBackend) -> None:
     names = {a.value for a in backend.supported_archs}
-    assert {"sdxl", "sd15", "flux", "sd3"}.issubset(names)
+    # Eight upstream-supported families per kohya sd-scripts README.
+    assert names == {
+        "sd15",
+        "sd2",
+        "sdxl",
+        "sd3",
+        "flux",
+        "lumina",
+        "hunyuan_image",
+        "anima",
+    }
+
+
+def test_supported_archs_excludes_dp_only_models(backend: KohyaBackend) -> None:
+    """kohya does not ship trainers for these dp-only arches."""
+    names = {a.value for a in backend.supported_archs}
+    for dp_only in ("wan", "hunyuan_video", "chroma", "ltx_video", "flux2"):
+        assert dp_only not in names
 
 
 def test_validate_passes_for_good_recipe(tmp_path: Path, backend: KohyaBackend) -> None:

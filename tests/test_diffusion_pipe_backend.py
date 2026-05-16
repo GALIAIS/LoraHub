@@ -63,6 +63,32 @@ def test_supported_archs_excludes_sd15(backend: DiffusionPipeBackend) -> None:
     names = {a.value for a in backend.supported_archs}
     assert {"sdxl", "flux", "sd3"}.issubset(names)
     assert "sd15" not in names
+    assert "sd2" not in names
+
+
+def test_supported_archs_cover_dp_only_models(backend: DiffusionPipeBackend) -> None:
+    """The full dp matrix (Wan, HunyuanVideo, Chroma, ...) is reachable."""
+    names = {a.value for a in backend.supported_archs}
+    assert {
+        "wan",
+        "hunyuan_video",
+        "hunyuan_video_15",
+        "ltx_video",
+        "ltx2",
+        "chroma",
+        "hidream",
+        "omnigen2",
+        "auraflow",
+        "qwen_image",
+        "cosmos",
+        "cosmos_predict2",
+        "anima",
+        "hunyuan_image",
+        "lumina",
+        "flux2",
+        "z_image",
+        "ernie_image",
+    }.issubset(names)
 
 
 def test_validate_passes_for_good_recipe(
