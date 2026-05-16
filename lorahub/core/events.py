@@ -24,6 +24,11 @@ class EventType(StrEnum):
     epoch_end = "epoch_end"
     sample_ready = "sample_ready"
     checkpoint_saved = "checkpoint_saved"
+    # Emitted whenever the backend reports a validation-set loss (sd-scripts'
+    # `--validation_split_percentage` / `--validate_every_n_epochs`). Payload
+    # keys: `val_loss` (float, required), `epoch` and `step` (optional ints).
+    # Older consumers without explicit handling fall through harmlessly.
+    validation = "validation"
     log = "log"
     error = "error"
     done = "done"

@@ -46,6 +46,12 @@ class DatasetConfig(BaseModel):
     bucket: BucketConfig = Field(default_factory=lambda: BucketConfig())
     caption: CaptionConfig = Field(default_factory=lambda: CaptionConfig())
     num_repeats: int = Field(1, ge=1)
+    # Fraction of the dataset reserved for held-out validation. `0.0` disables
+    # validation entirely (the previous behaviour); upper bound stays under
+    # 0.5 because anything more would be a strange split. sd-scripts' flag
+    # `--validation_split_percentage` takes an integer percent — we convert
+    # at compile time.
+    val_split: float = Field(0.0, ge=0.0, lt=0.5)
 
     @model_validator(mode="after")
     def _validate_resolution(self) -> DatasetConfig:
@@ -119,6 +125,19 @@ class ResumeConfig(BaseModel):
     save_state_every_n_epochs: int | None = Field(default=None, ge=1)
 
 
+class ValidationConfig(BaseModel):
+    """Validation-loss cadence for overfit detection.
+
+    Only takes effect when `dataset.val_split > 0`; otherwise the compiler
+    skips emitting validation argv entirely. `max_samples` caps how many
+    validation steps sd-scripts will run per evaluation pass — handy when
+    the held-out split is large and you only want a quick signal.
+    """
+
+    every_n_epochs: int = Field(1, ge=1)
+    max_samples: int | None = Field(default=None, ge=1)
+
+
 class RecipeConfig(BaseModel):
     """Top-level recipe configuration. One YAML file = one RecipeConfig."""
 
@@ -135,6 +154,7 @@ class RecipeConfig(BaseModel):
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     backend: BackendConfig = Field(default_factory=lambda: BackendConfig())
     resume: ResumeConfig = Field(default_factory=lambda: ResumeConfig())
+    validation: ValidationConfig = Field(default_factory=lambda: ValidationConfig())
 
     model_config = {"extra": "forbid"}
 

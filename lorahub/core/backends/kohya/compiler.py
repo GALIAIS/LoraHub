@@ -58,6 +58,7 @@ def compile_recipe(
     _emit_output_args(recipe, workspace, args)
     _emit_sampling_args(recipe, workspace, args)
     _emit_resume_args(recipe, args)
+    _emit_validation_args(recipe, args)
     _emit_variant_args(recipe, args)
     _emit_extra_args(recipe, args)
 
@@ -253,6 +254,30 @@ def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
         args.append("--save_state_on_train_end")
     if r.save_state_every_n_epochs is not None:
         args.append(f"--save_state_every_n_epochs={r.save_state_every_n_epochs}")
+
+
+def _emit_validation_args(recipe: RecipeConfig, args: list[str]) -> None:
+    """Emit sd-scripts' validation-split flags when `dataset.val_split > 0`.
+
+    sd-scripts 1.x exposes a held-out validation split via three flags:
+    `--validation_split_percentage` (integer percent, 0 disables it),
+    `--validate_every_n_epochs`, and `--max_validation_steps`. We round the
+    fractional `val_split` to the nearest percent so a YAML value of `0.10`
+    lands on `10` instead of `10.0`. `validation.max_samples` is mapped to
+    `--max_validation_steps` because that is the per-eval-pass cap kohya
+    actually accepts; users can always override via `backend.extra_args`.
+    """
+    ds = recipe.dataset
+    if ds.val_split <= 0.0:
+        return
+
+    percent = max(1, round(ds.val_split * 100))
+    args.append(f"--validation_split_percentage={percent}")
+
+    v = recipe.validation
+    args.append(f"--validate_every_n_epochs={v.every_n_epochs}")
+    if v.max_samples is not None:
+        args.append(f"--max_validation_steps={v.max_samples}")
 
 
 def _emit_variant_args(recipe: RecipeConfig, args: list[str]) -> None:
