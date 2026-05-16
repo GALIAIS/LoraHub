@@ -2478,3 +2478,50 @@ def test_get_sweep_aggregates_job_states(
     assert len(body["jobs"]) == 3
     # Sibling sweep is filtered out.
     assert all(j["metadata"]["sweep_id"] == sweep_id for j in body["jobs"])
+
+
+def test_sweep_metadata_persists_across_restart(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job tagged with sweep metadata must remain grouped after rehydration.
+
+    Simulates the lifespan path: write a JobRecord through a backed registry,
+    drop the in-memory registry on the floor, and re-open the same SQLite
+    file. The sweep aggregation endpoint must still find the job.
+    """
+    from lorahub.api.store import JobStore
+
+    sweep_id = "01TESTRESTART000000000000"
+    db_path = tmp_path / "restart.sqlite"
+
+    # First "process": register a job under a backed registry and stamp metadata.
+    store_a = JobStore(db_path)
+    reg_a = state.JobRegistry(store=store_a)
+    monkeypatch.setattr(state, "registry", reg_a)
+    ws = tmp_path / "variant-1"
+    ws.mkdir()
+    job = reg_a.create(workspace=ws, recipe_snapshot={"x": 1})
+    job.state = state.JobState.succeeded
+    job.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 16}}
+    reg_a.update(job)
+
+    # Second "process": fresh store + registry pointing at the same SQLite
+    # file, just like `_lifespan` does on server startup.
+    store_b = JobStore(db_path)
+    reg_b = state.JobRegistry(store=store_b)
+    loaded = reg_b.load_persisted()
+    assert loaded == 1
+    monkeypatch.setattr(state, "registry", reg_b)
+
+    r = client.get(f"/api/sweeps/{sweep_id}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sweep_id"] == sweep_id
+    assert body["total"] == 1
+    assert body["succeeded"] == 1
+    assert body["jobs"][0]["metadata"] == {
+        "sweep_id": sweep_id,
+        "axis_values": {"network.rank": 16},
+    }
