@@ -4,6 +4,7 @@ Commands:
     lorahub validate <recipe>   Check a recipe without launching training.
     lorahub info <recipe>       Show compiled argv and VRAM estimate (dry run).
     lorahub train <recipe>      Run training to completion.
+    lorahub sweep <recipe>      Expand a grid sweep into per-variant recipes.
     lorahub init <name>         Scaffold a starter recipe in the current dir.
 """
 
@@ -12,7 +13,7 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.backends.kohya.compiler import compile_recipe
 from lorahub.core.config.loader import load_recipe
+from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.dataset.sources import bangumi_base
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
@@ -126,6 +128,175 @@ def train(
         err_console.print(f"[red]training failed (rc={rc})[/red]")
         raise typer.Exit(code=rc)
     console.print("[green]OK[/] training complete")
+
+
+@app.command()
+def sweep(
+    recipe: Annotated[Path, typer.Argument(help="Path to the base recipe YAML file.")],
+    axis: Annotated[
+        list[str],
+        typer.Option(
+            "--axis",
+            help=(
+                "Sweep axis spec, repeatable: 'dotted.path=v1,v2,v3'. "
+                "Values are parsed as JSON when possible (so 1e-4, 32, true work) "
+                "and fall back to string."
+            ),
+        ),
+    ],
+    name_template: Annotated[
+        str,
+        typer.Option(
+            "--name-template",
+            help="Per-variant name template ({base} = base output.name, {i} = 1-based index).",
+        ),
+    ] = "{base}-{i:03d}",
+    workspace_root: Annotated[
+        Path,
+        typer.Option(
+            "--workspace-root",
+            help="Where each materialised variant recipe should record its workspace.",
+        ),
+    ] = Path("./runs"),
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help=(
+                "Where to write generated `variant_NNN.yaml` files plus the "
+                "`sweep.json` mapping. Defaults to ./recipes/sweep-<name>."
+            ),
+        ),
+    ] = Path("./recipes"),
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print each variant name and recipe diff; do not write any files.",
+        ),
+    ] = False,
+) -> None:
+    """Expand a grid sweep into per-variant recipe files.
+
+    The CLI never spawns training subprocesses for sweeps — running N kohya
+    or diffusion-pipe processes in parallel would deadlock most workstations.
+    Instead this command writes ``variant_NNN.yaml`` files plus a ``sweep.json``
+    manifest so the operator can pick the dispatcher (kohya in tmux, the API
+    server's serial scheduler, slurm, etc.).
+    """
+    import json  # noqa: PLC0415
+
+    from lorahub.core.config.loader import dump_recipe  # noqa: PLC0415
+    from lorahub.core.sweep import (  # noqa: PLC0415
+        SweepAxis,
+        SweepError,
+        SweepPlan,
+    )
+
+    if not axis:
+        err_console.print("[red]at least one --axis is required[/red]")
+        raise typer.Exit(code=1)
+
+    # Validate the base recipe up front so the user sees schema errors before
+    # we materialise N copies of a broken recipe.
+    cfg = load_recipe(recipe)
+    base_dict = cfg.model_dump(mode="json", exclude_none=True)
+
+    axes: list[SweepAxis] = []
+    for spec in axis:
+        if "=" not in spec:
+            err_console.print(
+                f"[red]bad --axis spec {spec!r}; expected 'dotted.path=v1,v2,...'[/red]"
+            )
+            raise typer.Exit(code=1)
+        path, _, raw_values = spec.partition("=")
+        path = path.strip()
+        if not path:
+            err_console.print(f"[red]empty axis path in {spec!r}[/red]")
+            raise typer.Exit(code=1)
+        values = [_coerce_axis_value(tok) for tok in raw_values.split(",") if tok.strip()]
+        if not values:
+            err_console.print(f"[red]axis {path!r} has no values[/red]")
+            raise typer.Exit(code=1)
+        axes.append(SweepAxis(path=path, values=values))
+
+    plan = SweepPlan(base_recipe=base_dict, axes=axes, name_template=name_template)
+    try:
+        variants = plan.expand()
+    except SweepError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    base_name = base_dict.get("output", {}).get("name", "sweep")
+    sweep_dir_name = f"sweep-{base_name}"
+
+    if dry_run:
+        console.print(f"[bold]sweep[/bold] {len(variants)} variant(s) [dim](dry run)[/dim]")
+        for i, (variant_name, _variant_recipe) in enumerate(variants, start=1):
+            diff = plan.axis_values_for(i)
+            console.print(f"[cyan]{variant_name}[/cyan]  {diff}")
+        return
+
+    # Re-validate every variant before writing — catches axis values that
+    # violate pydantic constraints (e.g. negative LR, rank > 512).
+    for variant_name, variant_recipe in variants:
+        try:
+            RecipeConfig.model_validate(variant_recipe)
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(
+                f"[red]variant {variant_name!r} fails schema validation: {exc}[/red]"
+            )
+            raise typer.Exit(code=1) from exc
+
+    target_dir = (output_dir / sweep_dir_name).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest: dict[str, object] = {
+        "base_recipe": str(recipe.resolve()),
+        "name_template": name_template,
+        "workspace_root": str(workspace_root.resolve()),
+        "axes": [{"path": a.path, "values": list(a.values)} for a in axes],
+        "variants": [],
+    }
+    for i, (variant_name, variant_recipe) in enumerate(variants, start=1):
+        # `dump_recipe` requires a RecipeConfig — round-trip through validation
+        # both confirms the variant is valid and normalises field ordering.
+        cfg_v = RecipeConfig.model_validate(variant_recipe)
+        variant_path = target_dir / f"variant_{i:03d}.yaml"
+        dump_recipe(cfg_v, variant_path)
+        manifest["variants"].append(  # type: ignore[union-attr]
+            {
+                "name": variant_name,
+                "path": str(variant_path),
+                "axis_values": plan.axis_values_for(i),
+            }
+        )
+
+    manifest_path = target_dir / "sweep.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, default=str, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    console.print(
+        f"[green]OK[/] wrote {len(variants)} variant(s) to {target_dir}"
+    )
+    console.print(f"[dim]manifest:[/dim] {manifest_path}")
+
+
+def _coerce_axis_value(token: str) -> Any:
+    """Best-effort cast of a CLI axis token to an int / float / bool / null / string.
+
+    JSON parses the obvious literals (`32`, `1e-4`, `true`, `null`) so users
+    get the typed values pydantic expects. Anything else (`adamw8bit`,
+    `cosine_with_restarts`) falls back to the trimmed string.
+    """
+    import json as _json  # noqa: PLC0415
+
+    text = token.strip()
+    try:
+        return _json.loads(text)
+    except (ValueError, TypeError):
+        return text
 
 
 @app.command()

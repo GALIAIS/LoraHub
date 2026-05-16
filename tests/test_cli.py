@@ -107,3 +107,33 @@ def test_init_rejects_unknown_template(tmp_path: Path, monkeypatch) -> None:  # 
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init", "x", "--template", "no_such_template"])
     assert result.exit_code == 1
+
+
+def test_sweep_dry_run_lists_variants(tmp_path: Path) -> None:
+    """`lorahub sweep ... --dry-run` prints each variant name and its diff
+    without touching disk."""
+    sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
+    recipe = _make_recipe_yaml(tmp_path, sd)
+    output_root = tmp_path / "recipes-out"
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            str(recipe),
+            "--axis",
+            "network.rank=16,32",
+            "--axis",
+            "schedule.epochs=1,2",
+            "--output-dir",
+            str(output_root),
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "4 variant" in result.stdout
+    # Default base output.name is "lora_output"; template renders {base}-{i:03d}.
+    assert "lora_output-001" in result.stdout
+    assert "lora_output-004" in result.stdout
+    # Dry-run must not write any files.
+    assert not output_root.exists()

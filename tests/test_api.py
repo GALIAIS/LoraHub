@@ -2386,3 +2386,95 @@ def test_apply_placeholders_creates_intermediate_dicts() -> None:
     )
     assert untouched == {"output": {"name": "old"}}
 
+
+# --------------------------------------------------------------------------- #
+# /api/sweeps
+# --------------------------------------------------------------------------- #
+
+
+def test_create_sweep_enqueues_one_job_per_variant(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/sweeps must call _launch_job exactly once per grid variant.
+
+    The real launcher would spawn kohya subprocesses, so we patch it on the
+    sweep router to record metadata and return a fake job id without ever
+    touching the scheduler. With three values across one axis we expect
+    three calls; the response variants must echo the same job ids.
+    """
+    from lorahub.api import state as state_mod
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_launch(cfg: RecipeConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        # Mirror what _launch_job does in production: register a JobRecord so
+        # the GET endpoint has something to aggregate, then stamp metadata.
+        record = state_mod.registry.create(
+            workspace=workspace, recipe_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append({"workspace": workspace, "metadata": metadata})
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_recipe": _recipe_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "values": [16, 32, 64]}],
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    body = r.json()
+
+    assert len(captured) == 3
+    assert len(body["variants"]) == 3
+    assert len(body["job_ids"]) == 3
+    # Every variant carries the same sweep_id and a 1-based axis_values entry.
+    sweep_ids = {c["metadata"]["sweep_id"] for c in captured}
+    assert sweep_ids == {body["sweep_id"]}
+    rank_values = [c["metadata"]["axis_values"]["network.rank"] for c in captured]
+    assert rank_values == [16, 32, 64]
+
+
+def test_get_sweep_aggregates_job_states(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Three fake jobs in distinct states must aggregate into the right counters."""
+    sweep_id = "01TESTSWEEPID0000000000000"
+    states_by_index: list[state.JobState] = [
+        state.JobState.queued,
+        state.JobState.running,
+        state.JobState.succeeded,
+    ]
+    for i, st in enumerate(states_by_index, start=1):
+        ws = tmp_path / f"variant-{i}"
+        ws.mkdir()
+        rec = state.registry.create(workspace=ws, recipe_snapshot={})
+        rec.state = st
+        rec.metadata = {"sweep_id": sweep_id, "variant_name": f"v-{i:03d}"}
+        state.registry.update(rec)
+
+    # Drop a sibling job under a different sweep_id to confirm filtering works.
+    other_ws = tmp_path / "other"
+    other_ws.mkdir()
+    other = state.registry.create(workspace=other_ws, recipe_snapshot={})
+    other.metadata = {"sweep_id": "another-sweep"}
+    state.registry.update(other)
+
+    r = client.get(f"/api/sweeps/{sweep_id}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sweep_id"] == sweep_id
+    assert body["total"] == 3
+    assert body["queued"] == 1
+    assert body["running"] == 1
+    assert body["succeeded"] == 1
+    assert body["failed"] == 0
+    assert len(body["jobs"]) == 3
+    # Sibling sweep is filtered out.
+    assert all(j["metadata"]["sweep_id"] == sweep_id for j in body["jobs"])
