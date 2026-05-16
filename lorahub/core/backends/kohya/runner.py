@@ -3,6 +3,9 @@
 Thin wrapper over `SubprocessRunner` that wires kohya's parser in and
 keeps the historical `KohyaRunner(python=, script=, argv=, ...)` ctor
 shape intact.
+
+Each runner owns a fresh `KohyaLineParser` so per-job state (traceback
+aggregation, cache-progress throttling) is isolated.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from lorahub.core.backends._common.runner import (
     RunResult,
     SubprocessRunner,
 )
-from lorahub.core.backends.kohya.parser import parse_line
+from lorahub.core.backends.kohya.parser import KohyaLineParser
 
 __all__ = ["KohyaRunner", "RunResult"]
 
@@ -33,11 +36,12 @@ class KohyaRunner(SubprocessRunner):
         job_id: str | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
+        parser = KohyaLineParser()
         super().__init__(
             argv=[str(python), str(script), *argv],
             workspace=workspace,
             on_event=on_event,
-            parse_line=parse_line,
+            parse_line=parser.parse_line,
             cwd=script.parent,
             job_id=job_id,
             env=env,

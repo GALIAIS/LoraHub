@@ -29,6 +29,13 @@ class EventType(StrEnum):
     # keys: `val_loss` (float, required), `epoch` and `step` (optional ints).
     # Older consumers without explicit handling fall through harmlessly.
     validation = "validation"
+    # Caching latents / text-encoder outputs progress. The parser throttles
+    # tqdm spam so listeners only see meaningful jumps. Payload keys:
+    # `phase` ("latents" or "text_encoder"), `done` (int), `total` (int).
+    cache_progress = "cache_progress"
+    # CUDA out-of-memory. Distinct from generic `error` so the UI can render
+    # a tailored toast with VRAM-trimming suggestions. Payload key: `message`.
+    oom = "oom"
     log = "log"
     error = "error"
     done = "done"
