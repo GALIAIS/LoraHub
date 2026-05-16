@@ -10,6 +10,9 @@ export interface RecipeFormValue {
   schema_version?: string
   base_model: {
     arch: string
+    // SDXL sub-variant; only meaningful when arch === "sdxl". Empty string
+    // (or absent) means「无变体」.
+    arch_variant?: string
     checkpoint: string
     vae?: string | null
   }
@@ -29,6 +32,7 @@ export interface RecipeFormValue {
       drop_rate?: number
     }
     num_repeats?: number
+    val_split?: number
   }
   network?: {
     type?: string
@@ -36,12 +40,33 @@ export interface RecipeFormValue {
     alpha?: number
     target_unet?: boolean
     target_text_encoder?: boolean
+    conv_dim?: number | null
+    conv_alpha?: number | null
+    network_dropout?: number
+    rank_dropout?: number
+    module_dropout?: number
+    scale_weight_norms?: number | null
   }
   optimizer?: {
     type?: string
     lr?: { unet?: number; text_encoder?: number }
     schedule?: string
     warmup_steps?: number
+    betas?: [number, number] | number[]
+    weight_decay?: number
+    eps?: number
+    optimizer_args?: Record<string, string>
+  }
+  loss?: {
+    min_snr_gamma?: number | null
+    noise_offset?: number
+    ip_noise_gamma?: number | null
+    prior_loss_weight?: number
+    loss_type?: string
+    debiased_estimation?: boolean
+    masked_loss?: boolean
+    scale_v_pred_loss_like_noise_pred?: boolean
+    v_parameterization?: boolean
   }
   schedule?: {
     epochs?: number
@@ -71,6 +96,36 @@ export interface RecipeFormValue {
     sd_scripts_path?: string | null
     python_executable?: string | null
     extra_args?: Record<string, unknown>
+    diffusion_pipe?: {
+      pipeline_stages?: number
+      gradient_clipping?: number
+      partition_method?: string
+      caching_batch_size?: number
+      steps_per_print?: number
+      blocks_to_swap?: number
+      compile?: boolean
+      eval_every_n_epochs?: number | null
+      eval_before_first_step?: boolean
+      eval_micro_batch_size_per_gpu?: number
+      enable_wandb?: boolean
+      tracker_name?: string | null
+      run_name?: string | null
+      min_ar?: number
+      max_ar?: number
+      num_ar_buckets?: number
+      cache_shuffle_num?: number
+      skip_empty_caption?: boolean
+      model_paths?: Record<string, string>
+    }
+  }
+  resume?: {
+    save_state?: boolean
+    save_state_at_end?: boolean
+    save_state_every_n_epochs?: number | null
+  }
+  validation?: {
+    every_n_epochs?: number
+    max_samples?: number | null
   }
   [k: string]: unknown
 }
