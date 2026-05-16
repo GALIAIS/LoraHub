@@ -14,7 +14,38 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class BaseModelConfig(BaseModel):
-    arch: Literal["sd15", "sdxl", "flux", "sd3"] = "sdxl"
+    # The arch literal mirrors the union of upstream-supported model families
+    # across kohya sd-scripts and diffusion-pipe. Backends are responsible for
+    # rejecting arches they do not implement (kohya rejects dp-only entries
+    # like `wan` or `hunyuan_video`; dp rejects kohya-only entries like sd15).
+    # Old recipe values stay valid; new values follow each upstream's docs.
+    arch: Literal[
+        # kohya sd-scripts (README "Supported Models")
+        "sd15",
+        "sd2",
+        "sdxl",
+        "sd3",
+        "flux",
+        "lumina",
+        "hunyuan_image",
+        "anima",
+        # diffusion-pipe (docs/supported_models.md) -- additional entries
+        "flux2",
+        "chroma",
+        "hidream",
+        "omnigen2",
+        "auraflow",
+        "qwen_image",
+        "cosmos",
+        "cosmos_predict2",
+        "hunyuan_video",
+        "hunyuan_video_15",
+        "ltx_video",
+        "ltx2",
+        "wan",
+        "z_image",
+        "ernie_image",
+    ] = "sdxl"
     # SDXL sub-architectures sharing the SDXL backbone but trained on
     # different finetune lineages (Pony/Illustrious/NoobAI/Animagine).
     # Backends still treat these as SDXL; the variant only nudges
@@ -205,6 +236,17 @@ class DiffusionPipeOptions(BaseModel):
     num_ar_buckets: int = Field(7, ge=1)
     cache_shuffle_num: int = Field(0, ge=0)  # 0 = preserve original order
     skip_empty_caption: bool = True
+
+    # ---- Free-form per-arch path bag for the [model] section ----
+    # diffusion-pipe's [model] block accepts arch-specific path keys like
+    # `transformer_path`, `vae_path`, `llm_path`, `clip_l_path`, `t5_path`,
+    # etc. The set varies by arch (Anima needs transformer/vae/llm; Hunyuan
+    # Video needs transformer/vae/llm/clip; ...) and upstream keeps adding
+    # new entries. Rather than encode every variant in pydantic, we accept
+    # an opaque `key=value` mapping that the compiler flattens into the
+    # `[model]` section verbatim. Empty by default so existing SDXL/Flux/SD3
+    # recipes keep producing identical TOML.
+    model_paths: dict[str, str] = Field(default_factory=dict)
 
 
 class BackendConfig(BaseModel):

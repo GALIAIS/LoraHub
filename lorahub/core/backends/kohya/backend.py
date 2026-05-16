@@ -15,12 +15,19 @@ from lorahub.core.backends.base import (
     VRAMEstimate,
 )
 from lorahub.core.backends.kohya import bootstrap as _bootstrap
-from lorahub.core.backends.kohya.compiler import CompilationError, compile_recipe
+from lorahub.core.backends.kohya.compiler import (
+    CompilationError,
+    _KOHYA_SCRIPT_MAP,
+    compile_recipe,
+)
 from lorahub.core.backends.kohya.runner import KohyaRunner
 from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import TrainingEvent
 
-_SUPPORTED: set[ModelArch] = {ModelArch.sdxl, ModelArch.sd15, ModelArch.flux, ModelArch.sd3}
+# kohya sd-scripts ships dedicated entry points for these arches today
+# (see compiler._KOHYA_SCRIPT_MAP). diffusion-pipe-only entries (Wan,
+# HunyuanVideo, Cosmos, Chroma, ...) are intentionally excluded.
+_SUPPORTED: set[ModelArch] = {ModelArch(arch) for arch in _KOHYA_SCRIPT_MAP}
 
 
 class KohyaBackend:
