@@ -161,3 +161,27 @@ def test_extra_args_escape_hatch() -> None:
     assert "--seed=1234" in args
     assert "--noise_offset=0.05" in args
     assert "--xformers" in args
+
+
+def test_pony_variant_emits_clip_skip() -> None:
+    cfg = _recipe(base_model={"arch": "sdxl", "arch_variant": "pony", "checkpoint": "/m.safetensors"})
+    args = _argv(cfg)
+    assert "--clip_skip=2" in args
+
+
+def test_non_pony_variants_dont_emit_clip_skip() -> None:
+    # Vanilla SDXL has no clip_skip flag.
+    args = _argv(_recipe())
+    assert not any(a.startswith("--clip_skip") for a in args)
+
+    # Illustrious / NoobAI / Animagine intentionally don't add argv yet.
+    for variant in ("illustrious", "noobai", "animagine"):
+        cfg = _recipe(
+            base_model={
+                "arch": "sdxl",
+                "arch_variant": variant,
+                "checkpoint": "/m.safetensors",
+            }
+        )
+        argv = _argv(cfg)
+        assert not any(a.startswith("--clip_skip") for a in argv), variant
