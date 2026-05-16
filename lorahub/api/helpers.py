@@ -1,4 +1,4 @@
-"""Shared helpers for the LoraHub HTTP API.
+﻿"""Shared helpers for the LoraHub HTTP API.
 
 Pure-ish functions and constants that are reused by more than one router
 module. Keep these free of FastAPI-router state so they can be imported in
@@ -16,32 +16,32 @@ from typing import Any
 from fastapi import HTTPException
 
 from lorahub.core.backends.kohya.backend import KohyaBackend
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 
 _IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
-# Matches the leading-char + 1-63 trailing chars name rule used by save_recipe.
+# Matches the leading-char + 1-63 trailing chars name rule used by save_config.
 _NAME_RE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
 
 
-def _recipes_dir() -> Path:
-    """Resolve the recipes/ directory.
+def _configs_dir() -> Path:
+    """Resolve the configs/ directory.
 
-    Honors $LORAHUB_RECIPES_DIR (absolute path); otherwise looks at
-    `<cwd>/recipes` so users get whatever templates ship with their checkout
+    Honors $LORAHUB_configs_dir (absolute path); otherwise looks at
+    `<cwd>/configs` so users get whatever templates ship with their checkout
     when running `lorahub serve` from the repo root.
     """
-    override = os.environ.get("LORAHUB_RECIPES_DIR")
+    override = os.environ.get("LORAHUB_configs_dir")
     if override:
         return Path(override).expanduser().resolve()
-    return (Path.cwd() / "recipes").resolve()
+    return (Path.cwd() / "configs").resolve()
 
 
-def _recipe_path(name: str) -> Path:
-    """Resolve a recipe by name within the recipes/ dir, blocking traversal."""
+def _config_path(name: str) -> Path:
+    """Resolve a config by name within the configs/ dir, blocking traversal."""
     if not name or "/" in name or "\\" in name or name.startswith(".."):
-        raise HTTPException(status_code=400, detail="invalid recipe name")
-    base = _recipes_dir()
+        raise HTTPException(status_code=400, detail="invalid config name")
+    base = _configs_dir()
     # Accept "foo" or "foo.yaml"
     candidates = [base / name, base / f"{name}.yaml", base / f"{name}.yml"]
     for c in candidates:
@@ -52,10 +52,10 @@ def _recipe_path(name: str) -> Path:
             continue
         if c_resolved.is_file():
             return c_resolved
-    raise HTTPException(status_code=404, detail="recipe not found")
+    raise HTTPException(status_code=404, detail="config not found")
 
 
-def _preflight_recipe(cfg: RecipeConfig) -> dict[str, Any]:
+def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
     backend = KohyaBackend()
     issues = [
         {

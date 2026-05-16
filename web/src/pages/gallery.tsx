@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ChevronRight, ExternalLink, Images, X } from "lucide-react"
@@ -218,12 +218,12 @@ function SampleTile({
       <div className="px-2 py-1.5 text-[11px] space-y-0.5">
         <div className="flex items-center justify-between gap-1.5">
           <span className="font-mono">{shortId}</span>
-          {item.recipe_name && (
+          {item.config_name && (
             <span
               className="text-muted-foreground/80 truncate"
-              title={item.recipe_name}
+              title={item.config_name}
             >
-              {item.recipe_name}
+              {item.config_name}
             </span>
           )}
         </div>
@@ -265,7 +265,7 @@ function SampleLightbox({
               <Stat label="工作区" value={item.job_name} />
               <Stat
                 label="配置"
-                value={item.recipe_name ?? "—"}
+                value={item.config_name ?? "—"}
               />
               <Stat
                 label="大小"
@@ -294,12 +294,12 @@ function SampleLightbox({
                 <ChevronRight className="size-3" /> 前往任务
               </Button>
             </div>
-            {item.recipe_name && (
+            {item.config_name && (
               <Badge
                 variant="outline"
                 className="rounded-[2px] mt-1 self-start text-[10px]"
               >
-                {item.recipe_name}
+                {item.config_name}
               </Badge>
             )}
           </>

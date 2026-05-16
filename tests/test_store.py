@@ -1,4 +1,4 @@
-"""Tests for the SQLite-backed job store + registry persistence integration."""
+﻿"""Tests for the SQLite-backed job store + registry persistence integration."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def _job(record_id: str = "j1", state_: state.JobState = state.JobState.queued) 
         id=record_id,
         state=state_,
         workspace=Path("/tmp/ws") / record_id,
-        recipe_snapshot={"base_model": {"checkpoint": "/m.safetensors"}},
+        config_snapshot={"base_model": {"checkpoint": "/m.safetensors"}},
         created_at=datetime(2026, 5, 15, 12, 0, tzinfo=UTC),
     )
 
@@ -35,7 +35,7 @@ def test_store_creates_db_and_round_trips_record(tmp_path: Path) -> None:
     assert out.state is state.JobState.queued
     assert out.pid == 1234
     assert out.started_at == rec.started_at
-    assert out.recipe_snapshot == rec.recipe_snapshot
+    assert out.config_snapshot == rec.config_snapshot
 
 
 def test_store_upsert_updates_state(tmp_path: Path) -> None:
@@ -87,14 +87,14 @@ def test_registry_persists_creates(tmp_path: Path) -> None:
     s = JobStore(tmp_path / "x.sqlite")
     reg = state.JobRegistry(store=s)
 
-    job = reg.create(workspace=tmp_path / "ws", recipe_snapshot={"x": 1})
+    job = reg.create(workspace=tmp_path / "ws", config_snapshot={"x": 1})
     assert s.get(job.id) is not None
 
 
 def test_registry_persists_updates(tmp_path: Path) -> None:
     s = JobStore(tmp_path / "x.sqlite")
     reg = state.JobRegistry(store=s)
-    job = reg.create(workspace=tmp_path / "ws", recipe_snapshot={"x": 1})
+    job = reg.create(workspace=tmp_path / "ws", config_snapshot={"x": 1})
 
     job.state = state.JobState.running
     job.pid = 7890
@@ -119,7 +119,7 @@ def test_registry_load_persisted_rehydrates(tmp_path: Path) -> None:
 
 def test_registry_works_without_store(tmp_path: Path) -> None:
     reg = state.JobRegistry()
-    job = reg.create(workspace=tmp_path / "ws", recipe_snapshot={})
+    job = reg.create(workspace=tmp_path / "ws", config_snapshot={})
     assert reg.get(job.id) is job
     assert reg.load_persisted() == 0
 
@@ -175,7 +175,7 @@ def test_legacy_db_without_metadata_column_migrates(tmp_path: Path) -> None:
             id              TEXT PRIMARY KEY,
             state           TEXT NOT NULL,
             workspace       TEXT NOT NULL,
-            recipe_snapshot TEXT NOT NULL,
+            config_snapshot TEXT NOT NULL,
             created_at      TEXT NOT NULL,
             started_at      TEXT,
             finished_at     TEXT,
@@ -187,7 +187,7 @@ def test_legacy_db_without_metadata_column_migrates(tmp_path: Path) -> None:
     )
     raw.execute(
         """
-        INSERT INTO jobs (id, state, workspace, recipe_snapshot, created_at,
+        INSERT INTO jobs (id, state, workspace, config_snapshot, created_at,
                           started_at, finished_at, returncode, error, pid)
         VALUES ('legacy-1', 'succeeded', '/tmp/ws/legacy-1',
                 '{"base_model": {"checkpoint": "/m.safetensors"}}',

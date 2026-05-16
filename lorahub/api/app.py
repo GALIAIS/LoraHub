@@ -2,7 +2,7 @@
 
 Run with `lorahub serve` (preferred) or `uvicorn lorahub.api.app:app`.
 The API surface is intentionally small for v0.2 — list/create/cancel jobs,
-read recipe schema, stream events. Auth is out of scope; bind to localhost.
+read config schema, stream events. Auth is out of scope; bind to localhost.
 
 All API routes live under `/api`. The site root and `/{spa-path}` are reserved
 for the React frontend (mounted from `web/dist` when present).

@@ -20,7 +20,7 @@ const NAV = [
   { to: "/", label: "数据面板", icon: Activity },
   { to: "/jobs", label: "训练任务", icon: ListTree },
   { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal },
-  { to: "/recipes", label: "训练配置", icon: Layers },
+  { to: "/configs", label: "训练配置", icon: Layers },
   { to: "/datasets", label: "数据集", icon: Database },
   { to: "/gallery", label: "样图画廊", icon: Images },
   { to: "/settings", label: "设置", icon: Settings },

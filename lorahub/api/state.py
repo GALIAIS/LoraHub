@@ -1,4 +1,4 @@
-"""In-memory job registry — the v0.2 single-process state.
+﻿"""In-memory job registry — the v0.2 single-process state.
 
 Each `JobRecord` carries the immutable job descriptor plus its live
 progress, the training handle (so we can stop/wait), and a ring buffer of
@@ -43,7 +43,7 @@ class JobRecord:
     id: str
     state: JobState
     workspace: Path
-    recipe_snapshot: dict[str, Any]
+    config_snapshot: dict[str, Any]
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -108,13 +108,13 @@ class JobRegistry:
         with contextlib.suppress(Exception):
             self._store.upsert(record)
 
-    def create(self, workspace: Path, recipe_snapshot: dict[str, Any]) -> JobRecord:
+    def create(self, workspace: Path, config_snapshot: dict[str, Any]) -> JobRecord:
         with self._lock:
             job = JobRecord(
                 id=str(ulid.new()),
                 state=JobState.queued,
                 workspace=workspace,
-                recipe_snapshot=recipe_snapshot,
+                config_snapshot=config_snapshot,
                 created_at=datetime.now(UTC),
             )
             self._jobs[job.id] = job

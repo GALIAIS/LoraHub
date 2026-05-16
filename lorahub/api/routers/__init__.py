@@ -18,7 +18,7 @@ from .health import router as health_router
 from .jobs import router as jobs_router
 from .models import router as models_router
 from .network import router as network_router
-from .recipes import router as recipes_router
+from .configs import router as configs_router
 from .runtime import router as runtime_router
 from .samples import router as samples_router
 from .settings_routes import router as settings_router
@@ -29,7 +29,7 @@ from .tagging import router as tagging_router
 all_routers: list[APIRouter] = [
     health_router,
     settings_router,
-    recipes_router,
+    configs_router,
     datasets_router,
     jobs_router,
     backends_router,

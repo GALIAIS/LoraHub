@@ -1,4 +1,4 @@
-"""SQLite-backed persistence for the job registry.
+﻿"""SQLite-backed persistence for the job registry.
 
 Holds job metadata so the API can survive a restart with history intact.
 The live `TrainingHandle` and the event ring buffer stay in memory only —
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,
     state           TEXT NOT NULL,
     workspace       TEXT NOT NULL,
-    recipe_snapshot TEXT NOT NULL,
+    config_snapshot TEXT NOT NULL,
     created_at      TEXT NOT NULL,
     started_at      TEXT,
     finished_at     TEXT,
@@ -82,16 +82,16 @@ class JobStore:
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO jobs (id, state, workspace, recipe_snapshot, created_at,
+                INSERT INTO jobs (id, state, workspace, config_snapshot, created_at,
                                   started_at, finished_at, returncode, error, pid,
                                   metadata)
-                VALUES (:id, :state, :workspace, :recipe_snapshot, :created_at,
+                VALUES (:id, :state, :workspace, :config_snapshot, :created_at,
                         :started_at, :finished_at, :returncode, :error, :pid,
                         :metadata)
                 ON CONFLICT(id) DO UPDATE SET
                     state           = excluded.state,
                     workspace       = excluded.workspace,
-                    recipe_snapshot = excluded.recipe_snapshot,
+                    config_snapshot = excluded.config_snapshot,
                     started_at      = excluded.started_at,
                     finished_at     = excluded.finished_at,
                     returncode      = excluded.returncode,
@@ -147,7 +147,7 @@ def _record_to_row(r: JobRecord) -> dict[str, Any]:
         "id": r.id,
         "state": r.state.value,
         "workspace": str(r.workspace),
-        "recipe_snapshot": json.dumps(r.recipe_snapshot, ensure_ascii=False),
+        "config_snapshot": json.dumps(r.config_snapshot, ensure_ascii=False),
         "created_at": r.created_at.isoformat(),
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
@@ -170,7 +170,7 @@ def _row_to_record(row: sqlite3.Row) -> JobRecord:
         id=row["id"],
         state=JobState(row["state"]),
         workspace=Path(row["workspace"]),
-        recipe_snapshot=json.loads(row["recipe_snapshot"]),
+        config_snapshot=json.loads(row["config_snapshot"]),
         created_at=_parse_dt(row["created_at"]),
         started_at=_parse_dt_optional(row["started_at"]),
         finished_at=_parse_dt_optional(row["finished_at"]),

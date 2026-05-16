@@ -133,7 +133,7 @@ export function SweepsPage() {
             {!sweeps.isLoading && list.length === 0 && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
                 还没有 sweep。运行
-                <code className="text-foreground"> lorahub sweep recipe.yaml --axis ...</code>
+                <code className="text-foreground"> lorahub sweep config.yaml --axis ...</code>
                 {" "}或 POST {" "}
                 <code className="text-foreground">/api/sweeps</code> 触发一次。
               </li>

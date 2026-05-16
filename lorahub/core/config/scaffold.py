@@ -1,9 +1,9 @@
-"""Recipe scaffolder — turn known facts (GPU, dataset, base model) into a recipe.
+﻿"""Recipe scaffolder — turn known facts (GPU, dataset, base model) into a recipe.
 
 `auto_scaffold()` picks reasonable defaults the way a human writes a fresh
 recipe: rank/batch by VRAM tier, num_repeats inversely by image count,
 target architecture from the checkpoint filename. The output is a fully
-populated `RecipeConfig` ready to dump to YAML.
+populated `TrainingConfig` ready to dump to YAML.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
@@ -169,8 +169,8 @@ def auto_scaffold(
     *,
     vram_mib: int | None = None,
     epochs: int = 10,
-) -> RecipeConfig:
-    """Build a RecipeConfig from probed facts and tier defaults.
+) -> TrainingConfig:
+    """Build a TrainingConfig from probed facts and tier defaults.
 
     `vram_mib=None` triggers `detect_gpu_vram_mib()`; if that fails too we
     assume the conservative 8GB tier so the recipe is still runnable on
@@ -225,4 +225,4 @@ def auto_scaffold(
     if optimizer_block:
         payload["optimizer"] = optimizer_block
 
-    return RecipeConfig.model_validate(payload)
+    return TrainingConfig.model_validate(payload)

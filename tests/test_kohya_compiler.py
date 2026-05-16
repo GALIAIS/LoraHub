@@ -1,4 +1,4 @@
-﻿"""Tests for the kohya compiler."""
+"""Tests for the kohya compiler."""
 
 from __future__ import annotations
 
@@ -6,31 +6,31 @@ from pathlib import Path
 
 import pytest
 
-from lorahub.core.backends.kohya.compiler import CompilationError, compile_recipe
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.backends.kohya.compiler import CompilationError, compile_config
+from lorahub.core.config.schema import TrainingConfig
 
 
-def _recipe(**overrides: object) -> RecipeConfig:
+def _recipe(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"checkpoint": "/m/sdxl.safetensors"},
         "dataset": {"source": "/d/imgs"},
     }
     base.update(overrides)  # type: ignore[arg-type]
-    return RecipeConfig.model_validate(base)
+    return TrainingConfig.model_validate(base)
 
 
-def _argv(recipe: RecipeConfig, ws: Path = Path("/ws")) -> list[str]:
-    _, args, _files = compile_recipe(recipe, ws)
+def _argv(cfg: TrainingConfig, ws: Path = Path("/ws")) -> list[str]:
+    _, args, _files = compile_config(cfg, ws)
     return args
 
 
-def _files(recipe: RecipeConfig, ws: Path = Path("/ws")) -> dict[Path, str]:
-    _, _args, files = compile_recipe(recipe, ws)
+def _files(cfg: TrainingConfig, ws: Path = Path("/ws")) -> dict[Path, str]:
+    _, _args, files = compile_config(cfg, ws)
     return files
 
 
-def _dataset_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
-    return next(iter(_files(recipe, ws).values()))
+def _dataset_toml(cfg: TrainingConfig, ws: Path = Path("/ws")) -> str:
+    return next(iter(_files(cfg, ws).values()))
 
 
 def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
@@ -40,18 +40,18 @@ def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
         ("flux", "flux_train_network.py"),
         ("sd3", "sd3_train_network.py"),
     ]:
-        cfg = RecipeConfig.model_validate(
+        cfg = TrainingConfig.model_validate(
             {
                 "base_model": {"arch": arch, "checkpoint": "/m.safetensors"},
                 "dataset": {"source": "/d"},
             }
         )
-        s, _, _ = compile_recipe(cfg, tmp_path)
+        s, _, _ = compile_config(cfg, tmp_path)
         assert s == script
 
 
-def _arch_recipe(arch: str) -> RecipeConfig:
-    return RecipeConfig.model_validate(
+def _arch_recipe(arch: str) -> TrainingConfig:
+    return TrainingConfig.model_validate(
         {
             "base_model": {"arch": arch, "checkpoint": "/m.safetensors"},
             "dataset": {"source": "/d"},
@@ -61,23 +61,23 @@ def _arch_recipe(arch: str) -> RecipeConfig:
 
 def test_pick_script_anima(tmp_path: Path) -> None:
     """Anima uses its own entry script per kohya's README."""
-    s, _, _ = compile_recipe(_arch_recipe("anima"), tmp_path)
+    s, _, _ = compile_config(_arch_recipe("anima"), tmp_path)
     assert s == "anima_train_network.py"
 
 
 def test_pick_script_lumina(tmp_path: Path) -> None:
-    s, _, _ = compile_recipe(_arch_recipe("lumina"), tmp_path)
+    s, _, _ = compile_config(_arch_recipe("lumina"), tmp_path)
     assert s == "lumina_train_network.py"
 
 
 def test_pick_script_hunyuan_image(tmp_path: Path) -> None:
-    s, _, _ = compile_recipe(_arch_recipe("hunyuan_image"), tmp_path)
+    s, _, _ = compile_config(_arch_recipe("hunyuan_image"), tmp_path)
     assert s == "hunyuan_image_train_network.py"
 
 
 def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
     """sd-scripts ships sd1.x/2.x in the same train_network.py entry script."""
-    s, _, _ = compile_recipe(_arch_recipe("sd2"), tmp_path)
+    s, _, _ = compile_config(_arch_recipe("sd2"), tmp_path)
     assert s == "train_network.py"
 
 
@@ -95,7 +95,7 @@ def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
 def test_pick_script_rejects_dp_only_arch(tmp_path: Path, arch: str) -> None:
     """Arches that only diffusion-pipe ships fail kohya compilation up front."""
     with pytest.raises(CompilationError, match="diffusion-pipe"):
-        compile_recipe(_arch_recipe(arch), tmp_path)
+        compile_config(_arch_recipe(arch), tmp_path)
 
 
 def test_dataset_toml_emitted_with_dataset_config() -> None:
@@ -175,7 +175,7 @@ def test_optimizer_maps_adamw8bit() -> None:
 def test_unknown_optimizer_rejected() -> None:
     cfg = _recipe(optimizer={"type": "made_up"})
     with pytest.raises(CompilationError):
-        compile_recipe(cfg, Path("/ws"))
+        compile_config(cfg, Path("/ws"))
 
 
 def test_precision_and_memory_flags() -> None:
@@ -259,7 +259,7 @@ def test_validation_split_too_large_rejected() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        RecipeConfig.model_validate(
+        TrainingConfig.model_validate(
             {
                 "base_model": {"checkpoint": "/m.safetensors"},
                 "dataset": {"source": "/d", "val_split": 0.6},
@@ -340,7 +340,7 @@ def test_conv_dim_rejected_for_lora() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        RecipeConfig.model_validate(
+        TrainingConfig.model_validate(
             {
                 "base_model": {"checkpoint": "/m.safetensors"},
                 "dataset": {"source": "/d"},
@@ -353,7 +353,7 @@ def test_conv_alpha_rejected_for_dora() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        RecipeConfig.model_validate(
+        TrainingConfig.model_validate(
             {
                 "base_model": {"checkpoint": "/m.safetensors"},
                 "dataset": {"source": "/d"},

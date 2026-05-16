@@ -1,4 +1,4 @@
-"""Cross-job sample image gallery.
+﻿"""Cross-job sample image gallery.
 
 Aggregates the ``samples`` bucket from every registered job's workspace into
 a single time-ordered feed so the UI can show "all the pretty pictures
@@ -73,13 +73,13 @@ def list_samples(
 
     items: list[dict[str, Any]] = []
     for job in jobs:
-        snapshot = job.recipe_snapshot or {}
-        recipe_name: str | None = None
+        snapshot = job.config_snapshot or {}
+        config_name: str | None = None
         output = snapshot.get("output")
         if isinstance(output, dict):
             raw_name = output.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
-                recipe_name = raw_name.strip()
+                config_name = raw_name.strip()
 
         buckets = _list_workspace_files(job.workspace)
         for entry in buckets.get("samples", []):
@@ -88,7 +88,7 @@ def list_samples(
                 {
                     "job_id": job.id,
                     "job_name": job.workspace.name,
-                    "recipe_name": recipe_name,
+                    "config_name": config_name,
                     "path": rel,
                     "size_bytes": entry["size_bytes"],
                     "modified_at": entry["modified_at"],

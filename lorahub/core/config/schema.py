@@ -1,4 +1,4 @@
-"""Semantic recipe schema for LoRA training.
+﻿"""Semantic recipe schema for LoRA training.
 
 Users write a single YAML file describing *what* they want to train. The schema
 validates it, fills defaults (tuned for 8GB VRAM on SDXL), and later a
@@ -287,8 +287,8 @@ class ValidationConfig(BaseModel):
     max_samples: int | None = Field(default=None, ge=1)
 
 
-class RecipeConfig(BaseModel):
-    """Top-level recipe configuration. One YAML file = one RecipeConfig."""
+class TrainingConfig(BaseModel):
+    """Top-level recipe configuration. One YAML file = one TrainingConfig."""
 
     schema_version: str = "1.0"
     base_model: BaseModelConfig
@@ -309,7 +309,7 @@ class RecipeConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def _validate_arch_variant(self) -> RecipeConfig:
+    def _validate_arch_variant(self) -> TrainingConfig:
         """SDXL sub-variants only make sense on the SDXL backbone."""
         if self.base_model.arch_variant and self.base_model.arch != "sdxl":
             msg = (

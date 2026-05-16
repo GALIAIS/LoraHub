@@ -10,7 +10,7 @@ import pytest
 
 from lorahub.core.backends.base import Severity
 from lorahub.core.backends.kohya.backend import KohyaBackend
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 
@@ -43,12 +43,12 @@ def _make_stub_sd_scripts(root: Path) -> Path:
     return root
 
 
-def _make_recipe(tmp_path: Path, sd_scripts: Path) -> RecipeConfig:
+def _make_recipe(tmp_path: Path, sd_scripts: Path) -> TrainingConfig:
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
-    return RecipeConfig.model_validate(
+    return TrainingConfig.model_validate(
         {
             "base_model": {"checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},

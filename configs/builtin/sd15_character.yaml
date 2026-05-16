@@ -1,0 +1,62 @@
+# Built-in recipe template: SD 1.5 character LoRA at 768px, fp16 for older GPUs.
+# REQUIRED before saving: base_model.checkpoint, dataset.source.
+# The _template block is metadata for GET /api/recipes/templates and is
+# stripped before the document is validated against RecipeConfig.
+
+_template:
+  name: SD 1.5 Character
+  description: SD 1.5 character LoRA at 768px, fp16 for older GPUs.
+  arch: sd15
+
+_placeholders:
+  - key: name
+    label: Recipe / output name
+    path_field: output.name
+    placeholder: my_character_v1
+  - key: checkpoint
+    label: SD 1.5 base model checkpoint
+    path_field: base_model.checkpoint
+    placeholder: C:\models\sd15_base.safetensors
+  - key: dataset
+    label: Dataset directory
+    path_field: dataset.source
+    placeholder: ./datasets/my_character
+
+base_model:
+  arch: sd15
+  checkpoint: ""
+
+dataset:
+  source: ""
+  resolution: [768, 768]
+  num_repeats: 10
+
+network:
+  type: lora
+  rank: 16
+  alpha: 8
+  target_unet: true
+  target_text_encoder: false
+
+optimizer:
+  type: adamw8bit
+  lr:
+    unet: 5.0e-5
+    text_encoder: 5.0e-5
+  schedule: cosine_with_restarts
+  warmup_steps: 100
+
+schedule:
+  epochs: 10
+  batch_size: 1
+  grad_accum: 2
+
+precision: fp16
+gradient_checkpointing: true
+cache_latents: true
+
+sampling:
+  enabled: false
+
+output:
+  save_dtype: fp16

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 实时数据面板：硬件状态 + 任务概览。
  *
  * 通过 WebSocket /api/system/stream 每秒接收一次系统快照；WS 不可用时回退到
@@ -1303,8 +1303,8 @@ function EmptyState() {
       <Pause className="size-5 mx-auto text-muted-foreground/60" />
       <div className="mt-2 text-sm font-medium">还没有训练任务</div>
       <div className="text-xs text-muted-foreground">
-        在 <code className="text-foreground">recipes/</code> 选一个配置点击训练，或运行{" "}
-        <code className="text-foreground">lorahub train recipe.yaml</code>。
+        在 <code className="text-foreground">configs/</code> 选一个配置点击训练，或运行{" "}
+        <code className="text-foreground">lorahub train config.yaml</code>。
       </div>
     </div>
   )

@@ -107,7 +107,7 @@ export function OverviewTab({
   const itPerSecRecent = computeItPerSec(recentStepSamples)
   const itPerSecAvg = computeItPerSec(stepSamples)
 
-  // ETA only makes sense once the recipe declared a total, otherwise we'd be
+  // ETA only makes sense once the config declared a total, otherwise we'd be
   // dividing by zero. We prefer the most recent total_steps in case it grew.
   const totalSteps = useMemo(() => {
     for (let i = stepSamples.length - 1; i >= 0; i -= 1) {

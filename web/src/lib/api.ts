@@ -21,7 +21,7 @@ export interface TrainingEvent {
   job_id: string | null
 }
 
-export interface RecipeListEntry {
+export interface ConfigListEntry {
   name: string
   filename: string
   size: number
@@ -32,7 +32,7 @@ export interface RecipeListEntry {
   error: string | null
 }
 
-export interface RecipeDetail {
+export interface ConfigDetail {
   name: string
   filename: string
   path: string
@@ -239,26 +239,26 @@ export interface JobMetricsResponse {
   overfit_signal: OverfitSignal
 }
 
-export interface RecipeTemplatePlaceholder {
+export interface ConfigTemplatePlaceholder {
   key: string
   label: string
   path_field: string
   placeholder: string
 }
 
-export interface RecipeTemplate {
+export interface ConfigTemplate {
   id: string
   name: string
   description: string
   arch: string
-  placeholders: RecipeTemplatePlaceholder[]
-  recipe: Record<string, unknown>
+  placeholders: ConfigTemplatePlaceholder[]
+  config: Record<string, unknown>
 }
 
 export interface SampleGalleryItem {
   job_id: string
   job_name: string
-  recipe_name: string | null
+  config_name: string | null
   path: string
   size_bytes: number
   modified_at: number
@@ -425,29 +425,29 @@ export const api = {
       workspace_moved_to: string | null
       warnings: string[]
     }>(`/jobs/${id}?archive=true`, { method: "DELETE" }),
-  recipeSchema: () => http<Record<string, unknown>>("/recipes/schema"),
-  listRecipes: () =>
-    http<{ dir: string; recipes: RecipeListEntry[] }>("/recipes"),
-  getRecipe: (name: string) =>
-    http<RecipeDetail>(`/recipes/${encodeURIComponent(name)}`),
-  validateRecipe: (recipe: Record<string, unknown>) =>
-    http<ValidateResponse>("/recipes/validate", {
+  configSchema: () => http<Record<string, unknown>>("/configs/schema"),
+  listConfigs: () =>
+    http<{ dir: string; configs: ConfigListEntry[] }>("/configs"),
+  getConfig: (name: string) =>
+    http<ConfigDetail>(`/configs/${encodeURIComponent(name)}`),
+  validateConfig: (config: Record<string, unknown>) =>
+    http<ValidateResponse>("/configs/validate", {
       method: "POST",
-      body: JSON.stringify({ recipe }),
+      body: JSON.stringify({ config }),
     }),
-  saveRecipe: (
+  saveConfig: (
     name: string,
-    recipe: Record<string, unknown>,
+    config: Record<string, unknown>,
     overwrite = false,
   ) =>
-    http<{ name: string; filename: string; path: string }>("/recipes", {
+    http<{ name: string; filename: string; path: string }>("/configs", {
       method: "POST",
-      body: JSON.stringify({ name, recipe, overwrite }),
+      body: JSON.stringify({ name, config, overwrite }),
     }),
-  createJob: (recipe: Record<string, unknown>, workspace?: string) =>
+  createJob: (config: Record<string, unknown>, workspace?: string) =>
     http<JobSummary>("/jobs", {
       method: "POST",
-      body: JSON.stringify({ recipe, workspace }),
+      body: JSON.stringify({ config, workspace }),
     }),
   scanDataset: (path: string, recursive = false, limit = 40) =>
     http<DatasetScanResponse>(
@@ -552,24 +552,24 @@ export const api = {
   getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
   jobFileUrl: (id: string, path: string) =>
     `/api/jobs/${id}/files/raw?path=${encodeURIComponent(path)}`,
-  duplicateRecipe: (name: string, newName: string) =>
+  duplicateConfig: (name: string, newName: string) =>
     http<{ name: string; filename: string; path: string }>(
-      `/recipes/${encodeURIComponent(name)}/duplicate`,
+      `/configs/${encodeURIComponent(name)}/duplicate`,
       { method: "POST", body: JSON.stringify({ new_name: newName }) },
     ),
-  renameRecipe: (name: string, newName: string) =>
+  renameConfig: (name: string, newName: string) =>
     http<{ name: string; filename: string; path: string }>(
-      `/recipes/${encodeURIComponent(name)}/rename`,
+      `/configs/${encodeURIComponent(name)}/rename`,
       { method: "POST", body: JSON.stringify({ new_name: newName }) },
     ),
-  deleteRecipe: (name: string) =>
+  deleteConfig: (name: string) =>
     http<{ deleted: boolean; name: string }>(
-      `/recipes/${encodeURIComponent(name)}`,
+      `/configs/${encodeURIComponent(name)}`,
       { method: "DELETE" },
     ),
-  listRecipeTemplates: () =>
-    http<{ templates: RecipeTemplate[] }>("/recipes/templates"),
-  instantiateRecipeTemplate: (
+  listConfigTemplates: () =>
+    http<{ templates: ConfigTemplate[] }>("/configs/templates"),
+  instantiateConfigTemplate: (
     templateId: string,
     body: {
       name: string
@@ -582,7 +582,7 @@ export const api = {
       filename: string
       path: string
       template_id: string
-    }>(`/recipes/templates/${encodeURIComponent(templateId)}/instantiate`, {
+    }>(`/configs/templates/${encodeURIComponent(templateId)}/instantiate`, {
       method: "POST",
       body: JSON.stringify({
         name: body.name,
@@ -602,12 +602,12 @@ export const api = {
     const qs = search.toString()
     return http<SampleGalleryResponse>(`/samples${qs ? `?${qs}` : ""}`)
   },
-  importRecipe: async (name: string, file: File, overwrite = false) => {
+  importConfig: async (name: string, file: File, overwrite = false) => {
     const fd = new FormData()
     fd.append("file", file)
     fd.append("name", name)
     fd.append("overwrite", overwrite ? "true" : "false")
-    const res = await fetch(`${API_BASE}/recipes/import`, {
+    const res = await fetch(`${API_BASE}/configs/import`, {
       method: "POST",
       body: fd,
     })
@@ -890,12 +890,14 @@ export interface ProbeResult {
 }
 
 /**
- * Subscribe to /api/system/stream with automatic reconnection.
+ * Subscribe to /api/system/stream with smart automatic reconnection.
  *
- * On unexpected close the hook retries with exponential backoff (1s -> 2s -> 4s,
- * capped at 10s). A successful open resets the backoff. The 30ms initial delay
- * avoids the React StrictMode double-mount race. On unmount we cancel any
- * pending retry and close the socket.
+ * Reconnection strategy:
+ *   - First disconnect: immediate retry (0ms)
+ *   - Subsequent: exponential backoff 500ms -> 1s -> 2s -> 3s (capped)
+ *   - Tab becomes visible: immediate reconnect if socket is closed
+ *   - Network comes back online: immediate reconnect
+ *   - Successful open resets backoff to 0
  */
 export function useSystemStream(enabled = true) {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
@@ -907,32 +909,29 @@ export function useSystemStream(enabled = true) {
     let cancelled = false
     let ws: WebSocket | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
-    let backoff = 1000
+    let backoff = 0
 
     function connect() {
       if (cancelled) return
+      if (!navigator.onLine) return
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
       const host = window.location.host || "127.0.0.1:18765"
       ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
       wsRef.current = ws
 
       ws.onopen = () => {
-        backoff = 1000
+        backoff = 0
         setStatus("open")
       }
       ws.onclose = () => {
         setStatus("closed")
         scheduleRetry()
       }
-      ws.onerror = () => {
-        // onclose fires after onerror — retry handled there
-      }
+      ws.onerror = () => {}
       ws.onmessage = (msg) => {
         try {
           setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
-        } catch {
-          // ignore malformed frames
-        }
+        } catch {}
       }
     }
 
@@ -942,14 +941,35 @@ export function useSystemStream(enabled = true) {
         retryTimer = null
         connect()
       }, backoff)
-      backoff = Math.min(backoff * 2, 10000)
+      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 3000)
     }
 
-    // Initial connect with small delay to dodge StrictMode double-mount
+    function reconnectNow() {
+      if (cancelled) return
+      if (ws && ws.readyState === WebSocket.OPEN) return
+      if (retryTimer !== null) clearTimeout(retryTimer)
+      retryTimer = null
+      backoff = 0
+      connect()
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") reconnectNow()
+    }
+
+    function onOnline() {
+      reconnectNow()
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    window.addEventListener("online", onOnline)
+
     retryTimer = setTimeout(connect, 30)
 
     return () => {
       cancelled = true
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+      window.removeEventListener("online", onOnline)
       if (retryTimer !== null) clearTimeout(retryTimer)
       const sock = ws
       if (!sock) return

@@ -1,4 +1,4 @@
-"""Compile a semantic `RecipeConfig` into kohya-ss command-line arguments.
+"""Compile a semantic `TrainingConfig` into kohya-ss command-line arguments.
 
 This is the most important translation layer in the project: upper layers
 stay stable while kohya parameter names drift. Keep it a pure function so
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 
 # Map our optimizer names to kohya's --optimizer_type values
 _OPTIMIZER_MAP: dict[str, str] = {
@@ -31,11 +31,11 @@ _NETWORK_MODULE_MAP: dict[str, str] = {
 
 
 class CompilationError(ValueError):
-    """Raised when a recipe cannot be expressed in kohya's argument vocabulary."""
+    """Raised when a config cannot be expressed in kohya's argument vocabulary."""
 
 
-def compile_recipe(
-    recipe: RecipeConfig,
+def compile_config(
+    cfg: TrainingConfig,
     workspace: Path,
 ) -> tuple[str, list[str], dict[Path, str]]:
     """Translate a recipe into (script_name, argv, files_to_write).
@@ -45,23 +45,23 @@ def compile_recipe(
     `<workspace>/dataset.toml`). Returning it instead of writing it ourselves
     keeps the compiler a pure function.
     """
-    script = _pick_script(recipe.base_model.arch)
+    script = _pick_script(cfg.base_model.arch)
     args: list[str] = []
     files: dict[Path, str] = {}
 
-    _emit_model_args(recipe, args)
-    _emit_dataset_args(recipe, workspace, args, files)
-    _emit_network_args(recipe, args)
-    _emit_optimizer_args(recipe, args)
-    _emit_schedule_args(recipe, args)
-    _emit_precision_args(recipe, args)
-    _emit_loss_args(recipe, args)
-    _emit_output_args(recipe, workspace, args)
-    _emit_sampling_args(recipe, workspace, args)
-    _emit_resume_args(recipe, args)
-    _emit_validation_args(recipe, args)
-    _emit_variant_args(recipe, args)
-    _emit_extra_args(recipe, args)
+    _emit_model_args(cfg, args)
+    _emit_dataset_args(cfg, workspace, args, files)
+    _emit_network_args(cfg, args)
+    _emit_optimizer_args(cfg, args)
+    _emit_schedule_args(cfg, args)
+    _emit_precision_args(cfg, args)
+    _emit_loss_args(cfg, args)
+    _emit_output_args(cfg, workspace, args)
+    _emit_sampling_args(cfg, workspace, args)
+    _emit_resume_args(cfg, args)
+    _emit_validation_args(cfg, args)
+    _emit_variant_args(cfg, args)
+    _emit_extra_args(cfg, args)
 
     return script, args, files
 
@@ -94,14 +94,14 @@ def _pick_script(arch: str) -> str:
     raise CompilationError(msg)
 
 
-def _emit_model_args(recipe: RecipeConfig, args: list[str]) -> None:
-    args += [f"--pretrained_model_name_or_path={recipe.base_model.checkpoint}"]
-    if recipe.base_model.vae is not None:
-        args += [f"--vae={recipe.base_model.vae}"]
+def _emit_model_args(cfg: TrainingConfig, args: list[str]) -> None:
+    args += [f"--pretrained_model_name_or_path={cfg.base_model.checkpoint}"]
+    if cfg.base_model.vae is not None:
+        args += [f"--vae={cfg.base_model.vae}"]
 
 
 def _emit_dataset_args(
-    recipe: RecipeConfig,
+    cfg: TrainingConfig,
     workspace: Path,
     args: list[str],
     files: dict[Path, str],
@@ -114,12 +114,12 @@ def _emit_dataset_args(
     passing the legacy resolution/bucket/caption flags that conflict with it.
     """
     toml_path = (workspace / "dataset.toml").resolve()
-    files[toml_path] = _build_dataset_toml(recipe)
+    files[toml_path] = _build_dataset_toml(cfg)
     args.append(f"--dataset_config={toml_path}")
 
 
-def _build_dataset_toml(recipe: RecipeConfig) -> str:
-    ds = recipe.dataset
+def _build_dataset_toml(cfg: TrainingConfig) -> str:
+    ds = cfg.dataset
     res = (
         f"{ds.resolution[0]}"
         if len(ds.resolution) == 1
@@ -134,7 +134,7 @@ def _build_dataset_toml(recipe: RecipeConfig) -> str:
         "",
         "[[datasets]]",
         f"resolution = {res}",
-        f"batch_size = {recipe.schedule.batch_size}",
+        f"batch_size = {cfg.schedule.batch_size}",
     ]
     if ds.bucket.enabled:
         parts += [
@@ -162,8 +162,8 @@ def _toml_escape(path: Path) -> str:
 
 
 
-def _emit_network_args(recipe: RecipeConfig, args: list[str]) -> None:
-    n = recipe.network
+def _emit_network_args(cfg: TrainingConfig, args: list[str]) -> None:
+    n = cfg.network
     module = _NETWORK_MODULE_MAP.get(n.type)
     if module is None:
         msg = f"unsupported network.type: {n.type}"
@@ -214,8 +214,8 @@ def _emit_network_args(recipe: RecipeConfig, args: list[str]) -> None:
         args.append(f"--scale_weight_norms={n.scale_weight_norms}")
 
 
-def _emit_optimizer_args(recipe: RecipeConfig, args: list[str]) -> None:
-    o = recipe.optimizer
+def _emit_optimizer_args(cfg: TrainingConfig, args: list[str]) -> None:
+    o = cfg.optimizer
     opt_type = _OPTIMIZER_MAP.get(o.type.lower())
     if opt_type is None:
         msg = f"unsupported optimizer.type: {o.type}"
@@ -244,8 +244,8 @@ def _emit_optimizer_args(recipe: RecipeConfig, args: list[str]) -> None:
     args += [f"{k}={v}" for k, v in extra.items()]
 
 
-def _emit_schedule_args(recipe: RecipeConfig, args: list[str]) -> None:
-    s = recipe.schedule
+def _emit_schedule_args(cfg: TrainingConfig, args: list[str]) -> None:
+    s = cfg.schedule
     args += [
         f"--max_train_epochs={s.epochs}",
         f"--train_batch_size={s.batch_size}",
@@ -255,23 +255,23 @@ def _emit_schedule_args(recipe: RecipeConfig, args: list[str]) -> None:
         args += [f"--max_train_steps={s.max_steps}"]
 
 
-def _emit_precision_args(recipe: RecipeConfig, args: list[str]) -> None:
-    if recipe.precision != "fp32":
-        args += [f"--mixed_precision={recipe.precision}"]
-    if recipe.gradient_checkpointing:
+def _emit_precision_args(cfg: TrainingConfig, args: list[str]) -> None:
+    if cfg.precision != "fp32":
+        args += [f"--mixed_precision={cfg.precision}"]
+    if cfg.gradient_checkpointing:
         args += ["--gradient_checkpointing"]
-    if recipe.cache_latents:
+    if cfg.cache_latents:
         args += ["--cache_latents"]
 
 
-def _emit_loss_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_loss_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Emit loss-shaping flags (--min_snr_gamma, --noise_offset, etc).
 
     None-valued / zero-valued / sd-scripts-default-valued fields are omitted
     so the user's recipe stays additive over the kohya defaults: writing
     `loss: {}` keeps every behaviour kohya ships with.
     """
-    loss = recipe.loss
+    loss = cfg.loss
     if loss.min_snr_gamma is not None:
         args.append(f"--min_snr_gamma={loss.min_snr_gamma}")
     if loss.noise_offset > 0:
@@ -292,8 +292,8 @@ def _emit_loss_args(recipe: RecipeConfig, args: list[str]) -> None:
         args.append("--v_parameterization")
 
 
-def _emit_output_args(recipe: RecipeConfig, workspace: Path, args: list[str]) -> None:
-    out = recipe.output
+def _emit_output_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -> None:
+    out = cfg.output
     output_dir = out.output_dir if out.output_dir is not None else workspace / "output"
     args += [
         f"--output_dir={output_dir}",
@@ -305,8 +305,8 @@ def _emit_output_args(recipe: RecipeConfig, workspace: Path, args: list[str]) ->
     ]
 
 
-def _emit_sampling_args(recipe: RecipeConfig, workspace: Path, args: list[str]) -> None:
-    s = recipe.sampling
+def _emit_sampling_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -> None:
+    s = cfg.sampling
     if not s.enabled or s.prompts_file is None:
         return
     args += [
@@ -316,7 +316,7 @@ def _emit_sampling_args(recipe: RecipeConfig, workspace: Path, args: list[str]) 
     ]
 
 
-def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_resume_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Emit the kohya `--save_state*` flags so a run can be resumed.
 
     sd-scripts writes the state directory inside `--output_dir` next to
@@ -324,7 +324,7 @@ def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
     saving here; the resume route scans the same directory at restart
     time. `--save_state_to_huggingface` is intentionally not surfaced.
     """
-    r = recipe.resume
+    r = cfg.resume
     if r.save_state:
         args.append("--save_state")
     if r.save_state_at_end:
@@ -333,7 +333,7 @@ def _emit_resume_args(recipe: RecipeConfig, args: list[str]) -> None:
         args.append(f"--save_state_every_n_epochs={r.save_state_every_n_epochs}")
 
 
-def _emit_validation_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_validation_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Emit sd-scripts' validation-split flags when `dataset.val_split > 0`.
 
     sd-scripts 1.x exposes a held-out validation split via three flags:
@@ -344,20 +344,20 @@ def _emit_validation_args(recipe: RecipeConfig, args: list[str]) -> None:
     `--max_validation_steps` because that is the per-eval-pass cap kohya
     actually accepts; users can always override via `backend.extra_args`.
     """
-    ds = recipe.dataset
+    ds = cfg.dataset
     if ds.val_split <= 0.0:
         return
 
     percent = max(1, round(ds.val_split * 100))
     args.append(f"--validation_split_percentage={percent}")
 
-    v = recipe.validation
+    v = cfg.validation
     args.append(f"--validate_every_n_epochs={v.every_n_epochs}")
     if v.max_samples is not None:
         args.append(f"--max_validation_steps={v.max_samples}")
 
 
-def _emit_variant_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_variant_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Inject argv tweaks specific to an SDXL sub-architecture.
 
     Conservative for now: only the Pony lineage gets `--clip_skip=2`,
@@ -367,14 +367,14 @@ def _emit_variant_args(recipe: RecipeConfig, args: list[str]) -> None:
     defaults. User overrides via `backend.extra_args` win because
     `_emit_extra_args` runs after this hook.
     """
-    variant = recipe.base_model.arch_variant
+    variant = cfg.base_model.arch_variant
     if variant == "pony":
         args.append("--clip_skip=2")
 
 
-def _emit_extra_args(recipe: RecipeConfig, args: list[str]) -> None:
+def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Append user-provided escape-hatch args verbatim. Last write wins."""
-    for key, value in recipe.backend.extra_args.items():
+    for key, value in cfg.backend.extra_args.items():
         flag = f"--{key}" if not key.startswith("--") else key
         if value is True:
             args.append(flag)

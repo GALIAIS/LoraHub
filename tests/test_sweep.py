@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
     SWEEP_MAX_VARIANTS,
     SweepAxis,
@@ -17,8 +17,8 @@ from lorahub.core.sweep import (
 )
 
 
-def _base_recipe(tmp_path: Path) -> dict[str, Any]:
-    """Minimal but RecipeConfig-valid recipe used as the sweep base."""
+def _base_config(tmp_path: Path) -> dict[str, Any]:
+    """Minimal but TrainingConfig-valid recipe used as the sweep base."""
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -40,9 +40,9 @@ def test_cartesian_expand_order(tmp_path: Path) -> None:
     With axes [(rank, [16,32]), (lr, [1e-4, 5e-4])] the order is
     (16,1e-4) (16,5e-4) (32,1e-4) (32,5e-4).
     """
-    base = _base_recipe(tmp_path)
+    base = _base_config(tmp_path)
     plan = SweepPlan(
-        base_recipe=base,
+        base_config=base,
         axes=[
             SweepAxis(path="network.rank", values=[16, 32]),
             SweepAxis(path="optimizer.lr.unet", values=[1.0e-4, 5.0e-4]),
@@ -61,9 +61,9 @@ def test_cartesian_expand_order(tmp_path: Path) -> None:
 
 def test_dotted_path_setter_preserves_neighbours(tmp_path: Path) -> None:
     """Setting optimizer.lr.unet must not clobber optimizer.lr.text_encoder."""
-    base = _base_recipe(tmp_path)
+    base = _base_config(tmp_path)
     plan = SweepPlan(
-        base_recipe=base,
+        base_config=base,
         axes=[SweepAxis(path="optimizer.lr.unet", values=[1.0e-4, 2.0e-4])],
     )
     for _name, variant in plan.expand():
@@ -74,10 +74,10 @@ def test_dotted_path_setter_preserves_neighbours(tmp_path: Path) -> None:
 
 
 def test_too_many_variants_raises(tmp_path: Path) -> None:
-    base = _base_recipe(tmp_path)
+    base = _base_config(tmp_path)
     # Two axes whose product exceeds the cap (17 * 16 = 272 > 256).
     plan = SweepPlan(
-        base_recipe=base,
+        base_config=base,
         axes=[
             SweepAxis(path="network.rank", values=list(range(1, 18))),
             SweepAxis(path="schedule.epochs", values=list(range(1, 17))),
@@ -89,9 +89,9 @@ def test_too_many_variants_raises(tmp_path: Path) -> None:
 
 
 def test_unknown_axis_path_raises(tmp_path: Path) -> None:
-    base = _base_recipe(tmp_path)
+    base = _base_config(tmp_path)
     plan = SweepPlan(
-        base_recipe=base,
+        base_config=base,
         axes=[SweepAxis(path="optimizer.does_not_exist", values=[1, 2])],
     )
     with pytest.raises(SweepError) as exc_info:
@@ -100,10 +100,10 @@ def test_unknown_axis_path_raises(tmp_path: Path) -> None:
 
 
 def test_each_variant_validates_against_recipe_schema(tmp_path: Path) -> None:
-    """Every materialised variant must round-trip through RecipeConfig."""
-    base = _base_recipe(tmp_path)
+    """Every materialised variant must round-trip through TrainingConfig."""
+    base = _base_config(tmp_path)
     plan = SweepPlan(
-        base_recipe=base,
+        base_config=base,
         axes=[
             SweepAxis(path="network.rank", values=[16, 32, 64]),
             SweepAxis(path="optimizer.lr.unet", values=[1.0e-4, 5.0e-4]),
@@ -112,6 +112,6 @@ def test_each_variant_validates_against_recipe_schema(tmp_path: Path) -> None:
     variants = plan.expand()
     assert len(variants) == 6
     for variant_name, variant in variants:
-        cfg = RecipeConfig.model_validate(variant)
+        cfg = TrainingConfig.model_validate(variant)
         # The variant suffix is stamped onto output.name so checkpoints don't collide.
         assert cfg.output.name == variant_name

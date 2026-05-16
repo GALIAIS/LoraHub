@@ -1,6 +1,6 @@
-"""DiffusionPipeBackend: wraps tdrussell/diffusion-pipe as a TrainingBackend.
+﻿"""DiffusionPipeBackend: wraps tdrussell/diffusion-pipe as a TrainingBackend.
 
-Translates a ``RecipeConfig`` into the TOML config files diffusion-pipe expects
+Translates a ``TrainingConfig`` into the TOML config files diffusion-pipe expects
 (see `compiler.py`), writes them under the workspace, and launches
 ``python train.py --deepspeed --config <toml>`` through the shared
 ``SubprocessRunner`` (see `runner.py`).
@@ -30,10 +30,10 @@ from lorahub.core.backends.diffusion_pipe import bootstrap as _bootstrap
 from lorahub.core.backends.diffusion_pipe.compiler import (
     _DP_MODEL_TYPE_MAP,
     CompilationError,
-    compile_recipe,
+    compile_config,
 )
 from lorahub.core.backends.diffusion_pipe.runner import DiffusionPipeRunner
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import TrainingEvent
 
 # diffusion-pipe ships trainers for every entry in `_DP_MODEL_TYPE_MAP`
@@ -56,7 +56,7 @@ class DiffusionPipeBackend:
     def supported_archs(self) -> set[ModelArch]:
         return set(_SUPPORTED)
 
-    def validate(self, cfg: RecipeConfig) -> list[ValidationIssue]:
+    def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
 
         if cfg.base_model.arch not in {a.value for a in _SUPPORTED}:
@@ -75,14 +75,14 @@ class DiffusionPipeBackend:
 
         try:
             _bootstrap.resolve(
-                recipe_path=cfg.backend.sd_scripts_path,
-                recipe_python=cfg.backend.python_executable,
+                config_path=cfg.backend.sd_scripts_path,
+                config_python=cfg.backend.python_executable,
             )
         except _bootstrap.BootstrapError as e:
             issues.append(ValidationIssue(Severity.error, "backend.repo_path", str(e)))
 
         try:
-            compile_recipe(cfg, workspace=Path("/"))
+            compile_config(cfg, workspace=Path("/"))
         except CompilationError as e:
             issues.append(ValidationIssue(Severity.error, "recipe", str(e)))
 
@@ -105,7 +105,7 @@ class DiffusionPipeBackend:
 
         return issues
 
-    def estimate_vram(self, cfg: RecipeConfig) -> VRAMEstimate:
+    def estimate_vram(self, cfg: TrainingConfig) -> VRAMEstimate:
         """Coarse first-pass VRAM estimate.
 
         Reuses the shared ``_common.vram`` table so the kohya and
@@ -124,7 +124,7 @@ class DiffusionPipeBackend:
 
     def launch(
         self,
-        cfg: RecipeConfig,
+        cfg: TrainingConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
         *,
@@ -132,11 +132,11 @@ class DiffusionPipeBackend:
         env: dict[str, str] | None = None,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
-            recipe_path=cfg.backend.sd_scripts_path,
-            recipe_python=cfg.backend.python_executable,
+            config_path=cfg.backend.sd_scripts_path,
+            config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()
-        argv, files = compile_recipe(cfg, workspace)
+        argv, files = compile_config(cfg, workspace)
         if extra_argv:
             argv = [*argv, *extra_argv]
         workspace.mkdir(parents=True, exist_ok=True)

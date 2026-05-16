@@ -1,4 +1,4 @@
-"""Job CRUD plus rerun / reveal / archive."""
+﻿"""Job CRUD plus rerun / reveal / archive."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from lorahub.api.jobs_helpers import (
     _resolve_workspace_file,
 )
 from lorahub.api.state import JobState
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 
 router = APIRouter(prefix="/api")
 
@@ -36,7 +36,7 @@ _RESUMABLE_STATES = (
 
 
 class CreateJobRequest(BaseModel):
-    recipe: dict[str, Any]
+    config: dict[str, Any]
     workspace: str | None = None
 
 
@@ -65,7 +65,7 @@ def get_recent_events(job_id: str, limit: int = 100) -> dict[str, Any]:
 @router.post("/jobs", status_code=202)
 def create_job(req: CreateJobRequest) -> dict[str, Any]:
     try:
-        cfg = RecipeConfig.model_validate(req.recipe)
+        cfg = TrainingConfig.model_validate(req.config)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -77,7 +77,7 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/rerun", status_code=202)
 def rerun_job(job_id: str) -> dict[str, Any]:
-    """Start a fresh job from an existing job's recipe snapshot.
+    """Start a fresh job from an existing job's config snapshot.
 
     The original job is left untouched. The new run gets its own workspace
     sibling to the original (suffixed with a short timestamp so the two never
@@ -88,10 +88,10 @@ def rerun_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="job not found")
 
     try:
-        cfg = RecipeConfig.model_validate(job.recipe_snapshot)
+        cfg = TrainingConfig.model_validate(job.config_snapshot)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=422, detail=f"recipe snapshot is no longer valid: {exc}"
+            status_code=422, detail=f"config snapshot is no longer valid: {exc}"
         ) from exc
 
     base = job.workspace.resolve()
@@ -105,7 +105,7 @@ def resume_job(job_id: str) -> dict[str, Any]:
     """Resume an interrupted/failed/canceled job from its last `--save_state`.
 
     Creates a NEW JobRecord in a fresh sibling workspace, replays the
-    original recipe snapshot, and injects `--resume=<state_dir>` and
+    original config snapshot, and injects `--resume=<state_dir>` and
     `--network_weights=<latest.safetensors>` after the compiler's argv.
     The original record is left untouched so /resume can be called again
     if the resumed run also fails.
@@ -115,7 +115,7 @@ def resume_job(job_id: str) -> dict[str, Any]:
       409 — original is not in a resumable state, or no `*-state*` /
             `*.safetensors` artifact was produced (run never reached a
             checkpoint)
-      422 — recipe snapshot no longer matches the current schema
+      422 — config snapshot no longer matches the current schema
     """
     original = state.registry.get(job_id)
     if original is None:
@@ -149,7 +149,7 @@ def resume_job(job_id: str) -> dict[str, Any]:
         )
 
     try:
-        cfg = RecipeConfig.model_validate(original.recipe_snapshot)
+        cfg = TrainingConfig.model_validate(original.config_snapshot)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

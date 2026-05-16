@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
@@ -185,7 +185,7 @@ export function DatasetsPage() {
                 <Button
                   disabled={!canTrain}
                   onClick={() =>
-                    navigate("/recipes", {
+                    navigate("/configs", {
                       state: { overrideDataset: data.path },
                     })
                   }

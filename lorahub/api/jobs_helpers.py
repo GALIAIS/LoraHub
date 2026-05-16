@@ -1,4 +1,4 @@
-"""Job-management helpers shared between the jobs router and websocket layer."""
+﻿"""Job-management helpers shared between the jobs router and websocket layer."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from lorahub.api import state
 from lorahub.api.state import JobRecord, JobState
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
-from lorahub.core.config.loader import dump_recipe
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.loader import dump_config
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 log = logging.getLogger(__name__)
@@ -348,8 +348,8 @@ def _job_events(job: state.JobRecord, limit: int | None = None) -> list[Training
     return events
 
 
-def _select_backend(cfg: RecipeConfig):  # type: ignore[no-untyped-def]
-    """Pick the training backend implementation that the recipe asks for."""
+def _select_backend(cfg: TrainingConfig):  # type: ignore[no-untyped-def]
+    """Pick the training backend implementation that the config asks for."""
     backend_type = cfg.backend.type
     if backend_type == "kohya":
         return KohyaBackend()
@@ -360,7 +360,7 @@ def _select_backend(cfg: RecipeConfig):  # type: ignore[no-untyped-def]
 
 
 def _launch_job(
-    cfg: RecipeConfig,
+    cfg: TrainingConfig,
     workspace: Path,
     *,
     extra_argv: list[str] | None = None,
@@ -382,11 +382,11 @@ def _launch_job(
     workspace.mkdir(parents=True, exist_ok=True)
 
     snapshot = cfg.model_dump(mode="json")
-    job = state.registry.create(workspace=workspace, recipe_snapshot=snapshot)
+    job = state.registry.create(workspace=workspace, config_snapshot=snapshot)
     if metadata is not None:
         job.metadata = metadata
         state.registry.update(job)
-    dump_recipe(cfg, workspace / "recipe.yaml")
+    dump_config(cfg, workspace / "config.yaml")
 
     _enqueue_launch(job, cfg, extra_argv=extra_argv)
     return job.to_summary()
@@ -394,7 +394,7 @@ def _launch_job(
 
 def _enqueue_launch(
     job: JobRecord,
-    cfg: RecipeConfig,
+    cfg: TrainingConfig,
     *,
     extra_argv: list[str] | None = None,
 ) -> None:

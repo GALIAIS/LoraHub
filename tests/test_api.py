@@ -1,4 +1,4 @@
-﻿"""Tests for the LoraHub HTTP API."""
+"""Tests for the LoraHub HTTP API."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from lorahub.api import state
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 
@@ -76,7 +76,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app_mod.app)
 
 
-def _recipe_payload(tmp_path: Path) -> dict[str, Any]:
+def _config_payload(tmp_path: Path) -> dict[str, Any]:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
@@ -104,11 +104,11 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "sd_scripts_path" in body["backend"]
 
 
-def test_recipe_schema_is_valid_json_schema(client: TestClient) -> None:
-    r = client.get("/api/recipes/schema")
+def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
+    r = client.get("/api/configs/schema")
     assert r.status_code == 200
     schema = r.json()
-    assert schema["title"] == "RecipeConfig"
+    assert schema["title"] == "TrainingConfig"
     assert "base_model" in schema["$defs"] or "base_model" in str(schema)
 
 
@@ -124,7 +124,7 @@ def test_get_unknown_job_returns_404(client: TestClient) -> None:
 
 
 def test_create_and_complete_job(client: TestClient, tmp_path: Path) -> None:
-    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
     r = client.post("/api/jobs", json=payload)
     assert r.status_code == 202, r.text
     summary = r.json()
@@ -150,7 +150,7 @@ def test_create_and_complete_job(client: TestClient, tmp_path: Path) -> None:
 def test_recent_events_returned_after_completion(
     client: TestClient, tmp_path: Path
 ) -> None:
-    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
     job_id = client.post("/api/jobs", json=payload).json()["id"]
 
     import time
@@ -172,7 +172,7 @@ def test_recent_events_replay_from_workspace_jsonl(
 ) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.succeeded
     job.started_at = datetime.now(UTC)
     job.finished_at = datetime.now(UTC)
@@ -195,7 +195,7 @@ def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
 ) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.succeeded
     state.registry.update(job)
 
@@ -213,7 +213,7 @@ def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
 
 
 def test_invalid_recipe_returns_422(client: TestClient) -> None:
-    r = client.post("/api/jobs", json={"recipe": {"missing": "everything"}})
+    r = client.post("/api/jobs", json={"config": {"missing": "everything"}})
     assert r.status_code == 422
 
 
@@ -228,7 +228,7 @@ def test_resume_running_job_returns_409(
     """Resume only makes sense for terminated runs; running jobs must 409."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.running
     state.registry.update(job)
 
@@ -243,7 +243,7 @@ def test_resume_without_state_returns_409(
     """No `*-state*` directory => no checkpoint to resume from."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.failed
     state.registry.update(job)
 
@@ -259,7 +259,7 @@ def test_resume_without_weights_returns_409(
     ws = tmp_path / "ws"
     (ws / "out").mkdir(parents=True)
     (ws / "out" / "lora-state").mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.interrupted
     state.registry.update(job)
 
@@ -274,7 +274,7 @@ def test_cancel_queued_job_short_circuits_to_canceled(
     """A job pending on the worker deque must cancel without launching."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     # Default state is 'queued'.
     assert job.state is state.JobState.queued
 
@@ -324,7 +324,7 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
     monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
     fresh_sched.start()
     try:
-        payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+        payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
         r = client.post("/api/jobs", json=payload)
         assert r.status_code == 202, r.text
         job_id = r.json()["id"]
@@ -347,15 +347,15 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
 
 
 @pytest.fixture
-def recipes_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def configs_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the API at an isolated recipes directory."""
     rdir = tmp_path / "recipes"
     rdir.mkdir()
-    monkeypatch.setenv("LORAHUB_RECIPES_DIR", str(rdir))
+    monkeypatch.setenv("LORAHUB_configs_dir", str(rdir))
     return rdir
 
 
-def _write_valid_recipe(rdir: Path, name: str = "demo") -> Path:
+def _write_valid_config(rdir: Path, name: str = "demo") -> Path:
     ckpt = rdir.parent / "model.safetensors"
     ckpt.write_bytes(b"")
     data = rdir.parent / "data"
@@ -379,34 +379,34 @@ def _write_valid_recipe(rdir: Path, name: str = "demo") -> Path:
     return p
 
 
-def test_list_recipes_returns_valid_and_invalid(
-    client: TestClient, recipes_dir: Path
+def test_list_configs_returns_valid_and_invalid(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    _write_valid_recipe(recipes_dir, "good")
-    (recipes_dir / "broken.yaml").write_text("base_model: {}\n", encoding="utf-8")
-    (recipes_dir / "ignore-me.txt").write_text("not yaml", encoding="utf-8")
+    _write_valid_config(configs_dir, "good")
+    (configs_dir / "broken.yaml").write_text("base_model: {}\n", encoding="utf-8")
+    (configs_dir / "ignore-me.txt").write_text("not yaml", encoding="utf-8")
 
-    r = client.get("/api/recipes")
+    r = client.get("/api/configs")
     assert r.status_code == 200
     body = r.json()
-    names = {it["name"] for it in body["recipes"]}
+    names = {it["name"] for it in body["configs"]}
     assert names == {"good", "broken"}
 
-    good = next(it for it in body["recipes"] if it["name"] == "good")
+    good = next(it for it in body["configs"] if it["name"] == "good")
     assert good["valid"] is True
     assert good["arch"] == "sdxl"
     assert "epoch" in good["summary"]
 
-    broken = next(it for it in body["recipes"] if it["name"] == "broken")
+    broken = next(it for it in body["configs"] if it["name"] == "broken")
     assert broken["valid"] is False
     assert broken["error"]
 
 
-def test_get_recipe_returns_content_and_parsed(
-    client: TestClient, recipes_dir: Path
+def test_get_config_returns_content_and_parsed(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    _write_valid_recipe(recipes_dir, "good")
-    r = client.get("/api/recipes/good")
+    _write_valid_config(configs_dir, "good")
+    r = client.get("/api/configs/good")
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "good"
@@ -415,28 +415,28 @@ def test_get_recipe_returns_content_and_parsed(
     assert body["error"] is None
 
 
-def test_get_recipe_missing_returns_404(
-    client: TestClient, recipes_dir: Path
+def test_get_config_missing_returns_404(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    r = client.get("/api/recipes/nope")
+    r = client.get("/api/configs/nope")
     assert r.status_code == 404
 
 
-def test_get_recipe_blocks_path_traversal(
-    client: TestClient, recipes_dir: Path
+def test_get_config_blocks_path_traversal(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    r = client.get("/api/recipes/..%2Fpasswd")
+    r = client.get("/api/configs/..%2Fpasswd")
     # FastAPI normalizes %2F into /, our handler rejects bare names with slashes
     assert r.status_code in (400, 404)
 
 
-def test_recipe_schema_still_resolves_under_recipes_prefix(
-    client: TestClient, recipes_dir: Path
+def test_config_schema_still_resolves_under_recipes_prefix(
+    client: TestClient, configs_dir: Path
 ) -> None:
     # /recipes/schema must keep working alongside /recipes/{name}
-    r = client.get("/api/recipes/schema")
+    r = client.get("/api/configs/schema")
     assert r.status_code == 200
-    assert r.json()["title"] == "RecipeConfig"
+    assert r.json()["title"] == "TrainingConfig"
 
 
 # --------------------------------------------------------------------------- #
@@ -444,7 +444,7 @@ def test_recipe_schema_still_resolves_under_recipes_prefix(
 # --------------------------------------------------------------------------- #
 
 
-def _valid_recipe_dict(tmp_path: Path) -> dict[str, Any]:
+def _valid_config_dict(tmp_path: Path) -> dict[str, Any]:
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -457,10 +457,10 @@ def _valid_recipe_dict(tmp_path: Path) -> dict[str, Any]:
     }
 
 
-def test_validate_recipe_returns_normalized_payload(
+def test_validate_config_returns_normalized_payload(
     client: TestClient, tmp_path: Path
 ) -> None:
-    r = client.post("/api/recipes/validate", json={"recipe": _valid_recipe_dict(tmp_path)})
+    r = client.post("/api/configs/validate", json={"config": _valid_config_dict(tmp_path)})
     assert r.status_code == 200
     body = r.json()
     assert body["valid"] is True
@@ -473,14 +473,14 @@ def test_validate_recipe_returns_normalized_payload(
     assert isinstance(body["preflight"]["issues"], list)
 
 
-def test_validate_recipe_reports_dataset_caption_preflight(
+def test_validate_config_reports_dataset_caption_preflight(
     client: TestClient, tmp_path: Path
 ) -> None:
-    recipe = _valid_recipe_dict(tmp_path)
-    data = Path(str(recipe["dataset"]["source"]))
+    cfg_dict = _valid_config_dict(tmp_path)
+    data = Path(str(cfg_dict["dataset"]["source"]))
     (data / "sample.png").write_bytes(b"fake image bytes")
 
-    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+    r = client.post("/api/configs/validate", json={"config": cfg_dict})
 
     assert r.status_code == 200
     paths = r.json()["preflight"]["paths"]
@@ -489,8 +489,8 @@ def test_validate_recipe_reports_dataset_caption_preflight(
     assert paths["missing_caption_files"] == ["sample.png"]
 
 
-def test_validate_recipe_returns_structured_errors(client: TestClient) -> None:
-    r = client.post("/api/recipes/validate", json={"recipe": {}})
+def test_validate_config_returns_structured_errors(client: TestClient) -> None:
+    r = client.post("/api/configs/validate", json={"config": {}})
     assert r.status_code == 200
     body = r.json()
     assert body["valid"] is False
@@ -499,15 +499,15 @@ def test_validate_recipe_returns_structured_errors(client: TestClient) -> None:
     assert all("loc" in e for e in body["errors"])
 
 
-def test_validate_recipe_rejects_sd15_with_arch_variant(
+def test_validate_config_rejects_sd15_with_arch_variant(
     client: TestClient, tmp_path: Path
 ) -> None:
     """arch_variant only makes sense on the SDXL backbone."""
-    recipe = _valid_recipe_dict(tmp_path)
-    recipe["base_model"]["arch"] = "sd15"
-    recipe["base_model"]["arch_variant"] = "pony"
+    cfg_dict = _valid_config_dict(tmp_path)
+    cfg_dict["base_model"]["arch"] = "sd15"
+    cfg_dict["base_model"]["arch_variant"] = "pony"
 
-    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+    r = client.post("/api/configs/validate", json={"config": cfg_dict})
     # The validate route always returns 200; the rejection surfaces via
     # `valid=false` plus a structured error mentioning arch_variant.
     assert r.status_code == 200
@@ -517,46 +517,46 @@ def test_validate_recipe_rejects_sd15_with_arch_variant(
 
     # The save route validates the same way and returns 422 outright.
     r2 = client.post(
-        "/api/recipes",
-        json={"name": "bad-variant", "recipe": recipe},
+        "/api/configs",
+        json={"name": "bad-variant", "config": cfg_dict},
     )
     assert r2.status_code == 422
     assert "arch_variant" in r2.json()["detail"]
 
 
-def test_save_recipe_writes_file_and_blocks_overwrite(
-    client: TestClient, tmp_path: Path, recipes_dir: Path
+def test_save_config_writes_file_and_blocks_overwrite(
+    client: TestClient, tmp_path: Path, configs_dir: Path
 ) -> None:
-    payload = {"name": "demo", "recipe": _valid_recipe_dict(tmp_path)}
-    r = client.post("/api/recipes", json=payload)
+    payload = {"name": "demo", "config": _valid_config_dict(tmp_path)}
+    r = client.post("/api/configs", json=payload)
     assert r.status_code == 201, r.text
     saved = r.json()
     assert saved["filename"] == "demo.yaml"
-    assert (recipes_dir / "demo.yaml").is_file()
+    assert (configs_dir / "demo.yaml").is_file()
 
     # Repeat without overwrite 鈥?should 409
-    r2 = client.post("/api/recipes", json=payload)
+    r2 = client.post("/api/configs", json=payload)
     assert r2.status_code == 409
 
     # With overwrite 鈥?should 201
-    r3 = client.post("/api/recipes", json={**payload, "overwrite": True})
+    r3 = client.post("/api/configs", json={**payload, "overwrite": True})
     assert r3.status_code == 201
 
 
-def test_save_recipe_rejects_invalid_name(
-    client: TestClient, tmp_path: Path, recipes_dir: Path
+def test_save_config_rejects_invalid_name(
+    client: TestClient, tmp_path: Path, configs_dir: Path
 ) -> None:
     r = client.post(
-        "/api/recipes",
-        json={"name": "../etc/passwd", "recipe": _valid_recipe_dict(tmp_path)},
+        "/api/configs",
+        json={"name": "../etc/passwd", "config": _valid_config_dict(tmp_path)},
     )
     assert r.status_code == 400
 
 
-def test_save_recipe_rejects_invalid_recipe(
-    client: TestClient, recipes_dir: Path
+def test_save_config_rejects_invalid_recipe(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    r = client.post("/api/recipes", json={"name": "bad", "recipe": {}})
+    r = client.post("/api/configs", json={"name": "bad", "config": {}})
     assert r.status_code == 422
 
 
@@ -869,7 +869,7 @@ def _wait_terminal(client: TestClient, job_id: str, timeout: float = 30.0) -> di
 
 
 def test_rerun_creates_new_job(client: TestClient, tmp_path: Path) -> None:
-    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
     first = client.post("/api/jobs", json=payload).json()
     first_id = first["id"]
     final_first = _wait_terminal(client, first_id)
@@ -903,7 +903,7 @@ def test_reveal_existing_job_invokes_subprocess(
 ) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.succeeded
     state.registry.update(job)
 
@@ -927,7 +927,7 @@ def test_reveal_returns_409_when_workspace_missing(
     client: TestClient, tmp_path: Path
 ) -> None:
     job = state.registry.create(
-        workspace=tmp_path / "gone", recipe_snapshot={}
+        workspace=tmp_path / "gone", config_snapshot={}
     )
     job.state = state.JobState.succeeded
     state.registry.update(job)
@@ -939,7 +939,7 @@ def test_reveal_returns_409_when_workspace_missing(
 def test_archive_completed_job_moves_workspace(
     client: TestClient, tmp_path: Path
 ) -> None:
-    payload = {"recipe": _recipe_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
     job_id = client.post("/api/jobs", json=payload).json()["id"]
     final = _wait_terminal(client, job_id)
     assert final["state"] == "succeeded", final
@@ -965,7 +965,7 @@ def test_archive_completed_job_moves_workspace(
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     job.state = state.JobState.running
     state.registry.update(job)
 
@@ -1132,7 +1132,7 @@ def _make_job_with_workspace(ws: Path) -> str:
     creating jobs without bleeding into other tests.
     """
     ws.mkdir(parents=True, exist_ok=True)
-    job = state.registry.create(workspace=ws, recipe_snapshot={})
+    job = state.registry.create(workspace=ws, config_snapshot={})
     return job.id
 
 
@@ -1142,7 +1142,7 @@ def test_job_files_lists_workspace_artifacts(
     ws = tmp_path / "run-1"
     ws.mkdir()
     (ws / "model.safetensors").write_bytes(b"weights")
-    (ws / "recipe.yaml").write_text("name: test\n", encoding="utf-8")
+    (ws / "config.yaml").write_text("name: test\n", encoding="utf-8")
     (ws / "events.jsonl").write_text("", encoding="utf-8")
     out_dir = ws / "output"
     out_dir.mkdir()
@@ -1168,7 +1168,7 @@ def test_job_files_lists_workspace_artifacts(
     assert checkpoints == {"model.safetensors"}
     assert samples == {"output/sample-1.png"}
     assert logs == {"events.jsonl"}
-    assert "recipe.yaml" in other
+    assert "config.yaml" in other
     # Archive contents must be filtered out entirely.
     assert all("_archive" not in e["path"] for e in body["checkpoints"])
     # Each entry carries size + mtime.
@@ -1355,76 +1355,76 @@ def test_job_metrics_returns_val_loss_and_overfit_signal(
 # --------------------------------------------------------------------------- #
 
 
-def test_duplicate_recipe_creates_copy(
-    client: TestClient, recipes_dir: Path
+def test_duplicate_config_creates_copy(
+    client: TestClient, configs_dir: Path
 ) -> None:
-    src = _write_valid_recipe(recipes_dir, "demo")
+    src = _write_valid_config(configs_dir, "demo")
 
-    r = client.post("/api/recipes/demo/duplicate", json={"new_name": "demo_v2"})
+    r = client.post("/api/configs/demo/duplicate", json={"new_name": "demo_v2"})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["name"] == "demo_v2"
     assert body["filename"] == "demo_v2.yaml"
-    copy = recipes_dir / "demo_v2.yaml"
+    copy = configs_dir / "demo_v2.yaml"
     assert copy.is_file()
     assert copy.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
 
     # Source missing -> 404
     r_missing = client.post(
-        "/api/recipes/nope/duplicate", json={"new_name": "ghost"}
+        "/api/configs/nope/duplicate", json={"new_name": "ghost"}
     )
     assert r_missing.status_code == 404
 
     # Destination already exists -> 409
     r_clash = client.post(
-        "/api/recipes/demo/duplicate", json={"new_name": "demo_v2"}
+        "/api/configs/demo/duplicate", json={"new_name": "demo_v2"}
     )
     assert r_clash.status_code == 409
 
     # Bad new_name -> 400
     r_bad = client.post(
-        "/api/recipes/demo/duplicate", json={"new_name": "../etc/passwd"}
+        "/api/configs/demo/duplicate", json={"new_name": "../etc/passwd"}
     )
     assert r_bad.status_code == 400
 
 
-def test_rename_recipe(client: TestClient, recipes_dir: Path) -> None:
-    _write_valid_recipe(recipes_dir, "demo")
-    _write_valid_recipe(recipes_dir, "other")
+def test_rename_config(client: TestClient, configs_dir: Path) -> None:
+    _write_valid_config(configs_dir, "demo")
+    _write_valid_config(configs_dir, "other")
 
-    r = client.post("/api/recipes/demo/rename", json={"new_name": "demo_renamed"})
+    r = client.post("/api/configs/demo/rename", json={"new_name": "demo_renamed"})
     assert r.status_code == 200, r.text
-    assert not (recipes_dir / "demo.yaml").exists()
-    assert (recipes_dir / "demo_renamed.yaml").is_file()
+    assert not (configs_dir / "demo.yaml").exists()
+    assert (configs_dir / "demo_renamed.yaml").is_file()
 
     # Renaming to a name that's already taken -> 409
     r_clash = client.post(
-        "/api/recipes/demo_renamed/rename", json={"new_name": "other"}
+        "/api/configs/demo_renamed/rename", json={"new_name": "other"}
     )
     assert r_clash.status_code == 409
 
     # Renaming a missing recipe -> 404
     r_missing = client.post(
-        "/api/recipes/ghost/rename", json={"new_name": "demo_v3"}
+        "/api/configs/ghost/rename", json={"new_name": "demo_v3"}
     )
     assert r_missing.status_code == 404
 
 
-def test_delete_recipe(client: TestClient, recipes_dir: Path) -> None:
-    _write_valid_recipe(recipes_dir, "demo")
+def test_delete_config(client: TestClient, configs_dir: Path) -> None:
+    _write_valid_config(configs_dir, "demo")
 
-    r = client.delete("/api/recipes/demo")
+    r = client.delete("/api/configs/demo")
     assert r.status_code == 200, r.text
     assert r.json() == {"deleted": True, "name": "demo"}
 
     # Now it's gone
-    assert client.get("/api/recipes/demo").status_code == 404
+    assert client.get("/api/configs/demo").status_code == 404
     # Re-deleting a missing recipe -> 404
-    assert client.delete("/api/recipes/demo").status_code == 404
+    assert client.delete("/api/configs/demo").status_code == 404
 
 
-def test_list_templates_returns_validated_recipes(client: TestClient) -> None:
-    r = client.get("/api/recipes/templates")
+def test_list_templates_returns_validated_configs(client: TestClient) -> None:
+    r = client.get("/api/configs/templates")
     assert r.status_code == 200, r.text
     body = r.json()
 
@@ -1433,7 +1433,7 @@ def test_list_templates_returns_validated_recipes(client: TestClient) -> None:
 
     # Each template recipe must round-trip through the schema.
     for tpl in body["templates"]:
-        cfg = RecipeConfig.model_validate(tpl["recipe"])
+        cfg = TrainingConfig.model_validate(tpl["config"])
         assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3"}
 
 
@@ -1446,7 +1446,7 @@ def test_list_templates_skips_invalid_yaml_files(
     """One good YAML + one schema-invalid YAML -> only the good one survives,
     and the bad one logs a warning instead of taking the endpoint down.
     """
-    from lorahub.api import recipe_templates as recipe_templates_module
+    from lorahub.api import config_templates as config_templates_module
 
     builtin_dir = tmp_path / "builtin"
     builtin_dir.mkdir()
@@ -1464,7 +1464,7 @@ def test_list_templates_skips_invalid_yaml_files(
         yaml.safe_dump(good, sort_keys=False), encoding="utf-8"
     )
 
-    # Missing the required `dataset` key -> RecipeConfig.model_validate fails.
+    # Missing the required `dataset` key -> TrainingConfig.model_validate fails.
     bad = {
         "_template": {"name": "Bad Template", "description": "x", "arch": "sdxl"},
         "base_model": {"arch": "sdxl", "checkpoint": ""},
@@ -1474,12 +1474,12 @@ def test_list_templates_skips_invalid_yaml_files(
     )
 
     monkeypatch.setattr(
-        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+        config_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
     )
 
-    caplog.set_level("WARNING", logger=recipe_templates_module.logger.name)
+    caplog.set_level("WARNING", logger=config_templates_module.logger.name)
 
-    r = client.get("/api/recipes/templates")
+    r = client.get("/api/configs/templates")
     assert r.status_code == 200, r.text
     body = r.json()
 
@@ -1492,14 +1492,14 @@ def test_list_templates_skips_invalid_yaml_files(
     assert any("bad.yaml" in msg for msg in warnings), warnings
 
 
-def test_import_recipe_from_yaml(
-    client: TestClient, tmp_path: Path, recipes_dir: Path
+def test_import_config_from_yaml(
+    client: TestClient, tmp_path: Path, configs_dir: Path
 ) -> None:
-    recipe_dict = _valid_recipe_dict(tmp_path)
-    yaml_bytes = yaml.safe_dump(recipe_dict, sort_keys=False).encode("utf-8")
+    config_dict = _valid_config_dict(tmp_path)
+    yaml_bytes = yaml.safe_dump(config_dict, sort_keys=False).encode("utf-8")
 
     r = client.post(
-        "/api/recipes/import",
+        "/api/configs/import",
         files={"file": ("foo.yaml", yaml_bytes, "application/x-yaml")},
         data={"name": "imported"},
     )
@@ -1507,10 +1507,10 @@ def test_import_recipe_from_yaml(
     body = r.json()
     assert body["name"] == "imported"
     assert body["filename"] == "imported.yaml"
-    saved = recipes_dir / "imported.yaml"
+    saved = configs_dir / "imported.yaml"
     assert saved.is_file()
-    # The persisted file is canonical YAML emitted by dump_recipe; just confirm
-    # it loads back to an equivalent RecipeConfig.
+    # The persisted file is canonical YAML emitted by dump_config; just confirm
+    # it loads back to an equivalent TrainingConfig.
     assert saved.read_text(encoding="utf-8").startswith("schema_version")
 
 
@@ -1598,12 +1598,12 @@ def test_bootstrap_with_diffusion_pipe_backend(
     assert "diffusion-pipe" in final["events"][-1]["message"]
 
 
-def test_recipe_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path) -> None:
+def test_config_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path) -> None:
     """A recipe using backend.type='diffusion-pipe' must validate cleanly."""
-    recipe = _valid_recipe_dict(tmp_path)
-    recipe["backend"] = {"type": "diffusion-pipe"}
+    cfg_dict = _valid_config_dict(tmp_path)
+    cfg_dict["backend"] = {"type": "diffusion-pipe"}
 
-    r = client.post("/api/recipes/validate", json={"recipe": recipe})
+    r = client.post("/api/configs/validate", json={"config": cfg_dict})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["valid"] is True
@@ -1615,7 +1615,7 @@ def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path)
     import sys
 
     from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
-    from lorahub.core.config.schema import RecipeConfig
+    from lorahub.core.config.schema import TrainingConfig
 
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
@@ -1629,7 +1629,7 @@ def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path)
         "import sys\nprint('loaded'); sys.exit(0)\n", encoding="utf-8"
     )
 
-    cfg = RecipeConfig.model_validate(
+    cfg = TrainingConfig.model_validate(
         {
             "base_model": {"arch": "sdxl", "checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},
@@ -2120,7 +2120,7 @@ def test_samples_aggregates_across_jobs(
     ws_a.mkdir()
     (ws_a / "sample-1.png").write_bytes(_png_bytes())
     job_a = state.registry.create(
-        workspace=ws_a, recipe_snapshot={"output": {"name": "alpha"}}
+        workspace=ws_a, config_snapshot={"output": {"name": "alpha"}}
     )
 
     ws_b = tmp_path / "run-b"
@@ -2129,7 +2129,7 @@ def test_samples_aggregates_across_jobs(
     out.mkdir()
     (out / "sample-2.jpg").write_bytes(_png_bytes())
     job_b = state.registry.create(
-        workspace=ws_b, recipe_snapshot={"output": {"name": "beta"}}
+        workspace=ws_b, config_snapshot={"output": {"name": "beta"}}
     )
 
     r = client.get("/api/samples")
@@ -2144,7 +2144,7 @@ def test_samples_aggregates_across_jobs(
 
     item_a = by_job[job_a.id]
     assert item_a["path"] == "sample-1.png"
-    assert item_a["recipe_name"] == "alpha"
+    assert item_a["config_name"] == "alpha"
     assert item_a["job_name"] == "run-a"
     assert item_a["raw_url"] == (
         f"/api/jobs/{job_a.id}/files/raw?path=sample-1.png"
@@ -2170,12 +2170,12 @@ def test_samples_filter_by_job_ids(client: TestClient, tmp_path: Path) -> None:
     ws_a = tmp_path / "run-a"
     ws_a.mkdir()
     (ws_a / "a.png").write_bytes(_png_bytes())
-    job_a = state.registry.create(workspace=ws_a, recipe_snapshot={})
+    job_a = state.registry.create(workspace=ws_a, config_snapshot={})
 
     ws_b = tmp_path / "run-b"
     ws_b.mkdir()
     (ws_b / "b.png").write_bytes(_png_bytes())
-    state.registry.create(workspace=ws_b, recipe_snapshot={})
+    state.registry.create(workspace=ws_b, config_snapshot={})
 
     r = client.get("/api/samples", params={"job_ids": job_a.id})
     assert r.status_code == 200
@@ -2204,7 +2204,7 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
     # Force an older mtime on old.png so sorting has something to chew on.
     old_ts = (ws / "new.png").stat().st_mtime - 60
     os.utime(ws / "old.png", (old_ts, old_ts))
-    state.registry.create(workspace=ws, recipe_snapshot={})
+    state.registry.create(workspace=ws, config_snapshot={})
 
     r = client.get("/api/samples")
     paths = [item["path"] for item in r.json()["items"]]
@@ -2218,13 +2218,13 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
 
 def test_instantiate_template_substitutes_placeholders(
     client: TestClient,
-    recipes_dir: Path,
+    configs_dir: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Placeholders applied by dotted-path setter, recipe validates, and the
     persisted YAML carries the substituted values."""
-    from lorahub.api import recipe_templates as recipe_templates_module
+    from lorahub.api import config_templates as config_templates_module
 
     builtin_dir = tmp_path / "builtin"
     builtin_dir.mkdir()
@@ -2268,11 +2268,11 @@ def test_instantiate_template_substitutes_placeholders(
         yaml.safe_dump(template_yaml, sort_keys=False), encoding="utf-8"
     )
     monkeypatch.setattr(
-        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+        config_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
     )
 
     # Confirm the listing exposes the new placeholders array.
-    listed = client.get("/api/recipes/templates").json()["templates"]
+    listed = client.get("/api/configs/templates").json()["templates"]
     assert len(listed) == 1
     assert [p["key"] for p in listed[0]["placeholders"]] == [
         "checkpoint",
@@ -2281,7 +2281,7 @@ def test_instantiate_template_substitutes_placeholders(
     ]
 
     r = client.post(
-        "/api/recipes/templates/test/instantiate",
+        "/api/configs/templates/test/instantiate",
         json={
             "name": "myrun",
             "values": {
@@ -2296,7 +2296,7 @@ def test_instantiate_template_substitutes_placeholders(
     assert body["name"] == "myrun"
     assert body["template_id"] == "test"
 
-    saved = recipes_dir / "myrun.yaml"
+    saved = configs_dir / "myrun.yaml"
     assert saved.is_file()
     parsed = yaml.safe_load(saved.read_text(encoding="utf-8"))
     assert parsed["base_model"]["checkpoint"] == str(ckpt)
@@ -2310,10 +2310,10 @@ def test_instantiate_template_substitutes_placeholders(
 
 
 def test_instantiate_template_unknown_id_returns_404(
-    client: TestClient, recipes_dir: Path
+    client: TestClient, configs_dir: Path
 ) -> None:
     r = client.post(
-        "/api/recipes/templates/does-not-exist/instantiate",
+        "/api/configs/templates/does-not-exist/instantiate",
         json={"name": "anything", "values": {}},
     )
     assert r.status_code == 404
@@ -2321,11 +2321,11 @@ def test_instantiate_template_unknown_id_returns_404(
 
 def test_instantiate_template_conflict_without_overwrite(
     client: TestClient,
-    recipes_dir: Path,
+    configs_dir: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from lorahub.api import recipe_templates as recipe_templates_module
+    from lorahub.api import config_templates as config_templates_module
 
     builtin_dir = tmp_path / "builtin"
     builtin_dir.mkdir()
@@ -2341,23 +2341,23 @@ def test_instantiate_template_conflict_without_overwrite(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+        config_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
     )
 
     first = client.post(
-        "/api/recipes/templates/skel/instantiate",
+        "/api/configs/templates/skel/instantiate",
         json={"name": "dup", "values": {}},
     )
     assert first.status_code == 201, first.text
 
     clash = client.post(
-        "/api/recipes/templates/skel/instantiate",
+        "/api/configs/templates/skel/instantiate",
         json={"name": "dup", "values": {}},
     )
     assert clash.status_code == 409
 
     overwrite = client.post(
-        "/api/recipes/templates/skel/instantiate",
+        "/api/configs/templates/skel/instantiate",
         json={"name": "dup", "values": {}, "overwrite": True},
     )
     assert overwrite.status_code == 201, overwrite.text
@@ -2366,7 +2366,7 @@ def test_instantiate_template_conflict_without_overwrite(
 def test_apply_placeholders_creates_intermediate_dicts() -> None:
     """The dotted-path setter is the load-bearing piece 鈥?make sure it
     creates missing intermediates and rejects non-mapping traversal."""
-    from lorahub.api.recipe_templates import apply_placeholders
+    from lorahub.api.config_templates import apply_placeholders
 
     placeholders = [
         {
@@ -2408,11 +2408,11 @@ def test_create_sweep_enqueues_one_job_per_variant(
 
     captured: list[dict[str, Any]] = []
 
-    def fake_launch(cfg: RecipeConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
         # Mirror what _launch_job does in production: register a JobRecord so
         # the GET endpoint has something to aggregate, then stamp metadata.
         record = state_mod.registry.create(
-            workspace=workspace, recipe_snapshot=cfg.model_dump(mode="json")
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
         )
         record.metadata = metadata
         state_mod.registry.update(record)
@@ -2422,7 +2422,7 @@ def test_create_sweep_enqueues_one_job_per_variant(
     monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
 
     payload = {
-        "base_recipe": _recipe_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
         "axes": [{"path": "network.rank", "values": [16, 32, 64]}],
         "workspace_root": str(tmp_path / "runs"),
     }
@@ -2453,7 +2453,7 @@ def test_get_sweep_aggregates_job_states(
     for i, st in enumerate(states_by_index, start=1):
         ws = tmp_path / f"variant-{i}"
         ws.mkdir()
-        rec = state.registry.create(workspace=ws, recipe_snapshot={})
+        rec = state.registry.create(workspace=ws, config_snapshot={})
         rec.state = st
         rec.metadata = {"sweep_id": sweep_id, "variant_name": f"v-{i:03d}"}
         state.registry.update(rec)
@@ -2461,7 +2461,7 @@ def test_get_sweep_aggregates_job_states(
     # Drop a sibling job under a different sweep_id to confirm filtering works.
     other_ws = tmp_path / "other"
     other_ws.mkdir()
-    other = state.registry.create(workspace=other_ws, recipe_snapshot={})
+    other = state.registry.create(workspace=other_ws, config_snapshot={})
     other.metadata = {"sweep_id": "another-sweep"}
     state.registry.update(other)
 
@@ -2501,7 +2501,7 @@ def test_sweep_metadata_persists_across_restart(
     monkeypatch.setattr(state, "registry", reg_a)
     ws = tmp_path / "variant-1"
     ws.mkdir()
-    job = reg_a.create(workspace=ws, recipe_snapshot={"x": 1})
+    job = reg_a.create(workspace=ws, config_snapshot={"x": 1})
     job.state = state.JobState.succeeded
     job.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 16}}
     reg_a.update(job)
@@ -2545,7 +2545,7 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
         ws.mkdir()
         rec = state.registry.create(
             workspace=ws,
-            recipe_snapshot={"output": {"name": f"alpha-{i:03d}"}},
+            config_snapshot={"output": {"name": f"alpha-{i:03d}"}},
         )
         rec.state = st
         rec.metadata = {
@@ -2562,7 +2562,7 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
         ws.mkdir()
         rec = state.registry.create(
             workspace=ws,
-            recipe_snapshot={"output": {"name": f"bravo-{i:03d}"}},
+            config_snapshot={"output": {"name": f"bravo-{i:03d}"}},
         )
         rec.state = state.JobState.failed
         rec.metadata = {"sweep_id": sweep_b}
@@ -2571,7 +2571,7 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     # Stray job without a sweep tag 鈥?must not appear in the response.
     stray = tmp_path / "stray"
     stray.mkdir()
-    state.registry.create(workspace=stray, recipe_snapshot={})
+    state.registry.create(workspace=stray, config_snapshot={})
 
     r = client.get("/api/sweeps")
     assert r.status_code == 200, r.text

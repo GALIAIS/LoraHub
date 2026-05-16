@@ -1,4 +1,4 @@
-"""KohyaBackend: implements `TrainingBackend` by wrapping kohya_ss/sd-scripts."""
+﻿"""KohyaBackend: implements `TrainingBackend` by wrapping kohya_ss/sd-scripts."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ from lorahub.core.backends.kohya import bootstrap as _bootstrap
 from lorahub.core.backends.kohya.compiler import (
     CompilationError,
     _KOHYA_SCRIPT_MAP,
-    compile_recipe,
+    compile_config,
 )
 from lorahub.core.backends.kohya.runner import KohyaRunner
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import TrainingEvent
 
 # kohya sd-scripts ships dedicated entry points for these arches today
@@ -42,19 +42,19 @@ class KohyaBackend:
     def supported_archs(self) -> set[ModelArch]:
         return set(_SUPPORTED)
 
-    def validate(self, cfg: RecipeConfig) -> list[ValidationIssue]:
+    def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
 
         try:
             _bootstrap.resolve(
-                recipe_path=cfg.backend.sd_scripts_path,
-                recipe_python=cfg.backend.python_executable,
+                config_path=cfg.backend.sd_scripts_path,
+                config_python=cfg.backend.python_executable,
             )
         except _bootstrap.BootstrapError as e:
             issues.append(ValidationIssue(Severity.error, "backend.sd_scripts_path", str(e)))
 
         try:
-            compile_recipe(cfg, workspace=Path("/"))
+            compile_config(cfg, workspace=Path("/"))
         except CompilationError as e:
             issues.append(ValidationIssue(Severity.error, "recipe", str(e)))
 
@@ -77,7 +77,7 @@ class KohyaBackend:
 
         return issues
 
-    def estimate_vram(self, cfg: RecipeConfig) -> VRAMEstimate:
+    def estimate_vram(self, cfg: TrainingConfig) -> VRAMEstimate:
         """Coarse VRAM estimate. Refine with empirical data later.
 
         The per-arch tables and the formula live in
@@ -94,7 +94,7 @@ class KohyaBackend:
 
     def launch(
         self,
-        cfg: RecipeConfig,
+        cfg: TrainingConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
         *,
@@ -102,11 +102,11 @@ class KohyaBackend:
         env: dict[str, str] | None = None,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
-            recipe_path=cfg.backend.sd_scripts_path,
-            recipe_python=cfg.backend.python_executable,
+            config_path=cfg.backend.sd_scripts_path,
+            config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()
-        script_name, argv, files = compile_recipe(cfg, workspace)
+        script_name, argv, files = compile_config(cfg, workspace)
         if extra_argv:
             argv = [*argv, *extra_argv]
         workspace.mkdir(parents=True, exist_ok=True)

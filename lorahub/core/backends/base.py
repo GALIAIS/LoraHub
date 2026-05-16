@@ -1,4 +1,4 @@
-"""Training backend protocol and shared types.
+﻿"""Training backend protocol and shared types.
 
 Every concrete backend (Kohya, Diffusers, ...) implements `TrainingBackend`.
 The orchestrator and CLI interact exclusively through this interface, so
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import TrainingEvent
 
 
@@ -107,17 +107,17 @@ class TrainingBackend(Protocol):
     @property
     def supported_archs(self) -> set[ModelArch]: ...
 
-    def validate(self, cfg: RecipeConfig) -> list[ValidationIssue]:
+    def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         """Check config for errors before launching."""
         ...
 
-    def estimate_vram(self, cfg: RecipeConfig) -> VRAMEstimate:
+    def estimate_vram(self, cfg: TrainingConfig) -> VRAMEstimate:
         """Estimate peak VRAM usage for the given config."""
         ...
 
     def launch(
         self,
-        cfg: RecipeConfig,
+        cfg: TrainingConfig,
         workspace: Path,
         on_event: Callable[[TrainingEvent], None],
         *,

@@ -52,7 +52,7 @@ def _make_recipe_yaml(tmp_path: Path, sd_scripts: Path) -> Path:
             "python_executable": sys.executable,
         },
     }
-    path = tmp_path / "recipe.yaml"
+    path = tmp_path / "config.yaml"
     path.write_text(yaml.dump(recipe), encoding="utf-8")
     return path
 

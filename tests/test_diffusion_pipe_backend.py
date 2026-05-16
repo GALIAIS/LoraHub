@@ -10,7 +10,7 @@ import pytest
 
 from lorahub.core.backends.base import Severity
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 
@@ -31,7 +31,7 @@ def _make_stub_repo(root: Path) -> Path:
     return root
 
 
-def _make_recipe(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> RecipeConfig:
+def _make_recipe(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> TrainingConfig:
     ckpt = tmp_path / ("model.safetensors" if arch == "sdxl" else "diffusers")
     if arch == "sdxl":
         ckpt.write_bytes(b"")
@@ -39,7 +39,7 @@ def _make_recipe(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> RecipeCon
         ckpt.mkdir(exist_ok=True)
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
-    return RecipeConfig.model_validate(
+    return TrainingConfig.model_validate(
         {
             "base_model": {"arch": arch, "checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},
@@ -119,7 +119,7 @@ def test_validate_rejects_sd15_with_pointer_to_kohya(
     ckpt.write_bytes(b"")
     data = tmp_path / "d"
     data.mkdir()
-    recipe = RecipeConfig.model_validate(
+    recipe = TrainingConfig.model_validate(
         {
             "base_model": {"arch": "sd15", "checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},

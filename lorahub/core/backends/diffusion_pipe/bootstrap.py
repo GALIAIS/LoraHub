@@ -1,4 +1,4 @@
-"""Resolve the tdrussell/diffusion-pipe checkout and the Python that runs it.
+﻿"""Resolve the tdrussell/diffusion-pipe checkout and the Python that runs it.
 
 Mirrors `lorahub.core.backends.kohya.bootstrap` -- both backends compose the
 same helpers from ``lorahub.core.backends._common.bootstrap`` so probes and
@@ -47,17 +47,17 @@ def default_repo_path() -> Path:
 
 
 def resolve(
-    recipe_path: Path | None = None,
-    recipe_python: Path | None = None,
+    config_path: Path | None = None,
+    config_python: Path | None = None,
 ) -> DiffusionPipeEnv:
     """Resolve the diffusion-pipe environment using recipe -> env var -> default."""
     repo = (
-        recipe_path
+        config_path
         or _common.path_from_env(_ENV_REPO)
         or default_repo_path()
     )
     python = _common.resolve_python(
-        repo, recipe_python=recipe_python, env_var=_ENV_PYTHON
+        repo, config_python=config_python, env_var=_ENV_PYTHON
     )
 
     _common.check_repo(
@@ -66,7 +66,7 @@ def resolve(
         required_files=_REQUIRED_FILES,
         env_var=_ENV_REPO,
         default_path=default_repo_path(),
-        recipe_field="repo_path",
+        config_field="repo_path",
     )
     _common.check_python(python)
 

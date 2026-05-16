@@ -1,4 +1,4 @@
-"""Resolve the kohya-ss/sd-scripts checkout and the Python that runs it.
+﻿"""Resolve the kohya-ss/sd-scripts checkout and the Python that runs it.
 
 Locates an existing sd-scripts checkout via (in priority order) explicit
 recipe field, environment variable, or default user-data location. Fails
@@ -63,8 +63,8 @@ def default_sd_scripts_path() -> Path:
 
 
 def resolve(
-    recipe_path: Path | None = None,
-    recipe_python: Path | None = None,
+    config_path: Path | None = None,
+    config_python: Path | None = None,
 ) -> KohyaEnv:
     """Resolve the kohya environment using recipe -> env var -> default.
 
@@ -73,12 +73,12 @@ def resolve(
     up). Only if none is present do we fall back to the current interpreter.
     """
     sd_scripts = (
-        recipe_path
+        config_path
         or _common.path_from_env(_ENV_SD_SCRIPTS)
         or default_sd_scripts_path()
     )
     python = _common.resolve_python(
-        sd_scripts, recipe_python=recipe_python, env_var=_ENV_PYTHON
+        sd_scripts, config_python=config_python, env_var=_ENV_PYTHON
     )
 
     _common.check_repo(
@@ -87,7 +87,7 @@ def resolve(
         required_files=_REQUIRED_SCRIPTS,
         env_var=_ENV_SD_SCRIPTS,
         default_path=default_sd_scripts_path(),
-        recipe_field="sd_scripts_path",
+        config_field="sd_scripts_path",
     )
     _common.check_python(python)
 

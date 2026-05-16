@@ -1,6 +1,6 @@
-"""Sweep — batch-enqueue a cartesian-product grid over a base recipe.
+"""Sweep — batch-enqueue a cartesian-product grid over a base config.
 
-The sweep endpoint takes one validated base recipe plus N axes, materialises
+The sweep endpoint takes one validated base config plus N axes, materialises
 every cartesian-product variant via :class:`SweepPlan`, and pushes each one
 through :func:`_launch_job` so the scheduler runs them serially under the
 existing single-slot concurrency model.
@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from lorahub.api import state
 from lorahub.api.jobs_helpers import _launch_job
 from lorahub.api.state import JobRecord, JobState
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
     SweepAxis,
     SweepError,
@@ -65,8 +65,8 @@ def _common_prefix(names: list[str]) -> str:
 
 
 def _job_name(job: JobRecord) -> str | None:
-    """Pull the human-readable variant name from the job's recipe snapshot."""
-    snap = job.recipe_snapshot or {}
+    """Pull the human-readable variant name from the job's config snapshot."""
+    snap = job.config_snapshot or {}
     output = snap.get("output") if isinstance(snap, dict) else None
     if isinstance(output, dict):
         name = output.get("name")
@@ -81,7 +81,7 @@ class SweepAxisRequest(BaseModel):
 
 
 class CreateSweepRequest(BaseModel):
-    base_recipe: dict[str, Any]
+    base_config: dict[str, Any]
     axes: list[SweepAxisRequest] = Field(min_length=1)
     name_template: str = "{base}-{i:03d}"
     workspace_root: str | None = None
@@ -92,20 +92,20 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
     """Expand a sweep into N variants, enqueue each one, return the manifest.
 
     Errors:
-      422 — base recipe fails schema validation
+      422 — base config fails schema validation
       400 — axis path doesn't resolve in base, or grid is too large, or a
             materialised variant fails schema validation (likely caused by
             an axis value that violates a pydantic constraint)
     """
     try:
-        RecipeConfig.model_validate(req.base_recipe)
+        TrainingConfig.model_validate(req.base_config)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status_code=422, detail=f"base_recipe is invalid: {exc}"
+            status_code=422, detail=f"base_config is invalid: {exc}"
         ) from exc
 
     plan = SweepPlan(
-        base_recipe=req.base_recipe,
+        base_config=req.base_config,
         axes=[SweepAxis(path=a.path, values=a.values) for a in req.axes],
         name_template=req.name_template,
     )
@@ -125,9 +125,9 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
 
     summary_variants: list[dict[str, Any]] = []
     job_ids: list[str] = []
-    for i, (variant_name, variant_recipe) in enumerate(variants, start=1):
+    for i, (variant_name, variant_config) in enumerate(variants, start=1):
         try:
-            cfg_v = RecipeConfig.model_validate(variant_recipe)
+            cfg_v = TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=400,
@@ -151,9 +151,9 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                 "name": variant_name,
                 "job_id": result["id"],
                 # Compact diff: just the axis paths and their assigned values.
-                # The full materialised recipe is too bulky to ship back per
+                # The full materialised config is too bulky to ship back per
                 # variant — callers can re-derive it from base + axis_values.
-                "recipe_diff": axis_values,
+                "config_diff": axis_values,
             }
         )
 

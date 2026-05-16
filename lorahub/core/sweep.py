@@ -1,4 +1,4 @@
-"""Hyperparameter sweep — grid search over a base recipe.
+﻿"""Hyperparameter sweep — grid search over a base recipe.
 
 A :class:`SweepPlan` takes a validated base recipe dict plus one or more
 :class:`SweepAxis` declarations and materialises every cartesian-product
@@ -50,7 +50,7 @@ class SweepAxis:
 
 @dataclass(frozen=True)
 class SweepPlan:
-    """A grid sweep over ``base_recipe`` along the given ``axes``.
+    """A grid sweep over ``base_config`` along the given ``axes``.
 
     ``name_template`` controls the per-variant ``output.name`` suffix.
     Two placeholders are recognised: ``{base}`` (the base recipe's
@@ -59,7 +59,7 @@ class SweepPlan:
     three-digit).
     """
 
-    base_recipe: dict[str, Any]
+    base_config: dict[str, Any]
     axes: list[SweepAxis]
     name_template: str = "{base}-{i:03d}"
 
@@ -69,7 +69,7 @@ class SweepPlan:
         Order is stable: the cartesian product walks axes in declaration
         order, with the last axis varying fastest (so axis 0 anchors the
         outer loop). Each returned recipe is an independent deep copy so
-        callers can hand it straight to ``RecipeConfig.model_validate``
+        callers can hand it straight to ``TrainingConfig.model_validate``
         without worrying about shared sub-dicts.
 
         The base ``output.name`` is read once from the validated base; if
@@ -86,7 +86,7 @@ class SweepPlan:
             # Fail fast if a path can't be walked into the base recipe —
             # otherwise the user only learns of a typo after the API has
             # validated and enqueued the first N variants.
-            _validate_path(self.base_recipe, axis.path)
+            _validate_path(self.base_config, axis.path)
 
         total = 1
         for axis in self.axes:
@@ -99,15 +99,15 @@ class SweepPlan:
             raise SweepTooLargeError(msg)
 
         base_name = (
-            self.base_recipe.get("output", {}).get("name")
-            if isinstance(self.base_recipe.get("output"), dict)
+            self.base_config.get("output", {}).get("name")
+            if isinstance(self.base_config.get("output"), dict)
             else None
         ) or "sweep"
 
         out: list[tuple[str, dict[str, Any]]] = []
         value_grids = [axis.values for axis in self.axes]
         for i, combo in enumerate(itertools.product(*value_grids), start=1):
-            variant = copy.deepcopy(self.base_recipe)
+            variant = copy.deepcopy(self.base_config)
             for axis, value in zip(self.axes, combo, strict=True):
                 _set_by_path(variant, axis.path, value)
             variant_name = self.name_template.format(base=base_name, i=i)

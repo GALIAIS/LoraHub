@@ -1,0 +1,70 @@
+# Anima character LoRA config -- tuned for 24GB VRAM (RTX 4090)
+# Uses diffusion-pipe backend with the split-file Anima model.
+# Expects 20-50 images with Danbooru-style tag captions (.txt files).
+
+schema_version: "1.0"
+
+base_model:
+  arch: anima
+  # Point to any one of the split_files as the "checkpoint" anchor;
+  # the actual per-component paths are in backend.diffusion_pipe.model_paths.
+  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+
+dataset:
+  source: ./datasets/azurlane_char0
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    min: 512
+    max: 1536
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    drop_rate: 0.05
+  num_repeats: 10
+
+network:
+  type: lora
+  rank: 16
+  alpha: 8
+  target_unet: true
+  target_text_encoder: false
+
+optimizer:
+  type: adamw8bit
+  lr:
+    unet: 5.0e-5
+    text_encoder: 0
+  schedule: cosine
+  warmup_steps: 50
+
+schedule:
+  epochs: 15
+  batch_size: 2
+  grad_accum: 2
+  max_steps: null
+
+precision: bf16
+gradient_checkpointing: true
+cache_latents: true
+
+sampling:
+  enabled: false
+
+output:
+  name: azurlane_char0_anima_lora
+  save_every_n_epochs: 5
+  save_dtype: bf16
+
+backend:
+  type: diffusion-pipe
+  diffusion_pipe:
+    pipeline_stages: 1
+    gradient_clipping: 1.0
+    blocks_to_swap: 0
+    model_paths:
+      transformer_path: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+      vae_path: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
+      llm_path: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors

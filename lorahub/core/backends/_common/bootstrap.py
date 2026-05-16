@@ -1,4 +1,4 @@
-"""Shared bootstrap helpers for resolving a backend checkout + interpreter.
+﻿"""Shared bootstrap helpers for resolving a backend checkout + interpreter.
 
 Every backend wants the same priority cascade: explicit recipe field,
 environment variable, default location. And every backend wants to detect a
@@ -83,7 +83,7 @@ def check_repo(
     required_files: tuple[str, ...],
     env_var: str,
     default_path: Path,
-    recipe_field: str,
+    config_field: str,
 ) -> None:
     """Validate that ``path`` is a non-empty backend checkout.
 
@@ -95,7 +95,7 @@ def check_repo(
         msg = (
             f"{label} not found at {path}.\n"
             f"Either:\n"
-            f"  1. Set backend.{recipe_field} in your recipe, or\n"
+            f"  1. Set backend.{config_field} in your recipe, or\n"
             f"  2. Set the {env_var} environment variable, or\n"
             f"  3. Clone {label} into {default_path}"
         )
@@ -115,12 +115,12 @@ def check_repo(
 def resolve_python(
     repo: Path,
     *,
-    recipe_python: Path | None,
+    config_python: Path | None,
     env_var: str,
 ) -> Path:
     """Apply the recipe -> env -> venv -> sys.executable cascade for python."""
     return (
-        recipe_python
+        config_python
         or path_from_env(env_var)
         or venv_python(repo)
         or Path(sys.executable)

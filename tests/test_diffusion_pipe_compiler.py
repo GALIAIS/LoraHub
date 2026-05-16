@@ -1,6 +1,6 @@
-﻿"""Tests for the diffusion-pipe compiler.
+"""Tests for the diffusion-pipe compiler.
 
-The compiler is a pure function: take a RecipeConfig + workspace, give back
+The compiler is a pure function: take a TrainingConfig + workspace, give back
 ``(argv, files_to_write)``. We exercise that contract by inspecting the TOML
 strings we'd write to disk; we never actually shell out to diffusion-pipe.
 """
@@ -13,18 +13,18 @@ import pytest
 
 from lorahub.core.backends.diffusion_pipe.compiler import (
     CompilationError,
-    compile_recipe,
+    compile_config,
 )
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.config.schema import TrainingConfig
 
 
-def _recipe(**overrides: object) -> RecipeConfig:
+def _recipe(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
         "dataset": {"source": "/d/imgs"},
     }
     base.update(overrides)  # type: ignore[arg-type]
-    return RecipeConfig.model_validate(base)
+    return TrainingConfig.model_validate(base)
 
 
 def _toml_repr(p: str | Path) -> str:
@@ -33,18 +33,18 @@ def _toml_repr(p: str | Path) -> str:
     return raw.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _compile(recipe: RecipeConfig, ws: Path = Path("/ws")) -> tuple[list[str], dict[Path, str]]:
-    return compile_recipe(recipe, ws)
+def _compile(cfg: TrainingConfig, ws: Path = Path("/ws")) -> tuple[list[str], dict[Path, str]]:
+    return compile_config(cfg, ws)
 
 
-def _main_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
-    _argv, files = _compile(recipe, ws)
+def _main_toml(cfg: TrainingConfig, ws: Path = Path("/ws")) -> str:
+    _argv, files = _compile(cfg, ws)
     main_path = ws.resolve() / "diffusion_pipe.toml"
     return files[main_path]
 
 
-def _dataset_toml(recipe: RecipeConfig, ws: Path = Path("/ws")) -> str:
-    _argv, files = _compile(recipe, ws)
+def _dataset_toml(cfg: TrainingConfig, ws: Path = Path("/ws")) -> str:
+    _argv, files = _compile(cfg, ws)
     ds_path = ws.resolve() / "dataset.toml"
     return files[ds_path]
 

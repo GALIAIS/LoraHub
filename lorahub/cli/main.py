@@ -23,9 +23,9 @@ from rich.table import Table
 from lorahub import __version__
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.backends.kohya.backend import KohyaBackend
-from lorahub.core.backends.kohya.compiler import compile_recipe
-from lorahub.core.config.loader import load_recipe
-from lorahub.core.config.schema import RecipeConfig
+from lorahub.core.backends.kohya.compiler import compile_config
+from lorahub.core.config.loader import load_config
+from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.dataset.sources import bangumi_base
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
@@ -49,10 +49,10 @@ def version() -> None:
 
 @app.command()
 def validate(
-    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
 ) -> None:
     """Validate a config without running training."""
-    cfg = load_recipe(recipe)
+    cfg = load_config(config)
     backend = KohyaBackend()
     issues = backend.validate(cfg)
     _render_issues(issues)
@@ -63,17 +63,17 @@ def validate(
 
 @app.command()
 def info(
-    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
 ) -> None:
     """Show what a config would compile to, plus VRAM estimate (no training)."""
-    cfg = load_recipe(recipe)
+    cfg = load_config(config)
     backend = KohyaBackend()
 
-    script, argv, _files = compile_recipe(cfg, workspace=Path.cwd() / "_dryrun")
+    script, argv, _files = compile_config(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
     table = Table(title="Config summary", show_header=False, expand=False)
-    table.add_row("config", str(recipe))
+    table.add_row("config", str(config))
     table.add_row("arch", cfg.base_model.arch)
     table.add_row("network", f"{cfg.network.type} rank={cfg.network.rank} alpha={cfg.network.alpha}")
     table.add_row("schedule", f"{cfg.schedule.epochs} epochs x bs={cfg.schedule.batch_size}")
@@ -89,14 +89,14 @@ def info(
 
 @app.command()
 def train(
-    recipe: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
     workspace: Annotated[
         Path | None,
         typer.Option(help="Where to write logs/checkpoints/samples."),
     ] = None,
 ) -> None:
     """Run training to completion. Press Ctrl+C to stop gracefully."""
-    cfg = load_recipe(recipe)
+    cfg = load_config(config)
     backend = KohyaBackend()
 
     issues = backend.validate(cfg)
@@ -132,7 +132,7 @@ def train(
 
 @app.command()
 def sweep(
-    recipe: Annotated[Path, typer.Argument(help="Path to the base config YAML file.")],
+    config: Annotated[Path, typer.Argument(help="Path to the base config YAML file.")],
     axis: Annotated[
         list[str],
         typer.Option(
@@ -164,10 +164,10 @@ def sweep(
             "--output-dir",
             help=(
                 "Where to write generated `variant_NNN.yaml` files plus the "
-                "`sweep.json` mapping. Defaults to ./recipes/sweep-<name>."
+                "`sweep.json` mapping. Defaults to ./configs/sweep-<name>."
             ),
         ),
-    ] = Path("./recipes"),
+    ] = Path("./configs"),
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -186,7 +186,7 @@ def sweep(
     """
     import json  # noqa: PLC0415
 
-    from lorahub.core.config.loader import dump_recipe  # noqa: PLC0415
+    from lorahub.core.config.loader import dump_config  # noqa: PLC0415
     from lorahub.core.sweep import (  # noqa: PLC0415
         SweepAxis,
         SweepError,
@@ -197,9 +197,9 @@ def sweep(
         err_console.print("[red]at least one --axis is required[/red]")
         raise typer.Exit(code=1)
 
-    # Validate the base recipe up front so the user sees schema errors before
-    # we materialise N copies of a broken recipe.
-    cfg = load_recipe(recipe)
+    # Validate the base config up front so the user sees schema errors before
+    # we materialise N copies of a broken config.
+    cfg = load_config(config)
     base_dict = cfg.model_dump(mode="json", exclude_none=True)
 
     axes: list[SweepAxis] = []
@@ -220,7 +220,7 @@ def sweep(
             raise typer.Exit(code=1)
         axes.append(SweepAxis(path=path, values=values))
 
-    plan = SweepPlan(base_recipe=base_dict, axes=axes, name_template=name_template)
+    plan = SweepPlan(base_config=base_dict, axes=axes, name_template=name_template)
     try:
         variants = plan.expand()
     except SweepError as exc:
@@ -232,16 +232,16 @@ def sweep(
 
     if dry_run:
         console.print(f"[bold]sweep[/bold] {len(variants)} variant(s) [dim](dry run)[/dim]")
-        for i, (variant_name, _variant_recipe) in enumerate(variants, start=1):
+        for i, (variant_name, _variant_config) in enumerate(variants, start=1):
             diff = plan.axis_values_for(i)
             console.print(f"[cyan]{variant_name}[/cyan]  {diff}")
         return
 
     # Re-validate every variant before writing — catches axis values that
     # violate pydantic constraints (e.g. negative LR, rank > 512).
-    for variant_name, variant_recipe in variants:
+    for variant_name, variant_config in variants:
         try:
-            RecipeConfig.model_validate(variant_recipe)
+            TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
             err_console.print(
                 f"[red]variant {variant_name!r} fails schema validation: {exc}[/red]"
@@ -252,18 +252,18 @@ def sweep(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, object] = {
-        "base_recipe": str(recipe.resolve()),
+        "base_config": str(config.resolve()),
         "name_template": name_template,
         "workspace_root": str(workspace_root.resolve()),
         "axes": [{"path": a.path, "values": list(a.values)} for a in axes],
         "variants": [],
     }
-    for i, (variant_name, variant_recipe) in enumerate(variants, start=1):
-        # `dump_recipe` requires a RecipeConfig — round-trip through validation
+    for i, (variant_name, variant_config) in enumerate(variants, start=1):
+        # `dump_config` requires a TrainingConfig — round-trip through validation
         # both confirms the variant is valid and normalises field ordering.
-        cfg_v = RecipeConfig.model_validate(variant_recipe)
+        cfg_v = TrainingConfig.model_validate(variant_config)
         variant_path = target_dir / f"variant_{i:03d}.yaml"
-        dump_recipe(cfg_v, variant_path)
+        dump_config(cfg_v, variant_path)
         manifest["variants"].append(  # type: ignore[union-attr]
             {
                 "name": variant_name,
@@ -368,7 +368,7 @@ def init(
             )
             raise typer.Exit(code=1)
         from lorahub.core.config import scaffold
-        from lorahub.core.config.loader import dump_recipe
+        from lorahub.core.config.loader import dump_config
 
         cfg = scaffold.auto_scaffold(
             name=name,
@@ -376,7 +376,7 @@ def init(
             dataset=dataset.resolve(),
             vram_mib=vram_mib,
         )
-        dump_recipe(cfg, dst)
+        dump_config(cfg, dst)
         images = scaffold.count_images(dataset.resolve())
         console.print(
             f"[green]created[/green] {dst}\n"
@@ -388,7 +388,7 @@ def init(
         )
         return
 
-    src = _builtin_recipe(template)
+    src = _builtin_config(template)
     if not src.exists():
         err_console.print(f"[red]unknown template: {template}[/red]")
         raise typer.Exit(code=1)
@@ -890,9 +890,9 @@ def _parse_remap(raw: str) -> dict[str, str]:
     return rules
 
 
-def _builtin_recipe(name: str) -> Path:
+def _builtin_config(name: str) -> Path:
     package_root = Path(__file__).resolve().parent.parent.parent
-    return package_root / "recipes" / f"{name}.yaml"
+    return package_root / "configs" / f"{name}.yaml"
 
 
 def _render_issues(issues: list[ValidationIssue]) -> None:
