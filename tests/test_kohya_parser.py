@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lorahub.core.backends.kohya.parser import parse_line
+from lorahub.core.backends.kohya.parser import KohyaLineParser, parse_line
 from lorahub.core.events import EventType
 
 
@@ -88,16 +88,18 @@ def test_arbitrary_log_line_kept_as_log() -> None:
 
 
 def test_error_line_flagged() -> None:
+    """OOM lines now go to a dedicated `oom` event, not generic log/error."""
     ev = parse_line("RuntimeError: CUDA out of memory")
     assert ev is not None
-    assert ev.type is EventType.log
-    assert ev.payload["level"] == "error"
+    assert ev.type is EventType.oom
+    assert "out of memory" in ev.payload["message"].lower()
 
 
-def test_traceback_line_flagged() -> None:
-    ev = parse_line("Traceback (most recent call last):")
-    assert ev is not None
-    assert ev.payload["level"] == "error"
+def test_traceback_opener_buffered() -> None:
+    """A bare `Traceback (...)` opener is buffered, not emitted as a log."""
+    parser = KohyaLineParser()
+    ev = parser.parse_line("Traceback (most recent call last):")
+    assert ev is None
 
 
 def test_validation_loss_emits_validation_event() -> None:
@@ -108,3 +110,90 @@ def test_validation_loss_emits_validation_event() -> None:
     assert ev.payload["val_loss"] == 0.5237
     assert ev.payload.get("epoch") == 3
     assert ev.job_id == "J1"
+
+
+def test_oom_runtime_error_emits_oom_event() -> None:
+    """Legacy `RuntimeError: CUDA out of memory` becomes an `oom` event."""
+    ev = parse_line("RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB")
+    assert ev is not None
+    assert ev.type is EventType.oom
+    assert "CUDA out of memory" in ev.payload["message"]
+
+
+def test_oom_torch_class_name_emits_oom_event() -> None:
+    """Modern `torch.cuda.OutOfMemoryError` form is also recognised."""
+    ev = parse_line("torch.cuda.OutOfMemoryError: CUDA out of memory.")
+    assert ev is not None
+    assert ev.type is EventType.oom
+
+
+def test_traceback_aggregated_into_single_error_event() -> None:
+    """Traceback opener + body + summary line collapses into one error event."""
+    parser = KohyaLineParser()
+    lines = [
+        "Traceback (most recent call last):",
+        '  File "/sd-scripts/train_network.py", line 42, in <module>',
+        "    main()",
+        '  File "/sd-scripts/train_network.py", line 30, in main',
+        "    raise ValueError('boom')",
+        "ValueError: boom",
+    ]
+    events = [parser.parse_line(ln, job_id="J7") for ln in lines]
+    # Only the closing summary line yields an event; the rest buffer.
+    assert events[:-1] == [None] * (len(lines) - 1)
+    flush = events[-1]
+    assert flush is not None
+    assert flush.type is EventType.error
+    assert flush.job_id == "J7"
+    assert flush.payload["summary"] == "ValueError: boom"
+    assert flush.payload["traceback"].startswith("Traceback (")
+    assert flush.payload["traceback"].endswith("ValueError: boom")
+    # No truncation on a normal flush.
+    assert "truncated" not in flush.payload
+
+
+def test_traceback_truncates_after_max_lines() -> None:
+    """An adversarial traceback longer than the cap is force-flushed."""
+    parser = KohyaLineParser()
+    feed = ["Traceback (most recent call last):"] + [
+        f"  File \"x.py\", line {i}, in fn{i}" for i in range(80)
+    ]
+    error_events = []
+    for line in feed:
+        ev = parser.parse_line(line)
+        if ev is not None and ev.type is EventType.error:
+            error_events.append(ev)
+
+    assert len(error_events) == 1
+    ev = error_events[0]
+    assert ev.payload.get("truncated") is True
+    # 50 line cap → traceback text contains exactly 50 buffered lines.
+    assert ev.payload["traceback"].count("\n") == 49
+
+
+def test_cache_progress_throttled() -> None:
+    """30 progress lines should collapse to a small number of events."""
+    parser = KohyaLineParser()
+    events = []
+    for i in range(1, 31):
+        line = f"caching latents:  {i*3}%|##        | {i}/30 [00:01<00:30,  1.00it/s]"
+        ev = parser.parse_line(line)
+        if ev is not None:
+            events.append(ev)
+
+    # First emit (i=1) + roughly every 10% step (~10/20/30 done) + terminal.
+    assert 3 <= len(events) <= 5
+    assert all(e.type is EventType.cache_progress for e in events)
+    assert all(e.payload["phase"] == "latents" for e in events)
+    # Terminal emit pinned to the final tick.
+    assert events[-1].payload["done"] == 30
+    assert events[-1].payload["total"] == 30
+
+
+def test_cache_progress_phases_independent() -> None:
+    """Latents and text-encoder phases keep independent throttle state."""
+    parser = KohyaLineParser()
+    a = parser.parse_line("caching latents: 5%| | 1/20")
+    b = parser.parse_line("caching text encoder outputs: 5%| | 1/20")
+    assert a is not None and a.payload["phase"] == "latents"
+    assert b is not None and b.payload["phase"] == "text_encoder"
