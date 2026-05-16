@@ -12,6 +12,7 @@ import { TaggingTab } from "./components/tagging-tab"
 import { NetworkTab } from "./components/network-tab"
 import { ModelsTab } from "./components/models-tab"
 import { DependenciesTab } from "./components/dependencies-tab"
+import { AboutTab } from "./components/about-tab"
 
 type TabKey =
   | "overview"
@@ -21,6 +22,7 @@ type TabKey =
   | "network"
   | "models"
   | "tagging"
+  | "about"
 
 /**
  * Settings page shell. Each tab is independently scrollable so a long log
@@ -56,6 +58,7 @@ export function SettingsPage() {
             <TabsTrigger value="network">网络加速</TabsTrigger>
             <TabsTrigger value="models">模型下载</TabsTrigger>
             <TabsTrigger value="tagging">标注</TabsTrigger>
+            <TabsTrigger value="about">关于</TabsTrigger>
           </TabsList>
         </div>
 
@@ -106,6 +109,13 @@ export function SettingsPage() {
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
                 <TaggingTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="about" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <AboutTab />
               </div>
             </div>
           </TabsContent>
