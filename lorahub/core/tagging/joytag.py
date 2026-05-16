@@ -1,24 +1,18 @@
 """JoyTag tagger — booru-style auto-tagger backed by `fancyfeast/joytag`.
 
 Uses PyTorch (already a hard dependency for any LoRA training rig) so we
-don't pull in transformers / timm just for inference. The HuggingFace repo
-ships ``model.safetensors`` (a custom ViT-B/16 + sigmoid head) plus
-``top_tags.txt`` (one tag per line, ~5000 entries). Default predict
-threshold is 0.4, matching the upstream README.
+don't pull in ``transformers`` / ``timm`` just for inference. The HuggingFace
+repo ships ``model.safetensors`` (a custom 12-layer ViT with a CNN stem and
+sigmoid head), ``config.json`` (architecture hyperparameters), and
+``top_tags.txt`` (one tag per line, ~5800 entries). Default predict threshold
+is 0.4, matching the upstream README.
 
-NOTE — model architecture is the load-bearing TODO here. The upstream
-checkout pairs ``model.safetensors`` with a ``Models.py`` module that
-defines a custom ``VisionModel`` class; weights are stored under that
-class's parameter names (``vision_model.*`` etc.) and are *not* a stock
-HuggingFace ``transformers.ViTModel`` checkpoint. Until we vendor or
-reimplement that class, ``load()`` will:
-
-1. Download ``model.safetensors`` and ``top_tags.txt`` from the Hub.
-2. Read the safetensors header so we can describe what's there.
-3. Raise ``JoyTagModelError`` with a clear message pointing at this TODO.
-
-Once the class is in place, the rest of the file (preprocessing,
-``predict_tags``, ``tag_directory``) plumbs the result through unchanged.
+The model architecture lives in :mod:`lorahub.core.tagging._joytag_model` —
+a trimmed inference-only port of fancyfeast/joytag's ``Models.ViT``. State
+dict keys (``patch_embeddings.*``, ``blocks.N.{norm1,qkv_proj,out_proj,
+skip_init1,norm2,mlp,skip_init2}``, ``norm.*``, ``head.*``) match upstream
+exactly so the safetensors checkpoint loads via ``load_state_dict`` without
+any remapping.
 """
 
 from __future__ import annotations
@@ -92,29 +86,17 @@ class JoyTagger:
     def load(self) -> None:
         """Download weights + tag list and build the inference module.
 
-        See module docstring for the architecture caveat — this currently
-        raises ``JoyTagModelError`` until the upstream model class is
-        wired in.
+        Resolves the torch device first so ``active_provider`` is populated
+        early (and we surface a clean error if torch is missing). Then pulls
+        ``config.json`` / ``model.safetensors`` / ``top_tags.txt`` from the
+        Hub, builds the vendored :class:`JoyTagViT`, and loads the state dict
+        in eval mode on the chosen device.
         """
         if self._model is not None:
             return
 
-        # Download first so failures during model construction still leave
-        # the safetensors blob cached locally for the next attempt.
-        weights_path = hf_hub_download(repo_id=self.model_id, filename="model.safetensors")
-        tags_path = hf_hub_download(repo_id=self.model_id, filename="top_tags.txt")
-
-        with Path(tags_path).open(encoding="utf-8") as fh:
-            self._tag_names = [line.strip() for line in fh if line.strip()]
-
-        # Inspect the safetensors header so the error message can hint at
-        # what's actually in the file.
-        param_summary = _safetensors_param_summary(Path(weights_path))
-
-        # Resolve the runtime now so ``active_provider`` is populated even
-        # though we never finished loading. Catch torch-missing as part of
-        # the same ``JoyTagModelError`` umbrella so callers don't need a
-        # second except clause.
+        # Resolve torch first so a missing-torch env fails before downloading
+        # several hundred MB of weights.
         try:
             self._torch_device = _resolve_torch_device(self.device)
             self._active_provider = str(self._torch_device)
@@ -125,17 +107,21 @@ class JoyTagger:
             )
             raise JoyTagModelError(msg) from exc
 
-        # TODO: vendor or reimplement fancyfeast/joytag's ``Models.VisionModel``
-        # so we can ``load_state_dict(...)`` the safetensors here. Until then
-        # we fail fast with enough context for the caller to swap in WD14.
-        msg = (
-            "JoyTag inference is not yet wired up. The model weights at "
-            f"{weights_path} were downloaded successfully ({param_summary}), "
-            "but the matching ``VisionModel`` architecture from "
-            "fancyfeast/joytag's Models.py has not been ported into LoraHub yet. "
-            "Pass tagger='wd14' for now or open an issue."
+        weights_path = hf_hub_download(repo_id=self.model_id, filename="model.safetensors")
+        tags_path = hf_hub_download(repo_id=self.model_id, filename="top_tags.txt")
+        config_path = hf_hub_download(repo_id=self.model_id, filename="config.json")
+
+        with Path(tags_path).open(encoding="utf-8") as fh:
+            self._tag_names = [line.strip() for line in fh if line.strip()]
+
+        with Path(config_path).open(encoding="utf-8") as fh:
+            config = json.load(fh)
+
+        self._model = _load_vision_model(
+            config=config,
+            weights_path=Path(weights_path),
+            device=self._torch_device,
         )
-        raise JoyTagModelError(msg)
 
     def tag_image(self, image_path: Path) -> JoyTagResult:
         """Run inference on a single image. Calls `load()` lazily."""
@@ -215,6 +201,56 @@ def _resolve_torch_device(device: str) -> torch.device:
         msg = f"unknown device {device!r}; expected 'auto', 'cpu', or 'cuda'"
         raise ValueError(msg)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _load_vision_model(
+    *,
+    config: dict[str, Any],
+    weights_path: Path,
+    device: torch.device,
+) -> Any:
+    """Build the JoyTag ViT and load the safetensors state dict into it.
+
+    Split out from ``JoyTagger.load`` so tests can monkey-patch this with a
+    dummy ``nn.Module`` and avoid a real download. Imports happen inside the
+    function so the module remains importable in a torch-less env.
+    """
+    # noqa: PLC0415 — lazy imports so the module imports cleanly without torch.
+    try:
+        from safetensors.torch import load_file  # noqa: PLC0415
+    except ImportError as exc:
+        msg = (
+            "JoyTag needs the ``safetensors`` package to read model weights but "
+            f"``import safetensors.torch`` failed: {exc}. ``pip install safetensors``."
+        )
+        raise JoyTagModelError(msg) from exc
+
+    from lorahub.core.tagging._joytag_model import (  # noqa: PLC0415
+        build_joytag_vit,
+        load_joytag_state_dict,
+    )
+
+    try:
+        model = build_joytag_vit(config)
+    except (KeyError, TypeError, ValueError) as exc:
+        msg = (
+            f"failed to build JoyTag ViT from config.json: {exc}. The config "
+            "shape may have drifted from upstream — open an issue."
+        )
+        raise JoyTagModelError(msg) from exc
+
+    state_dict = load_file(str(weights_path), device="cpu")
+    try:
+        load_joytag_state_dict(model, state_dict)
+    except RuntimeError as exc:
+        msg = (
+            "failed to load JoyTag state dict — vendored architecture and "
+            f"checkpoint don't agree: {exc}"
+        )
+        raise JoyTagModelError(msg) from exc
+
+    model.eval()
+    return model.to(device)
 
 
 def _safetensors_param_summary(path: Path) -> str:
