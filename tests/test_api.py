@@ -1287,6 +1287,60 @@ def test_job_metrics_missing_log_returns_empty(
     assert body["loss"] == []
     assert body["epochs"] == []
     assert body["duration_s"] is None
+    # New v1.0 fields stay backwards-compatible: empty list + null trend
+    # when no validation events have ever been written.
+    assert body["val_loss"] == []
+    assert body["overfit_signal"]["trend"] is None
+    assert body["overfit_signal"]["gap"] is None
+
+
+def test_job_metrics_returns_val_loss_and_overfit_signal(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Train loss flat-ish + val loss climbing -> overfitting trend."""
+    ws = tmp_path / "run-overfit"
+    ws.mkdir()
+    log = ws / "events.jsonl"
+    base_ts = 1_700_000_500.0
+
+    lines: list[str] = []
+    # Train loss decreasing — 5 step events.
+    train_losses = [0.50, 0.40, 0.30, 0.22, 0.18]
+    for i, tl in enumerate(train_losses, start=1):
+        lines.append(
+            TrainingEvent(
+                type=EventType.step,
+                payload={"step": i, "total_steps": 100, "loss": tl},
+                timestamp=base_ts + i,
+            ).to_json()
+        )
+    # Validation loss going up — classic overfit signature.
+    val_losses = [(1, 0.45), (2, 0.50), (3, 0.58)]
+    for ep, vl in val_losses:
+        lines.append(
+            TrainingEvent(
+                type=EventType.validation,
+                payload={"epoch": ep, "val_loss": vl},
+                timestamp=base_ts + 10 + ep,
+            ).to_json()
+        )
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/jobs/{job_id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+
+    assert len(body["loss"]) == 5
+    assert [p["epoch"] for p in body["val_loss"]] == [1, 2, 3]
+    assert [p["val_loss"] for p in body["val_loss"]] == [0.45, 0.50, 0.58]
+
+    sig = body["overfit_signal"]
+    assert sig["latest_train"] == pytest.approx(0.18)
+    assert sig["latest_val"] == pytest.approx(0.58)
+    assert sig["gap"] == pytest.approx(0.40)
+    assert sig["trend"] == "overfitting"
 
 
 # --------------------------------------------------------------------------- #

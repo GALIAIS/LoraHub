@@ -210,14 +210,32 @@ export interface JobMetricPoint {
   ts: number
 }
 
+export interface JobValLossPoint {
+  epoch: number
+  val_loss: number
+  step?: number | null
+  ts: number
+}
+
+export type OverfitTrend = "improving" | "flat" | "overfitting"
+
+export interface OverfitSignal {
+  latest_train: number | null
+  latest_val: number | null
+  gap: number | null
+  trend: OverfitTrend | null
+}
+
 export interface JobMetricsResponse {
   loss: JobMetricPoint[]
+  val_loss: JobValLossPoint[]
   epochs: Array<{ epoch: number; ts: number }>
   checkpoints: Array<{ path: string; step: number; ts: number }>
   samples: Array<{ path: string; ts: number }>
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null
+  overfit_signal: OverfitSignal
 }
 
 export interface RecipeTemplatePlaceholder {
