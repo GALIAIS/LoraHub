@@ -310,6 +310,18 @@ export function InstallTab() {
     },
   })
 
+  const installDeps = useMutation({
+    mutationFn: (backend: BackendId) => {
+      console.info("[lorahub] installDeps", { backend })
+      return api.installDeps(backend)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
+      qc.invalidateQueries({ queryKey: ["settings"] })
+      qc.invalidateQueries({ queryKey: ["backends"] })
+    },
+  })
+
   // When an install transitions to a terminal state, refresh the backend
   // catalog so the user sees their new checkout immediately.
   useEffect(() => {
@@ -424,6 +436,28 @@ export function InstallTab() {
               </span>
             )}
           </div>
+
+          {descriptor && !descriptor.status.requirements_ok && descriptor.status.python_ok && !isRunning && (
+            <div className="flex items-center gap-3 rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2">
+              <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span className="text-xs text-amber-700 dark:text-amber-400 flex-1">
+                检测到 {descriptor.status.missing_requirements.length} 个依赖未安装
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isRunning || installDeps.isPending}
+                onClick={() => effective && installDeps.mutate(effective as BackendId)}
+              >
+                {installDeps.isPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Download className="size-3" />
+                )}
+                安装依赖
+              </Button>
+            </div>
+          )}
 
           {startConflict && (
             <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">

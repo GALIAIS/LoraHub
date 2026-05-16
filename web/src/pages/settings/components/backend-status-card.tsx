@@ -28,6 +28,12 @@ function isDiffusionPipe(s: AnyBackendStatus): s is DiffusionPipeBackendStatus {
 
 function statusTone(s: AnyBackendStatus) {
   if (s.ready) return { tone: "ready" as const, label: "已就绪" }
+  if (isKohya(s) && s.sd_scripts_ok && s.python_ok && !s.requirements_ok) {
+    return { tone: "warn" as const, label: "缺少依赖" }
+  }
+  if (isDiffusionPipe(s) && s.repo_ok && s.python_ok && !s.requirements_ok) {
+    return { tone: "warn" as const, label: "缺少依赖" }
+  }
   if (isKohya(s) && s.sd_scripts_ok && !s.python_ok) {
     return { tone: "warn" as const, label: "缺少 Python" }
   }
@@ -155,6 +161,14 @@ export function BackendStatusCard({
       {missingFiles.length > 0 && (
         <div className="text-[11px] text-destructive">
           缺失文件：{missingFiles.join(", ")}
+        </div>
+      )}
+
+      {status.missing_requirements.length > 0 && (
+        <div className="text-[11px] text-amber-600 dark:text-amber-400">
+          缺失依赖：{status.missing_requirements.length > 5
+            ? `${status.missing_requirements.slice(0, 5).join(", ")} 等 ${status.missing_requirements.length} 项`
+            : status.missing_requirements.join(", ")}
         </div>
       )}
     </div>

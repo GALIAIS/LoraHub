@@ -9,9 +9,10 @@ request time rather than imported at module import.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from lorahub.api import app as app_module
 from lorahub.api.bootstrap_session import (
@@ -53,3 +54,111 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
         "status": sess.status,
         "backend": sess.backend,
     }
+
+
+class InstallDepsRequest(BaseModel):
+    backend: Literal["kohya", "diffusion-pipe"] = "diffusion-pipe"
+
+
+@router.post("/backend/install-deps", status_code=202)
+async def install_deps(req: InstallDepsRequest) -> dict[str, Any]:
+    """Run only the requirements install step for an existing backend venv."""
+    with _bootstrap_lock:
+        existing = app_module._bootstrap_session
+        if existing is not None and existing.is_running():
+            raise HTTPException(
+                status_code=409, detail="a bootstrap session is already running"
+            )
+        runner = _build_deps_runner(req)
+        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
+        app_module._bootstrap_session = sess
+
+    loop = asyncio.get_running_loop()
+    sess.start(runner, loop)
+    return {
+        "session_id": sess.session_id,
+        "status": sess.status,
+        "backend": sess.backend,
+    }
+
+
+def _build_deps_runner(
+    req: InstallDepsRequest,
+) -> Any:
+    """Build a runner that only installs requirements.txt into the existing venv."""
+    from collections.abc import Callable  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from lorahub.api import app as _app  # noqa: PLC0415
+
+    settings = _app._settings_store.load()
+
+    if req.backend == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe import installer  # noqa: PLC0415
+        from lorahub.core.backends.diffusion_pipe.bootstrap import (  # noqa: PLC0415
+            _venv_python,
+            default_repo_path,
+        )
+        import os  # noqa: PLC0415
+
+        repo_raw = (
+            os.environ.get("LORAHUB_DIFFUSION_PIPE_REPO")
+            or settings.diffusion_pipe_repo_path
+            or str(default_repo_path())
+        )
+        repo_path = Path(repo_raw).expanduser()
+        venv_py = _venv_python(repo_path)
+        if not venv_py or not venv_py.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"No venv found at {repo_path}. Run a full install first.",
+            )
+        plan = installer.BootstrapPlan(
+            target=repo_path,
+            cuda_version="cu124",
+            torch_version="2.6.0",
+            torchvision_version="0.21.0",
+            install_deepspeed=False,
+            github_proxy=settings.github_proxy,
+            base_python=venv_py,
+            pypi_index=settings.pypi_index_url,
+        )
+
+        def runner(progress: Callable[[str], None]) -> None:
+            installer.install_requirements(plan, progress=progress)
+
+    else:
+        from lorahub.core.backends.kohya import installer  # noqa: PLC0415
+        from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
+            _venv_python,
+            default_sd_scripts_path,
+        )
+        import os  # noqa: PLC0415
+
+        sd_raw = (
+            os.environ.get("LORAHUB_SD_SCRIPTS")
+            or settings.sd_scripts_path
+            or str(default_sd_scripts_path())
+        )
+        sd_path = Path(sd_raw).expanduser()
+        venv_py = _venv_python(sd_path)
+        if not venv_py or not venv_py.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"No venv found at {sd_path}. Run a full install first.",
+            )
+        plan = installer.BootstrapPlan(
+            target=sd_path,
+            cuda_version="cu124",
+            torch_version="2.6.0",
+            torchvision_version="0.21.0",
+            install_xformers=False,
+            github_proxy=settings.github_proxy,
+            base_python=venv_py,
+            pypi_index=settings.pypi_index_url,
+        )
+
+        def runner(progress: Callable[[str], None]) -> None:
+            installer.install_requirements(plan, progress=progress)
+
+    return runner

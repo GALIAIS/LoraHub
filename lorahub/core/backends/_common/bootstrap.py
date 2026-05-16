@@ -9,13 +9,17 @@ private helpers; they now compose the functions in this module instead.
 
 from __future__ import annotations
 
+import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from platformdirs import user_data_path
 
 from lorahub.core.backends.errors import BootstrapError
+
+_log = logging.getLogger(__name__)
 
 
 def path_from_env(name: str) -> Path | None:
@@ -127,9 +131,72 @@ def resolve_python(
     )
 
 
+def check_requirements(
+    python: Path,
+    requirements_txt: Path,
+    *,
+    skip_patterns: tuple[str, ...] = (),
+) -> list[str]:
+    """Return package names from *requirements_txt* not installed in the venv.
+
+    Runs ``pip freeze`` via *python* and compares the installed set against
+    the requirements file. Lines matching any pattern in *skip_patterns*
+    (case-insensitive substring match) are excluded from the check — useful
+    for packages installed via a separate step (e.g. deepspeed).
+
+    Returns an empty list when everything is satisfied. On subprocess failure
+    (e.g. broken venv) returns ``["<check failed>"]`` so callers can surface
+    the issue without crashing the probe.
+    """
+    if not requirements_txt.is_file():
+        return ["<requirements.txt not found>"]
+    if not python.is_file():
+        return ["<python not found>"]
+
+    try:
+        result = subprocess.run(
+            [str(python), "-m", "pip", "freeze", "--local"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            _log.warning("pip freeze failed: %s", result.stderr[:200])
+            return ["<check failed>"]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.warning("pip freeze error: %s", exc)
+        return ["<check failed>"]
+
+    installed: set[str] = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if "==" in line:
+            installed.add(line.split("==")[0].lower().replace("-", "_"))
+        elif line and not line.startswith("#"):
+            installed.add(line.lower().replace("-", "_"))
+
+    missing: list[str] = []
+    for line in requirements_txt.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+            continue
+        if any(pat in stripped.lower() for pat in skip_patterns):
+            continue
+        # Extract package name from version specifiers
+        name = stripped
+        for sep in (">=", "<=", "==", "!=", "~=", ">", "<", "[", "@", ";"):
+            name = name.split(sep)[0]
+        name = name.strip().lower().replace("-", "_")
+        if name and name not in installed:
+            missing.append(stripped)
+
+    return missing
+
+
 __all__ = [
     "check_python",
     "check_repo",
+    "check_requirements",
     "default_repo_path",
     "path_from_env",
     "resolve_python",

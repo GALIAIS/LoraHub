@@ -49,6 +49,8 @@ export interface KohyaBackendStatus {
   python: string | null
   python_ok: boolean
   venv_detected: boolean
+  requirements_ok: boolean
+  missing_requirements: string[]
   ready: boolean
   source: "env" | "settings" | "default"
 }
@@ -61,6 +63,8 @@ export interface DiffusionPipeBackendStatus {
   python: string | null
   python_ok: boolean
   venv_detected: boolean
+  requirements_ok: boolean
+  missing_requirements: string[]
   ready: boolean
   source: "env" | "settings" | "default"
 }
@@ -474,6 +478,11 @@ export const api = {
     http<BootstrapStartResponse>("/backend/bootstrap", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  installDeps: (backend: BackendId = "diffusion-pipe") =>
+    http<BootstrapStartResponse>("/backend/install-deps", {
+      method: "POST",
+      body: JSON.stringify({ backend }),
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),

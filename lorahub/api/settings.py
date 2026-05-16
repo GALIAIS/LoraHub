@@ -118,6 +118,9 @@ class SettingsStore:
 
 def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the configured kohya checkout looks usable."""
+    from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
+        check_requirements,
+    )
     from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
         _ENV_PYTHON,
         _ENV_SD_SCRIPTS,
@@ -148,6 +151,14 @@ def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
     py_path = Path(py_raw).expanduser() if py_raw else None
     py_ok = bool(py_path and py_path.is_file())
 
+    # Check requirements.txt completeness when repo and python are both OK.
+    requirements_ok = True
+    missing_requirements: list[str] = []
+    if sd_ok and not missing and py_ok and py_path:
+        req_file = sd_path / "requirements.txt"
+        missing_requirements = check_requirements(py_path, req_file)
+        requirements_ok = len(missing_requirements) == 0
+
     if os.environ.get(_ENV_SD_SCRIPTS):
         source = "env"
     elif settings.sd_scripts_path:
@@ -163,13 +174,18 @@ def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
         "venv_detected": _venv_python(sd_path) is not None if sd_ok else False,
-        "ready": (sd_ok and not missing) and py_ok,
+        "requirements_ok": requirements_ok,
+        "missing_requirements": missing_requirements,
+        "ready": (sd_ok and not missing) and py_ok and requirements_ok,
         "source": source,
     }
 
 
 def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the configured diffusion-pipe checkout looks usable."""
+    from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
+        check_requirements,
+    )
     from lorahub.core.backends.diffusion_pipe.bootstrap import (  # noqa: PLC0415
         _ENV_PYTHON,
         _ENV_REPO,
@@ -200,6 +216,16 @@ def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
     py_path = Path(py_raw).expanduser() if py_raw else None
     py_ok = bool(py_path and py_path.is_file())
 
+    # Check requirements.txt completeness when repo and python are both OK.
+    requirements_ok = True
+    missing_requirements: list[str] = []
+    if repo_ok and not missing and py_ok and py_path:
+        req_file = repo_path / "requirements.txt"
+        missing_requirements = check_requirements(
+            py_path, req_file, skip_patterns=("deepspeed",)
+        )
+        requirements_ok = len(missing_requirements) == 0
+
     if os.environ.get(_ENV_REPO):
         source = "env"
     elif settings.diffusion_pipe_repo_path:
@@ -215,7 +241,9 @@ def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
         "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
-        "ready": (repo_ok and not missing) and py_ok,
+        "requirements_ok": requirements_ok,
+        "missing_requirements": missing_requirements,
+        "ready": (repo_ok and not missing) and py_ok and requirements_ok,
         "source": source,
     }
 
