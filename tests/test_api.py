@@ -243,7 +243,9 @@ def test_resume_without_state_returns_409(
     """No `*-state*` directory => no checkpoint to resume from."""
     ws = tmp_path / "ws"
     ws.mkdir()
-    job = state.registry.create(workspace=ws, config_snapshot={})
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_config_payload(tmp_path)
+    )
     job.state = state.JobState.failed
     state.registry.update(job)
 
@@ -259,13 +261,132 @@ def test_resume_without_weights_returns_409(
     ws = tmp_path / "ws"
     (ws / "out").mkdir(parents=True)
     (ws / "out" / "lora-state").mkdir()
-    job = state.registry.create(workspace=ws, config_snapshot={})
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_config_payload(tmp_path)
+    )
     job.state = state.JobState.interrupted
     state.registry.update(job)
 
     r = client.post(f"/api/jobs/{job.id}/resume")
     assert r.status_code == 409
     assert "safetensors" in r.json()["detail"]
+
+
+def _dp_config_payload(tmp_path: Path) -> dict[str, Any]:
+    """Minimal dp recipe snapshot — sdxl arch + dp backend type."""
+    ckpt = tmp_path / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    return {
+        "base_model": {"checkpoint": str(ckpt), "arch": "sdxl"},
+        "dataset": {"source": str(data)},
+        "schedule": {"epochs": 1, "batch_size": 1},
+        "sampling": {"enabled": False},
+        "backend": {"type": "diffusion-pipe"},
+    }
+
+
+def test_resume_dp_without_run_dir_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """An interrupted dp job with no output_dir on disk => 409."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_dp_config_payload(tmp_path)
+    )
+    job.state = state.JobState.interrupted
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "output_dir" in r.json()["detail"]
+
+
+def test_resume_dp_run_dir_without_global_step_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Run dir without a `global_step*` subdir is not resumable."""
+    ws = tmp_path / "ws"
+    run_dir = ws / "output" / "20260101_00-00-00"
+    run_dir.mkdir(parents=True)
+    (run_dir / "latest").write_text("global_step100", encoding="utf-8")
+    # No global_step* subdir.
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_dp_config_payload(tmp_path)
+    )
+    job.state = state.JobState.interrupted
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "run directory" in r.json()["detail"]
+
+
+def test_resume_dp_run_dir_without_latest_file_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Run dir with global_step but no `latest` text file is not resumable."""
+    ws = tmp_path / "ws"
+    run_dir = ws / "output" / "20260101_00-00-00"
+    (run_dir / "global_step100").mkdir(parents=True)
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_dp_config_payload(tmp_path)
+    )
+    job.state = state.JobState.interrupted
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/resume")
+    assert r.status_code == 409
+    assert "run directory" in r.json()["detail"]
+
+
+def test_resume_dp_happy_path_enqueues_with_resume_argv(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A complete dp run_dir => 202 + new JobRecord whose enqueue stamps
+    `--resume_from_checkpoint=<basename>` and overrides output.output_dir
+    so dp picks up the same run_dir on relaunch."""
+    from lorahub.api import jobs_helpers
+
+    ws = tmp_path / "ws"
+    out = ws / "output"
+    run_dir = out / "20260102_03-04-05"
+    (run_dir / "global_step100").mkdir(parents=True)
+    (run_dir / "latest").write_text("global_step100", encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+
+    def stub_enqueue(job, cfg, *, extra_argv=None):  # type: ignore[no-untyped-def]
+        captured["job_id"] = job.id
+        captured["extra_argv"] = list(extra_argv or [])
+        captured["output_dir"] = (
+            str(cfg.output.output_dir) if cfg.output.output_dir else None
+        )
+
+    monkeypatch.setattr(jobs_helpers, "_enqueue_launch", stub_enqueue)
+
+    original = state.registry.create(
+        workspace=ws, config_snapshot=_dp_config_payload(tmp_path)
+    )
+    original.state = state.JobState.interrupted
+    state.registry.update(original)
+
+    r = client.post(f"/api/jobs/{original.id}/resume")
+    assert r.status_code == 202, r.text
+    new_summary = r.json()
+    assert new_summary["id"] != original.id
+    assert new_summary["metadata"]["resumed_from"] == original.id
+
+    assert captured["job_id"] == new_summary["id"]
+    assert any(
+        a == "--resume_from_checkpoint=20260102_03-04-05"
+        for a in captured["extra_argv"]
+    ), captured
+    assert captured["output_dir"] == str(out.resolve())
 
 
 def test_cancel_queued_job_short_circuits_to_canceled(

@@ -13,15 +13,16 @@ from pydantic import BaseModel
 from lorahub.api import state
 from lorahub.api.jobs_helpers import (
     _TERMINAL_STATES,
+    _apply_cfg_overrides,
     _archive_workspace,
-    _find_latest_safetensors,
-    _find_latest_state_dir,
+    _dispatch_resume_spec,
     _job_events,
     _launch_job,
     _list_workspace_files,
     _media_type_for,
     _read_metrics,
     _resolve_workspace_file,
+    ResumeNotReady,
 )
 from lorahub.api.state import JobState
 from lorahub.api.store import _pid_alive
@@ -105,19 +106,22 @@ def rerun_job(job_id: str) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/resume", status_code=202)
 def resume_job(job_id: str) -> dict[str, Any]:
-    """Resume an interrupted/failed/canceled job from its last `--save_state`.
+    """Resume an interrupted/failed/canceled job from its last checkpoint.
 
-    Creates a NEW JobRecord in a fresh sibling workspace, replays the
-    original config snapshot, and injects `--resume=<state_dir>` and
-    `--network_weights=<latest.safetensors>` after the compiler's argv.
-    The original record is left untouched so /resume can be called again
-    if the resumed run also fails.
+    Backend-aware: kohya jobs are resumed via `--resume=<state_dir>` plus
+    `--network_weights=<latest.safetensors>`; diffusion-pipe jobs via
+    `--resume_from_checkpoint=<run_dir_basename>` with `output.output_dir`
+    pinned to the original run's output dir so dp's checkpoint discovery
+    finds the same `global_step*` folders.
+
+    Always creates a NEW JobRecord in a fresh sibling workspace and stamps
+    `metadata.resumed_from = <original_id>` so the lineage is queryable.
 
     Errors:
       404 — original job id not found
-      409 — original is not in a resumable state, or no `*-state*` /
-            `*.safetensors` artifact was produced (run never reached a
-            checkpoint)
+      409 — original is not in a resumable state, or the backend reports
+            no resumable artifacts on disk yet (no kohya state dir / no
+            dp run_dir / no `latest` file)
       422 — config snapshot no longer matches the current schema
     """
     original = state.registry.get(job_id)
@@ -132,29 +136,17 @@ def resume_job(job_id: str) -> dict[str, Any]:
             ),
         )
 
-    state_dir = _find_latest_state_dir(original.workspace)
-    if state_dir is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"no kohya state directory found under {original.workspace}; "
-                "resume requires --save_state to have produced at least one snapshot"
-            ),
-        )
-    weights = _find_latest_safetensors(original.workspace)
-    if weights is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"no .safetensors weights found under {original.workspace}; "
-                "cannot seed --network_weights"
-            ),
-        )
-
     try:
         cfg = TrainingConfig.model_validate(original.config_snapshot)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        spec = _dispatch_resume_spec(cfg, original.workspace)
+    except ResumeNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
 
     base = original.workspace.resolve()
     workspace = (base.parent / f"{base.name}-resume").resolve()
@@ -163,11 +155,12 @@ def resume_job(job_id: str) -> dict[str, Any]:
         suffix += 1
         workspace = (base.parent / f"{base.name}-resume-{suffix}").resolve()
 
-    extra_argv = [
-        f"--resume={state_dir}",
-        f"--network_weights={weights}",
-    ]
-    return _launch_job(cfg, workspace, extra_argv=extra_argv)
+    return _launch_job(
+        cfg,
+        workspace,
+        extra_argv=spec.extra_argv,
+        metadata={"resumed_from": original.id},
+    )
 
 
 @router.post("/jobs/{job_id}/reveal")

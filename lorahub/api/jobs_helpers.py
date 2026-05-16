@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -497,6 +498,242 @@ def _find_latest_safetensors(workspace: Path) -> Path | None:
     if not files:
         return None
     return max(files, key=lambda p: p.stat().st_mtime)
+
+
+# --------------------------------------------------------------------------- #
+# Resume helpers (backend-aware artifact discovery + argv assembly)
+# --------------------------------------------------------------------------- #
+
+
+class ResumeNotReady(Exception):
+    """Raised when a job has no resumable artifacts on disk yet.
+
+    Surfaced by `/jobs/{id}/resume` as 409 and by the auto-resume hook as
+    a skip reason. The message is operator-facing — keep it specific.
+    """
+
+
+@dataclass(slots=True)
+class ResumeSpec:
+    """Backend-agnostic recipe for what to inject into a resume launch.
+
+    `extra_argv` is appended after the compiler's argv (same channel kohya
+    /resume already uses). `cfg_overrides` is a flat dot-path mapping the
+    caller applies to the validated `TrainingConfig` before launching;
+    used by dp resume to redirect `output.output_dir` at the original
+    run_dir so `--resume_from_checkpoint=<basename>` resolves.
+    """
+
+    extra_argv: list[str]
+    cfg_overrides: dict[str, Any] = field(default_factory=dict)
+
+
+def _kohya_resume_spec(workspace: Path) -> ResumeSpec:
+    """Locate kohya `--save_state` artifacts and pack them into a ResumeSpec."""
+    state_dir = _find_latest_state_dir(workspace)
+    if state_dir is None:
+        raise ResumeNotReady(
+            f"no kohya state directory found under {workspace}; "
+            "resume requires --save_state to have produced at least one snapshot"
+        )
+    weights = _find_latest_safetensors(workspace)
+    if weights is None:
+        raise ResumeNotReady(
+            f"no .safetensors weights found under {workspace}; "
+            "cannot seed --network_weights"
+        )
+    return ResumeSpec(
+        extra_argv=[
+            f"--resume={state_dir}",
+            f"--network_weights={weights}",
+        ],
+    )
+
+
+def _dp_output_dir(workspace: Path, cfg: TrainingConfig) -> Path:
+    """Mirror compiler.py's resolution: explicit output_dir wins, else workspace/output."""
+    explicit = cfg.output.output_dir
+    if explicit is not None:
+        return Path(str(explicit)).expanduser().resolve()
+    return (workspace / "output").resolve()
+
+
+def _find_latest_dp_run_dir(workspace: Path, cfg: TrainingConfig) -> Path | None:
+    """Most recent dp run directory under the configured output_dir.
+
+    diffusion-pipe writes one timestamped subdirectory per run under
+    `output_dir/`. Each contains a `latest` text file pointing at the most
+    recent `global_stepN/` checkpoint. We pick the lex-max basename among
+    candidates that look complete (have both `latest` and at least one
+    `global_step*` folder), matching dp's own selection in
+    `train.get_most_recent_run_dir`.
+    """
+    out_dir = _dp_output_dir(workspace, cfg)
+    if not out_dir.is_dir():
+        return None
+    candidates: list[Path] = []
+    for child in out_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if not (child / "latest").is_file():
+            continue
+        if not any(p.is_dir() and p.name.startswith("global_step") for p in child.iterdir()):
+            continue
+        candidates.append(child)
+    if not candidates:
+        return None
+    # Match dp's lex-sort: timestamp dir names sort correctly that way.
+    return max(candidates, key=lambda p: p.name)
+
+
+def _dp_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
+    """Locate the dp run_dir and pack `--resume_from_checkpoint` argv."""
+    out_dir = _dp_output_dir(workspace, cfg)
+    if not out_dir.is_dir():
+        raise ResumeNotReady(
+            f"no diffusion-pipe output_dir found at {out_dir}; "
+            "the run never produced a checkpoint folder"
+        )
+    run_dir = _find_latest_dp_run_dir(workspace, cfg)
+    if run_dir is None:
+        raise ResumeNotReady(
+            f"no resumable diffusion-pipe run directory under {out_dir}; "
+            "expected a timestamped subdir containing `latest` + `global_step*/`"
+        )
+    return ResumeSpec(
+        extra_argv=[f"--resume_from_checkpoint={run_dir.name}"],
+        # Pin the resumed run to the same output_dir so dp picks the
+        # same run_dir back up. Stored as an absolute string so
+        # subsequent re-validation through pydantic's Path field is happy.
+        cfg_overrides={"output.output_dir": str(out_dir)},
+    )
+
+
+def _dispatch_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
+    """Dispatch to the per-backend resume helper based on `cfg.backend.type`."""
+    backend_type = cfg.backend.type
+    if backend_type == "kohya":
+        return _kohya_resume_spec(workspace)
+    if backend_type == "diffusion-pipe":
+        return _dp_resume_spec(cfg, workspace)
+    raise ResumeNotReady(
+        f"resume not implemented for backend.type={backend_type!r}"
+    )
+
+
+def _apply_cfg_overrides(cfg: TrainingConfig, overrides: dict[str, Any]) -> TrainingConfig:
+    """Apply a flat dot-path override mapping onto a validated TrainingConfig.
+
+    Re-dumps the config to a dict, walks the dot path to set each value,
+    then re-validates. Returns a fresh `TrainingConfig` so the caller's
+    snapshot stays untouched. Empty overrides short-circuit.
+    """
+    if not overrides:
+        return cfg
+    data = cfg.model_dump(mode="json")
+    for dotted, value in overrides.items():
+        cur: Any = data
+        parts = dotted.split(".")
+        for key in parts[:-1]:
+            cur = cur.setdefault(key, {})
+        cur[parts[-1]] = value
+    return TrainingConfig.model_validate(data)
+
+
+def _should_auto_resume(meta: dict[str, Any] | None, *, global_default: bool) -> bool:
+    """Decide whether a single interrupted job qualifies for auto-resume.
+
+    Per-job `metadata.auto_resume` overrides the global flag in either
+    direction (True forces yes, False forces no). Sweep children are
+    always declined — the sweep router already classifies interrupted
+    children as failed and double-spawning would race the operator.
+    """
+    if meta is None:
+        return global_default
+    if meta.get("sweep_id") is not None:
+        return False
+    explicit = meta.get("auto_resume")
+    if explicit is True:
+        return True
+    if explicit is False:
+        return False
+    return global_default
+
+
+def _attempt_auto_resume(*, max_attempts: int, global_default: bool) -> int:
+    """Re-launch every interrupted job that still has resumable artifacts.
+
+    Returns the number of jobs successfully enqueued. Skips silently when:
+      - The job is part of a sweep (sweep router owns those)
+      - Per-job opt-out via `metadata.auto_resume = False`
+      - Already hit `max_attempts` in this lineage
+      - Config snapshot fails schema validation (logged at WARNING)
+      - No checkpoint produced yet (logged at INFO; the run never reached
+        a save_state / global_step* boundary)
+
+    Hooked from `app._lifespan` after `mark_orphans_interrupted` flips
+    survivors to interrupted, before the scheduler starts. Pre-queueing
+    means resumed jobs are first-in-line when workers come online.
+    """
+    from lorahub.api import state as _state  # noqa: PLC0415
+
+    resumed = 0
+    for job in list(_state.registry.list()):
+        if job.state is not JobState.interrupted:
+            continue
+        if not _should_auto_resume(job.metadata, global_default=global_default):
+            continue
+        attempts = (job.metadata or {}).get("auto_resume_attempts", 0)
+        if attempts >= max_attempts:
+            log.info(
+                "auto-resume: skipping job %s — hit max attempts (%d)",
+                job.id,
+                max_attempts,
+            )
+            continue
+        try:
+            cfg = TrainingConfig.model_validate(job.config_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "auto-resume: config snapshot for job %s failed validation: %s",
+                job.id,
+                exc,
+            )
+            continue
+        try:
+            spec = _dispatch_resume_spec(cfg, job.workspace)
+        except ResumeNotReady as exc:
+            log.info("auto-resume: skipping job %s — %s", job.id, exc)
+            continue
+        cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
+        base = job.workspace.resolve()
+        target = (base.parent / f"{base.name}-resume").resolve()
+        suffix = 1
+        while target.exists():
+            suffix += 1
+            target = (base.parent / f"{base.name}-resume-{suffix}").resolve()
+        try:
+            _launch_job(
+                cfg,
+                target,
+                extra_argv=spec.extra_argv,
+                metadata={
+                    "resumed_from": job.id,
+                    "auto_resume": True,
+                    "auto_resume_attempts": attempts + 1,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("auto-resume: failed to launch resume for job %s", job.id)
+            continue
+        resumed += 1
+        log.info(
+            "auto-resume: enqueued resume for job %s (attempt %d) at %s",
+            job.id,
+            attempts + 1,
+            target,
+        )
+    return resumed
 
 
 def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[str]]:
