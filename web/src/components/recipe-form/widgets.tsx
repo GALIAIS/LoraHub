@@ -270,7 +270,7 @@ export const EnumSelect = memo(function EnumSelect({
 }: EnumSelectProps) {
   const readOnly = useReadOnly()
   return (
-    <Select value={value ?? ""} onValueChange={(v) => onChange(v ?? "")} disabled={readOnly}>
+    <Select items={options} value={value ?? ""} onValueChange={(v) => onChange(v ?? "")} disabled={readOnly}>
       <SelectTrigger className="w-64">
         <SelectValue placeholder={placeholder ?? "Select…"} />
       </SelectTrigger>

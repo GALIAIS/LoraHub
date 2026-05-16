@@ -33,6 +33,11 @@ const SOURCE_LABEL: Record<Source, string> = {
   modelscope: "ModelScope",
 }
 
+const SOURCE_OPTIONS: { value: Source; label: string }[] = [
+  { value: "huggingface", label: SOURCE_LABEL.huggingface },
+  { value: "modelscope", label: SOURCE_LABEL.modelscope },
+]
+
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B"
   const units = ["B", "KB", "MB", "GB", "TB"]
@@ -116,7 +121,7 @@ export function ModelsTab() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 items-center">
             <Label className="text-xs">来源</Label>
-            <Select value={source} onValueChange={(v) => setSource(v as Source)}>
+            <Select items={SOURCE_OPTIONS} value={source} onValueChange={(v) => setSource(v as Source)}>
               <SelectTrigger className="w-64">
                 <SelectValue />
               </SelectTrigger>
@@ -216,10 +221,12 @@ export function ModelsTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <Progress value={percent} className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-2">
-            <ProgressLabel className="text-xs text-muted-foreground">
+            <ProgressLabel className="text-xs text-muted-foreground truncate">
               {current ? `${SOURCE_LABEL[current.source]} · ${current.repo_id}` : "等待任务"}
             </ProgressLabel>
-            <div className="text-xs font-mono text-muted-foreground">{percent.toFixed(1)}%</div>
+            <div className="text-xs font-mono tabular-nums text-muted-foreground text-right min-w-[5ch]">
+              {percent.toFixed(1)}%
+            </div>
             <ProgressTrack className="col-span-2 h-3">
               <ProgressIndicator />
             </ProgressTrack>
@@ -293,11 +300,13 @@ export function ModelsTab() {
 
 function ProgressStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[4px] border border-border/60 bg-background/45 px-3 py-2">
+    <div className="rounded-[4px] border border-border/60 bg-background/45 px-3 py-2 min-w-0">
       <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1 font-mono text-sm truncate">{value}</div>
+      <div className="mt-1 font-mono tabular-nums text-sm truncate" title={value}>
+        {value}
+      </div>
     </div>
   )
 }

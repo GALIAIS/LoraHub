@@ -78,6 +78,10 @@ export function DependenciesTab() {
     () => status.data?.recommended_versions ?? ["3.11", "3.12"],
     [status.data?.recommended_versions],
   )
+  const versionOptions = useMemo(
+    () => versions.map((v) => ({ value: v, label: `Python ${v}` })),
+    [versions],
+  )
   const installed = status.data?.installed ?? []
   const active = status.data?.active
 
@@ -160,7 +164,7 @@ export function DependenciesTab() {
 
                 <span className="text-xs text-muted-foreground">推荐版本</span>
                 <div className="flex items-center gap-2">
-                  <Select value={effectiveVersion} onValueChange={(v) => setVersion(v ?? "")}>
+                  <Select items={versionOptions} value={effectiveVersion} onValueChange={(v) => setVersion(v ?? "")}>
                     <SelectTrigger className="w-32 text-xs font-mono h-8">
                       <SelectValue />
                     </SelectTrigger>

@@ -61,7 +61,7 @@ export function RecipesToolbar({
       </div>
 
       <div>
-        <div className="text-xs text-muted-foreground">
+        <div className="text-xs text-muted-foreground tabular-nums">
           {filtered
             ? `共 ${total} 个 · 显示 ${visibleCount} 个`
             : `共 ${total} 个`}
@@ -80,7 +80,7 @@ export function RecipesToolbar({
         </div>
 
         <div className="flex items-center gap-2">
-          <Select value={arch} onValueChange={(v) => onArchChange(v as ArchFilter)}>
+          <Select items={ARCH_OPTIONS} value={arch} onValueChange={(v) => onArchChange(v as ArchFilter)}>
             <SelectTrigger className="h-8 text-xs flex-1 min-w-[7rem]">
               <SelectValue />
             </SelectTrigger>
@@ -95,7 +95,7 @@ export function RecipesToolbar({
         </div>
 
         <div className="flex items-center gap-2">
-          <Select value={sort} onValueChange={(v) => onSortChange(v as SortOrder)}>
+          <Select items={SORT_OPTIONS} value={sort} onValueChange={(v) => onSortChange(v as SortOrder)}>
             <SelectTrigger className="h-8 text-xs flex-1 min-w-[7rem]">
               <SelectValue />
             </SelectTrigger>

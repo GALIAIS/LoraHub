@@ -273,6 +273,15 @@ export function InstallTab() {
     ? (sessionBackend ?? selected)
     : selected
 
+  const backendOptions = useMemo(
+    () =>
+      (backendsQuery.data?.backends ?? []).map((b) => ({
+        value: b.id,
+        label: b.name,
+      })),
+    [backendsQuery.data?.backends],
+  )
+
   // Stream live events while a session is active. Prefer the streamed
   // events when the WS has produced any (lower latency than the poll);
   // otherwise fall back to the buffered events from the polling query.
@@ -345,6 +354,7 @@ export function InstallTab() {
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-muted-foreground">后端</span>
             <Select
+              items={backendOptions}
               value={effective || ""}
               onValueChange={(v) => setSelected(v as BackendId)}
               disabled={isRunning || !backendsQuery.data}

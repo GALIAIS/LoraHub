@@ -142,14 +142,19 @@ function Chip({
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 min-w-0"
+      className="inline-flex items-center gap-1.5 min-w-0 shrink-0"
       title={sub ?? undefined}
     >
       <span className="text-muted-foreground/70 shrink-0">{icon}</span>
       <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
         {label}
       </span>
-      <span className={cn("font-mono tabular-nums font-semibold", tone)}>
+      <span
+        className={cn(
+          "font-mono tabular-nums font-semibold text-right min-w-[5ch]",
+          tone,
+        )}
+      >
         {value}
       </span>
     </span>

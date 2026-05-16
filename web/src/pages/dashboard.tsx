@@ -365,9 +365,16 @@ function UsageBar({
   const tone = toneForPercent(percent)
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{label}</span>
-        <span className={cn("font-mono tabular-nums", tone.text)}>{valueText}</span>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="text-muted-foreground truncate">{label}</span>
+        <span
+          className={cn(
+            "font-mono tabular-nums shrink-0 text-right min-w-[6ch]",
+            tone.text,
+          )}
+        >
+          {valueText}
+        </span>
       </div>
       <Progress value={percent ?? 0}>
         <ProgressTrack>
@@ -661,9 +668,9 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
             <TableRow>
               <TableHead>用途</TableHead>
               <TableHead>路径</TableHead>
-              <TableHead className="text-right">已用 / 总量</TableHead>
-              <TableHead className="text-right">可用</TableHead>
-              <TableHead className="w-[180px]">使用率</TableHead>
+              <TableHead className="text-right whitespace-nowrap min-w-[14ch]">已用 / 总量</TableHead>
+              <TableHead className="text-right whitespace-nowrap min-w-[8ch]">可用</TableHead>
+              <TableHead className="w-[200px]">使用率</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -675,10 +682,10 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
                   <TableCell className="font-mono text-xs truncate max-w-xs" title={d.path}>
                     {d.path}
                   </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
+                  <TableCell className="text-right font-mono tabular-nums whitespace-nowrap">
                     {fmtBytes(d.used_bytes)} / {fmtBytes(d.total_bytes)}
                   </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
+                  <TableCell className="text-right font-mono tabular-nums whitespace-nowrap">
                     {fmtBytes(d.free_bytes)}
                   </TableCell>
                   <TableCell>
@@ -689,7 +696,7 @@ function DiskSection({ disks }: { disks: SystemDisk[] }) {
                           style={{ width: `${Math.max(0, Math.min(100, d.percent))}%` }}
                         />
                       </div>
-                      <span className={cn("text-[11px] font-mono tabular-nums", tone.text)}>
+                      <span className={cn("text-[11px] font-mono tabular-nums shrink-0 text-right min-w-[4ch]", tone.text)}>
                         {d.percent.toFixed(0)}%
                       </span>
                     </div>
@@ -724,9 +731,9 @@ function RecentJobsCard({ jobs }: { jobs: JobSummary[] }) {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[110px]">状态</TableHead>
-                <TableHead>任务 ID</TableHead>
+                <TableHead className="w-[120px]">任务 ID</TableHead>
                 <TableHead>工作区</TableHead>
-                <TableHead className="text-right">创建时间</TableHead>
+                <TableHead className="text-right whitespace-nowrap min-w-[160px]">创建时间</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -735,11 +742,11 @@ function RecentJobsCard({ jobs }: { jobs: JobSummary[] }) {
                   <TableCell>
                     <StateBadge state={j.state} />
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{j.id.slice(-8)}</TableCell>
+                  <TableCell className="font-mono text-xs whitespace-nowrap">{j.id.slice(-8)}</TableCell>
                   <TableCell className="font-mono text-xs truncate max-w-md" title={j.workspace}>
                     {j.workspace}
                   </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
+                  <TableCell className="text-right text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                     {new Date(j.created_at).toLocaleString()}
                   </TableCell>
                 </TableRow>

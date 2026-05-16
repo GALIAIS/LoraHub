@@ -26,6 +26,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+const DEFAULT_BACKEND_OPTIONS: { value: BackendId; label: string }[] = [
+  { value: "kohya", label: "kohya-ss/sd-scripts" },
+  { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe" },
+]
+
 interface FieldProps {
   label: string
   description: string
@@ -172,6 +177,7 @@ export function BackendsTab() {
           <div className="grid grid-cols-[10rem_1fr] gap-x-4 items-center">
             <Label className="text-xs">默认后端</Label>
             <Select
+              items={DEFAULT_BACKEND_OPTIONS}
               value={draft.default_backend}
               onValueChange={(v) =>
                 setDraft({ ...draft, default_backend: v as BackendId })

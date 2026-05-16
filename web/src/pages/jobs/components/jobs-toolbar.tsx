@@ -35,7 +35,7 @@ export function JobsToolbar({
 }) {
   return (
     <header className="px-5 py-4 border-b border-border/60 space-y-3">
-      <div className="text-xs text-muted-foreground">
+      <div className="text-xs text-muted-foreground tabular-nums">
         共 {total} 个 · 显示 {visibleCount} 个 · 每 2 秒刷新
       </div>
 
@@ -51,6 +51,7 @@ export function JobsToolbar({
 
       <div className="flex items-center gap-2 flex-wrap">
         <Select
+          items={STATUS_FILTER_OPTIONS}
           value={status}
           onValueChange={(v) => onStatusChange(v as StatusFilter)}
         >
