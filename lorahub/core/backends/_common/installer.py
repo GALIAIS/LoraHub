@@ -96,6 +96,20 @@ def run_step(
         raise BootstrapError(step, rc)
 
 
+def _is_complete_git_repo(target: Path) -> bool:
+    """Return True if *target* is a usable shallow/full git checkout."""
+    git_dir = target / ".git"
+    if not git_dir.is_dir():
+        return False
+    result = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def clone_repo(
     plan: BootstrapPlanLike,
     *,
@@ -105,10 +119,16 @@ def clone_repo(
 ) -> None:
     """Run ``git clone --depth ... <repo_url> <plan.target>``.
 
-    Refuses to clone into a non-empty directory and applies the optional
-    GitHub proxy from settings to the URL before invoking git.
+    If the target already contains a complete git checkout, the clone is
+    skipped entirely (avoids re-downloading multi-GB repos on retry).
+    Otherwise, refuses to clone into a non-empty directory and applies the
+    optional GitHub proxy from settings to the URL before invoking git.
     """
     if plan.target.exists() and any(plan.target.iterdir()):
+        if _is_complete_git_repo(plan.target):
+            if progress is not None:
+                progress(f"clone {label} -> {plan.target} (already complete, skipped)")
+            return
         msg = f"target directory is not empty: {plan.target}"
         raise BootstrapError("clone", 1) from FileExistsError(msg)
     plan.target.parent.mkdir(parents=True, exist_ok=True)

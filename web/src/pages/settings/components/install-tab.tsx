@@ -243,6 +243,13 @@ export function InstallTab() {
     queryFn: api.listBackends,
   })
 
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+  })
+
+  const noProxy = !settingsQuery.data?.settings.github_proxy
+
   // Poll status as a fallback so the panel survives a page reload while an
   // install is mid-flight, and so we never miss a terminal frame the WS may
   // have sent before we attached.
@@ -351,6 +358,21 @@ export function InstallTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {noProxy && (
+            <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
+              <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold">GitHub 代理未配置</div>
+                <div className="mt-0.5">
+                  国内直连 GitHub 克隆仓库可能极慢或超时。建议先到
+                  <strong className="text-foreground"> 网络加速 </strong>
+                  标签页配置 GitHub 代理（推荐
+                  <code className="text-foreground"> https://gh-proxy.org </code>
+                  ），再执行安装。
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-muted-foreground">后端</span>
             <Select

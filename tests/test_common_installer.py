@@ -158,3 +158,55 @@ def test_clone_repo_refuses_non_empty_target(
     with pytest.raises(BootstrapError):
         common.clone_repo(plan, repo_url="https://example.invalid/r.git", label="r")
     called.assert_not_called()
+
+
+def test_clone_repo_skips_when_complete_git_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If target is already a complete git checkout, clone should be skipped."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / ".git").mkdir()
+    (target / "file.txt").write_text("x", encoding="utf-8")
+
+    # Make _is_complete_git_repo return True
+    monkeypatch.setattr(common, "_is_complete_git_repo", lambda t: True)
+
+    called = MagicMock()
+    monkeypatch.setattr(common, "run_step", called)
+
+    plan = MagicMock()
+    plan.target = target
+    plan.git_depth = 1
+    plan.github_proxy = None
+
+    seen: list[str] = []
+    common.clone_repo(
+        plan, repo_url="https://example.invalid/r.git", label="r", progress=seen.append
+    )
+    called.assert_not_called()
+    assert len(seen) == 1
+    assert "skipped" in seen[0]
+
+
+def test_clone_repo_raises_when_non_empty_not_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-empty dir that is NOT a git repo should still raise BootstrapError."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "random.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(common, "_is_complete_git_repo", lambda t: False)
+
+    called = MagicMock()
+    monkeypatch.setattr(common, "run_step", called)
+
+    plan = MagicMock()
+    plan.target = target
+    plan.git_depth = 1
+    plan.github_proxy = None
+
+    with pytest.raises(BootstrapError):
+        common.clone_repo(plan, repo_url="https://example.invalid/r.git", label="r")
+    called.assert_not_called()
