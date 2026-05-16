@@ -342,14 +342,14 @@ def test_resume_dp_run_dir_without_latest_file_returns_409(
     assert "run directory" in r.json()["detail"]
 
 
-def test_resume_dp_happy_path_enqueues_with_resume_argv(
+def test_resume_dp_happy_path_relaunches_in_place_with_resume_argv(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A complete dp run_dir => 202 + new JobRecord whose enqueue stamps
-    `--resume_from_checkpoint=<basename>` and overrides output.output_dir
-    so dp picks up the same run_dir on relaunch."""
+    """A complete dp run_dir => 202 + same JobRecord re-enqueued with
+    `--resume_from_checkpoint=<basename>` and `output.output_dir`
+    overridden so dp picks up the same run_dir on relaunch."""
     from lorahub.api import jobs_helpers
 
     ws = tmp_path / "ws"
@@ -366,6 +366,7 @@ def test_resume_dp_happy_path_enqueues_with_resume_argv(
         captured["output_dir"] = (
             str(cfg.output.output_dir) if cfg.output.output_dir else None
         )
+        captured["state_at_enqueue"] = job.state.value
 
     monkeypatch.setattr(jobs_helpers, "_enqueue_launch", stub_enqueue)
 
@@ -377,11 +378,15 @@ def test_resume_dp_happy_path_enqueues_with_resume_argv(
 
     r = client.post(f"/api/jobs/{original.id}/resume")
     assert r.status_code == 202, r.text
-    new_summary = r.json()
-    assert new_summary["id"] != original.id
-    assert new_summary["metadata"]["resumed_from"] == original.id
+    summary = r.json()
+    # Same id, same workspace — in-place relaunch.
+    assert summary["id"] == original.id
+    assert Path(summary["workspace"]) == ws
+    assert summary["state"] == "queued"
+    assert "last_resumed_at" in summary["metadata"]
 
-    assert captured["job_id"] == new_summary["id"]
+    assert captured["job_id"] == original.id
+    assert captured["state_at_enqueue"] == "queued"
     assert any(
         a == "--resume_from_checkpoint=20260102_03-04-05"
         for a in captured["extra_argv"]
@@ -989,7 +994,12 @@ def _wait_terminal(client: TestClient, job_id: str, timeout: float = 30.0) -> di
     return client.get(f"/api/jobs/{job_id}").json()
 
 
-def test_rerun_creates_new_job(client: TestClient, tmp_path: Path) -> None:
+def test_rerun_relaunches_job_in_place(client: TestClient, tmp_path: Path) -> None:
+    """Rerun re-uses the original JobRecord and workspace; no new id.
+
+    A logical job stays as a single timeline regardless of how many times
+    the user re-runs it — the events log appends to the same file.
+    """
     payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
     first = client.post("/api/jobs", json=payload).json()
     first_id = first["id"]
@@ -999,14 +1009,32 @@ def test_rerun_creates_new_job(client: TestClient, tmp_path: Path) -> None:
     r = client.post(f"/api/jobs/{first_id}/rerun")
     assert r.status_code == 202, r.text
     fresh = r.json()
-    assert fresh["id"] != first_id
-    # The fresh job must land in its own workspace so the two runs don't fight
-    # over the same `events.jsonl`.
-    assert fresh["workspace"] != final_first["workspace"]
+    # Same id, same workspace — in-place relaunch.
+    assert fresh["id"] == first_id
+    assert fresh["workspace"] == final_first["workspace"]
+    assert fresh["state"] == "queued"
+    # Runtime fields cleared from the previous terminal state.
+    assert fresh["finished_at"] is None
+    assert fresh["returncode"] is None
+    assert fresh["error"] is None
 
     final_fresh = _wait_terminal(client, fresh["id"])
     assert final_fresh["state"] == "succeeded", final_fresh
     assert final_fresh["returncode"] == 0
+
+
+def test_rerun_refuses_when_active(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(
+        workspace=ws, config_snapshot=_config_payload(tmp_path)
+    )
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/rerun")
+    assert r.status_code == 409
+    assert "cancel" in r.json()["detail"]
 
 
 def test_rerun_unknown_job_404(client: TestClient) -> None:
@@ -2767,70 +2795,3 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     assert b["total"] == 2
     assert b["failed"] == 2
     assert b["name_prefix"] == "bravo"
-
-
-# --------------------------------------------------------------------------- #
-# Filesystem browser endpoints
-# --------------------------------------------------------------------------- #
-
-
-def test_fs_roots_includes_cwd_when_locked(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    r = client.get("/api/fs/roots")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["unrestricted"] is False
-    paths = [root["path"] for root in body["roots"]]
-    assert any(Path(p) == tmp_path.resolve() for p in paths)
-
-
-def test_fs_list_blocks_paths_outside_allowed_roots(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    outside = tmp_path.parent / "lorahub-outside"
-    outside.mkdir(exist_ok=True)
-    r = client.get("/api/fs/list", params={"path": str(outside)})
-    assert r.status_code == 403
-
-
-def test_fs_read_and_write_text_inside_allowed_root(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    target = tmp_path / "notes.md"
-    target.write_bytes(b"hello\n")
-
-    r = client.get("/api/fs/read", params={"path": str(target)})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "text"
-    assert body["content"] == "hello\n"
-
-    r2 = client.put(
-        "/api/fs/write",
-        json={"path": str(target), "content": "updated\n"},
-    )
-    assert r2.status_code == 200
-    assert target.read_bytes() == b"updated\n"
-
-
-def test_fs_subdirs_lists_only_directories(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
-    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
-    r = client.get("/api/fs/subdirs", params={"path": str(tmp_path)})
-    assert r.status_code == 200
-    names = [s["name"] for s in r.json()["subdirs"]]
-    assert names == ["a", "b"]
-
-
-def test_fs_unrestricted_lets_paths_outside_through(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    outside = tmp_path.parent / "lorahub-outside-2"
-    outside.mkdir(exist_ok=True)
-    (outside / "x.txt").write_text("y", encoding="utf-8")
-
-    r0 = client.put("/api/settings", json={"allow_filesystem_browse": True})
-    assert r0.status_code == 200
-    r = client.get("/api/fs/list", params={"path": str(outside)})
-    assert r.status_code == 200
-    names = [e["name"] for e in r.json()["entries"]]
-    assert "x.txt" in names

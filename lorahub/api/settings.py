@@ -66,12 +66,6 @@ class Settings:
     # Format: socks5h://user:pass@host:port or http://user:pass@host:port
     download_proxy: str | None = None
 
-    # When true, the filesystem browser API can list/read/write any path on
-    # the host (not just paths under cwd / $LORAHUB_DATASETS_ROOT / job
-    # workspaces). Default off so the local UI keeps the same blast radius
-    # it had when only the dataset roots were reachable.
-    allow_filesystem_browse: bool = False
-
     # When true, on server startup any job that was running before the
     # process died and has a usable checkpoint on disk is automatically
     # re-launched via the resume flow. Off by default — a corrupt run
