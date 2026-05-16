@@ -115,6 +115,7 @@ def clone_repo(
     *,
     repo_url: str,
     label: str,
+    recurse_submodules: bool = False,
     progress: ProgressCallback | None = None,
 ) -> None:
     """Run ``git clone --depth ... <repo_url> <plan.target>``.
@@ -123,11 +124,18 @@ def clone_repo(
     skipped entirely (avoids re-downloading multi-GB repos on retry).
     Otherwise, refuses to clone into a non-empty directory and applies the
     optional GitHub proxy from settings to the URL before invoking git.
+
+    When ``recurse_submodules`` is True, also runs
+    ``git submodule update --init --recursive`` after cloning. Required for
+    diffusion-pipe, which keeps ComfyUI and HunyuanVideo as submodules whose
+    contents are imported at training time (e.g. ``import comfy``).
     """
     if plan.target.exists() and any(plan.target.iterdir()):
         if _is_complete_git_repo(plan.target):
             if progress is not None:
                 progress(f"clone {label} -> {plan.target} (already complete, skipped)")
+            if recurse_submodules:
+                _ensure_submodules(plan.target, label, progress=progress)
             return
         msg = f"target directory is not empty: {plan.target}"
         raise BootstrapError("clone", 1) from FileExistsError(msg)
@@ -141,10 +149,32 @@ def clone_repo(
         "--progress",
         "--depth",
         str(plan.git_depth),
-        proxied,
-        str(plan.target),
     ]
+    if recurse_submodules:
+        cmd += ["--recurse-submodules", "--shallow-submodules"]
+    cmd += [proxied, str(plan.target)]
     run_step(cmd, f"clone {label} -> {plan.target}", progress)
+
+
+def _ensure_submodules(
+    target: Path,
+    label: str,
+    *,
+    progress: ProgressCallback | None = None,
+) -> None:
+    """Re-init submodules on an existing checkout (idempotent)."""
+    cmd = [
+        "git",
+        "-C",
+        str(target),
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+        "--depth",
+        "1",
+    ]
+    run_step(cmd, f"sync submodules for {label}", progress)
 
 
 def create_venv(

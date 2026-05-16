@@ -62,6 +62,9 @@ def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> N
         plan,
         repo_url=DIFFUSION_PIPE_REPO_URL,
         label="tdrussell/diffusion-pipe",
+        # ComfyUI / HunyuanVideo / Cosmos / etc. live as submodules and
+        # are import-time dependencies of `utils/dataset.py`.
+        recurse_submodules=True,
         progress=progress,
     )
 
