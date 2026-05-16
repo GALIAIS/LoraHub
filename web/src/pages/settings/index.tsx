@@ -12,7 +12,6 @@ import { TaggingTab } from "./components/tagging-tab"
 import { NetworkTab } from "./components/network-tab"
 import { ModelsTab } from "./components/models-tab"
 import { DependenciesTab } from "./components/dependencies-tab"
-import { AboutTab } from "./components/about-tab"
 
 type TabKey =
   | "overview"
@@ -24,9 +23,8 @@ type TabKey =
   | "tagging"
 
 /**
- * Settings page shell. The active tab's content scrolls together with a
- * page-wide About footer below it, so users always have the project
- * intro and links a scroll away regardless of which tab they're on.
+ * Settings page shell. Each tab is independently scrollable so a long log
+ * in the install tab never pushes the header off-screen.
  */
 export function SettingsPage() {
   const [tab, setTab] = useState<TabKey>("overview")
@@ -61,20 +59,56 @@ export function SettingsPage() {
           </TabsList>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="px-8 py-6 w-full space-y-8">
-            <TabsContent value="overview"><OverviewTab /></TabsContent>
-            <TabsContent value="dependencies"><DependenciesTab /></TabsContent>
-            <TabsContent value="backends"><BackendsTab /></TabsContent>
-            <TabsContent value="install"><InstallTab /></TabsContent>
-            <TabsContent value="network"><NetworkTab /></TabsContent>
-            <TabsContent value="models"><ModelsTab /></TabsContent>
-            <TabsContent value="tagging"><TaggingTab /></TabsContent>
-
-            <div className="pt-4 border-t border-border/50">
-              <AboutTab />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <TabsContent value="overview" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <OverviewTab />
+              </div>
             </div>
-          </div>
+          </TabsContent>
+          <TabsContent value="dependencies" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <DependenciesTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="backends" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <BackendsTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="install" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <InstallTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="network" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <NetworkTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="models" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <ModelsTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="tagging" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <TaggingTab />
+              </div>
+            </div>
+          </TabsContent>
         </div>
       </Tabs>
     </div>

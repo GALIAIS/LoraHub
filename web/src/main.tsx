@@ -11,6 +11,7 @@ import { DatasetsPage } from "./pages/datasets"
 import { GalleryPage } from "./pages/gallery"
 import { SettingsPage } from "./pages/settings"
 import { SweepsPage } from "./pages/sweeps"
+import { AboutPage } from "./pages/about"
 import "./index.css"
 
 const queryClient = new QueryClient({
@@ -35,6 +36,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="datasets" element={<DatasetsPage />} />
             <Route path="gallery" element={<GalleryPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="about" element={<AboutPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
