@@ -62,8 +62,30 @@ def _file_size(item: dict[str, Any]) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _hf_list_files(repo_id: str, revision: str) -> list[tuple[str, int]]:
+    """Return [(rfilename, size_bytes)] for every file in the snapshot."""
+    from huggingface_hub import HfApi  # noqa: PLC0415
+
+    info = HfApi().model_info(repo_id, revision=revision, files_metadata=True)
+    out: list[tuple[str, int]] = []
+    for sibling in info.siblings or []:
+        size = getattr(sibling, "size", None) or 0
+        out.append((sibling.rfilename, int(size)))
+    return out
+
+
 def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
-    from huggingface_hub import snapshot_download  # noqa: PLC0415
+    """Pull a model snapshot from HuggingFace with per-file progress events.
+
+    We resolve the file list via `HfApi.model_info` and then call
+    `hf_hub_download` once per file under a thread pool. Going one file at a
+    time gives the UI a meaningful progress signal — `snapshot_download`
+    routes its progress through tqdm, which we can't capture from an HTTP
+    callback. The trade-off is one extra HTTP round-trip for the metadata
+    listing; for repos with many small files it pays for itself within a
+    second.
+    """
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
     if req.huggingface_endpoint:
         os.environ["HF_ENDPOINT"] = req.huggingface_endpoint.rstrip("/")
@@ -72,42 +94,77 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
     endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
+
     _emit(
         progress,
         DownloadProgress(
-            message=f"hf: snapshot_download {req.repo_id} ({revision}) <- {endpoint}",
-            percent=5,
+            message=f"hf: list files for {req.repo_id} (rev={revision}) <- {endpoint}",
+            percent=2,
         ),
     )
-    kwargs: dict[str, Any] = {
-        "repo_id": req.repo_id,
-        "revision": revision,
-        "local_dir": str(target),
-        "local_dir_use_symlinks": False,
-    }
-    if req.threads > 0:
-        kwargs["max_workers"] = req.threads
-    try:
-        snapshot_download(**kwargs)
-    except TypeError:
-        # Older huggingface_hub versions do not expose max_workers.
-        kwargs.pop("max_workers", None)
-        snapshot_download(**kwargs)
-    files = list(target.rglob("*"))
-    total = sum(f.stat().st_size for f in files if f.is_file())
-    file_count = sum(1 for f in files if f.is_file())
+    files = _hf_list_files(req.repo_id, revision)
+    bytes_total = sum(size for _, size in files)
     _emit(
         progress,
         DownloadProgress(
-            message=f"hf: done - {file_count} files, {total} bytes",
+            message=f"hf: {len(files)} files to download",
+            percent=5 if files else 100,
+            files_total=len(files),
+            bytes_total=bytes_total,
+        ),
+    )
+
+    def fetch(name: str, size: int) -> tuple[str, int]:
+        hf_hub_download(
+            repo_id=req.repo_id,
+            filename=name,
+            revision=revision,
+            local_dir=str(target),
+        )
+        # If size metadata is missing (rare), fall back to the on-disk size.
+        if size <= 0:
+            size = (target / name).stat().st_size
+        return name, size
+
+    workers = max(1, min(req.threads, len(files) or 1))
+    completed = 0
+    bytes_done = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(fetch, name, size) for name, size in files]
+        for future in as_completed(futures):
+            completed += 1
+            try:
+                name, size = future.result()
+                bytes_done += size
+                message = f"hf: [{completed}/{len(files)}] {name}"
+            except Exception as exc:  # noqa: BLE001
+                message = f"hf: [{completed}/{len(files)}] skip: {exc}"
+            percent = 5 + (completed / len(files) * 95) if files else 100
+            _emit(
+                progress,
+                DownloadProgress(
+                    message=message,
+                    percent=percent,
+                    files_done=completed,
+                    files_total=len(files),
+                    bytes_done=bytes_done,
+                    bytes_total=bytes_total,
+                ),
+            )
+
+    file_count = len(files)
+    _emit(
+        progress,
+        DownloadProgress(
+            message=f"hf: done - {file_count} files, {bytes_done} bytes",
             percent=100,
             files_done=file_count,
             files_total=file_count,
-            bytes_done=total,
-            bytes_total=total,
+            bytes_done=bytes_done,
+            bytes_total=bytes_total or bytes_done,
         ),
     )
-    return DownloadResult(target=target, files=file_count, total_bytes=total)
+    return DownloadResult(target=target, files=file_count, total_bytes=bytes_done)
 
 
 # --------------------------------------------------------------------------- #

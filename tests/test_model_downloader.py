@@ -12,18 +12,38 @@ from lorahub.core.models import downloader
 from lorahub.core.models.downloader import DownloadRequest
 
 
-def test_huggingface_download_uses_progress_and_worker_count(
+def test_huggingface_download_emits_per_file_progress_and_uses_workers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[dict[str, Any]] = []
+    siblings = [
+        types.SimpleNamespace(rfilename="config.json", size=12),
+        types.SimpleNamespace(rfilename="model.safetensors", size=4096),
+        types.SimpleNamespace(rfilename="tokenizer/vocab.txt", size=64),
+    ]
 
-    def snapshot_download(**kwargs: Any) -> None:
-        calls.append(kwargs)
-        target = Path(kwargs["local_dir"])
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "model.safetensors").write_bytes(b"weights")
+    class FakeApi:
+        def model_info(self, repo_id: str, revision: str, files_metadata: bool):
+            assert repo_id == "owner/name"
+            assert revision == "main"
+            assert files_metadata is True
+            return types.SimpleNamespace(siblings=siblings)
 
-    fake_hub = types.SimpleNamespace(snapshot_download=snapshot_download)
+    worker_names: set[str] = set()
+
+    def fake_hf_hub_download(
+        *,
+        repo_id: str,
+        filename: str,
+        revision: str,
+        local_dir: str,
+    ) -> str:
+        worker_names.add(threading.current_thread().name)
+        out = Path(local_dir) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x" * next(s.size for s in siblings if s.rfilename == filename))
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
 
     events: list[downloader.DownloadProgress] = []
@@ -33,16 +53,20 @@ def test_huggingface_download_uses_progress_and_worker_count(
             repo_id="owner/name",
             revision="main",
             target_dir=tmp_path / "hf",
-            threads=7,
+            threads=3,
         ),
         events.append,
     )
 
-    assert result.files == 1
-    assert result.total_bytes == len(b"weights")
-    assert calls[0]["max_workers"] == 7
-    assert events[0].percent == 5
+    assert result.files == len(siblings)
+    assert result.total_bytes == sum(s.size for s in siblings)
+    # We expect: list-files event, file-count event, one per finished file, plus the final event.
+    per_file_events = [e for e in events if e.files_done and e.files_done >= 1]
+    assert len(per_file_events) >= len(siblings)
     assert events[-1].percent == 100
+    assert events[-1].files_done == len(siblings)
+    # Multi-threaded: at least one file ran on a non-main thread when threads > 1.
+    assert any(name != threading.current_thread().name for name in worker_names)
 
 
 def test_modelscope_download_uses_parallel_workers_and_progress(
