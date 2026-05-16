@@ -12,6 +12,7 @@ from fastapi import APIRouter
 
 from .backends import router as backends_router
 from .bootstrap import router as bootstrap_router
+from .captions import router as captions_router
 from .datasets import router as datasets_router
 from .health import router as health_router
 from .jobs import router as jobs_router
@@ -32,6 +33,7 @@ all_routers: list[APIRouter] = [
     jobs_router,
     backends_router,
     bootstrap_router,
+    captions_router,
     models_router,
     network_router,
     runtime_router,
