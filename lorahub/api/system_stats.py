@@ -133,6 +133,25 @@ class GpuStats:
     power_limit_w: float | None
     fan_percent: float | None
     vendor: str = "unknown"  # "nvidia" | "amd" | "intel" | "apple" | "unknown"
+    pcie_gen_current: int | None = None
+    pcie_width_current: int | None = None
+    pcie_gen_max: int | None = None
+    pcie_width_max: int | None = None
+    sm_clock_mhz: int | None = None
+    mem_clock_mhz: int | None = None
+    sm_clock_max_mhz: int | None = None
+    mem_clock_max_mhz: int | None = None
+
+
+@dataclass
+class GpuProcessInfo:
+    """Per-process GPU memory occupancy from ``nvidia-smi --query-compute-apps``."""
+
+    gpu_index: int
+    pid: int
+    process_name: str
+    used_memory_mib: int
+    type: str  # "C" | "G" | "C+G" - compute / graphics / both
 
 
 @dataclass
@@ -189,6 +208,33 @@ class PublicIpInfo:
 
 
 @dataclass
+class DiskIoDevice:
+    device: str
+    read_bytes_per_sec: float
+    write_bytes_per_sec: float
+    read_ops_per_sec: float
+    write_ops_per_sec: float
+
+
+@dataclass
+class DiskIoStats:
+    """Aggregate disk IO with per-device breakdown.
+
+    All ``*_total`` numbers are monotonically increasing kernel counters; the
+    ``*_per_sec`` numbers are diff'd against the previous sample so the first
+    call always reports 0 rates.
+    """
+
+    read_bytes_total: int
+    write_bytes_total: int
+    read_bytes_per_sec: float
+    write_bytes_per_sec: float
+    read_ops_per_sec: float
+    write_ops_per_sec: float
+    per_device: list[DiskIoDevice] = field(default_factory=list)
+
+
+@dataclass
 class NetworkStats:
     """Per-snapshot network throughput.
 
@@ -240,6 +286,8 @@ class SystemSnapshot:
     battery: BatteryStats | None = None
     network: NetworkStats | None = None
     processes: list[ProcessInfo] = field(default_factory=list)
+    disk_io: DiskIoStats | None = None
+    gpu_processes: list[GpuProcessInfo] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -254,6 +302,15 @@ class SystemSnapshot:
             "battery": self.battery.__dict__ if self.battery is not None else None,
             "network": _network_to_dict(self.network),
             "processes": [p.__dict__ for p in self.processes],
+            "disk_io": (
+                {
+                    **{k: v for k, v in self.disk_io.__dict__.items() if k != "per_device"},
+                    "per_device": [d.__dict__ for d in self.disk_io.per_device],
+                }
+                if self.disk_io is not None
+                else None
+            ),
+            "gpu_processes": [p.__dict__ for p in self.gpu_processes],
         }
 
 
@@ -475,8 +532,66 @@ def _collect_memory() -> MemoryStats:
     return MemoryStats(total_bytes=0, used_bytes=0, available_bytes=0, percent=0.0)
 
 
+# Pseudo / virtual filesystems we never want to report as a "disk" - they
+# are not backed by real storage so their used/free numbers are misleading.
+_VIRTUAL_FSTYPES = frozenset(
+    {
+        "tmpfs",
+        "devtmpfs",
+        "overlay",
+        "overlay2",
+        "squashfs",
+        "proc",
+        "sysfs",
+        "cgroup",
+        "cgroup2",
+        "autofs",
+        "fusectl",
+        "pstore",
+        "efivarfs",
+        "mqueue",
+        "devpts",
+        "binfmt_misc",
+        "tracefs",
+        "debugfs",
+        "configfs",
+        "hugetlbfs",
+    }
+)
+
+
+def _iter_real_mounts() -> list[tuple[str, Path]]:
+    """Return `(label, mount_point)` for every real (non-virtual) partition.
+
+    Uses ``psutil.disk_partitions(all=False)`` so the kernel-level virtual
+    filesystems are mostly skipped already; we still defensively filter the
+    fstype against :data:`_VIRTUAL_FSTYPES` for cases where the host reports
+    overlays / tmpfs as "physical" (Docker, WSL, snap mounts).
+    """
+    if not _HAS_PSUTIL:
+        return []
+    try:
+        partitions = psutil.disk_partitions(all=False)
+    except (OSError, RuntimeError):
+        return []
+    out: list[tuple[str, Path]] = []
+    for part in partitions:
+        fstype = (getattr(part, "fstype", "") or "").lower()
+        if fstype in _VIRTUAL_FSTYPES:
+            continue
+        mount_raw = getattr(part, "mountpoint", None)
+        if not mount_raw:
+            continue
+        try:
+            mount = Path(mount_raw)
+        except (TypeError, ValueError):
+            continue
+        out.append((mount.as_posix(), mount))
+    return out
+
+
 def _collect_disks(extra_paths: list[Path] | None = None) -> list[DiskUsage]:
-    """Report the workspace's disk plus any extras the caller cares about."""
+    """Report cwd / home / extras *plus* every real mount point on the host."""
     seen: set[str] = set()
     out: list[DiskUsage] = []
     targets: list[tuple[str, Path]] = []
@@ -491,6 +606,8 @@ def _collect_disks(extra_paths: list[Path] | None = None) -> list[DiskUsage]:
                     targets.append((p.as_posix(), p))
             except OSError:
                 continue
+    # All real mount points come last so cwd / home keep their friendly labels.
+    targets.extend(_iter_real_mounts())
 
     for label, path in targets:
         try:
@@ -523,7 +640,11 @@ def _collect_disks(extra_paths: list[Path] | None = None) -> list[DiskUsage]:
 
 _GPU_QUERY = (
     "index,name,driver_version,memory.total,memory.used,memory.free,"
-    "utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed"
+    "utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed,"
+    "pcie.link.gen.current,pcie.link.width.current,"
+    "pcie.link.gen.max,pcie.link.width.max,"
+    "clocks.current.sm,clocks.current.memory,"
+    "clocks.max.sm,clocks.max.memory"
 )
 
 
@@ -558,6 +679,15 @@ def _collect_nvidia_gpus(start_index: int = 0) -> list[GpuStats]:
             except ValueError:
                 return None
 
+        def _i(s: str) -> int | None:
+            v = _f(s)
+            return int(v) if v is not None else None
+
+        # Helper to safely fetch optional fields - older driver releases don't
+        # ship every column we ask for.
+        def _at(idx: int) -> str:
+            return parts[idx] if idx < len(parts) else ""
+
         mem_total = _f(parts[3])
         mem_used = _f(parts[4])
         mem_free = _f(parts[5])
@@ -575,6 +705,98 @@ def _collect_nvidia_gpus(start_index: int = 0) -> list[GpuStats]:
                 power_limit_w=_f(parts[9]),
                 fan_percent=_f(parts[10]),
                 vendor="nvidia",
+                pcie_gen_current=_i(_at(11)),
+                pcie_width_current=_i(_at(12)),
+                pcie_gen_max=_i(_at(13)),
+                pcie_width_max=_i(_at(14)),
+                sm_clock_mhz=_i(_at(15)),
+                mem_clock_mhz=_i(_at(16)),
+                sm_clock_max_mhz=_i(_at(17)),
+                mem_clock_max_mhz=_i(_at(18)),
+            )
+        )
+    return out
+
+
+def _collect_gpu_processes() -> list[GpuProcessInfo]:
+    """Per-process GPU memory map via two ``nvidia-smi`` queries.
+
+    First call resolves UUID -> index because ``--query-compute-apps`` reports
+    the GPU UUID (no index column available in current nvidia-smi). The
+    second pulls the actual compute apps. Both go through best-effort error
+    handling: a missing tool, a non-zero exit, or a parse failure simply
+    yields an empty list so the snapshot stays usable.
+    """
+    smi = _find_nvidia_smi()
+    if smi is None:
+        return []
+    try:
+        idx_proc = subprocess.run(  # noqa: S603
+            [smi, "--query-gpu=index,uuid", "--format=csv,noheader"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if idx_proc.returncode != 0:
+        return []
+    uuid_to_index: dict[str, int] = {}
+    for line in idx_proc.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        try:
+            uuid_to_index[parts[1]] = int(parts[0])
+        except ValueError:
+            continue
+    if not uuid_to_index:
+        return []
+
+    try:
+        apps_proc = subprocess.run(  # noqa: S603
+            [
+                smi,
+                "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if apps_proc.returncode != 0:
+        return []
+
+    out: list[GpuProcessInfo] = []
+    for line in apps_proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 4:
+            continue
+        gpu_uuid, pid_str, name, mem_str = parts[0], parts[1], parts[2], parts[3]
+        gpu_index = uuid_to_index.get(gpu_uuid)
+        if gpu_index is None:
+            continue
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        try:
+            mem_mib = int(float(mem_str)) if mem_str and not mem_str.lower().startswith(("[n/a]", "n/a")) else 0
+        except ValueError:
+            mem_mib = 0
+        out.append(
+            GpuProcessInfo(
+                gpu_index=gpu_index,
+                pid=pid,
+                process_name=name,
+                used_memory_mib=mem_mib,
+                type="C",  # --query-compute-apps only enumerates compute (CUDA) clients
             )
         )
     return out
@@ -1133,6 +1355,13 @@ def _collect_public_ip() -> PublicIpInfo | None:
     return info
 
 
+# Same idea for disk IO: aggregate sample is (t, read_bytes, write_bytes,
+# read_count, write_count); per-device is keyed by device name with the same
+# tuple shape minus the timestamp (we reuse the aggregate's timestamp).
+_last_disk_sample: tuple[float, int, int, int, int] | None = None
+_last_perdisk_sample: dict[str, tuple[int, int, int, int]] = {}
+
+
 def _collect_network() -> NetworkStats | None:
     if not _HAS_PSUTIL:
         return None
@@ -1280,6 +1509,93 @@ def _collect_top_processes(n: int = 5) -> list[ProcessInfo]:
     return rows[:n]
 
 
+def _collect_disk_io() -> DiskIoStats | None:
+    """Aggregate + per-device disk IO with rolling rate calculation.
+
+    Returns None if psutil is missing or the kernel does not expose IO
+    counters (some containers strip /sys/block, ``disk_io_counters`` then
+    raises or returns None).
+    """
+    if not _HAS_PSUTIL:
+        return None
+    try:
+        agg = psutil.disk_io_counters(perdisk=False)
+    except Exception:  # noqa: BLE001 - container kernels can raise here
+        return None
+    if agg is None:
+        return None
+    try:
+        perdisk = psutil.disk_io_counters(perdisk=True) or {}
+    except Exception:  # noqa: BLE001
+        perdisk = {}
+
+    global _last_disk_sample
+    now = time.monotonic()
+    read_bytes = int(agg.read_bytes)
+    write_bytes = int(agg.write_bytes)
+    read_count = int(agg.read_count)
+    write_count = int(agg.write_count)
+
+    # Capture the previous aggregate timestamp BEFORE we overwrite the global,
+    # so the per-device loop below can reuse the same dt window.
+    prev_sample = _last_disk_sample
+    rate_read_b = 0.0
+    rate_write_b = 0.0
+    rate_read_ops = 0.0
+    rate_write_ops = 0.0
+    if prev_sample is not None:
+        prev_t, prev_rb, prev_wb, prev_rc, prev_wc = prev_sample
+        dt = now - prev_t
+        if dt > 0:
+            rate_read_b = max(0.0, (read_bytes - prev_rb) / dt)
+            rate_write_b = max(0.0, (write_bytes - prev_wb) / dt)
+            rate_read_ops = max(0.0, (read_count - prev_rc) / dt)
+            rate_write_ops = max(0.0, (write_count - prev_wc) / dt)
+    _last_disk_sample = (now, read_bytes, write_bytes, read_count, write_count)
+
+    per_device: list[DiskIoDevice] = []
+    new_perdisk: dict[str, tuple[int, int, int, int]] = {}
+    prev_t = prev_sample[0] if prev_sample is not None else None
+    dt = (now - prev_t) if (prev_t is not None and now > prev_t) else 0.0
+    for device, counters in perdisk.items():
+        rb = int(getattr(counters, "read_bytes", 0))
+        wb = int(getattr(counters, "write_bytes", 0))
+        rc = int(getattr(counters, "read_count", 0))
+        wc = int(getattr(counters, "write_count", 0))
+        new_perdisk[device] = (rb, wb, rc, wc)
+
+        prev = _last_perdisk_sample.get(device)
+        if prev is None or dt <= 0:
+            d_rb = d_wb = d_rc = d_wc = 0.0
+        else:
+            p_rb, p_wb, p_rc, p_wc = prev
+            d_rb = max(0.0, (rb - p_rb) / dt)
+            d_wb = max(0.0, (wb - p_wb) / dt)
+            d_rc = max(0.0, (rc - p_rc) / dt)
+            d_wc = max(0.0, (wc - p_wc) / dt)
+        per_device.append(
+            DiskIoDevice(
+                device=device,
+                read_bytes_per_sec=round(d_rb, 2),
+                write_bytes_per_sec=round(d_wb, 2),
+                read_ops_per_sec=round(d_rc, 2),
+                write_ops_per_sec=round(d_wc, 2),
+            )
+        )
+    _last_perdisk_sample.clear()
+    _last_perdisk_sample.update(new_perdisk)
+
+    return DiskIoStats(
+        read_bytes_total=read_bytes,
+        write_bytes_total=write_bytes,
+        read_bytes_per_sec=round(rate_read_b, 2),
+        write_bytes_per_sec=round(rate_write_b, 2),
+        read_ops_per_sec=round(rate_read_ops, 2),
+        write_ops_per_sec=round(rate_write_ops, 2),
+        per_device=per_device,
+    )
+
+
 def collect_snapshot(
     extra_disk_paths: list[Path] | None = None,
     top_processes_n: int = 5,
@@ -1297,12 +1613,17 @@ def collect_snapshot(
         battery=_collect_battery(),
         network=_collect_network(),
         processes=_collect_top_processes(top_processes_n),
+        disk_io=_collect_disk_io(),
+        gpu_processes=_collect_gpu_processes(),
     )
 
 
 __all__ = [
     "BatteryStats",
     "CpuStats",
+    "DiskIoDevice",
+    "DiskIoStats",
+    "GpuProcessInfo",
     "GpuStats",
     "InterfaceAddress",
     "NetworkInterfaceStats",
