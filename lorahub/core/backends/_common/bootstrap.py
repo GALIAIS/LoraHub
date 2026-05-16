@@ -139,10 +139,10 @@ def check_requirements(
 ) -> list[str]:
     """Return package names from *requirements_txt* not installed in the venv.
 
-    Runs ``pip freeze`` via *python* and compares the installed set against
-    the requirements file. Lines matching any pattern in *skip_patterns*
-    (case-insensitive substring match) are excluded from the check — useful
-    for packages installed via a separate step (e.g. deepspeed).
+    Tries ``pip freeze`` first; falls back to ``importlib.metadata`` when
+    pip is unavailable (common in uv-created venvs). Lines matching any
+    pattern in *skip_patterns* (case-insensitive substring match) are
+    excluded from the check.
 
     Returns an empty list when everything is satisfied. On subprocess failure
     (e.g. broken venv) returns ``["<check failed>"]`` so callers can surface
@@ -153,27 +153,9 @@ def check_requirements(
     if not python.is_file():
         return ["<python not found>"]
 
-    try:
-        result = subprocess.run(
-            [str(python), "-m", "pip", "freeze", "--local"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            _log.warning("pip freeze failed: %s", result.stderr[:200])
-            return ["<check failed>"]
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        _log.warning("pip freeze error: %s", exc)
+    installed = _get_installed_packages(python)
+    if installed is None:
         return ["<check failed>"]
-
-    installed: set[str] = set()
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if "==" in line:
-            installed.add(line.split("==")[0].lower().replace("-", "_"))
-        elif line and not line.startswith("#"):
-            installed.add(line.lower().replace("-", "_"))
 
     missing: list[str] = []
     for line in requirements_txt.read_text(encoding="utf-8").splitlines():
@@ -182,7 +164,6 @@ def check_requirements(
             continue
         if any(pat in stripped.lower() for pat in skip_patterns):
             continue
-        # Extract package name from version specifiers
         name = stripped
         for sep in (">=", "<=", "==", "!=", "~=", ">", "<", "[", "@", ";"):
             name = name.split(sep)[0]
@@ -191,6 +172,54 @@ def check_requirements(
             missing.append(stripped)
 
     return missing
+
+
+def _get_installed_packages(python: Path) -> set[str] | None:
+    """Get the set of installed package names (normalized) from a venv."""
+    # Try pip freeze first
+    try:
+        result = subprocess.run(
+            [str(python), "-m", "pip", "freeze", "--local"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            packages: set[str] = set()
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if "==" in line:
+                    packages.add(line.split("==")[0].lower().replace("-", "_"))
+                elif line and not line.startswith("#"):
+                    packages.add(line.lower().replace("-", "_"))
+            return packages
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback: use importlib.metadata (works in uv-created venvs without pip)
+    script = (
+        "import importlib.metadata as m;"
+        "print('\\n'.join(d.metadata['Name'] for d in m.distributions()))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python), "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            packages = set()
+            for line in result.stdout.splitlines():
+                name = line.strip().lower().replace("-", "_")
+                if name:
+                    packages.add(name)
+            return packages
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.warning("importlib.metadata fallback failed: %s", exc)
+
+    _log.warning("could not determine installed packages for %s", python)
+    return None
 
 
 __all__ = [
