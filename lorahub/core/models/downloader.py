@@ -25,6 +25,7 @@ class DownloadRequest:
     huggingface_endpoint: str | None = None
     modelscope_token: str | None = None
     threads: int = 4
+    proxy: str | None = None  # socks5h://user:pass@host:port or http://...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,10 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     if req.huggingface_endpoint:
         os.environ["HF_ENDPOINT"] = req.huggingface_endpoint.rstrip("/")
         os.environ["HUGGINGFACE_HUB_ENDPOINT"] = req.huggingface_endpoint.rstrip("/")
+    if req.proxy:
+        os.environ["HTTPS_PROXY"] = req.proxy
+        os.environ["HTTP_PROXY"] = req.proxy
+        os.environ["ALL_PROXY"] = req.proxy
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
@@ -220,6 +225,10 @@ def _ms_download_file(
 
 
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
+    if req.proxy:
+        os.environ["HTTPS_PROXY"] = req.proxy
+        os.environ["HTTP_PROXY"] = req.proxy
+        os.environ["ALL_PROXY"] = req.proxy
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
     _emit(

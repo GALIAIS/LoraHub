@@ -44,6 +44,7 @@ class UpdateSettingsRequest(BaseModel):
     modelscope_enabled: bool | None = None
     modelscope_token: str | None = None
     pypi_index_url: str | None = None
+    download_proxy: str | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -134,6 +135,7 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
         ),
         modelscope_token=_norm(req.modelscope_token),
         pypi_index_url=_norm(req.pypi_index_url),
+        download_proxy=_norm(req.download_proxy),
         extra=current.extra,
     )
     store.save(new)

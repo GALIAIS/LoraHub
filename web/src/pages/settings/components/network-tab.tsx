@@ -35,6 +35,7 @@ type Draft = {
   modelscope_enabled: boolean
   modelscope_token: string
   pypi_index_url: string
+  download_proxy: string
 }
 
 function buildDraft(s: SettingsState): Draft {
@@ -44,6 +45,7 @@ function buildDraft(s: SettingsState): Draft {
     modelscope_enabled: s.modelscope_enabled,
     modelscope_token: s.modelscope_token ?? "",
     pypi_index_url: s.pypi_index_url ?? "",
+    download_proxy: s.download_proxy ?? "",
   }
 }
 
@@ -231,7 +233,8 @@ export function NetworkTab() {
     draft.huggingface_endpoint !== (saved.huggingface_endpoint ?? "") ||
     draft.modelscope_enabled !== saved.modelscope_enabled ||
     draft.modelscope_token !== (saved.modelscope_token ?? "") ||
-    draft.pypi_index_url !== (saved.pypi_index_url ?? "")
+    draft.pypi_index_url !== (saved.pypi_index_url ?? "") ||
+    draft.download_proxy !== (saved.download_proxy ?? "")
 
   const githubPresets = presetsQuery.data?.github_proxy ?? []
   const hfPresets = presetsQuery.data?.huggingface ?? []
@@ -379,6 +382,41 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
+      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Globe2 className="size-4 text-muted-foreground" />
+            下载代理（模型下载）
+          </CardTitle>
+          <CardDescription>
+            模型下载（HuggingFace / ModelScope）时使用的网络代理。支持
+            <code className="text-foreground"> socks5h://user:pass@host:port </code>
+            或
+            <code className="text-foreground"> http://user:pass@host:port </code>
+            格式。留空表示直连。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-start">
+            <Label className="text-xs pt-2">代理地址</Label>
+            <div className="space-y-1">
+              <Input
+                value={draft.download_proxy}
+                placeholder="socks5h://user:pass@host:port"
+                onChange={(e) =>
+                  setDraft({ ...draft, download_proxy: e.target.value })
+                }
+                className="font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground/80">
+                SOCKS5 代理推荐使用 <code>socks5h://</code> 协议前缀（由代理端解析 DNS）。
+                需要安装 <code>PySocks</code> 依赖才能使用 SOCKS 代理。
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center gap-3 sticky bottom-4 bg-background/80 backdrop-blur rounded-[4px] border border-border/60 px-4 py-3 shadow-[var(--panel-shadow)]">
         <Button
           size="sm"
@@ -390,6 +428,7 @@ export function NetworkTab() {
               modelscope_enabled: draft.modelscope_enabled,
               modelscope_token: draft.modelscope_token || null,
               pypi_index_url: draft.pypi_index_url || null,
+              download_proxy: draft.download_proxy || null,
             })
           }
         >

@@ -62,6 +62,10 @@ class Settings:
     # --index-url. Leaves wheel-store URLs (download.pytorch.org/...) alone.
     pypi_index_url: str | None = None
 
+    # Optional SOCKS5/HTTP proxy for model downloads (HuggingFace, ModelScope).
+    # Format: socks5h://user:pass@host:port or http://user:pass@host:port
+    download_proxy: str | None = None
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

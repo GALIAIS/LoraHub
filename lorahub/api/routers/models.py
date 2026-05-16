@@ -117,6 +117,7 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         huggingface_endpoint=settings.huggingface_endpoint,
         modelscope_token=settings.modelscope_token,
         threads=req.threads,
+        proxy=settings.download_proxy,
     )
     session = _DownloadSession(
         session_id=uuid.uuid4().hex,

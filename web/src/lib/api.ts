@@ -99,6 +99,7 @@ export interface SettingsState {
   modelscope_enabled: boolean
   modelscope_token: string | null
   pypi_index_url: string | null
+  download_proxy: string | null
   extra: Record<string, unknown>
 }
 
