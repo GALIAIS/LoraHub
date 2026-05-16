@@ -87,10 +87,13 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     second.
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
+    import huggingface_hub.constants as _hf_constants  # noqa: PLC0415
 
     if req.huggingface_endpoint:
-        os.environ["HF_ENDPOINT"] = req.huggingface_endpoint.rstrip("/")
-        os.environ["HUGGINGFACE_HUB_ENDPOINT"] = req.huggingface_endpoint.rstrip("/")
+        endpoint_url = req.huggingface_endpoint.rstrip("/")
+        os.environ["HF_ENDPOINT"] = endpoint_url
+        os.environ["HUGGINGFACE_HUB_ENDPOINT"] = endpoint_url
+        _hf_constants.ENDPOINT = endpoint_url
     if req.proxy:
         os.environ["HTTPS_PROXY"] = req.proxy
         os.environ["HTTP_PROXY"] = req.proxy
