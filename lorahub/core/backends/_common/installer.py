@@ -11,6 +11,7 @@ deepspeed, etc.).
 
 from __future__ import annotations
 
+import collections
 import shutil
 import subprocess
 import sys
@@ -60,18 +61,39 @@ def run_step(
 ) -> None:
     """Run a non-package subprocess (typically `git clone`) with stderr capture.
 
-    Reports the step name through ``progress`` before launching, and on a
-    non-zero exit code attaches the last 12 stderr lines to the progress
-    stream so the UI can surface a useful error message.
+    Streams the subprocess's stderr **line by line** to ``progress`` so the
+    dashboard can surface git's own progress output (e.g. ``Receiving objects:
+    23% (...)``) while the clone is still running, instead of waiting for the
+    process to exit. Reports the step name through ``progress`` before
+    launching, and on a non-zero exit code attaches the last 12 stderr lines
+    to the progress stream so the UI can surface a useful error message.
     """
     if progress is not None:
         progress(step)
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        if progress is not None and result.stderr:
-            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
-            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
-        raise BootstrapError(step, result.returncode)
+    proc = subprocess.Popen(  # noqa: S603 -- caller controls argv
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,  # line-buffered so we get progress lines as they're written
+    )
+    tail: collections.deque[str] = collections.deque(maxlen=12)
+    assert proc.stderr is not None  # noqa: S101 -- PIPE above guarantees this
+    for raw_line in proc.stderr:
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        tail.append(line)
+        if progress is not None:
+            # Forward each line so the dashboard sees git's own progress
+            # output. Indent with two spaces so multiple concurrent steps
+            # stay readable in a combined log stream.
+            progress(f"  {line}")
+    rc = proc.wait()
+    if rc != 0:
+        if progress is not None and tail:
+            progress(f"{step} failed (exit {rc}):\n" + "\n".join(tail))
+        raise BootstrapError(step, rc)
 
 
 def clone_repo(
@@ -96,6 +118,7 @@ def clone_repo(
     cmd = [
         "git",
         "clone",
+        "--progress",
         "--depth",
         str(plan.git_depth),
         proxied,
