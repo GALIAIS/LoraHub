@@ -340,6 +340,15 @@ class CaptionPipeline:
     keep_n: int = 0
     drop_rate: float = 0.0
     seed: int | None = None
+    # Apply the curated Danbooru -> Gelbooru alias table after the user
+    # ``remap`` step. Off by default so existing recipes round-trip
+    # bit-identically; opt-in via the CLI's ``--booru-alias`` flag or the
+    # API's ``apply_booru_alias`` field.
+    apply_booru_alias: bool = False
+    # Optional override / extension for the alias table. Keys here win over
+    # the default :data:`DANBOORU_TO_GELBOORU`; ignored unless
+    # ``apply_booru_alias`` is true.
+    booru_alias_extra: dict[str, str] = field(default_factory=dict)
 
     def transform_text(self, text: str) -> str:
         """Run the pipeline against a raw caption string and return the result."""
@@ -349,6 +358,17 @@ class CaptionPipeline:
             tags = filter_blacklist(tags, self.blacklist)
         if self.remap:
             tags = remap_tags(tags, self.remap)
+        if self.apply_booru_alias:
+            # Lazy import keeps the dataset module's surface lean.
+            from lorahub.core.dataset.booru_alias import (  # noqa: PLC0415
+                load_aliases,
+            )
+
+            # User ``remap`` runs first, so any conflicting key the user
+            # already supplied has already replaced the tag and the alias
+            # step won't see it. That is intentional: user rules trump the
+            # curated alias table.
+            tags = remap_tags(tags, load_aliases(self.booru_alias_extra or None))
 
         # `normalise_tags` works on the joined string form because that's
         # the canonical entry point for dedup / lowercasing. Round-trip

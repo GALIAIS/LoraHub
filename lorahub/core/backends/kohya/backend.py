@@ -7,6 +7,7 @@ from pathlib import Path
 
 import ulid
 
+from lorahub.core.backends._common.vram import estimate_vram as _shared_estimate_vram
 from lorahub.core.backends.base import (
     ModelArch,
     Severity,
@@ -77,25 +78,18 @@ class KohyaBackend:
         return issues
 
     def estimate_vram(self, cfg: RecipeConfig) -> VRAMEstimate:
-        """Coarse VRAM estimate. Refine in v0.2 once we have empirical data."""
-        arch = cfg.base_model.arch
-        bytes_per_param = 2 if cfg.precision in ("fp16", "bf16") else 4
+        """Coarse VRAM estimate. Refine with empirical data later.
 
-        model_params = {"sd15": 860, "sdxl": 2600, "flux": 12000, "sd3": 2000}.get(arch, 2600)
-        model_mib = model_params * bytes_per_param // 1
-
-        optimizer_mib = cfg.network.rank * 8
-        if not cfg.gradient_checkpointing:
-            optimizer_mib *= 4
-
-        activations_mib = cfg.schedule.batch_size * (1024 if arch in ("sdxl", "flux") else 512)
-        if cfg.gradient_checkpointing:
-            activations_mib //= 3
-
-        return VRAMEstimate(
-            model_mib=model_mib,
-            optimizer_mib=optimizer_mib,
-            activations_mib=activations_mib,
+        The per-arch tables and the formula live in
+        ``lorahub.core.backends._common.vram`` so the kohya and
+        diffusion-pipe backends stay in lockstep.
+        """
+        return _shared_estimate_vram(
+            cfg.base_model.arch,
+            precision=cfg.precision,
+            batch_size=cfg.schedule.batch_size,
+            network_rank=cfg.network.rank,
+            gradient_checkpointing=cfg.gradient_checkpointing,
         )
 
     def launch(
