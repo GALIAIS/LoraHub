@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from huggingface_hub import hf_hub_download
 from PIL import Image
+
+from lorahub.core.net import hf_download
 
 if TYPE_CHECKING:
     import onnxruntime as ort
@@ -112,8 +113,8 @@ class WD14Tagger:
             return
         import onnxruntime as ort  # noqa: PLC0415
 
-        model_path = hf_hub_download(repo_id=self.model_id, filename="model.onnx")
-        labels_path = hf_hub_download(repo_id=self.model_id, filename="selected_tags.csv")
+        model_path = hf_download(repo_id=self.model_id, filename="model.onnx")
+        labels_path = hf_download(repo_id=self.model_id, filename="selected_tags.csv")
 
         providers = _resolve_providers(self.device, ort.get_available_providers())
         self._session = ort.InferenceSession(model_path, providers=providers)

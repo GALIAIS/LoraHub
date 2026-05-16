@@ -434,6 +434,10 @@ def _enqueue_launch(
         # the slot is always 0; with N>1 each worker gets a distinct GPU id
         # so kohya / diffusion-pipe see exactly one device.
         slot_env = {"CUDA_VISIBLE_DEVICES": str(slot)}
+        from lorahub.api.settings import env_overrides  # noqa: PLC0415
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        slot_env.update(env_overrides(_app._settings_store.load()))
         sink.__enter__()
         try:
             handle = backend.launch(

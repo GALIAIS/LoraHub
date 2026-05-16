@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from lorahub.core.net import hf_api as _make_hf_api, hf_download
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
@@ -39,7 +39,7 @@ class BangumiBaseError(RuntimeError):
 def list_characters(repo_id: str) -> list[str]:
     """Return every character directory id (e.g. ['0', '1', ..., '106'])."""
     full = repo_id if "/" in repo_id else f"BangumiBase/{repo_id}"
-    api = HfApi()
+    api = _make_hf_api()
     files = api.list_repo_files(full, repo_type="dataset")
     ids: set[str] = set()
     for f in files:
@@ -60,7 +60,7 @@ def download_preview(
     """Download one preview thumbnail (1-8) so the user can identify the character."""
     full = repo_id if "/" in repo_id else f"BangumiBase/{repo_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    cached = hf_hub_download(
+    cached = hf_download(
         repo_id=full,
         filename=f"{character_id}/preview_{index}.png",
         repo_type="dataset",
@@ -91,7 +91,7 @@ def fetch_character(
     if on_progress:
         on_progress(f"resolving {full}/{character_id}/dataset.zip")
     try:
-        cached_zip = hf_hub_download(
+        cached_zip = hf_download(
             repo_id=full,
             filename=f"{character_id}/dataset.zip",
             repo_type="dataset",
@@ -139,7 +139,7 @@ def _extract_images(zip_path: Path, output_dir: Path, *, limit: int | None) -> l
 
 def _read_dataset_license(repo_id: str) -> str | None:
     try:
-        info = HfApi().dataset_info(repo_id)
+        info = _make_hf_api().dataset_info(repo_id)
     except Exception:  # noqa: BLE001
         return None
     card_data = getattr(info, "card_data", None)

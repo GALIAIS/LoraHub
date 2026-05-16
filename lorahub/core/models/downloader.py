@@ -63,11 +63,12 @@ def _file_size(item: dict[str, Any]) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _hf_list_files(repo_id: str, revision: str) -> list[tuple[str, int]]:
+def _hf_list_files(repo_id: str, revision: str, endpoint: str | None) -> list[tuple[str, int]]:
     """Return [(rfilename, size_bytes)] for every file in the snapshot."""
     from huggingface_hub import HfApi  # noqa: PLC0415
 
-    info = HfApi().model_info(repo_id, revision=revision, files_metadata=True)
+    api = HfApi(endpoint=endpoint) if endpoint else HfApi()
+    info = api.model_info(repo_id, revision=revision, files_metadata=True)
     out: list[tuple[str, int]] = []
     for sibling in info.siblings or []:
         size = getattr(sibling, "size", None) or 0
@@ -87,13 +88,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     second.
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
-    import huggingface_hub.constants as _hf_constants  # noqa: PLC0415
 
-    if req.huggingface_endpoint:
-        endpoint_url = req.huggingface_endpoint.rstrip("/")
-        os.environ["HF_ENDPOINT"] = endpoint_url
-        os.environ["HUGGINGFACE_HUB_ENDPOINT"] = endpoint_url
-        _hf_constants.ENDPOINT = endpoint_url
+    endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
     if req.proxy:
         os.environ["HTTPS_PROXY"] = req.proxy
         os.environ["HTTP_PROXY"] = req.proxy
@@ -101,16 +97,15 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
-    endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
 
     _emit(
         progress,
         DownloadProgress(
-            message=f"hf: list files for {req.repo_id} (rev={revision}) <- {endpoint}",
+            message=f"hf: list files for {req.repo_id} (rev={revision}) <- {endpoint or 'huggingface.co'}",
             percent=2,
         ),
     )
-    files = _hf_list_files(req.repo_id, revision)
+    files = _hf_list_files(req.repo_id, revision, endpoint)
     bytes_total = sum(size for _, size in files)
     _emit(
         progress,
@@ -123,12 +118,15 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     )
 
     def fetch(name: str, size: int) -> tuple[str, int]:
-        hf_hub_download(
-            repo_id=req.repo_id,
-            filename=name,
-            revision=revision,
-            local_dir=str(target),
-        )
+        kw: dict[str, Any] = {
+            "repo_id": req.repo_id,
+            "filename": name,
+            "revision": revision,
+            "local_dir": str(target),
+        }
+        if endpoint:
+            kw["endpoint"] = endpoint
+        hf_hub_download(**kw)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
             size = (target / name).stat().st_size

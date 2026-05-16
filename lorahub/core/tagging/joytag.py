@@ -24,8 +24,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from huggingface_hub import hf_hub_download
 from PIL import Image
+
+from lorahub.core.net import hf_download
 
 if TYPE_CHECKING:
     import torch
@@ -107,9 +108,9 @@ class JoyTagger:
             )
             raise JoyTagModelError(msg) from exc
 
-        weights_path = hf_hub_download(repo_id=self.model_id, filename="model.safetensors")
-        tags_path = hf_hub_download(repo_id=self.model_id, filename="top_tags.txt")
-        config_path = hf_hub_download(repo_id=self.model_id, filename="config.json")
+        weights_path = hf_download(repo_id=self.model_id, filename="model.safetensors")
+        tags_path = hf_download(repo_id=self.model_id, filename="top_tags.txt")
+        config_path = hf_download(repo_id=self.model_id, filename="config.json")
 
         with Path(tags_path).open(encoding="utf-8") as fh:
             self._tag_names = [line.strip() for line in fh if line.strip()]

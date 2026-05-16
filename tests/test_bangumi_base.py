@@ -18,6 +18,19 @@ def _make_zip(tmp_path: Path, names: list[str]) -> Path:
     return p
 
 
+class _FakeHfApi:
+    """Minimal stand-in for HfApi used by list_characters tests."""
+
+    def __init__(self, files: list[str] | None = None, seen: dict | None = None):
+        self._files = files or []
+        self._seen = seen
+
+    def list_repo_files(self, repo_id: str, repo_type: str | None = None) -> list[str]:
+        if self._seen is not None:
+            self._seen["repo_id"] = repo_id
+        return self._files
+
+
 def test_list_characters_filters_to_numeric_dirs(monkeypatch: pytest.MonkeyPatch) -> None:
     files = [
         "README.md",
@@ -29,9 +42,7 @@ def test_list_characters_filters_to_numeric_dirs(monkeypatch: pytest.MonkeyPatch
         ".gitattributes",
     ]
     monkeypatch.setattr(
-        bangumi_base.HfApi,
-        "list_repo_files",
-        lambda self, repo_id, repo_type: files,  # type: ignore[arg-type]
+        bangumi_base, "_make_hf_api", lambda: _FakeHfApi(files=files)
     )
 
     chars = bangumi_base.list_characters("azurlaneanime")
@@ -41,12 +52,9 @@ def test_list_characters_filters_to_numeric_dirs(monkeypatch: pytest.MonkeyPatch
 
 def test_repo_id_short_form_is_namespaced(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, str] = {}
-
-    def fake_list(self, repo_id, repo_type):  # type: ignore[no-untyped-def]
-        seen["repo_id"] = repo_id
-        return []
-
-    monkeypatch.setattr(bangumi_base.HfApi, "list_repo_files", fake_list)
+    monkeypatch.setattr(
+        bangumi_base, "_make_hf_api", lambda: _FakeHfApi(seen=seen)
+    )
 
     bangumi_base.list_characters("azurlaneanime")
     assert seen["repo_id"] == "BangumiBase/azurlaneanime"
@@ -60,7 +68,7 @@ def test_fetch_character_unpacks_images(
 ) -> None:
     fake_zip = _make_zip(tmp_path, ["a.png", "b.jpg", "c.webp", "notes.txt"])
     monkeypatch.setattr(
-        bangumi_base, "hf_hub_download", lambda **_: str(fake_zip)
+        bangumi_base, "hf_download", lambda **_: str(fake_zip)
     )
     monkeypatch.setattr(bangumi_base, "_read_dataset_license", lambda _r: "mit")
 
@@ -79,7 +87,7 @@ def test_fetch_character_seeds_captions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_zip = _make_zip(tmp_path, ["a.png", "b.png"])
-    monkeypatch.setattr(bangumi_base, "hf_hub_download", lambda **_: str(fake_zip))
+    monkeypatch.setattr(bangumi_base, "hf_download", lambda **_: str(fake_zip))
     monkeypatch.setattr(bangumi_base, "_read_dataset_license", lambda _r: None)
 
     out = tmp_path / "out"
@@ -94,7 +102,7 @@ def test_fetch_character_respects_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_zip = _make_zip(tmp_path, [f"{i:03d}.png" for i in range(10)])
-    monkeypatch.setattr(bangumi_base, "hf_hub_download", lambda **_: str(fake_zip))
+    monkeypatch.setattr(bangumi_base, "hf_download", lambda **_: str(fake_zip))
     monkeypatch.setattr(bangumi_base, "_read_dataset_license", lambda _r: None)
 
     out = tmp_path / "out"
@@ -109,7 +117,7 @@ def test_fetch_character_progress_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_zip = _make_zip(tmp_path, ["a.png"])
-    monkeypatch.setattr(bangumi_base, "hf_hub_download", lambda **_: str(fake_zip))
+    monkeypatch.setattr(bangumi_base, "hf_download", lambda **_: str(fake_zip))
     monkeypatch.setattr(bangumi_base, "_read_dataset_license", lambda _r: None)
 
     msgs: list[str] = []
@@ -126,6 +134,6 @@ def test_download_failure_wrapped(
     def boom(**_):  # type: ignore[no-untyped-def]
         raise RuntimeError("hf is down")
 
-    monkeypatch.setattr(bangumi_base, "hf_hub_download", boom)
+    monkeypatch.setattr(bangumi_base, "hf_download", boom)
     with pytest.raises(bangumi_base.BangumiBaseError, match="failed to download"):
         bangumi_base.fetch_character("x", "0", tmp_path / "out")

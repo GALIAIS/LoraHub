@@ -72,7 +72,7 @@ def joytag_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, P
         assert repo_id == joytag.DEFAULT_MODEL
         return str(paths[filename])
 
-    monkeypatch.setattr(joytag, "hf_hub_download", fake_download)
+    monkeypatch.setattr(joytag, "hf_download", fake_download)
     return paths
 
 

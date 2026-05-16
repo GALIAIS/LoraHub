@@ -63,7 +63,7 @@ def fake_tagger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> wd14.WD14Tag
     def fake_download(repo_id: str, filename: str, **_: Any) -> str:
         return str(paths[filename])
 
-    monkeypatch.setattr(wd14, "hf_hub_download", fake_download)
+    monkeypatch.setattr(wd14, "hf_download", fake_download)
 
     probs = np.array([0.1, 0.9, 0.95, 0.5, 0.30, 0.92], dtype=np.float32)
     session = _FakeSession(probs)

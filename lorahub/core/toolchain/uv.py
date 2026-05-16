@@ -88,6 +88,15 @@ def _bootstrap_uv(progress: ProgressCallback | None) -> str:
         str(target),
         "uv",
     ]
+    # Use configured PyPI mirror if available (helps in China where pypi.org is slow)
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        pypi_index = (_app._settings_store.load().pypi_index_url or "").strip()
+        if pypi_index:
+            cmd[5:5] = ["--index-url", pypi_index, "--trusted-host", pypi_index.split("//")[-1].split("/")[0]]
+    except Exception:  # noqa: BLE001
+        pass
     result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         tail_text = (result.stderr or "").strip()
