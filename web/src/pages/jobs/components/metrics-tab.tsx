@@ -19,25 +19,67 @@ export function MetricsTab({
     refetchInterval: isTerminal ? false : 4000,
   })
 
+  // Train loss series uses the existing color slot; the validation overlay
+  // gets a contrasting amber so the gap between the two curves is the
+  // visual cue users actually look at.
   const series: LossSeries[] = useMemo(() => {
-    const points = (metrics.data?.loss ?? [])
+    const trainPoints = (metrics.data?.loss ?? [])
       .filter(
         (p): p is { step: number; loss: number; epoch?: number | null; ts: number } =>
           typeof p.loss === "number" && Number.isFinite(p.loss),
       )
       .map((p) => ({ step: p.step, loss: p.loss }))
-    if (points.length === 0) return []
-    return [
-      {
-        id: jobId,
-        label: jobId.slice(-8),
-        color: "var(--primary)",
-        points,
-      },
-    ]
+
+    const out: LossSeries[] = []
+    if (trainPoints.length > 0) {
+      out.push({
+        id: `${jobId}-train`,
+        label: "训练 loss",
+        color: "var(--chart-1)",
+        points: trainPoints,
+      })
+    }
+
+    // Validation events are reported per epoch — translate to step using the
+    // mean train-loss step in that epoch so both curves share an x-axis. If
+    // the train loss series is missing or epoch info is absent, fall back
+    // to (epoch * total_steps_per_epoch_estimate) using the last-seen step.
+    const valPoints = (metrics.data?.val_loss ?? []).filter(
+      (p): p is { epoch: number; val_loss: number; step?: number | null; ts: number } =>
+        typeof p.val_loss === "number" && Number.isFinite(p.val_loss),
+    )
+    if (valPoints.length > 0) {
+      // Map epoch -> last train step seen during that epoch.
+      const epochToStep = new Map<number, number>()
+      for (const p of metrics.data?.loss ?? []) {
+        if (typeof p.epoch === "number" && typeof p.step === "number") {
+          epochToStep.set(p.epoch, p.step)
+        }
+      }
+      const lastTrainStep = trainPoints.length
+        ? trainPoints[trainPoints.length - 1].step
+        : 0
+
+      const mapped = valPoints.map((p) => {
+        const x =
+          typeof p.step === "number"
+            ? p.step
+            : (epochToStep.get(p.epoch) ?? (lastTrainStep || p.epoch))
+        return { step: x, loss: p.val_loss }
+      })
+      out.push({
+        id: `${jobId}-val`,
+        label: "验证 loss",
+        color: "var(--chart-2)",
+        points: mapped,
+      })
+    }
+
+    return out
   }, [metrics.data, jobId])
 
   const totalPoints = metrics.data?.loss?.length ?? 0
+  const overfitSignal = metrics.data?.overfit_signal
 
   return (
     <div className="space-y-4">
@@ -55,7 +97,7 @@ export function MetricsTab({
           </span>
         </CardHeader>
         <CardContent className="p-4">
-          <LossChart series={series} />
+          <LossChart series={series} overfitSignal={overfitSignal ?? null} />
         </CardContent>
       </Card>
 
