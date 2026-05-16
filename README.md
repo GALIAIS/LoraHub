@@ -212,7 +212,9 @@ venv (or system Python), installs missing dependencies on first run, and brings
 up the API and the React dev server side by side:
 
 ```powershell
-# Windows (PowerShell or double-click in Explorer)
+# Windows — quick dev: API + Vite each in its own console window
+scripts\launch-dev.ps1
+# Windows — full launcher (PowerShell or double-click in Explorer)
 scripts\launch.bat              # default: dev mode (API + Vite)
 scripts\launch.bat -Mode prod   # API only, serves prebuilt web/dist
 scripts\launch.bat -Mode build  # one-shot npm install + vite build

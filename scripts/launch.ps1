@@ -156,8 +156,15 @@ function Start-Web {
   }
   $env:LORAHUB_API_TARGET = "http://${ApiHost}:$ApiPort"
   Write-Info "Web:  http://localhost:$WebPort  (proxying /api -> $env:LORAHUB_API_TARGET)"
+  # Resolve to npm.cmd (the real shim on PATH). Start-Process can spawn the
+  # .cmd directly and keeps the lifecycle bound to whatever the shim launches
+  # — npm doesn't fork detached, so the returned process exits when Vite exits.
+  # Going via `cmd.exe /c npm` would let the cmd parent return as soon as it
+  # had handed off to npm, breaking the "service exited" detector.
+  $npmExe = (Get-Command npm -ErrorAction SilentlyContinue).Source
+  if (-not $npmExe) { throw 'npm not found on PATH; install Node.js first.' }
   $argv = @('run', 'dev', '--', '--host', '127.0.0.1', '--port', "$WebPort")
-  Start-Process -FilePath 'npm' `
+  Start-Process -FilePath $npmExe `
     -ArgumentList $argv `
     -WorkingDirectory (Join-Path $Root 'web') `
     -NoNewWindow `
