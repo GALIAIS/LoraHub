@@ -1121,8 +1121,10 @@ def test_recipe_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path
     assert body["normalized"]["backend"]["type"] == "diffusion-pipe"
 
 
-def test_diffusion_pipe_launch_raises_not_implemented(tmp_path: Path) -> None:
-    """The backend's launch() is intentionally unwired in v0.2."""
+def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path) -> None:
+    """launch() compiles the recipe to TOML and spawns train.py."""
+    import sys
+
     from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
     from lorahub.core.config.schema import RecipeConfig
 
@@ -1130,19 +1132,36 @@ def test_diffusion_pipe_launch_raises_not_implemented(tmp_path: Path) -> None:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
+
+    repo = tmp_path / "dp"
+    repo.mkdir()
+    # train.py replacement that exits cleanly so the runner sees `done`.
+    (repo / "train.py").write_text(
+        "import sys\nprint('loaded'); sys.exit(0)\n", encoding="utf-8"
+    )
+
     cfg = RecipeConfig.model_validate(
         {
             "base_model": {"arch": "sdxl", "checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},
             "schedule": {"epochs": 1, "batch_size": 1},
             "sampling": {"enabled": False},
-            "backend": {"type": "diffusion-pipe"},
+            "backend": {
+                "type": "diffusion-pipe",
+                "sd_scripts_path": str(repo),
+                "python_executable": sys.executable,
+            },
         }
     )
 
     backend = DiffusionPipeBackend()
-    with pytest.raises(NotImplementedError, match="v0.3"):
-        backend.launch(cfg, tmp_path / "ws", on_event=lambda _ev: None)
+    workspace = tmp_path / "ws"
+    handle = backend.launch(cfg, workspace, on_event=lambda _ev: None)
+    assert handle.pid is not None
+    rc = handle.wait(timeout=30)
+    assert rc == 0
+    assert (workspace / "diffusion_pipe.toml").is_file()
+    assert (workspace / "dataset.toml").is_file()
 
 
 # --------------------------------------------------------------------------- #
