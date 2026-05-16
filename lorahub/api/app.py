@@ -96,6 +96,23 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
 
+    # Auto-resume: replay interrupted jobs that have a usable checkpoint.
+    # Done before scheduler.start() so resumed work lands at the head of
+    # the queue. Per-job `metadata.auto_resume` overrides the global
+    # default in either direction; sweep children are always declined.
+    try:
+        _settings = _settings_store.load()
+        from lorahub.api.jobs_helpers import _attempt_auto_resume  # noqa: PLC0415
+
+        resumed = _attempt_auto_resume(
+            max_attempts=max(1, int(_settings.auto_resume_max_attempts)),
+            global_default=bool(_settings.auto_resume_interrupted),
+        )
+        if resumed > 0:
+            log.info("auto-resumed %d interrupted job(s) on startup", resumed)
+    except Exception:  # noqa: BLE001
+        log.exception("auto-resume hook failed; continuing startup")
+
     # Resize the module-level scheduler from persisted Settings before
     # workers start. We reach for the *current* `_settings_store` symbol
     # rather than a captured reference so test monkeypatches still apply.

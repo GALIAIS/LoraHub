@@ -72,6 +72,18 @@ class Settings:
     # it had when only the dataset roots were reachable.
     allow_filesystem_browse: bool = False
 
+    # When true, on server startup any job that was running before the
+    # process died and has a usable checkpoint on disk is automatically
+    # re-launched via the resume flow. Off by default — a corrupt run
+    # that flaps between kill -9 and resume could otherwise loop. The
+    # per-lineage cap below bounds blast radius even when on.
+    # Per-job opt-out via metadata.auto_resume = False; per-job opt-in
+    # via metadata.auto_resume = True is honored even with this flag off.
+    auto_resume_interrupted: bool = False
+    # Maximum consecutive auto-resume attempts per lineage. Tracked via
+    # metadata.auto_resume_attempts on each resumed JobRecord.
+    auto_resume_max_attempts: int = 3
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
