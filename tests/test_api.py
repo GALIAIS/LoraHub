@@ -1295,6 +1295,61 @@ def test_list_templates_returns_validated_recipes(client: TestClient) -> None:
         assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3"}
 
 
+def test_list_templates_skips_invalid_yaml_files(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One good YAML + one schema-invalid YAML -> only the good one survives,
+    and the bad one logs a warning instead of taking the endpoint down.
+    """
+    from lorahub.api import recipe_templates as recipe_templates_module
+
+    builtin_dir = tmp_path / "builtin"
+    builtin_dir.mkdir()
+
+    good = {
+        "_template": {
+            "name": "Good Template",
+            "description": "A valid template for testing.",
+            "arch": "sdxl",
+        },
+        "base_model": {"arch": "sdxl", "checkpoint": ""},
+        "dataset": {"source": ""},
+    }
+    (builtin_dir / "good.yaml").write_text(
+        yaml.safe_dump(good, sort_keys=False), encoding="utf-8"
+    )
+
+    # Missing the required `dataset` key -> RecipeConfig.model_validate fails.
+    bad = {
+        "_template": {"name": "Bad Template", "description": "x", "arch": "sdxl"},
+        "base_model": {"arch": "sdxl", "checkpoint": ""},
+    }
+    (builtin_dir / "bad.yaml").write_text(
+        yaml.safe_dump(bad, sort_keys=False), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        recipe_templates_module, "_DEFAULT_BUILTIN_DIR", builtin_dir
+    )
+
+    caplog.set_level("WARNING", logger=recipe_templates_module.logger.name)
+
+    r = client.get("/api/recipes/templates")
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    ids = [t["id"] for t in body["templates"]]
+    assert ids == ["good"], body
+    assert body["templates"][0]["name"] == "Good Template"
+    assert body["templates"][0]["arch"] == "sdxl"
+
+    warnings = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
+    assert any("bad.yaml" in msg for msg in warnings), warnings
+
+
 def test_import_recipe_from_yaml(
     client: TestClient, tmp_path: Path, recipes_dir: Path
 ) -> None:
