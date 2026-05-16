@@ -15,8 +15,23 @@ from lorahub.core.toolchain import uv as _uv
 
 @pytest.fixture
 def fake_run(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Patch subprocess.run + subprocess.Popen for the streaming git path."""
     mock = MagicMock(return_value=MagicMock(returncode=0, stderr=""))
+    mock.popen_rc = 0
+    mock.popen_stderr_lines = []
+    mock.git_clone_hook = None
+
+    def fake_popen(cmd: list[str], **kw: Any) -> MagicMock:
+        mock(cmd, **kw)
+        if mock.git_clone_hook is not None:
+            mock.git_clone_hook(cmd)
+        proc = MagicMock()
+        proc.stderr = iter(list(mock.popen_stderr_lines))
+        proc.wait.return_value = mock.popen_rc
+        return proc
+
     monkeypatch.setattr(installer.subprocess, "run", mock)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(_uv.subprocess, "run", mock)
     monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
     return mock
@@ -81,13 +96,12 @@ def test_bootstrap_runs_six_logical_steps(tmp_path: Path, fake_run: MagicMock) -
     target = tmp_path / "dp"
     plan = installer.BootstrapPlan(target=target)
 
-    def fake_subprocess_run(cmd: list[str], **_kw: Any) -> MagicMock:
+    def on_clone(cmd: list[str]) -> None:
         if cmd[:2] == ["git", "clone"]:
             target.mkdir(parents=True, exist_ok=True)
             (target / "requirements.txt").write_text("transformers\n", encoding="utf-8")
-        return MagicMock(returncode=0, stderr="")
 
-    fake_run.side_effect = fake_subprocess_run
+    fake_run.git_clone_hook = on_clone
 
     seen: list[str] = []
     installer.bootstrap(plan, progress=seen.append)
@@ -95,7 +109,11 @@ def test_bootstrap_runs_six_logical_steps(tmp_path: Path, fake_run: MagicMock) -
     # clone, venv, pip-noop, torch, requirements, deepspeed.
     # The "skipping from requirements" line is informational and is *also*
     # emitted when deepspeed is in requirements; we filter it for the count.
-    main_steps = [s for s in seen if not s.startswith("skipping from")]
+    # Indented lines (two leading spaces) are streamed git-stderr forwards
+    # and shouldn't be counted as logical steps either.
+    main_steps = [
+        s for s in seen if not s.startswith("skipping from") and not s.startswith("  ")
+    ]
     assert len(main_steps) >= 6
     assert "clone" in main_steps[0]
     assert "venv" in main_steps[1]
