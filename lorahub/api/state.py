@@ -54,9 +54,8 @@ class JobRecord:
     events: deque[TrainingEvent] = field(default_factory=lambda: deque(maxlen=_DEFAULT_RING_SIZE))
     # Free-form metadata bag set by callers that orchestrate jobs (e.g. the
     # sweep router stamps `{"sweep_id": ..., "axis_values": {...}}` here so
-    # later GETs can group jobs by their parent sweep). In-memory only —
-    # the SQLite store does not currently persist this; if a server restart
-    # rehydrates jobs they'll come back with metadata=None until re-tagged.
+    # later GETs can group jobs by their parent sweep). Persisted to SQLite
+    # as a JSON blob so sweep<->job associations survive a server restart.
     metadata: dict[str, Any] | None = None
 
     def to_summary(self) -> dict[str, Any]:
