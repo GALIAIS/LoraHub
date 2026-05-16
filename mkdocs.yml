@@ -1,0 +1,87 @@
+site_name: LoraHub
+site_description: Open-source LoRA training workbench for diffusion models.
+site_url: https://galiais.github.io/LoraHub/
+repo_url: https://github.com/GALIAIS/LoraHub
+repo_name: GALIAIS/LoraHub
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 GALIAIS &mdash; Apache 2.0
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/GALIAIS/LoraHub
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install: getting-started/install.md
+      - Quick start: getting-started/quickstart.md
+      - Smoke test: getting-started/smoke-test.md
+  - Recipes:
+      - Overview: recipes/index.md
+      - Templates: recipes/templates.md
+      - Field reference: recipes/fields.md
+  - CLI:
+      - Overview: cli/index.md
+      - Commands: cli/commands.md
+  - API:
+      - Overview: api/index.md
+      - Endpoints: api/endpoints.md
+  - Roadmap: roadmap.md
