@@ -356,3 +356,97 @@ def test_optimizer_args_extra_keys_render_to_toml() -> None:
     )
     assert "foreach =" in main
     assert "amsgrad =" in main
+
+
+# --------------------------------------------------------------------------- #
+# Arch coverage: every supported dp arch renders a recognisable [model] type
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("arch", "dp_type"),
+    [
+        ("sdxl", "sdxl"),
+        ("sd3", "sd3"),
+        ("flux", "flux"),
+        ("flux2", "flux2"),
+        ("lumina", "lumina_2"),
+        ("chroma", "chroma"),
+        ("hidream", "hidream"),
+        ("omnigen2", "omnigen2"),
+        ("auraflow", "auraflow"),
+        ("qwen_image", "qwen_image"),
+        ("cosmos", "cosmos"),
+        ("cosmos_predict2", "cosmos_predict2"),
+        ("anima", "anima"),
+        ("hunyuan_image", "hunyuan_image"),
+        ("hunyuan_video", "hunyuan-video"),
+        ("hunyuan_video_15", "hunyuan_video_15"),
+        ("ltx_video", "ltx-video"),
+        ("ltx2", "ltx2"),
+        ("wan", "wan"),
+        ("z_image", "z_image"),
+        ("ernie_image", "ernie_image"),
+    ],
+)
+def test_dp_arch_emits_correct_model_type(arch: str, dp_type: str) -> None:
+    cfg = _recipe(base_model={"arch": arch, "checkpoint": "/m/ckpt"})
+    main = _main_toml(cfg)
+    assert f'type = "{dp_type}"' in main
+
+
+def test_dp_rejects_kohya_only_arch_sd15() -> None:
+    cfg = _recipe(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
+    with pytest.raises(CompilationError, match="does not support arch"):
+        _compile(cfg)
+
+
+def test_dp_rejects_kohya_only_arch_sd2() -> None:
+    cfg = _recipe(base_model={"arch": "sd2", "checkpoint": "/m/sd2"})
+    with pytest.raises(CompilationError, match="does not support arch"):
+        _compile(cfg)
+
+
+# --------------------------------------------------------------------------- #
+# DiffusionPipeOptions.model_paths -- arch-specific [model] path overrides
+# --------------------------------------------------------------------------- #
+
+
+def test_dp_model_paths_render_to_toml() -> None:
+    """model_paths flatten into the [model] block as `key = "value"` lines."""
+    cfg = _recipe(
+        base_model={"arch": "anima", "checkpoint": "/m/anima"},
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "model_paths": {
+                    "transformer_path": "/x.safetensors",
+                    "vae_path": "/v.safetensors",
+                    "llm_path": "/llm",
+                },
+            },
+        },
+    )
+    main = _main_toml(cfg)
+    # The [model] block contains all three new path keys (TOML-escaped).
+    assert 'transformer_path = "/x.safetensors"' in main
+    assert 'vae_path = "/v.safetensors"' in main
+    assert 'llm_path = "/llm"' in main
+
+
+def test_dp_model_paths_override_default_diffusers_path() -> None:
+    """Explicit `diffusers_path` in model_paths wins over the default."""
+    cfg = _recipe(
+        base_model={"arch": "flux", "checkpoint": "/auto/inferred"},
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "model_paths": {"diffusers_path": "/explicit/override"},
+            },
+        },
+    )
+    main = _main_toml(cfg)
+    # Only one diffusers_path line should remain, and it carries the override.
+    assert main.count("diffusers_path =") == 1
+    assert 'diffusers_path = "/explicit/override"' in main
+    assert "/auto/inferred" not in main

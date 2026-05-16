@@ -27,8 +27,16 @@ def _make_stub_sd_scripts(root: Path) -> Path:
         sys.exit(0)
         """
     ).strip() + "\n"
-    (root / "train_network.py").write_text(stub, encoding="utf-8")
-    (root / "sdxl_train_network.py").write_text(stub, encoding="utf-8")
+    for name in (
+        "train_network.py",
+        "sdxl_train_network.py",
+        "sd3_train_network.py",
+        "flux_train_network.py",
+        "lumina_train_network.py",
+        "hunyuan_image_train_network.py",
+        "anima_train_network.py",
+    ):
+        (root / name).write_text(stub, encoding="utf-8")
     return root
 
 

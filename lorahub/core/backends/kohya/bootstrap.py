@@ -17,7 +17,18 @@ from lorahub.core.backends.errors import BootstrapError
 
 _ENV_SD_SCRIPTS = "LORAHUB_KOHYA_SD_SCRIPTS"
 _ENV_PYTHON = "LORAHUB_KOHYA_PYTHON"
-_REQUIRED_SCRIPTS = ("train_network.py", "sdxl_train_network.py")
+# Every entry script lorahub may shell out to. Mirrors compiler._KOHYA_SCRIPT_MAP
+# but kept duplicated here to avoid a backend->compiler import cycle through
+# bootstrap (probe_kohya_backend imports this module from api.settings).
+_REQUIRED_SCRIPTS = (
+    "train_network.py",
+    "sdxl_train_network.py",
+    "sd3_train_network.py",
+    "flux_train_network.py",
+    "lumina_train_network.py",
+    "hunyuan_image_train_network.py",
+    "anima_train_network.py",
+)
 _LABEL = "kohya-ss/sd-scripts"
 
 

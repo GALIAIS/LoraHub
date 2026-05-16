@@ -26,8 +26,20 @@ def _make_stub_sd_scripts(root: Path) -> Path:
         sys.exit(0)
         """
     ).strip() + "\n"
-    (root / "train_network.py").write_text(stub, encoding="utf-8")
-    (root / "sdxl_train_network.py").write_text(stub, encoding="utf-8")
+    # Stub every entry script the bootstrap probe checks for. New kohya
+    # arches (sd2 reuses train_network.py; lumina/hunyuan_image/anima get
+    # their own scripts) need a file on disk so probe_kohya_backend reports
+    # `ready=True`. The contents are identical no-op stubs.
+    for name in (
+        "train_network.py",
+        "sdxl_train_network.py",
+        "sd3_train_network.py",
+        "flux_train_network.py",
+        "lumina_train_network.py",
+        "hunyuan_image_train_network.py",
+        "anima_train_network.py",
+    ):
+        (root / name).write_text(stub, encoding="utf-8")
     return root
 
 
@@ -57,7 +69,24 @@ def backend() -> KohyaBackend:
 
 def test_supported_archs_cover_main_models(backend: KohyaBackend) -> None:
     names = {a.value for a in backend.supported_archs}
-    assert {"sdxl", "sd15", "flux", "sd3"}.issubset(names)
+    # Eight upstream-supported families per kohya sd-scripts README.
+    assert names == {
+        "sd15",
+        "sd2",
+        "sdxl",
+        "sd3",
+        "flux",
+        "lumina",
+        "hunyuan_image",
+        "anima",
+    }
+
+
+def test_supported_archs_excludes_dp_only_models(backend: KohyaBackend) -> None:
+    """kohya does not ship trainers for these dp-only arches."""
+    names = {a.value for a in backend.supported_archs}
+    for dp_only in ("wan", "hunyuan_video", "chroma", "ltx_video", "flux2"):
+        assert dp_only not in names
 
 
 def test_validate_passes_for_good_recipe(tmp_path: Path, backend: KohyaBackend) -> None:

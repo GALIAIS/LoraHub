@@ -18,10 +18,31 @@ from lorahub.core.events import TrainingEvent
 
 
 class ModelArch(enum.StrEnum):
+    # kohya sd-scripts arches
     sd15 = "sd15"
+    sd2 = "sd2"
     sdxl = "sdxl"
-    flux = "flux"
     sd3 = "sd3"
+    flux = "flux"
+    lumina = "lumina"
+    hunyuan_image = "hunyuan_image"
+    anima = "anima"
+    # diffusion-pipe-only arches
+    flux2 = "flux2"
+    chroma = "chroma"
+    hidream = "hidream"
+    omnigen2 = "omnigen2"
+    auraflow = "auraflow"
+    qwen_image = "qwen_image"
+    cosmos = "cosmos"
+    cosmos_predict2 = "cosmos_predict2"
+    hunyuan_video = "hunyuan_video"
+    hunyuan_video_15 = "hunyuan_video_15"
+    ltx_video = "ltx_video"
+    ltx2 = "ltx2"
+    wan = "wan"
+    z_image = "z_image"
+    ernie_image = "ernie_image"
 
 
 class Severity(enum.StrEnum):

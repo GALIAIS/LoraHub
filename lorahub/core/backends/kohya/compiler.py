@@ -66,19 +66,32 @@ def compile_recipe(
     return script, args, files
 
 
+# Map our base_model.arch literals to the kohya sd-scripts entry script that
+# trains a network/LoRA for that family. Mirrors the upstream README's
+# "Supported Models" table -- see https://github.com/kohya-ss/sd-scripts.
+# Arches not in this map are diffusion-pipe-exclusive and `_pick_script`
+# raises with a pointer back to the dp backend.
+_KOHYA_SCRIPT_MAP: dict[str, str] = {
+    "sd15": "train_network.py",
+    "sd2": "train_network.py",
+    "sdxl": "sdxl_train_network.py",
+    "sd3": "sd3_train_network.py",
+    "flux": "flux_train_network.py",
+    "lumina": "lumina_train_network.py",
+    "hunyuan_image": "hunyuan_image_train_network.py",
+    "anima": "anima_train_network.py",
+}
+
+
 def _pick_script(arch: str) -> str:
-    match arch:
-        case "sdxl":
-            return "sdxl_train_network.py"
-        case "sd15":
-            return "train_network.py"
-        case "flux":
-            return "flux_train_network.py"
-        case "sd3":
-            return "sd3_train_network.py"
-        case _:
-            msg = f"unsupported base_model.arch: {arch}"
-            raise CompilationError(msg)
+    script = _KOHYA_SCRIPT_MAP.get(arch)
+    if script is not None:
+        return script
+    msg = (
+        f"kohya does not support arch={arch!r}; use diffusion-pipe "
+        f"(supported kohya arches: {sorted(_KOHYA_SCRIPT_MAP)})"
+    )
+    raise CompilationError(msg)
 
 
 def _emit_model_args(recipe: RecipeConfig, args: list[str]) -> None:

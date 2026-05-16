@@ -17,8 +17,20 @@ from lorahub.core.backends.kohya.bootstrap import (
 
 def _make_fake_sd_scripts(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "train_network.py").write_text("# stub\n", encoding="utf-8")
-    (root / "sdxl_train_network.py").write_text("# stub\n", encoding="utf-8")
+    # Stub every script the bootstrap probe checks for. Mirrors
+    # `lorahub.core.backends.kohya.bootstrap._REQUIRED_SCRIPTS`; tests that
+    # need a deliberately incomplete checkout build it inline instead of
+    # using this helper.
+    for name in (
+        "train_network.py",
+        "sdxl_train_network.py",
+        "sd3_train_network.py",
+        "flux_train_network.py",
+        "lumina_train_network.py",
+        "hunyuan_image_train_network.py",
+        "anima_train_network.py",
+    ):
+        (root / name).write_text("# stub\n", encoding="utf-8")
     return root
 
 

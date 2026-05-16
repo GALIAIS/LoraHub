@@ -50,6 +50,54 @@ def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
         assert s == script
 
 
+def _arch_recipe(arch: str) -> RecipeConfig:
+    return RecipeConfig.model_validate(
+        {
+            "base_model": {"arch": arch, "checkpoint": "/m.safetensors"},
+            "dataset": {"source": "/d"},
+        }
+    )
+
+
+def test_pick_script_anima(tmp_path: Path) -> None:
+    """Anima uses its own entry script per kohya's README."""
+    s, _, _ = compile_recipe(_arch_recipe("anima"), tmp_path)
+    assert s == "anima_train_network.py"
+
+
+def test_pick_script_lumina(tmp_path: Path) -> None:
+    s, _, _ = compile_recipe(_arch_recipe("lumina"), tmp_path)
+    assert s == "lumina_train_network.py"
+
+
+def test_pick_script_hunyuan_image(tmp_path: Path) -> None:
+    s, _, _ = compile_recipe(_arch_recipe("hunyuan_image"), tmp_path)
+    assert s == "hunyuan_image_train_network.py"
+
+
+def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
+    """sd-scripts ships sd1.x/2.x in the same train_network.py entry script."""
+    s, _, _ = compile_recipe(_arch_recipe("sd2"), tmp_path)
+    assert s == "train_network.py"
+
+
+@pytest.mark.parametrize(
+    "arch",
+    [
+        "hunyuan_video",
+        "wan",
+        "chroma",
+        "flux2",
+        "ltx_video",
+        "qwen_image",
+    ],
+)
+def test_pick_script_rejects_dp_only_arch(tmp_path: Path, arch: str) -> None:
+    """Arches that only diffusion-pipe ships fail kohya compilation up front."""
+    with pytest.raises(CompilationError, match="diffusion-pipe"):
+        compile_recipe(_arch_recipe(arch), tmp_path)
+
+
 def test_dataset_toml_emitted_with_dataset_config() -> None:
     args = _argv(_recipe())
     assert any(a.startswith("--dataset_config=") for a in args)
