@@ -27,6 +27,7 @@ from lorahub.core.backends.base import (
 )
 from lorahub.core.backends.diffusion_pipe import bootstrap as _bootstrap
 from lorahub.core.backends.diffusion_pipe.compiler import (
+    _DP_MODEL_TYPE_MAP,
     CompilationError,
     compile_recipe,
 )
@@ -34,10 +35,13 @@ from lorahub.core.backends.diffusion_pipe.runner import DiffusionPipeRunner
 from lorahub.core.config.schema import RecipeConfig
 from lorahub.core.events import TrainingEvent
 
-# diffusion-pipe focuses on Flux/SD3-class image diffusion models plus
-# SDXL. SD1.5 is intentionally not supported -- upstream's
-# `docs/supported_models.md` doesn't ship a trainer for it.
-_SUPPORTED: set[ModelArch] = {ModelArch.flux, ModelArch.sd3, ModelArch.sdxl}
+# diffusion-pipe ships trainers for every entry in `_DP_MODEL_TYPE_MAP`
+# (SDXL, SD3, Flux/Flux2, Lumina2, Chroma, HiDream, OmniGen2, AuraFlow,
+# Qwen-Image, Cosmos, HunyuanImage/Video, LTX-Video, Wan, Z-Image, ...).
+# SD1.5 / SD2 are intentionally absent because upstream's
+# `docs/supported_models.md` does not document a trainer for them; recipes
+# targeting those arches fall through to the kohya backend.
+_SUPPORTED: set[ModelArch] = {ModelArch(arch) for arch in _DP_MODEL_TYPE_MAP}
 
 
 class DiffusionPipeBackend:
@@ -63,7 +67,7 @@ class DiffusionPipeBackend:
                         f"diffusion-pipe does not support arch "
                         f"{cfg.base_model.arch!r}; supported: "
                         f"{sorted(a.value for a in _SUPPORTED)}. "
-                        "Switch backend.type to 'kohya' for sd15."
+                        "Switch backend.type to 'kohya' for sd15/sd2."
                     ),
                 )
             )

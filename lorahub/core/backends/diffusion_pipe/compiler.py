@@ -34,9 +34,44 @@ class CompilationError(ValueError):
     """Raised when a recipe cannot be expressed in diffusion-pipe's vocabulary."""
 
 
-# diffusion-pipe currently supports SDXL, Flux, and SD3 from our registered
-# arch list. SD1.5 is intentionally absent from upstream's supported_models.md.
-_SUPPORTED_ARCHS: frozenset[str] = frozenset({"sdxl", "flux", "sd3"})
+# Map our base_model.arch literals to the `[model] type = "..."` value
+# diffusion-pipe expects in its TOML config. Mirrors upstream's
+# docs/supported_models.md. Note the dash-vs-underscore mismatches: dp
+# spells `hunyuan_video` as `hunyuan-video` and `ltx_video` as `ltx-video`
+# (every other entry happens to match the schema literal verbatim).
+# Arches not in this map are kohya-only and rejected up front.
+_DP_MODEL_TYPE_MAP: dict[str, str] = {
+    "sdxl": "sdxl",
+    "sd3": "sd3",
+    "flux": "flux",
+    "flux2": "flux2",
+    "lumina": "lumina_2",
+    "chroma": "chroma",
+    "hidream": "hidream",
+    "omnigen2": "omnigen2",
+    "auraflow": "auraflow",
+    "qwen_image": "qwen_image",
+    "cosmos": "cosmos",
+    "cosmos_predict2": "cosmos_predict2",
+    "anima": "anima",
+    "hunyuan_image": "hunyuan_image",
+    "hunyuan_video": "hunyuan-video",  # upstream uses a hyphen here
+    "hunyuan_video_15": "hunyuan_video_15",
+    "ltx_video": "ltx-video",  # upstream uses a hyphen here
+    "ltx2": "ltx2",
+    "wan": "wan",  # covers Wan2.1 and Wan2.2
+    "z_image": "z_image",
+    "ernie_image": "ernie_image",
+}
+
+# Convenience set used by validators.
+_SUPPORTED_ARCHS: frozenset[str] = frozenset(_DP_MODEL_TYPE_MAP)
+
+# Arches whose [model] section takes a single-file `checkpoint_path =`. Every
+# other supported arch uses `diffusers_path =` (folder of Diffusers shards).
+# Mirrors the historical default for SDXL plus the dp examples for image
+# diffusion models that ship as single safetensors (e.g. AuraFlow, Chroma).
+_CHECKPOINT_PATH_ARCHES: frozenset[str] = frozenset({"sdxl"})
 
 # Map our optimizer.type values onto names diffusion-pipe accepts directly.
 # Anything not in this map is passed through verbatim and resolved by
@@ -174,16 +209,38 @@ def _monitoring_section(opts: DiffusionPipeOptions) -> list[str]:
 
 def _model_section(recipe: RecipeConfig) -> list[str]:
     arch = recipe.base_model.arch
+    dp_type = _DP_MODEL_TYPE_MAP[arch]  # presence guaranteed by compile_recipe
     dtype = "bfloat16" if recipe.precision in ("bf16", "fp32") else "float16"
-    lines: list[str] = ["[model]", f"type = {_toml_str(arch)}"]
+    lines: list[str] = ["[model]", f"type = {_toml_str(dp_type)}"]
 
-    if arch == "sdxl":
+    if arch in _CHECKPOINT_PATH_ARCHES:
         lines.append(f"checkpoint_path = {_toml_str(str(recipe.base_model.checkpoint))}")
     else:
-        # Flux and SD3 expect a Diffusers folder.
+        # Most arches expect a Diffusers folder. Per-arch path overrides
+        # (transformer_path / vae_path / llm_path / clip_l_path / t5_path...
+        # depending on the arch) come from `backend.diffusion_pipe.model_paths`
+        # below and win over this default.
         lines.append(f"diffusers_path = {_toml_str(str(recipe.base_model.checkpoint))}")
 
     lines.append(f"dtype = {_toml_str(dtype)}")
+
+    # Free-form arch-specific path bag. Keys are emitted verbatim so users
+    # can drop in any path field upstream's [model] section accepts (e.g.
+    # `transformer_path = "..."`, `vae_path = "..."`, `llm_path = "..."`).
+    # Empty by default -- existing SDXL/Flux/SD3 recipes produce identical
+    # TOML to before. Keys provided here override duplicate defaults
+    # rendered above (last-write-wins matches the rest of the compiler).
+    opts = _dp_options(recipe)
+    if opts.model_paths:
+        seen_keys = {line.split(" =", 1)[0].strip() for line in lines if " =" in line}
+        for key, value in opts.model_paths.items():
+            if key in seen_keys:
+                lines = [
+                    line for line in lines
+                    if not line.startswith(f"{key} =")
+                ]
+            lines.append(f"{key} = {_toml_str(value)}")
+
     return lines
 
 
