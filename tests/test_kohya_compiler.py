@@ -217,3 +217,98 @@ def test_validation_split_too_large_rejected() -> None:
                 "dataset": {"source": "/d", "val_split": 0.6},
             }
         )
+
+
+def test_locon_emits_conv_dim_and_alpha() -> None:
+    """locon recipes forward conv_dim/conv_alpha as `--network_args` keys."""
+    cfg = _recipe(
+        network={
+            "type": "locon",
+            "rank": 16,
+            "alpha": 8,
+            "conv_dim": 8,
+            "conv_alpha": 4,
+        }
+    )
+    args = _argv(cfg)
+    assert "--network_args" in args
+    idx = args.index("--network_args")
+    network_args = args[idx + 1 :]
+    assert "algo=locon" in network_args
+    assert "conv_dim=8" in network_args
+    assert "conv_alpha=4" in network_args
+
+
+def test_loha_conv_alpha_optional() -> None:
+    """conv_alpha unset means we don't emit the key (sd-scripts defaults it)."""
+    cfg = _recipe(network={"type": "loha", "conv_dim": 8})
+    args = _argv(cfg)
+    idx = args.index("--network_args")
+    network_args = args[idx + 1 :]
+    assert "conv_dim=8" in network_args
+    assert not any(a.startswith("conv_alpha=") for a in network_args)
+
+
+def test_dropout_args_only_when_positive() -> None:
+    """All three dropout knobs default to 0 and stay off the argv."""
+    args_default = _argv(_recipe())
+    if "--network_args" in args_default:
+        idx = args_default.index("--network_args")
+        rest = args_default[idx + 1 :]
+        assert not any(a.startswith("dropout=") for a in rest)
+        assert not any(a.startswith("rank_dropout=") for a in rest)
+        assert not any(a.startswith("module_dropout=") for a in rest)
+
+    cfg = _recipe(
+        network={
+            "type": "locon",
+            "network_dropout": 0.1,
+            "rank_dropout": 0.2,
+            "module_dropout": 0.3,
+        }
+    )
+    args = _argv(cfg)
+    idx = args.index("--network_args")
+    network_args = args[idx + 1 :]
+    assert "dropout=0.1" in network_args
+    assert "rank_dropout=0.2" in network_args
+    assert "module_dropout=0.3" in network_args
+
+
+def test_scale_weight_norms_is_top_level_flag() -> None:
+    """scale_weight_norms goes on the top-level argv, not inside --network_args."""
+    cfg = _recipe(network={"scale_weight_norms": 1.0})
+    args = _argv(cfg)
+    assert "--scale_weight_norms=1.0" in args
+    # Make sure it isn't accidentally swept into --network_args
+    if "--network_args" in args:
+        idx = args.index("--network_args")
+        rest = args[idx + 1 :]
+        assert not any("scale_weight_norms" in a for a in rest)
+
+
+def test_conv_dim_rejected_for_lora() -> None:
+    """Plain `lora` doesn't have conv layers — schema rejects conv_dim."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RecipeConfig.model_validate(
+            {
+                "base_model": {"checkpoint": "/m.safetensors"},
+                "dataset": {"source": "/d"},
+                "network": {"type": "lora", "conv_dim": 8},
+            }
+        )
+
+
+def test_conv_alpha_rejected_for_dora() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        RecipeConfig.model_validate(
+            {
+                "base_model": {"checkpoint": "/m.safetensors"},
+                "dataset": {"source": "/d"},
+                "network": {"type": "dora", "conv_alpha": 4},
+            }
+        )

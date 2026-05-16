@@ -67,6 +67,39 @@ class NetworkConfig(BaseModel):
     alpha: int = Field(16, ge=1)
     target_unet: bool = True
     target_text_encoder: bool = False
+    # Convolutional rank/alpha for locon/loha. Plain `lora` doesn't touch
+    # conv layers, so these only make sense on lycoris flavours and the
+    # validator below rejects them otherwise. `conv_alpha=None` means
+    # "let sd-scripts default it (commonly mirrors `alpha`)".
+    conv_dim: int | None = Field(default=None, ge=1, le=512)
+    conv_alpha: int | None = Field(default=None, ge=1)
+    # Regularisation knobs forwarded to sd-scripts as `--network_args`. All
+    # default to 0 / None so existing recipes keep emitting identical argv.
+    network_dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    rank_dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    module_dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    # Top-level `--scale_weight_norms` max-norm scalar. None disables it.
+    scale_weight_norms: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_conv_for_lora(self) -> NetworkConfig:
+        """`lora` and `dora` don't expose conv layers in sd-scripts, so
+        rejecting `conv_dim` / `conv_alpha` upfront avoids a confusing
+        runtime crash inside the trainer."""
+        if self.type in ("lora", "dora"):
+            if self.conv_dim is not None:
+                msg = (
+                    f"network.conv_dim is only valid for locon/loha "
+                    f"(got network.type={self.type!r})"
+                )
+                raise ValueError(msg)
+            if self.conv_alpha is not None:
+                msg = (
+                    f"network.conv_alpha is only valid for locon/loha "
+                    f"(got network.type={self.type!r})"
+                )
+                raise ValueError(msg)
+        return self
 
 
 class LRConfig(BaseModel):

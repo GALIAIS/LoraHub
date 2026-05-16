@@ -169,6 +169,23 @@ def _emit_network_args(recipe: RecipeConfig, args: list[str]) -> None:
     elif n.type == "dora":
         network_args.append("dora_wd=True")
 
+    # Conv rank/alpha for lycoris flavours. The schema validator already
+    # guarantees these are None for plain lora/dora, so no extra guard.
+    if n.conv_dim is not None:
+        network_args.append(f"conv_dim={n.conv_dim}")
+    if n.conv_alpha is not None:
+        network_args.append(f"conv_alpha={n.conv_alpha}")
+
+    # sd-scripts spells dropout knobs as `dropout` / `rank_dropout` /
+    # `module_dropout` inside `--network_args`. Only emit when > 0 so
+    # default recipes don't grow noise in the launch argv.
+    if n.network_dropout > 0:
+        network_args.append(f"dropout={n.network_dropout}")
+    if n.rank_dropout > 0:
+        network_args.append(f"rank_dropout={n.rank_dropout}")
+    if n.module_dropout > 0:
+        network_args.append(f"module_dropout={n.module_dropout}")
+
     if not n.target_text_encoder:
         args += ["--network_train_unet_only"]
     elif not n.target_unet:
@@ -176,6 +193,11 @@ def _emit_network_args(recipe: RecipeConfig, args: list[str]) -> None:
 
     if network_args:
         args += ["--network_args"] + network_args
+
+    # `--scale_weight_norms` is a top-level sd-scripts flag, not a
+    # `--network_args` key, so it goes straight on `args`.
+    if n.scale_weight_norms is not None:
+        args.append(f"--scale_weight_norms={n.scale_weight_norms}")
 
 
 def _emit_optimizer_args(recipe: RecipeConfig, args: list[str]) -> None:
