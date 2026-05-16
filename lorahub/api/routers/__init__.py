@@ -22,6 +22,7 @@ from .recipes import router as recipes_router
 from .runtime import router as runtime_router
 from .samples import router as samples_router
 from .settings_routes import router as settings_router
+from .sweeps import router as sweeps_router
 from .system import router as system_router
 from .tagging import router as tagging_router
 
@@ -38,6 +39,7 @@ all_routers: list[APIRouter] = [
     network_router,
     runtime_router,
     samples_router,
+    sweeps_router,
     system_router,
     tagging_router,
 ]
