@@ -149,6 +149,78 @@ def test_estimate_vram_returns_sane_numbers(
     assert est.total_mib > 0
 
 
+@pytest.mark.parametrize(
+    "arch",
+    [
+        # full 23-arch matrix; dp supports a superset for vram estimation
+        # purposes even though sd15/sd2 fail validation downstream.
+        "sd15",
+        "sd2",
+        "sdxl",
+        "sd3",
+        "flux",
+        "flux2",
+        "lumina",
+        "anima",
+        "hunyuan_image",
+        "chroma",
+        "hidream",
+        "omnigen2",
+        "auraflow",
+        "qwen_image",
+        "cosmos",
+        "cosmos_predict2",
+        "hunyuan_video",
+        "hunyuan_video_15",
+        "ltx_video",
+        "ltx2",
+        "wan",
+        "z_image",
+        "ernie_image",
+    ],
+)
+def test_estimate_vram_covers_every_arch(
+    tmp_path: Path, backend: DiffusionPipeBackend, arch: str
+) -> None:
+    """Every arch yields a positive estimate, even ones dp would refuse to launch."""
+    from lorahub.core.backends.base import VRAMEstimate
+
+    repo = _make_stub_repo(tmp_path / "dp")
+    # `_make_recipe` creates either a flat .safetensors or a diffusers dir
+    # depending on the arch token; reuse it so checkpoint shape matches what
+    # the dp recipe expects.
+    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
+    cfg = recipe.model_copy(
+        update={
+            "base_model": recipe.base_model.model_copy(update={"arch": arch}),
+        }
+    )
+    est = backend.estimate_vram(cfg)
+    assert isinstance(est, VRAMEstimate)
+    assert est.total_mib > 0
+
+
+def test_estimate_vram_activations_scale_with_batch_size(
+    tmp_path: Path, backend: DiffusionPipeBackend
+) -> None:
+    """Doubling batch_size doubles the activations component."""
+    repo = _make_stub_repo(tmp_path / "dp")
+    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
+    recipe = recipe.model_copy(update={"gradient_checkpointing": False})
+
+    bs1 = backend.estimate_vram(
+        recipe.model_copy(
+            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 1})}
+        )
+    )
+    bs2 = backend.estimate_vram(
+        recipe.model_copy(
+            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 2})}
+        )
+    )
+    assert bs2.activations_mib == 2 * bs1.activations_mib
+
+
 def test_launch_writes_toml_files_and_runs_subprocess(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:

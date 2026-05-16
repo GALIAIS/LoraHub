@@ -113,6 +113,75 @@ def test_estimate_vram_returns_sane_numbers(tmp_path: Path, backend: KohyaBacken
     assert 1.0 <= est.total_gib <= 32.0
 
 
+@pytest.mark.parametrize(
+    "arch",
+    [
+        "sd15",
+        "sd2",
+        "sdxl",
+        "sd3",
+        "flux",
+        "flux2",
+        "lumina",
+        "anima",
+        "hunyuan_image",
+        "chroma",
+        "hidream",
+        "omnigen2",
+        "auraflow",
+        "qwen_image",
+        "cosmos",
+        "cosmos_predict2",
+        "hunyuan_video",
+        "hunyuan_video_15",
+        "ltx_video",
+        "ltx2",
+        "wan",
+        "z_image",
+        "ernie_image",
+    ],
+)
+def test_estimate_vram_covers_every_arch(
+    tmp_path: Path, backend: KohyaBackend, arch: str
+) -> None:
+    """Every arch in the matrix must yield a non-crashing, positive estimate."""
+    from lorahub.core.backends.base import VRAMEstimate
+
+    sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
+    recipe = _make_recipe(tmp_path, sd)
+    cfg = recipe.model_copy(
+        update={
+            "base_model": recipe.base_model.model_copy(update={"arch": arch}),
+        }
+    )
+    est = backend.estimate_vram(cfg)
+    assert isinstance(est, VRAMEstimate)
+    assert est.total_mib > 0
+
+
+def test_estimate_vram_activations_scale_with_batch_size(
+    tmp_path: Path, backend: KohyaBackend
+) -> None:
+    """Doubling batch_size doubles the activations component."""
+    sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
+    recipe = _make_recipe(tmp_path, sd)
+    # Disable gradient_checkpointing so the //3 discount doesn't fold the
+    # multiplier away through integer truncation.
+    recipe = recipe.model_copy(update={"gradient_checkpointing": False})
+
+    bs1 = backend.estimate_vram(
+        recipe.model_copy(
+            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 1})}
+        )
+    )
+    bs2 = backend.estimate_vram(
+        recipe.model_copy(
+            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 2})}
+        )
+    )
+    assert bs2.activations_mib == 2 * bs1.activations_mib
+
+
 def test_launch_runs_to_completion(tmp_path: Path, backend: KohyaBackend) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
     recipe = _make_recipe(tmp_path, sd)
