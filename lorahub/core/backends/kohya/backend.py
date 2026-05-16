@@ -98,8 +98,9 @@ class KohyaBackend:
         on_event: Callable[[TrainingEvent], None],
         *,
         extra_argv: list[str] | None = None,
+        env: dict[str, str] | None = None,
     ) -> TrainingHandle:
-        env = _bootstrap.resolve(
+        bootstrap_env = _bootstrap.resolve(
             recipe_path=cfg.backend.sd_scripts_path,
             recipe_python=cfg.backend.python_executable,
         )
@@ -111,16 +112,17 @@ class KohyaBackend:
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-        script = env.script(script_name)
+        script = bootstrap_env.script(script_name)
 
         job_id = str(ulid.new())
         runner = KohyaRunner(
-            python=env.python_executable,
+            python=bootstrap_env.python_executable,
             script=script,
             argv=argv,
             workspace=workspace,
             on_event=on_event,
             job_id=job_id,
+            env=env,
         )
         runner.start()
 

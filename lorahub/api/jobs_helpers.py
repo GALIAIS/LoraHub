@@ -322,10 +322,14 @@ def _enqueue_launch(
                 state.registry.update(j)
             sink.__exit__(None, None, None)
 
-    def task(_slot: int) -> None:
+    def task(slot: int) -> None:
         current = state.registry.get(job.id)
         if current is None or current.state is not JobState.queued:
             return
+        # Pin the worker subprocess to the assigned GPU. With concurrency=1
+        # the slot is always 0; with N>1 each worker gets a distinct GPU id
+        # so kohya / diffusion-pipe see exactly one device.
+        slot_env = {"CUDA_VISIBLE_DEVICES": str(slot)}
         sink.__enter__()
         try:
             handle = backend.launch(
@@ -333,6 +337,7 @@ def _enqueue_launch(
                 workspace=workspace,
                 on_event=on_event,
                 extra_argv=extra_argv,
+                env=slot_env,
             )
         except Exception as exc:  # noqa: BLE001
             j = state.registry.get(job.id)
