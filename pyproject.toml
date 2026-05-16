@@ -34,6 +34,13 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["onnxruntime-gpu>=1.18"]
+tagging = [
+    # JoyTag inference: needs PyTorch + safetensors. Torch is intentionally
+    # not pinned to a CUDA build here — pick the right wheel from
+    # https://pytorch.org/get-started/locally/ or rely on the CPU build.
+    "torch>=2.1",
+    "safetensors>=0.4",
+]
 api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
