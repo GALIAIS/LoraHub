@@ -472,6 +472,221 @@ def test_scan_dataset_missing_path_returns_empty_summary(client: TestClient) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Dataset thumbnails + caption I/O
+# --------------------------------------------------------------------------- #
+
+
+def _write_png(target: Path, color: tuple[int, int, int] = (200, 80, 40)) -> Path:
+    """Write a real (Pillow-decodable) 4x4 PNG so thumbnail generation works."""
+    from PIL import Image
+
+    img = Image.new("RGB", (4, 4), color=color)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    img.save(target, format="PNG")
+    return target
+
+
+def test_thumb_generates_and_caches_webp(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid image under an allowed root yields a WEBP thumbnail; the second
+    call must hit the on-disk cache (same content, same path)."""
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    img = _write_png(tmp_path / "ds" / "one.png")
+
+    r1 = client.get("/api/datasets/thumb", params={"path": str(img), "size": 64})
+    assert r1.status_code == 200, r1.text
+    assert r1.headers["content-type"] == "image/webp"
+    # Cache header is present so the browser can re-use the thumbnail.
+    assert "max-age" in r1.headers.get("cache-control", "")
+    body1 = r1.content
+    assert body1[:4] == b"RIFF"  # WEBP magic prefix
+
+    # Cache file should now exist on disk.
+    cache_dir = tmp_path / "runs" / ".thumbs"
+    assert cache_dir.is_dir()
+    cached = list(cache_dir.glob("*.webp"))
+    assert len(cached) == 1
+
+    # Second call returns the same bytes (served from cache).
+    r2 = client.get("/api/datasets/thumb", params={"path": str(img), "size": 64})
+    assert r2.status_code == 200
+    assert r2.content == body1
+
+
+def test_thumb_blocks_path_traversal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path outside every allowed root must be rejected with 400, not 404."""
+    (tmp_path / "ds").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path / "ds"))
+    monkeypatch.chdir(tmp_path / "ds")
+
+    # Path-traversal attempt that resolves above the allowed root.
+    bad = tmp_path / "outside" / "secret.png"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_bytes(b"")
+
+    r = client.get(
+        "/api/datasets/thumb",
+        params={"path": str(bad), "size": 128},
+    )
+    assert r.status_code == 400
+    assert "outside" in r.json()["detail"].lower()
+
+
+def test_thumb_rejects_non_image_suffix(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even inside an allowed root, a non-image file is rejected with 400."""
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "notes.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    r = client.get(
+        "/api/datasets/thumb", params={"path": str(target), "size": 128}
+    )
+    assert r.status_code == 400
+
+
+def test_thumb_size_bounds_enforced(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    img = _write_png(tmp_path / "one.png")
+
+    too_small = client.get(
+        "/api/datasets/thumb", params={"path": str(img), "size": 1}
+    )
+    too_big = client.get(
+        "/api/datasets/thumb", params={"path": str(img), "size": 99999}
+    )
+    assert too_small.status_code == 400
+    assert too_big.status_code == 400
+
+
+def test_thumb_corrupt_image_returns_404(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pillow can't decode a `.png` of arbitrary bytes — we surface 404."""
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "broken.png"
+    bad.write_bytes(b"definitely not a real png")
+
+    r = client.get("/api/datasets/thumb", params={"path": str(bad), "size": 64})
+    assert r.status_code == 404
+
+
+def test_get_caption_returns_existing_text(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    img = _write_png(tmp_path / "shot.png")
+    img.with_suffix(".txt").write_text("blue eyes, smile", encoding="utf-8")
+
+    r = client.get("/api/datasets/caption", params={"path": str(img)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["caption"] == "blue eyes, smile"
+    assert body["path"].endswith("shot.txt")
+
+
+def test_get_caption_missing_returns_null(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing companion is `caption=null`, not an error — there's nothing
+    wrong with an unlabeled image, that's just the pre-tagging state."""
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    img = _write_png(tmp_path / "shot.png")
+
+    r = client.get("/api/datasets/caption", params={"path": str(img)})
+    assert r.status_code == 200
+    assert r.json()["caption"] is None
+
+
+def test_put_caption_writes_file_and_round_trips(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    img = _write_png(tmp_path / "shot.png")
+
+    r = client.put(
+        "/api/datasets/caption",
+        json={"path": str(img), "caption": "blue hair, solo\nportrait"},
+    )
+    assert r.status_code == 200, r.text
+    # File is written as UTF-8 with LF newlines (no BOM).
+    on_disk = (tmp_path / "shot.txt").read_bytes()
+    assert on_disk == b"blue hair, solo\nportrait"
+
+    # GET reflects the write.
+    g = client.get("/api/datasets/caption", params={"path": str(img)}).json()
+    assert g["caption"] == "blue hair, solo\nportrait"
+
+
+def test_put_caption_normalises_crlf_to_lf(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    img = _write_png(tmp_path / "shot.png")
+
+    r = client.put(
+        "/api/datasets/caption",
+        json={"path": str(img), "caption": "first\r\nsecond\rthird"},
+    )
+    assert r.status_code == 200
+    assert (tmp_path / "shot.txt").read_bytes() == b"first\nsecond\nthird"
+
+
+def test_put_caption_blocks_path_traversal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "ds").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path / "ds"))
+    monkeypatch.chdir(tmp_path / "ds")
+    bad = tmp_path / "outside" / "secret.png"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+
+    r = client.put(
+        "/api/datasets/caption",
+        json={"path": str(bad), "caption": "should not be written"},
+    )
+    assert r.status_code == 400
+    # Make sure no .txt was created above the allowed root.
+    assert not (tmp_path / "outside" / "secret.txt").exists()
+
+
+def test_caption_endpoints_reject_non_image_suffix(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`path` must point at an image. The .txt sibling is derived server-side
+    so the user can't supply a raw .txt path and overwrite an arbitrary file."""
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    foreign = tmp_path / "secrets.txt"
+    foreign.write_text("don't overwrite me", encoding="utf-8")
+
+    g = client.get("/api/datasets/caption", params={"path": str(foreign)})
+    p = client.put(
+        "/api/datasets/caption",
+        json={"path": str(foreign), "caption": "pwn"},
+    )
+    assert g.status_code == 400
+    assert p.status_code == 400
+    # Original file content is untouched.
+    assert foreign.read_text(encoding="utf-8") == "don't overwrite me"
+
+
+# --------------------------------------------------------------------------- #
 # Rerun / reveal / archive
 # --------------------------------------------------------------------------- #
 
