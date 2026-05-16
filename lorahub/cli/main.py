@@ -470,6 +470,94 @@ def tag(
     console.print(f"[green]OK[/] tagged {len(results)} images")
 
 
+@app.command("anima-caption")
+def anima_caption(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Directory of *.txt caption files to rewrite in Anima layout."),
+    ],
+    dataset_tag: Annotated[
+        str | None,
+        typer.Option(
+            "--dataset-tag",
+            help="Optional non-anime subset header (e.g. 'ye-pop', 'deviantart').",
+        ),
+    ] = None,
+    quality: Annotated[
+        str | None,
+        typer.Option(
+            "--quality",
+            help="Comma-separated quality tags to inject (e.g. 'masterpiece,best quality').",
+        ),
+    ] = None,
+    score: Annotated[
+        str | None,
+        typer.Option(
+            "--score",
+            help="Comma-separated PonyV7 score tags to inject (e.g. 'score_7').",
+        ),
+    ] = None,
+    safety: Annotated[
+        str | None,
+        typer.Option(
+            "--safety",
+            help="Default safety tag if absent: safe / sensitive / nsfw / explicit. "
+            "Pass empty string to disable.",
+        ),
+    ] = "safe",
+    year: Annotated[
+        str | None,
+        typer.Option(
+            "--year",
+            help="Comma-separated year tags to inject (e.g. 'year 2025,newest').",
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Rewrite existing captions in place."),
+    ] = False,
+    recursive: Annotated[
+        bool,
+        typer.Option("--recursive", "-r", help="Recurse into subdirectories."),
+    ] = False,
+) -> None:
+    """Rewrite *.txt captions to Anima's recommended layout (no tagger inference)."""
+    from lorahub.core.dataset.anima import AnimaDatasetTransformer  # noqa: PLC0415
+
+    if not directory.is_dir():
+        err_console.print(f"[red]not a directory: {directory}[/red]")
+        raise typer.Exit(code=1)
+
+    def _split(value: str | None) -> list[str] | None:
+        if value is None:
+            return None
+        items = [t.strip() for t in value.split(",") if t.strip()]
+        return items or None
+
+    transformer = AnimaDatasetTransformer(
+        default_quality=_split(quality),
+        default_score=_split(score),
+        default_year=_split(year),
+        default_safety=safety if safety else None,
+        dataset_tag=dataset_tag,
+    )
+
+    def _on_progress(path: Path) -> None:
+        console.print(f"[dim]rewrote[/dim] {path.name}")
+
+    written = transformer.transform_directory(
+        directory,
+        recursive=recursive,
+        overwrite=overwrite,
+        progress=_on_progress,
+    )
+    if not overwrite:
+        console.print(
+            "[yellow]dry run[/yellow] (pass --overwrite to actually rewrite captions)"
+        )
+    console.print(f"[green]OK[/] rewrote {written} caption(s)")
+
+
 def _builtin_recipe(name: str) -> Path:
     package_root = Path(__file__).resolve().parent.parent.parent
     return package_root / "recipes" / f"{name}.yaml"
