@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom"
 import {
   Activity,
   Database,
+  Images,
   Layers,
   ListTree,
   Monitor,
@@ -19,6 +20,7 @@ const NAV = [
   { to: "/jobs", label: "训练任务", icon: ListTree },
   { to: "/recipes", label: "训练配方", icon: Layers },
   { to: "/datasets", label: "数据集", icon: Database },
+  { to: "/gallery", label: "样图画廊", icon: Images },
   { to: "/settings", label: "设置", icon: Settings },
 ]
 

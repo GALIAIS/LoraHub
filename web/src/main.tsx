@@ -8,6 +8,7 @@ import { JobsPage } from "./pages/jobs"
 import { DashboardPage } from "./pages/dashboard"
 import { RecipesPage } from "./pages/recipes"
 import { DatasetsPage } from "./pages/datasets"
+import { GalleryPage } from "./pages/gallery"
 import { SettingsPage } from "./pages/settings"
 import "./index.css"
 
@@ -30,6 +31,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="jobs" element={<JobsPage />} />
             <Route path="recipes" element={<RecipesPage />} />
             <Route path="datasets" element={<DatasetsPage />} />
+            <Route path="gallery" element={<GalleryPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
