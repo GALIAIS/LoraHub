@@ -66,6 +66,12 @@ class Settings:
     # Format: socks5h://user:pass@host:port or http://user:pass@host:port
     download_proxy: str | None = None
 
+    # When true, the filesystem browser API can list/read/write any path on
+    # the host (not just paths under cwd / $LORAHUB_DATASETS_ROOT / job
+    # workspaces). Default off so the local UI keeps the same blast radius
+    # it had when only the dataset roots were reachable.
+    allow_filesystem_browse: bool = False
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from .backends import router as backends_router
 from .bootstrap import router as bootstrap_router
 from .captions import router as captions_router
 from .datasets import router as datasets_router
+from .filesystem import router as filesystem_router
 from .health import router as health_router
 from .jobs import router as jobs_router
 from .models import router as models_router
@@ -31,6 +32,7 @@ all_routers: list[APIRouter] = [
     settings_router,
     configs_router,
     datasets_router,
+    filesystem_router,
     jobs_router,
     backends_router,
     bootstrap_router,

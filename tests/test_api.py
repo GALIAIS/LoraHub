@@ -2593,3 +2593,70 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     assert b["total"] == 2
     assert b["failed"] == 2
     assert b["name_prefix"] == "bravo"
+
+
+# --------------------------------------------------------------------------- #
+# Filesystem browser endpoints
+# --------------------------------------------------------------------------- #
+
+
+def test_fs_roots_includes_cwd_when_locked(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    r = client.get("/api/fs/roots")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["unrestricted"] is False
+    paths = [root["path"] for root in body["roots"]]
+    assert any(Path(p) == tmp_path.resolve() for p in paths)
+
+
+def test_fs_list_blocks_paths_outside_allowed_roots(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "lorahub-outside"
+    outside.mkdir(exist_ok=True)
+    r = client.get("/api/fs/list", params={"path": str(outside)})
+    assert r.status_code == 403
+
+
+def test_fs_read_and_write_text_inside_allowed_root(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "notes.md"
+    target.write_bytes(b"hello\n")
+
+    r = client.get("/api/fs/read", params={"path": str(target)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "text"
+    assert body["content"] == "hello\n"
+
+    r2 = client.put(
+        "/api/fs/write",
+        json={"path": str(target), "content": "updated\n"},
+    )
+    assert r2.status_code == 200
+    assert target.read_bytes() == b"updated\n"
+
+
+def test_fs_subdirs_lists_only_directories(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    r = client.get("/api/fs/subdirs", params={"path": str(tmp_path)})
+    assert r.status_code == 200
+    names = [s["name"] for s in r.json()["subdirs"]]
+    assert names == ["a", "b"]
+
+
+def test_fs_unrestricted_lets_paths_outside_through(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "lorahub-outside-2"
+    outside.mkdir(exist_ok=True)
+    (outside / "x.txt").write_text("y", encoding="utf-8")
+
+    r0 = client.put("/api/settings", json={"allow_filesystem_browse": True})
+    assert r0.status_code == 200
+    r = client.get("/api/fs/list", params={"path": str(outside)})
+    assert r.status_code == 200
+    names = [e["name"] for e in r.json()["entries"]]
+    assert "x.txt" in names

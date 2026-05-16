@@ -71,6 +71,7 @@ _smoke/
 # Datasets (user data, never commit)
 datasets/
 !tests/fixtures/datasets/
+!web/src/pages/datasets/
 
 # Bundled kohya checkout (cloned by `lorahub bootstrap-kohya`, never committed)
 sd-scripts/

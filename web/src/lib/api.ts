@@ -104,6 +104,7 @@ export interface SettingsState {
   modelscope_token: string | null
   pypi_index_url: string | null
   download_proxy: string | null
+  allow_filesystem_browse: boolean
   extra: Record<string, unknown>
 }
 
@@ -112,6 +113,57 @@ export interface SettingsResponse {
   backend: AnyBackendStatus
   backends: Record<BackendId, AnyBackendStatus>
   path: string
+}
+
+export type FsEntryKind = "dir" | "image" | "text" | "binary"
+
+export interface FsEntry {
+  name: string
+  path: string
+  relative_path: string
+  is_dir: boolean
+  kind: FsEntryKind
+  suffix: string
+  size: number
+  mtime: number | null
+}
+
+export interface FsRoot {
+  name: string
+  path: string
+  kind: "dataset_root" | "drive"
+}
+
+export interface FsRootsResponse {
+  roots: FsRoot[]
+  unrestricted: boolean
+}
+
+export interface FsListResponse {
+  path: string
+  parent: string | null
+  entries: FsEntry[]
+  truncated: boolean
+}
+
+export interface FsSubdir {
+  name: string
+  path: string
+}
+
+export interface FsSubdirsResponse {
+  path: string
+  subdirs: FsSubdir[]
+}
+
+export interface FsReadResponse {
+  path: string
+  kind: "text" | "image" | "binary"
+  size: number
+  suffix?: string
+  encoding?: string
+  content: string | null
+  reason?: string
 }
 
 export interface BootstrapEvent {
@@ -467,6 +519,20 @@ export const api = {
     http<DatasetCaptionResponse & { bytes: number }>("/datasets/caption", {
       method: "PUT",
       body: JSON.stringify({ path, caption }),
+    }),
+  fsRoots: () => http<FsRootsResponse>("/fs/roots"),
+  fsList: (path: string, showHidden = false) =>
+    http<FsListResponse>(
+      `/fs/list?path=${encodeURIComponent(path)}&show_hidden=${showHidden ? "true" : "false"}`,
+    ),
+  fsSubdirs: (path: string) =>
+    http<FsSubdirsResponse>(`/fs/subdirs?path=${encodeURIComponent(path)}`),
+  fsRead: (path: string) =>
+    http<FsReadResponse>(`/fs/read?path=${encodeURIComponent(path)}`),
+  fsWrite: (path: string, content: string, create = false) =>
+    http<{ path: string; bytes: number }>("/fs/write", {
+      method: "PUT",
+      body: JSON.stringify({ path, content, create }),
     }),
   getSettings: () => http<SettingsResponse>("/settings"),
   updateSettings: (patch: Partial<SettingsState>) =>
