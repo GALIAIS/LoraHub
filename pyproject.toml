@@ -1,6 +1,6 @@
 [project]
 name = "lorahub"
-version = "0.1.0.dev0"
+version = "0.2.0"
 description = "Open-source LoRA training workbench for diffusion models"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -8,7 +8,7 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "GALIAIS", email = "GALIAIS@users.noreply.github.com" }]
 keywords = ["lora", "stable-diffusion", "sdxl", "kohya", "training", "ai"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: Microsoft :: Windows",
