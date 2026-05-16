@@ -249,6 +249,64 @@ def test_transform_directory_recursive_picks_up_subdirs(tmp_path: Path) -> None:
     assert (sub / "deep.txt").read_text(encoding="utf-8") == "blue hair"
 
 
+# --------------------------------------------------------------------------- #
+# Booru alias plumbing
+# --------------------------------------------------------------------------- #
+#
+# These tests use a synthetic ``booru_alias_extra`` table so the assertions
+# stay independent of the curated default. The default
+# ``DANBOORU_TO_GELBOORU`` table can grow or shrink over time without forcing
+# a test rewrite — we are validating the *mechanism*, not its contents.
+
+
+def test_pipeline_booru_alias_disabled_by_default() -> None:
+    """Without ``apply_booru_alias`` the alias table is a no-op.
+
+    Even when ``booru_alias_extra`` would carry a mapping, the pipeline must
+    leave the tag untouched until the user opts in. This guards the
+    backwards-compatibility promise made by older recipes.
+    """
+    pipeline = CaptionPipeline(
+        booru_alias_extra={"fake danbooru tag": "fake gelbooru tag"},
+    )
+    out = pipeline.transform_text("fake danbooru tag, 1girl")
+    parts = split_tags(out)
+    assert "fake danbooru tag" in parts
+    assert "fake gelbooru tag" not in parts
+
+
+def test_pipeline_booru_alias_when_enabled_remaps_tags() -> None:
+    """With the flag on, ``booru_alias_extra`` rewrites the matching tag."""
+    pipeline = CaptionPipeline(
+        apply_booru_alias=True,
+        booru_alias_extra={"fake danbooru tag": "fake gelbooru tag"},
+    )
+    out = pipeline.transform_text("fake danbooru tag, 1girl")
+    parts = split_tags(out)
+    assert "fake gelbooru tag" in parts
+    assert "fake danbooru tag" not in parts
+
+
+def test_pipeline_user_remap_wins_over_booru_alias() -> None:
+    """User-supplied ``remap`` takes precedence on shared keys.
+
+    ``remap`` runs before the alias step, so the tag is already replaced by
+    the user's target by the time the alias table fires; the alias mapping
+    for the same key never gets a chance to match. This is the documented
+    contract: user rules trump the curated table.
+    """
+    pipeline = CaptionPipeline(
+        remap={"shared key": "user winner"},
+        apply_booru_alias=True,
+        booru_alias_extra={"shared key": "alias winner"},
+    )
+    out = pipeline.transform_text("shared key, 1girl")
+    parts = split_tags(out)
+    assert "user winner" in parts
+    assert "alias winner" not in parts
+    assert "shared key" not in parts
+
+
 def test_vocab_constants_are_frozen_and_populated() -> None:
     """Cheap sanity: the curated vocabularies are non-empty + immutable."""
     for vocab in (QUALITY_TAGS, SCORE_TAGS, SAFETY_TAGS, META_TAGS, TIME_TAGS):

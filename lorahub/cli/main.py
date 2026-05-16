@@ -641,6 +641,16 @@ def caption(
             help="Reserved for future skip-if-already-cleaned logic; currently a no-op.",
         ),
     ] = False,
+    booru_alias: Annotated[
+        bool,
+        typer.Option(
+            "--booru-alias",
+            help=(
+                "Apply the curated Danbooru->Gelbooru alias table after "
+                "--remap (off by default; user --remap rules still win)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Clean booru-style captions in place (Illustrious / Pony / Animagine / NoobAI).
 
@@ -670,6 +680,7 @@ def caption(
         keep_n=keep_n,
         drop_rate=drop_rate,
         seed=seed,
+        apply_booru_alias=booru_alias,
     )
 
     def _on_progress(p: Path, done: int, total: int) -> None:
