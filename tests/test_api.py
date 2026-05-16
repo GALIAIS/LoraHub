@@ -1996,6 +1996,113 @@ def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) ->
 
 
 # --------------------------------------------------------------------------- #
+# Caption preprocessing (/api/captions/normalize)
+# --------------------------------------------------------------------------- #
+
+
+def test_captions_normalize_rejects_missing_directory(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.post(
+        "/api/captions/normalize",
+        json={"path": str(tmp_path / "nope")},
+    )
+    assert r.status_code == 400
+    assert "not a directory" in r.json()["detail"]
+
+
+def test_captions_normalize_runs_session_and_rewrites_files(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mock the pipeline so the route's session/threading/progress plumbing
+    is exercised end-to-end without depending on the real CaptionPipeline."""
+    import time
+
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "ds"
+    data.mkdir()
+    (data / "a.txt").write_text("Blue_Hair, NSFW", encoding="utf-8")
+    (data / "b.txt").write_text("blue hair", encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+
+    class FakePipeline:
+        def __init__(self, *, blacklist: set[str], **_: Any) -> None:
+            self.blacklist = blacklist
+
+        def transform_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            overwrite: bool,
+            progress: Any,
+        ) -> int:
+            captured["params"] = {
+                "directory": str(directory),
+                "recursive": recursive,
+                "overwrite": overwrite,
+                "blacklist": set(self.blacklist),
+            }
+            files = sorted(directory.glob("*.txt"))
+            written = 0
+            for idx, p in enumerate(files, start=1):
+                old = p.read_text(encoding="utf-8")
+                # Trivial fake: lowercase + drop "nsfw" tags.
+                tags = [t.strip().lower() for t in old.split(",") if t.strip()]
+                tags = [t.replace("_", " ") for t in tags if t not in self.blacklist]
+                new = ", ".join(tags)
+                if new != old:
+                    p.write_text(new, encoding="utf-8")
+                    written += 1
+                if progress is not None:
+                    progress(p, idx, len(files))
+            return written
+
+    monkeypatch.setattr(
+        captions_router, "_build_pipeline", lambda req: FakePipeline(
+            blacklist=set(req.blacklist),
+        )
+    )
+
+    r = client.post(
+        "/api/captions/normalize",
+        json={
+            "path": str(data),
+            "blacklist": ["nsfw"],
+            "recursive": False,
+        },
+    )
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["status"] == "running"
+    sid = body["session_id"]
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/captions/normalize/{sid}").json()
+        if final["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+
+    assert final["status"] == "succeeded", final
+    assert final["total"] == 2
+    assert final["written"] == 2
+    assert final["percent"] == 100
+    file_events = [e for e in final["events"] if e.get("file")]
+    assert {Path(e["file"]).name for e in file_events} == {"a.txt", "b.txt"}
+    assert captured["params"]["blacklist"] == {"nsfw"}
+    assert (data / "a.txt").read_text(encoding="utf-8") == "blue hair"
+
+
+def test_captions_normalize_status_unknown_returns_404(client: TestClient) -> None:
+    r = client.get("/api/captions/normalize/does-not-exist")
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # Cross-job sample gallery (/api/samples)
 # --------------------------------------------------------------------------- #
 

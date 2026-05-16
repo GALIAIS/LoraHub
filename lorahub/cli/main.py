@@ -470,6 +470,8 @@ def tag(
     console.print(f"[green]OK[/] tagged {len(results)} images")
 
 
+
+
 @app.command("anima-caption")
 def anima_caption(
     directory: Annotated[
@@ -556,6 +558,154 @@ def anima_caption(
             "[yellow]dry run[/yellow] (pass --overwrite to actually rewrite captions)"
         )
     console.print(f"[green]OK[/] rewrote {written} caption(s)")
+
+
+@app.command()
+def caption(
+    action: Annotated[
+        str,
+        typer.Argument(
+            help="Caption sub-action. Currently only 'normalize' is supported.",
+        ),
+    ],
+    directory: Annotated[
+        Path, typer.Argument(help="Directory of .txt caption files to process.")
+    ],
+    blacklist: Annotated[
+        str,
+        typer.Option(
+            "--blacklist",
+            help="Comma-separated tags to drop (case-insensitive).",
+        ),
+    ] = "",
+    remap: Annotated[
+        str,
+        typer.Option(
+            "--remap",
+            help='Comma-separated rewrite rules, "old:new,old2:new2". Empty new deletes.',
+        ),
+    ] = "",
+    known_artists: Annotated[
+        str,
+        typer.Option(
+            "--known-artists",
+            help="Comma-separated artist tags to prefix with @ (Animagine convention).",
+        ),
+    ] = "",
+    quality: Annotated[
+        str,
+        typer.Option(
+            "--quality",
+            help='Comma-separated quality tags to prepend, e.g. "masterpiece,best quality".',
+        ),
+    ] = "",
+    score: Annotated[
+        str,
+        typer.Option(
+            "--score",
+            help='Comma-separated score chain to prepend, e.g. "score_9,score_8_up".',
+        ),
+    ] = "",
+    safety: Annotated[
+        str,
+        typer.Option("--safety", help="Safety marker to prepend, e.g. 'safe'."),
+    ] = "",
+    shuffle: Annotated[
+        bool, typer.Option("--shuffle", help="Random-shuffle non-anchored tags.")
+    ] = False,
+    keep_n: Annotated[
+        int,
+        typer.Option(
+            "--keep-n", help="Anchor the first N tags during shuffle (kohya keep_tokens)."
+        ),
+    ] = 0,
+    drop_rate: Annotated[
+        float,
+        typer.Option(
+            "--drop-rate",
+            help="Probability of dropping each non-anchored tag (0..1).",
+        ),
+    ] = 0.0,
+    seed: Annotated[
+        int | None,
+        typer.Option("--seed", help="PRNG seed for reproducible shuffle/dropout."),
+    ] = None,
+    recursive: Annotated[
+        bool,
+        typer.Option("--recursive", "-r", help="Recurse into subdirectories."),
+    ] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite",
+            help="Reserved for future skip-if-already-cleaned logic; currently a no-op.",
+        ),
+    ] = False,
+) -> None:
+    """Clean booru-style captions in place (Illustrious / Pony / Animagine / NoobAI).
+
+    Generic preprocessing toolkit: lowercase, swap underscores for spaces,
+    dedupe, drop blacklisted tags, remap one tag to another, prepend
+    quality/score/safety markers, optionally shuffle and dropout-regularise.
+    Pony score_N tags and quality/safety markers are anchored against
+    dropout so the prompt's stylistic spine survives.
+    """
+    from lorahub.core.dataset.captions import CaptionPipeline  # noqa: PLC0415
+
+    if action != "normalize":
+        err_console.print(f"[red]unknown caption action: {action}[/red]")
+        raise typer.Exit(code=1)
+    if not directory.is_dir():
+        err_console.print(f"[red]not a directory: {directory}[/red]")
+        raise typer.Exit(code=1)
+
+    pipeline = CaptionPipeline(
+        blacklist=_parse_csv_set(blacklist),
+        remap=_parse_remap(remap),
+        known_artists=_parse_csv_set(known_artists),
+        quality=_parse_csv_list(quality) or None,
+        score=_parse_csv_list(score) or None,
+        safety=safety.strip() or None,
+        shuffle=shuffle,
+        keep_n=keep_n,
+        drop_rate=drop_rate,
+        seed=seed,
+    )
+
+    def _on_progress(p: Path, done: int, total: int) -> None:
+        console.print(f"[dim]{done}/{total}[/dim] {p.name}")
+
+    written = pipeline.transform_directory(
+        directory,
+        recursive=recursive,
+        overwrite=overwrite,
+        progress=_on_progress,
+    )
+    console.print(f"[green]OK[/] rewrote {written} caption(s)")
+
+
+def _parse_csv_list(raw: str) -> list[str]:
+    """Split a comma-separated CLI option into trimmed, non-empty tokens."""
+    if not raw:
+        return []
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+def _parse_csv_set(raw: str) -> set[str]:
+    return set(_parse_csv_list(raw))
+
+
+def _parse_remap(raw: str) -> dict[str, str]:
+    """Parse ``"old:new,old2:new2"`` into ``{old: new, old2: new2}``."""
+    rules: dict[str, str] = {}
+    for token in _parse_csv_list(raw):
+        if ":" not in token:
+            continue
+        key, _, value = token.partition(":")
+        key = key.strip()
+        if key:
+            rules[key] = value.strip()
+    return rules
 
 
 def _builtin_recipe(name: str) -> Path:
