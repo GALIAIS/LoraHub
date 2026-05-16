@@ -8,9 +8,8 @@ existing single-slot concurrency model.
 Each spawned :class:`JobRecord` is stamped with
 ``metadata = {"sweep_id": ..., "axis_values": {...}}`` so a later
 ``GET /api/sweeps/{sweep_id}`` can filter the in-memory registry without
-needing a join table. Persistence across server restarts is a follow-up:
-``JobRecord.metadata`` is in-memory only, so an interrupted sweep loses its
-sweep_id grouping after a crash.
+needing a join table. The metadata blob is persisted alongside the rest of
+the job row in SQLite, so sweep_id grouping survives a server restart.
 """
 
 from __future__ import annotations
