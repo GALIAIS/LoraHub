@@ -1,25 +1,29 @@
 """Resolve the kohya-ss/sd-scripts checkout and the Python that runs it.
 
-v0.1 scope: locate an existing sd-scripts checkout via (in priority order)
-explicit recipe field, environment variable, or default user-data location.
-Fail fast with a clear remediation message if it isn't there. Automated
-clone+pip-install is deferred to v0.2.
+Locates an existing sd-scripts checkout via (in priority order) explicit
+recipe field, environment variable, or default user-data location. Fails
+fast with a clear remediation message if it isn't there. Shared helpers
+live in ``lorahub.core.backends._common.bootstrap`` so the diffusion-pipe
+backend can apply the same cascade against its own paths.
 """
 
 from __future__ import annotations
 
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from platformdirs import user_data_path
-
+from lorahub.core.backends._common import bootstrap as _common
 from lorahub.core.backends.errors import BootstrapError
 
 _ENV_SD_SCRIPTS = "LORAHUB_KOHYA_SD_SCRIPTS"
 _ENV_PYTHON = "LORAHUB_KOHYA_PYTHON"
 _REQUIRED_SCRIPTS = ("train_network.py", "sdxl_train_network.py")
+_LABEL = "kohya-ss/sd-scripts"
+
+
+# Re-export the shared venv-python lookup so the api.settings probe can
+# keep using the historical private name without reaching into _common.
+_venv_python = _common.venv_python
 
 
 __all__ = [
@@ -43,31 +47,15 @@ class KohyaEnv:
 
 
 def default_sd_scripts_path() -> Path:
-    """Where lorahub looks for sd-scripts when nothing else is configured.
-
-    Priority order:
-      1. `<cwd>/sd-scripts` — the project-local convention `bootstrap-kohya`
-         creates and `lorahub init` recommends.
-      2. `<platformdirs user_data>/lorahub/lorahub/backends/sd-scripts` — the
-         OS-standard per-user data location.
-
-    The first existing path wins; if neither exists, the cwd-relative path
-    is returned so error messages point users at the conventional location.
-    """
-    cwd_local = Path.cwd() / "sd-scripts"
-    if cwd_local.is_dir():
-        return cwd_local
-    user_local = user_data_path("lorahub", "lorahub") / "backends" / "sd-scripts"
-    if user_local.is_dir():
-        return user_local
-    return cwd_local
+    """Where lorahub looks for sd-scripts when nothing else is configured."""
+    return _common.default_repo_path("sd-scripts")
 
 
 def resolve(
     recipe_path: Path | None = None,
     recipe_python: Path | None = None,
 ) -> KohyaEnv:
-    """Resolve the kohya environment using recipe → env var → default.
+    """Resolve the kohya environment using recipe -> env var -> default.
 
     For the Python interpreter, after exhausting the recipe field and env var
     we look for a `venv/` next to sd-scripts (the layout kohya's README sets
@@ -75,67 +63,24 @@ def resolve(
     """
     sd_scripts = (
         recipe_path
-        or _path_from_env(_ENV_SD_SCRIPTS)
+        or _common.path_from_env(_ENV_SD_SCRIPTS)
         or default_sd_scripts_path()
     )
-    python = (
-        recipe_python
-        or _path_from_env(_ENV_PYTHON)
-        or _venv_python(sd_scripts)
-        or Path(sys.executable)
+    python = _common.resolve_python(
+        sd_scripts, recipe_python=recipe_python, env_var=_ENV_PYTHON
     )
 
-    _check_sd_scripts(sd_scripts)
-    _check_python(python)
-
-    return KohyaEnv(sd_scripts_path=sd_scripts.resolve(), python_executable=python.resolve())
-
-
-def _venv_python(sd_scripts: Path) -> Path | None:
-    """Look for the venv python kohya's README sets up next to its checkout."""
-    candidates = (
-        sd_scripts / "venv" / "Scripts" / "python.exe",
-        sd_scripts / "venv" / "bin" / "python",
-        sd_scripts / ".venv" / "Scripts" / "python.exe",
-        sd_scripts / ".venv" / "bin" / "python",
+    _common.check_repo(
+        sd_scripts,
+        label=_LABEL,
+        required_files=_REQUIRED_SCRIPTS,
+        env_var=_ENV_SD_SCRIPTS,
+        default_path=default_sd_scripts_path(),
+        recipe_field="sd_scripts_path",
     )
-    for c in candidates:
-        if c.is_file():
-            return c
-    return None
+    _common.check_python(python)
 
-
-def _path_from_env(name: str) -> Path | None:
-    raw = os.environ.get(name)
-    return Path(raw) if raw else None
-
-
-def _check_sd_scripts(path: Path) -> None:
-    if not path.exists():
-        msg = (
-            f"kohya sd-scripts not found at {path}.\n"
-            f"Either:\n"
-            f"  1. Set backend.sd_scripts_path in your recipe, or\n"
-            f"  2. Set the {_ENV_SD_SCRIPTS} environment variable, or\n"
-            f"  3. Clone kohya-ss/sd-scripts into {default_sd_scripts_path()}"
-        )
-        raise BootstrapError(msg)
-    if not path.is_dir():
-        msg = f"sd-scripts path is not a directory: {path}"
-        raise BootstrapError(msg)
-    missing = [s for s in _REQUIRED_SCRIPTS if not (path / s).is_file()]
-    if missing:
-        msg = (
-            f"sd-scripts checkout at {path} is missing required files: "
-            f"{', '.join(missing)}. Is this really kohya-ss/sd-scripts?"
-        )
-        raise BootstrapError(msg)
-
-
-def _check_python(python: Path) -> None:
-    if not python.exists():
-        msg = f"Python executable not found: {python}"
-        raise BootstrapError(msg)
-    if not python.is_file():
-        msg = f"Python executable is not a file: {python}"
-        raise BootstrapError(msg)
+    return KohyaEnv(
+        sd_scripts_path=sd_scripts.resolve(),
+        python_executable=python.resolve(),
+    )

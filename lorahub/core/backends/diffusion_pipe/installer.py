@@ -3,31 +3,33 @@
 Mirrors the public surface of `lorahub.core.backends.kohya.installer` so the
 bootstrap session can drive either backend with the same plumbing. Each step
 runs a single subprocess; failure raises `BootstrapError` annotated with the
-step name and exit code.
+step name and exit code. Shared steps (clone, venv, torch) compose helpers
+from ``lorahub.core.backends._common.installer``.
 
-All package operations go through ``lorahub.core.toolchain.uv``, so torch and
-its sibling wheels are hard-linked from the shared uv cache instead of
+All package operations go through ``lorahub.core.toolchain.uv``, so torch
+and its sibling wheels are hard-linked from the shared uv cache instead of
 re-downloaded into every backend's venv.
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
+import subprocess  # noqa: F401  -- re-exported so tests can monkeypatch it
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from lorahub.core.backends._common import installer as _common
+from lorahub.core.backends._common.installer import (
+    DEFAULT_CUDA,
+    DEFAULT_DEPTH,
+    DEFAULT_TORCH,
+    DEFAULT_TORCHVISION,
+    ProgressCallback,
+)
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.toolchain import uv as _uv
 
 DIFFUSION_PIPE_REPO_URL = "https://github.com/tdrussell/diffusion-pipe.git"
-DEFAULT_TORCH = "2.6.0"
-DEFAULT_TORCHVISION = "0.21.0"
-DEFAULT_CUDA = "cu124"
-DEFAULT_DEPTH = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,69 +57,25 @@ class BootstrapPlan:
         return f"https://download.pytorch.org/whl/{self.cuda_version}"
 
 
-ProgressCallback = Callable[[str], None]
-
-
-def _run(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
-    """Run a non-package command (git clone, etc.) with stderr capture."""
-    if progress is not None:
-        progress(step)
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        if progress is not None and result.stderr:
-            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
-            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
-        raise BootstrapError(step, result.returncode)
-
-
 def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    if plan.target.exists() and any(plan.target.iterdir()):
-        msg = f"target directory is not empty: {plan.target}"
-        raise BootstrapError("clone", 1) from FileExistsError(msg)
-    plan.target.parent.mkdir(parents=True, exist_ok=True)
-    from lorahub.api.settings import apply_github_proxy  # noqa: PLC0415
-
-    repo_url = apply_github_proxy(DIFFUSION_PIPE_REPO_URL, plan.github_proxy)
-    cmd = [
-        "git",
-        "clone",
-        "--depth",
-        str(plan.git_depth),
-        repo_url,
-        str(plan.target),
-    ]
-    _run(cmd, f"clone tdrussell/diffusion-pipe -> {plan.target}", progress)
+    _common.clone_repo(
+        plan,
+        repo_url=DIFFUSION_PIPE_REPO_URL,
+        label="tdrussell/diffusion-pipe",
+        progress=progress,
+    )
 
 
 def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    try:
-        _uv.create_venv(plan.target, python=plan.base_python, progress=progress)
-    except RuntimeError as exc:
-        raise BootstrapError("create venv", 1) from exc
+    _common.create_venv(plan, progress=progress)
 
 
 def upgrade_pip(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    """No-op under uv."""
-    if progress is not None:
-        progress("upgrade pip + wheel + setuptools (skipped under uv)")
+    _common.upgrade_pip(plan, progress=progress)
 
 
 def install_torch(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
-    args = [
-        f"torch=={plan.torch_version}",
-        f"torchvision=={plan.torchvision_version}",
-        "--index-url",
-        plan.torch_index,
-    ]
-    try:
-        _uv.pip_install(
-            plan.venv_python,
-            args,
-            step=f"install torch=={plan.torch_version} ({plan.cuda_version})",
-            progress=progress,
-        )
-    except RuntimeError as exc:
-        raise BootstrapError(f"install torch=={plan.torch_version}", 1) from exc
+    _common.install_torch(plan, progress=progress)
 
 
 def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -127,7 +85,7 @@ def install_requirements(plan: BootstrapPlan, *, progress: ProgressCallback | No
         raise BootstrapError("install requirements", 1) from FileNotFoundError(msg)
 
     # diffusion-pipe pins `deepspeed` in requirements.txt, but DeepSpeed
-    # ships no Windows wheel — pip then tries to build from source which
+    # ships no Windows wheel -- pip then tries to build from source which
     # needs CUDA toolkit + MSVC and almost always fails. Strip every line
     # that mentions deepspeed and run the rest; the dedicated
     # install_deepspeed step takes care of it (and skips on Windows).
@@ -193,35 +151,19 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
-    """Remove a half-installed target so the user can retry.
-
-    Git pack files inside `.git/objects/pack/*.idx` are written read-only on
-    Windows, so the default ``shutil.rmtree`` raises PermissionError on them.
-    Hook ``onexc`` (Python 3.12+) / ``onerror`` to flip the read-only bit and
-    retry, otherwise the user gets stuck in a 409 loop on every reinstall.
-    """
-    if not plan.target.exists():
-        return
-
-    def _force_writable(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
-        import stat as _stat  # noqa: PLC0415
-
-        try:
-            Path(path).chmod(_stat.S_IWRITE | _stat.S_IREAD)
-            func(path)
-        except OSError:
-            pass
-
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(plan.target, onexc=_force_writable)
-    else:
-        shutil.rmtree(plan.target, onerror=_force_writable)
+    """Remove a half-installed target so the user can retry."""
+    _common.cleanup_partial(plan.target)
 
 
 __all__ = [
+    "DEFAULT_CUDA",
+    "DEFAULT_DEPTH",
+    "DEFAULT_TORCH",
+    "DEFAULT_TORCHVISION",
+    "DIFFUSION_PIPE_REPO_URL",
     "BootstrapError",
     "BootstrapPlan",
-    "DIFFUSION_PIPE_REPO_URL",
+    "ProgressCallback",
     "bootstrap",
     "cleanup_partial",
     "clone",
