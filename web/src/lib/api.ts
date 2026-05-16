@@ -713,6 +713,11 @@ export interface SystemCpu {
   arch: string
   frequency_mhz: number | null
   cpu_temperature_c: number | null
+  // Newer fields - all optional so older snapshots still type-check.
+  model?: string
+  frequency_min_mhz?: number | null
+  frequency_max_mhz?: number | null
+  frequency_per_core_mhz?: number[]
 }
 
 export interface SystemMemory {
@@ -746,6 +751,93 @@ export interface SystemGpu {
   power_limit_w: number | null
   fan_percent: number | null
   vendor: "nvidia" | "amd" | "intel" | "apple" | "qemu" | "unknown" | string
+  // PCIe link state (optional - older backends don't emit these).
+  pcie_gen_current?: number | null
+  pcie_width_current?: number | null
+  pcie_gen_max?: number | null
+  pcie_width_max?: number | null
+  // Clocks (MHz).
+  sm_clock_mhz?: number | null
+  mem_clock_mhz?: number | null
+  sm_clock_max_mhz?: number | null
+  mem_clock_max_mhz?: number | null
+}
+
+export interface ProcessInfo {
+  pid: number
+  name: string
+  cpu_percent: number
+  memory_rss_bytes: number
+  memory_percent: number
+}
+
+export interface InterfaceAddress {
+  family: string
+  address: string
+  netmask?: string | null
+  broadcast?: string | null
+}
+
+export type NetworkInterfaceKind = "physical" | "loopback" | "virtual" | "wireless"
+
+export interface NetworkInterfaceStats {
+  name: string
+  is_up: boolean
+  speed_mbps: number | null
+  mtu: number | null
+  addresses: InterfaceAddress[]
+  bytes_sent_total: number
+  bytes_recv_total: number
+  bytes_sent_per_sec: number
+  bytes_recv_per_sec: number
+  packets_sent_total: number
+  packets_recv_total: number
+  errors_in: number
+  errors_out: number
+  drops_in: number
+  drops_out: number
+  kind: NetworkInterfaceKind
+}
+
+export interface TcpConnectionStats {
+  total: number
+  established: number
+  listen: number
+  time_wait: number
+  close_wait: number
+  other: number
+}
+
+export interface PublicIpInfo {
+  ip: string | null
+  fetched_at: number
+  source: "ip.sb" | "ipinfo.io" | "cached" | "unreachable" | string
+}
+
+export interface DiskIoDevice {
+  device: string
+  read_bytes_per_sec: number
+  write_bytes_per_sec: number
+  read_ops_per_sec: number
+  write_ops_per_sec: number
+}
+
+export interface DiskIoStats {
+  read_bytes_total: number
+  write_bytes_total: number
+  read_bytes_per_sec: number
+  write_bytes_per_sec: number
+  read_ops_per_sec: number
+  write_ops_per_sec: number
+  per_device: DiskIoDevice[]
+}
+
+export interface GpuProcessInfo {
+  gpu_index: number
+  pid: number
+  process_name: string
+  used_memory_mib: number
+  type: "C" | "G" | "C+G" | string
 }
 
 export interface SystemBattery {
@@ -769,7 +861,15 @@ export interface SystemSnapshot {
     bytes_recv_total: number
     bytes_sent_per_sec: number
     bytes_recv_per_sec: number
+    // Newer fields - all optional so older snapshots still parse.
+    interfaces?: NetworkInterfaceStats[]
+    tcp_connections?: TcpConnectionStats | null
+    public_ip?: PublicIpInfo | null
   } | null
+  // Newer top-level fields - all optional.
+  processes?: ProcessInfo[]
+  disk_io?: DiskIoStats | null
+  gpu_processes?: GpuProcessInfo[]
 }
 
 export interface MirrorPreset {
