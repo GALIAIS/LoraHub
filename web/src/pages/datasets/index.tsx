@@ -52,7 +52,7 @@ export function DatasetsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-5 w-full max-w-6xl">
+      <div className="px-8 py-7 space-y-5 w-full">
         <header className="space-y-1">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
             数据集管理
