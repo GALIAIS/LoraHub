@@ -110,6 +110,38 @@ def test_scheduler_exposes_available_slots_for_multi_gpu() -> None:
     sched.stop(timeout=2.0)
 
 
+def test_scheduler_runs_two_tasks_in_parallel_with_concurrency_2() -> None:
+    """With N=2 workers, two tasks must be able to run *simultaneously*.
+
+    We block both tasks on a `Barrier(2)`: if only one worker were active,
+    the barrier would never be released and the test would time out. The
+    barrier waiting succeeding proves both tasks reached `_loop` at once.
+    """
+    sched = JobScheduler(concurrency=2)
+    barrier = threading.Barrier(2, timeout=3.0)
+    finished = threading.Event()
+    counter = {"n": 0}
+    lock = threading.Lock()
+
+    def task(_slot: int) -> None:
+        # If only one worker is running, this barrier stays unfilled and
+        # raises BrokenBarrierError — the test then fails on the assertion
+        # below because `finished` never gets set.
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            return
+        with lock:
+            counter["n"] += 1
+            if counter["n"] == 2:
+                finished.set()
+
+    sched.submit("a", task)
+    sched.submit("b", task)
+    assert finished.wait(timeout=3.0), "two workers did not run in parallel"
+    sched.stop(timeout=2.0)
+
+
 def test_scheduler_rejects_invalid_concurrency() -> None:
     with pytest.raises(ValueError, match="concurrency"):
         JobScheduler(concurrency=0)
