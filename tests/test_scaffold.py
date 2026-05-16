@@ -61,11 +61,23 @@ def test_detect_arch_from_filename() -> None:
     assert scaffold.detect_arch(Path("sdxl_base_1.0.safetensors")) == "sdxl"
     assert scaffold.detect_arch(Path("illustriousXL_v01.safetensors")) == "sdxl"
     assert scaffold.detect_arch(Path("ponyDiffusionXL.safetensors")) == "sdxl"
+    assert scaffold.detect_arch(Path("noobaiXL_e2.safetensors")) == "sdxl"
+    assert scaffold.detect_arch(Path("animagineXL_v3.safetensors")) == "sdxl"
     assert scaffold.detect_arch(Path("flux1-dev.safetensors")) == "flux"
     assert scaffold.detect_arch(Path("sd3-medium.safetensors")) == "sd3"
     assert scaffold.detect_arch(Path("v1-5-pruned.safetensors")) == "sd15"
     # Unknown checkpoints default to SDXL (current most common case).
     assert scaffold.detect_arch(Path("mystery.safetensors")) == "sdxl"
+
+
+def test_detect_arch_variant_from_filename() -> None:
+    assert scaffold.detect_arch_variant(Path("ponyDiffusionXL.safetensors")) == "pony"
+    assert scaffold.detect_arch_variant(Path("illustriousXL_v01.safetensors")) == "illustrious"
+    assert scaffold.detect_arch_variant(Path("noobaiXL_e2.safetensors")) == "noobai"
+    assert scaffold.detect_arch_variant(Path("animagineXL_v3.safetensors")) == "animagine"
+    # Vanilla SDXL has no variant token in its filename.
+    assert scaffold.detect_arch_variant(Path("sdxl_base_1.0.safetensors")) == ""
+    assert scaffold.detect_arch_variant(Path("mystery.safetensors")) == ""
 
 
 def test_auto_scaffold_uses_explicit_vram(tmp_path: Path) -> None:
@@ -103,6 +115,68 @@ def test_auto_scaffold_sd15_uses_lower_resolution(tmp_path: Path) -> None:
     )
     assert cfg.base_model.arch == "sd15"
     assert cfg.dataset.resolution == [768, 768]
+
+
+def test_auto_scaffold_pony_sets_variant_and_lr(tmp_path: Path) -> None:
+    ds = _make_dataset(tmp_path / "data", 60)
+    cfg = scaffold.auto_scaffold(
+        name="t",
+        checkpoint=tmp_path / "ponyDiffusionXL.safetensors",
+        dataset=ds,
+        vram_mib=8192,
+    )
+    # Backbone is still SDXL; variant is what tells callers it's Pony.
+    assert cfg.base_model.arch == "sdxl"
+    assert cfg.base_model.arch_variant == "pony"
+    assert cfg.optimizer.lr.unet == 4.0e-4
+    assert cfg.optimizer.lr.text_encoder == 2.0e-4
+    # 8GB tier alpha is 8; variant raises it to 16.
+    assert cfg.network.alpha == 16
+
+
+def test_auto_scaffold_illustrious_sets_variant(tmp_path: Path) -> None:
+    ds = _make_dataset(tmp_path / "data", 60)
+    cfg = scaffold.auto_scaffold(
+        name="t",
+        checkpoint=tmp_path / "illustriousXL_v01.safetensors",
+        dataset=ds,
+        vram_mib=8192,
+    )
+    assert cfg.base_model.arch == "sdxl"
+    assert cfg.base_model.arch_variant == "illustrious"
+    assert cfg.optimizer.lr.unet == 4.0e-4
+
+
+def test_auto_scaffold_noobai_and_animagine_share_pony_lr(tmp_path: Path) -> None:
+    for fname, expected_variant in [
+        ("noobaiXL_e2.safetensors", "noobai"),
+        ("animagineXL_v3.safetensors", "animagine"),
+    ]:
+        ds = _make_dataset(tmp_path / f"data_{expected_variant}", 60)
+        cfg = scaffold.auto_scaffold(
+            name="t",
+            checkpoint=tmp_path / fname,
+            dataset=ds,
+            vram_mib=8192,
+        )
+        assert cfg.base_model.arch == "sdxl"
+        assert cfg.base_model.arch_variant == expected_variant
+        assert cfg.optimizer.lr.unet == 4.0e-4
+        assert cfg.optimizer.lr.text_encoder == 2.0e-4
+
+
+def test_auto_scaffold_vanilla_sdxl_has_no_variant(tmp_path: Path) -> None:
+    ds = _make_dataset(tmp_path / "data", 60)
+    cfg = scaffold.auto_scaffold(
+        name="t",
+        checkpoint=tmp_path / "sdxl_base_1.0.safetensors",
+        dataset=ds,
+        vram_mib=8192,
+    )
+    assert cfg.base_model.arch == "sdxl"
+    assert cfg.base_model.arch_variant == ""
+    # No variant means we fall back to LRConfig defaults.
+    assert cfg.optimizer.lr.unet == 1.0e-4
 
 
 def test_detect_gpu_vram_returns_none_when_smi_missing(
