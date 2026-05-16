@@ -1518,3 +1518,108 @@ def test_models_download_starts_session_and_reports_progress(
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/models/download/missing")
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# WD14 auto-tagging
+# --------------------------------------------------------------------------- #
+
+
+def test_tagging_rejects_missing_directory(client: TestClient, tmp_path: Path) -> None:
+    r = client.post(
+        "/api/tagging/tag",
+        json={"path": str(tmp_path / "nope")},
+    )
+    assert r.status_code == 400
+    assert "not a directory" in r.json()["detail"]
+
+
+def test_tagging_runs_session_with_progress_and_writes_captions(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mock the tagger so the route's session/threading/progress plumbing is
+    exercised end-to-end without touching the real ONNX model."""
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    for name in ("a.png", "b.png", "c.png"):
+        (data / name).write_bytes(b"fake image bytes")
+
+    captured: dict[str, Any] = {}
+
+    class FakeTagger:
+        def __init__(self) -> None:
+            self.active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            captured["loaded"] = True
+
+        def tag_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            write_caption: bool,
+            skip_existing: bool,
+            underscores: bool,
+            include_character: bool,
+            on_progress: Any = None,
+        ) -> list[Any]:
+            captured["params"] = {
+                "directory": str(directory),
+                "recursive": recursive,
+                "skip_existing": skip_existing,
+                "underscores": underscores,
+                "include_character": include_character,
+            }
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=recursive):
+                if write_caption:
+                    image.with_suffix(".txt").write_text("1girl, blue hair", encoding="utf-8")
+                if on_progress is not None:
+                    on_progress(image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    r = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu", "general": 0.5, "character": 0.9},
+    )
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["status"] == "running"
+    sid = body["session_id"]
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/tagging/tag/{sid}").json()
+        if final["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+
+    assert final["status"] == "succeeded", final
+    assert final["written"] == 3
+    assert final["total"] == 3
+    assert final["percent"] == 100
+    assert final["active_provider"] == "CPUExecutionProvider"
+    # Per-image events make it through (one per file plus framing messages).
+    image_events = [e for e in final["events"] if e.get("image")]
+    assert {Path(e["image"]).name for e in image_events} == {"a.png", "b.png", "c.png"}
+    # The route translates `overwrite=False` into `skip_existing=True`.
+    assert captured["params"]["skip_existing"] is True
+    # Captions actually landed on disk.
+    for name in ("a", "b", "c"):
+        assert (data / f"{name}.txt").read_text(encoding="utf-8") == "1girl, blue hair"
+
+
+def test_tagging_status_unknown_session_returns_404(client: TestClient) -> None:
+    r = client.get("/api/tagging/tag/does-not-exist")
+    assert r.status_code == 404
