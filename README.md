@@ -187,6 +187,30 @@ pip install lorahub[api]
 lorahub serve --port 18765
 ```
 
+### One-shot launcher
+
+If you'd rather not memorise `pip install` and `npm run dev` separately, the
+`scripts/` folder ships a cross-platform launcher that resolves the project
+venv (or system Python), installs missing dependencies on first run, and brings
+up the API and the React dev server side by side:
+
+```powershell
+# Windows (PowerShell or double-click in Explorer)
+scripts\launch.bat              # default: dev mode (API + Vite)
+scripts\launch.bat -Mode prod   # API only, serves prebuilt web/dist
+scripts\launch.bat -Mode build  # one-shot npm install + vite build
+```
+
+```bash
+# macOS / Linux
+chmod +x scripts/launch.sh
+scripts/launch.sh                       # default: dev mode
+scripts/launch.sh --mode prod --port 8080
+scripts/launch.sh --mode build
+```
+
+The launcher auto-detects `.venv/` and `web/node_modules/`, runs `pip install -e ".[api,dev]"` and `npm install` only when something's missing, and forwards Vite's `/api` proxy to whichever port the API ended up on. Pass `--no-install` to skip the dependency check, `--reload` for uvicorn auto-reload.
+
 Endpoints live under `/api`:
 
 - `GET /api/health` — server status, version, and backend probe
