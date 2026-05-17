@@ -1,10 +1,11 @@
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   FlipHorizontal,
   FolderOpen,
   Heart,
+  HelpCircle,
   Pencil,
   RotateCw,
   Save,
@@ -39,6 +40,7 @@ function ImageStudioPage() {
   const view = params.get("view") || "grid"
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [inputPath, setInputPath] = useState(path)
+  const [showHelp, setShowHelp] = useState(false)
 
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
@@ -64,6 +66,45 @@ function ImageStudioPage() {
     queryFn: () => imageStudioGetImage(selectedPath!),
     enabled: !!selectedPath,
   })
+
+  // Keyboard shortcuts
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const items = listQuery.data?.items
+      if (!items) return
+
+      const currentIdx = selectedPath
+        ? items.findIndex((i) => i.path === selectedPath)
+        : -1
+
+      switch (e.key) {
+        case "j":
+          e.preventDefault()
+          if (currentIdx < items.length - 1) setSelectedPath(items[currentIdx + 1].path)
+          else if (currentIdx === -1 && items.length > 0) setSelectedPath(items[0].path)
+          break
+        case "k":
+          e.preventDefault()
+          if (currentIdx > 0) setSelectedPath(items[currentIdx - 1].path)
+          break
+        case "Escape":
+          setSelectedPath(null)
+          setShowHelp(false)
+          break
+        case "?":
+          e.preventDefault()
+          setShowHelp((v) => !v)
+          break
+      }
+    },
+    [listQuery.data?.items, selectedPath],
+  )
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [handleKeyDown])
 
   if (!path) {
     return <PathPrompt value={inputPath} onChange={setInputPath} onSubmit={navigate} />
@@ -114,7 +155,33 @@ function ImageStudioPage() {
             Duplicates
           </button>
         </div>
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+          <input
+            type="checkbox"
+            checked={recursive}
+            onChange={(e) => {
+              const n = new URLSearchParams(params)
+              if (e.target.checked) n.set("recursive", "1")
+              else n.delete("recursive")
+              n.set("page", "1")
+              setParams(n)
+            }}
+            className="size-3"
+          />
+          Recursive
+        </label>
+        <button
+          type="button"
+          onClick={() => setShowHelp(true)}
+          className="rounded p-1 text-muted-foreground hover:bg-muted"
+          title="Keyboard shortcuts (?)"
+        >
+          <HelpCircle className="size-4" />
+        </button>
       </div>
+
+      {/* Help overlay */}
+      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
 
       {/* Main content */}
       {view === "duplicates" ? (
@@ -709,6 +776,43 @@ function Pagination({
       >
         Next
       </button>
+    </div>
+  )
+}
+
+function HelpOverlay({ onClose }: { onClose: () => void }) {
+  const shortcuts = [
+    { key: "j / k", desc: "Navigate down / up in grid" },
+    { key: "Escape", desc: "Close inspector / help" },
+    { key: "?", desc: "Toggle this help" },
+  ]
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="w-80 rounded-lg border bg-popover p-4 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Keyboard Shortcuts</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 hover:bg-muted">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {shortcuts.map((s) => (
+            <div key={s.key} className="flex items-center justify-between text-xs">
+              <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                {s.key}
+              </kbd>
+              <span className="text-muted-foreground">{s.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
