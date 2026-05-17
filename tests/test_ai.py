@@ -19,6 +19,54 @@ from lorahub.api.ai_store import (
     AIRoute,
     AIStore,
 )
+from lorahub.core.ai.client import build_endpoint_url
+
+
+# --------------------------------------------------------------------------- #
+# build_endpoint_url
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("base_url", "endpoint", "expected"),
+    [
+        # Bare host -- our endpoint path's /v1 prefix lands on the URL.
+        ("https://api.example.com", "/v1/chat/completions",
+         "https://api.example.com/v1/chat/completions"),
+        ("https://api.example.com", "/v1/models",
+         "https://api.example.com/v1/models"),
+        # Trailing slash on the base URL -- normalised away.
+        ("https://api.example.com/", "/v1/models",
+         "https://api.example.com/v1/models"),
+        # User already supplied /v1 -- we strip /v1 from the endpoint to
+        # avoid the v1/v1 double.
+        ("https://api.example.com/v1", "/v1/models",
+         "https://api.example.com/v1/models"),
+        ("https://api.example.com/v1/", "/v1/chat/completions",
+         "https://api.example.com/v1/chat/completions"),
+        # Nested path that ends in /v1 also wins the strip.
+        ("https://gateway.example.com/openai/v1", "/v1/models",
+         "https://gateway.example.com/openai/v1/models"),
+        # Path that contains v1 mid-string but doesn't END in /v1 -- no strip.
+        ("https://api.example.com/api/v1beta", "/v1/models",
+         "https://api.example.com/api/v1beta/v1/models"),
+        # Query and fragment on the base URL are discarded.
+        ("https://api.example.com/v1?token=ignored#frag", "/v1/models",
+         "https://api.example.com/v1/models"),
+    ],
+)
+def test_build_endpoint_url(base_url: str, endpoint: str, expected: str) -> None:
+    assert build_endpoint_url(base_url, endpoint) == expected
+
+
+def test_build_endpoint_url_rejects_empty() -> None:
+    with pytest.raises(ValueError):
+        build_endpoint_url("", "/v1/models")
+
+
+def test_build_endpoint_url_rejects_malformed() -> None:
+    with pytest.raises(ValueError):
+        build_endpoint_url("not-a-url", "/v1/models")
 
 
 # --------------------------------------------------------------------------- #

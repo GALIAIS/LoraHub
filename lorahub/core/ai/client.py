@@ -12,6 +12,17 @@ the same, plus:
   * connection test that lists models AND runs an optional 1-token chat
   * task invocation that resolves the route's provider+model+sampling
     overrides, then issues the chat completion with prompt + system prompt
+
+Base-URL handling mirrors ShiroManager's `buildEndpointUrl`:
+
+  * If the user-supplied base_url already ends in `/v1` (or any segment
+    ending in `/v1`), the `/v1` prefix is *stripped* from the endpoint
+    path before joining — so `https://api.x/v1` + `/v1/models` becomes
+    `https://api.x/v1/models`, not `…/v1/v1/models`.
+  * Otherwise the endpoint path is joined verbatim — so `https://api.x`
+    + `/v1/models` becomes `https://api.x/v1/models`.
+  * Trailing slashes, fragments, and query strings on the base_url are
+    discarded on every call.
 """
 
 from __future__ import annotations
@@ -19,10 +30,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from lorahub.api.ai_store import (
     AIModel,
@@ -76,6 +89,40 @@ class ConnectionTestResult:
 
 
 # --------------------------------------------------------------------------- #
+# URL helpers
+# --------------------------------------------------------------------------- #
+
+
+_TRAILING_SLASHES = re.compile(r"/+$")
+
+
+def build_endpoint_url(base_url: str, endpoint_path: str) -> str:
+    """Join an OpenAI-style endpoint path onto a user-supplied base URL.
+
+    Endpoint paths are written with their conventional `/v1/...` prefix
+    (e.g. `/v1/chat/completions`). When the base URL already ends in a
+    `/v1` segment we strip the prefix to avoid the `/v1/v1/...` double
+    that comes from naive concatenation.
+
+    Raises ``ValueError`` if base_url is empty or unparseable.
+    """
+    if not base_url or not base_url.strip():
+        raise ValueError("AI provider base URL is required.")
+    parts = urlsplit(base_url.strip())
+    if not parts.scheme or not parts.netloc:
+        raise ValueError(f"AI provider base URL is malformed: {base_url!r}")
+    base_path = _TRAILING_SLASHES.sub("", parts.path or "")
+    suffix = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+    if base_path == "/v1" or base_path.endswith("/v1"):
+        joined_path = base_path + re.sub(r"^/v1", "", suffix)
+        if not joined_path:
+            joined_path = "/v1"
+    else:
+        joined_path = (base_path + suffix) if base_path else suffix
+    return urlunsplit((parts.scheme, parts.netloc, joined_path, "", ""))
+
+
+# --------------------------------------------------------------------------- #
 # HTTP helpers
 # --------------------------------------------------------------------------- #
 
@@ -101,13 +148,13 @@ def _post_chat(
 ) -> dict[str, Any]:
     import httpx  # noqa: PLC0415
 
-    url = f"{base_url.rstrip('/')}/chat/completions"
+    url = build_endpoint_url(base_url, "/v1/chat/completions")
     try:
         with httpx.Client(timeout=timeout) as client:
             r = client.post(url, headers=headers, json=body)
     except httpx.HTTPError as exc:
         raise AIError(
-            f"network error reaching {base_url}: {exc}",
+            f"network error reaching {url}: {exc}",
             status_code=None,
             retryable=True,
         ) from exc
@@ -132,7 +179,7 @@ def _get_models(
 ) -> list[dict[str, Any]]:
     import httpx  # noqa: PLC0415
 
-    url = f"{base_url.rstrip('/')}/models"
+    url = build_endpoint_url(base_url, "/v1/models")
     try:
         with httpx.Client(timeout=timeout) as client:
             r = client.get(url, headers=headers)

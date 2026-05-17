@@ -359,11 +359,14 @@ function ProviderForm({
             placeholder="例: DeepSeek / 我的 Ollama"
           />
         </Field>
-        <Field label="Base URL">
+        <Field
+          label="Base URL"
+          hint="可填带或不带 /v1 后缀(例: https://api.deepseek.com 或 https://api.deepseek.com/v1)"
+        >
           <Input
             value={draft.baseUrl}
             onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-            placeholder="https://api.deepseek.com/v1"
+            placeholder="https://api.deepseek.com"
             className="font-mono text-[12px]"
           />
         </Field>
