@@ -106,6 +106,67 @@ def test_save_phrasing_full_model_checkpoint() -> None:
     assert ev.payload["path"].endswith("model_final.safetensors")
 
 
+def test_keyboard_interrupt_traceback_is_cancel_not_error() -> None:
+    """User cancel: KeyboardInterrupt closes the traceback as a log,
+    not as EventType.error, so the UI doesn't flag a clean stop red."""
+    p = KohyaLineParser()
+    lines = [
+        "Traceback (most recent call last):",
+        '  File "/foo/deepspeed/launcher/runner.py", line 646, in main',
+        "    result.wait()",
+        '  File "/foo/subprocess.py", line 1266, in wait',
+        "    return self._wait(timeout=timeout)",
+        "KeyboardInterrupt",
+    ]
+    events = [p.parse_line(line, job_id="J") for line in lines]
+    closing = events[-1]
+    assert closing is not None
+    assert closing.type is EventType.log, (
+        f"expected log (cancel), got {closing.type}"
+    )
+    assert closing.payload.get("level") == "info"
+    assert closing.payload.get("kind") == "cancel"
+    # Body still contains the full traceback for forensics.
+    assert "KeyboardInterrupt" in closing.payload["traceback"]
+
+
+def test_real_exception_traceback_still_error() -> None:
+    """A genuine RuntimeError must still close the traceback as
+    EventType.error so failures stay visually distinct from cancels."""
+    p = KohyaLineParser()
+    lines = [
+        "Traceback (most recent call last):",
+        '  File "/foo/train.py", line 1, in <module>',
+        "    raise RuntimeError('boom')",
+        "RuntimeError: boom",
+    ]
+    events = [p.parse_line(line, job_id="J") for line in lines]
+    closing = events[-1]
+    assert closing is not None
+    assert closing.type is EventType.error
+    assert closing.payload["summary"] == "RuntimeError: boom"
+
+
+def test_killing_subprocess_log_is_info() -> None:
+    line = "[2026-05-18 03:37:03,778] [INFO] [launch.py:335:sigkill_handler] Killing subprocess 64724"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.log
+    assert ev.payload["level"] == "info"
+
+
+def test_cancel_returncode_log_is_info() -> None:
+    # The line literally contains [ERROR] but it's a SIGINT cancel — keep info.
+    line = (
+        "[2026-05-18 03:37:03,778] [ERROR] [launch.py:341:sigkill_handler] "
+        "[...] exits with return code = -2"
+    )
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.log
+    assert ev.payload["level"] == "info"
+
+
 def test_arbitrary_log_line_kept_as_log() -> None:
     ev = parse_line("loading model from sdxl_base_1.0.safetensors")
     assert ev is not None

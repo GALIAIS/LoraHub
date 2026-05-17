@@ -85,9 +85,29 @@ _OOM_RE = re.compile(
 
 # Traceback boundaries. We accept the standard `Traceback (most recent call
 # last):` opener and close on the first non-indented line that looks like
-# an exception summary (matches "ExceptionType: message").
+# an exception summary. The pattern accepts the usual `XxxError` /
+# `XxxException` / `XxxWarning` suffixes and also `KeyboardInterrupt` /
+# `SystemExit` so a clean Ctrl-C closes the traceback instead of letting
+# it dangle for 50 lines.
 _TRACEBACK_OPEN_RE = re.compile(r"^Traceback \(most recent call last\):")
-_EXCEPTION_LINE_RE = re.compile(r"^[A-Z]\w*(?:Error|Exception|Warning):")
+_EXCEPTION_LINE_RE = re.compile(
+    r"^(?:[A-Z]\w*(?:Error|Exception|Warning)"
+    r"|KeyboardInterrupt|SystemExit"
+    r"):?",
+)
+
+# Substrings appearing inside a traceback that mean "this was a user
+# cancel, not a real failure". When _flush_traceback sees any of these,
+# it downgrades the emitted event from EventType.error to a plain log
+# at info level so cancels don't render red in the UI.
+_CANCEL_HINTS = (
+    "keyboardinterrupt",
+    "killing subprocess",
+    "exits with return code = -2",
+    "exits with return code = -9",
+    "exits with return code = -15",
+    "process group received signal",
+)
 
 # Cache-latents / cache-text-encoder progress lines (tqdm). We accept both
 # phases and capture done/total so listeners can show a real percentage.
@@ -271,12 +291,29 @@ class KohyaLineParser:
         traceback_text = "\n".join(self._traceback_lines)
         self._traceback_lines = []
         self._in_traceback = False
+
+        # Cancel-shaped tracebacks (KeyboardInterrupt, sigkill_handler,
+        # `exits with return code = -2`) come from a clean user-initiated
+        # stop, not a crash. Emit them as plain log lines at info level
+        # so the UI doesn't flag a clean cancel as a failure.
+        cancel = _is_cancel_traceback(traceback_text)
+
         payload: dict[str, object] = {
             "traceback": traceback_text,
             "summary": summary,
         }
         if truncated:
             payload["truncated"] = True
+        if cancel:
+            # Tag the kind so consumers can distinguish "user cancel"
+            # vs other info-level traceback dumps if they care.
+            payload["kind"] = "cancel"
+            payload["level"] = "info"
+            return TrainingEvent(
+                type=EventType.log,
+                payload=payload,
+                job_id=job_id,
+            )
         return TrainingEvent(
             type=EventType.error,
             payload=payload,
@@ -347,11 +384,22 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     return KohyaLineParser().parse_line(line, job_id=job_id)
 
 
+def _is_cancel_traceback(text: str) -> bool:
+    lowered = text.lower()
+    return any(h in lowered for h in _CANCEL_HINTS)
+
+
 def _looks_like_error(line: str) -> bool:
     lowered = line.lower()
+    # User-cancel artefacts override the red flag — Ctrl-C / SIGKILL
+    # phrasings should never render as failures.
+    if any(h in lowered for h in _CANCEL_HINTS):
+        return False
+    # A bare `Traceback ...` banner shows up for clean cancels too, so
+    # we no longer auto-redden it. The exception-summary line that
+    # closes the traceback is what really signals a failure.
     return (
         "error" in lowered
-        or "traceback" in lowered
         or "out of memory" in lowered
         or "cuda error" in lowered
     )

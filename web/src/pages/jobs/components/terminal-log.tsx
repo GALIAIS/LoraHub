@@ -68,9 +68,20 @@ function eventToLine(
   const explicitLevel =
     typeof p.level === "string" ? (p.level as string).toUpperCase() : null
   let level = explicitLevel ?? event.type.toUpperCase()
+  // Cancel-shaped messages (Ctrl-C, sigkill_handler, deepspeed launch's
+  // `exits with return code = -2`) must NOT render red — they're a clean
+  // user stop, not a failure. We override `looksLikeError` for them.
+  const looksLikeCancel =
+    /\b(?:keyboardinterrupt|killing subprocess|exits with return code = -(?:2|9|15))\b/i.test(
+      rawMessage,
+    )
+  // `Traceback (most recent call last):` is only a banner — the exception
+  // summary that follows is the real error signal, and that summary has
+  // its own `XxxError`/`XxxException` keyword which matches below.
   const looksLikeError =
-    event.type === "error" ||
-    /\b(error|fail(ed|ure)?|fatal|traceback|exception)\b/i.test(rawMessage)
+    !looksLikeCancel &&
+    (event.type === "error" ||
+      /\b(error|fail(ed|ure)?|fatal|exception)\b/i.test(rawMessage))
 
   let toneClass = "text-zinc-100"
   let borderClass = "border-l-transparent"

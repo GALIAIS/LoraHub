@@ -115,14 +115,45 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     )
 
 
+# Patterns that show up when the user cancels a job: deepspeed's launcher
+# raises KeyboardInterrupt out of `result.wait()` and prints a traceback,
+# then `sigkill_handler` reports the killed subprocess and exit code. None
+# of these are real errors — the parser must NOT flag them red, otherwise
+# every clean cancel looks like a crash in the UI.
+_CANCEL_HINTS = (
+    "keyboardinterrupt",
+    "killing subprocess",
+    # deepspeed's launch.py:341
+    "exits with return code = -2",
+    "exits with return code = -9",
+    "exits with return code = -15",
+    # Process exits as a result of a signal handler.
+    "process group received signal",
+    # The OOM phrasing has its own EventType so we still want it red — keep
+    # this list minimal.
+)
+
+
 def _looks_like_error(line: str) -> bool:
     lowered = line.lower()
-    return (
+    # User-cancel artefacts override the red flag — `Traceback ...` after
+    # KeyboardInterrupt is part of a clean shutdown, not a failure.
+    if any(h in lowered for h in _CANCEL_HINTS):
+        return False
+    # `Traceback (most recent call last):` is just a banner — it appears
+    # for both genuine crashes AND clean Ctrl-C shutdowns. The actual
+    # error signal is the exception summary that closes the traceback,
+    # so we keep the banner + body in info-tone and only escalate when
+    # we see a concrete `XxxError:` / `XxxException:` line. dp doesn't
+    # do multi-line traceback aggregation here (kohya does), so each
+    # line is judged independently.
+    if (
         "error" in lowered
-        or "traceback" in lowered
         or "out of memory" in lowered
         or "cuda error" in lowered
-    )
+    ):
+        return True
+    return False
 
 
 __all__ = ["parse_line"]

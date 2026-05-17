@@ -107,11 +107,15 @@ def test_irrelevant_lines_kept_as_log() -> None:
     assert ev.payload["level"] == "info"
 
 
-def test_traceback_first_line_flagged_as_error() -> None:
+def test_traceback_banner_stays_info() -> None:
+    # `Traceback (most recent call last):` is just a banner — it appears
+    # for both genuine crashes and clean Ctrl-C shutdowns, so the parser
+    # must NOT auto-redden it. The exception summary line that closes
+    # the traceback is the real error signal.
     ev = parse_line("Traceback (most recent call last):")
     assert ev is not None
     assert ev.type is EventType.log
-    assert ev.payload["level"] == "error"
+    assert ev.payload["level"] == "info"
 
 
 def test_runtime_error_flagged() -> None:
@@ -119,3 +123,32 @@ def test_runtime_error_flagged() -> None:
     assert ev is not None
     assert ev.type is EventType.log
     assert ev.payload["level"] == "error"
+
+
+def test_keyboard_interrupt_stays_info() -> None:
+    # User-cancel artefact, must not be flagged as error.
+    ev = parse_line("KeyboardInterrupt")
+    assert ev is not None
+    assert ev.type is EventType.log
+    assert ev.payload["level"] == "info"
+
+
+def test_killing_subprocess_stays_info() -> None:
+    line = "[2026-05-18 03:37:03,778] [INFO] [launch.py:335:sigkill_handler] Killing subprocess 64724"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.log
+    assert ev.payload["level"] == "info"
+
+
+def test_cancel_returncode_stays_info() -> None:
+    line = (
+        "[2026-05-18 03:37:03,778] [ERROR] [launch.py:341:sigkill_handler] "
+        "[...] exits with return code = -2"
+    )
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type is EventType.log
+    # Despite the embedded "[ERROR]" tag, this is a SIGINT-driven
+    # cancellation — keep it info so a clean cancel doesn't render red.
+    assert ev.payload["level"] == "info"
