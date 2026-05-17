@@ -1,8 +1,14 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Download, ImageIcon, X } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Download, ImageIcon, Sparkles, X, Loader2 } from "lucide-react"
 import { api } from "@/lib/api"
-import type { JobMetricPoint, JobFile, JobValLossPoint } from "@/lib/api"
+import type {
+  JobAnalysis,
+  JobFile,
+  JobMetricPoint,
+  JobMetricsResponse,
+  JobValLossPoint,
+} from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -37,9 +43,21 @@ export function AnalysisTab({ jobId, jobState }: AnalysisTabProps) {
     queryFn: () => api.getJobFiles(jobId),
     refetchInterval: isTerminal ? false : 8000,
   })
+  const analysis = useQuery({
+    queryKey: ["job-analysis", jobId],
+    queryFn: () => api.getJobAnalysis(jobId),
+    refetchInterval: false,
+  })
 
   return (
     <div className="space-y-4">
+      <AICard
+        jobId={jobId}
+        cached={analysis.data?.analysis ?? null}
+        loading={analysis.isLoading}
+        canRun={isTerminal || (metrics.data?.loss?.length ?? 0) > 0}
+      />
+      <ResourceTrendCard metrics={metrics.data ?? null} loading={metrics.isLoading} />
       <MetricsTable
         loss={metrics.data?.loss ?? []}
         valLoss={metrics.data?.val_loss ?? []}
@@ -50,6 +68,233 @@ export function AnalysisTab({ jobId, jobState }: AnalysisTabProps) {
         samples={files.data?.samples ?? []}
         loading={files.isLoading}
       />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AI analysis card
+// ---------------------------------------------------------------------------
+
+function AICard({
+  jobId,
+  cached,
+  loading,
+  canRun,
+}: {
+  jobId: string
+  cached: JobAnalysis | null
+  loading: boolean
+  canRun: boolean
+}) {
+  const qc = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const run = useMutation({
+    mutationFn: () => api.analyzeJob(jobId),
+    onSuccess: () => {
+      setError(null)
+      qc.invalidateQueries({ queryKey: ["job-analysis", jobId] })
+    },
+    onError: (e: unknown) => {
+      setError(e instanceof Error ? e.message : String(e))
+    },
+  })
+
+  return (
+    <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
+      <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-3.5 text-primary" />
+          <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+            AI 分析总结
+          </CardTitle>
+          {cached && (
+            <span className="text-[10px] text-muted-foreground/70">
+              {cached.model} · {new Date(cached.generated_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-[11px]"
+          disabled={!canRun || run.isPending}
+          onClick={() => run.mutate()}
+        >
+          {run.isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <Sparkles className="size-3" />
+          )}
+          {cached ? "重新分析" : "生成分析"}
+        </Button>
+      </CardHeader>
+      <CardContent className="p-4">
+        {loading && (
+          <div className="text-xs text-muted-foreground">加载中…</div>
+        )}
+        {!loading && !cached && !run.isPending && (
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            点击「生成分析」让 AI 阅读 events.jsonl + 配置摘要后给出诊断（收敛趋势、过拟合判断、LR 建议、下一次实验调整）。
+            {!canRun && (
+              <span className="block mt-1 text-amber-600">
+                训练尚未产出指标点，先等一会再分析。
+              </span>
+            )}
+          </div>
+        )}
+        {run.isPending && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            正在调用模型，通常 5-15 秒…
+          </div>
+        )}
+        {error && (
+          <div className="text-xs text-destructive break-all">分析失败：{error}</div>
+        )}
+        {cached && (
+          <pre className="font-sans text-[12px] leading-relaxed whitespace-pre-wrap text-foreground/90">
+            {cached.markdown}
+          </pre>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Resource trend
+// ---------------------------------------------------------------------------
+
+function ResourceTrendCard({
+  metrics,
+  loading,
+}: {
+  metrics: JobMetricsResponse | null
+  loading: boolean
+}) {
+  const samples = metrics?.gpu_samples ?? []
+
+  // Normalise series for the three lines we draw.
+  const series = useMemo(() => {
+    if (samples.length === 0) return null
+    const t0 = samples[0].ts
+    const points = samples.map((s) => ({
+      tMin: (s.ts - t0) / 60,
+      util: s.util_percent,
+      vramPct:
+        s.vram_used_mib != null && s.vram_total_mib && s.vram_total_mib > 0
+          ? (s.vram_used_mib / s.vram_total_mib) * 100
+          : null,
+      temp: s.temperature_c,
+    }))
+    return { points, durationMin: points[points.length - 1].tMin }
+  }, [samples])
+
+  return (
+    <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
+      <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
+        <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+          资源使用趋势
+        </CardTitle>
+        <span className="text-[10px] text-muted-foreground/70">
+          {loading ? "加载中…" : `${samples.length} 个采样点`}
+        </span>
+      </CardHeader>
+      <CardContent className="p-4">
+        {!series && (
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            训练运行期间每 5 秒采集一次 GPU 利用率 / 显存占用 / 温度。当前没有采样数据。
+          </div>
+        )}
+        {series && (
+          <div className="space-y-3">
+            <ResourceLine
+              label="GPU 利用率"
+              unit="%"
+              points={series.points.map((p) => ({ x: p.tMin, y: p.util }))}
+              color="var(--chart-1)"
+              yMax={100}
+            />
+            <ResourceLine
+              label="显存占用"
+              unit="%"
+              points={series.points.map((p) => ({ x: p.tMin, y: p.vramPct }))}
+              color="var(--chart-2)"
+              yMax={100}
+            />
+            <ResourceLine
+              label="温度"
+              unit="°C"
+              points={series.points.map((p) => ({ x: p.tMin, y: p.temp }))}
+              color="var(--chart-3)"
+              yMax={null}
+            />
+            <div className="text-[10px] text-muted-foreground/70 text-right">
+              横轴：分钟（共 {series.durationMin.toFixed(1)} min）
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ResourceLine({
+  label,
+  unit,
+  points,
+  color,
+  yMax,
+}: {
+  label: string
+  unit: string
+  points: Array<{ x: number; y: number | null }>
+  color: string
+  yMax: number | null
+}) {
+  const valid = points.filter((p): p is { x: number; y: number } => typeof p.y === "number")
+  if (valid.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="w-20 text-muted-foreground">{label}</span>
+        <span className="text-muted-foreground/60">未采集到</span>
+      </div>
+    )
+  }
+  const W = 600
+  const H = 48
+  const xs = valid.map((p) => p.x)
+  const ys = valid.map((p) => p.y)
+  const xMin = Math.min(...xs)
+  const xMax = Math.max(...xs) || 1
+  const yLo = Math.min(...ys, 0)
+  const yHi = yMax ?? Math.max(...ys, 1)
+  const yRange = yHi - yLo || 1
+  const path = valid
+    .map((p, i) => {
+      const x = ((p.x - xMin) / (xMax - xMin || 1)) * W
+      const y = H - ((p.y - yLo) / yRange) * H
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(" ")
+  const last = valid[valid.length - 1]
+  const min = Math.min(...ys)
+  const max = Math.max(...ys)
+  const avg = ys.reduce((a, b) => a + b, 0) / ys.length
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-20 text-[11px] text-muted-foreground shrink-0">{label}</span>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="flex-1 h-[40px]"
+        preserveAspectRatio="none"
+      >
+        <path d={path} fill="none" stroke={color} strokeWidth={1.5} />
+      </svg>
+      <span className="w-44 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+        当前 {last.y.toFixed(1)}{unit} · 均 {avg.toFixed(1)} · 峰 {max.toFixed(1)} · 谷 {min.toFixed(1)}
+      </span>
     </div>
   )
 }

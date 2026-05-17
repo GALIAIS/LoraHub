@@ -36,6 +36,12 @@ class EventType(StrEnum):
     # CUDA out-of-memory. Distinct from generic `error` so the UI can render
     # a tailored toast with VRAM-trimming suggestions. Payload key: `message`.
     oom = "oom"
+    # Periodic resource sample emitted while a job is running. Payload:
+    # `gpu_index` (int), `util_percent` (float|null), `vram_used_mib`
+    # (int|null), `vram_total_mib` (int|null), `temperature_c` (float|null).
+    # Sampled by the API host every few seconds so we can replay an
+    # accurate hardware-usage trend after the run finishes.
+    gpu_sample = "gpu_sample"
     log = "log"
     error = "error"
     done = "done"

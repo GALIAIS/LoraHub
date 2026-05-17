@@ -255,10 +255,25 @@ export interface JobMetricsResponse {
   epochs: Array<{ epoch: number; ts: number }>
   checkpoints: Array<{ path: string; step: number; ts: number }>
   samples: Array<{ path: string; ts: number }>
+  gpu_samples: Array<{
+    gpu_index: number | null
+    util_percent: number | null
+    vram_used_mib: number | null
+    vram_total_mib: number | null
+    temperature_c: number | null
+    ts: number
+  }>
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null
   overfit_signal: OverfitSignal
+}
+
+export interface JobAnalysis {
+  markdown: string
+  model: string
+  generated_at: string
+  summary_payload: Record<string, unknown>
 }
 
 export interface ConfigTemplatePlaceholder {
@@ -705,6 +720,10 @@ export const api = {
     }),
   getJobFiles: (id: string) => http<JobFilesResponse>(`/jobs/${id}/files`),
   getJobMetrics: (id: string) => http<JobMetricsResponse>(`/jobs/${id}/metrics`),
+  getJobAnalysis: (id: string) =>
+    http<{ analysis: JobAnalysis | null }>(`/jobs/${id}/analysis`),
+  analyzeJob: (id: string) =>
+    http<{ analysis: JobAnalysis }>(`/jobs/${id}/analyze`, { method: "POST" }),
   jobFileUrl: (id: string, path: string) =>
     `/api/jobs/${id}/files/raw?path=${encodeURIComponent(path)}`,
   duplicateConfig: (name: string, newName: string) =>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -231,6 +232,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "epochs": [],
         "checkpoints": [],
         "samples": [],
+        "gpu_samples": [],
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
@@ -244,6 +246,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     epochs: list[dict[str, Any]] = []
     checkpoints: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
+    gpu_samples: list[dict[str, Any]] = []
     epoch_counter = 0
 
     with log.open("r", encoding="utf-8") as fh:
@@ -294,6 +297,17 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                 )
             elif etype == EventType.sample_ready.value:
                 samples.append({"path": payload.get("path"), "ts": ts})
+            elif etype == EventType.gpu_sample.value:
+                gpu_samples.append(
+                    {
+                        "gpu_index": payload.get("gpu_index"),
+                        "util_percent": payload.get("util_percent"),
+                        "vram_used_mib": payload.get("vram_used_mib"),
+                        "vram_total_mib": payload.get("vram_total_mib"),
+                        "temperature_c": payload.get("temperature_c"),
+                        "ts": ts,
+                    }
+                )
 
     first_ts = loss[0]["ts"] if loss else None
     last_ts = loss[-1]["ts"] if loss else None
@@ -305,6 +319,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
 
     if len(loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
         loss = _downsample(loss, _METRICS_MAX_POINTS)
+    if len(gpu_samples) > _METRICS_DOWNSAMPLE_THRESHOLD:
+        gpu_samples = _downsample(gpu_samples, _METRICS_MAX_POINTS)
 
     overfit_signal = _compute_overfit_signal(loss, val_loss)
 
@@ -314,6 +330,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "epochs": epochs,
         "checkpoints": checkpoints,
         "samples": samples,
+        "gpu_samples": gpu_samples,
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,
@@ -605,12 +622,76 @@ def _enqueue_launch(
             j.state = JobState.running
             j.started_at = datetime.now(UTC)
             state.registry.update(j)
+
+        # Spawn a low-frequency GPU sampler so the analysis tab gets a
+        # post-hoc resource trend (util / VRAM / temp). Lives only as
+        # long as the job is running; the `done` event triggers shutdown.
+        sampler_stop = threading.Event()
+        sampler = threading.Thread(
+            target=_gpu_sampler_loop,
+            args=(job.id, slot, on_event, sampler_stop),
+            daemon=True,
+            name=f"gpu-sampler-{job.id[-6:]}",
+        )
+        sampler.start()
         try:
             handle.wait(timeout=None)
         except Exception:  # noqa: BLE001
             log.exception("worker wait() failed for job %s", job.id)
+        finally:
+            sampler_stop.set()
 
     sched.scheduler.submit(job.id, task)
+
+
+def _gpu_sampler_loop(
+    job_id: str,
+    slot: int,
+    on_event: Any,
+    stop_evt: threading.Event,
+) -> None:
+    """Emit a `gpu_sample` event every ~5s while the job is running.
+
+    Snapshot comes from the same nvidia-smi path the dashboard uses, so
+    no extra dependency. Failures are swallowed (the trend chart is a
+    nice-to-have; we never want it to crash a training run).
+    """
+    from lorahub.api.system_stats import _collect_nvidia_gpus  # noqa: PLC0415
+    from lorahub.core.events import EventType, TrainingEvent  # noqa: PLC0415
+
+    interval = 5.0
+    while not stop_evt.wait(interval):
+        try:
+            gpus = _collect_nvidia_gpus()
+        except Exception:  # noqa: BLE001
+            continue
+        if not gpus or slot >= len(gpus):
+            continue
+        g = gpus[slot]
+        try:
+            on_event(
+                TrainingEvent(
+                    type=EventType.gpu_sample,
+                    job_id=job_id,
+                    payload={
+                        "gpu_index": slot,
+                        "util_percent": g.utilization_percent,
+                        "vram_used_mib": (
+                            int(g.memory_used_bytes // (1024 * 1024))
+                            if getattr(g, "memory_used_bytes", None) is not None
+                            else None
+                        ),
+                        "vram_total_mib": (
+                            int(g.memory_total_bytes // (1024 * 1024))
+                            if getattr(g, "memory_total_bytes", None) is not None
+                            else None
+                        ),
+                        "temperature_c": g.temperature_c,
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001
+            continue
 
 
 def _find_latest_state_dir(workspace: Path) -> Path | None:

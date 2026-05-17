@@ -103,11 +103,17 @@ backend:
     cachingBatchSize: 4
     stepsPerPrint: 10
     compile: true
-    # Style datasets often span more aspect ratios than character ones;
-    # 11 buckets keeps the per-bucket sample count reasonable.
+    # AR bucket count is the BIGGEST knob for disk usage during the
+    # latent-caching pass: dp writes one VAE-encoded copy of every
+    # image per bucket it might end up in. Anima at 1024px puts each
+    # latent at ~1MB plus ~0.6MB Qwen3 text-encoder cache, so 200
+    # images x 11 buckets fills ~35GB before training even starts.
+    # 5 buckets covers the typical portrait/landscape/square span
+    # without blowing out disk; raise to 7-9 only when the dataset
+    # really has unusual aspect ratios.
     minAr: 0.4
     maxAr: 2.5
-    numArBuckets: 11
+    numArBuckets: 5
     # Random shuffle of cached latents helps the optimiser see varied
     # styles each step instead of clustering by aspect ratio.
     cacheShuffleNum: 256
