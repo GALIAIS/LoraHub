@@ -26,6 +26,21 @@ _STEP_RE = re.compile(
     r"(?:.*?lr=\[(?P<lr>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?))?",
 )
 
+# diffusion-pipe (newer releases) prints its own per-step summary line
+# separately from the deepspeed engine line: `steps: 30 loss: 0.1808
+# iter time (s): 3.662 samples/sec: 1.092`. This is the only line that
+# carries the actual training loss, so without recognising it the
+# metrics endpoint would never see a loss series. We allow the trailing
+# `iter time (s): T` and `samples/sec: R` to be optional so format
+# drift doesn't silently break recognition.
+_STEPS_LOSS_RE = re.compile(
+    r"^\s*steps:\s*(?P<step>\d+)"
+    r"\s+loss:\s*(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+    r"(?:\s+iter time\s*\(s\):\s*(?P<iter>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?))?"
+    r"(?:\s+samples/sec:\s*(?P<sps>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?))?"
+    r"\s*$"
+)
+
 # `train.py`/`utils/saver.py` use these exact phrasings.
 _EPOCH_RE = re.compile(
     r"^Started new epoch:\s*(?P<epoch>\d+)\s*$",
@@ -69,6 +84,20 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
             payload={"path": m.group("path")},
             job_id=job_id,
         )
+
+    # diffusion-pipe per-step summary (the only line carrying loss).
+    # Try this BEFORE _STEP_RE so a `steps: ...` line never falls
+    # through to the deepspeed-style branch (which can't see loss).
+    if (m := _STEPS_LOSS_RE.match(stripped)) is not None:
+        payload: dict[str, object] = {
+            "step": int(m.group("step")),
+            "loss": float(m.group("loss")),
+        }
+        if (it := m.group("iter")) is not None:
+            payload["iter_time_s"] = float(it)
+        if (sps := m.group("sps")) is not None:
+            payload["samples_per_sec"] = float(sps)
+        return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
 
     if (m := _STEP_RE.search(stripped)) is not None:
         payload: dict[str, object] = {"step": int(m.group("step"))}

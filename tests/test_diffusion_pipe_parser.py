@@ -43,6 +43,34 @@ def test_loss_only_line_emits_log_event() -> None:
     assert ev.type is EventType.log
 
 
+def test_dp_steps_loss_summary_emits_step_event() -> None:
+    # diffusion-pipe (newer releases) prints its own per-step summary on
+    # a separate line. This is the only line that carries the loss, so
+    # the parser MUST recognise it or the metrics endpoint never sees a
+    # loss series.
+    line = "steps: 30 loss: 0.1808 iter time (s): 3.662 samples/sec: 1.092"
+    ev = parse_line(line, job_id="J9")
+    assert ev is not None
+    assert ev.type is EventType.step
+    assert ev.job_id == "J9"
+    assert ev.payload["step"] == 30
+    assert ev.payload["loss"] == 0.1808
+    assert ev.payload["iter_time_s"] == 3.662
+    assert ev.payload["samples_per_sec"] == 1.092
+
+
+def test_dp_steps_loss_minimal() -> None:
+    # The trailing iter time / samples/sec are optional — older or
+    # patched dp builds may omit them. Loss must still be captured.
+    ev = parse_line("steps: 7 loss: 0.42")
+    assert ev is not None
+    assert ev.type is EventType.step
+    assert ev.payload["step"] == 7
+    assert ev.payload["loss"] == 0.42
+    assert "iter_time_s" not in ev.payload
+    assert "samples_per_sec" not in ev.payload
+
+
 def test_epoch_event() -> None:
     ev = parse_line("Started new epoch: 3")
     assert ev is not None
