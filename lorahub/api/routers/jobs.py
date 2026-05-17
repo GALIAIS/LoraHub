@@ -360,6 +360,31 @@ def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
                 status_code=409,
                 detail=f"job is {job.state.value}; cancel before archiving",
             )
+        # Refuse to archive when another non-terminal job is currently
+        # using this same workspace path. Multiple jobs share a workspace
+        # whenever they were created with the same `output.name`; mv'ing
+        # the dir out from under an active sibling crashes that sibling
+        # mid-run with FileNotFoundError on its toml/dataset/checkpoints.
+        target_ws = job.workspace.resolve()
+        for other in state.registry.list():
+            if other.id == job.id:
+                continue
+            if other.state in _TERMINAL_STATES:
+                continue
+            try:
+                if other.workspace.resolve() == target_ws:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"workspace {target_ws} is in use by job "
+                            f"{other.id} (state={other.state.value}); "
+                            "cancel that job before archiving this one"
+                        ),
+                    )
+            except OSError:
+                # workspace path resolution failed for `other` — skip it
+                # rather than blocking on a broken sibling record.
+                continue
         # `interrupted` is the one terminal state where the OS process
         # might still be alive (e.g. uvicorn was kill -9'd while a
         # detached deepspeed launcher kept running, then mark_orphans
