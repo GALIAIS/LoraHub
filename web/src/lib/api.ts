@@ -1564,7 +1564,7 @@ export async function imageStudioSmartCaption(params: {
   device?: string
   mergeStrategy?: string
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  const r = await fetch(`${API_BASE}/image-studio/smart-caption`, {
+  const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -1577,7 +1577,7 @@ export async function imageStudioSmartCaptionSingle(params: {
   path: string
   device?: string
 }): Promise<{ caption: string; tags: string }> {
-  const r = await fetch(`${API_BASE}/image-studio/smart-caption/single`, {
+  const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption/single`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -1609,6 +1609,35 @@ export async function getTaggingSession(
   sessionId: string,
 ): Promise<TaggingSession> {
   const r = await fetch(`${API_BASE}/tagging/tag/${sessionId}`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function imageStudioBatchCaption(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+  mergeStrategy?: string
+}): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
+  const r = await fetch(`${API_BASE}/image-studio/ai/caption`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function imageStudioBatchQuality(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+}): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
+  const r = await fetch(`${API_BASE}/image-studio/ai/quality`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  })
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
   return r.json()
 }

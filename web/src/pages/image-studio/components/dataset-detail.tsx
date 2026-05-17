@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Filter, FolderOpen, HelpCircle, Sparkles, Tag } from "lucide-react"
+import { Filter, FolderOpen, HelpCircle, Loader2, Sparkles, Tag } from "lucide-react"
 import {
   imageStudioList,
   imageStudioGetImage,
@@ -9,6 +9,11 @@ import {
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioBatchDelete,
+  imageStudioSmartCaption,
+  imageStudioBatchCaption,
+  imageStudioBatchQuality,
+  startTaggingSession,
+  getTaggingSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
 import { FilterPanel } from "./filter-panel"
@@ -38,6 +43,13 @@ export function DatasetDetail() {
   const [showAiBulk, setShowAiBulk] = useState(false)
   const [showTagging, setShowTagging] = useState(false)
   const [filters, setFilters] = useState<FilterState>(defaultFilters)
+  const [aiProgress, setAiProgress] = useState<{
+    running: boolean
+    label: string
+    processed?: number
+    total?: number
+    error?: string
+  } | null>(null)
 
   const queryClient = useQueryClient()
   const datasetName = path.split(/[/\\]/).pop() || ""
@@ -206,9 +218,84 @@ export function DatasetDetail() {
   const totalPages = data ? Math.ceil(data.total / data.limit) : 0
   const filteredItems = data ? applyFilters(data.items, filters) : []
 
-  const handleAiBulkStart = (_tab: AiBulkTab, _params: Record<string, unknown>) => {
-    // TODO: wire to actual API calls
+  const handleAiBulkStart = async (tab: AiBulkTab, params: Record<string, unknown>) => {
     setShowAiBulk(false)
+    const taskPath = (params.path as string) || path
+
+    try {
+      switch (tab) {
+        case "smart-caption": {
+          setAiProgress({ running: true, label: "智能标注 (WD14 + VLM)..." })
+          const res = await imageStudioSmartCaption({
+            path: taskPath,
+            recursive,
+            device: params.device as string,
+            mergeStrategy: params.mergeStrategy as string,
+          })
+          setAiProgress({ running: false, label: "智能标注完成", processed: res.processed })
+          break
+        }
+        case "vlm-caption": {
+          setAiProgress({ running: true, label: "VLM 标注中..." })
+          const res = await imageStudioBatchCaption({
+            path: taskPath,
+            recursive,
+            mergeStrategy: (params.mergeStrategy as string) || "replace",
+          })
+          setAiProgress({ running: false, label: "VLM 标注完成", processed: res.processed })
+          break
+        }
+        case "quality-score": {
+          setAiProgress({ running: true, label: "质量评分中..." })
+          const res = await imageStudioBatchQuality({ path: taskPath, recursive })
+          setAiProgress({ running: false, label: "质量评分完成", processed: res.processed })
+          break
+        }
+        case "wd14": {
+          setAiProgress({ running: true, label: "WD14 标注中..." })
+          const session = await startTaggingSession({
+            path: taskPath,
+            tagger: (params.model_id as string)?.startsWith("joy") ? "joytag" : "wd14",
+            model_id: params.model_id as string,
+            general: params.general as number,
+            character: params.character as number,
+            device: params.device as string,
+            overwrite: params.overwrite as boolean,
+            recursive,
+          })
+          // Poll session progress
+          const poll = setInterval(async () => {
+            try {
+              const snap = await getTaggingSession(session.session_id)
+              setAiProgress({
+                running: snap.status === "running",
+                label: snap.status === "running"
+                  ? `WD14 标注中... ${snap.written}/${snap.total ?? "?"}`
+                  : snap.status === "succeeded" ? "WD14 标注完成" : "WD14 标注失败",
+                processed: snap.written,
+                total: snap.total ?? undefined,
+                error: snap.error ?? undefined,
+              })
+              if (snap.status !== "running") {
+                clearInterval(poll)
+                queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+              }
+            } catch { clearInterval(poll) }
+          }, 2000)
+          return
+        }
+        case "trigger-words":
+          setAiProgress({ running: true, label: "触发词分析中..." })
+          // Uses smart caption endpoint with a different merge strategy as a proxy
+          await imageStudioSmartCaption({ path: taskPath, recursive, mergeStrategy: "replace" })
+          setAiProgress({ running: false, label: "触发词分析完成" })
+          break
+      }
+      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setAiProgress({ running: false, label: "执行失败", error: msg })
+    }
   }
 
   return (
@@ -311,6 +398,31 @@ export function DatasetDetail() {
           onClose={() => setShowAiBulk(false)}
           onStart={handleAiBulkStart}
         />
+      )}
+
+      {/* AI progress bar */}
+      {aiProgress && (
+        <div className="flex items-center gap-3 border-b px-4 py-2 bg-muted/30">
+          {aiProgress.running && <Loader2 className="size-4 animate-spin text-primary" />}
+          <span className="text-xs font-medium">{aiProgress.label}</span>
+          {aiProgress.processed != null && (
+            <span className="text-xs text-muted-foreground">
+              {aiProgress.processed}{aiProgress.total ? ` / ${aiProgress.total}` : ""} 张
+            </span>
+          )}
+          {aiProgress.error && (
+            <span className="text-xs text-destructive truncate flex-1">{aiProgress.error}</span>
+          )}
+          {!aiProgress.running && (
+            <button
+              type="button"
+              onClick={() => setAiProgress(null)}
+              className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+            >
+              关闭
+            </button>
+          )}
+        </div>
       )}
 
       {/* Main content */}
