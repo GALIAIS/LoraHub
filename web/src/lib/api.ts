@@ -1555,6 +1555,65 @@ export async function imageStudioBatchDelete(body: {
 }
 
 // --------------------------------------------------------------------------- //
+// Image Studio — Smart Caption / Tagging from Studio
+// --------------------------------------------------------------------------- //
+
+export async function imageStudioSmartCaption(params: {
+  path: string
+  recursive?: boolean
+  device?: string
+  mergeStrategy?: string
+}): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
+  const r = await fetch(`${API_BASE}/image-studio/smart-caption`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function imageStudioSmartCaptionSingle(params: {
+  path: string
+  device?: string
+}): Promise<{ caption: string; tags: string }> {
+  const r = await fetch(`${API_BASE}/image-studio/smart-caption/single`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function startTaggingSession(params: {
+  path: string
+  tagger?: string
+  model_id?: string
+  general?: number
+  character?: number
+  device?: string
+  overwrite?: boolean
+  recursive?: boolean
+}): Promise<{ session_id: string }> {
+  const r = await fetch(`${API_BASE}/tagging/tag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function getTaggingSession(
+  sessionId: string,
+): Promise<TaggingSession> {
+  const r = await fetch(`${API_BASE}/tagging/tag/${sessionId}`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+// --------------------------------------------------------------------------- //
 // Dataset management
 // --------------------------------------------------------------------------- //
 
