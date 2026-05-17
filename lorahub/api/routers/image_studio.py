@@ -123,18 +123,87 @@ def list_images(
     page: int = 1,
     limit: int = 48,
     sort: str = "name",
+    filter_caption: str | None = None,
+    filter_quality: str | None = None,
+    filter_aspect: str | None = None,
 ) -> dict[str, Any]:
     directory = _resolve_under_roots(path)
     if not directory.is_dir():
         raise HTTPException(400, f"not a directory: {path}")
     images = _scan_images(directory, recursive)
     images = _sort_images(images, sort)
+
+    store = _store()
+
+    # Apply filters
+    if filter_caption or filter_quality or filter_aspect:
+        images = _apply_filters(
+            images, store,
+            caption=filter_caption,
+            quality=filter_quality,
+            aspect=filter_aspect,
+        )
+
     total = len(images)
     start = (page - 1) * limit
     page_items = images[start : start + limit]
-    store = _store()
     items = [_image_item(p, directory, store) for p in page_items]
     return {"path": str(directory), "total": total, "page": page, "limit": limit, "items": items}
+
+
+def _apply_filters(
+    images: list[Path],
+    store: ImageStudioStore,
+    *,
+    caption: str | None = None,
+    quality: str | None = None,
+    aspect: str | None = None,
+) -> list[Path]:
+    """Filter image list by caption existence, quality label, and aspect ratio."""
+    filtered: list[Path] = []
+    for p in images:
+        # Caption filter
+        if caption:
+            has_caption = p.with_suffix(".txt").is_file()
+            if caption == "with" and not has_caption:
+                continue
+            if caption == "missing" and has_caption:
+                continue
+
+        # Fetch annotation once if needed by quality or aspect filters
+        ann = None
+        if quality or aspect:
+            ann = store.get_annotation(str(p))
+
+        # Quality filter (checks annotation ai_quality_label or favorite)
+        if quality:
+            if quality in ("favourite", "favorite"):
+                if not ann or not ann.favorite:
+                    continue
+            else:
+                if not ann or ann.ai_quality_label != quality:
+                    continue
+
+        # Aspect ratio filter
+        if aspect:
+            w: int | None = ann.width if ann else None
+            h: int | None = ann.height if ann else None
+            if w is None or h is None:
+                try:
+                    from PIL import Image  # noqa: PLC0415
+                    with Image.open(p) as img:
+                        w, h = img.size
+                except Exception:  # noqa: BLE001
+                    continue
+            if aspect == "landscape" and not (w > h):
+                continue
+            if aspect == "portrait" and not (h > w):
+                continue
+            if aspect == "square" and w != h:
+                continue
+
+        filtered.append(p)
+    return filtered
 
 
 # --------------------------------------------------------------------------- #
@@ -711,6 +780,202 @@ def batch_delete(body: BatchDeleteSelectInput) -> dict[str, Any]:
         "bytesFreed": bytes_freed,
         "errors": errors,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Smart caption (WD14 + Vision LLM)
+# --------------------------------------------------------------------------- #
+
+_SMART_CAPTION_PROMPT = (
+    "Based on the following WD14 tags and the image, write an optimized training caption.\n"
+    "WD14 tags: {tags}\n"
+    "Write a natural language caption suitable for LoRA training. Include all relevant details "
+    "about the subject, pose, clothing, background, and composition. Be concise but complete."
+)
+
+
+class SmartCaptionBatchInput(BaseModel):
+    path: str
+    recursive: bool = False
+    taggerModel: str = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+    visionTask: str = "tagging.assist"
+    mergeStrategy: str = "replace"
+    device: str = "auto"
+    generalThreshold: float = 0.35
+    characterThreshold: float = 0.85
+
+
+def _smart_caption_single_image(
+    img_path: Path,
+    tagger: "WD14Tagger",
+    ai_store: Any,
+    route: Any,
+    merge_strategy: str,
+    store: ImageStudioStore,
+) -> dict[str, Any]:
+    """Run WD14 tagging then vision LLM on a single image. Returns result dict."""
+    import base64  # noqa: PLC0415
+    import mimetypes  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
+    # Step 1: WD14 tagging
+    tag_result = tagger.tag_image(img_path)
+    tags_str = tag_result.caption(underscores=False, include_character=True)
+
+    # Step 2: Prepare image for vision LLM
+    mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
+    data = img_path.read_bytes()
+    b64 = base64.b64encode(data).decode("ascii")
+    data_url = f"data:{mime};base64,{b64}"
+
+    prompt_text = _SMART_CAPTION_PROMPT.format(tags=tags_str)
+
+    messages: list[dict[str, Any]] = []
+    if route.system_prompt:
+        messages.append({"role": "system", "content": route.system_prompt})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": prompt_text},
+        ],
+    })
+
+    # Step 3: Invoke vision LLM
+    result = ai_client.invoke(
+        ai_store,
+        provider_id=route.provider_id,
+        model_id=route.model_id,
+        messages=messages,
+        route=route,
+    )
+
+    # Step 4: Save caption
+    caption_path = img_path.with_suffix(".txt")
+    existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
+
+    if merge_strategy == "append":
+        new_caption = (existing.strip() + ", " + result.content).strip(", ")
+    elif merge_strategy == "prepend":
+        new_caption = (result.content + ", " + existing.strip()).strip(", ")
+    else:  # replace
+        new_caption = result.content
+
+    caption_path.write_text(new_caption, encoding="utf-8")
+
+    # Step 5: Update annotation
+    ann = store.get_annotation(str(img_path))
+    if ann is None:
+        ann = ImageAnnotation(
+            image_path=str(img_path),
+            sha256=_file_sha256(img_path),
+        )
+    ann.ai_caption = result.content
+    ann.ai_caption_provider = f"{result.provider_name}/{result.model_id}"
+    ann.ai_caption_at = datetime.now(UTC).isoformat()
+    store.upsert_annotation(ann)
+
+    return {
+        "path": str(img_path),
+        "wd14Tags": tags_str,
+        "caption": new_caption,
+    }
+
+
+@router.post("/ai/smart-caption")
+def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
+    """Run WD14 tagging + vision LLM captioning for all images in a directory."""
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+    from lorahub.core.tagging.wd14 import WD14Tagger  # noqa: PLC0415
+
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.visionTask)
+    if route is None:
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
+
+    # Initialize WD14 tagger
+    tagger = WD14Tagger(
+        model_id=body.taggerModel,
+        general_threshold=body.generalThreshold,
+        character_threshold=body.characterThreshold,
+        device=body.device,
+    )
+    tagger.load()
+
+    images = _scan_images(directory, body.recursive)
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    store = _store()
+    for img_path in images:
+        try:
+            item = _smart_caption_single_image(
+                img_path, tagger, ai_store, route, body.mergeStrategy, store
+            )
+            results.append(item)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"path": str(img_path), "error": str(exc)})
+
+    return {"processed": len(results), "results": results, "errors": errors}
+
+
+class SmartCaptionSingleInput(BaseModel):
+    path: str
+    taggerModel: str = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+    visionTask: str = "tagging.assist"
+    mergeStrategy: str = "replace"
+    device: str = "auto"
+    generalThreshold: float = 0.35
+    characterThreshold: float = 0.85
+
+
+@router.post("/ai/smart-caption/single")
+def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
+    """Run WD14 tagging + vision LLM captioning for a single image."""
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+    from lorahub.core.tagging.wd14 import WD14Tagger  # noqa: PLC0415
+
+    file_path = _resolve_under_roots(body.path)
+    if not file_path.is_file():
+        raise HTTPException(404, "image not found")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.visionTask)
+    if route is None:
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
+
+    tagger = WD14Tagger(
+        model_id=body.taggerModel,
+        general_threshold=body.generalThreshold,
+        character_threshold=body.characterThreshold,
+        device=body.device,
+    )
+    tagger.load()
+
+    store = _store()
+    try:
+        item = _smart_caption_single_image(
+            file_path, tagger, ai_store, route, body.mergeStrategy, store
+        )
+        return {"ok": True, **item}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"smart caption failed: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- #
