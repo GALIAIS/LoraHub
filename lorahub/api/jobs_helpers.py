@@ -494,13 +494,24 @@ def _relaunch_job_in_place(
     so callers can stamp things like ``last_resumed_at`` / ``rerun_count``
     without clobbering sweep tags or auto-resume counters.
 
-    The on-disk ``events.jsonl`` is left in place — the new run appends to
-    it. If you need a fresh log, archive the workspace first.
+    The on-disk ``events.jsonl`` and the in-memory event ring are both
+    cleared before the new run starts, so logs reflect the current run
+    only. Resume runs (``extra_argv`` non-empty) keep the prior log so
+    the timeline survives across the resume boundary.
     """
     workspace = job.workspace
     workspace.mkdir(parents=True, exist_ok=True)
 
     _normalize_recipe_paths(cfg)
+
+    # Plain rerun: wipe stale events so the user sees only the fresh
+    # attempt. /resume passes extra_argv, where preserving history is
+    # the whole point — leave its log alone.
+    if not extra_argv:
+        job.events.clear()
+        event_log = workspace / "events.jsonl"
+        if event_log.is_file():
+            event_log.unlink()
 
     snapshot = cfg.model_dump(mode="json")
     job.config_snapshot = snapshot
