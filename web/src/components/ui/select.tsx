@@ -4,7 +4,53 @@ import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Select = SelectPrimitive.Root
+/**
+ * base-ui's <Select.Value> falls back to printing the raw value when it
+ * cannot find a matching label in the store-level `items` prop on
+ * <Select.Root>. We don't pass that prop — every consumer just renders
+ * <SelectItem> children. To bridge the gap, we maintain a small
+ * Context-backed registry: each <SelectItem> publishes its
+ * `value -> rendered children` pair on mount, and our <SelectValue>
+ * looks the current value up in that map. If the lookup misses (item
+ * not yet mounted, or genuinely unknown value), we fall back to the
+ * placeholder rather than the raw value.
+ */
+interface SelectLabelRegistry {
+  register: (value: string, node: React.ReactNode) => void
+  unregister: (value: string) => void
+  lookup: (value: string) => React.ReactNode | undefined
+}
+
+const SelectLabelContext = React.createContext<SelectLabelRegistry | null>(null)
+
+function Select<Value = string, Multiple extends boolean | undefined = false>({
+  children,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root<Value, Multiple>>) {
+  const [labels, setLabels] = React.useState<Record<string, React.ReactNode>>({})
+  const registry = React.useMemo<SelectLabelRegistry>(
+    () => ({
+      register: (value, node) =>
+        setLabels((prev) =>
+          prev[value] === node ? prev : { ...prev, [value]: node },
+        ),
+      unregister: (value) =>
+        setLabels((prev) => {
+          if (!(value in prev)) return prev
+          const next = { ...prev }
+          delete next[value]
+          return next
+        }),
+      lookup: (value) => labels[value],
+    }),
+    [labels],
+  )
+  return (
+    <SelectLabelContext.Provider value={registry}>
+      <SelectPrimitive.Root {...props}>{children}</SelectPrimitive.Root>
+    </SelectLabelContext.Provider>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
@@ -16,13 +62,49 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   )
 }
 
-function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
+function SelectValue({
+  className,
+  children: childrenProp,
+  placeholder,
+  ...props
+}: SelectPrimitive.Value.Props & { placeholder?: React.ReactNode }) {
+  const registry = React.useContext(SelectLabelContext)
+  const renderChildren = React.useCallback(
+    (value: unknown) => {
+      // Caller-supplied children take precedence (escape hatch for
+      // multi-select / custom rendering).
+      if (typeof childrenProp === "function") {
+        return childrenProp(value as never)
+      }
+      if (childrenProp != null && childrenProp !== "") {
+        return childrenProp
+      }
+      const key =
+        value == null
+          ? ""
+          : typeof value === "string"
+            ? value
+            : JSON.stringify(value)
+      // Empty value: nothing selected -> placeholder.
+      if (key === "" || key === '""') {
+        return placeholder ?? null
+      }
+      const label = registry?.lookup(key)
+      if (label != null && label !== "") return label
+      // Last resort: don't print the raw value; show placeholder.
+      return placeholder ?? null
+    },
+    [childrenProp, placeholder, registry],
+  )
   return (
     <SelectPrimitive.Value
       data-slot="select-value"
       className={cn("flex flex-1 text-left", className)}
+      placeholder={placeholder as string | undefined}
       {...props}
-    />
+    >
+      {renderChildren}
+    </SelectPrimitive.Value>
   )
 }
 
@@ -106,10 +188,29 @@ function SelectLabel({ className, ...props }: SelectPrimitive.GroupLabel.Props) 
   )
 }
 
-function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Props) {
+function SelectItem({
+  className,
+  children,
+  value,
+  ...props
+}: SelectPrimitive.Item.Props) {
+  const registry = React.useContext(SelectLabelContext)
+  React.useEffect(() => {
+    if (!registry) return undefined
+    const key =
+      value == null
+        ? ""
+        : typeof value === "string"
+          ? value
+          : JSON.stringify(value)
+    if (key === "" || key === '""') return undefined
+    registry.register(key, children)
+    return () => registry.unregister(key)
+  }, [registry, value, children])
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
+      value={value}
       className={cn(
         "relative flex w-full cursor-default items-center gap-1.5 rounded-[2px] py-1.5 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
