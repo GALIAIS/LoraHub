@@ -16,6 +16,7 @@ from .ai import router as ai_router
 from .captions import router as captions_router
 from .datasets import router as datasets_router
 from .health import router as health_router
+from .image_studio import router as image_studio_router
 from .jobs import router as jobs_router
 from .models import router as models_router
 from .network import router as network_router
@@ -33,6 +34,7 @@ all_routers: list[APIRouter] = [
     settings_router,
     configs_router,
     datasets_router,
+    image_studio_router,
     jobs_router,
     backends_router,
     bootstrap_router,

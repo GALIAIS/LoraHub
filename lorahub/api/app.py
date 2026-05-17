@@ -45,6 +45,10 @@ from lorahub.api.ai_store import (
     AIStore,
     default_ai_store_path,
 )
+from lorahub.api.image_studio_store import (
+    ImageStudioStore,
+    default_image_studio_store_path,
+)
 from lorahub.api.helpers import _resolve_web_dist
 from lorahub.api.jobs_helpers import _job_events
 from lorahub.api.session_store import SessionStore, default_session_store_path
@@ -72,6 +76,7 @@ _bootstrap_session: _BootstrapSession | None = None
 _sweep_store: SweepStore | None = None
 _session_store: SessionStore | None = None
 _ai_store: AIStore | None = None
+_image_studio_store: ImageStudioStore | None = None
 
 
 @asynccontextmanager
@@ -95,13 +100,15 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_store  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store, _image_studio_store  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
     if _ai_store is None:
         _ai_store = AIStore(default_ai_store_path())
+    if _image_studio_store is None:
+        _image_studio_store = ImageStudioStore(default_image_studio_store_path())
         # Seed empty routes for the LoraHub task ids so the Settings UI
         # has something to render on a fresh install. Each row carries
         # `enabled=True` + null provider/model — the user picks them in

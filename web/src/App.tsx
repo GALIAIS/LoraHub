@@ -23,6 +23,7 @@ const NAV = [
   { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal },
   { to: "/configs", label: "训练配置", icon: Layers },
   { to: "/datasets", label: "数据集", icon: Database },
+  { to: "/image-studio", label: "图像工作台", icon: Palette },
   { to: "/gallery", label: "样图画廊", icon: Images },
   { to: "/settings", label: "设置", icon: Settings },
   { to: "/about", label: "关于", icon: Info },

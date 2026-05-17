@@ -9,6 +9,7 @@ import { DashboardPage } from "./pages/dashboard"
 import { ConfigsPage } from "./pages/configs"
 import { DatasetsPage } from "./pages/datasets"
 import { GalleryPage } from "./pages/gallery"
+import { ImageStudioPage } from "./pages/image-studio"
 import { SettingsPage } from "./pages/settings"
 import { SweepsPage } from "./pages/sweeps"
 import { AboutPage } from "./pages/about"
@@ -34,6 +35,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="sweeps" element={<SweepsPage />} />
             <Route path="configs" element={<ConfigsPage />} />
             <Route path="datasets" element={<DatasetsPage />} />
+            <Route path="image-studio" element={<ImageStudioPage />} />
             <Route path="gallery" element={<GalleryPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="about" element={<AboutPage />} />
