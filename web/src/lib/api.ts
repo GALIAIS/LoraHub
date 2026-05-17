@@ -629,6 +629,52 @@ export const api = {
     }),
   getTaggingSession: (sessionId: string) =>
     http<TaggingSession>(`/tagging/tag/${sessionId}`),
+  // ----- AI provider catalogue + credentials -----
+  aiListProviders: () =>
+    http<{ providers: AIProviderEntry[] }>("/ai/providers"),
+  aiListCredentials: () =>
+    http<{ credentials: AICredentialEntry[] }>("/ai/credentials"),
+  aiUpsertCredential: (body: {
+    provider: string
+    api_key?: string | null
+    base_url?: string | null
+    default_model?: string | null
+    enabled?: boolean
+  }) =>
+    http<{ credential: AICredentialEntry }>("/ai/credentials", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  aiDeleteCredential: (provider: string) =>
+    http<{ deleted: boolean; provider: string }>(
+      `/ai/credentials/${encodeURIComponent(provider)}`,
+      { method: "DELETE" },
+    ),
+  aiTestProvider: (body: {
+    provider: string
+    api_key?: string | null
+    base_url?: string | null
+    model?: string | null
+  }) =>
+    http<AITestResult>("/ai/test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  aiChat: (body: {
+    provider: string
+    messages: Array<{ role: "system" | "user" | "assistant"; content: unknown }>
+    model?: string | null
+    temperature?: number
+    max_tokens?: number | null
+    response_format?: "text" | "json"
+    stream?: boolean
+    timeout_s?: number
+    extra?: Record<string, unknown>
+  }) =>
+    http<AIChatResult>("/ai/chat", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
   probeMirrors: (
@@ -985,6 +1031,58 @@ export interface ProbeResult {
   status: number | null
   latency_ms: number | null
   error: string | null
+}
+
+export interface AIModelInfo {
+  id: string
+  label: string
+  vision: boolean
+  context: number
+}
+
+export interface AIProviderEntry {
+  id: string
+  name: string
+  homepage: string
+  docs_url: string
+  auth_help: string
+  default_base_url: string
+  default_model: string | null
+  custom_base_url: boolean
+  models: AIModelInfo[]
+  configured: boolean
+  enabled: boolean
+  current_base_url: string | null
+  current_default_model: string | null
+}
+
+export interface AICredentialEntry {
+  provider: string
+  api_key: string | null
+  api_key_set: boolean
+  base_url: string | null
+  default_model: string | null
+  enabled: boolean
+  updated_at: string | null
+}
+
+export interface AITestResult {
+  ok: boolean
+  model?: string
+  sample?: string
+  usage_input_tokens?: number | null
+  usage_output_tokens?: number | null
+  error?: string
+  status_code?: number | null
+  retryable?: boolean
+}
+
+export interface AIChatResult {
+  text: string
+  model: string
+  finish_reason: string | null
+  usage_input_tokens: number | null
+  usage_output_tokens: number | null
 }
 
 /**

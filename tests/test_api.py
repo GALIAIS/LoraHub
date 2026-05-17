@@ -62,17 +62,25 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api.settings import SettingsStore
 
     # Isolate the settings store so tests don't read or write the real
-    # user-data file. Patch on the imported `app` module 鈥?that's the symbol
+    # user-data file. Patch on the imported `app` module — that's the symbol
     # the request handlers resolve at call time.
     monkeypatch.setattr(
         app_mod, "_settings_store", SettingsStore(tmp_path / "settings.json")
     )
-    # Don't let a developer's .env (LORAHUB_KOHYA_*) leak into backend probes 鈥?    # those env vars are valid in production but confuse settings tests.
+    # Don't let a developer's .env (LORAHUB_KOHYA_*) leak into backend probes —
+    # those env vars are valid in production but confuse settings tests.
     monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
     monkeypatch.delenv("LORAHUB_KOHYA_PYTHON", raising=False)
     # Reset the singleton bootstrap session so tests can't leak state into
     # one another (each test starts from "idle").
     monkeypatch.setattr(app_mod, "_bootstrap_session", None)
+    # Reset the persistence stores so each test sees an empty DB. Previous
+    # tests in the same session (or the developer's local `runs/` folder)
+    # would otherwise leak rows through the module-level singletons.
+    monkeypatch.setattr(app_mod, "_sweep_store", None)
+    monkeypatch.setattr(app_mod, "_session_store", None)
+    monkeypatch.setattr(app_mod, "_ai_credentials_store", None)
+    monkeypatch.chdir(tmp_path)
     return TestClient(app_mod.app)
 
 

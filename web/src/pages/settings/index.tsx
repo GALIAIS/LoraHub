@@ -12,6 +12,7 @@ import { TaggingTab } from "./components/tagging-tab"
 import { NetworkTab } from "./components/network-tab"
 import { ModelsTab } from "./components/models-tab"
 import { DependenciesTab } from "./components/dependencies-tab"
+import { AIProvidersTab } from "./components/ai-providers-tab"
 import { MaintenanceTab } from "./components/maintenance-tab"
 
 type TabKey =
@@ -22,6 +23,7 @@ type TabKey =
   | "network"
   | "models"
   | "tagging"
+  | "ai"
   | "maintenance"
 
 /**
@@ -58,6 +60,7 @@ export function SettingsPage() {
             <TabsTrigger value="network">网络加速</TabsTrigger>
             <TabsTrigger value="models">模型下载</TabsTrigger>
             <TabsTrigger value="tagging">标注</TabsTrigger>
+            <TabsTrigger value="ai">AI 服务商</TabsTrigger>
             <TabsTrigger value="maintenance">维护</TabsTrigger>
           </TabsList>
         </div>
@@ -109,6 +112,13 @@ export function SettingsPage() {
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
                 <TaggingTab />
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="ai" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                <AIProvidersTab />
               </div>
             </div>
           </TabsContent>

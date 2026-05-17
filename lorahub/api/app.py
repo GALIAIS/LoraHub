@@ -41,6 +41,10 @@ from lorahub.api.bootstrap_session import (
     _BootstrapSession,
     default_build_bootstrap_runner,
 )
+from lorahub.api.ai_credentials_store import (
+    AICredentialStore,
+    default_ai_credentials_path,
+)
 from lorahub.api.helpers import _resolve_web_dist
 from lorahub.api.jobs_helpers import _job_events
 from lorahub.api.session_store import SessionStore, default_session_store_path
@@ -67,6 +71,7 @@ _bootstrap_session: _BootstrapSession | None = None
 # SQLite files; tests monkeypatch them to in-memory or per-test paths.
 _sweep_store: SweepStore | None = None
 _session_store: SessionStore | None = None
+_ai_credentials_store: AICredentialStore | None = None
 
 
 @asynccontextmanager
@@ -90,11 +95,13 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_credentials_store  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
+    if _ai_credentials_store is None:
+        _ai_credentials_store = AICredentialStore(default_ai_credentials_path())
 
     # Auto-resume: replay interrupted jobs that have a usable checkpoint.
     # Done before scheduler.start() so resumed work lands at the head of
