@@ -20,17 +20,27 @@ const tabs: { id: AiBulkTab; label: string }[] = [
 export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModalProps) {
   const [activeTab, setActiveTab] = useState<AiBulkTab>("smart-caption")
   const [device, setDevice] = useState("auto")
-  const [mergeStrategy, setMergeStrategy] = useState("append")
+  const [mergeStrategy, setMergeStrategy] = useState("replace")
   const [taggerModel, setTaggerModel] = useState("wd-swinv2-v3")
   const [generalThreshold, setGeneralThreshold] = useState(0.35)
   const [characterThreshold, setCharacterThreshold] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
+  const [captionMode, setCaptionMode] = useState<"general" | "style" | "character">("style")
+  const [triggerWord, setTriggerWord] = useState("")
+  const [stripStyleTags, setStripStyleTags] = useState(true)
 
   const handleStart = () => {
     const base = { device, paths }
     switch (activeTab) {
       case "smart-caption":
-        onStart(activeTab, { ...base, mergeStrategy, path: datasetPath })
+        onStart(activeTab, {
+          ...base,
+          mergeStrategy,
+          path: datasetPath,
+          captionMode,
+          triggerWord: triggerWord.trim() || undefined,
+          stripStyleTags,
+        })
         break
       case "vlm-caption":
         onStart(activeTab, { ...base, path: datasetPath })
@@ -108,8 +118,30 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           {activeTab === "smart-caption" && (
             <div className="flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
-                使用 WD14 标签 + VLM 视觉模型生成综合描述
+                WD14 标签 + VLM 视觉模型综合标注，按训练用途自动调整 prompt
               </p>
+              <label className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-16">训练用途</span>
+                <select
+                  value={captionMode}
+                  onChange={(e) => setCaptionMode(e.target.value as typeof captionMode)}
+                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                >
+                  <option value="style">风格 LoRA（不写画风词）</option>
+                  <option value="character">角色 LoRA（不写角色特征）</option>
+                  <option value="general">通用（描述全部内容）</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-16">触发词</span>
+                <input
+                  type="text"
+                  value={triggerWord}
+                  onChange={(e) => setTriggerWord(e.target.value)}
+                  placeholder="例如 anima style"
+                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                />
+              </label>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">合并策略</span>
                 <select
@@ -117,11 +149,22 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setMergeStrategy(e.target.value)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
+                  <option value="replace">替换（推荐）</option>
                   <option value="append">追加</option>
-                  <option value="replace">替换</option>
                   <option value="prepend">前置</option>
                 </select>
               </label>
+              {captionMode === "style" && (
+                <label className="flex items-center gap-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={stripStyleTags}
+                    onChange={(e) => setStripStyleTags(e.target.checked)}
+                    className="size-3"
+                  />
+                  自动剔除画风/质量类 WD14 标签（anime / illustration / masterpiece 等）
+                </label>
+              )}
             </div>
           )}
 

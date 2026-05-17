@@ -1563,6 +1563,9 @@ export async function imageStudioSmartCaption(params: {
   recursive?: boolean
   device?: string
   mergeStrategy?: string
+  captionMode?: "general" | "style" | "character"
+  triggerWord?: string
+  stripStyleTags?: boolean
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
   const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption`, {
     method: "POST",
@@ -1576,6 +1579,10 @@ export async function imageStudioSmartCaption(params: {
 export async function imageStudioSmartCaptionSingle(params: {
   path: string
   device?: string
+  captionMode?: "general" | "style" | "character"
+  triggerWord?: string
+  stripStyleTags?: boolean
+  mergeStrategy?: string
 }): Promise<{ caption: string; tags: string }> {
   const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption/single`, {
     method: "POST",

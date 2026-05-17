@@ -791,12 +791,73 @@ def batch_delete(body: BatchDeleteSelectInput) -> dict[str, Any]:
 # Smart caption (WD14 + Vision LLM)
 # --------------------------------------------------------------------------- #
 
-_SMART_CAPTION_PROMPT = (
+# Style words that pollute caption when training a *style* LoRA — these
+# describe the visual style itself and must be stripped from the caption,
+# otherwise the model anchors the style on the words instead of the latent.
+_STYLE_TAGS_TO_STRIP = {
+    "anime", "anime style", "anime coloring", "anime screencap", "manga",
+    "illustration", "comic", "cartoon", "western comics (style)",
+    "cel shading", "cel-shaded", "flat color", "flat colors", "flat shading",
+    "pixel art", "chibi", "sketch", "lineart", "line art", "monochrome",
+    "watercolor", "watercolor (medium)", "oil painting (medium)",
+    "concept art", "official art", "key visual", "promotional art",
+    "screencap", "official style", "studio ghibli style",
+    "realistic", "photorealistic", "photo", "photograph", "3d", "3d (artwork)",
+    "render", "cgi", "unreal engine", "octane render",
+    "highres", "absurdres", "best quality", "masterpiece",
+    "traditional media", "digital media", "digital painting",
+    "artist name", "signature", "watermark", "logo", "english text",
+    "dated", "twitter username", "patreon username", "artist logo",
+}
+
+_SMART_CAPTION_PROMPT_STYLE = (
+    "You are writing a training caption for a STYLE LoRA. The model must learn the visual "
+    "style by seeing it across many captions, so the caption must describe ONLY the content "
+    "(subject, pose, clothing, expression, background, composition, lighting) and must NEVER "
+    "name the art style, medium, or quality.\n\n"
+    "Strict rules:\n"
+    "  - Do NOT mention: anime, manga, illustration, cartoon, cel shading, flat color, "
+    "    digital painting, watercolor, sketch, lineart, pixel art, chibi, 3d, render, "
+    "    photorealistic, photograph, official art, screencap, masterpiece, best quality, "
+    "    highres, absurdres, signature, watermark, artist name.\n"
+    "  - Do NOT use vague aesthetic words like beautiful, stunning, gorgeous, detailed.\n"
+    "  - Describe what is in the frame as if it were a real scene, in plain natural English.\n"
+    "  - One paragraph, 2-4 sentences, concrete nouns and verbs.\n"
+    "  - Mention: subject (gender/age if obvious), pose / action, clothing items and colors, "
+    "    facial expression, hair, background or setting, framing (close-up / full body / "
+    "    from behind / etc), lighting if distinctive.\n\n"
+    "Reference WD14 tags (you may borrow concrete content tags but ignore any style/quality "
+    "tags above): {tags}\n\n"
+    "Write the caption now."
+)
+
+_SMART_CAPTION_PROMPT_CHARACTER = (
+    "You are writing a training caption for a CHARACTER LoRA. The model must learn the "
+    "character's identity, so the caption must describe everything EXCEPT the character's "
+    "fixed identity features.\n\n"
+    "Strict rules:\n"
+    "  - Do NOT describe: the character's face, eye color, hair color, hair style, "
+    "    hair length, signature outfit, or any identity-defining trait. These are what the "
+    "    LoRA is supposed to learn.\n"
+    "  - DO describe: pose, action, expression, clothing variations, accessories, "
+    "    background, lighting, framing, camera angle, mood.\n"
+    "  - One paragraph, 2-4 sentences, concrete and natural.\n\n"
+    "Reference WD14 tags: {tags}\n\nWrite the caption now."
+)
+
+_SMART_CAPTION_PROMPT_GENERAL = (
     "Based on the following WD14 tags and the image, write an optimized training caption.\n"
     "WD14 tags: {tags}\n"
     "Write a natural language caption suitable for LoRA training. Include all relevant details "
     "about the subject, pose, clothing, background, and composition. Be concise but complete."
 )
+
+
+def _filter_style_tags(tags_str: str) -> str:
+    """Drop style/quality WD14 tags so they don't leak into a style-LoRA caption."""
+    parts = [t.strip() for t in tags_str.split(",") if t.strip()]
+    kept = [t for t in parts if t.lower() not in _STYLE_TAGS_TO_STRIP]
+    return ", ".join(kept)
 
 
 class SmartCaptionBatchInput(BaseModel):
@@ -808,6 +869,9 @@ class SmartCaptionBatchInput(BaseModel):
     device: str = "auto"
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
+    captionMode: str = "general"  # general | style | character
+    triggerWord: str | None = None  # prepended to every caption for activation
+    stripStyleTags: bool = True  # drop style/quality tags from WD14 output
 
 
 def _smart_caption_single_image(
@@ -817,6 +881,9 @@ def _smart_caption_single_image(
     route: Any,
     merge_strategy: str,
     store: ImageStudioStore,
+    caption_mode: str = "general",
+    trigger_word: str | None = None,
+    strip_style_tags: bool = True,
 ) -> dict[str, Any]:
     """Run WD14 tagging then vision LLM on a single image. Returns result dict."""
     import base64  # noqa: PLC0415
@@ -825,9 +892,11 @@ def _smart_caption_single_image(
 
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
 
-    # Step 1: WD14 tagging
+    # Step 1: WD14 tagging (drop style/quality tags for style LoRA)
     tag_result = tagger.tag_image(img_path)
     tags_str = tag_result.caption(underscores=False, include_character=True)
+    if strip_style_tags and caption_mode == "style":
+        tags_str = _filter_style_tags(tags_str)
 
     # Step 2: Prepare image for vision LLM
     mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
@@ -835,7 +904,13 @@ def _smart_caption_single_image(
     b64 = base64.b64encode(data).decode("ascii")
     data_url = f"data:{mime};base64,{b64}"
 
-    prompt_text = _SMART_CAPTION_PROMPT.format(tags=tags_str)
+    if caption_mode == "style":
+        prompt_template = _SMART_CAPTION_PROMPT_STYLE
+    elif caption_mode == "character":
+        prompt_template = _SMART_CAPTION_PROMPT_CHARACTER
+    else:
+        prompt_template = _SMART_CAPTION_PROMPT_GENERAL
+    prompt_text = prompt_template.format(tags=tags_str)
 
     messages: list[dict[str, Any]] = []
     if route.system_prompt:
@@ -857,16 +932,21 @@ def _smart_caption_single_image(
         route=route,
     )
 
-    # Step 4: Save caption
+    # Step 4: Save caption (inject trigger word at the very front for activation)
+    caption_body = result.content.strip()
+    trigger = (trigger_word or "").strip()
+    if trigger and not caption_body.lower().startswith(trigger.lower()):
+        caption_body = f"{trigger}, {caption_body}"
+
     caption_path = img_path.with_suffix(".txt")
     existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
 
     if merge_strategy == "append":
-        new_caption = (existing.strip() + ", " + result.content).strip(", ")
+        new_caption = (existing.strip() + ", " + caption_body).strip(", ")
     elif merge_strategy == "prepend":
-        new_caption = (result.content + ", " + existing.strip()).strip(", ")
+        new_caption = (caption_body + ", " + existing.strip()).strip(", ")
     else:  # replace
-        new_caption = result.content
+        new_caption = caption_body
 
     caption_path.write_text(new_caption, encoding="utf-8")
 
@@ -926,7 +1006,10 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     for img_path in images:
         try:
             item = _smart_caption_single_image(
-                img_path, tagger, ai_store, route, body.mergeStrategy, store
+                img_path, tagger, ai_store, route, body.mergeStrategy, store,
+                caption_mode=body.captionMode,
+                trigger_word=body.triggerWord,
+                strip_style_tags=body.stripStyleTags,
             )
             results.append(item)
         except Exception as exc:  # noqa: BLE001
@@ -943,6 +1026,9 @@ class SmartCaptionSingleInput(BaseModel):
     device: str = "auto"
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
+    captionMode: str = "general"
+    triggerWord: str | None = None
+    stripStyleTags: bool = True
 
 
 @router.post("/ai/smart-caption/single")
@@ -976,7 +1062,10 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
     store = _store()
     try:
         item = _smart_caption_single_image(
-            file_path, tagger, ai_store, route, body.mergeStrategy, store
+            file_path, tagger, ai_store, route, body.mergeStrategy, store,
+            caption_mode=body.captionMode,
+            trigger_word=body.triggerWord,
+            strip_style_tags=body.stripStyleTags,
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001

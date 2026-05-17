@@ -231,6 +231,9 @@ export function DatasetDetail() {
             recursive,
             device: params.device as string,
             mergeStrategy: params.mergeStrategy as string,
+            captionMode: params.captionMode as "general" | "style" | "character",
+            triggerWord: params.triggerWord as string | undefined,
+            stripStyleTags: params.stripStyleTags as boolean | undefined,
           })
           setAiProgress({ running: false, label: "智能标注完成", processed: res.processed })
           break
