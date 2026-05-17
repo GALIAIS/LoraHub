@@ -1,0 +1,31 @@
+# 预览图提示词 — Anima Base + Kiko.L 风格 LoRA
+#
+# 文件格式（kohya / sd-scripts inference）：
+#   一行一个提示词。空行和以 # 开头的行被忽略。
+#   每行格式：
+#     <prompt> --w <宽> --h <高> --d <种子> --s <步数> --l <CFG> --n <负向提示>
+#
+# 预览图选取的原则：
+#   1. 覆盖几种典型构图：portrait / cowboy shot / full body / 群像 / 场景 / 横构图。
+#   2. 全部以 Anima 标准头 + 触发词 @Kiko.L 起手，与训练 caption 形态保持一致。
+#   3. 描述只写「内容」，不写「画风词」(anime/illustration 等)，让 LoRA 自己绑定风格。
+#   4. 同一种子 (--d 42) 跨 checkpoint 复用，便于横向对比看风格漂移。
+#   5. 1024×1024 是 Anima 的训练原生尺寸；横构图用 1280×768 验证 AR 桶外推。
+#
+# 改动这份文件后无需重启训练，下一次 sample 会自动读取。
+
+masterpiece, best quality, score_7, safe, 1girl, solo, @Kiko.L, A young woman with long hair stands in a sunlit meadow, looking back over her shoulder with a calm smile, wearing a casual summer dress, gentle breeze lifting her bangs, soft daylight from the upper left, painted in clean lineart with cel shading. --w 1024 --h 1024 --d 42 --s 24 --l 5.0 --n lowres, blurry, watermark, text, jpeg artifacts, signature, extra limbs, bad anatomy
+
+masterpiece, best quality, score_7, safe, 1girl, solo, @Kiko.L, A close-up portrait of a young woman with twin tails and bright eyes, head tilted slightly, soft pink blush, neutral background with bokeh, three-quarter angle, painterly highlights on the hair. --w 1024 --h 1024 --d 42 --s 24 --l 5.0 --n lowres, blurry, watermark, text, signature, extra fingers, bad anatomy
+
+masterpiece, best quality, score_7, safe, 1girl, solo, @Kiko.L, Full body shot of a young woman in detailed armor standing on a rocky cliff at golden hour, holding a sword loosely in one hand, dramatic rim lighting, distant mountain range behind her, dynamic low-angle composition. --w 1024 --h 1024 --d 42 --s 28 --l 5.5 --n lowres, blurry, watermark, text, signature, deformed, missing limbs
+
+masterpiece, best quality, score_7, sensitive, 1girl, solo, @Kiko.L, A young woman in a modern street outfit walks through a neon-lit Tokyo alley at night, looking at the viewer with a slight smile, hands in jacket pockets, vivid magenta and cyan reflections on wet pavement, cinematic shallow depth of field. --w 1280 --h 768 --d 42 --s 28 --l 5.5 --n lowres, blurry, watermark, text, signature, extra limbs, bad anatomy
+
+masterpiece, best quality, score_7, safe, 2girls, @Kiko.L, Two young women sitting back to back on a school rooftop fence at sunset, one laughing while the other looks contemplatively at the orange sky, school uniforms, soft warm light wrapping around their silhouettes, slice-of-life mood. --w 1280 --h 768 --d 42 --s 24 --l 5.0 --n lowres, blurry, watermark, text, signature, deformed, extra limbs
+
+masterpiece, best quality, score_7, safe, 1girl, solo, @Kiko.L, A young woman sits cross-legged in a quiet bookshop with afternoon light streaming through tall windows, reading an open book, dust motes in the air, warm wooden shelves and stacked novels behind her, intimate composition. --w 1024 --h 1024 --d 42 --s 24 --l 5.0 --n lowres, blurry, watermark, text, signature, extra fingers, bad anatomy
+
+masterpiece, best quality, score_7, safe, 1girl, solo, @Kiko.L, A young woman in a flowing white dress dances on a ballroom floor under a crystal chandelier, mid-spin, fabric trailing behind her, ornate marble pillars in the background, refined indoor lighting with golden highlights. --w 1024 --h 1024 --d 42 --s 28 --l 5.5 --n lowres, blurry, watermark, text, signature, extra limbs, bad anatomy
+
+masterpiece, best quality, score_7, safe, no humans, @Kiko.L, A serene mountain lake at dawn with mist rising from the water, ancient pine trees framing the foreground, distant snow-capped peaks reflected on the surface, soft pastel sky transitioning from pink to pale blue, peaceful landscape composition. --w 1280 --h 768 --d 42 --s 24 --l 5.0 --n lowres, blurry, watermark, text, signature, deformed

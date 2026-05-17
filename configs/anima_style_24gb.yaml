@@ -87,6 +87,10 @@ sampling:
   everyNSteps: 200
   resolution: [1024, 1024]
   seed: 42
+  # 8-prompt default covering portrait / cowboy / full body / group /
+  # scene / wide landscape, with @Kiko.L baked in. Edit the file to
+  # re-target a different trigger or aesthetic.
+  promptsFile: ./configs/sample_prompts/anima_default.txt
 
 output:
   name: lx_anima_style_lora

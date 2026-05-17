@@ -90,6 +90,10 @@ sampling:
   everyNSteps: 200
   resolution: [1024, 1024]
   seed: 42
+  # Default Anima preview prompt set (8 lines, portrait / cowboy /
+  # full body / group / scene / wide landscape coverage). Swap the
+  # trigger inside the file to match your character LoRA name.
+  promptsFile: ./configs/sample_prompts/anima_default.txt
 
 output:
   name: azurlane_char0_anima_lora
