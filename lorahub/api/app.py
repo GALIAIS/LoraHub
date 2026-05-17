@@ -211,6 +211,13 @@ for _r in all_routers:
     app.include_router(_r)
 
 
+# Idle-traffic heartbeat: AutoDL / nginx / similar reverse proxies tend to
+# axe a websocket that goes silent for ~60s. We push a tiny `ping` frame
+# every WS_PING_INTERVAL seconds while waiting on the queue so the proxy
+# always sees activity. Clients ignore type=ping frames.
+_WS_PING_INTERVAL = 25.0
+
+
 @app.websocket("/api/jobs/{job_id}/stream")
 async def stream_events(ws: WebSocket, job_id: str) -> None:
     job = state.registry.get(job_id)
@@ -233,7 +240,12 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
             JobState.interrupted,
         }
         while not replayed_terminal and not terminal_state:
-            ev = await queue.get()
+            try:
+                ev = await asyncio.wait_for(queue.get(), timeout=_WS_PING_INTERVAL)
+            except asyncio.TimeoutError:
+                # Heartbeat: keep the proxy from cutting the idle channel.
+                await ws.send_json({"type": "ping"})
+                continue
             await ws.send_json(ev.to_dict())
             if ev.type is EventType.done:
                 break
@@ -261,7 +273,11 @@ async def stream_bootstrap(ws: WebSocket) -> None:
         if not sess.is_running():
             return
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=_WS_PING_INTERVAL)
+            except asyncio.TimeoutError:
+                await ws.send_json({"type": "ping"})
+                continue
             if event.get("step") == "__terminal__":
                 break
             await ws.send_json(event)

@@ -23,10 +23,11 @@ import { expectedTotalSteps } from "../utils"
 import { OverviewTab } from "./overview-tab"
 import { EventsTab } from "./events-tab"
 import { MetricsTab } from "./metrics-tab"
+import { AnalysisTab } from "./analysis-tab"
 import { FilesTab } from "./files-tab"
 import { CompareTab } from "./compare-tab"
 
-type TabKey = "overview" | "events" | "metrics" | "files" | "compare"
+type TabKey = "overview" | "events" | "metrics" | "analysis" | "files" | "compare"
 
 export function JobDetail({
   jobId,
@@ -249,6 +250,7 @@ export function JobDetail({
             <TabsTrigger value="overview">概览</TabsTrigger>
             <TabsTrigger value="events">事件</TabsTrigger>
             <TabsTrigger value="metrics">指标曲线</TabsTrigger>
+            <TabsTrigger value="analysis">详细分析</TabsTrigger>
             <TabsTrigger value="files">产物文件</TabsTrigger>
             {showCompare && <TabsTrigger value="compare">对比</TabsTrigger>}
           </TabsList>
@@ -275,6 +277,13 @@ export function JobDetail({
             <ScrollArea className="h-full">
               <div className="px-7 py-5">
                 <MetricsTab jobId={jobId} jobState={data?.state} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+          <TabsContent value="analysis" className="h-full">
+            <ScrollArea className="h-full">
+              <div className="px-7 py-5">
+                <AnalysisTab jobId={jobId} jobState={data?.state} />
               </div>
             </ScrollArea>
           </TabsContent>

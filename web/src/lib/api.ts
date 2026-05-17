@@ -779,6 +779,11 @@ export const api = {
 /**
  * Live event stream over WebSocket. Returns the latest snapshot of buffered
  * events plus the connection state; reconnects on close while the job is alive.
+ *
+ * Reconnection: the server sends a `{type: "ping"}` heartbeat every ~25s so
+ * proxies don't kill the idle channel. We reconnect with exponential backoff
+ * (capped at 5s) when the socket closes, and immediately when the tab regains
+ * focus — that's the case where the browser parked the socket for a while.
  */
 export function useJobStream(jobId: string | null) {
   const [events, setEvents] = useState<TrainingEvent[]>([])
@@ -788,25 +793,72 @@ export function useJobStream(jobId: string | null) {
   useEffect(() => {
     if (!jobId) return
     setEvents([])
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const host = window.location.host || "127.0.0.1:18765"
-    const ws = new WebSocket(`${protocol}//${host}/api/jobs/${jobId}/stream`)
-    wsRef.current = ws
 
-    ws.onopen = () => setStatus("open")
-    ws.onclose = () => setStatus("closed")
-    ws.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as TrainingEvent
-        setEvents((prev) => [...prev, event].slice(-500))
-      } catch {
-        // ignore malformed frames
+    let cancelled = false
+    let backoff = 0
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    function connect() {
+      if (cancelled) return
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      const host = window.location.host || "127.0.0.1:18765"
+      const ws = new WebSocket(`${protocol}//${host}/api/jobs/${jobId}/stream`)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        backoff = 0
+        setStatus("open")
+      }
+      ws.onclose = () => {
+        setStatus("closed")
+        scheduleRetry()
+      }
+      ws.onerror = () => {}
+      ws.onmessage = (msg) => {
+        try {
+          const event = JSON.parse(msg.data) as TrainingEvent | { type: "ping" }
+          // Heartbeats keep the proxy quiet; they're not real events.
+          if ((event as { type?: string }).type === "ping") return
+          setEvents((prev) => [...prev, event as TrainingEvent].slice(-500))
+        } catch {
+          // ignore malformed frames
+        }
       }
     }
 
+    function scheduleRetry() {
+      if (cancelled) return
+      retryTimer = setTimeout(() => {
+        retryTimer = null
+        connect()
+      }, backoff)
+      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
+    }
+
+    function onVisible() {
+      if (document.visibilityState !== "visible") return
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
+      // Tab woke up and the socket is dead — reconnect now instead of
+      // waiting on the backoff timer.
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
+      backoff = 0
+      connect()
+    }
+
+    document.addEventListener("visibilitychange", onVisible)
+    connect()
+
     return () => {
-      ws.close()
-      wsRef.current = null
+      cancelled = true
+      document.removeEventListener("visibilitychange", onVisible)
+      if (retryTimer) clearTimeout(retryTimer)
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
     }
   }, [jobId])
 
@@ -817,6 +869,8 @@ export function useJobStream(jobId: string | null) {
  * Live bootstrap event stream over WebSocket. Mirrors `useJobStream` but talks
  * to the singleton backend-install session — it doesn't take an id because at
  * most one bootstrap can run at a time.
+ *
+ * Same heartbeat / reconnect strategy as useJobStream.
  */
 export function useBootstrapStream(enabled: boolean) {
   const [events, setEvents] = useState<BootstrapEvent[]>([])
@@ -826,25 +880,69 @@ export function useBootstrapStream(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return
     setEvents([])
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const host = window.location.host || "127.0.0.1:18765"
-    const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
-    wsRef.current = ws
 
-    ws.onopen = () => setStatus("open")
-    ws.onclose = () => setStatus("closed")
-    ws.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as BootstrapEvent
-        setEvents((prev) => [...prev, event].slice(-200))
-      } catch {
-        // ignore malformed frames
+    let cancelled = false
+    let backoff = 0
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    function connect() {
+      if (cancelled) return
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+      const host = window.location.host || "127.0.0.1:18765"
+      const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        backoff = 0
+        setStatus("open")
+      }
+      ws.onclose = () => {
+        setStatus("closed")
+        scheduleRetry()
+      }
+      ws.onerror = () => {}
+      ws.onmessage = (msg) => {
+        try {
+          const event = JSON.parse(msg.data) as BootstrapEvent | { type: "ping" }
+          if ((event as { type?: string }).type === "ping") return
+          setEvents((prev) => [...prev, event as BootstrapEvent].slice(-200))
+        } catch {
+          // ignore malformed frames
+        }
       }
     }
 
+    function scheduleRetry() {
+      if (cancelled) return
+      retryTimer = setTimeout(() => {
+        retryTimer = null
+        connect()
+      }, backoff)
+      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
+    }
+
+    function onVisible() {
+      if (document.visibilityState !== "visible") return
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
+      backoff = 0
+      connect()
+    }
+
+    document.addEventListener("visibilitychange", onVisible)
+    connect()
+
     return () => {
-      ws.close()
-      wsRef.current = null
+      cancelled = true
+      document.removeEventListener("visibilitychange", onVisible)
+      if (retryTimer) clearTimeout(retryTimer)
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
     }
   }, [enabled])
 
