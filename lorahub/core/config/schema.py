@@ -1,8 +1,13 @@
-﻿"""Semantic recipe schema for LoRA training.
+"""Semantic recipe schema for LoRA training.
 
 Users write a single YAML file describing *what* they want to train. The schema
 validates it, fills defaults (tuned for 8GB VRAM on SDXL), and later a
 backend-specific compiler translates it into the backend's native arguments.
+
+The schema deliberately mirrors the union of kohya-ss/sd-scripts argv and
+tdrussell/diffusion-pipe TOML keys. Each backend's compiler emits whichever
+fields its upstream understands and silently ignores the rest, so the same
+recipe can be retargeted between backends with minimal edits.
 """
 
 from __future__ import annotations
@@ -53,6 +58,67 @@ class BaseModelConfig(BaseModel):
     arch_variant: Literal["", "pony", "illustrious", "noobai", "animagine"] = ""
     checkpoint: Path
     vae: Path | None = None
+    # Per-component checkpoint paths for arches that ship as multi-file
+    # bundles (FLUX = clip_l + t5xxl + ae; SD3 = clip_l/g + t5xxl;
+    # Anima = qwen3 + qwen_image_vae + transformer; HunyuanImage = byt5 +
+    # text_encoder; ...). Free-form bag because upstream keeps adding
+    # entries. The kohya/dp compilers each render the keys their
+    # respective upstream understands.
+    arch_paths: ArchPathsConfig = Field(default_factory=lambda: ArchPathsConfig())
+
+
+class ArchPathsConfig(BaseModel):
+    """Arch-specific component paths shared by both backends.
+
+    Empty by default — only set the fields your model actually uses.
+    Both compilers consume the same fields and emit them under the names
+    the corresponding upstream expects (kohya argv, dp TOML keys).
+    """
+
+    # FLUX / SD3 / FLUX2
+    clip_l: Path | None = None
+    clip_g: Path | None = None
+    t5xxl: Path | None = None
+    ae: Path | None = None  # FLUX autoencoder
+
+    # Generic (Anima / Wan / HunyuanImage / chroma transformer-style)
+    transformer: Path | None = None
+    text_encoder: Path | None = None
+    llm: Path | None = None  # Anima Qwen3, HunyuanVideo LLM
+    byt5: Path | None = None  # HunyuanImage byT5
+
+    # Anima-specific
+    qwen3: Path | None = None
+    t5_tokenizer: Path | None = None
+    llm_adapter: Path | None = None
+
+    # Token length caps
+    t5xxl_max_token_length: int | None = Field(default=None, ge=1)
+    qwen3_max_token_length: int | None = Field(default=None, ge=1)
+    t5_max_token_length: int | None = Field(default=None, ge=1)
+
+    # Attention masking + dropout — FLUX/SD3
+    apply_t5_attn_mask: bool = False
+    apply_lg_attn_mask: bool = False
+    t5_dropout_rate: float = Field(0.0, ge=0.0, lt=1.0)
+    clip_l_dropout_rate: float = Field(0.0, ge=0.0, lt=1.0)
+    clip_g_dropout_rate: float = Field(0.0, ge=0.0, lt=1.0)
+
+    # SD3 positional-embed crop
+    pos_emb_random_crop_rate: float = Field(0.0, ge=0.0, lt=1.0)
+    enable_scaled_pos_embed: bool = False
+
+    # FLUX dev distilled guidance scale baked into the LoRA
+    guidance_scale: float | None = Field(default=None, gt=0)
+
+    # Place TE on a specific device / dtype (SD3 separates TEs from UNet)
+    t5xxl_device: str | None = None
+    t5xxl_dtype: Literal["fp16", "bf16", "fp32", "fp8"] | None = None
+
+    # VAE memory tweaks (Anima / HunyuanImage / Wan)
+    vae_chunk_size: int | None = Field(default=None, ge=1)
+    vae_disable_cache: bool = False
+    text_encoder_cpu: bool = False
 
 
 class BucketConfig(BaseModel):
@@ -60,6 +126,19 @@ class BucketConfig(BaseModel):
     min_size: int = Field(256, alias="min")
     max_size: int = Field(2048, alias="max")
     step: int = 64
+    # Don't upscale images smaller than the bucket; clamps tiny inputs
+    # instead of stretching them. kohya: --bucket_no_upscale.
+    no_upscale: bool = False
+    # Skip the resolution sanity check (kohya: --skip_image_resolution).
+    # Useful for datasets with unusual aspect ratios.
+    skip_image_resolution: bool = False
+    # PIL resampling kernel. None lets the trainer pick its default.
+    resize_interpolation: Literal[
+        "lanczos", "bicubic", "bilinear", "box", "nearest", "hamming"
+    ] | None = None
+    # diffusion-pipe accepts an explicit AR list overriding min/max/num.
+    # Each entry is a width/height ratio; only consumed by the dp compiler.
+    ar_buckets: list[float] | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -69,6 +148,47 @@ class CaptionConfig(BaseModel):
     ext: str = ".txt"
     shuffle: bool = True
     drop_rate: float = Field(0.0, ge=0.0, le=1.0)
+    # Per-epoch caption dropout (kohya: --caption_dropout_every_n_epochs).
+    # Different from drop_rate which is per-step.
+    dropout_every_n_epochs: int = Field(0, ge=0)
+    # Per-tag dropout — drops individual tags within a caption.
+    tag_dropout_rate: float = Field(0.0, ge=0.0, le=1.0)
+    # First N comma-separated tokens are NEVER shuffled away; pinning
+    # the trigger word at index 0 is the typical use.
+    keep_tokens: int = Field(0, ge=0)
+    # Custom separator between "kept" and shufflable tokens; default ","
+    keep_tokens_separator: str | None = None
+    # Secondary separator within a token group (e.g. " ,"). kohya only.
+    secondary_separator: str | None = None
+    # `{a|b|c}` wildcard support in captions (kohya: --enable_wildcard).
+    enable_wildcard: bool = False
+    # Compose-time prefix/suffix prepended/appended to every caption.
+    prefix: str | None = None
+    suffix: str | None = None
+    # Max tokenizer length (kohya: --max_token_length, valid: 75/150/225).
+    max_token_length: Literal[75, 150, 225] | None = None
+    # Token warmup (slow-start the tag count). kohya only.
+    token_warmup_min: int | None = Field(default=None, ge=1)
+    token_warmup_step: float | None = Field(default=None, ge=0)
+    # Weighted captions (lpw-style `(token:1.5)`). kohya: --weighted_captions.
+    weighted: bool = False
+    # dp-only: tag shuffle delimiter (default ", ") and legacy whole-caption shuffle.
+    shuffle_delimiter: str | None = None
+    shuffle_tags: bool = False
+
+
+class DatasetSubsetConfig(BaseModel):
+    """One [[directory]] entry on the dp side; kohya squashes these into
+    `--train_data_dir` semantics via per-subset toml."""
+
+    path: Path
+    num_repeats: int = Field(1, ge=1)
+    # Optional mask directory, mirrors the image dir layout.
+    mask_path: Path | None = None
+    # Per-subset bucket override (dp).
+    ar_buckets: list[float] | None = None
+    # Per-subset caption override.
+    caption_prefix: str | None = None
 
 
 class DatasetConfig(BaseModel):
@@ -83,6 +203,17 @@ class DatasetConfig(BaseModel):
     # `--validation_split_percentage` takes an integer percent — we convert
     # at compile time.
     val_split: float = Field(0.0, ge=0.0, lt=0.5)
+    # Multi-directory support — when populated, OVERRIDES `source`.
+    # dp emits one [[directory]] block per entry; kohya synthesises an
+    # equivalent dataset toml.
+    subsets: list[DatasetSubsetConfig] = Field(default_factory=list)
+    # Video training: list of frame counts (e.g. `[1, 33, 65]`).
+    # Default `[1]` means image-only.
+    frame_buckets: list[int] = Field(default_factory=lambda: [1])
+    # ControlNet / inpainting conditioning images (kohya: --conditioning_data_dir).
+    conditioning_dir: Path | None = None
+    # DreamBooth regularisation set (kohya: --reg_data_dir).
+    reg_source: Path | None = None
 
     @model_validator(mode="after")
     def _validate_resolution(self) -> DatasetConfig:
@@ -90,6 +221,21 @@ class DatasetConfig(BaseModel):
             msg = "resolution must be [size] or [width, height]"
             raise ValueError(msg)
         return self
+
+
+class PerModuleLRConfig(BaseModel):
+    """Per-submodule LR overrides for arches that train multiple components.
+
+    Anima exposes llm_adapter / self_attn / cross_attn / mlp / mod LRs
+    independently; SD3 separates TE from UNet; etc. None means "inherit
+    the global unet LR".
+    """
+
+    llm_adapter: float | None = Field(default=None, gt=0)
+    self_attn: float | None = Field(default=None, gt=0)
+    cross_attn: float | None = Field(default=None, gt=0)
+    mlp: float | None = Field(default=None, gt=0)
+    mod: float | None = Field(default=None, gt=0)
 
 
 class NetworkConfig(BaseModel):
@@ -111,6 +257,20 @@ class NetworkConfig(BaseModel):
     module_dropout: float = Field(0.0, ge=0.0, lt=1.0)
     # Top-level `--scale_weight_norms` max-norm scalar. None disables it.
     scale_weight_norms: float | None = Field(default=None, gt=0)
+    # Continue training from an existing LoRA. kohya: --network_weights;
+    # dp: [adapter] init_from_existing.
+    init_from: Path | None = None
+    # Tell kohya to read rank from the loaded weights file rather than CLI.
+    dim_from_weights: Path | None = None
+    # Merge a list of LoRA bases into the model before training (kohya).
+    base_weights: list[Path] = Field(default_factory=list)
+    base_weights_multiplier: list[float] = Field(default_factory=list)
+    # dp: list of `{path, multiplier}` dicts to fuse before training.
+    fuse_adapters: list[dict[str, Any]] = Field(default_factory=list)
+    # Per-module LR overrides (Anima/Wan multi-component models).
+    module_lr: PerModuleLRConfig | None = None
+    # LoRA training dtype on dp. kohya is always fp32 for LoRA params.
+    dtype: Literal["fp16", "bf16", "fp32"] | None = None
 
     @model_validator(mode="after")
     def _validate_conv_for_lora(self) -> NetworkConfig:
@@ -128,6 +288,13 @@ class NetworkConfig(BaseModel):
                 msg = (
                     f"network.conv_alpha is only valid for locon/loha "
                     f"(got network.type={self.type!r})"
+                )
+                raise ValueError(msg)
+        if len(self.base_weights) != len(self.base_weights_multiplier):
+            if self.base_weights and self.base_weights_multiplier:
+                msg = (
+                    "network.base_weights and base_weights_multiplier "
+                    "must have the same length"
                 )
                 raise ValueError(msg)
         return self
@@ -156,26 +323,84 @@ class OptimizerConfig(BaseModel):
     weight_decay: float = Field(0.0, ge=0.0)
     eps: float = Field(1e-8, gt=0)
     optimizer_args: dict[str, str] = Field(default_factory=dict)
+    # Gradient clipping max-norm. kohya: --max_grad_norm; dp: gradient_clipping
+    # (already on DiffusionPipeOptions, this top-level mirror lets recipes
+    # share). 0 disables clipping.
+    max_grad_norm: float = Field(1.0, ge=0)
+    # Custom LR scheduler module (kohya: --lr_scheduler_type).
+    scheduler_module: str | None = None
+    # Free-form scheduler-specific kwargs (kohya: --lr_scheduler_args).
+    scheduler_args: dict[str, str] = Field(default_factory=dict)
+    # cosine_with_restarts cycle count.
+    scheduler_num_cycles: int = Field(1, ge=1)
+    # polynomial decay power.
+    scheduler_power: float = Field(1.0, gt=0)
+    # inverse_sqrt timescale.
+    scheduler_timescale: int | None = Field(default=None, ge=1)
+    # cosine min-LR ratio (kohya: --lr_scheduler_min_lr_ratio).
+    scheduler_min_lr_ratio: float | None = Field(default=None, ge=0, le=1)
+    # dp gradient_release: chunk-wise grad release for memory savings.
+    gradient_release: bool = False
 
 
 class LossConfig(BaseModel):
-    """Loss-shaping hyperparameters for diffusion training.
+    """Core loss-shaping hyperparameters.
 
-    Currently only the kohya backend consumes this section; the diffusion-pipe
-    backend ignores it because its loss settings live under that backend's own
-    `[model]` toml block and are not generally portable. None-valued fields are
-    omitted from kohya argv entirely so sd-scripts falls back to its defaults.
+    Per-step noise / SNR weighting / huber. Currently kohya consumes most
+    of these; dp ignores all but `pseudo_huber_c`. Advanced flow-matching
+    knobs live on `FlowMatchConfig`.
     """
 
     min_snr_gamma: float | None = Field(default=None, gt=0)
     noise_offset: float = Field(0.0, ge=0)
+    noise_offset_random_strength: bool = False
+    multires_noise_iterations: int | None = Field(default=None, ge=1)
+    multires_noise_discount: float = Field(0.3, ge=0.0, le=1.0)
+    adaptive_noise_scale: float | None = None
     ip_noise_gamma: float | None = Field(default=None, gt=0)
+    ip_noise_gamma_random_strength: bool = False
+    zero_terminal_snr: bool = False
+    min_timestep: int | None = Field(default=None, ge=0)
+    max_timestep: int | None = Field(default=None, ge=0)
     prior_loss_weight: float = Field(1.0, ge=0)
     loss_type: Literal["l2", "huber", "smooth_l1"] = "l2"
+    huber_schedule: Literal["constant", "exponential", "snr"] | None = None
+    huber_c: float | None = Field(default=None, gt=0)
+    huber_scale: float | None = Field(default=None, gt=0)
     debiased_estimation: bool = False
     masked_loss: bool = False
     scale_v_pred_loss_like_noise_pred: bool = False
     v_parameterization: bool = False
+    v_pred_like_loss: float | None = Field(default=None, gt=0)
+    # dp: pseudo Huber loss constant (top-level TOML).
+    pseudo_huber_c: float | None = Field(default=None, gt=0)
+
+
+class FlowMatchConfig(BaseModel):
+    """Flow-matching hyperparameters used by FLUX / SD3 / Lumina / Anima /
+    HunyuanImage / chroma. These are entirely separate from the SD-style
+    epsilon-prediction loss in `LossConfig`.
+
+    None values mean "use the trainer's default for the chosen arch".
+    """
+
+    # logit_normal / uniform / sigma_uniform / mode / cosmap. kohya/dp arch-specific.
+    timestep_sampling: Literal[
+        "logit_normal", "uniform", "sigma_uniform", "mode", "cosmap"
+    ] | None = None
+    sigmoid_scale: float | None = Field(default=None, gt=0)
+    model_prediction_type: Literal["raw", "additive", "sigma_scaled"] | None = None
+    # Discrete flow timestep shift (FLUX/Anima).
+    discrete_flow_shift: float | None = Field(default=None, gt=0)
+    # SD3 training-time shift.
+    training_shift: float | None = Field(default=None, gt=0)
+    # FLUX/SD3 timestep weighting scheme.
+    weighting_scheme: Literal[
+        "sigma_sqrt", "logit_normal", "mode", "cosmap", "none"
+    ] | None = None
+    logit_mean: float | None = None
+    logit_std: float | None = Field(default=None, gt=0)
+    mode_scale: float | None = Field(default=None, gt=0)
 
 
 class ScheduleConfig(BaseModel):
@@ -183,11 +408,19 @@ class ScheduleConfig(BaseModel):
     batch_size: int = Field(1, ge=1)
     grad_accum: int = Field(2, ge=1)
     max_steps: int | None = None
+    # Random seed (kohya: --seed).
+    seed: int | None = None
+    # cosine/linear decay window if you want it shorter than the full run.
+    lr_decay_steps: int | None = Field(default=None, ge=1)
 
 
 class SamplingConfig(BaseModel):
     enabled: bool = True
     every_n_epochs: int = Field(1, ge=1)
+    # Step-level sampling cadence (kohya: --sample_every_n_steps).
+    every_n_steps: int | None = Field(default=None, ge=1)
+    # Generate a baseline before training starts (kohya: --sample_at_first).
+    at_first: bool = False
     prompts_file: Path | None = None
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
     seed: int = 42
@@ -227,6 +460,34 @@ class AttentionConfig(BaseModel):
     split: bool = False
 
 
+class DataLoaderConfig(BaseModel):
+    """DataLoader / cache pipeline knobs.
+
+    kohya: --max_data_loader_n_workers, --persistent_data_loader_workers,
+    --vae_batch_size, --text_encoder_batch_size. dp: caching_batch_size,
+    map_num_proc.
+    """
+
+    num_workers: int = Field(8, ge=0)
+    persistent_workers: bool = False
+    vae_batch_size: int = Field(1, ge=1)
+    text_encoder_batch_size: int | None = Field(default=None, ge=1)
+    cache_shuffle_num: int = Field(0, ge=0)
+    map_num_proc: int | None = Field(default=None, ge=1)
+
+
+class AugmentationConfig(BaseModel):
+    """Image augmentation (kohya only). dp doesn't currently consume any of these."""
+
+    flip: bool = False
+    color: bool = False
+    random_crop: bool = False
+    # `min_face_size,target_size,max_face_size` triple, kohya format.
+    face_crop_aug_range: str | None = None
+    # Use image alpha channel as masked-loss mask.
+    alpha_mask: bool = False
+
+
 class OptimizationConfig(BaseModel):
     """Training-time speed / VRAM knobs that sit alongside the optimiser.
 
@@ -248,28 +509,64 @@ class OptimizationConfig(BaseModel):
     # Train all parameters in bf16 (model + grads + optimizer states).
     # kohya: --full_bf16. dp: optim_dtype="bf16".
     full_bf16: bool = False
+    # Same idea, fp16 path (older GPUs).
+    full_fp16: bool = False
     # Number of transformer blocks temporarily offloaded to CPU during
     # the forward pass. kohya FLUX/SD3: --blocks_to_swap. dp:
     # `blocks_to_swap` in TOML's [general] block (already supported via
     # backend.diffusion_pipe.blocks_to_swap; this top-level mirror lets
     # us share recipes across backends without two source-of-truth keys).
     blocks_to_swap: int = Field(0, ge=0)
+    # FP8 base model weight load (FLUX / SD3 / HunyuanImage). VRAM -40%.
+    fp8_base: bool = False
+    fp8_base_unet: bool = False
+    # HunyuanImage scaled FP8 (different math from --fp8_base).
+    fp8_scaled: bool = False
+    # HunyuanImage VL text encoder in FP8.
+    fp8_vl_text_encoder: bool = False
+    # Memory-strategy hints (kohya).
+    lowram: bool = False
+    highvram: bool = False
+    # SDXL VAE in fp32 (the half-precision VAE corrupts colours on some
+    # SDXL finetunes; this is the canonical workaround).
+    no_half_vae: bool = False
+    # safetensors loading without mmap (NFS / network filesystems).
+    disable_mmap_load_safetensors: bool = False
+    # Gradient checkpointing offloaded to CPU (kohya).
+    cpu_offload_checkpointing: bool = False
+    # Anima-specific unsloth-flavoured offload.
+    unsloth_offload_checkpointing: bool = False
+    # Cache text encoder outputs to RAM / disk (kohya). Disk version frees
+    # VRAM completely and lets 6GB cards train SDXL.
+    cache_text_encoder_outputs: bool = False
+    cache_text_encoder_outputs_to_disk: bool = False
 
 
 class OutputConfig(BaseModel):
     name: str = "lora_output"
     save_every_n_epochs: int = Field(1, ge=1)
+    # Step-level save cadence (kohya / dp).
+    save_every_n_steps: int | None = Field(default=None, ge=1)
+    # dp: examples-level save cadence.
+    save_every_n_examples: int | None = Field(default=None, ge=1)
+    # Retain only the most recent N checkpoints (kohya).
+    save_last_n_epochs: int | None = Field(default=None, ge=1)
+    save_last_n_steps: int | None = Field(default=None, ge=1)
     save_dtype: Literal["fp16", "bf16", "float"] = "fp16"
     output_dir: Path | None = None
+    # Free-form metadata stamped onto the LoRA file. kohya: --metadata_*.
+    training_comment: str | None = None
+    no_metadata: bool = False
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class DiffusionPipeOptions(BaseModel):
-    """diffusion-pipe specific knobs.
+    """diffusion-pipe specific knobs not represented anywhere else.
 
-    Only consumed when ``backend.type == "diffusion-pipe"``; other backends
-    (kohya) ignore this field entirely. Defaults reproduce the previous
-    hard-coded values in the dp compiler so existing recipes keep producing
-    the same TOML.
+    Most dp options now live on shared sections (LossConfig.pseudo_huber_c,
+    BucketConfig.ar_buckets, NetworkConfig.fuse_adapters, ...). What
+    remains here is genuinely dp-only or doesn't make sense to expose
+    cross-backend.
     """
 
     # ---- Top-level [general] knobs ----
@@ -278,15 +575,46 @@ class DiffusionPipeOptions(BaseModel):
     partition_method: Literal[
         "parameters", "uniform", "type:transformer_layer"
     ] = "parameters"
+    # Manual layer-split when partition_method=manual; len = pipeline_stages-1.
+    partition_split: list[int] | None = None
     caching_batch_size: int = Field(1, ge=1)
     steps_per_print: int = Field(1, ge=1)
     blocks_to_swap: int = Field(0, ge=0)
     compile: bool = False
+    # Pipeline parallelism + reentrant grad ckpt requirement.
+    reentrant_activation_checkpointing: bool = False
+    # Skip block_swap during eval (eval uses less memory).
+    disable_block_swap_for_eval: bool = False
+    # Mixed image+video training.
+    image_micro_batch_size_per_gpu: int | None = Field(default=None, ge=1)
+    image_eval_micro_batch_size_per_gpu: int | None = Field(default=None, ge=1)
+    eval_gradient_accumulation_steps: int = Field(1, ge=1)
+    # Force a flat LR regardless of scheduler (resume tweak).
+    force_constant_lr: float | None = Field(default=None, gt=0)
+    # CFG-style training: drop captions for `uncond_fraction` of steps.
+    uncond_fraction: float = Field(0.0, ge=0.0, le=1.0)
+    # Tensorboard X-axis: `steps` or `examples`.
+    x_axis_examples: bool = False
+    logging_steps: int = Field(1, ge=1)
+    # Transformer dtype (HunyuanVideo float8 etc).
+    transformer_dtype: Literal["bfloat16", "float16", "float8_e4m3fn", "float8_e5m2"] | None = None
+    diffusion_model_dtype: Literal["bfloat16", "float16", "float8_e4m3fn"] | None = None
+    timestep_sample_method: Literal["logit_normal", "uniform"] | None = None
+    # Independent eval datasets — each entry: {name, config_path}.
+    eval_datasets: list[dict[str, str]] = Field(default_factory=list)
+    # Video clip extraction strategy.
+    video_clip_mode: Literal["single_beginning", "single_middle"] = "single_beginning"
 
     # ---- [eval] section ----
     eval_every_n_epochs: int | None = Field(default=None, ge=1)
+    eval_every_n_steps: int | None = Field(default=None, ge=1)
+    eval_every_n_examples: int | None = Field(default=None, ge=1)
     eval_before_first_step: bool = False
     eval_micro_batch_size_per_gpu: int = Field(1, ge=1)
+
+    # ---- Checkpoint cadence (DeepSpeed state, separate from save_*) ----
+    checkpoint_every_n_epochs: int | None = Field(default=None, ge=1)
+    checkpoint_every_n_minutes: int | None = Field(default=None, ge=1)
 
     # ---- [monitoring] section ----
     enable_wandb: bool = False
@@ -301,14 +629,9 @@ class DiffusionPipeOptions(BaseModel):
     skip_empty_caption: bool = True
 
     # ---- Free-form per-arch path bag for the [model] section ----
-    # diffusion-pipe's [model] block accepts arch-specific path keys like
-    # `transformer_path`, `vae_path`, `llm_path`, `clip_l_path`, `t5_path`,
-    # etc. The set varies by arch (Anima needs transformer/vae/llm; Hunyuan
-    # Video needs transformer/vae/llm/clip; ...) and upstream keeps adding
-    # new entries. Rather than encode every variant in pydantic, we accept
-    # an opaque `key=value` mapping that the compiler flattens into the
-    # `[model]` section verbatim. Empty by default so existing SDXL/Flux/SD3
-    # recipes keep producing identical TOML.
+    # Legacy escape hatch for arch-specific keys not represented on
+    # ArchPathsConfig. Most arches should now use cfg.base_model.arch_paths
+    # instead; this remains for upstream additions we haven't typed yet.
     model_paths: dict[str, str] = Field(default_factory=dict)
 
 
@@ -335,6 +658,15 @@ class ResumeConfig(BaseModel):
     save_state: bool = True
     save_state_at_end: bool = True
     save_state_every_n_epochs: int | None = Field(default=None, ge=1)
+    # Local resume path (kohya: --resume).
+    resume_from: Path | None = None
+    # Retain only the most recent N state directories.
+    save_last_n_epochs_state: int | None = Field(default=None, ge=1)
+    save_last_n_steps_state: int | None = Field(default=None, ge=1)
+    # Skip ahead to a specific step on resume (kohya).
+    skip_until_initial_step: bool = False
+    initial_epoch: int | None = Field(default=None, ge=1)
+    initial_step: int | None = Field(default=None, ge=0)
 
 
 class ValidationConfig(BaseModel):
@@ -347,7 +679,9 @@ class ValidationConfig(BaseModel):
     """
 
     every_n_epochs: int = Field(1, ge=1)
+    every_n_steps: int | None = Field(default=None, ge=1)
     max_samples: int | None = Field(default=None, ge=1)
+    seed: int | None = None
 
 
 class TrainingConfig(BaseModel):
@@ -359,10 +693,15 @@ class TrainingConfig(BaseModel):
     network: NetworkConfig = Field(default_factory=lambda: NetworkConfig())
     optimizer: OptimizerConfig = Field(default_factory=lambda: OptimizerConfig())
     loss: LossConfig = Field(default_factory=lambda: LossConfig())
+    flow_match: FlowMatchConfig = Field(default_factory=lambda: FlowMatchConfig())
     schedule: ScheduleConfig = Field(default_factory=lambda: ScheduleConfig())
     precision: Literal["fp16", "bf16", "fp32"] = "bf16"
     gradient_checkpointing: bool = True
     cache_latents: bool = True
+    cache_latents_to_disk: bool = False
+    skip_cache_check: bool = False
+    cache_info: bool = False
+    train_inpainting: bool = False
     sampling: SamplingConfig = Field(default_factory=lambda: SamplingConfig())
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     backend: BackendConfig = Field(default_factory=lambda: BackendConfig())
@@ -370,6 +709,8 @@ class TrainingConfig(BaseModel):
     validation: ValidationConfig = Field(default_factory=lambda: ValidationConfig())
     attention: AttentionConfig = Field(default_factory=lambda: AttentionConfig())
     optimization: OptimizationConfig = Field(default_factory=lambda: OptimizationConfig())
+    dataloader: DataLoaderConfig = Field(default_factory=lambda: DataLoaderConfig())
+    augmentation: AugmentationConfig = Field(default_factory=lambda: AugmentationConfig())
 
     model_config = {"extra": "forbid"}
 
