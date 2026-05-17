@@ -598,3 +598,582 @@ def test_attention_xformers_logs_but_compiles(caplog: pytest.LogCaptureFixture) 
     assert "--deepspeed" in argv
     assert any("xformers" in rec.message for rec in caplog.records)
 
+
+# --------------------------------------------------------------------------- #
+# Batch B2: full coverage of every dp upstream TOML key the schema exposes.
+# Each section keeps a "default omits" + "set value emits" pair so the
+# byte-identical-default contract is regression-tested.
+# --------------------------------------------------------------------------- #
+
+
+# DEFAULT_KEYS_TO_NEVER_EMIT serves both as a regression check and a
+# documentation of fields whose dp-only knob should NOT appear in the
+# baseline TOML. If you add a new emit and intentionally make it default-on,
+# remove the relevant entry here together with the test below.
+DEFAULT_OMITTED_KEYS: list[str] = [
+    "partition_split",
+    "reentrant_activation_checkpointing",
+    "disable_block_swap_for_eval",
+    "image_micro_batch_size_per_gpu",
+    "image_eval_micro_batch_size_per_gpu",
+    "force_constant_lr",
+    "uncond_fraction",
+    "x_axis_examples",
+    "logging_steps",
+    "video_clip_mode",
+    "map_num_proc",
+    "save_every_n_steps",
+    "save_every_n_examples",
+    "checkpoint_every_n_epochs",
+    "checkpoint_every_n_minutes",
+    "pseudo_huber_c",
+    "eval_every_n_steps",
+    "eval_every_n_examples",
+    "eval_gradient_accumulation_steps",
+    "eval_datasets",
+    "transformer_dtype",
+    "diffusion_model_dtype",
+    "timestep_sample_method",
+    "init_from_existing",
+    "fuse_adapters",
+    "gradient_release",
+]
+
+
+def test_default_recipe_omits_every_optional_key() -> None:
+    main = _main_toml(_recipe())
+    for key in DEFAULT_OMITTED_KEYS:
+        assert f"{key} =" not in main, f"unexpected {key} in default TOML"
+
+
+# ---- Top-level main TOML new emits ---- #
+
+
+def test_partition_split_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"partition_split": [10, 20]},
+        }
+    )
+    main = _main_toml(cfg)
+    assert "partition_split = [10, 20]" in main
+
+
+def test_reentrant_activation_checkpointing_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"reentrant_activation_checkpointing": True},
+        }
+    )
+    main = _main_toml(cfg)
+    assert "reentrant_activation_checkpointing = true" in main
+
+
+def test_disable_block_swap_for_eval_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"disable_block_swap_for_eval": True},
+        }
+    )
+    main = _main_toml(cfg)
+    assert "disable_block_swap_for_eval = true" in main
+
+
+def test_image_micro_batch_size_per_gpu_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "image_micro_batch_size_per_gpu": 4,
+                "image_eval_micro_batch_size_per_gpu": 2,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "image_micro_batch_size_per_gpu = 4" in main
+    assert "image_eval_micro_batch_size_per_gpu = 2" in main
+
+
+def test_force_constant_lr_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"force_constant_lr": 1e-5},
+        }
+    )
+    main = _main_toml(cfg)
+    assert "force_constant_lr = 1e-05" in main or "force_constant_lr = 0.00001" in main
+
+
+def test_uncond_fraction_emitted_only_when_positive() -> None:
+    main = _main_toml(_recipe())
+    assert "uncond_fraction" not in main
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"uncond_fraction": 0.1},
+        }
+    )
+    main2 = _main_toml(cfg)
+    assert "uncond_fraction = 0.1" in main2
+
+
+def test_x_axis_examples_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"x_axis_examples": True},
+        }
+    )
+    main = _main_toml(cfg)
+    assert "x_axis_examples = true" in main
+
+
+def test_logging_steps_emitted_only_when_overridden() -> None:
+    main = _main_toml(_recipe())
+    assert "logging_steps" not in main  # default 1 is dp default
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"logging_steps": 10},
+        }
+    )
+    main2 = _main_toml(cfg)
+    assert "logging_steps = 10" in main2
+
+
+def test_video_clip_mode_emitted_only_when_non_default() -> None:
+    main = _main_toml(_recipe())
+    assert "video_clip_mode" not in main  # default single_beginning is dp default
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"video_clip_mode": "single_middle"},
+        }
+    )
+    main2 = _main_toml(cfg)
+    assert 'video_clip_mode = "single_middle"' in main2
+
+
+def test_map_num_proc_emitted_from_dataloader() -> None:
+    cfg = _recipe(dataloader={"map_num_proc": 32})
+    main = _main_toml(cfg)
+    assert "map_num_proc = 32" in main
+
+
+def test_save_every_n_steps_and_examples_emitted() -> None:
+    cfg = _recipe(output={"save_every_n_steps": 100, "save_every_n_examples": 1000})
+    main = _main_toml(cfg)
+    assert "save_every_n_steps = 100" in main
+    assert "save_every_n_examples = 1000" in main
+
+
+def test_pseudo_huber_c_emitted() -> None:
+    cfg = _recipe(loss={"pseudo_huber_c": 0.5})
+    main = _main_toml(cfg)
+    assert "pseudo_huber_c = 0.5" in main
+
+
+def test_checkpoint_cadence_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "checkpoint_every_n_epochs": 1,
+                "checkpoint_every_n_minutes": 60,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "checkpoint_every_n_epochs = 1" in main
+    assert "checkpoint_every_n_minutes = 60" in main
+
+
+def test_eval_section_with_steps_and_examples() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "eval_every_n_steps": 100,
+                "eval_every_n_examples": 1000,
+                "eval_gradient_accumulation_steps": 2,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "eval_every_n_steps = 100" in main
+    assert "eval_every_n_examples = 1000" in main
+    assert "eval_gradient_accumulation_steps = 2" in main
+
+
+def test_eval_datasets_emitted_as_inline_table_array() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "eval_datasets": [
+                    {"name": "small", "config_path": "/eval/small.toml"},
+                    {"name": "anime", "config_path": "/eval/anime.toml"},
+                ],
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert (
+        'eval_datasets = [{ name = "small", config = "/eval/small.toml" }, '
+        '{ name = "anime", config = "/eval/anime.toml" }]' in main
+    )
+
+
+# ---- [model] section new emits ---- #
+
+
+def test_transformer_dtype_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"transformer_dtype": "float8_e4m3fn"},
+        }
+    )
+    main = _main_toml(cfg)
+    assert 'transformer_dtype = "float8_e4m3fn"' in main
+
+
+def test_diffusion_model_dtype_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"diffusion_model_dtype": "float8_e4m3fn"},
+        }
+    )
+    main = _main_toml(cfg)
+    assert 'diffusion_model_dtype = "float8_e4m3fn"' in main
+
+
+def test_timestep_sample_method_emitted() -> None:
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"timestep_sample_method": "logit_normal"},
+        }
+    )
+    main = _main_toml(cfg)
+    assert 'timestep_sample_method = "logit_normal"' in main
+
+
+# ---- ArchPathsConfig coverage ---- #
+
+
+def test_arch_paths_render_to_model_section() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "anima",
+            "checkpoint": "/m/anima",
+            "arch_paths": {
+                "transformer": "/p/transformer.safetensors",
+                "llm": "/p/qwen3.safetensors",
+                "qwen3": "/p/qwen3-base.safetensors",
+                "t5_tokenizer": "/p/t5_tok",
+                "llm_adapter": "/p/llm_adapter.safetensors",
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert f'transformer_path = "{_toml_repr("/p/transformer.safetensors")}"' in main
+    assert f'llm_path = "{_toml_repr("/p/qwen3.safetensors")}"' in main
+    assert f'qwen3_path = "{_toml_repr("/p/qwen3-base.safetensors")}"' in main
+    assert f't5_tokenizer_path = "{_toml_repr("/p/t5_tok")}"' in main
+    assert f'llm_adapter_path = "{_toml_repr("/p/llm_adapter.safetensors")}"' in main
+
+
+def test_arch_paths_clip_t5_ae_render() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "clip_l": "/p/clip_l.safetensors",
+                "clip_g": "/p/clip_g.safetensors",
+                "t5xxl": "/p/t5xxl.safetensors",
+                "ae": "/p/ae.safetensors",
+                "byt5": "/p/byt5.safetensors",
+                "text_encoder": "/p/te.safetensors",
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert f'clip_l_path = "{_toml_repr("/p/clip_l.safetensors")}"' in main
+    assert f'clip_g_path = "{_toml_repr("/p/clip_g.safetensors")}"' in main
+    assert f't5xxl_path = "{_toml_repr("/p/t5xxl.safetensors")}"' in main
+    assert f'ae_path = "{_toml_repr("/p/ae.safetensors")}"' in main
+    assert f'byt5_path = "{_toml_repr("/p/byt5.safetensors")}"' in main
+    assert f'text_encoder_path = "{_toml_repr("/p/te.safetensors")}"' in main
+
+
+def test_arch_paths_legacy_vae_renders_as_vae_path() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "vae": "/p/vae.safetensors",
+        }
+    )
+    main = _main_toml(cfg)
+    assert f'vae_path = "{_toml_repr("/p/vae.safetensors")}"' in main
+
+
+def test_arch_paths_token_caps_emitted() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "t5xxl_max_token_length": 256,
+                "qwen3_max_token_length": 1024,
+                "t5_max_token_length": 512,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "t5xxl_max_token_length = 256" in main
+    assert "qwen3_max_token_length = 1024" in main
+    assert "t5_max_token_length = 512" in main
+
+
+def test_arch_paths_attn_masks_and_dropouts() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "apply_t5_attn_mask": True,
+                "apply_lg_attn_mask": True,
+                "t5_dropout_rate": 0.1,
+                "clip_l_dropout_rate": 0.05,
+                "clip_g_dropout_rate": 0.07,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "apply_t5_attn_mask = true" in main
+    assert "apply_lg_attn_mask = true" in main
+    assert "t5_dropout_rate = 0.1" in main
+    assert "clip_l_dropout_rate = 0.05" in main
+    assert "clip_g_dropout_rate = 0.07" in main
+
+
+def test_arch_paths_guidance_scale_and_vae_tweaks() -> None:
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "guidance_scale": 1.0,
+                "vae_chunk_size": 8,
+                "text_encoder_cpu": True,
+            },
+        }
+    )
+    main = _main_toml(cfg)
+    assert "guidance_scale = 1.0" in main
+    assert "vae_chunk_size = 8" in main
+    assert "text_encoder_cpu = true" in main
+
+
+def test_arch_paths_default_unchanged_byte_identical() -> None:
+    """A recipe with no arch_paths fields should produce zero new keys."""
+    main = _main_toml(_recipe())
+    assert "transformer_path" not in main
+    assert "llm_path" not in main
+    assert "vae_path" not in main
+    assert "guidance_scale" not in main
+
+
+def test_model_paths_legacy_overrides_arch_paths_collisions() -> None:
+    """`model_paths` (free dict) wins over `arch_paths` for shared keys."""
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {"transformer": "/from/arch.safetensors"},
+        },
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "model_paths": {"transformer_path": "/from/legacy.safetensors"},
+            },
+        },
+    )
+    main = _main_toml(cfg)
+    assert main.count("transformer_path =") == 1
+    assert 'transformer_path = "/from/legacy.safetensors"' in main
+    assert "/from/arch.safetensors" not in main
+
+
+def test_model_paths_and_arch_paths_dont_clobber_distinct_keys() -> None:
+    """When keys differ, both arch_paths and model_paths render."""
+    cfg = _recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {"transformer": "/p/transformer.safetensors"},
+        },
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "model_paths": {"single_file_path": "/p/single.safetensors"},
+            },
+        },
+    )
+    main = _main_toml(cfg)
+    assert f'transformer_path = "{_toml_repr("/p/transformer.safetensors")}"' in main
+    assert 'single_file_path = "/p/single.safetensors"' in main
+
+
+# ---- [adapter] section new emits ---- #
+
+
+def test_adapter_dtype_emitted() -> None:
+    cfg = _recipe(network={"dtype": "bf16"})
+    main = _main_toml(cfg)
+    # Adapter block dtype key is plain `dtype`, not `lora_dtype`.
+    assert "[adapter]" in main
+    adapter_section = main.split("[adapter]", 1)[1].split("\n\n", 1)[0]
+    assert 'dtype = "bfloat16"' in adapter_section
+
+
+def test_adapter_init_from_existing_emitted() -> None:
+    cfg = _recipe(network={"init_from": "/runs/prev/epoch5"})
+    main = _main_toml(cfg)
+    assert f'init_from_existing = "{_toml_repr("/runs/prev/epoch5")}"' in main
+
+
+def test_adapter_fuse_adapters_inline_table_array() -> None:
+    cfg = _recipe(
+        network={
+            "fuse_adapters": [
+                {"path": "/loras/a.safetensors", "weight": 1.0},
+                {"path": "/loras/b.safetensors", "multiplier": 0.5},
+            ]
+        }
+    )
+    main = _main_toml(cfg)
+    assert (
+        'fuse_adapters = [{ path = "/loras/a.safetensors", weight = 1.0 }, '
+        '{ path = "/loras/b.safetensors", weight = 0.5 }]' in main
+    )
+
+
+# ---- [optimizer] section new emit ---- #
+
+
+def test_optimizer_gradient_release_emitted() -> None:
+    cfg = _recipe(optimizer={"gradient_release": True})
+    main = _main_toml(cfg)
+    assert "gradient_release = true" in main
+
+
+# ---- Dataset TOML new emits ---- #
+
+
+def test_dataset_frame_buckets_default_unchanged() -> None:
+    ds = _dataset_toml(_recipe())
+    assert "frame_buckets = [1]" in ds
+
+
+def test_dataset_frame_buckets_video_emitted() -> None:
+    cfg = _recipe(dataset={"source": "/d", "frame_buckets": [1, 33, 65]})
+    ds = _dataset_toml(cfg)
+    assert "frame_buckets = [1, 33, 65]" in ds
+
+
+def test_dataset_subsets_emit_multiple_directory_blocks() -> None:
+    cfg = _recipe(
+        dataset={
+            "source": "/d",  # ignored when subsets is non-empty
+            "num_repeats": 99,  # also ignored
+            "subsets": [
+                {
+                    "path": "/d/imgs",
+                    "num_repeats": 3,
+                    "mask_path": "/d/masks",
+                    "caption_prefix": "anime style, ",
+                },
+                {
+                    "path": "/d/extra",
+                    "num_repeats": 1,
+                    "ar_buckets": [1.0, 1.5],
+                },
+            ],
+        }
+    )
+    ds = _dataset_toml(cfg)
+    # Two [[directory]] blocks, no leftover single-source path.
+    assert ds.count("[[directory]]") == 2
+    assert _toml_repr("/d/imgs") in ds
+    assert "num_repeats = 3" in ds
+    assert _toml_repr("/d/masks") in ds
+    assert 'caption_prefix = "anime style, "' in ds
+    assert _toml_repr("/d/extra") in ds
+    assert "ar_buckets = [1.0, 1.5]" in ds
+    # Single-source legacy fields suppressed when subsets is set.
+    assert "num_repeats = 99" not in ds
+
+
+def test_dataset_explicit_ar_buckets_overrides_min_max() -> None:
+    cfg = _recipe(
+        dataset={"source": "/d", "bucket": {"ar_buckets": [1.0, 1.5, 2.0]}}
+    )
+    ds = _dataset_toml(cfg)
+    assert "ar_buckets = [1.0, 1.5, 2.0]" in ds
+    assert "min_ar" not in ds
+    assert "max_ar" not in ds
+    assert "num_ar_buckets" not in ds
+
+
+def test_dataset_caption_shuffle_delimiter_renders_dp_key() -> None:
+    cfg = _recipe(dataset={"source": "/d", "caption": {"shuffle_delimiter": " | "}})
+    ds = _dataset_toml(cfg)
+    # Note: dp uses `cache_shuffle_delimiter`, not `shuffle_delimiter`.
+    assert 'cache_shuffle_delimiter = " | "' in ds
+    assert "shuffle_delimiter =" not in ds.replace("cache_shuffle_delimiter", "")
+
+
+def test_dataset_caption_shuffle_tags_legacy_flag() -> None:
+    cfg = _recipe(dataset={"source": "/d", "caption": {"shuffle_tags": True}})
+    ds = _dataset_toml(cfg)
+    assert "shuffle_tags = true" in ds
+
+
+# ---- Kohya-only field debug logging ---- #
+
+
+def test_kohya_only_fields_logged_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """Setting a kohya-only field should produce a single debug log entry,
+    no warnings, and no TOML drift."""
+    import logging
+
+    baseline = _main_toml(_recipe())
+    cfg = _recipe(
+        loss={"min_snr_gamma": 5.0},  # kohya-only
+        augmentation={"flip": True},  # kohya-only
+        optimization={"fp8_base": True},  # kohya-only
+    )
+    with caplog.at_level(logging.DEBUG, logger="lorahub.core.backends.diffusion_pipe.compiler"):
+        main = _main_toml(cfg)
+    # Kohya-only inputs shouldn't shape the dp TOML.
+    assert main == baseline
+    # And we shouldn't see a warning about them, only debug.
+    assert not any(rec.levelno >= logging.WARNING for rec in caplog.records)
+    debug_msgs = [rec.message for rec in caplog.records if rec.levelno == logging.DEBUG]
+    audit_msg = next(
+        (m for m in debug_msgs if "ignored" in m and "kohya-only" in m), None
+    )
+    assert audit_msg is not None, debug_msgs
+    assert "loss.min_snr_gamma" in audit_msg
+    assert "augmentation.flip" in audit_msg
+    assert "optimization.fp8_base" in audit_msg
+
