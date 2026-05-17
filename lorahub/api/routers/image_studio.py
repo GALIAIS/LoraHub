@@ -809,6 +809,36 @@ _RATING_MAP = {
     "explicit": "nsfw",
 }
 
+# Process-level cache for loaded WD14 taggers, keyed by full config tuple.
+# EVA02-large weights are ~1.2GB so re-loading per request kills throughput.
+_TAGGER_CACHE: dict[tuple[str, float, float, str], Any] = {}
+_TAGGER_LOCK = threading.Lock()
+
+
+def _get_tagger(
+    model_id: str,
+    general_threshold: float,
+    character_threshold: float,
+    device: str,
+) -> Any:
+    """Return a WD14Tagger that's loaded once per process per config."""
+    from lorahub.core.tagging.wd14 import WD14Tagger  # noqa: PLC0415
+
+    key = (model_id, general_threshold, character_threshold, device)
+    with _TAGGER_LOCK:
+        cached = _TAGGER_CACHE.get(key)
+        if cached is not None:
+            return cached
+        tagger = WD14Tagger(
+            model_id=model_id,
+            general_threshold=general_threshold,
+            character_threshold=character_threshold,
+            device=device,
+        )
+        tagger.load()
+        _TAGGER_CACHE[key] = tagger
+        return tagger
+
 _SMART_CAPTION_PROMPT_STYLE = (
     "You are writing the natural-language sentence that will sit inside an Anima training "
     "caption for a STYLE LoRA. The reader is the text encoder; your sentence must teach it "
@@ -1069,14 +1099,14 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
 
-    # Initialize WD14 tagger
-    tagger = WD14Tagger(
-        model_id=body.taggerModel,
-        general_threshold=body.generalThreshold,
-        character_threshold=body.characterThreshold,
-        device=body.device,
+    # Initialize WD14 tagger (cached per-process so we don't re-load 1.2GB
+    # of weights on every request)
+    tagger = _get_tagger(
+        body.taggerModel,
+        body.generalThreshold,
+        body.characterThreshold,
+        body.device,
     )
-    tagger.load()
 
     images = _scan_images(directory, body.recursive)
     results: list[dict[str, Any]] = []
@@ -1131,13 +1161,12 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
 
-    tagger = WD14Tagger(
-        model_id=body.taggerModel,
-        general_threshold=body.generalThreshold,
-        character_threshold=body.characterThreshold,
-        device=body.device,
+    tagger = _get_tagger(
+        body.taggerModel,
+        body.generalThreshold,
+        body.characterThreshold,
+        body.device,
     )
-    tagger.load()
 
     store = _store()
     try:
