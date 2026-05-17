@@ -36,32 +36,39 @@ import { BackendStatusCard } from "./backend-status-card"
 // Per-backend ordered step plan + a regex matching each step's progress
 // message. Keep these in sync with the corresponding installer.bootstrap()
 // implementation in lorahub/core/backends/<id>/installer.py.
+//
+// The patterns are anchored with a leading ^ wherever feasible so that
+// indented git-progress lines emitted by run_step (`  Receiving objects:
+// 23%`) never accidentally match. Matching is case-insensitive.
 type StepDef = { id: string; label: string; match: RegExp }
 
 const STEP_PLANS: Record<BackendId, StepDef[]> = {
   kohya: [
-    { id: "clone", label: "克隆仓库", match: /^clone\s+kohya/i },
-    { id: "venv", label: "创建虚拟环境", match: /^create venv/i },
-    { id: "pip", label: "升级 pip / wheel", match: /^upgrade pip/i },
-    { id: "torch", label: "安装 PyTorch", match: /^install torch/i },
+    { id: "clone", label: "克隆仓库", match: /^clone\s+kohya-ss\//i },
+    // installer prints `uv venv -> .../venv (python=...)` (see
+    // lorahub/core/toolchain/uv.py::create_venv). We also accept a
+    // permissive form so a future label change still highlights this step.
+    { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
+    { id: "pip", label: "升级 pip / wheel", match: /^upgrade\s+pip/i },
+    { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
     {
       id: "requirements",
       label: "安装 kohya requirements",
-      match: /kohya requirements/i,
+      match: /kohya\s+requirements/i,
     },
-    { id: "xformers", label: "安装 xformers", match: /^install xformers/i },
+    { id: "xformers", label: "安装 xformers", match: /^install\s+xformers/i },
   ],
   "diffusion-pipe": [
-    { id: "clone", label: "克隆仓库", match: /^clone\s+tdrussell/i },
-    { id: "venv", label: "创建虚拟环境", match: /^create venv/i },
-    { id: "pip", label: "升级 pip / wheel", match: /^upgrade pip/i },
-    { id: "torch", label: "安装 PyTorch", match: /^install torch/i },
+    { id: "clone", label: "克隆仓库", match: /^clone\s+tdrussell\//i },
+    { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
+    { id: "pip", label: "升级 pip / wheel", match: /^upgrade\s+pip/i },
+    { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
     {
       id: "requirements",
       label: "安装 diffusion-pipe requirements",
-      match: /diffusion-pipe requirements/i,
+      match: /diffusion-pipe\s+requirements/i,
     },
-    { id: "deepspeed", label: "安装 DeepSpeed", match: /^install deepspeed/i },
+    { id: "deepspeed", label: "安装 DeepSpeed", match: /^install\s+deepspeed/i },
   ],
 }
 
