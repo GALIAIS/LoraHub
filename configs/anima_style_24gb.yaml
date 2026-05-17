@@ -117,7 +117,14 @@ backend:
     gradientClipping: 1.0
     cachingBatchSize: 4
     stepsPerPrint: 10
-    compile: true
+    # ⚠ Keep this off. dp's pipeline already calls
+    # `pipeline_model.compile(dynamic=True)` internally; this top-level
+    # `compile=true` flag triggers an *additional* torch.compile pass
+    # that spawns a 32-worker Inductor compile pool. We hit a hang in
+    # that pool right at the end of the first cache pass — the worker
+    # pool deadlocks on `unix_stream_data_wait` waiting on a child that
+    # crashed into a zombie. With this off the runs are stable.
+    compile: false
     # AR bucket count is the BIGGEST knob for disk usage during the
     # latent-caching pass: dp writes one VAE-encoded copy of every
     # image per bucket it might end up in. Anima at 1024px puts each

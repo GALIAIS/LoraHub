@@ -116,9 +116,12 @@ backend:
     # ~3-4x vs the default 1 with no quality cost.
     cachingBatchSize: 4
     stepsPerPrint: 5
-    # compile=true builds a torch.compile graph for the dp pipeline; first
-    # epoch is ~30s slower, subsequent epochs run 8-12% faster.
-    compile: true
+    # ⚠ Keep this off. dp's pipeline already runs torch.compile
+    # internally; flipping this on spawns a separate 32-worker
+    # Inductor compile pool that's been hanging in
+    # `unix_stream_data_wait` at the tail of the cache pass on Anima
+    # runs. With it off training is stable.
+    compile: false
     # Aspect-ratio bucketing widened to 0.4-2.5 so portrait/landscape
     # character art trains without crops.
     minAr: 0.4
