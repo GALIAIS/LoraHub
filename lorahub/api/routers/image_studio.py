@@ -341,3 +341,203 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# AI batch endpoints
+# --------------------------------------------------------------------------- #
+
+
+class AIBatchCaptionInput(BaseModel):
+    path: str
+    recursive: bool = False
+    task: str = "tagging.assist"
+    mergeStrategy: str = "replace"
+
+
+@router.post("/ai/caption")
+def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
+    """Queue AI captioning for all images in a directory.
+
+    For IS-3 this is synchronous (processes sequentially). A future
+    iteration will use the session pattern for async progress.
+    """
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.task)
+    if route is None:
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.task!r}")
+
+    images = _scan_images(directory, body.recursive)
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    store = _store()
+    for img_path in images:
+        try:
+            import base64  # noqa: PLC0415
+            import mimetypes  # noqa: PLC0415
+
+            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
+            data = img_path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            data_url = f"data:{mime};base64,{b64}"
+
+            messages: list[dict[str, Any]] = []
+            if route.system_prompt:
+                messages.append({"role": "system", "content": route.system_prompt})
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            })
+
+            result = ai_client.invoke(
+                ai_store,
+                provider_id=route.provider_id,
+                model_id=route.model_id,
+                messages=messages,
+                route=route,
+            )
+
+            caption_path = img_path.with_suffix(".txt")
+            existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
+
+            if body.mergeStrategy == "append":
+                new_caption = (existing.strip() + ", " + result.content).strip(", ")
+            elif body.mergeStrategy == "rewrite":
+                new_caption = result.content
+            else:
+                new_caption = result.content
+
+            caption_path.write_text(new_caption, encoding="utf-8")
+
+            ann = store.get_annotation(str(img_path))
+            if ann is None:
+                from lorahub.api.image_studio_store import ImageAnnotation  # noqa: PLC0415
+                ann = ImageAnnotation(
+                    image_path=str(img_path),
+                    sha256=_file_sha256(img_path),
+                )
+            ann.ai_caption = result.content
+            ann.ai_caption_provider = f"{result.provider_name}/{result.model_id}"
+            from datetime import UTC, datetime  # noqa: PLC0415
+            ann.ai_caption_at = datetime.now(UTC).isoformat()
+            store.upsert_annotation(ann)
+
+            results.append({"path": str(img_path), "caption": new_caption})
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"path": str(img_path), "error": str(exc)})
+
+    return {"processed": len(results), "results": results, "errors": errors}
+
+
+class AIBatchQualityInput(BaseModel):
+    path: str
+    recursive: bool = False
+    task: str = "quality.score"
+
+
+@router.post("/ai/quality")
+def ai_batch_quality(body: AIBatchQualityInput) -> dict[str, Any]:
+    """Score image quality via VLM for all images in a directory."""
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.task)
+    if route is None:
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.task!r}")
+
+    images = _scan_images(directory, body.recursive)
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    store = _store()
+    for img_path in images:
+        try:
+            import base64  # noqa: PLC0415
+            import json as json_mod  # noqa: PLC0415
+            import mimetypes  # noqa: PLC0415
+
+            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
+            data = img_path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            data_url = f"data:{mime};base64,{b64}"
+
+            system_prompt = route.system_prompt or (
+                'Rate this training image on a 0-100 scale. '
+                'Return JSON: {"score": 0-100, "label": "good"|"medium"|"bad", "reason": "..."}'
+            )
+
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]},
+            ]
+
+            result = ai_client.invoke(
+                ai_store,
+                provider_id=route.provider_id,
+                model_id=route.model_id,
+                messages=messages,
+                route=route,
+            )
+
+            score: float | None = None
+            label: str | None = None
+            reason: str | None = None
+            try:
+                parsed = json_mod.loads(result.content)
+                score = float(parsed.get("score", 0)) / 100.0
+                label = parsed.get("label")
+                reason = parsed.get("reason")
+            except (json_mod.JSONDecodeError, ValueError, TypeError):
+                reason = result.content
+
+            ann = store.get_annotation(str(img_path))
+            if ann is None:
+                from lorahub.api.image_studio_store import ImageAnnotation  # noqa: PLC0415
+                ann = ImageAnnotation(
+                    image_path=str(img_path),
+                    sha256=_file_sha256(img_path),
+                )
+            ann.ai_quality_score = score
+            ann.ai_quality_label = label
+            ann.ai_quality_reason = reason
+            from datetime import UTC, datetime  # noqa: PLC0415
+            ann.ai_quality_at = datetime.now(UTC).isoformat()
+            store.upsert_annotation(ann)
+
+            results.append({
+                "path": str(img_path),
+                "score": score,
+                "label": label,
+                "reason": reason,
+            })
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"path": str(img_path), "error": str(exc)})
+
+    return {"processed": len(results), "results": results, "errors": errors}

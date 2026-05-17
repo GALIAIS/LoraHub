@@ -1055,6 +1055,8 @@ export const AI_TASK_IDS = [
   "dataset.analyze",
   "training.diagnose",
   "error.diagnose",
+  "quality.score",
+  "trigger.suggest",
 ] as const
 export type AITaskId = (typeof AI_TASK_IDS)[number]
 

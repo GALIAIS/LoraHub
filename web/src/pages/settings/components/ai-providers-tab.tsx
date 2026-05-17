@@ -53,6 +53,8 @@ const TASK_LABELS: Record<AITaskId, string> = {
   "dataset.analyze": "数据集分析",
   "training.diagnose": "训练诊断",
   "error.diagnose": "错误自助",
+  "quality.score": "图片质量评分",
+  "trigger.suggest": "Trigger 建议",
 }
 
 const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
@@ -62,6 +64,8 @@ const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
   "dataset.analyze": "对扫描结果做诊断 — caption 长度、tag 分布等",
   "training.diagnose": "解读 loss/grad_norm 曲线给优化建议",
   "error.diagnose": "训练 / 安装失败时给出修复建议",
+  "quality.score": "VLM 评估图片质量 (0-100 + 优/中/差)",
+  "trigger.suggest": "根据数据集特征建议 trigger word 和模板",
 }
 
 const SELECTION_MODES: { value: AIKeySelectionMode; label: string }[] = [

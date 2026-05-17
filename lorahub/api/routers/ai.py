@@ -21,6 +21,9 @@ Plus a couple of LoraHub-specific extras kept out of the panel UI:
 
 from __future__ import annotations
 
+import base64
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -44,6 +47,20 @@ router = APIRouter(prefix="/api")
 # --------------------------------------------------------------------------- #
 # Lifespan singleton bootstrap
 # --------------------------------------------------------------------------- #
+
+
+def _resolve_image_url(img: "InvokeImageInput") -> str:
+    """Convert an image input to a data URL for the OpenAI vision API."""
+    if img.kind == "data_url":
+        return img.value
+    # file_path: read from disk and base64-encode
+    p = Path(img.value)
+    if not p.is_file():
+        raise HTTPException(400, f"image file not found: {img.value}")
+    mime = mimetypes.guess_type(str(p))[0] or "image/png"
+    data = p.read_bytes()
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"
 
 
 def _store() -> AIStore:
@@ -466,10 +483,16 @@ def test_connection(req: TestRequest) -> dict[str, Any]:
     }
 
 
+class InvokeImageInput(BaseModel):
+    kind: str = "data_url"  # "data_url" | "file_path"
+    value: str
+
+
 class InvokeRequest(BaseModel):
     taskId: str
     prompt: str
     systemPrompt: str | None = None
+    images: list[InvokeImageInput] | None = None
     stream: bool | None = None
     temperature: float | None = None
     topP: float | None = None
@@ -534,7 +557,20 @@ def invoke_task(req: InvokeRequest) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": req.prompt})
+
+    if req.images:
+        content_parts: list[dict[str, Any]] = []
+        if req.prompt:
+            content_parts.append({"type": "text", "text": req.prompt})
+        for img in req.images:
+            url = _resolve_image_url(img)
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": url},
+            })
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": req.prompt})
 
     try:
         result = ai_client.invoke(
