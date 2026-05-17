@@ -567,10 +567,26 @@ def _enqueue_launch(
     workspace = job.workspace
     backend = _select_backend(cfg)
     sink = JsonlEventSink(workspace / "events.jsonl")
+    # Set lazily once the preview worker is up — the on_event handler
+    # forwards `checkpoint_saved` events to it so the worker reacts in
+    # < 1s instead of waiting for its polling tick.
+    preview_worker_ref: dict[str, Any] = {}
 
     def on_event(ev: TrainingEvent) -> None:
         sink(ev)
         state.registry.record_event(job.id, ev)
+        # Wake the preview worker for every checkpoint dp finishes
+        # writing. The worker dedupes via mtime so duplicate notifies
+        # are harmless.
+        if ev.type is EventType.checkpoint_saved:
+            worker = preview_worker_ref.get("worker")
+            if worker is not None:
+                ckpt_name = _extract_ckpt_name(ev)
+                if ckpt_name:
+                    try:
+                        worker.notify_checkpoint(ckpt_name)
+                    except Exception:  # noqa: BLE001
+                        log.exception("preview worker notify failed")
         if ev.type is EventType.done:
             j = state.registry.get(job.id)
             if j is not None:
@@ -640,9 +656,14 @@ def _enqueue_launch(
         # turns each new dp checkpoint into a PNG using the user's
         # `sampling.promptsFile`. Off by default (cfg.sampling.enable_live_inference).
         preview_stop = threading.Event()
-        preview_thread = _maybe_start_preview_worker(
+        preview_handle = _maybe_start_preview_worker(
             cfg, workspace, job.id, on_event, preview_stop,
         )
+        if preview_handle is not None:
+            preview_thread, preview_worker = preview_handle
+            preview_worker_ref["worker"] = preview_worker
+        else:
+            preview_thread = None
 
         try:
             handle.wait(timeout=None)
@@ -657,19 +678,40 @@ def _enqueue_launch(
     sched.scheduler.submit(job.id, task)
 
 
+def _extract_ckpt_name(ev: TrainingEvent) -> str | None:
+    """Pick the ckpt directory name out of a `checkpoint_saved` event.
+
+    dp's parser emits the path as `payload.path` (the full
+    "Saving model to directory <path>" target). For dp this is
+    `<output_dir>/<run_ts>/{step|epoch}{N}` so the ckpt name is the
+    last path component.
+    """
+    payload = ev.payload or {}
+    raw = payload.get("path") or payload.get("checkpoint")
+    if not isinstance(raw, str) or not raw:
+        return None
+    # `Path` handles both / and \ separators. We want the last
+    # non-empty segment: dp passes a directory, kohya passes a file —
+    # both surface a useful identifier when basenamed.
+    name = Path(raw.strip()).name
+    return name or None
+
+
 def _maybe_start_preview_worker(
     cfg: TrainingConfig,
     workspace: Path,
     job_id: str,
     on_event: Any,
     stop_evt: threading.Event,
-) -> threading.Thread | None:
+) -> tuple[threading.Thread, Any] | None:
     """Start a PreviewWorker thread if the recipe asks for it.
 
-    Returns the running daemon thread (so the caller can join on
-    shutdown) or None when the feature is disabled or prerequisites
-    are missing. Failures here are non-fatal — training never depends
-    on preview rendering.
+    Returns ``(thread, worker)`` so callers can both join the thread on
+    shutdown and call ``worker.notify_checkpoint(name)`` from the
+    event sink to wake the worker the moment dp finishes a save —
+    avoiding the up-to-5s polling latency. Returns ``None`` when the
+    feature is disabled or prerequisites are missing. Failures here
+    are non-fatal — training never depends on preview rendering.
     """
     sampling = cfg.sampling
     if not sampling.enabled or not sampling.enable_live_inference:
@@ -751,7 +793,7 @@ def _maybe_start_preview_worker(
         name=f"preview-{job_id[-6:]}",
     )
     thread.start()
-    return thread
+    return thread, worker
 
 
 def _gpu_sampler_loop(

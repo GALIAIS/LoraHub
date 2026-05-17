@@ -30,6 +30,7 @@ Design choices:
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import threading
 import time
@@ -204,6 +205,20 @@ class PreviewConfig:
     samples_dir: Path
     output_dir: Path
     poll_interval_s: float = 5.0
+    # Hard cap on time spent rendering a single checkpoint's prompts.
+    # Even with a 4-image prompt set we shouldn't burn more than this
+    # much wall time per ckpt — once exceeded, the worker breaks out
+    # of the prompt loop, drops the rest of that checkpoint's prompts
+    # on the floor, and waits for the next one. Rationale: lazy
+    # protection so a degenerate inference call can't permanently
+    # starve training throughput.
+    max_render_time_per_ckpt_s: float = 300.0
+    # Soft budget — a fraction of the wall-clock distance between the
+    # last two checkpoints. A checkpoint cadence of 200 steps × 3.7s
+    # = 740s; with budget_fraction=0.3 that's 222s of preview work
+    # allowed. Effective budget = min(max_render_time, fraction × Δ).
+    # Falls back to max_render_time on the first ckpt (no Δ yet).
+    budget_fraction: float = 0.3
 
 
 @dataclass(slots=True)
@@ -213,7 +228,6 @@ class _CheckpointSeen:
     rendered: bool = False
 
 
-@dataclass(slots=True)
 class PreviewWorker:
     """Background loop that turns new dp checkpoints into preview PNGs.
 
@@ -223,14 +237,52 @@ class PreviewWorker:
     matches our GPU sharing strategy — never run inference in parallel
     with another inference, and never run two checkpoints' worth of
     previews at once.
+
+    Trigger model:
+      * Primary: explicit `notify_checkpoint(ckpt_name)` calls from
+        whoever forwards `checkpoint_saved` events. These give us the
+        sub-second reaction we want — the moment dp's saver returns,
+        the worker is already rendering against the freshly written
+        adapter.
+      * Fallback: a polling tick that scans `output_dir/{step,epoch}*`
+        directories. Catches checkpoints that arrived while the worker
+        was busy and any case where the event channel was lossy.
+
+    Both paths converge on the same `_seen` map keyed by ckpt name +
+    mtime so we can never render the same checkpoint twice.
     """
 
-    config: PreviewConfig
-    inference: AnimaInference
-    on_event: Callable[[TrainingEvent], None]
-    job_id: str
-    stop_evt: threading.Event = field(default_factory=threading.Event)
-    _seen: dict[str, _CheckpointSeen] = field(default_factory=dict)
+    def __init__(
+        self,
+        *,
+        config: PreviewConfig,
+        inference: AnimaInference,
+        on_event: Callable[[TrainingEvent], None],
+        job_id: str,
+        stop_evt: threading.Event | None = None,
+    ) -> None:
+        self.config = config
+        self.inference = inference
+        self.on_event = on_event
+        self.job_id = job_id
+        self.stop_evt = stop_evt or threading.Event()
+        self._seen: dict[str, _CheckpointSeen] = {}
+        self._notify_q: queue.Queue[str] = queue.Queue()
+        # Wall-clock at the last successful checkpoint render — used to
+        # compute the per-checkpoint budget.
+        self._last_render_completed_at: float | None = None
+        self._last_render_started_at: float | None = None
+
+    def notify_checkpoint(self, ckpt_name: str) -> None:
+        """Wake the worker on a `checkpoint_saved` event so it doesn't
+        have to wait for the next polling tick. Safe to call from any
+        thread; falls through harmlessly if the worker isn't running."""
+        try:
+            self._notify_q.put_nowait(ckpt_name)
+        except queue.Full:
+            # Bounded fallback: if somehow the queue fills (shouldn't —
+            # we don't bound it), drop the notify and rely on polling.
+            pass
 
     def run(self) -> None:
         if not self.config.enabled:
@@ -253,7 +305,21 @@ class PreviewWorker:
             len(prompts),
             self.config.output_dir,
         )
-        while not self.stop_evt.wait(self.config.poll_interval_s):
+
+        while not self.stop_evt.is_set():
+            # Wait either for an event-driven notify or for the polling
+            # tick — whichever fires first.
+            try:
+                self._notify_q.get(timeout=self.config.poll_interval_s)
+            except queue.Empty:
+                pass
+            if self.stop_evt.is_set():
+                break
+            # Drain any extra notifies that piled up while we were
+            # blocking — _tick will pick the latest state from disk
+            # anyway, no point in re-running for each one.
+            with _drain_queue(self._notify_q):
+                pass
             try:
                 self._tick(prompts)
             except Exception:  # noqa: BLE001
@@ -285,9 +351,24 @@ class PreviewWorker:
     def _render_one(
         self, adapter: Path, ckpt_name: str, prompts: list[PromptSpec]
     ) -> None:
+        budget = self._compute_budget()
+        ckpt_started = time.time()
+        self._last_render_started_at = ckpt_started
+        log.info(
+            "preview worker [%s] rendering %s (%d prompts, budget=%.0fs)",
+            self.job_id,
+            ckpt_name,
+            len(prompts),
+            budget,
+        )
+        budget_exceeded = False
         for spec in prompts:
             if self.stop_evt.is_set():
                 return
+            elapsed = time.time() - ckpt_started
+            if elapsed >= budget:
+                budget_exceeded = True
+                break
             png_name = f"{ckpt_name}_{spec.index:02d}.png"
             out_path = self.config.samples_dir / png_name
             try:
@@ -301,6 +382,17 @@ class PreviewWorker:
                 )
                 duration = time.time() - started
             except Exception as exc:  # noqa: BLE001
+                if _is_skipped(exc):
+                    # Backend deliberately bowed out (low VRAM, cancelled).
+                    # Nothing to log loudly — the next ckpt picks up.
+                    log.info(
+                        "preview worker [%s] %s prompt %d skipped: %s",
+                        self.job_id,
+                        ckpt_name,
+                        spec.index,
+                        exc,
+                    )
+                    continue
                 log.exception(
                     "preview worker [%s] render failed for %s prompt %d",
                     self.job_id,
@@ -330,6 +422,31 @@ class PreviewWorker:
                     },
                 )
             )
+        if budget_exceeded:
+            remaining = max(0, len(prompts) - spec.index - 1)
+            log.warning(
+                "preview worker [%s] budget exceeded on %s after %.1fs — "
+                "dropping %d remaining prompt(s)",
+                self.job_id,
+                ckpt_name,
+                time.time() - ckpt_started,
+                remaining,
+            )
+            self._emit_log(
+                "warning",
+                f"preview budget exceeded on {ckpt_name}; dropped "
+                f"{remaining} prompt(s) to keep training throughput up",
+            )
+        self._last_render_completed_at = time.time()
+
+    def _compute_budget(self) -> float:
+        """Effective per-checkpoint render budget in seconds."""
+        cap = max(0.0, self.config.max_render_time_per_ckpt_s)
+        if self._last_render_completed_at is None:
+            return cap
+        elapsed_since = time.time() - self._last_render_completed_at
+        soft = max(0.0, elapsed_since * self.config.budget_fraction)
+        return min(cap, soft)
 
     def _emit_log(self, level: str, message: str) -> None:
         try:
@@ -342,6 +459,35 @@ class PreviewWorker:
             )
         except Exception:  # noqa: BLE001
             pass
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _is_skipped(exc: BaseException) -> bool:
+    """True for exceptions whose class name ends in `Skipped` — currently
+    `InferenceSkipped` from `lorahub.core.inference.anima`. This is
+    duck-typed on the class name to avoid an import cycle (the anima
+    backend imports from this module)."""
+    return type(exc).__name__.endswith("Skipped")
+
+
+import contextlib
+
+
+@contextlib.contextmanager
+def _drain_queue(q: "queue.Queue[str]"):
+    """Drop any pending items from `q` without blocking. Used after a
+    notify to coalesce a burst of `checkpoint_saved` signals into one
+    `_tick` call (which scans the whole output dir anyway)."""
+    try:
+        while True:
+            q.get_nowait()
+    except queue.Empty:
+        pass
+    yield
 
 
 def _iter_ckpt_dirs(output_dir: Path) -> Iterable[Path]:

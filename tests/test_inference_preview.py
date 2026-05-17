@@ -235,3 +235,176 @@ def test_worker_no_op_when_prompts_file_missing(tmp_path: Path) -> None:
     finally:
         stop.set()
         t.join(timeout=2)
+
+
+# --------------------------------------------------------------------------- #
+# Cut-3 features: notify wake, budget enforcement, skip semantics
+# --------------------------------------------------------------------------- #
+
+
+def test_notify_checkpoint_wakes_worker_before_poll(tmp_path: Path) -> None:
+    """Even with a slow poll interval, a `notify_checkpoint` call from
+    the event sink should make the worker render within milliseconds
+    rather than waiting for the next tick."""
+    worker, stop, events = _make_worker(tmp_path)
+    # Bump poll interval far above the test's deadline so the only way
+    # work happens within the window is via notify.
+    worker.config.poll_interval_s = 30.0
+
+    t = threading.Thread(target=worker.run, daemon=True)
+    t.start()
+    try:
+        # Drop a checkpoint and poke the worker.
+        _drop_checkpoint(worker.config.output_dir, "step777")
+        worker.notify_checkpoint("step777")
+
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if (
+                len([e for e in events if e.type is EventType.sample_ready]) >= 2
+            ):
+                break
+            time.sleep(0.05)
+
+        sample_evs = [e for e in events if e.type is EventType.sample_ready]
+        assert len(sample_evs) == 2
+        assert {e.payload["checkpoint"] for e in sample_evs} == {"step777"}
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
+def test_budget_drops_remaining_prompts(tmp_path: Path) -> None:
+    """When the per-checkpoint render budget is exhausted, the worker
+    must skip the remaining prompts and emit a warning log instead of
+    pushing through and stalling training."""
+    # Force-feed a tight budget by spending real time inside the
+    # inference render. Use a fake backend that sleeps deliberately.
+    class _SlowInference:
+        def render(self, *, lora_path, spec, out_path, default_steps, default_cfg):
+            from PIL import Image  # noqa: PLC0415
+            time.sleep(0.4)
+            Image.new("RGB", (32, 32), (0, 0, 0)).save(out_path)
+
+    prompts_file = tmp_path / "prompts.txt"
+    prompts_file.write_text(
+        "p0 --w 128 --h 128\np1 --w 128 --h 128\np2 --w 128 --h 128\n"
+    )
+    output_dir = tmp_path / "output"
+    samples_dir = tmp_path / "samples"
+    output_dir.mkdir()
+    samples_dir.mkdir()
+    cfg = PreviewConfig(
+        enabled=True,
+        prompts_file=prompts_file,
+        default_steps=4,
+        default_cfg=5.0,
+        samples_dir=samples_dir,
+        output_dir=output_dir,
+        poll_interval_s=0.1,
+        # 0.5s budget — roughly enough for one 0.4s render, definitely
+        # not three.
+        max_render_time_per_ckpt_s=0.5,
+        budget_fraction=1.0,
+    )
+    events: list[TrainingEvent] = []
+    stop = threading.Event()
+    worker = PreviewWorker(
+        config=cfg,
+        inference=_SlowInference(),
+        on_event=events.append,
+        job_id="J9",
+        stop_evt=stop,
+    )
+    _drop_checkpoint(output_dir, "step100")
+
+    t = threading.Thread(target=worker.run, daemon=True)
+    t.start()
+    try:
+        # Wait for either a budget-warning log or sample events to
+        # stabilise. 2 seconds is plenty for the budget to expire.
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if any(
+                e.type is EventType.log
+                and e.payload.get("level") == "warning"
+                and "budget exceeded" in e.payload.get("message", "")
+                for e in events
+            ):
+                break
+            time.sleep(0.05)
+
+        sample_count = sum(1 for e in events if e.type is EventType.sample_ready)
+        warning_logs = [
+            e for e in events
+            if e.type is EventType.log and e.payload.get("level") == "warning"
+        ]
+        assert sample_count >= 1, "expected at least one render to land"
+        assert sample_count < 3, f"expected fewer than 3 renders, got {sample_count}"
+        assert warning_logs, "expected a budget-exceeded warning event"
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
+def test_skipped_inference_does_not_emit_error(tmp_path: Path) -> None:
+    """If the backend raises an `*Skipped` exception (e.g. low VRAM),
+    the worker must NOT emit an error log — it's a soft fail by design."""
+
+    class _AlwaysSkipped:
+        def render(self, *, lora_path, spec, out_path, default_steps, default_cfg):
+            class InferenceSkipped(Exception):
+                pass
+
+            raise InferenceSkipped("fake VRAM pressure")
+
+    worker, stop, events = _make_worker(tmp_path)
+    worker.inference = _AlwaysSkipped()
+    _drop_checkpoint(worker.config.output_dir, "step100")
+    t = threading.Thread(target=worker.run, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.5)
+        # No error logs even though render() always raised.
+        error_logs = [
+            e for e in events
+            if e.type is EventType.log and e.payload.get("level") == "error"
+        ]
+        sample_evs = [e for e in events if e.type is EventType.sample_ready]
+        assert error_logs == [], f"unexpected error logs: {error_logs}"
+        assert sample_evs == [], "no PNG should have been produced"
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
+def test_genuine_inference_failure_does_emit_error(tmp_path: Path) -> None:
+    """Counter-test: a non-Skipped exception should still surface as
+    an error event so the user sees real failures in the events tab."""
+
+    class _AlwaysCrash:
+        def render(self, *, lora_path, spec, out_path, default_steps, default_cfg):
+            raise RuntimeError("real boom")
+
+    worker, stop, events = _make_worker(tmp_path)
+    worker.inference = _AlwaysCrash()
+    _drop_checkpoint(worker.config.output_dir, "step100")
+    t = threading.Thread(target=worker.run, daemon=True)
+    t.start()
+    try:
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if any(
+                e.type is EventType.log and e.payload.get("level") == "error"
+                for e in events
+            ):
+                break
+            time.sleep(0.05)
+        error_logs = [
+            e for e in events
+            if e.type is EventType.log and e.payload.get("level") == "error"
+        ]
+        assert error_logs, "expected an error log for a real crash"
+    finally:
+        stop.set()
+        t.join(timeout=2)
