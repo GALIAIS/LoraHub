@@ -698,6 +698,9 @@ def _maybe_start_preview_worker(
             PreviewWorker,
             StubInference,
         )
+        from lorahub.core.inference.anima import (  # noqa: PLC0415
+            build_backend_from_config,
+        )
     except Exception:  # noqa: BLE001
         log.exception("preview worker [%s]: failed to import module", job_id)
         return None
@@ -710,6 +713,23 @@ def _maybe_start_preview_worker(
     samples_dir = (workspace / "samples").resolve()
     samples_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prefer the real Anima inference backend; fall back to the
+    # placeholder stub if any prerequisite path is missing (sd-scripts
+    # repo, base model files...). The stub keeps the event flow live
+    # so the UI still gets sample_ready pings even while we're waiting
+    # on user setup of sd-scripts.
+    inference_backend: Any
+    real_backend = build_backend_from_config(recipe=cfg, workspace=workspace)
+    if real_backend is not None:
+        inference_backend = real_backend
+        log.info("preview worker [%s]: using AnimaInferenceBackend", job_id)
+    else:
+        inference_backend = StubInference()
+        log.info(
+            "preview worker [%s]: anima prerequisites missing — using StubInference",
+            job_id,
+        )
+
     pcfg = PreviewConfig(
         enabled=True,
         prompts_file=Path(str(prompts_file)).resolve(),
@@ -720,7 +740,7 @@ def _maybe_start_preview_worker(
     )
     worker = PreviewWorker(
         config=pcfg,
-        inference=StubInference(),
+        inference=inference_backend,
         on_event=on_event,
         job_id=job_id,
         stop_evt=stop_evt,
