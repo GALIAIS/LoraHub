@@ -2,16 +2,24 @@ import { useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
+  FlipHorizontal,
   FolderOpen,
   Heart,
+  Pencil,
   RotateCw,
+  Save,
   Star,
   Trash2,
+  Undo2,
+  X,
 } from "lucide-react"
 import {
   imageStudioList,
   imageStudioGetImage,
   imageStudioSaveAnnotation,
+  imageStudioAddOp,
+  imageStudioApplyOps,
+  imageStudioDeleteOp,
   type ImageStudioItem,
   type ImageStudioDetailItem,
 } from "@/lib/api"
@@ -238,13 +246,43 @@ function Inspector({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
+  const [editingCaption, setEditingCaption] = useState(false)
+  const [captionDraft, setCaptionDraft] = useState("")
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+
   const favMutation = useMutation({
     mutationFn: (fav: boolean) =>
       imageStudioSaveAnnotation({ path, favorite: fav }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
-    },
+    onSuccess: invalidate,
   })
+
+  const addOpMutation = useMutation({
+    mutationFn: (body: { op: string; payload?: Record<string, unknown> }) =>
+      imageStudioAddOp({ path, ...body }),
+    onSuccess: invalidate,
+  })
+
+  const deleteOpMutation = useMutation({
+    mutationFn: (opId: string) => imageStudioDeleteOp(opId),
+    onSuccess: invalidate,
+  })
+
+  const applyMutation = useMutation({
+    mutationFn: () => imageStudioApplyOps(path),
+    onSuccess: invalidate,
+  })
+
+  const startCaptionEdit = () => {
+    setCaptionDraft(detail?.caption || "")
+    setEditingCaption(true)
+  }
+
+  const saveCaption = () => {
+    addOpMutation.mutate({ op: "replace_caption", payload: { caption: captionDraft } })
+    setEditingCaption(false)
+  }
 
   return (
     <aside className="w-[22rem] shrink-0 overflow-y-auto border-l bg-background p-3">
@@ -286,8 +324,44 @@ function Inspector({
 
           {/* Caption */}
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium">Caption</span>
-            {detail.caption ? (
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium">Caption</span>
+              {!editingCaption && (
+                <button
+                  type="button"
+                  onClick={startCaptionEdit}
+                  className="rounded p-0.5 text-muted-foreground hover:bg-muted"
+                >
+                  <Pencil className="size-3" />
+                </button>
+              )}
+            </div>
+            {editingCaption ? (
+              <div className="flex flex-col gap-1.5">
+                <textarea
+                  value={captionDraft}
+                  onChange={(e) => setCaptionDraft(e.target.value)}
+                  rows={4}
+                  className="w-full rounded border bg-background px-2 py-1.5 text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-y"
+                />
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={saveCaption}
+                    className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-xs text-primary-foreground"
+                  >
+                    <Save className="size-3" /> Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingCaption(false)}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
+                  >
+                    <X className="size-3" /> Cancel
+                  </button>
+                </div>
+              </div>
+            ) : detail.caption ? (
               <p className="rounded bg-muted/50 p-2 text-xs leading-relaxed">
                 {detail.caption}
               </p>
@@ -308,8 +382,8 @@ function Inspector({
             </div>
           )}
 
-          {/* Actions */}
-          <div className="flex gap-2 pt-2 border-t">
+          {/* Edit actions */}
+          <div className="flex flex-wrap gap-1.5 pt-2 border-t">
             <button
               type="button"
               onClick={() => favMutation.mutate(!detail.annotation?.favorite)}
@@ -322,21 +396,59 @@ function Inspector({
               <Heart className="size-3" />
               {detail.annotation?.favorite ? "Unfav" : "Fav"}
             </button>
+            <button
+              type="button"
+              onClick={() => addOpMutation.mutate({ op: "rotate", payload: { degrees: 90 } })}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
+            >
+              <RotateCw className="size-3" /> Rotate
+            </button>
+            <button
+              type="button"
+              onClick={() => addOpMutation.mutate({ op: "flip", payload: { direction: "horizontal" } })}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
+            >
+              <FlipHorizontal className="size-3" /> Flip
+            </button>
+            <button
+              type="button"
+              onClick={() => addOpMutation.mutate({ op: "delete", payload: {} })}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+            >
+              <Trash2 className="size-3" /> Delete
+            </button>
           </div>
 
           {/* Pending ops */}
           {detail.pendingOps.length > 0 && (
-            <div className="flex flex-col gap-1 pt-2 border-t">
-              <span className="text-xs font-medium">
-                Pending ops ({detail.pendingOps.length})
-              </span>
+            <div className="flex flex-col gap-1.5 pt-2 border-t">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">
+                  Pending ({detail.pendingOps.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => applyMutation.mutate()}
+                  disabled={applyMutation.isPending}
+                  className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground disabled:opacity-50"
+                >
+                  Apply all
+                </button>
+              </div>
               {detail.pendingOps.map((op) => (
                 <div
                   key={op.id}
                   className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 text-xs"
                 >
-                  <RotateCw className="size-3" />
-                  <span>{op.op}</span>
+                  <RotateCw className="size-3 shrink-0" />
+                  <span className="flex-1">{op.op}</span>
+                  <button
+                    type="button"
+                    onClick={() => deleteOpMutation.mutate(op.id)}
+                    className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  >
+                    <Undo2 className="size-3" />
+                  </button>
                 </div>
               ))}
             </div>
