@@ -271,3 +271,116 @@ def test_apply_ops_rotate(client: TestClient, sample_dir: Path) -> None:
     assert r.status_code == 200
     assert len(r.json()["applied"]) == 1
     assert r.json()["errors"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Phash unit tests
+# --------------------------------------------------------------------------- #
+
+
+def test_phash64_deterministic(tmp_path: Path) -> None:
+    from lorahub.core.phash import phash64
+
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), color="blue")
+    p = tmp_path / "blue.png"
+    img.save(p)
+    h1 = phash64(p)
+    h2 = phash64(p)
+    assert h1 == h2
+    assert len(h1) == 16  # 64 bits = 16 hex chars
+
+
+def test_dhash64_deterministic(tmp_path: Path) -> None:
+    from lorahub.core.phash import dhash64
+
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), color="green")
+    p = tmp_path / "green.png"
+    img.save(p)
+    h1 = dhash64(p)
+    h2 = dhash64(p)
+    assert h1 == h2
+    assert len(h1) == 16
+
+
+def test_hamming_distance() -> None:
+    from lorahub.core.phash import hamming_distance
+    assert hamming_distance("0000000000000000", "0000000000000000") == 0
+    assert hamming_distance("0000000000000000", "0000000000000001") == 1
+    assert hamming_distance("ffffffffffffffff", "0000000000000000") == 64
+
+
+def test_similar_images_low_distance(tmp_path: Path) -> None:
+    from lorahub.core.phash import hamming_distance, phash64
+
+    from PIL import Image
+    img1 = Image.new("RGB", (128, 128), color=(100, 150, 200))
+    img2 = img1.copy()
+    # Slightly modify one pixel
+    img2.putpixel((0, 0), (101, 150, 200))
+    p1 = tmp_path / "img1.png"
+    p2 = tmp_path / "img2.png"
+    img1.save(p1)
+    img2.save(p2)
+    h1 = phash64(p1)
+    h2 = phash64(p2)
+    assert hamming_distance(h1, h2) <= 5
+
+
+# --------------------------------------------------------------------------- #
+# Dedupe router tests
+# --------------------------------------------------------------------------- #
+
+
+def test_dedupe_scan_and_clusters(client: TestClient, sample_dir: Path) -> None:
+    # Create two identical images (should cluster together)
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), color="red")
+    img.save(sample_dir / "dup1.png")
+    img.save(sample_dir / "dup2.png")
+
+    r = client.post("/api/image-studio/dedupe/scan", json={
+        "path": str(sample_dir), "algo": "phash64", "threshold": 10
+    })
+    assert r.status_code == 200
+    assert r.json()["computed"] >= 2
+
+    r2 = client.get("/api/image-studio/dedupe/clusters", params={
+        "path": str(sample_dir), "kind": "phash", "threshold": 10
+    })
+    assert r2.status_code == 200
+    clusters = r2.json()["clusters"]
+    # At least one cluster with the two identical images
+    assert len(clusters) >= 1
+    dup_cluster = next(
+        (c for c in clusters if any("dup1" in m["path"] for m in c["members"])),
+        None,
+    )
+    assert dup_cluster is not None
+    assert len(dup_cluster["members"]) >= 2
+
+
+def test_batch_delete(client: TestClient, sample_dir: Path) -> None:
+    img_path = str(sample_dir / "c.png")
+    r = client.post("/api/image-studio/dedupe/batch-delete", json={
+        "paths": [img_path]
+    })
+    assert r.status_code == 200
+    assert r.json()["deletedCount"] == 1
+    assert not (sample_dir / "c.png").exists()
+
+
+def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> None:
+    img_path = str(sample_dir / "a.png")
+    # Mark as favorite
+    client.put("/api/image-studio/annotations", json={
+        "path": img_path, "favorite": True
+    })
+    r = client.post("/api/image-studio/dedupe/batch-delete", json={
+        "paths": [img_path]
+    })
+    assert r.status_code == 200
+    assert r.json()["deletedCount"] == 0
+    assert len(r.json()["errors"]) == 1
+    assert "favourite" in r.json()["errors"][0]["error"]
