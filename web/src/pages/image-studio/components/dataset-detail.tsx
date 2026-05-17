@@ -468,7 +468,11 @@ export function DatasetDetail() {
             )}
           </div>
 
-          {showTagging && <TaggingPanel datasetPath={path} />}
+          {showTagging && (
+            <aside className="w-56 shrink-0 overflow-y-auto border-l bg-background">
+              <TaggingPanel datasetPath={path} />
+            </aside>
+          )}
 
           {selectedPath && (
             <Inspector
