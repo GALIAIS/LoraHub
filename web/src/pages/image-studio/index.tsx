@@ -14,7 +14,6 @@ import {
   Save,
   Star,
   Trash2,
-  Undo2,
   Upload,
   X,
 } from "lucide-react"
@@ -26,7 +25,6 @@ import {
   imageStudioSaveAnnotation,
   imageStudioAddOp,
   imageStudioApplyOps,
-  imageStudioDeleteOp,
   imageStudioDedupeScan,
   imageStudioDedupeClusters,
   imageStudioBatchDelete,
@@ -958,6 +956,7 @@ function Inspector({
   const queryClient = useQueryClient()
   const [editingCaption, setEditingCaption] = useState(false)
   const [captionDraft, setCaptionDraft] = useState("")
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["image-studio"] })
@@ -968,19 +967,11 @@ function Inspector({
     onSuccess: invalidate,
   })
 
-  const addOpMutation = useMutation({
-    mutationFn: (body: { op: string; payload?: Record<string, unknown> }) =>
-      imageStudioAddOp({ path, ...body }),
-    onSuccess: invalidate,
-  })
-
-  const deleteOpMutation = useMutation({
-    mutationFn: (opId: string) => imageStudioDeleteOp(opId),
-    onSuccess: invalidate,
-  })
-
-  const applyMutation = useMutation({
-    mutationFn: () => imageStudioApplyOps(path),
+  const execMutation = useMutation({
+    mutationFn: async (body: { op: string; payload?: Record<string, unknown> }) => {
+      await imageStudioAddOp({ path, ...body })
+      return imageStudioApplyOps(path)
+    },
     onSuccess: invalidate,
   })
 
@@ -990,8 +981,14 @@ function Inspector({
   }
 
   const saveCaption = () => {
-    addOpMutation.mutate({ op: "replace_caption", payload: { caption: captionDraft } })
+    execMutation.mutate({ op: "replace_caption", payload: { caption: captionDraft } })
     setEditingCaption(false)
+  }
+
+  const handleDelete = () => {
+    execMutation.mutate({ op: "delete", payload: {} })
+    setShowDeleteConfirm(false)
+    onClose()
   }
 
   return (
@@ -1009,7 +1006,7 @@ function Inspector({
         <div className="flex flex-col gap-3">
           <div className="overflow-hidden rounded-md border">
             <img
-              src={`/api/datasets/thumb?path=${encodeURIComponent(detail.path)}&size=512`}
+              src={`/api/datasets/thumb?path=${encodeURIComponent(detail.path)}&size=1024`}
               alt={detail.name}
               className="w-full"
             />
@@ -1093,55 +1090,56 @@ function Inspector({
             </button>
             <button
               type="button"
-              onClick={() => addOpMutation.mutate({ op: "rotate", payload: { degrees: 90 } })}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
+              onClick={() => execMutation.mutate({ op: "rotate", payload: { degrees: 90 } })}
+              disabled={execMutation.isPending}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
             >
               <RotateCw className="size-3" /> 旋转
             </button>
             <button
               type="button"
-              onClick={() => addOpMutation.mutate({ op: "flip", payload: { direction: "horizontal" } })}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
+              onClick={() => execMutation.mutate({ op: "flip", payload: { direction: "horizontal" } })}
+              disabled={execMutation.isPending}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
             >
               <FlipHorizontal className="size-3" /> 翻转
             </button>
             <button
               type="button"
-              onClick={() => addOpMutation.mutate({ op: "delete", payload: {} })}
+              onClick={() => setShowDeleteConfirm(true)}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
             >
               <Trash2 className="size-3" /> 删除
             </button>
           </div>
+        </div>
+      )}
 
-          {detail.pendingOps.length > 0 && (
-            <div className="flex flex-col gap-1.5 pt-2 border-t">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium">待处理 ({detail.pendingOps.length})</span>
-                <button
-                  type="button"
-                  onClick={() => applyMutation.mutate()}
-                  disabled={applyMutation.isPending}
-                  className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground disabled:opacity-50"
-                >
-                  全部应用
-                </button>
-              </div>
-              {detail.pendingOps.map((op) => (
-                <div key={op.id} className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 text-xs">
-                  <RotateCw className="size-3 shrink-0" />
-                  <span className="flex-1">{op.op}</span>
-                  <button
-                    type="button"
-                    onClick={() => deleteOpMutation.mutate(op.id)}
-                    className="rounded p-0.5 text-muted-foreground hover:text-destructive"
-                  >
-                    <Undo2 className="size-3" />
-                  </button>
-                </div>
-              ))}
+      {/* Delete confirmation */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="w-80 rounded-lg border bg-popover p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold mb-2">确认删除</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              确定要删除 "{detail?.name}" 吗？文件将移入回收站。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="rounded-md px-3 py-1.5 text-xs hover:bg-muted"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground"
+              >
+                删除
+              </button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </aside>
