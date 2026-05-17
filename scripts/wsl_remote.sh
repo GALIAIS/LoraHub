@@ -10,11 +10,25 @@
 #   2. Driving ssh via sshpass with non-interactive flags
 #   3. Setting a single sane remote PATH on every command we launch
 #
+# Subcommands:
+#   setup              First-time install: node20 + uv + venv + npm + vite build
+#   serve              Start uvicorn on :6006 (kills prior, waits for /api/health)
+#   restart            Alias for serve (re-launch uvicorn without re-setup)
+#   stop               Kill the running uvicorn worker
+#   deploy             pull -> setup -> serve, the full happy path
+#   pull               git fetch + reset --hard origin/main on the VPS
+#   status             Show ports, uvicorn pid, venv version, dist presence
+#   health             curl /api/health and print the response
+#   clean [all|venv|web|logs]   Wipe build artefacts to force a fresh setup
+#   logs [setup|install|npm|vite|uvicorn]   Tail the relevant log file
+#   shell              Open an interactive ssh shell at the repo root
+#   exec '<cmd>'       Run an ad-hoc command with the sanitised remote PATH
+#
 # Usage examples:
 #   echo '<password>' | scripts/wsl_remote.sh setup        # first-time install
-#   LORAHUB_REMOTE_PASS=... scripts/wsl_remote.sh serve    # start uvicorn :6006
+#   LORAHUB_REMOTE_PASS=... scripts/wsl_remote.sh deploy   # pull + setup + serve
 #   scripts/wsl_remote.sh shell                            # interactive shell
-#   scripts/wsl_remote.sh exec 'tail -f /root/uvicorn.log' # ad-hoc command
+#   scripts/wsl_remote.sh exec 'tail -f /root/uvicorn.log'
 #
 # Required env (override on call site):
 #   LORAHUB_REMOTE_HOST   default: connect.westc.seetacloud.com
@@ -22,6 +36,7 @@
 #   LORAHUB_REMOTE_USER   default: root
 #   LORAHUB_REMOTE_DIR    default: /root/autodl-tmp/LoraHub
 #   LORAHUB_REMOTE_NODE   default: /root/autodl-tmp/opt/node20/bin
+#   LORAHUB_REMOTE_PASS   the SSH password (or pipe it in on stdin)
 
 set -euo pipefail
 
@@ -36,7 +51,7 @@ REMOTE_NODE_BIN="${LORAHUB_REMOTE_NODE:-/root/autodl-tmp/opt/node20/bin}"
 REMOTE_PATH="${REMOTE_NODE_BIN}:/root/.local/bin:/root/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 usage() {
-  sed -n '2,28p' "$0"
+  sed -n '2,42p' "$0"
   exit "${1:-1}"
 }
 
@@ -140,20 +155,67 @@ cmd_pull() {
   run_remote "cd ${REMOTE_DIR} && git fetch origin main && git reset --hard origin/main && git log --oneline -3"
 }
 
+cmd_health() {
+  # Check whether uvicorn responds. Prints the JSON or an error.
+  run_remote "curl -fsS --max-time 5 http://127.0.0.1:6006/api/health 2>&1 || echo 'API not reachable on :6006'"
+}
+
+cmd_stop() {
+  # Kill the uvicorn worker. Useful when you want to reclaim VRAM/RAM
+  # without redeploying.
+  run_remote "ps -ef | grep 'uvicorn lorahub' | grep -v grep | awk '{print \$2}' | xargs -r kill -9; sleep 1; ps -ef | grep 'uvicorn lorahub' | grep -v grep || echo stopped"
+}
+
+cmd_restart() {
+  # Re-launch uvicorn without re-running setup. Equivalent to remote_serve.
+  cmd_serve
+}
+
+cmd_deploy() {
+  # The full happy path: pull latest, run setup (idempotent), restart
+  # uvicorn. Use this after pushing a new commit from the dev box.
+  echo "[deploy] step 1/3: git pull"
+  cmd_pull
+  echo "[deploy] step 2/3: setup (background; tail with: $0 logs setup)"
+  cmd_setup
+  echo "[deploy] step 3/3: waiting for setup to finish then restarting uvicorn"
+  run_remote "until [ -f /root/_setup_done ] || ! pgrep -f remote_setup.sh > /dev/null; do sleep 3; done; tail -5 /root/_setup.log"
+  cmd_serve
+}
+
+cmd_clean() {
+  # Wipe per-step build artefacts. Keeps the repo + venv but forces the
+  # next setup to redo deps and dist. Use when bumping pyproject.toml.
+  case "${1:-all}" in
+    venv)  run_remote "rm -rf ${REMOTE_DIR}/.venv && echo venv_removed" ;;
+    web)   run_remote "rm -rf ${REMOTE_DIR}/web/node_modules ${REMOTE_DIR}/web/dist && echo web_artifacts_removed" ;;
+    logs)  run_remote "rm -f /root/_setup.log /root/_uv_install.log /root/_npm_install.log /root/_vite_build.log /root/_setup_done /root/uvicorn.log && echo logs_cleared" ;;
+    all|*) run_remote "rm -rf ${REMOTE_DIR}/.venv ${REMOTE_DIR}/web/node_modules ${REMOTE_DIR}/web/dist && rm -f /root/_setup.log /root/_uv_install.log /root/_npm_install.log /root/_vite_build.log /root/_setup_done /root/uvicorn.log && echo all_cleared" ;;
+  esac
+}
+
 main() {
   if [[ $# -lt 1 ]]; then usage; fi
   local sub="$1"; shift
+  # Help / usage subcommands don't need credentials or sshpass.
+  case "$sub" in
+    -h|--help|help) usage 0 ;;
+  esac
   read_pass
   require_sshpass
   case "$sub" in
-    shell)  cmd_shell ;;
-    exec)   cmd_exec "$@" ;;
-    setup)  cmd_setup ;;
-    serve)  cmd_serve ;;
-    logs)   cmd_logs "$@" ;;
-    status) cmd_status ;;
-    pull)   cmd_pull ;;
-    -h|--help|help) usage 0 ;;
+    shell)   cmd_shell ;;
+    exec)    cmd_exec "$@" ;;
+    setup)   cmd_setup ;;
+    serve)   cmd_serve ;;
+    restart) cmd_restart ;;
+    stop)    cmd_stop ;;
+    deploy)  cmd_deploy ;;
+    clean)   cmd_clean "$@" ;;
+    logs)    cmd_logs "$@" ;;
+    status)  cmd_status ;;
+    health)  cmd_health ;;
+    pull)    cmd_pull ;;
     *) echo "unknown subcommand: $sub" >&2; usage ;;
   esac
 }
