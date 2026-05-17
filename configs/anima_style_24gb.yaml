@@ -82,17 +82,19 @@ optimization:
 
 sampling:
   enabled: true
-  # Style runs are long; sample every 5 epochs to check direction
-  # without wasting time on previews.
-  everyNEpochs: 5
+  # Sample alongside checkpoints (every 200 steps) so each saved
+  # weight has a matching preview image to judge by.
+  everyNSteps: 200
   resolution: [1024, 1024]
   seed: 42
 
 output:
   name: lx_anima_style_lora
-  # Save every 5 epochs gives 5 checkpoint candidates over the run;
-  # pick by sample quality, not final loss.
-  saveEveryNEpochs: 5
+  # Save every 200 steps. At ~3.7s/step this is one checkpoint every
+  # ~12 minutes — frequent enough to catch the sweet spot before the
+  # LoRA over-fits, sparse enough to avoid filling disk. Pick the
+  # final LoRA by sample quality, not by lowest train loss.
+  saveEveryNSteps: 200
   saveDtype: bf16
 
 backend:

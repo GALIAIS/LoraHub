@@ -83,16 +83,17 @@ optimization:
   torchCompile: false
   fusedBackwardPass: false
 
-# Sample previews every 3 epochs so you can early-stop a bad run.
+# Sample + checkpoint every 200 training steps so you can early-stop
+# a bad run and pick the sweet-spot weight before overfit kicks in.
 sampling:
   enabled: true
-  everyNEpochs: 3
+  everyNSteps: 200
   resolution: [1024, 1024]
   seed: 42
 
 output:
   name: azurlane_char0_anima_lora
-  saveEveryNEpochs: 3
+  saveEveryNSteps: 200
   saveDtype: bf16
 
 backend:

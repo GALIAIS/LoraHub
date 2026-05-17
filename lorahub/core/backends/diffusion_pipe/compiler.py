@@ -277,9 +277,19 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
     if cfg.schedule.max_steps is not None:
         parts.append(f"max_steps = {cfg.schedule.max_steps}")
 
+    # Save cadence. dp's saver tests for the *presence* of each key, not
+    # the value, so we only emit `save_every_n_epochs` when the user
+    # actually wants epoch-level saves. Step-level cadence (when set)
+    # supersedes it; emitting both would produce double checkpoints
+    # whenever a step-save and an epoch-save fall on the same iteration.
+    save_block: list[str] = []
+    if cfg.output.save_every_n_steps is None:
+        save_block.append(
+            f"save_every_n_epochs = {cfg.output.save_every_n_epochs}"
+        )
     parts += [
         "",
-        f"save_every_n_epochs = {cfg.output.save_every_n_epochs}",
+        *save_block,
         f"activation_checkpointing = {_toml_bool(cfg.gradient_checkpointing)}",
         f"partition_method = {_toml_str(opts.partition_method)}",
         f"save_dtype = {_toml_str(_save_dtype(cfg.output.save_dtype))}",

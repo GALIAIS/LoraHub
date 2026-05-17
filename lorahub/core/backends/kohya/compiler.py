@@ -533,13 +533,18 @@ def _emit_output_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -> 
     args += [
         f"--output_dir={output_dir}",
         f"--output_name={out.name}",
-        f"--save_every_n_epochs={out.save_every_n_epochs}",
         "--save_model_as=safetensors",
         f"--save_precision={out.save_dtype}",
         f"--logging_dir={workspace / 'logs'}",
     ]
+    # Save cadence. When the user picks step-level cadence we skip the
+    # epoch flag entirely so kohya doesn't double-save (epoch boundary +
+    # step boundary both firing on the same iteration would yield two
+    # safetensors files for one weight set).
     if out.save_every_n_steps is not None:
         args.append(f"--save_every_n_steps={out.save_every_n_steps}")
+    else:
+        args.append(f"--save_every_n_epochs={out.save_every_n_epochs}")
     if out.save_last_n_epochs is not None:
         args.append(f"--save_last_n_epochs={out.save_last_n_epochs}")
     if out.save_last_n_steps is not None:
