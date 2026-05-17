@@ -9,7 +9,9 @@ import { useCallback, useMemo } from "react"
 import {
   Activity,
   Cpu,
+  Database,
   FileImage,
+  Flame,
   Folder,
   Gauge,
   History,
@@ -18,15 +20,22 @@ import {
   PaintBucket,
   Rocket,
   Settings2,
+  Shuffle,
   SlidersHorizontal,
+  Sparkles,
   Wand2,
   Workflow,
   Zap,
 } from "lucide-react"
 import type { ValidationFieldError } from "@/lib/api"
+import { ArchPathsFields } from "./sections/arch-paths"
 import { AttentionFields } from "./sections/attention"
+import { AdvancedLossFields } from "./sections/advanced-loss"
+import { AugmentationFields } from "./sections/augmentation"
 import { BaseModelFields } from "./sections/base-model"
 import { DatasetFields } from "./sections/dataset"
+import { DataLoaderFields } from "./sections/data-loader"
+import { FlowMatchFields } from "./sections/flow-match"
 import { NetworkFields } from "./sections/network"
 import { OptimizerFields } from "./sections/optimizer"
 import { LossFields } from "./sections/loss"
@@ -39,6 +48,7 @@ import { BackendFields } from "./sections/backend"
 import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
 import { ValidationFields } from "./sections/validation"
 import { ResumeFields } from "./sections/resume"
+import { FLOW_MATCH_ARCHES } from "./options"
 import { buildErrorMap, setIn } from "./types"
 import type { ConfigFormValue } from "./types"
 import { ReadOnlyProvider, Section } from "./widgets"
@@ -70,6 +80,17 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
     [value, onChange],
   )
 
+  const arch = value.base_model?.arch ?? ""
+  // ArchPaths section is collapsed by default but auto-expands for arches
+  // that almost always need a per-component path filled in.
+  const archPathsAutoOpen =
+    arch === "flux" ||
+    arch === "flux2" ||
+    arch === "sd3" ||
+    arch === "anima" ||
+    arch === "hunyuan_image"
+  const flowMatchVisible = FLOW_MATCH_ARCHES.has(arch)
+
   const body = (
     <div className="space-y-3">
       <Section
@@ -79,6 +100,20 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         defaultOpen
       >
         <BaseModelFields value={value.base_model} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
+        icon={<Sparkles className="size-3.5" />}
+        title="架构组件路径"
+        subtitle="FLUX / SD3 / Anima 等多文件 bundle 的逐组件路径"
+        defaultOpen={archPathsAutoOpen}
+      >
+        <ArchPathsFields
+          value={value.base_model?.arch_paths}
+          set={set}
+          errorMap={errorMap}
+          arch={arch}
+        />
       </Section>
 
       <Section
@@ -116,6 +151,29 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       </Section>
 
       <Section
+        icon={<Flame className="size-3.5" />}
+        title="高级损失"
+        subtitle="multires noise / huber schedule / pseudo huber / v_pred_like"
+      >
+        <AdvancedLossFields value={value.loss} set={set} errorMap={errorMap} />
+      </Section>
+
+      {flowMatchVisible && (
+        <Section
+          icon={<Shuffle className="size-3.5" />}
+          title="Flow Matching"
+          subtitle="FLUX / SD3 / Lumina / Anima / HunyuanImage / chroma 专用"
+        >
+          <FlowMatchFields
+            value={value.flow_match}
+            set={set}
+            errorMap={errorMap}
+            arch={arch}
+          />
+        </Section>
+      )}
+
+      <Section
         icon={<Settings2 className="size-3.5" />}
         title="训练计划"
         subtitle="回合数、批大小、梯度累积"
@@ -143,10 +201,34 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       <Section
         icon={<Rocket className="size-3.5" />}
         title="训练优化"
-        subtitle="torch_compile / full_bf16 / blocks_to_swap 等显存与速度开关"
+        subtitle="torch_compile / full_bf16 / blocks_to_swap / fp8 等显存与速度开关"
       >
         <OptimizationFields
           value={value.optimization}
+          set={set}
+          errorMap={errorMap}
+        />
+      </Section>
+
+      <Section
+        icon={<Database className="size-3.5" />}
+        title="DataLoader"
+        subtitle="num_workers / vae_batch_size / 缓存批大小"
+      >
+        <DataLoaderFields
+          value={value.dataloader}
+          set={set}
+          errorMap={errorMap}
+        />
+      </Section>
+
+      <Section
+        icon={<Shuffle className="size-3.5" />}
+        title="数据增强"
+        subtitle="flip / 颜色 / 随机裁剪 / face crop / alpha mask（kohya）"
+      >
+        <AugmentationFields
+          value={value.augmentation}
           set={set}
           errorMap={errorMap}
         />

@@ -31,6 +31,27 @@ export const SamplingFields = memo(function SamplingFields({
               onChange={(n) => set(["sampling", "every_n_epochs"], n ?? 1)}
             />
           </Row>
+          <Row
+            label="每 N 步一次"
+            description="kohya `--sample_every_n_steps`；与 every_n_epochs 互不冲突。留空仅按回合采样。"
+            errors={errorMap.get("sampling.every_n_steps")}
+          >
+            <IntInput
+              min={1}
+              value={v.every_n_steps ?? null}
+              onChange={(n) => set(["sampling", "every_n_steps"], n)}
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="训练前先采样"
+            description="kohya `--sample_at_first`：第 0 步生成一组基线样图。"
+          >
+            <ToggleSwitch
+              checked={v.at_first ?? false}
+              onCheckedChange={(b) => set(["sampling", "at_first"], b)}
+            />
+          </Row>
           <Row label="提示词文件" description="纯文本，每行一条提示词。" errors={errorMap.get("sampling.prompts_file")}>
             <PathInput
               value={v.prompts_file ?? ""}

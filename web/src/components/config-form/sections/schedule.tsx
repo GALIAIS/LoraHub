@@ -31,6 +31,29 @@ export const ScheduleFields = memo(function ScheduleFields({
           placeholder="（不限）"
         />
       </Row>
+      <Row
+        label="随机种子"
+        description="kohya `--seed`。留空使用随机种子。"
+        errors={errorMap.get("schedule.seed")}
+      >
+        <IntInput
+          value={v.seed ?? null}
+          onChange={(n) => set(["schedule", "seed"], n)}
+          placeholder="（随机）"
+        />
+      </Row>
+      <Row
+        label="lr_decay_steps"
+        description="cosine / linear 衰减的步数窗口；留空使用全程长度。"
+        errors={errorMap.get("schedule.lr_decay_steps")}
+      >
+        <IntInput
+          min={1}
+          value={v.lr_decay_steps ?? null}
+          onChange={(n) => set(["schedule", "lr_decay_steps"], n)}
+          placeholder="（默认）"
+        />
+      </Row>
     </>
   )
 })

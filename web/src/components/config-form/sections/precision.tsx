@@ -1,6 +1,6 @@
 import { memo } from "react"
 import { PRECISION_OPTIONS } from "../options"
-import type { ErrorMap, ConfigFormValue, Setter } from "../types"
+import type { ConfigFormValue, ErrorMap, Setter } from "../types"
 import { EnumSelect, Row, ToggleSwitch } from "../widgets"
 
 export const PrecisionFields = memo(function PrecisionFields({
@@ -36,6 +36,42 @@ export const PrecisionFields = memo(function PrecisionFields({
         <ToggleSwitch
           checked={value.cache_latents ?? true}
           onCheckedChange={(b) => set(["cache_latents"], b)}
+        />
+      </Row>
+      <Row
+        label="cache_latents_to_disk"
+        description="把潜变量缓存写到磁盘（释放内存）。"
+      >
+        <ToggleSwitch
+          checked={value.cache_latents_to_disk ?? false}
+          onCheckedChange={(b) => set(["cache_latents_to_disk"], b)}
+        />
+      </Row>
+      <Row
+        label="skip_cache_check"
+        description="跳过缓存一致性检查，加速冷启动。"
+      >
+        <ToggleSwitch
+          checked={value.skip_cache_check ?? false}
+          onCheckedChange={(b) => set(["skip_cache_check"], b)}
+        />
+      </Row>
+      <Row
+        label="cache_info"
+        description="把缓存元信息单独写出（kohya 调试用）。"
+      >
+        <ToggleSwitch
+          checked={value.cache_info ?? false}
+          onCheckedChange={(b) => set(["cache_info"], b)}
+        />
+      </Row>
+      <Row
+        label="train_inpainting"
+        description="启用 inpainting 训练目标。"
+      >
+        <ToggleSwitch
+          checked={value.train_inpainting ?? false}
+          onCheckedChange={(b) => set(["train_inpainting"], b)}
         />
       </Row>
     </>

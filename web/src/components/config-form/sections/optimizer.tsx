@@ -8,6 +8,8 @@ import {
   IntInput,
   KeyValueTextArea,
   Row,
+  TextInput,
+  ToggleSwitch,
 } from "../widgets"
 
 export const OptimizerFields = memo(function OptimizerFields({
@@ -124,6 +126,97 @@ export const OptimizerFields = memo(function OptimizerFields({
               value={v.optimizer_args}
               onChange={(next) => set(["optimizer", "optimizer_args"], next)}
               placeholder={"momentum = 0.9\ndecouple = True"}
+            />
+          </Row>
+          <Row
+            label="max_grad_norm"
+            description="梯度范数裁剪上限；0 关闭裁剪。"
+            errors={errorMap.get("optimizer.max_grad_norm")}
+          >
+            <FloatInput
+              step={0.1}
+              value={v.max_grad_norm ?? 1.0}
+              onChange={(n) => set(["optimizer", "max_grad_norm"], n ?? 1.0)}
+            />
+          </Row>
+          <Row
+            label="scheduler_module"
+            description="自定义 LR scheduler module（kohya `--lr_scheduler_type`）。"
+            errors={errorMap.get("optimizer.scheduler_module")}
+          >
+            <TextInput
+              className="w-64"
+              value={v.scheduler_module ?? ""}
+              onChange={(s) =>
+                set(["optimizer", "scheduler_module"], s || null)
+              }
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row
+            label="scheduler_args"
+            description="scheduler 私有 kwargs（kohya `--lr_scheduler_args`）。"
+            errors={errorMap.get("optimizer.scheduler_args")}
+          >
+            <KeyValueTextArea
+              value={v.scheduler_args}
+              onChange={(next) => set(["optimizer", "scheduler_args"], next)}
+              placeholder={"factor = 0.5\npatience = 5"}
+            />
+          </Row>
+          <Row
+            label="scheduler_num_cycles"
+            description="cosine_with_restarts 重启次数。"
+            errors={errorMap.get("optimizer.scheduler_num_cycles")}
+          >
+            <IntInput
+              min={1}
+              value={v.scheduler_num_cycles ?? 1}
+              onChange={(n) => set(["optimizer", "scheduler_num_cycles"], n ?? 1)}
+            />
+          </Row>
+          <Row
+            label="scheduler_power"
+            description="polynomial 衰减幂。"
+            errors={errorMap.get("optimizer.scheduler_power")}
+          >
+            <FloatInput
+              step={0.1}
+              value={v.scheduler_power ?? 1.0}
+              onChange={(n) => set(["optimizer", "scheduler_power"], n ?? 1.0)}
+            />
+          </Row>
+          <Row
+            label="scheduler_timescale"
+            description="inverse_sqrt 时间常数；留空使用默认。"
+            errors={errorMap.get("optimizer.scheduler_timescale")}
+          >
+            <IntInput
+              min={1}
+              value={v.scheduler_timescale ?? null}
+              onChange={(n) => set(["optimizer", "scheduler_timescale"], n)}
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="scheduler_min_lr_ratio"
+            description="cosine 最小 LR 比例（kohya `--lr_scheduler_min_lr_ratio`）。"
+            errors={errorMap.get("optimizer.scheduler_min_lr_ratio")}
+          >
+            <FloatInput
+              step={0.01}
+              value={v.scheduler_min_lr_ratio ?? null}
+              onChange={(n) => set(["optimizer", "scheduler_min_lr_ratio"], n)}
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="gradient_release"
+            description="dp 分块释放梯度以节省显存。"
+          >
+            <ToggleSwitch
+              checked={v.gradient_release ?? false}
+              onCheckedChange={(b) => set(["optimizer", "gradient_release"], b)}
             />
           </Row>
         </div>

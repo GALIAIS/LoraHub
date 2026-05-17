@@ -1,7 +1,7 @@
 import { memo } from "react"
-import { NETWORK_TYPE_OPTIONS } from "../options"
+import { NETWORK_DTYPE_OPTIONS, NETWORK_TYPE_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { EnumSelect, FloatInput, IntInput, Row, ToggleSwitch } from "../widgets"
+import { EnumSelect, FloatInput, IntInput, PathInput, Row, ToggleSwitch } from "../widgets"
 
 export const NetworkFields = memo(function NetworkFields({
   value = {},
@@ -155,8 +155,150 @@ export const NetworkFields = memo(function NetworkFields({
               )}
             </div>
           </Row>
+          <Row
+            label="init_from"
+            description="基于已有 LoRA 续训（kohya `--network_weights`，dp `init_from_existing`）。"
+            errors={errorMap.get("network.init_from")}
+          >
+            <PathInput
+              value={v.init_from ?? ""}
+              onChange={(s) => set(["network", "init_from"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row
+            label="dim_from_weights"
+            description="kohya 从已加载权重读取 rank。"
+            errors={errorMap.get("network.dim_from_weights")}
+          >
+            <PathInput
+              value={v.dim_from_weights ?? ""}
+              onChange={(s) => set(["network", "dim_from_weights"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row label="dtype" description="dp 训练时 LoRA 参数 dtype（kohya 忽略此字段）。">
+            <EnumSelect
+              value={v.dtype ?? ""}
+              onChange={(s) => set(["network", "dtype"], s || null)}
+              options={NETWORK_DTYPE_OPTIONS}
+            />
+          </Row>
+          <Row
+            label="base_weights"
+            description="训练前合并的 LoRA 路径列表，每行一个（kohya）。"
+            errors={errorMap.get("network.base_weights")}
+          >
+            <textarea
+              value={(v.base_weights ?? []).join("\n")}
+              onChange={(e) => {
+                const lines = e.target.value
+                  .split("\n")
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0)
+                set(["network", "base_weights"], lines)
+              }}
+              rows={3}
+              className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              placeholder="/path/to/style.safetensors"
+            />
+          </Row>
+          <Row
+            label="base_weights_multiplier"
+            description="对应 base_weights 的合并强度，每行一个浮点数。长度必须与上一项一致。"
+            errors={errorMap.get("network.base_weights_multiplier")}
+          >
+            <textarea
+              value={(v.base_weights_multiplier ?? []).join("\n")}
+              onChange={(e) => {
+                const nums = e.target.value
+                  .split("\n")
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0)
+                  .map((s) => parseFloat(s))
+                  .filter((n) => !Number.isNaN(n))
+                set(["network", "base_weights_multiplier"], nums)
+              }}
+              rows={3}
+              className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              placeholder="0.5"
+            />
+          </Row>
+          <Row
+            label="fuse_adapters"
+            description="dp 训练前融合的 LoRA 列表（JSON 数组，每项 {path, multiplier}）。"
+            errors={errorMap.get("network.fuse_adapters")}
+          >
+            <textarea
+              value={JSON.stringify(v.fuse_adapters ?? [], null, 2)}
+              onChange={(e) => {
+                try {
+                  const parsed = JSON.parse(e.target.value || "[]")
+                  if (Array.isArray(parsed)) {
+                    set(["network", "fuse_adapters"], parsed)
+                  }
+                } catch {
+                  // 当用户编辑中途 JSON 不合法时静默忽略，让其继续输入。
+                }
+              }}
+              rows={4}
+              className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              placeholder={'[{"path": "/path/to.safetensors", "multiplier": 1.0}]'}
+            />
+          </Row>
+          <Row
+            label="module_lr"
+            description="Anima/Wan 多组件模型的 per-submodule LR。留空走全局 unet LR。"
+          >
+            <PerModuleLREditor value={v.module_lr ?? null} set={set} errorMap={errorMap} />
+          </Row>
         </div>
       </details>
     </>
+  )
+})
+
+const PerModuleLREditor = memo(function PerModuleLREditor({
+  value,
+  set,
+  errorMap,
+}: {
+  value: NonNullable<ConfigFormValue["network"]>["module_lr"]
+  set: Setter
+  errorMap: ErrorMap
+}) {
+  const enabled = value !== null && value !== undefined
+  const v = value ?? {}
+  return (
+    <div className="space-y-2">
+      <ToggleSwitch
+        checked={enabled}
+        onCheckedChange={(b) =>
+          set(["network", "module_lr"], b ? {} : null)
+        }
+      />
+      {enabled && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+          {(["llm_adapter", "self_attn", "cross_attn", "mlp", "mod"] as const).map(
+            (key) => (
+              <div key={key}>
+                <div className="text-[11px] text-muted-foreground">{key}</div>
+                <FloatInput
+                  step={1e-5}
+                  value={v[key] ?? null}
+                  onChange={(n) => set(["network", "module_lr", key], n)}
+                  placeholder="（继承）"
+                />
+                {errorMap.get(`network.module_lr.${key}`)?.map((m, i) => (
+                  <div key={i} className="text-[10px] text-destructive">
+                    {m}
+                  </div>
+                ))}
+              </div>
+            ),
+          )}
+        </div>
+      )}
+    </div>
   )
 })

@@ -1,5 +1,11 @@
 import { memo } from "react"
-import { PARTITION_METHOD_OPTIONS } from "../options"
+import {
+  DP_DIFFUSION_DTYPE_OPTIONS,
+  DP_TIMESTEP_SAMPLE_OPTIONS,
+  DP_TRANSFORMER_DTYPE_OPTIONS,
+  DP_VIDEO_CLIP_MODE_OPTIONS,
+  PARTITION_METHOD_OPTIONS,
+} from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import {
   EnumSelect,
@@ -115,6 +121,190 @@ export const BackendDiffusionPipeFields = memo(
               }
             />
           </Row>
+          <Row
+            label="Partition Split"
+            description="manual 切分时各 stage 的层数列表，逗号分隔（长度 = pipeline_stages - 1）。"
+            errors={errorMap.get("backend.diffusion_pipe.partition_split")}
+          >
+            <TextInput
+              className="w-64"
+              value={(v.partition_split ?? []).join(",")}
+              onChange={(s) => {
+                const list = s
+                  .split(",")
+                  .map((x) => x.trim())
+                  .filter((x) => x.length > 0)
+                  .map((x) => parseInt(x, 10))
+                  .filter((n) => !Number.isNaN(n))
+                set(
+                  ["backend", "diffusion_pipe", "partition_split"],
+                  list.length ? list : null,
+                )
+              }}
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="Reentrant Activation Checkpointing"
+            description="管线并行 + 重入式激活检查点（dp 限定场景）。"
+          >
+            <ToggleSwitch
+              checked={v.reentrant_activation_checkpointing ?? false}
+              onCheckedChange={(b) =>
+                set(
+                  ["backend", "diffusion_pipe", "reentrant_activation_checkpointing"],
+                  b,
+                )
+              }
+            />
+          </Row>
+          <Row
+            label="Force Constant LR"
+            description="忽略 scheduler，强制使用恒定 LR（resume 调试用）。"
+            errors={errorMap.get("backend.diffusion_pipe.force_constant_lr")}
+          >
+            <FloatInput
+              step={1e-5}
+              value={v.force_constant_lr ?? null}
+              onChange={(n) =>
+                set(["backend", "diffusion_pipe", "force_constant_lr"], n)
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="Uncond Fraction"
+            description="CFG 风格训练：丢弃 caption 的步数比例（0..1）。"
+            errors={errorMap.get("backend.diffusion_pipe.uncond_fraction")}
+          >
+            <FloatInput
+              step={0.05}
+              value={v.uncond_fraction ?? 0}
+              onChange={(n) =>
+                set(["backend", "diffusion_pipe", "uncond_fraction"], n ?? 0)
+              }
+            />
+          </Row>
+          <Row
+            label="X-axis Examples"
+            description="Tensorboard X 轴用 examples 而不是 steps。"
+          >
+            <ToggleSwitch
+              checked={v.x_axis_examples ?? false}
+              onCheckedChange={(b) =>
+                set(["backend", "diffusion_pipe", "x_axis_examples"], b)
+              }
+            />
+          </Row>
+          <Row
+            label="Logging Steps"
+            description="每多少步写一次 wandb / tensorboard。"
+            errors={errorMap.get("backend.diffusion_pipe.logging_steps")}
+          >
+            <IntInput
+              min={1}
+              value={v.logging_steps ?? 1}
+              onChange={(n) =>
+                set(["backend", "diffusion_pipe", "logging_steps"], n ?? 1)
+              }
+            />
+          </Row>
+        </SubGroup>
+
+        <SubGroup label="混合 image / video">
+          <Row
+            label="Image Micro Batch Size"
+            description="混合训练时单 GPU 图像 micro batch。"
+            errors={errorMap.get(
+              "backend.diffusion_pipe.image_micro_batch_size_per_gpu",
+            )}
+          >
+            <IntInput
+              min={1}
+              value={v.image_micro_batch_size_per_gpu ?? null}
+              onChange={(n) =>
+                set(
+                  ["backend", "diffusion_pipe", "image_micro_batch_size_per_gpu"],
+                  n,
+                )
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="Image Eval Micro Batch Size"
+            description="混合训练评估时单 GPU 图像 micro batch。"
+            errors={errorMap.get(
+              "backend.diffusion_pipe.image_eval_micro_batch_size_per_gpu",
+            )}
+          >
+            <IntInput
+              min={1}
+              value={v.image_eval_micro_batch_size_per_gpu ?? null}
+              onChange={(n) =>
+                set(
+                  [
+                    "backend",
+                    "diffusion_pipe",
+                    "image_eval_micro_batch_size_per_gpu",
+                  ],
+                  n,
+                )
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="Video Clip Mode"
+            description="视频片段抽取策略。"
+          >
+            <EnumSelect
+              value={v.video_clip_mode ?? "single_beginning"}
+              onChange={(s) =>
+                set(["backend", "diffusion_pipe", "video_clip_mode"], s)
+              }
+              options={DP_VIDEO_CLIP_MODE_OPTIONS}
+            />
+          </Row>
+        </SubGroup>
+
+        <SubGroup label="dtype / 时间步采样">
+          <Row label="Transformer dtype">
+            <EnumSelect
+              value={v.transformer_dtype ?? ""}
+              onChange={(s) =>
+                set(
+                  ["backend", "diffusion_pipe", "transformer_dtype"],
+                  s || null,
+                )
+              }
+              options={DP_TRANSFORMER_DTYPE_OPTIONS}
+            />
+          </Row>
+          <Row label="Diffusion model dtype">
+            <EnumSelect
+              value={v.diffusion_model_dtype ?? ""}
+              onChange={(s) =>
+                set(
+                  ["backend", "diffusion_pipe", "diffusion_model_dtype"],
+                  s || null,
+                )
+              }
+              options={DP_DIFFUSION_DTYPE_OPTIONS}
+            />
+          </Row>
+          <Row label="Timestep sample method">
+            <EnumSelect
+              value={v.timestep_sample_method ?? ""}
+              onChange={(s) =>
+                set(
+                  ["backend", "diffusion_pipe", "timestep_sample_method"],
+                  s || null,
+                )
+              }
+              options={DP_TIMESTEP_SAMPLE_OPTIONS}
+            />
+          </Row>
         </SubGroup>
 
         <SubGroup label="评估">
@@ -148,6 +338,32 @@ export const BackendDiffusionPipeFields = memo(
             </div>
           </Row>
           <Row
+            label="每 N 步验证"
+            errors={errorMap.get("backend.diffusion_pipe.eval_every_n_steps")}
+          >
+            <IntInput
+              min={1}
+              value={v.eval_every_n_steps ?? null}
+              onChange={(n) =>
+                set(["backend", "diffusion_pipe", "eval_every_n_steps"], n)
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="每 N 样本验证"
+            errors={errorMap.get("backend.diffusion_pipe.eval_every_n_examples")}
+          >
+            <IntInput
+              min={1}
+              value={v.eval_every_n_examples ?? null}
+              onChange={(n) =>
+                set(["backend", "diffusion_pipe", "eval_every_n_examples"], n)
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
             label="首步前先评估"
             description="第一步训练之前先跑一次评估。"
           >
@@ -174,6 +390,106 @@ export const BackendDiffusionPipeFields = memo(
                   n ?? 1,
                 )
               }
+            />
+          </Row>
+          <Row
+            label="评估梯度累积"
+            description="评估期梯度累积步数（影响 perplexity / loss 平均口径）。"
+            errors={errorMap.get(
+              "backend.diffusion_pipe.eval_gradient_accumulation_steps",
+            )}
+          >
+            <IntInput
+              min={1}
+              value={v.eval_gradient_accumulation_steps ?? 1}
+              onChange={(n) =>
+                set(
+                  [
+                    "backend",
+                    "diffusion_pipe",
+                    "eval_gradient_accumulation_steps",
+                  ],
+                  n ?? 1,
+                )
+              }
+            />
+          </Row>
+          <Row
+            label="Disable Block Swap For Eval"
+            description="评估时跳过 block_swap（评估占用更小）。"
+          >
+            <ToggleSwitch
+              checked={v.disable_block_swap_for_eval ?? false}
+              onCheckedChange={(b) =>
+                set(
+                  ["backend", "diffusion_pipe", "disable_block_swap_for_eval"],
+                  b,
+                )
+              }
+            />
+          </Row>
+          <Row
+            label="Eval Datasets"
+            description="独立评估数据集列表（JSON 数组，每项 {name, config_path}）。"
+            errors={errorMap.get("backend.diffusion_pipe.eval_datasets")}
+          >
+            <textarea
+              value={JSON.stringify(v.eval_datasets ?? [], null, 2)}
+              onChange={(e) => {
+                try {
+                  const parsed = JSON.parse(e.target.value || "[]")
+                  if (Array.isArray(parsed)) {
+                    set(
+                      ["backend", "diffusion_pipe", "eval_datasets"],
+                      parsed,
+                    )
+                  }
+                } catch {
+                  // 用户编辑中途允许 JSON 不合法。
+                }
+              }}
+              rows={4}
+              className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              placeholder={'[{"name": "holdout", "config_path": "./eval.toml"}]'}
+            />
+          </Row>
+        </SubGroup>
+
+        <SubGroup label="DeepSpeed Checkpoint">
+          <Row
+            label="checkpoint_every_n_epochs"
+            errors={errorMap.get(
+              "backend.diffusion_pipe.checkpoint_every_n_epochs",
+            )}
+          >
+            <IntInput
+              min={1}
+              value={v.checkpoint_every_n_epochs ?? null}
+              onChange={(n) =>
+                set(
+                  ["backend", "diffusion_pipe", "checkpoint_every_n_epochs"],
+                  n,
+                )
+              }
+              placeholder="（默认）"
+            />
+          </Row>
+          <Row
+            label="checkpoint_every_n_minutes"
+            errors={errorMap.get(
+              "backend.diffusion_pipe.checkpoint_every_n_minutes",
+            )}
+          >
+            <IntInput
+              min={1}
+              value={v.checkpoint_every_n_minutes ?? null}
+              onChange={(n) =>
+                set(
+                  ["backend", "diffusion_pipe", "checkpoint_every_n_minutes"],
+                  n,
+                )
+              }
+              placeholder="（默认）"
             />
           </Row>
         </SubGroup>

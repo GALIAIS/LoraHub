@@ -59,6 +59,29 @@ export const ValidationFields = memo(function ValidationFields({
           placeholder="（不限）"
         />
       </Row>
+      <Row
+        label="每 N 步验证"
+        description="可选。与 every_n_epochs 互不冲突；留空仅按回合验证。"
+        errors={errorMap.get("validation.every_n_steps")}
+      >
+        <IntInput
+          min={1}
+          value={v.every_n_steps ?? null}
+          onChange={(n) => set(["validation", "every_n_steps"], n)}
+          placeholder="（默认）"
+        />
+      </Row>
+      <Row
+        label="验证 seed"
+        description="可选。固定验证集随机种子。留空使用全局 seed。"
+        errors={errorMap.get("validation.seed")}
+      >
+        <IntInput
+          value={v.seed ?? null}
+          onChange={(n) => set(["validation", "seed"], n)}
+          placeholder="（随机）"
+        />
+      </Row>
     </>
   )
 })

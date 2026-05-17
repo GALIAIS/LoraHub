@@ -118,3 +118,116 @@ export const SAMPLING_ATTENTION_OPTIONS = [
   { value: "flash", label: "flash（FlashAttention 2）" },
   { value: "sageattn", label: "sageattn（INT8 量化前向，仅采样）" },
 ] as const
+
+// FlowMatchConfig.timestep_sampling
+export const FLOW_MATCH_TIMESTEP_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "logit_normal", label: "logit_normal" },
+  { value: "uniform", label: "uniform" },
+  { value: "sigma_uniform", label: "sigma_uniform" },
+  { value: "mode", label: "mode" },
+  { value: "cosmap", label: "cosmap" },
+] as const
+
+export const FLOW_MATCH_PRED_TYPE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "raw", label: "raw" },
+  { value: "additive", label: "additive" },
+  { value: "sigma_scaled", label: "sigma_scaled" },
+] as const
+
+export const FLOW_MATCH_WEIGHTING_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "sigma_sqrt", label: "sigma_sqrt" },
+  { value: "logit_normal", label: "logit_normal" },
+  { value: "mode", label: "mode" },
+  { value: "cosmap", label: "cosmap" },
+  { value: "none", label: "none" },
+] as const
+
+// LossConfig.huber_schedule
+export const HUBER_SCHEDULE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "constant", label: "constant" },
+  { value: "exponential", label: "exponential" },
+  { value: "snr", label: "snr" },
+] as const
+
+// BucketConfig.resize_interpolation
+export const RESIZE_INTERPOLATION_OPTIONS = [
+  { value: "", label: "（默认 / 由训练器决定）" },
+  { value: "lanczos", label: "lanczos" },
+  { value: "bicubic", label: "bicubic" },
+  { value: "bilinear", label: "bilinear" },
+  { value: "box", label: "box" },
+  { value: "nearest", label: "nearest" },
+  { value: "hamming", label: "hamming" },
+] as const
+
+// CaptionConfig.max_token_length
+export const MAX_TOKEN_LENGTH_OPTIONS = [
+  { value: "", label: "（默认 75）" },
+  { value: "75", label: "75" },
+  { value: "150", label: "150" },
+  { value: "225", label: "225" },
+] as const
+
+// NetworkConfig.dtype (LoRA training dtype on dp)
+export const NETWORK_DTYPE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "fp16", label: "fp16" },
+  { value: "bf16", label: "bf16" },
+  { value: "fp32", label: "fp32" },
+] as const
+
+// ArchPathsConfig.t5xxl_dtype
+export const T5_DTYPE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "fp16", label: "fp16" },
+  { value: "bf16", label: "bf16" },
+  { value: "fp32", label: "fp32" },
+  { value: "fp8", label: "fp8" },
+] as const
+
+// DiffusionPipeOptions.transformer_dtype
+export const DP_TRANSFORMER_DTYPE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "bfloat16", label: "bfloat16" },
+  { value: "float16", label: "float16" },
+  { value: "float8_e4m3fn", label: "float8_e4m3fn" },
+  { value: "float8_e5m2", label: "float8_e5m2" },
+] as const
+
+// DiffusionPipeOptions.diffusion_model_dtype
+export const DP_DIFFUSION_DTYPE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "bfloat16", label: "bfloat16" },
+  { value: "float16", label: "float16" },
+  { value: "float8_e4m3fn", label: "float8_e4m3fn" },
+] as const
+
+// DiffusionPipeOptions.timestep_sample_method
+export const DP_TIMESTEP_SAMPLE_OPTIONS = [
+  { value: "", label: "（默认）" },
+  { value: "logit_normal", label: "logit_normal" },
+  { value: "uniform", label: "uniform" },
+] as const
+
+// DiffusionPipeOptions.video_clip_mode
+export const DP_VIDEO_CLIP_MODE_OPTIONS = [
+  { value: "single_beginning", label: "single_beginning" },
+  { value: "single_middle", label: "single_middle" },
+] as const
+
+// Architectures that consume FlowMatchConfig knobs.
+// Anything else → flow_match section is hidden.
+export const FLOW_MATCH_ARCHES: ReadonlySet<string> = new Set([
+  "flux",
+  "flux2",
+  "sd3",
+  "lumina",
+  "anima",
+  "hunyuan_image",
+  "chroma",
+  "qwen_image",
+])
