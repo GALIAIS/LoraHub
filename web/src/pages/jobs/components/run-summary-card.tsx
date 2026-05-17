@@ -40,8 +40,13 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
   )
 
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false
-    return window.localStorage.getItem(COLLAPSED_KEY) === "1"
+    if (typeof window === "undefined") return true
+    const stored = window.localStorage.getItem(COLLAPSED_KEY)
+    // Default to collapsed when nothing's stored yet — most of the
+    // time the user wants to glance at the inline digest and only
+    // expand when something looks off.
+    if (stored === null) return true
+    return stored === "1"
   })
   useEffect(() => {
     if (typeof window === "undefined") return
