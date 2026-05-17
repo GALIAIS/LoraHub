@@ -16,12 +16,16 @@
  * already fetches. Stateless apart from a memoised derive of summary
  * stats.
  */
-import { useMemo } from "react"
-import { ArrowDownRight, Hourglass, Zap } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useEffect, useMemo, useState } from "react"
+import { ArrowDownRight, ChevronDown, Hourglass, Zap } from "lucide-react"
+import { Card, CardContent, CardTitle } from "@/components/ui/card"
 import type { JobDetail, JobMetricsResponse } from "@/lib/api"
 import { fmtDuration } from "../utils"
 import { cn } from "@/lib/utils"
+
+// localStorage key — collapsed state should persist across reloads so
+// the user only flips the toggle once per session.
+const COLLAPSED_KEY = "lorahub.jobs.runSummary.collapsed"
 
 interface Props {
   job: JobDetail | undefined
@@ -34,21 +38,125 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
     () => deriveSummary(job, metrics, fallbackTotalSteps),
     [job, metrics, fallbackTotalSteps],
   )
+
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false
+    return window.localStorage.getItem(COLLAPSED_KEY) === "1"
+  })
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0")
+  }, [collapsed])
+
   if (!summary) return null
 
   return (
     <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
-      <CardHeader className="py-2.5 px-4 border-b border-border/60 bg-muted/40">
-        <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-          训练健康摘要
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="p-3 grid gap-3 grid-cols-1 md:grid-cols-3">
-        <ProgressBlock summary={summary} />
-        <LossBlock summary={summary} />
-        <HparamsBlock summary={summary} />
-      </CardContent>
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+        className={cn(
+          "w-full text-left flex items-center justify-between gap-3",
+          "py-2.5 px-4 bg-muted/40 hover:bg-muted/60 transition-colors",
+          collapsed ? "border-b-0" : "border-b border-border/60",
+        )}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground shrink-0">
+            训练健康摘要
+          </CardTitle>
+          {collapsed && <CollapsedSnapshot summary={summary} />}
+        </div>
+        <ChevronDown
+          className={cn(
+            "size-3.5 text-muted-foreground/80 shrink-0 transition-transform",
+            collapsed ? "-rotate-90" : "rotate-0",
+          )}
+          aria-hidden
+        />
+      </button>
+      {!collapsed && (
+        <CardContent className="p-3 grid gap-3 grid-cols-1 md:grid-cols-3">
+          <ProgressBlock summary={summary} />
+          <LossBlock summary={summary} />
+          <HparamsBlock summary={summary} />
+        </CardContent>
+      )}
     </Card>
+  )
+}
+
+// One-line digest shown inline with the header when the card is
+// collapsed. Picks the four numbers a user is most likely to glance
+// at to decide whether to expand: progress, latest loss, drop %, and
+// convergence trend label.
+function CollapsedSnapshot({ summary }: { summary: Summary }) {
+  const parts: React.ReactNode[] = []
+  if (summary.step != null) {
+    parts.push(
+      <span key="step" className="tabular-nums">
+        {summary.step}
+        {summary.totalSteps != null ? `/${summary.totalSteps}` : ""}
+        {summary.percent != null ? (
+          <span className="text-muted-foreground/70">
+            {" "}
+            ({summary.percent.toFixed(0)}%)
+          </span>
+        ) : null}
+      </span>,
+    )
+  }
+  if (summary.lossLatest != null) {
+    parts.push(
+      <span key="loss" className="tabular-nums">
+        loss {summary.lossLatest.toFixed(4)}
+      </span>,
+    )
+  }
+  if (summary.lossDropPct != null) {
+    parts.push(
+      <span
+        key="drop"
+        className={cn(
+          "tabular-nums",
+          summary.lossDropPct > 0
+            ? "text-emerald-600 dark:text-emerald-400"
+            : "text-amber-700 dark:text-amber-400",
+        )}
+      >
+        {summary.lossDropPct > 0 ? "↓" : "↑"}{" "}
+        {Math.abs(summary.lossDropPct).toFixed(1)}%
+      </span>,
+    )
+  }
+  if (summary.trend !== "unknown") {
+    parts.push(
+      <span key="trend" className={cn("text-[11px]", trendTone(summary.trend))}>
+        {trendLabel(summary.trend)}
+      </span>,
+    )
+  }
+  if (parts.length === 0) {
+    return (
+      <span className="text-[11px] text-muted-foreground/70">
+        等待第一组指标…
+      </span>
+    )
+  }
+  return (
+    <span className="flex items-center gap-3 text-[11px] text-foreground/85 truncate">
+      {parts.map((p, i) => (
+        <span key={i} className="flex items-center gap-3">
+          {p}
+          {i < parts.length - 1 && (
+            <span className="text-border" aria-hidden>
+              ·
+            </span>
+          )}
+        </span>
+      ))}
+    </span>
   )
 }
 
