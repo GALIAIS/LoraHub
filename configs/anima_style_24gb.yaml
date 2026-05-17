@@ -5,14 +5,14 @@
 #   2) Longer schedule with more variety — many images, fewer repeats
 #   3) Higher caption dropout — style should bleed across prompts
 
-schema_version: "1.0"
+schemaVersion: "1.0"
 
-base_model:
+baseModel:
   arch: anima
   checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
 
 dataset:
-  source: ./datasets/my_anime_style
+  source: ./datasets/lx
   resolution: [1024, 1024]
   # Wider AR range than the character recipe — style datasets typically
   # mix portraits, landscapes, full scenes. Bucket step kept at 64 so
@@ -26,13 +26,13 @@ dataset:
     strategy: tag_file
     ext: .txt
     shuffle: true
-    # Heavier drop_rate than character — style should generalise to
+    # Heavier dropRate than character — style should generalise to
     # captions it has never seen, so half the time the model trains
     # against partial tag sets.
-    drop_rate: 0.15
+    dropRate: 0.15
   # Style datasets are usually 50-300 images; 4 repeats keeps total
   # steps reasonable while preserving variety.
-  num_repeats: 4
+  numRepeats: 4
 
 network:
   type: lora
@@ -41,13 +41,13 @@ network:
   # of abstracting the style.
   rank: 16
   alpha: 8
-  target_unet: true
+  targetUnet: true
   # dp/Anima is transformer-only — text encoder LoRA isn't supported.
-  # We compensate via heavier caption shuffle + drop_rate above.
-  target_text_encoder: false
+  # We compensate via heavier caption shuffle + dropRate above.
+  targetTextEncoder: false
   # Stronger dropout than the character recipe: 0.10 prevents the LoRA
   # from over-memorising specific tag combinations.
-  network_dropout: 0.10
+  networkDropout: 0.10
 
 optimizer:
   type: adamw8bit
@@ -56,63 +56,66 @@ optimizer:
     # so the LoRA picks up colour/line/shading patterns rather than
     # specific compositions.
     unet: 8.0e-5
-    text_encoder: 0
+    textEncoder: 0
   schedule: cosine
-  warmup_steps: 100
+  warmupSteps: 100
 
 schedule:
   # Style benefits from more passes over diverse data; 25 epochs *
   # repeats 4 * ~150 imgs / (batch 2 * accum 2) ~ 7500 steps.
   # If your dataset is smaller (50-100 imgs) cut epochs to 18-20.
   epochs: 25
-  batch_size: 2
-  grad_accum: 2
-  max_steps: null
+  batchSize: 2
+  gradAccum: 2
+  maxSteps: null
 
 precision: bf16
-gradient_checkpointing: true
-cache_latents: true
+gradientCheckpointing: true
+cacheLatents: true
 
 optimization:
-  full_bf16: true
+  fullBf16: true
   # Adjust per-card: 0 (4090) / 4 (3080-16GB) / 8 (3070-12GB).
-  blocks_to_swap: 0
-  torch_compile: false
-  fused_backward_pass: false
+  blocksToSwap: 0
+  torchCompile: false
+  fusedBackwardPass: false
 
 sampling:
   enabled: true
   # Style runs are long; sample every 5 epochs to check direction
   # without wasting time on previews.
-  every_n_epochs: 5
+  everyNEpochs: 5
   resolution: [1024, 1024]
   seed: 42
 
 output:
-  name: my_anime_style_anima_lora
+  name: lx_anima_style_lora
   # Save every 5 epochs gives 5 checkpoint candidates over the run;
   # pick by sample quality, not final loss.
-  save_every_n_epochs: 5
-  save_dtype: bf16
+  saveEveryNEpochs: 5
+  saveDtype: bf16
 
 backend:
   type: diffusion-pipe
-  diffusion_pipe:
-    pipeline_stages: 1
-    gradient_clipping: 1.0
-    caching_batch_size: 4
-    steps_per_print: 10
+  diffusionPipe:
+    pipelineStages: 1
+    gradientClipping: 1.0
+    cachingBatchSize: 4
+    stepsPerPrint: 10
     compile: true
     # Style datasets often span more aspect ratios than character ones;
     # 11 buckets keeps the per-bucket sample count reasonable.
-    min_ar: 0.4
-    max_ar: 2.5
-    num_ar_buckets: 11
+    minAr: 0.4
+    maxAr: 2.5
+    numArBuckets: 11
     # Random shuffle of cached latents helps the optimiser see varied
     # styles each step instead of clustering by aspect ratio.
-    cache_shuffle_num: 256
-    skip_empty_caption: true
-    model_paths:
+    cacheShuffleNum: 256
+    skipEmptyCaption: true
+    # NOTE: keys inside `modelPaths` are written verbatim to the diffusion-pipe
+    # TOML, so they keep upstream's literal snake_case names (transformer_path
+    # / vae_path / llm_path). Don't camelCase these or dp won't recognise them.
+    modelPaths:
       transformer_path: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
       vae_path: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
       llm_path: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors

@@ -15,10 +15,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.alias_generators import to_camel
+
+
+# Shared model_config: every YAML field is accepted both in its Python
+# snake_case form and in camelCase (the canonical wire form going forward).
+# `populate_by_name=True` keeps existing recipes valid; `extra="forbid"` is
+# applied per-model where appropriate.
+_CAMEL_CONFIG = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
 class BaseModelConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     # The arch literal mirrors the union of upstream-supported model families
     # across kohya sd-scripts and diffusion-pipe. Backends are responsible for
     # rejecting arches they do not implement (kohya rejects dp-only entries
@@ -74,6 +84,8 @@ class ArchPathsConfig(BaseModel):
     Both compilers consume the same fields and emit them under the names
     the corresponding upstream expects (kohya argv, dp TOML keys).
     """
+
+    model_config = _CAMEL_CONFIG
 
     # FLUX / SD3 / FLUX2
     clip_l: Path | None = None
@@ -141,10 +153,15 @@ class BucketConfig(BaseModel):
     # Each entry is a width/height ratio; only consumed by the dp compiler.
     ar_buckets: list[float] | None = None
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
 
 
 class CaptionConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     strategy: Literal["tag_file", "filename", "none"] = "tag_file"
     ext: str = ".txt"
     shuffle: bool = True
@@ -184,6 +201,8 @@ class DatasetSubsetConfig(BaseModel):
     """One [[directory]] entry on the dp side; kohya squashes these into
     `--train_data_dir` semantics via per-subset toml."""
 
+    model_config = _CAMEL_CONFIG
+
     path: Path
     num_repeats: int = Field(1, ge=1)
     # Optional mask directory, mirrors the image dir layout.
@@ -195,6 +214,8 @@ class DatasetSubsetConfig(BaseModel):
 
 
 class DatasetConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     source: Path
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
     bucket: BucketConfig = Field(default_factory=lambda: BucketConfig())
@@ -234,6 +255,8 @@ class PerModuleLRConfig(BaseModel):
     the global unet LR".
     """
 
+    model_config = _CAMEL_CONFIG
+
     llm_adapter: float | None = Field(default=None, gt=0)
     self_attn: float | None = Field(default=None, gt=0)
     cross_attn: float | None = Field(default=None, gt=0)
@@ -242,6 +265,8 @@ class PerModuleLRConfig(BaseModel):
 
 
 class NetworkConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     type: Literal["lora", "locon", "loha", "dora"] = "lora"
     rank: int = Field(32, ge=1, le=512)
     alpha: int = Field(16, ge=1)
@@ -304,6 +329,8 @@ class NetworkConfig(BaseModel):
 
 
 class LRConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     unet: float = 1.0e-4
     text_encoder: float = 5.0e-5
 
@@ -317,6 +344,8 @@ class OptimizerConfig(BaseModel):
     `optimizer_args` keys win over the dedicated `betas`/`weight_decay`/`eps`
     when names collide on the kohya `--optimizer_args` line.
     """
+
+    model_config = _CAMEL_CONFIG
 
     type: str = "adamw8bit"
     lr: LRConfig = Field(default_factory=lambda: LRConfig())
@@ -354,6 +383,8 @@ class LossConfig(BaseModel):
     knobs live on `FlowMatchConfig`.
     """
 
+    model_config = _CAMEL_CONFIG
+
     min_snr_gamma: float | None = Field(default=None, gt=0)
     noise_offset: float = Field(0.0, ge=0)
     noise_offset_random_strength: bool = False
@@ -387,6 +418,8 @@ class FlowMatchConfig(BaseModel):
     None values mean "use the trainer's default for the chosen arch".
     """
 
+    model_config = _CAMEL_CONFIG
+
     # logit_normal / uniform / sigma_uniform / mode / cosmap. kohya/dp arch-specific.
     timestep_sampling: Literal[
         "logit_normal", "uniform", "sigma_uniform", "mode", "cosmap"
@@ -407,6 +440,8 @@ class FlowMatchConfig(BaseModel):
 
 
 class ScheduleConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     epochs: int = Field(10, ge=1)
     batch_size: int = Field(1, ge=1)
     grad_accum: int = Field(2, ge=1)
@@ -418,6 +453,8 @@ class ScheduleConfig(BaseModel):
 
 
 class SamplingConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     enabled: bool = True
     every_n_epochs: int = Field(1, ge=1)
     # Step-level sampling cadence (kohya: --sample_every_n_steps).
@@ -448,6 +485,8 @@ class AttentionConfig(BaseModel):
     when the host can't run the chosen kernel.
     """
 
+    model_config = _CAMEL_CONFIG
+
     training: Literal[
         "auto",     # pick the best available kernel for this GPU
         "torch",    # naive torch attention — debugging only
@@ -471,6 +510,8 @@ class DataLoaderConfig(BaseModel):
     map_num_proc.
     """
 
+    model_config = _CAMEL_CONFIG
+
     num_workers: int = Field(8, ge=0)
     persistent_workers: bool = False
     vae_batch_size: int = Field(1, ge=1)
@@ -481,6 +522,8 @@ class DataLoaderConfig(BaseModel):
 
 class AugmentationConfig(BaseModel):
     """Image augmentation (kohya only). dp doesn't currently consume any of these."""
+
+    model_config = _CAMEL_CONFIG
 
     flip: bool = False
     color: bool = False
@@ -498,6 +541,8 @@ class OptimizationConfig(BaseModel):
     compilers already know how to emit. Defaults match upstream defaults
     so existing recipes keep producing identical commands.
     """
+
+    model_config = _CAMEL_CONFIG
 
     # PyTorch 2 graph compilation. kohya: --torch_compile. dp:
     # `pipeline_model.compile(dynamic=True)` is currently unconditional
@@ -546,6 +591,8 @@ class OptimizationConfig(BaseModel):
 
 
 class OutputConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     name: str = "lora_output"
     save_every_n_epochs: int = Field(1, ge=1)
     # Step-level save cadence (kohya / dp).
@@ -571,6 +618,8 @@ class DiffusionPipeOptions(BaseModel):
     remains here is genuinely dp-only or doesn't make sense to expose
     cross-backend.
     """
+
+    model_config = _CAMEL_CONFIG
 
     # ---- Top-level [general] knobs ----
     pipeline_stages: int = Field(1, ge=1)
@@ -639,6 +688,8 @@ class DiffusionPipeOptions(BaseModel):
 
 
 class BackendConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
     type: Literal["kohya", "diffusion-pipe"] = "kohya"
     pin_version: str | None = None
     sd_scripts_path: Path | None = None
@@ -657,6 +708,8 @@ class ResumeConfig(BaseModel):
     interrupted one left off. State directories are large; use
     `save_state_every_n_epochs` to throttle writes if disk is tight.
     """
+
+    model_config = _CAMEL_CONFIG
 
     save_state: bool = True
     save_state_at_end: bool = True
@@ -680,6 +733,8 @@ class ValidationConfig(BaseModel):
     validation steps sd-scripts will run per evaluation pass — handy when
     the held-out split is large and you only want a quick signal.
     """
+
+    model_config = _CAMEL_CONFIG
 
     every_n_epochs: int = Field(1, ge=1)
     every_n_steps: int | None = Field(default=None, ge=1)
@@ -715,7 +770,11 @@ class TrainingConfig(BaseModel):
     dataloader: DataLoaderConfig = Field(default_factory=lambda: DataLoaderConfig())
     augmentation: AugmentationConfig = Field(default_factory=lambda: AugmentationConfig())
 
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )
 
     @model_validator(mode="after")
     def _validate_arch_variant(self) -> TrainingConfig:

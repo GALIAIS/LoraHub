@@ -2,14 +2,14 @@
 # Backend: diffusion-pipe (Anima = Qwen-Image-style stack: Anima transformer
 # + Qwen-Image VAE + Qwen3-0.6B text encoder).
 # Optimised for 20-50 character training images on RTX 4090 / 24GB.
-# Trade-offs documented below; tweak `blocks_to_swap` for tighter VRAM.
+# Trade-offs documented below; tweak `blocksToSwap` for tighter VRAM.
 
-schema_version: "1.0"
+schemaVersion: "1.0"
 
-base_model:
+baseModel:
   arch: anima
   # The "checkpoint" anchor only marks the model identity for the UI;
-  # actual per-component paths live under backend.diffusion_pipe.model_paths.
+  # actual per-component paths live under backend.diffusionPipe.modelPaths.
   checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
 
 dataset:
@@ -30,10 +30,10 @@ dataset:
     # Aggressive caption shuffle + small drop helps a small character set
     # generalise to new poses/outfits without memorising tag order.
     shuffle: true
-    drop_rate: 0.05
+    dropRate: 0.05
   # 8 is the empirical sweet spot on Anima for ~30 image character sets;
   # 10+ tends to cement training-pose artefacts.
-  num_repeats: 8
+  numRepeats: 8
 
 network:
   type: lora
@@ -42,78 +42,81 @@ network:
   # default scaling.
   rank: 32
   alpha: 16
-  target_unet: true
+  targetUnet: true
   # Anima/Qwen-Image LoRA training in dp is transformer-only; the Qwen3
   # text encoder is not trainable from this backend so we leave it off.
-  target_text_encoder: false
+  targetTextEncoder: false
   # Light network dropout: small character sets overfit fast; 0.05 buys
   # better generalisation with negligible VRAM cost.
-  network_dropout: 0.05
+  networkDropout: 0.05
 
 optimizer:
   type: adamw8bit
   lr:
     unet: 5.0e-5
-    text_encoder: 0
+    textEncoder: 0
   # Cosine decay (no restarts on dp) is the safe default for short runs.
   schedule: cosine
-  warmup_steps: 50
+  warmupSteps: 50
 
 schedule:
-  # 12 epochs * num_repeats 8 * 30 imgs / (batch 2 * accum 2) ~ 720 steps;
+  # 12 epochs * numRepeats 8 * 30 imgs / (batch 2 * accum 2) ~ 720 steps;
   # cosine lands the LR within ~5% of zero at the end.
   epochs: 12
-  batch_size: 2
-  grad_accum: 2
-  max_steps: null
+  batchSize: 2
+  gradAccum: 2
+  maxSteps: null
 
 precision: bf16
-gradient_checkpointing: true
-cache_latents: true
+gradientCheckpointing: true
+cacheLatents: true
 
 # Memory + speed knobs (lorahub OptimizationConfig)
 optimization:
-  # full_bf16 halves optimiser state memory; combined with adamw8bit the
+  # fullBf16 halves optimiser state memory; combined with adamw8bit the
   # optimiser footprint is negligible.
-  full_bf16: true
+  fullBf16: true
   # 0 on a 4090; bump to 4-8 on 16GB cards (3070/3080) for VRAM safety.
-  blocks_to_swap: 0
-  # torch_compile is a kohya knob; dp auto-compiles its pipeline already.
-  # fused_backward_pass also kohya-only.
-  torch_compile: false
-  fused_backward_pass: false
+  blocksToSwap: 0
+  # torchCompile is a kohya knob; dp auto-compiles its pipeline already.
+  # fusedBackwardPass also kohya-only.
+  torchCompile: false
+  fusedBackwardPass: false
 
 # Sample previews every 3 epochs so you can early-stop a bad run.
 sampling:
   enabled: true
-  every_n_epochs: 3
+  everyNEpochs: 3
   resolution: [1024, 1024]
   seed: 42
 
 output:
   name: azurlane_char0_anima_lora
-  save_every_n_epochs: 3
-  save_dtype: bf16
+  saveEveryNEpochs: 3
+  saveDtype: bf16
 
 backend:
   type: diffusion-pipe
-  diffusion_pipe:
-    pipeline_stages: 1
-    gradient_clipping: 1.0
-    # caching_batch_size 4 speeds up the one-time latent precompute pass
+  diffusionPipe:
+    pipelineStages: 1
+    gradientClipping: 1.0
+    # cachingBatchSize 4 speeds up the one-time latent precompute pass
     # ~3-4x vs the default 1 with no quality cost.
-    caching_batch_size: 4
-    steps_per_print: 5
+    cachingBatchSize: 4
+    stepsPerPrint: 5
     # compile=true builds a torch.compile graph for the dp pipeline; first
     # epoch is ~30s slower, subsequent epochs run 8-12% faster.
     compile: true
     # Aspect-ratio bucketing widened to 0.4-2.5 so portrait/landscape
     # character art trains without crops.
-    min_ar: 0.4
-    max_ar: 2.5
-    num_ar_buckets: 9
-    skip_empty_caption: true
-    model_paths:
+    minAr: 0.4
+    maxAr: 2.5
+    numArBuckets: 9
+    skipEmptyCaption: true
+    # NOTE: keys inside `modelPaths` are written verbatim to the diffusion-pipe
+    # TOML, so they keep upstream's literal snake_case names. Don't camelCase
+    # these or dp won't recognise them.
+    modelPaths:
       transformer_path: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
       vae_path: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
       llm_path: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
