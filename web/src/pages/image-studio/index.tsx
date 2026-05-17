@@ -21,7 +21,6 @@ import {
 import {
   datasetList,
   datasetCreate,
-  datasetUpload,
   imageStudioList,
   imageStudioGetImage,
   imageStudioSaveAnnotation,
@@ -519,7 +518,9 @@ function UploadDropZone({
 }) {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState<{ index: number; total: number; file: string } | null>(null)
+  const [phase, setPhase] = useState<"upload" | "extract" | "done">("upload")
+  const [uploadPercent, setUploadPercent] = useState(0)
+  const [extractProgress, setExtractProgress] = useState<{ index: number; total: number; file: string } | null>(null)
   const [result, setResult] = useState<{ total: number; errors: string[] } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -527,28 +528,61 @@ function UploadDropZone({
     const files = Array.from(fileList)
     if (files.length === 0) return
     setUploading(true)
-    setProgress(null)
+    setPhase("upload")
+    setUploadPercent(0)
+    setExtractProgress(null)
     setResult(null)
 
-    const { eventSource } = datasetUpload(datasetName, files)
-    const reader = eventSource.getReader()
+    const formData = new FormData()
+    for (const f of files) formData.append("files", f)
+    formData.append("keepCaptions", "true")
+    formData.append("onConflict", "rename")
 
-    const read = async () => {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value.event === "progress") {
-          const d = value.data as { index: number; total: number; file: string; status: string }
-          setProgress({ index: d.index, total: d.total, file: d.file })
-        } else if (value.event === "complete") {
-          const d = value.data as { totalExtracted: number; errors: string[] }
-          setResult({ total: d.totalExtracted, errors: d.errors })
-          setUploading(false)
-          onComplete()
+    const xhr = new XMLHttpRequest()
+    xhr.open("POST", `/api/image-studio/datasets/${encodeURIComponent(datasetName)}/upload`)
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        setUploadPercent(Math.round((e.loaded / e.total) * 100))
+      }
+    }
+
+    xhr.upload.onload = () => {
+      setPhase("extract")
+      setUploadPercent(100)
+    }
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState === XMLHttpRequest.LOADING || xhr.readyState === XMLHttpRequest.DONE) {
+        const text = xhr.responseText
+        const lines = text.split("\n")
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            // handled by next data line
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.status === "processing" || data.status === "done") {
+                setExtractProgress({ index: data.index ?? 0, total: data.total ?? 1, file: data.file ?? "" })
+              }
+              if (data.totalExtracted !== undefined) {
+                setPhase("done")
+                setResult({ total: data.totalExtracted, errors: data.errors || [] })
+                setUploading(false)
+                onComplete()
+              }
+            } catch { /* skip */ }
+          }
         }
       }
     }
-    read()
+
+    xhr.onerror = () => {
+      setUploading(false)
+      setResult({ total: 0, errors: ["上传失败，请检查网络连接"] })
+    }
+
+    xhr.send(formData)
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -559,6 +593,12 @@ function UploadDropZone({
     }
   }
 
+  const percent = phase === "upload"
+    ? uploadPercent
+    : phase === "extract" && extractProgress
+      ? Math.round((extractProgress.index / extractProgress.total) * 100)
+      : 100
+
   return (
     <div
       onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
@@ -568,20 +608,25 @@ function UploadDropZone({
         dragging
           ? "border-primary bg-primary/5"
           : "border-muted-foreground/20 hover:border-muted-foreground/40"
-      } ${uploading ? "pointer-events-none opacity-70" : ""}`}
+      }`}
     >
       <div className="flex items-center justify-center gap-3 px-4 py-3">
         <Upload className="size-4 text-muted-foreground" />
-        {uploading && progress ? (
+        {uploading ? (
           <div className="flex-1">
             <div className="flex items-center justify-between text-xs mb-1">
-              <span className="truncate max-w-[200px]">{progress.file}</span>
-              <span className="text-muted-foreground">{progress.index}/{progress.total}</span>
+              <span className="truncate max-w-[240px]">
+                {phase === "upload" && `上传中... ${uploadPercent}%`}
+                {phase === "extract" && (extractProgress ? `解压: ${extractProgress.file}` : "解压中...")}
+              </span>
+              <span className="text-muted-foreground">
+                {phase === "extract" && extractProgress && `${extractProgress.index}/${extractProgress.total}`}
+              </span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
               <div
-                className="h-full rounded-full bg-primary transition-all"
-                style={{ width: `${(progress.index / progress.total) * 100}%` }}
+                className="h-full rounded-full bg-primary transition-all duration-300"
+                style={{ width: `${percent}%` }}
               />
             </div>
           </div>
