@@ -139,6 +139,7 @@ export interface ConfigFormValue {
     fused_backward_pass?: boolean
     full_bf16?: boolean
     blocks_to_swap?: number
+  }
   attention?: {
     training?: string
     split?: boolean
