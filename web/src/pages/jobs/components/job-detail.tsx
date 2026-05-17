@@ -25,6 +25,7 @@ import { EventsTab } from "./events-tab"
 import { MetricsTab } from "./metrics-tab"
 import { AnalysisTab } from "./analysis-tab"
 import { FilesTab } from "./files-tab"
+import { RunSummaryCard } from "./run-summary-card"
 import { CompareTab } from "./compare-tab"
 
 type TabKey = "overview" | "events" | "metrics" | "analysis" | "files" | "compare"
@@ -46,6 +47,19 @@ export function JobDetail({
     queryKey: ["job", jobId],
     queryFn: () => api.getJob(jobId),
     refetchInterval: 2000,
+  })
+  // Drive the run-summary card on the job detail header. Mirrors the
+  // refresh cadence of the metrics tab — short while running, off when
+  // the job has reached a terminal state.
+  const summaryMetrics = useQuery({
+    queryKey: ["job-metrics", jobId],
+    queryFn: () => api.getJobMetrics(jobId),
+    refetchInterval: () => {
+      const j = job.data
+      const terminal = j ? TERMINAL_STATES.has(j.state) : false
+      if (terminal) return false
+      return 4000
+    },
   })
   const stream = useJobStream(jobId)
   const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill">(null)
@@ -238,6 +252,14 @@ export function JobDetail({
           )}
         </div>
       </header>
+
+      <div className="px-7 pt-4">
+        <RunSummaryCard
+          job={data}
+          metrics={summaryMetrics.data}
+          fallbackTotalSteps={fallbackTotalSteps}
+        />
+      </div>
 
       <Tabs
         value={tab}

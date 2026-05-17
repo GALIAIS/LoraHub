@@ -148,7 +148,7 @@ export function JobsPage() {
       className={cn(
         "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
         sidebarOpen
-          ? "grid-cols-[minmax(360px,420px)_1fr]"
+          ? "grid-cols-[minmax(280px,340px)_1fr]"
           : "grid-cols-[0px_1fr]",
       )}
     >

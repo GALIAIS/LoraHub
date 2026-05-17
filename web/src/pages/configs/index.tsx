@@ -143,7 +143,7 @@ export function ConfigsPage() {
       className={cn(
         "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
         sidebarOpen
-          ? "grid-cols-[minmax(320px,380px)_1fr]"
+          ? "grid-cols-[minmax(240px,300px)_1fr]"
           : "grid-cols-[0px_1fr]",
       )}
     >
