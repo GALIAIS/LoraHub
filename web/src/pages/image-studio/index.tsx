@@ -121,7 +121,7 @@ function ImageStudioPage() {
           type="button"
           onClick={() => navigate("")}
           className="rounded p-1 hover:bg-muted"
-          title="Change folder"
+          title="切换文件夹"
         >
           <FolderOpen className="size-4" />
         </button>
@@ -130,7 +130,7 @@ function ImageStudioPage() {
         </span>
         {data && (
           <span className="text-xs text-muted-foreground">
-            {data.total} images
+            {data.total} 张图片
           </span>
         )}
         <SortSelect value={sort} onChange={(s) => {
@@ -145,14 +145,14 @@ function ImageStudioPage() {
             onClick={() => { const n = new URLSearchParams(params); n.set("view", "grid"); setParams(n) }}
             className={`px-2 py-1 ${view === "grid" ? "bg-muted font-medium" : ""}`}
           >
-            Grid
+            网格
           </button>
           <button
             type="button"
             onClick={() => { const n = new URLSearchParams(params); n.set("view", "duplicates"); setParams(n) }}
             className={`px-2 py-1 ${view === "duplicates" ? "bg-muted font-medium" : ""}`}
           >
-            Duplicates
+            去重
           </button>
         </div>
         <label className="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -168,13 +168,13 @@ function ImageStudioPage() {
             }}
             className="size-3"
           />
-          Recursive
+          递归
         </label>
         <button
           type="button"
           onClick={() => setShowHelp(true)}
           className="rounded p-1 text-muted-foreground hover:bg-muted"
-          title="Keyboard shortcuts (?)"
+          title="键盘快捷键 (?)"
         >
           <HelpCircle className="size-4" />
         </button>
@@ -192,12 +192,12 @@ function ImageStudioPage() {
         <div className="flex-1 overflow-y-auto p-3">
           {listQuery.isLoading && (
             <div className="flex items-center justify-center h-32 text-muted-foreground">
-              Loading...
+              加载中...
             </div>
           )}
           {data && data.items.length === 0 && (
             <div className="flex items-center justify-center h-32 text-muted-foreground">
-              No images found in this directory.
+              该目录下未找到图片
             </div>
           )}
           {data && data.items.length > 0 && (
@@ -295,7 +295,7 @@ function DuplicatesView({ path, recursive }: { path: string; recursive: boolean 
           disabled={scanMutation.isPending}
           className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
         >
-          {scanMutation.isPending ? "Scanning..." : "Scan for duplicates"}
+          {scanMutation.isPending ? "扫描中..." : "扫描重复图片"}
         </button>
         {clusters.length > 0 && (
           <>
@@ -304,10 +304,10 @@ function DuplicatesView({ path, recursive }: { path: string; recursive: boolean 
               onClick={selectAllSuggested}
               className="rounded border px-2 py-1 text-xs hover:bg-muted"
             >
-              Select all suggested
+              全选建议删除
             </button>
             <span className="text-xs text-muted-foreground">
-              {clusters.length} clusters, {selectedPaths.size} selected
+              {clusters.length} 个聚类, 已选 {selectedPaths.size} 张
             </span>
             {selectedPaths.size > 0 && (
               <button
@@ -316,7 +316,7 @@ function DuplicatesView({ path, recursive }: { path: string; recursive: boolean 
                 disabled={deleteMutation.isPending}
                 className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground disabled:opacity-50"
               >
-                Delete selected ({selectedPaths.size})
+                删除选中 ({selectedPaths.size})
               </button>
             )}
           </>
@@ -324,12 +324,12 @@ function DuplicatesView({ path, recursive }: { path: string; recursive: boolean 
       </div>
 
       {clustersQuery.isLoading && (
-        <p className="text-sm text-muted-foreground">Loading clusters...</p>
+        <p className="text-sm text-muted-foreground">加载聚类中...</p>
       )}
 
       {clusters.length === 0 && !clustersQuery.isLoading && (
         <p className="text-sm text-muted-foreground">
-          No duplicate clusters found. Click "Scan for duplicates" to analyze images.
+          未发现重复聚类。点击"扫描重复图片"开始分析。
         </p>
       )}
 
@@ -365,7 +365,7 @@ function ClusterCard({
       >
         <span className="font-medium">{cluster.id}</span>
         <span className="text-xs text-muted-foreground">
-          {cluster.members.length} images
+          {cluster.members.length} 张图片
         </span>
         <span className="ml-auto text-xs">{expanded ? "▼" : "▶"}</span>
       </button>
@@ -401,7 +401,7 @@ function ClusterCard({
                 </div>
                 {isKeep && (
                   <div className="absolute right-1 top-1 rounded bg-green-600/80 px-1 py-0.5 text-[9px] font-medium text-white">
-                    Keep
+                    保留
                   </div>
                 )}
               </div>
@@ -425,9 +425,9 @@ function PathPrompt({
   return (
     <div className="flex h-full items-center justify-center p-8">
       <div className="flex w-full max-w-lg flex-col gap-4">
-        <h1 className="text-lg font-semibold">Image Studio</h1>
+        <h1 className="text-lg font-semibold">图像工作台</h1>
         <p className="text-sm text-muted-foreground">
-          Enter a dataset folder path to begin working on your training images.
+          输入数据集文件夹路径，开始处理训练图片。
         </p>
         <form
           onSubmit={(e) => {
@@ -440,7 +440,7 @@ function PathPrompt({
             type="text"
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="/path/to/dataset"
+            placeholder="数据集路径，如 /path/to/dataset"
             className="flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
           />
           <button
@@ -448,7 +448,7 @@ function PathPrompt({
             disabled={!value.trim()}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            Open
+            打开
           </button>
         </form>
       </div>
@@ -494,7 +494,7 @@ function ImageTile({
       </div>
       {!item.captionExists && (
         <div className="absolute right-1 top-1 rounded bg-amber-500/80 px-1 py-0.5 text-[9px] font-medium text-white">
-          No caption
+          无描述
         </div>
       )}
     </button>
@@ -564,7 +564,7 @@ function Inspector({
         </button>
       </div>
 
-      {loading && <p className="text-xs text-muted-foreground">Loading...</p>}
+      {loading && <p className="text-xs text-muted-foreground">加载中...</p>}
 
       {detail && (
         <div className="flex flex-col gap-3">
@@ -579,11 +579,11 @@ function Inspector({
 
           {/* Meta */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <span className="text-muted-foreground">Size</span>
+            <span className="text-muted-foreground">文件大小</span>
             <span>{formatBytes(detail.bytes)}</span>
             {detail.width && detail.height && (
               <>
-                <span className="text-muted-foreground">Dimensions</span>
+                <span className="text-muted-foreground">尺寸</span>
                 <span>{detail.width} x {detail.height}</span>
               </>
             )}
@@ -592,7 +592,7 @@ function Inspector({
           {/* Caption */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium">Caption</span>
+              <span className="text-xs font-medium">描述</span>
               {!editingCaption && (
                 <button
                   type="button"
@@ -617,14 +617,14 @@ function Inspector({
                     onClick={saveCaption}
                     className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-xs text-primary-foreground"
                   >
-                    <Save className="size-3" /> Save
+                    <Save className="size-3" /> 保存
                   </button>
                   <button
                     type="button"
                     onClick={() => setEditingCaption(false)}
                     className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
                   >
-                    <X className="size-3" /> Cancel
+                    <X className="size-3" /> 取消
                   </button>
                 </div>
               </div>
@@ -633,7 +633,7 @@ function Inspector({
                 {detail.caption}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground italic">No caption file</p>
+              <p className="text-xs text-muted-foreground italic">无描述文件</p>
             )}
           </div>
 
@@ -642,7 +642,7 @@ function Inspector({
             <div className="flex items-center gap-2">
               <Star className="size-3.5 text-amber-500" />
               <span className="text-xs">
-                Quality: {detail.annotation.aiQualityLabel}
+                质量: {detail.annotation.aiQualityLabel}
                 {detail.annotation.aiQualityScore != null &&
                   ` (${(detail.annotation.aiQualityScore * 100).toFixed(0)}%)`}
               </span>
@@ -661,28 +661,28 @@ function Inspector({
               }`}
             >
               <Heart className="size-3" />
-              {detail.annotation?.favorite ? "Unfav" : "Fav"}
+              {detail.annotation?.favorite ? "取消收藏" : "收藏"}
             </button>
             <button
               type="button"
               onClick={() => addOpMutation.mutate({ op: "rotate", payload: { degrees: 90 } })}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
             >
-              <RotateCw className="size-3" /> Rotate
+              <RotateCw className="size-3" /> 旋转
             </button>
             <button
               type="button"
               onClick={() => addOpMutation.mutate({ op: "flip", payload: { direction: "horizontal" } })}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-muted"
             >
-              <FlipHorizontal className="size-3" /> Flip
+              <FlipHorizontal className="size-3" /> 翻转
             </button>
             <button
               type="button"
               onClick={() => addOpMutation.mutate({ op: "delete", payload: {} })}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
             >
-              <Trash2 className="size-3" /> Delete
+              <Trash2 className="size-3" /> 删除
             </button>
           </div>
 
@@ -691,7 +691,7 @@ function Inspector({
             <div className="flex flex-col gap-1.5 pt-2 border-t">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium">
-                  Pending ({detail.pendingOps.length})
+                  待处理 ({detail.pendingOps.length})
                 </span>
                 <button
                   type="button"
@@ -699,7 +699,7 @@ function Inspector({
                   disabled={applyMutation.isPending}
                   className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground disabled:opacity-50"
                 >
-                  Apply all
+                  全部应用
                 </button>
               </div>
               {detail.pendingOps.map((op) => (
@@ -739,9 +739,9 @@ function SortSelect({
       onChange={(e) => onChange(e.target.value)}
       className="rounded border bg-background px-2 py-1 text-xs outline-none"
     >
-      <option value="name">Name</option>
-      <option value="mtime">Modified</option>
-      <option value="size">Size</option>
+      <option value="name">名称</option>
+      <option value="mtime">修改时间</option>
+      <option value="size">大小</option>
     </select>
   )
 }
@@ -763,7 +763,7 @@ function Pagination({
         onClick={() => onChange(page - 1)}
         className="rounded border px-2 py-1 text-xs disabled:opacity-40"
       >
-        Prev
+        上一页
       </button>
       <span className="text-xs text-muted-foreground">
         {page} / {total}
@@ -774,7 +774,7 @@ function Pagination({
         onClick={() => onChange(page + 1)}
         className="rounded border px-2 py-1 text-xs disabled:opacity-40"
       >
-        Next
+        下一页
       </button>
     </div>
   )
@@ -782,9 +782,9 @@ function Pagination({
 
 function HelpOverlay({ onClose }: { onClose: () => void }) {
   const shortcuts = [
-    { key: "j / k", desc: "Navigate down / up in grid" },
-    { key: "Escape", desc: "Close inspector / help" },
-    { key: "?", desc: "Toggle this help" },
+    { key: "j / k", desc: "在网格中向下/向上导航" },
+    { key: "Escape", desc: "关闭检查器/帮助" },
+    { key: "?", desc: "切换帮助面板" },
   ]
 
   return (
@@ -797,7 +797,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold">Keyboard Shortcuts</h3>
+          <h3 className="text-sm font-semibold">键盘快捷键</h3>
           <button type="button" onClick={onClose} className="rounded p-1 hover:bg-muted">
             <X className="size-4" />
           </button>
