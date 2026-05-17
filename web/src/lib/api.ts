@@ -1553,3 +1553,149 @@ export async function imageStudioBatchDelete(body: {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
   return r.json()
 }
+
+// --------------------------------------------------------------------------- //
+// Dataset management
+// --------------------------------------------------------------------------- //
+
+export interface DatasetInfo {
+  name: string
+  path: string
+  imageCount: number
+  coverPath: string | null
+  coverUrl: string | null
+  meta: {
+    name?: string
+    description?: string
+    targetResolution?: string
+    triggerWord?: string
+  }
+}
+
+export interface DatasetListResponse {
+  root: string
+  datasets: DatasetInfo[]
+}
+
+export async function datasetList(): Promise<DatasetListResponse> {
+  const r = await fetch(`${API_BASE}/image-studio/datasets`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function datasetCreate(body: {
+  name: string
+  description?: string
+  targetResolution?: string
+  triggerWord?: string
+}): Promise<{ ok: boolean; path: string; meta: Record<string, string> }> {
+  const r = await fetch(`${API_BASE}/image-studio/datasets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function datasetGetMeta(name: string): Promise<Record<string, string>> {
+  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}/meta`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function datasetUpdateMeta(
+  name: string,
+  body: { description?: string; targetResolution?: string; triggerWord?: string },
+): Promise<{ ok: boolean; meta: Record<string, string> }> {
+  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}/meta`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function datasetDelete(name: string): Promise<{ ok: boolean }> {
+  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export interface UploadProgressEvent {
+  file: string
+  index: number
+  total: number
+  status: string
+}
+
+export interface UploadCompleteEvent {
+  totalExtracted: number
+  errors: string[]
+}
+
+export function datasetUpload(
+  name: string,
+  files: File[],
+  opts: { keepCaptions?: boolean; onConflict?: string } = {},
+): {
+  eventSource: ReadableStream<{ event: string; data: unknown }>
+  abort: () => void
+} {
+  const formData = new FormData()
+  for (const f of files) {
+    formData.append("files", f)
+  }
+  formData.append("keepCaptions", String(opts.keepCaptions ?? true))
+  formData.append("onConflict", opts.onConflict ?? "rename")
+
+  const controller = new AbortController()
+
+  const stream = new ReadableStream<{ event: string; data: unknown }>({
+    async start(ctrl) {
+      try {
+        const r = await fetch(
+          `${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}/upload`,
+          { method: "POST", body: formData, signal: controller.signal },
+        )
+        if (!r.ok || !r.body) {
+          ctrl.enqueue({ event: "error", data: { message: `upload failed: ${r.status}` } })
+          ctrl.close()
+          return
+        }
+        const reader = r.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split("\n")
+          buffer = lines.pop() || ""
+          let currentEvent = ""
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim()
+            } else if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                ctrl.enqueue({ event: currentEvent, data })
+              } catch { /* skip malformed */ }
+            }
+          }
+        }
+        ctrl.close()
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") {
+          ctrl.enqueue({ event: "error", data: { message: String(e) } })
+        }
+        ctrl.close()
+      }
+    },
+  })
+
+  return { eventSource: stream, abort: () => controller.abort() }
+}

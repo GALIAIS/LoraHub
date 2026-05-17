@@ -1,20 +1,27 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   FlipHorizontal,
   FolderOpen,
+  FolderPlus,
+  Grid3x3,
   Heart,
   HelpCircle,
+  LayoutList,
   Pencil,
   RotateCw,
   Save,
   Star,
   Trash2,
   Undo2,
+  Upload,
   X,
 } from "lucide-react"
 import {
+  datasetList,
+  datasetCreate,
+  datasetUpload,
   imageStudioList,
   imageStudioGetImage,
   imageStudioSaveAnnotation,
@@ -24,6 +31,7 @@ import {
   imageStudioDedupeScan,
   imageStudioDedupeClusters,
   imageStudioBatchDelete,
+  type DatasetInfo,
   type ImageStudioItem,
   type ImageStudioDetailItem,
   type DedupeCluster,
@@ -31,7 +39,288 @@ import {
 
 export { ImageStudioPage }
 
+// =========================================================================== //
+// Main page: dataset manager OR dataset detail view
+// =========================================================================== //
+
 function ImageStudioPage() {
+  const [params, setParams] = useSearchParams()
+  const datasetPath = params.get("path") || ""
+
+  if (!datasetPath) {
+    return <DatasetManager onOpen={(path) => {
+      const next = new URLSearchParams()
+      next.set("path", path)
+      setParams(next)
+    }} />
+  }
+
+  return <DatasetDetailView />
+}
+
+// =========================================================================== //
+// Dataset Manager (first screen)
+// =========================================================================== //
+
+function DatasetManager({ onOpen }: { onOpen: (path: string) => void }) {
+  const queryClient = useQueryClient()
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
+  const [showCreate, setShowCreate] = useState(false)
+
+  const datasetsQuery = useQuery({
+    queryKey: ["datasets"],
+    queryFn: datasetList,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: datasetCreate,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      setShowCreate(false)
+      onOpen(data.path)
+    },
+  })
+
+  const datasets = datasetsQuery.data?.datasets ?? []
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-3 border-b px-4 py-3">
+        <h1 className="text-base font-semibold">创建数据集</h1>
+        <span className="text-xs text-muted-foreground">
+          {datasets.length} 个数据集
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex rounded border text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              className={`px-2 py-1 ${viewMode === "grid" ? "bg-muted font-medium" : ""}`}
+              title="图集视图"
+            >
+              <Grid3x3 className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              className={`px-2 py-1 ${viewMode === "list" ? "bg-muted font-medium" : ""}`}
+              title="列表视图"
+            >
+              <LayoutList className="size-3.5" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            <FolderPlus className="size-3.5" /> 新建
+          </button>
+        </div>
+      </div>
+
+      {/* Create dialog */}
+      {showCreate && (
+        <CreateDatasetDialog
+          onClose={() => setShowCreate(false)}
+          onCreate={(data) => createMutation.mutate(data)}
+          loading={createMutation.isPending}
+        />
+      )}
+
+      {/* Dataset list */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {datasetsQuery.isLoading && (
+          <p className="text-sm text-muted-foreground">加载中...</p>
+        )}
+        {datasets.length === 0 && !datasetsQuery.isLoading && (
+          <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
+            <FolderOpen className="size-10 opacity-40" />
+            <p className="text-sm">暂无数据集，点击"新建"创建第一个</p>
+          </div>
+        )}
+
+        {viewMode === "grid" ? (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
+            {datasets.map((ds) => (
+              <DatasetGridCard key={ds.name} dataset={ds} onClick={() => onOpen(ds.path)} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {datasets.map((ds) => (
+              <DatasetListRow key={ds.name} dataset={ds} onClick={() => onOpen(ds.path)} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DatasetGridCard({ dataset, onClick }: { dataset: DatasetInfo; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex flex-col overflow-hidden rounded-lg border transition-colors hover:border-primary/50 hover:shadow-sm text-left"
+    >
+      <div className="aspect-[4/3] w-full overflow-hidden bg-muted">
+        {dataset.coverUrl ? (
+          <img
+            src={dataset.coverUrl}
+            alt=""
+            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <FolderOpen className="size-8 text-muted-foreground/40" />
+          </div>
+        )}
+      </div>
+      <div className="px-3 py-2">
+        <p className="text-sm font-medium truncate">{dataset.name}</p>
+        <p className="text-xs text-muted-foreground">
+          {dataset.imageCount} 张图片
+          {dataset.meta.triggerWord && (
+            <span className="ml-2 rounded bg-muted px-1 py-0.5 text-[10px]">
+              {dataset.meta.triggerWord}
+            </span>
+          )}
+        </p>
+      </div>
+    </button>
+  )
+}
+
+function DatasetListRow({ dataset, onClick }: { dataset: DatasetInfo; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted/50"
+    >
+      <div className="size-10 shrink-0 overflow-hidden rounded bg-muted">
+        {dataset.coverUrl ? (
+          <img src={dataset.coverUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <FolderOpen className="size-4 text-muted-foreground/40" />
+          </div>
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{dataset.name}</p>
+        <p className="text-xs text-muted-foreground">
+          {dataset.imageCount} 张图片
+          {dataset.meta.description && ` · ${dataset.meta.description}`}
+        </p>
+      </div>
+      {dataset.meta.triggerWord && (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {dataset.meta.triggerWord}
+        </span>
+      )}
+    </button>
+  )
+}
+
+// PLACEHOLDER_CREATE_DIALOG
+
+function CreateDatasetDialog({
+  onClose,
+  onCreate,
+  loading,
+}: {
+  onClose: () => void
+  onCreate: (data: { name: string; description?: string; targetResolution?: string; triggerWord?: string }) => void
+  loading: boolean
+}) {
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
+  const [resolution, setResolution] = useState("")
+  const [trigger, setTrigger] = useState("")
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-96 rounded-lg border bg-popover p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold mb-4">新建数据集</h3>
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">名称 *</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my_character"
+              className="rounded-md border bg-background px-3 py-1.5 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">描述</span>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="角色/风格描述"
+              className="rounded-md border bg-background px-3 py-1.5 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">目标分辨率</span>
+            <input
+              type="text"
+              value={resolution}
+              onChange={(e) => setResolution(e.target.value)}
+              placeholder="512x512 / 1024x1024"
+              className="rounded-md border bg-background px-3 py-1.5 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">触发词</span>
+            <input
+              type="text"
+              value={trigger}
+              onChange={(e) => setTrigger(e.target.value)}
+              placeholder="ohwx, sks, ..."
+              className="rounded-md border bg-background px-3 py-1.5 text-sm outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+            />
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-xs hover:bg-muted"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={!name.trim() || loading}
+            onClick={() => onCreate({
+              name: name.trim(),
+              description: description || undefined,
+              targetResolution: resolution || undefined,
+              triggerWord: trigger || undefined,
+            })}
+            className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {loading ? "创建中..." : "创建"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// PLACEHOLDER_DETAIL_VIEW
+
+// =========================================================================== //
+// Dataset detail view (upload + grid + inspector + dedupe)
+// =========================================================================== //
+
+function DatasetDetailView() {
   const [params, setParams] = useSearchParams()
   const path = params.get("path") || ""
   const page = Number(params.get("page") || "1")
@@ -39,8 +328,10 @@ function ImageStudioPage() {
   const recursive = params.get("recursive") === "1"
   const view = params.get("view") || "grid"
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
-  const [inputPath, setInputPath] = useState(path)
   const [showHelp, setShowHelp] = useState(false)
+  const queryClient = useQueryClient()
+
+  const datasetName = path.split(/[/\\]/).pop() || ""
 
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
@@ -48,11 +339,8 @@ function ImageStudioPage() {
     setParams(next)
   }
 
-  const navigate = (newPath: string) => {
-    const next = new URLSearchParams()
-    next.set("path", newPath)
-    setParams(next)
-    setSelectedPath(null)
+  const goBack = () => {
+    setParams(new URLSearchParams())
   }
 
   const listQuery = useQuery({
@@ -67,17 +355,14 @@ function ImageStudioPage() {
     enabled: !!selectedPath,
   })
 
-  // Keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const items = listQuery.data?.items
       if (!items) return
-
       const currentIdx = selectedPath
         ? items.findIndex((i) => i.path === selectedPath)
         : -1
-
       switch (e.key) {
         case "j":
           e.preventDefault()
@@ -106,10 +391,6 @@ function ImageStudioPage() {
     return () => document.removeEventListener("keydown", handleKeyDown)
   }, [handleKeyDown])
 
-  if (!path) {
-    return <PathPrompt value={inputPath} onChange={setInputPath} onSubmit={navigate} />
-  }
-
   const data = listQuery.data
   const totalPages = data ? Math.ceil(data.total / data.limit) : 0
 
@@ -117,21 +398,13 @@ function ImageStudioPage() {
     <div className="flex h-full flex-col">
       {/* Toolbar */}
       <div className="flex items-center gap-3 border-b px-4 py-2">
-        <button
-          type="button"
-          onClick={() => navigate("")}
-          className="rounded p-1 hover:bg-muted"
-          title="切换文件夹"
-        >
+        <button type="button" onClick={goBack} className="rounded p-1 hover:bg-muted" title="返回数据集列表">
           <FolderOpen className="size-4" />
         </button>
-        <span className="font-mono text-xs text-muted-foreground truncate flex-1">
-          {path}
-        </span>
+        <span className="font-medium text-sm">{datasetName}</span>
+        <span className="font-mono text-xs text-muted-foreground truncate flex-1">{path}</span>
         {data && (
-          <span className="text-xs text-muted-foreground">
-            {data.total} 张图片
-          </span>
+          <span className="text-xs text-muted-foreground">{data.total} 张图片</span>
         )}
         <SortSelect value={sort} onChange={(s) => {
           const next = new URLSearchParams(params)
@@ -180,7 +453,11 @@ function ImageStudioPage() {
         </button>
       </div>
 
-      {/* Help overlay */}
+      {/* Upload drop zone */}
+      <UploadDropZone datasetName={datasetName} onComplete={() => {
+        queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+      }} />
+
       {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
 
       {/* Main content */}
@@ -188,7 +465,6 @@ function ImageStudioPage() {
         <DuplicatesView path={path} recursive={recursive} />
       ) : (
       <div className="flex flex-1 min-h-0">
-        {/* Image grid */}
         <div className="flex-1 overflow-y-auto p-3">
           {listQuery.isLoading && (
             <div className="flex items-center justify-center h-32 text-muted-foreground">
@@ -197,7 +473,7 @@ function ImageStudioPage() {
           )}
           {data && data.items.length === 0 && (
             <div className="flex items-center justify-center h-32 text-muted-foreground">
-              该目录下未找到图片
+              该目录下未找到图片，拖入文件或压缩包上传
             </div>
           )}
           {data && data.items.length > 0 && (
@@ -218,8 +494,6 @@ function ImageStudioPage() {
             </>
           )}
         </div>
-
-        {/* Inspector */}
         {selectedPath && (
           <Inspector
             detail={detailQuery.data ?? null}
@@ -234,13 +508,125 @@ function ImageStudioPage() {
   )
 }
 
-// --------------------------------------------------------------------------- //
-// Sub-components
-// --------------------------------------------------------------------------- //
+// PLACEHOLDER_UPLOAD_ZONE
 
-// --------------------------------------------------------------------------- //
-// Duplicates view
-// --------------------------------------------------------------------------- //
+function UploadDropZone({
+  datasetName,
+  onComplete,
+}: {
+  datasetName: string
+  onComplete: () => void
+}) {
+  const [dragging, setDragging] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState<{ index: number; total: number; file: string } | null>(null)
+  const [result, setResult] = useState<{ total: number; errors: string[] } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFiles = (fileList: FileList | File[]) => {
+    const files = Array.from(fileList)
+    if (files.length === 0) return
+    setUploading(true)
+    setProgress(null)
+    setResult(null)
+
+    const { eventSource } = datasetUpload(datasetName, files)
+    const reader = eventSource.getReader()
+
+    const read = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value.event === "progress") {
+          const d = value.data as { index: number; total: number; file: string; status: string }
+          setProgress({ index: d.index, total: d.total, file: d.file })
+        } else if (value.event === "complete") {
+          const d = value.data as { totalExtracted: number; errors: string[] }
+          setResult({ total: d.totalExtracted, errors: d.errors })
+          setUploading(false)
+          onComplete()
+        }
+      }
+    }
+    read()
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    if (e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files)
+    }
+  }
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      className={`mx-4 mt-2 rounded-lg border-2 border-dashed transition-colors ${
+        dragging
+          ? "border-primary bg-primary/5"
+          : "border-muted-foreground/20 hover:border-muted-foreground/40"
+      } ${uploading ? "pointer-events-none opacity-70" : ""}`}
+    >
+      <div className="flex items-center justify-center gap-3 px-4 py-3">
+        <Upload className="size-4 text-muted-foreground" />
+        {uploading && progress ? (
+          <div className="flex-1">
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="truncate max-w-[200px]">{progress.file}</span>
+              <span className="text-muted-foreground">{progress.index}/{progress.total}</span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${(progress.index / progress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        ) : result ? (
+          <span className="text-xs text-muted-foreground">
+            已导入 {result.total} 个文件
+            {result.errors.length > 0 && ` (${result.errors.length} 个错误)`}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            拖入图片或压缩包 (.zip/.tar.gz/.7z) 上传
+          </span>
+        )}
+        {!uploading && (
+          <>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="rounded bg-muted px-2 py-1 text-xs hover:bg-muted/80"
+            >
+              选择文件
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,.zip,.tar,.tar.gz,.tgz,.7z"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) handleFiles(e.target.files)
+                e.target.value = ""
+              }}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// PLACEHOLDER_SUBCOMPONENTS
+
+// =========================================================================== //
+// Sub-components (grid, inspector, dedupe, etc.)
+// =========================================================================== //
 
 function DuplicatesView({ path, recursive }: { path: string; recursive: boolean }) {
   const queryClient = useQueryClient()
@@ -413,48 +799,7 @@ function ClusterCard({
   )
 }
 
-function PathPrompt({
-  value,
-  onChange,
-  onSubmit,
-}: {
-  value: string
-  onChange: (v: string) => void
-  onSubmit: (v: string) => void
-}) {
-  return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="flex w-full max-w-lg flex-col gap-4">
-        <h1 className="text-lg font-semibold">图像工作台</h1>
-        <p className="text-sm text-muted-foreground">
-          输入数据集文件夹路径，开始处理训练图片。
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (value.trim()) onSubmit(value.trim())
-          }}
-          className="flex gap-2"
-        >
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="数据集路径，如 /path/to/dataset"
-            className="flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
-          />
-          <button
-            type="submit"
-            disabled={!value.trim()}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            打开
-          </button>
-        </form>
-      </div>
-    </div>
-  )
-}
+// PLACEHOLDER_IMAGE_TILE
 
 function ImageTile({
   item,
@@ -500,6 +845,8 @@ function ImageTile({
     </button>
   )
 }
+
+// PLACEHOLDER_INSPECTOR
 
 function Inspector({
   detail,
@@ -555,11 +902,7 @@ function Inspector({
     <aside className="w-[22rem] shrink-0 overflow-y-auto border-l bg-background p-3">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium truncate">{detail?.name ?? "..."}</h3>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
-        >
+        <button type="button" onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted">
           &times;
         </button>
       </div>
@@ -568,7 +911,6 @@ function Inspector({
 
       {detail && (
         <div className="flex flex-col gap-3">
-          {/* Preview */}
           <div className="overflow-hidden rounded-md border">
             <img
               src={`/api/datasets/thumb?path=${encodeURIComponent(detail.path)}&size=512`}
@@ -577,7 +919,6 @@ function Inspector({
             />
           </div>
 
-          {/* Meta */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <span className="text-muted-foreground">文件大小</span>
             <span>{formatBytes(detail.bytes)}</span>
@@ -589,16 +930,11 @@ function Inspector({
             )}
           </div>
 
-          {/* Caption */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium">描述</span>
               {!editingCaption && (
-                <button
-                  type="button"
-                  onClick={startCaptionEdit}
-                  className="rounded p-0.5 text-muted-foreground hover:bg-muted"
-                >
+                <button type="button" onClick={startCaptionEdit} className="rounded p-0.5 text-muted-foreground hover:bg-muted">
                   <Pencil className="size-3" />
                 </button>
               )}
@@ -629,15 +965,12 @@ function Inspector({
                 </div>
               </div>
             ) : detail.caption ? (
-              <p className="rounded bg-muted/50 p-2 text-xs leading-relaxed">
-                {detail.caption}
-              </p>
+              <p className="rounded bg-muted/50 p-2 text-xs leading-relaxed">{detail.caption}</p>
             ) : (
               <p className="text-xs text-muted-foreground italic">无描述文件</p>
             )}
           </div>
 
-          {/* AI annotation */}
           {detail.annotation?.aiQualityLabel && (
             <div className="flex items-center gap-2">
               <Star className="size-3.5 text-amber-500" />
@@ -649,7 +982,6 @@ function Inspector({
             </div>
           )}
 
-          {/* Edit actions */}
           <div className="flex flex-wrap gap-1.5 pt-2 border-t">
             <button
               type="button"
@@ -686,13 +1018,10 @@ function Inspector({
             </button>
           </div>
 
-          {/* Pending ops */}
           {detail.pendingOps.length > 0 && (
             <div className="flex flex-col gap-1.5 pt-2 border-t">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium">
-                  待处理 ({detail.pendingOps.length})
-                </span>
+                <span className="text-xs font-medium">待处理 ({detail.pendingOps.length})</span>
                 <button
                   type="button"
                   onClick={() => applyMutation.mutate()}
@@ -703,10 +1032,7 @@ function Inspector({
                 </button>
               </div>
               {detail.pendingOps.map((op) => (
-                <div
-                  key={op.id}
-                  className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 text-xs"
-                >
+                <div key={op.id} className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 text-xs">
                   <RotateCw className="size-3 shrink-0" />
                   <span className="flex-1">{op.op}</span>
                   <button
@@ -726,13 +1052,9 @@ function Inspector({
   )
 }
 
-function SortSelect({
-  value,
-  onChange,
-}: {
-  value: string
-  onChange: (v: string) => void
-}) {
+// PLACEHOLDER_UTILS
+
+function SortSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <select
       value={value}
@@ -746,15 +1068,7 @@ function SortSelect({
   )
 }
 
-function Pagination({
-  page,
-  total,
-  onChange,
-}: {
-  page: number
-  total: number
-  onChange: (p: number) => void
-}) {
+function Pagination({ page, total, onChange }: { page: number; total: number; onChange: (p: number) => void }) {
   return (
     <div className="flex items-center justify-center gap-2 pt-4">
       <button
@@ -765,9 +1079,7 @@ function Pagination({
       >
         上一页
       </button>
-      <span className="text-xs text-muted-foreground">
-        {page} / {total}
-      </span>
+      <span className="text-xs text-muted-foreground">{page} / {total}</span>
       <button
         type="button"
         disabled={page >= total}
@@ -788,14 +1100,8 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
   ]
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
-    >
-      <div
-        className="w-80 rounded-lg border bg-popover p-4 shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-80 rounded-lg border bg-popover p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold">键盘快捷键</h3>
           <button type="button" onClick={onClose} className="rounded p-1 hover:bg-muted">
@@ -805,9 +1111,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-1.5">
           {shortcuts.map((s) => (
             <div key={s.key} className="flex items-center justify-between text-xs">
-              <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                {s.key}
-              </kbd>
+              <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">{s.key}</kbd>
               <span className="text-muted-foreground">{s.desc}</span>
             </div>
           ))}
