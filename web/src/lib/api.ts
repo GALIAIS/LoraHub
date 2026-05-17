@@ -521,14 +521,16 @@ export const api = {
     }),
   getAttentionBackends: () =>
     http<AttentionBackendsResponse>("/system/attention-backends"),
-  installFlashAttn: (backend: BackendId, version: "3" | "4") =>
-    http<{ session_id: string; status: string; backend: BackendId }>(
-      "/backend/install-flash-attn",
-      {
-        method: "POST",
-        body: JSON.stringify({ backend, version }),
-      },
-    ),
+  installFlashAttn: (backend: BackendId, version: "2" | "3" | "4") =>
+    http<{
+      session_id: string
+      status: string
+      backend: BackendId
+      version?: "2" | "3" | "4"
+    }>("/backend/install-flash-attn", {
+      method: "POST",
+      body: JSON.stringify({ backend, version }),
+    }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
   getRuntimeStatus: () =>

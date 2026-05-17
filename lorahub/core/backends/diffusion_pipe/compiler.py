@@ -160,7 +160,13 @@ def _log_attention_choice(cfg: TrainingConfig) -> None:
     install the wheel when needed.
     """
     backend = cfg.attention.training
-    if backend in ("flash3", "flash4"):
+    if backend == "flash":
+        _log.info(
+            "diffusion-pipe auto-uses flash_attn (FA2) when the package is "
+            "importable; install via the 'install-flash-attn' button or "
+            "manually with `pip install flash-attn --no-build-isolation`."
+        )
+    elif backend in ("flash3", "flash4"):
         _log.info(
             "diffusion-pipe auto-detects FlashAttention; ensure the "
             "%s wheel (%s) is installed in the dp venv to actually use it.",

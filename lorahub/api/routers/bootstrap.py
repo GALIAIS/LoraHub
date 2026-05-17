@@ -199,46 +199,141 @@ def _build_deps_runner(
 
 
 # --------------------------------------------------------------------------- #
-# FlashAttention 3 / 4 install
+# FlashAttention install
 # --------------------------------------------------------------------------- #
 #
-# FlashAttention 3 (Hopper) and 4 (Hopper/Blackwell beta) ship as private
-# nightly wheels; their PyPI presence and exact distribution name move
-# around (the kernel team has shipped them under `flash-attn`, `flash-attn-3`,
-# and `flash-attn-4` at various points). Rather than guess and risk
-# typo-squat installs, this endpoint refuses with 501 + a pointer to the
-# upstream README so the user installs the correct wheel manually.
+# FA2: stable on PyPI (`flash-attn`). The Dao-AILab wheel index resolves
+# the right artefact for the active torch/cu/python/glibc combo, so we
+# just shell out to `uv pip install flash-attn --no-build-isolation` and
+# let it pick.
 #
-# The frontend reads this 501 + the `install_doc_url` and renders a
-# "Install manually" link instead of a one-click button.
+# FA3 (Hopper) and FA4 (Hopper/Blackwell beta) ship as in-repo source
+# builds with no stable PyPI presence; the kernel team has shipped them
+# under multiple distribution names (`flash-attn`, `flash-attn-3`,
+# `flash-attn-4`) at various points and the right install command
+# depends on CUDA toolkit version + glibc + GPU silicon. Rather than
+# guess and risk a typo-squat install, we surface 501 + the upstream
+# README link so the user installs the wheel manually for those.
 
 _FLASH_ATTN_DOC_URL = "https://github.com/Dao-AILab/flash-attention#installation-and-features"
 
 
 class InstallFlashAttnRequest(BaseModel):
     backend: Literal["kohya", "diffusion-pipe"] = "diffusion-pipe"
-    version: Literal["3", "4"] = "3"
+    # FA2 is the only version we install automatically. FA3/FA4 are still
+    # accepted so the frontend can surface a single endpoint, but they
+    # return 501 with a link to the upstream install docs.
+    version: Literal["2", "3", "4"] = "2"
 
 
-@router.post("/backend/install-flash-attn", status_code=501)
+@router.post("/backend/install-flash-attn", status_code=202)
 async def install_flash_attn(req: InstallFlashAttnRequest) -> dict[str, Any]:
-    """Install FA3/FA4 into a backend's venv.
+    """Install FlashAttention into the chosen backend's venv.
 
-    Currently a stub: FA3/FA4 wheel naming is unstable and the right install
-    command depends on CUDA version + glibc + GPU silicon. We surface a 501
-    plus the upstream installation URL so the user does it once by hand
-    rather than have us ship a flaky autoresolver.
+    Version 2 runs ``uv pip install flash-attn --no-build-isolation`` and
+    returns 202 with a bootstrap session id (poll the same
+    ``/backend/bootstrap/status`` channel to follow progress). Versions
+    3 and 4 are not auto-installable — see the module-level comment for
+    why — and return 501 with ``install_doc_url`` pointing at the
+    upstream README.
     """
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "message": (
-                f"Automatic FlashAttention {req.version} install is not "
-                f"implemented yet — install the wheel into the {req.backend} "
-                "venv manually."
-            ),
-            "backend": req.backend,
-            "version": req.version,
-            "install_doc_url": _FLASH_ATTN_DOC_URL,
-        },
-    )
+    if req.version != "2":
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "message": (
+                    f"Automatic FlashAttention {req.version} install is not "
+                    f"implemented yet — install the wheel into the {req.backend} "
+                    "venv manually."
+                ),
+                "backend": req.backend,
+                "version": req.version,
+                "install_doc_url": _FLASH_ATTN_DOC_URL,
+            },
+        )
+
+    with _bootstrap_lock:
+        existing = app_module._bootstrap_session
+        if existing is not None and existing.is_running():
+            raise HTTPException(
+                status_code=409, detail="a bootstrap session is already running"
+            )
+        runner = _build_flash_attn2_runner(req)
+        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
+        app_module._bootstrap_session = sess
+
+    loop = asyncio.get_running_loop()
+    sess.start(runner, loop)
+    return {
+        "session_id": sess.session_id,
+        "status": sess.status,
+        "backend": sess.backend,
+        "version": req.version,
+    }
+
+
+def _build_flash_attn2_runner(req: InstallFlashAttnRequest) -> Any:
+    """Build a runner that pip-installs flash-attn (FA2) into the backend venv.
+
+    Uses the shared uv pip plumbing so the install honours the configured
+    pypi_index mirror. ``--no-build-isolation`` is required because
+    flash-attn's setup.py needs the venv's torch to be visible — the
+    upstream README explicitly says so.
+    """
+    from collections.abc import Callable  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from lorahub.api import app as _app  # noqa: PLC0415
+    from lorahub.core.toolchain import uv as _uv  # noqa: PLC0415
+
+    settings = _app._settings_store.load()
+
+    if req.backend == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe.bootstrap import (  # noqa: PLC0415
+            _venv_python,
+            default_repo_path,
+        )
+        import os  # noqa: PLC0415
+
+        repo_raw = (
+            os.environ.get("LORAHUB_DIFFUSION_PIPE_REPO")
+            or settings.diffusion_pipe_repo_path
+            or str(default_repo_path())
+        )
+        repo_path = Path(repo_raw).expanduser()
+        venv_py = _venv_python(repo_path)
+    else:
+        from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
+            _venv_python,
+            default_sd_scripts_path,
+        )
+        import os  # noqa: PLC0415
+
+        sd_raw = (
+            os.environ.get("LORAHUB_SD_SCRIPTS")
+            or settings.sd_scripts_path
+            or str(default_sd_scripts_path())
+        )
+        repo_path = Path(sd_raw).expanduser()
+        venv_py = _venv_python(repo_path)
+
+    if not venv_py or not venv_py.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"No venv found at {repo_path}. Run a full install first.",
+        )
+
+    pypi_index = settings.pypi_index_url
+
+    def runner(progress: Callable[[str], None]) -> None:
+        progress("flash-attn (FA2): resolving wheel via uv pip")
+        _uv.pip_install(
+            venv_py,
+            ["flash-attn", "--no-build-isolation"],
+            step="flash-attn install",
+            progress=progress,
+            pypi_index=pypi_index,
+        )
+        progress("flash-attn (FA2): install complete")
+
+    return runner

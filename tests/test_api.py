@@ -2913,7 +2913,7 @@ def test_attention_backends_endpoint_uses_first_nvidia_gpu(
 
 
 def test_install_flash_attn_returns_501(client: TestClient) -> None:
-    """The conservative path: refuse the auto-install with a doc URL."""
+    """FA3/FA4 still refuse with a doc URL — only FA2 is auto-installable."""
     r = client.post(
         "/api/backend/install-flash-attn",
         json={"backend": "kohya", "version": "3"},
@@ -2933,4 +2933,85 @@ def test_install_flash_attn_validates_version(client: TestClient) -> None:
         json={"backend": "kohya", "version": "5"},  # invalid literal
     )
     assert r.status_code == 422
+
+
+def test_install_flash_attn_v2_runs_pip_install(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FA2 takes the auto-install path and shells out to `uv pip install`."""
+    from lorahub.api.routers import bootstrap as bootstrap_router
+    from lorahub.core.backends.kohya import bootstrap as kohya_bootstrap
+    from lorahub.core.toolchain import uv as _uv
+
+    # Pretend kohya has a real venv at <tmp>/sd-scripts so the runner builds.
+    sd = tmp_path / "sd-scripts"
+    sd.mkdir()
+    venv_py = tmp_path / "sd-scripts" / "venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_bytes(b"")
+    monkeypatch.setattr(kohya_bootstrap, "_venv_python", lambda _p: venv_py)
+    monkeypatch.setattr(kohya_bootstrap, "default_sd_scripts_path", lambda: sd)
+    monkeypatch.delenv("LORAHUB_SD_SCRIPTS", raising=False)
+
+    captured: dict[str, Any] = {}
+
+    def fake_pip_install(py, args, *, step, progress=None, pypi_index=None):
+        captured["py"] = py
+        captured["args"] = list(args)
+        captured["step"] = step
+        if progress is not None:
+            progress("uv pip install: ok")
+
+    monkeypatch.setattr(_uv, "pip_install", fake_pip_install)
+    # bootstrap.py imports uv lazily, so patch the same symbol on the
+    # bootstrap module's import path too.
+    monkeypatch.setattr(bootstrap_router, "_BootstrapSession", bootstrap_router._BootstrapSession)
+
+    r = client.post(
+        "/api/backend/install-flash-attn",
+        json={"backend": "kohya", "version": "2"},
+    )
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["backend"] == "kohya"
+    assert body["version"] == "2"
+    assert body["session_id"]
+
+    # Drain the bootstrap thread so the assertion below sees the call.
+    import time
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        sess = bootstrap_router.app_module._bootstrap_session
+        if sess is not None and not sess.is_running():
+            break
+        time.sleep(0.05)
+
+    assert "flash-attn" in captured["args"]
+    assert "--no-build-isolation" in captured["args"]
+    assert captured["py"] == venv_py
+
+
+def test_install_flash_attn_v2_requires_venv(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no venv exists yet, the v2 runner refuses with a clear 400."""
+    from lorahub.core.backends.kohya import bootstrap as kohya_bootstrap
+
+    sd = tmp_path / "sd-scripts"
+    sd.mkdir()
+    monkeypatch.setattr(kohya_bootstrap, "_venv_python", lambda _p: None)
+    monkeypatch.setattr(kohya_bootstrap, "default_sd_scripts_path", lambda: sd)
+    monkeypatch.delenv("LORAHUB_SD_SCRIPTS", raising=False)
+
+    r = client.post(
+        "/api/backend/install-flash-attn",
+        json={"backend": "kohya", "version": "2"},
+    )
+    assert r.status_code == 400
+    assert "venv" in r.json()["detail"].lower()
 
