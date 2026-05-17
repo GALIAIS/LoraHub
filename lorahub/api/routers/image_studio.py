@@ -452,7 +452,7 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
         raise HTTPException(503, "AI store not initialised")
 
     route = ai_store.get_route(body.task)
-    if route is None:
+    if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.task!r}")
@@ -543,7 +543,7 @@ def ai_batch_quality(body: AIBatchQualityInput) -> dict[str, Any]:
         raise HTTPException(503, "AI store not initialised")
 
     route = ai_store.get_route(body.task)
-    if route is None:
+    if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.task!r}")
@@ -904,7 +904,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         raise HTTPException(503, "AI store not initialised")
 
     route = ai_store.get_route(body.visionTask)
-    if route is None:
+    if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
@@ -960,7 +960,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
         raise HTTPException(503, "AI store not initialised")
 
     route = ai_store.get_route(body.visionTask)
-    if route is None:
+    if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
@@ -1383,7 +1383,7 @@ def similarity_scan(body: SimilarityScanInput) -> dict[str, Any]:
         raise HTTPException(503, "AI store not initialised")
 
     route = ai_store.get_route(body.task)
-    if route is None:
+    if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.task!r}")
@@ -1630,7 +1630,7 @@ def similarity_clusters(
         model_id = "unknown"
         if ai_store:
             route = ai_store.get_route("similarity.embedding")
-            if route is None:
+            if route is None or not (route.provider_id and route.model_id):
                 route = ai_store.get_route("global.default")
             if route and route.model_id:
                 model_id = route.model_id
