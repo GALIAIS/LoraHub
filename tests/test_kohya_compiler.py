@@ -717,3 +717,1045 @@ def test_attn_patch_module_imports_cleanly(monkeypatch: pytest.MonkeyPatch) -> N
     # (and logs a warning) instead of crashing.
     assert _attn_patch.apply() is False
 
+
+# --------------------------------------------------------------------------- #
+# B1: every-field-emit coverage. Each test focuses on a single helper so a
+# regression points at exactly one helper / one schema field.
+# --------------------------------------------------------------------------- #
+
+
+def _flux_recipe(**overrides: object) -> TrainingConfig:
+    base = {
+        "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
+        "dataset": {"source": "/d"},
+    }
+    base.update(overrides)  # type: ignore[arg-type]
+    return TrainingConfig.model_validate(base)
+
+
+def _sd3_recipe(**overrides: object) -> TrainingConfig:
+    base = {
+        "base_model": {"arch": "sd3", "checkpoint": "/m/sd3"},
+        "dataset": {"source": "/d"},
+    }
+    base.update(overrides)  # type: ignore[arg-type]
+    return TrainingConfig.model_validate(base)
+
+
+def _anima_recipe(**overrides: object) -> TrainingConfig:
+    base = {
+        "base_model": {"arch": "anima", "checkpoint": "/m/anima"},
+        "dataset": {"source": "/d"},
+    }
+    base.update(overrides)  # type: ignore[arg-type]
+    return TrainingConfig.model_validate(base)
+
+
+def _hunyuan_recipe(**overrides: object) -> TrainingConfig:
+    base = {
+        "base_model": {"arch": "hunyuan_image", "checkpoint": "/m/h"},
+        "dataset": {"source": "/d"},
+    }
+    base.update(overrides)  # type: ignore[arg-type]
+    return TrainingConfig.model_validate(base)
+
+
+# --- Defaults stay byte-identical -----------------------------------------
+
+
+def test_b1_default_recipe_emits_no_new_argv() -> None:
+    """A bare recipe must not pick up any of the new B1 flags. Existing
+    fixtures encode the byte-level expectation; this guards explicit
+    membership."""
+    args = _argv(_recipe())
+    forbidden = (
+        "--noise_offset_random_strength",
+        "--multires_noise_iterations",
+        "--multires_noise_discount",
+        "--adaptive_noise_scale",
+        "--ip_noise_gamma_random_strength",
+        "--zero_terminal_snr",
+        "--min_timestep",
+        "--max_timestep",
+        "--huber_schedule",
+        "--huber_c",
+        "--huber_scale",
+        "--v_pred_like_loss",
+        "--max_grad_norm",
+        "--lr_scheduler_type",
+        "--lr_scheduler_args",
+        "--lr_scheduler_num_cycles",
+        "--lr_scheduler_power",
+        "--lr_scheduler_timescale",
+        "--lr_scheduler_min_lr_ratio",
+        "--seed",
+        "--lr_decay_steps",
+        "--save_every_n_steps",
+        "--save_last_n_epochs",
+        "--save_last_n_steps",
+        "--training_comment",
+        "--no_metadata",
+        "--metadata_",
+        "--resume",
+        "--save_last_n_epochs_state",
+        "--save_last_n_steps_state",
+        "--skip_until_initial_step",
+        "--initial_epoch",
+        "--initial_step",
+        "--validate_every_n_steps",
+        "--validation_seed",
+        "--full_fp16",
+        "--lowram",
+        "--highvram",
+        "--no_half_vae",
+        "--cpu_offload_checkpointing",
+        "--unsloth_offload_checkpointing",
+        "--cache_text_encoder_outputs",
+        "--cache_text_encoder_outputs_to_disk",
+        "--fp8_base",
+        "--fp8_base_unet",
+        "--fp8_scaled",
+        "--fp8_vl",
+        "--disable_mmap_load_safetensors",
+        "--cache_latents_to_disk",
+        "--skip_cache_check",
+        "--cache_info",
+        "--train_inpainting",
+        "--max_data_loader_n_workers",
+        "--persistent_data_loader_workers",
+        "--vae_batch_size",
+        "--text_encoder_batch_size",
+        "--flip_aug",
+        "--color_aug",
+        "--random_crop",
+        "--face_crop_aug_range",
+        "--alpha_mask",
+        "--caption_dropout_every_n_epochs",
+        "--caption_tag_dropout_rate",
+        "--keep_tokens",
+        "--keep_tokens_separator",
+        "--secondary_separator",
+        "--enable_wildcard",
+        "--caption_prefix",
+        "--caption_suffix",
+        "--max_token_length",
+        "--token_warmup_min",
+        "--token_warmup_step",
+        "--weighted_captions",
+        "--bucket_no_upscale",
+        "--skip_image_resolution",
+        "--resize_interpolation",
+        "--timestep_sampling",
+        "--sigmoid_scale",
+        "--model_prediction_type",
+        "--discrete_flow_shift",
+        "--training_shift",
+        "--weighting_scheme",
+        "--logit_mean",
+        "--logit_std",
+        "--mode_scale",
+        "--clip_l",
+        "--clip_g",
+        "--t5xxl",
+        "--ae",
+        "--qwen3",
+        "--llm_adapter_path",
+        "--t5_tokenizer_path",
+        "--qwen3_max_token_length",
+        "--t5_max_token_length",
+        "--text_encoder_cpu",
+        "--vae_chunk_size",
+        "--vae_disable_cache",
+        "--apply_t5_attn_mask",
+        "--apply_lg_attn_mask",
+        "--pos_emb_random_crop_rate",
+        "--enable_scaled_pos_embed",
+        "--guidance_scale",
+        "--t5xxl_max_token_length",
+        "--t5_dropout_rate",
+        "--clip_l_dropout_rate",
+        "--clip_g_dropout_rate",
+        "--llm_adapter_lr",
+        "--self_attn_lr",
+        "--cross_attn_lr",
+        "--mlp_lr",
+        "--mod_lr",
+    )
+    for flag in forbidden:
+        assert not any(a.startswith(flag) for a in args), f"unexpected {flag} on default recipe"
+
+
+# --- LossConfig new fields -------------------------------------------------
+
+
+def test_b1_loss_advanced_full_emit() -> None:
+    cfg = _recipe(
+        loss={
+            "noise_offset": 0.05,
+            "noise_offset_random_strength": True,
+            "multires_noise_iterations": 8,
+            "multires_noise_discount": 0.4,
+            "adaptive_noise_scale": 0.005,
+            "ip_noise_gamma": 0.1,
+            "ip_noise_gamma_random_strength": True,
+            "zero_terminal_snr": True,
+            "min_timestep": 5,
+            "max_timestep": 950,
+            "huber_schedule": "exponential",
+            "huber_c": 0.2,
+            "huber_scale": 1.5,
+            "v_pred_like_loss": 0.3,
+        }
+    )
+    args = _argv(cfg)
+    for flag in (
+        "--noise_offset=0.05",
+        "--noise_offset_random_strength",
+        "--multires_noise_iterations=8",
+        "--multires_noise_discount=0.4",
+        "--adaptive_noise_scale=0.005",
+        "--ip_noise_gamma=0.1",
+        "--ip_noise_gamma_random_strength",
+        "--zero_terminal_snr",
+        "--min_timestep=5",
+        "--max_timestep=950",
+        "--huber_schedule=exponential",
+        "--huber_c=0.2",
+        "--huber_scale=1.5",
+        "--v_pred_like_loss=0.3",
+    ):
+        assert flag in args, flag
+
+
+def test_b1_loss_multires_discount_default_omitted() -> None:
+    """`multires_noise_discount=0.3` matches kohya default — argv stays clean."""
+    args = _argv(_recipe(loss={"multires_noise_discount": 0.3}))
+    assert not any(a.startswith("--multires_noise_discount") for a in args)
+
+
+# --- OptimizerConfig new fields -------------------------------------------
+
+
+def test_b1_optimizer_max_grad_norm_emitted_when_moved() -> None:
+    args = _argv(_recipe(optimizer={"max_grad_norm": 0.5}))
+    assert "--max_grad_norm=0.5" in args
+
+
+def test_b1_optimizer_max_grad_norm_default_omitted() -> None:
+    """`max_grad_norm=1.0` matches kohya default — argv stays clean."""
+    args = _argv(_recipe())
+    assert not any(a.startswith("--max_grad_norm") for a in args)
+
+
+def test_b1_optimizer_scheduler_module_and_args() -> None:
+    cfg = _recipe(
+        optimizer={
+            "scheduler_module": "transformers.optimization.cosine",
+            "scheduler_args": {"num_cycles": "0.5"},
+            "scheduler_num_cycles": 3,
+            "scheduler_power": 0.5,
+            "scheduler_timescale": 1000,
+            "scheduler_min_lr_ratio": 0.05,
+        }
+    )
+    args = _argv(cfg)
+    assert "--lr_scheduler_type=transformers.optimization.cosine" in args
+    assert "--lr_scheduler_args" in args
+    sched_idx = args.index("--lr_scheduler_args")
+    assert "num_cycles=0.5" in args[sched_idx + 1:]
+    assert "--lr_scheduler_num_cycles=3" in args
+    assert "--lr_scheduler_power=0.5" in args
+    assert "--lr_scheduler_timescale=1000" in args
+    assert "--lr_scheduler_min_lr_ratio=0.05" in args
+
+
+# --- ScheduleConfig new fields --------------------------------------------
+
+
+def test_b1_schedule_seed_and_lr_decay() -> None:
+    cfg = _recipe(schedule={"seed": 1234, "lr_decay_steps": 500})
+    args = _argv(cfg)
+    assert "--seed=1234" in args
+    assert "--lr_decay_steps=500" in args
+
+
+# --- TrainingConfig top-level booleans ------------------------------------
+
+
+def test_b1_top_level_caching_flags() -> None:
+    cfg = _recipe(
+        cache_latents_to_disk=True,
+        skip_cache_check=True,
+        cache_info=True,
+        train_inpainting=True,
+    )
+    args = _argv(cfg)
+    assert "--cache_latents_to_disk" in args
+    assert "--skip_cache_check" in args
+    assert "--cache_info" in args
+    assert "--train_inpainting" in args
+
+
+# --- OutputConfig new fields ----------------------------------------------
+
+
+def test_b1_output_step_and_retention() -> None:
+    cfg = _recipe(
+        output={
+            "save_every_n_steps": 100,
+            "save_last_n_epochs": 3,
+            "save_last_n_steps": 500,
+            "training_comment": "lorahub run",
+            "no_metadata": True,
+        }
+    )
+    args = _argv(cfg)
+    assert "--save_every_n_steps=100" in args
+    assert "--save_last_n_epochs=3" in args
+    assert "--save_last_n_steps=500" in args
+    assert "--training_comment=lorahub run" in args
+    assert "--no_metadata" in args
+
+
+def test_b1_output_metadata_keys_emit_metadata_flags() -> None:
+    cfg = _recipe(
+        output={
+            "metadata": {
+                "title": "My LoRA",
+                "author": "lorahub",
+                "trigger_phrase": "hub_trig",
+            }
+        }
+    )
+    args = _argv(cfg)
+    assert "--metadata_title=My LoRA" in args
+    assert "--metadata_author=lorahub" in args
+    assert "--metadata_trigger_phrase=hub_trig" in args
+
+
+def test_b1_output_metadata_unknown_key_warns_and_passes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    cfg = _recipe(output={"metadata": {"weird_key": "v"}})
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert "--metadata_weird_key=v" in args
+    assert any("weird_key" in r.message for r in caplog.records)
+
+
+# --- ResumeConfig new fields ----------------------------------------------
+
+
+def test_b1_resume_extras_full_emit() -> None:
+    cfg = _recipe(
+        resume={
+            "save_state": True,
+            "save_state_at_end": True,
+            "resume_from": "/r/state",
+            "save_last_n_epochs_state": 2,
+            "save_last_n_steps_state": 1000,
+            "skip_until_initial_step": True,
+            "initial_epoch": 3,
+            "initial_step": 1500,
+        }
+    )
+    args = _argv(cfg)
+    assert any(a.startswith("--resume=") for a in args)
+    assert "--save_last_n_epochs_state=2" in args
+    assert "--save_last_n_steps_state=1000" in args
+    assert "--skip_until_initial_step" in args
+    assert "--initial_epoch=3" in args
+    assert "--initial_step=1500" in args
+
+
+# --- ValidationConfig new fields ------------------------------------------
+
+
+def test_b1_validation_step_cadence_and_seed() -> None:
+    cfg = _recipe(
+        dataset={"source": "/d", "val_split": 0.1},
+        validation={"every_n_epochs": 1, "every_n_steps": 200, "seed": 7},
+    )
+    args = _argv(cfg)
+    assert "--validate_every_n_steps=200" in args
+    assert "--validation_seed=7" in args
+
+
+# --- SamplingConfig new fields --------------------------------------------
+
+
+def test_b1_sampling_step_cadence_and_at_first() -> None:
+    cfg = _recipe(
+        sampling={
+            "prompts_file": "/p/eval.txt",
+            "every_n_epochs": 1,
+            "every_n_steps": 50,
+            "at_first": True,
+        }
+    )
+    args = _argv(cfg)
+    assert "--sample_every_n_steps=50" in args
+    assert "--sample_at_first" in args
+
+
+# --- DataLoaderConfig -----------------------------------------------------
+
+
+def test_b1_dataloader_overrides_emit() -> None:
+    cfg = _recipe(
+        dataloader={
+            "num_workers": 2,
+            "persistent_workers": True,
+            "vae_batch_size": 4,
+        }
+    )
+    args = _argv(cfg)
+    assert "--max_data_loader_n_workers=2" in args
+    assert "--persistent_data_loader_workers" in args
+    assert "--vae_batch_size=4" in args
+
+
+def test_b1_dataloader_text_encoder_batch_size_sdxl() -> None:
+    cfg = _recipe(dataloader={"text_encoder_batch_size": 8})
+    args = _argv(cfg)
+    assert "--text_encoder_batch_size=8" in args
+
+
+def test_b1_dataloader_text_encoder_batch_size_sd15_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "sd15", "checkpoint": "/m"},
+            "dataset": {"source": "/d"},
+            "dataloader": {"text_encoder_batch_size": 8},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--text_encoder_batch_size") for a in args)
+    assert any("text_encoder_batch_size" in r.message for r in caplog.records)
+
+
+def test_b1_dataloader_defaults_silent() -> None:
+    args = _argv(_recipe())
+    assert not any(a.startswith("--max_data_loader_n_workers") for a in args)
+
+
+# --- AugmentationConfig ---------------------------------------------------
+
+
+def test_b1_augmentation_full_emit() -> None:
+    cfg = _recipe(
+        augmentation={
+            "flip": True,
+            "color": True,
+            "random_crop": True,
+            "face_crop_aug_range": "1.0,2.0,3.0",
+            "alpha_mask": True,
+        }
+    )
+    args = _argv(cfg)
+    assert "--flip_aug" in args
+    assert "--color_aug" in args
+    assert "--random_crop" in args
+    assert "--face_crop_aug_range=1.0,2.0,3.0" in args
+    assert "--alpha_mask" in args
+
+
+# --- Caption knobs --------------------------------------------------------
+
+
+def test_b1_caption_advanced_full_emit() -> None:
+    cfg = _recipe(
+        dataset={
+            "source": "/d",
+            "caption": {
+                "dropout_every_n_epochs": 5,
+                "tag_dropout_rate": 0.1,
+                "keep_tokens": 2,
+                "keep_tokens_separator": "|",
+                "secondary_separator": ";",
+                "enable_wildcard": True,
+                "prefix": "trigger,",
+                "suffix": ", style",
+                "max_token_length": 225,
+                "token_warmup_min": 1,
+                "token_warmup_step": 100.0,
+                "weighted": True,
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert "--caption_dropout_every_n_epochs=5" in args
+    assert "--caption_tag_dropout_rate=0.1" in args
+    assert "--keep_tokens=2" in args
+    assert "--keep_tokens_separator=|" in args
+    assert "--secondary_separator=;" in args
+    assert "--enable_wildcard" in args
+    assert "--caption_prefix=trigger," in args
+    assert "--caption_suffix=, style" in args
+    assert "--max_token_length=225" in args
+    assert "--token_warmup_min=1" in args
+    assert "--token_warmup_step=100.0" in args
+    assert "--weighted_captions" in args
+
+
+# --- BucketConfig new fields ----------------------------------------------
+
+
+def test_b1_bucket_extra_argv() -> None:
+    cfg = _recipe(
+        dataset={
+            "source": "/d",
+            "bucket": {
+                "no_upscale": True,
+                "skip_image_resolution": True,
+                "resize_interpolation": "lanczos",
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert "--bucket_no_upscale" in args
+    assert "--skip_image_resolution=0" in args
+    assert "--resize_interpolation=lanczos" in args
+
+
+def test_b1_bucket_extra_argv_silent_when_bucket_disabled() -> None:
+    cfg = _recipe(
+        dataset={
+            "source": "/d",
+            "bucket": {
+                "enabled": False,
+                "no_upscale": True,
+                "resize_interpolation": "lanczos",
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert "--bucket_no_upscale" not in args
+    assert not any(a.startswith("--resize_interpolation") for a in args)
+
+
+# --- OptimizationConfig new advanced flags --------------------------------
+
+
+def test_b1_optimization_universal_toggles() -> None:
+    cfg = _recipe(
+        optimization={
+            "full_fp16": True,
+            "lowram": True,
+            "highvram": True,
+            "no_half_vae": True,
+            "cpu_offload_checkpointing": True,
+            "fp8_base": True,
+            "fp8_base_unet": True,
+        }
+    )
+    args = _argv(cfg)
+    for flag in (
+        "--full_fp16",
+        "--lowram",
+        "--highvram",
+        "--no_half_vae",
+        "--cpu_offload_checkpointing",
+        "--fp8_base",
+        "--fp8_base_unet",
+    ):
+        assert flag in args, flag
+
+
+def test_b1_optimization_disable_mmap_emits_for_sdxl() -> None:
+    """SDXL's add_sdxl_training_arguments ships --disable_mmap_load_safetensors."""
+    cfg = _recipe(optimization={"disable_mmap_load_safetensors": True})
+    assert "--disable_mmap_load_safetensors" in _argv(cfg)
+
+
+def test_b1_optimization_disable_mmap_skipped_for_sd15(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "sd15", "checkpoint": "/m"},
+            "dataset": {"source": "/d"},
+            "optimization": {"disable_mmap_load_safetensors": True},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert "--disable_mmap_load_safetensors" not in args
+    assert any("disable_mmap" in r.message for r in caplog.records)
+
+
+def test_b1_optimization_cache_te_outputs_for_sdxl() -> None:
+    cfg = _recipe(
+        optimization={
+            "cache_text_encoder_outputs": True,
+            "cache_text_encoder_outputs_to_disk": True,
+        }
+    )
+    args = _argv(cfg)
+    assert "--cache_text_encoder_outputs" in args
+    assert "--cache_text_encoder_outputs_to_disk" in args
+
+
+def test_b1_optimization_cache_te_outputs_skipped_for_sd15(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "sd15", "checkpoint": "/m"},
+            "dataset": {"source": "/d"},
+            "optimization": {"cache_text_encoder_outputs": True},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert "--cache_text_encoder_outputs" not in args
+    assert any("cache_text_encoder_outputs" in r.message for r in caplog.records)
+
+
+def test_b1_optimization_fp8_scaled_only_hunyuan() -> None:
+    args = _argv(_hunyuan_recipe(optimization={"fp8_scaled": True}))
+    assert "--fp8_scaled" in args
+
+
+def test_b1_optimization_fp8_scaled_warns_on_flux(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(_flux_recipe(optimization={"fp8_scaled": True}))
+    assert "--fp8_scaled" not in args
+    assert any("fp8_scaled" in r.message for r in caplog.records)
+
+
+def test_b1_optimization_fp8_vl_text_encoder_emits_short_flag_on_hunyuan() -> None:
+    """Schema field is `fp8_vl_text_encoder` but kohya's argv is `--fp8_vl`."""
+    args = _argv(_hunyuan_recipe(optimization={"fp8_vl_text_encoder": True}))
+    assert "--fp8_vl" in args
+    assert not any(a.startswith("--fp8_vl_text_encoder") for a in args)
+
+
+def test_b1_optimization_unsloth_offload_only_anima() -> None:
+    args = _argv(_anima_recipe(optimization={"unsloth_offload_checkpointing": True}))
+    assert "--unsloth_offload_checkpointing" in args
+
+
+def test_b1_optimization_unsloth_offload_warns_on_flux(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(_flux_recipe(optimization={"unsloth_offload_checkpointing": True}))
+    assert "--unsloth_offload_checkpointing" not in args
+    assert any("unsloth" in r.message for r in caplog.records)
+
+
+# --- FlowMatchConfig ------------------------------------------------------
+
+
+def test_b1_flow_match_full_emit_on_flux() -> None:
+    cfg = _flux_recipe(
+        flow_match={
+            "timestep_sampling": "logit_normal",
+            "sigmoid_scale": 1.5,
+            "model_prediction_type": "raw",
+            "discrete_flow_shift": 3.0,
+            "weighting_scheme": "logit_normal",
+            "logit_mean": 0.0,
+            "logit_std": 1.0,
+            "mode_scale": 1.29,
+        }
+    )
+    args = _argv(cfg)
+    assert "--timestep_sampling=logit_normal" in args
+    assert "--sigmoid_scale=1.5" in args
+    assert "--model_prediction_type=raw" in args
+    assert "--discrete_flow_shift=3.0" in args
+    assert "--weighting_scheme=logit_normal" in args
+    assert "--logit_mean=0.0" in args
+    assert "--logit_std=1.0" in args
+    assert "--mode_scale=1.29" in args
+
+
+def test_b1_flow_match_training_shift_only_sd3() -> None:
+    args = _argv(_sd3_recipe(flow_match={"training_shift": 2.5}))
+    assert "--training_shift=2.5" in args
+
+
+def test_b1_flow_match_training_shift_warns_on_flux(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(_flux_recipe(flow_match={"training_shift": 2.5}))
+    assert not any(a.startswith("--training_shift") for a in args)
+    assert any("training_shift" in r.message for r in caplog.records)
+
+
+def test_b1_flow_match_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
+    """SDXL is epsilon-prediction; flow_match doesn't apply."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(_recipe(flow_match={"timestep_sampling": "logit_normal"}))
+    assert not any(a.startswith("--timestep_sampling") for a in args)
+    assert any("flow_match" in r.message for r in caplog.records)
+
+
+# --- ArchPathsConfig ------------------------------------------------------
+
+
+def test_b1_arch_paths_flux_full_emit() -> None:
+    cfg = _flux_recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "clip_l": "/m/clip_l",
+                "t5xxl": "/m/t5",
+                "ae": "/m/ae",
+                "t5xxl_max_token_length": 512,
+                "apply_t5_attn_mask": True,
+                "guidance_scale": 3.5,
+                "t5_dropout_rate": 0.1,
+                "clip_l_dropout_rate": 0.05,
+            },
+        }
+    )
+    args = _argv(cfg)
+    # Path values are platform-normalised by pathlib; assert flag prefix only.
+    assert any(a.startswith("--clip_l=") for a in args)
+    assert any(a.startswith("--t5xxl=") for a in args)
+    assert any(a.startswith("--ae=") for a in args)
+    assert "--t5xxl_max_token_length=512" in args
+    assert "--apply_t5_attn_mask" in args
+    assert "--guidance_scale=3.5" in args
+    assert "--t5_dropout_rate=0.1" in args
+    assert "--clip_l_dropout_rate=0.05" in args
+
+
+def test_b1_arch_paths_sd3_full_emit() -> None:
+    cfg = _sd3_recipe(
+        base_model={
+            "arch": "sd3",
+            "checkpoint": "/m/sd3",
+            "arch_paths": {
+                "clip_l": "/m/clip_l",
+                "clip_g": "/m/clip_g",
+                "t5xxl": "/m/t5",
+                "apply_t5_attn_mask": True,
+                "apply_lg_attn_mask": True,
+                "pos_emb_random_crop_rate": 0.1,
+                "enable_scaled_pos_embed": True,
+                "t5xxl_device": "cpu",
+                "t5xxl_dtype": "fp16",
+                "t5xxl_max_token_length": 256,
+                "clip_l_dropout_rate": 0.1,
+                "clip_g_dropout_rate": 0.1,
+                "t5_dropout_rate": 0.1,
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert any(a.startswith("--clip_l=") for a in args)
+    assert any(a.startswith("--clip_g=") for a in args)
+    assert any(a.startswith("--t5xxl=") for a in args)
+    for flag in (
+        "--apply_t5_attn_mask",
+        "--apply_lg_attn_mask",
+        "--pos_emb_random_crop_rate=0.1",
+        "--enable_scaled_pos_embed",
+        "--t5xxl_device=cpu",
+        "--t5xxl_dtype=fp16",
+        "--t5xxl_max_token_length=256",
+    ):
+        assert flag in args, flag
+
+
+def test_b1_arch_paths_anima_uses_upstream_spelling() -> None:
+    """Anima argv: `--llm_adapter_path` (not `--llm_adapter`),
+    `--t5_tokenizer_path` (not `--t5_tokenizer`)."""
+    cfg = _anima_recipe(
+        base_model={
+            "arch": "anima",
+            "checkpoint": "/m/anima",
+            "arch_paths": {
+                "qwen3": "/m/qwen3",
+                "llm_adapter": "/m/adapter",
+                "t5_tokenizer": "/m/t5tok",
+                "qwen3_max_token_length": 256,
+                "t5_max_token_length": 512,
+                "vae_chunk_size": 16,
+                "vae_disable_cache": True,
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert any(a.startswith("--qwen3=") for a in args)
+    assert any(a.startswith("--llm_adapter_path=") for a in args)
+    assert any(a.startswith("--t5_tokenizer_path=") for a in args)
+    assert "--qwen3_max_token_length=256" in args
+    assert "--t5_max_token_length=512" in args
+    assert "--vae_chunk_size=16" in args
+    assert "--vae_disable_cache" in args
+    # Negative: the schema field name does NOT leak into argv.
+    assert not any(a.startswith("--llm_adapter=") for a in args)
+    assert not any(a.startswith("--t5_tokenizer=") for a in args)
+
+
+def test_b1_arch_paths_hunyuan_full_emit() -> None:
+    cfg = _hunyuan_recipe(
+        base_model={
+            "arch": "hunyuan_image",
+            "checkpoint": "/m/h",
+            "arch_paths": {
+                "text_encoder": "/m/qwenvl",
+                "byt5": "/m/byt5",
+                "text_encoder_cpu": True,
+                "vae_chunk_size": 16,
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert any(a.startswith("--text_encoder=") for a in args)
+    assert any(a.startswith("--byt5=") for a in args)
+    assert "--text_encoder_cpu" in args
+    assert "--vae_chunk_size=16" in args
+
+
+def test_b1_arch_paths_flux_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
+    """clip_l / t5xxl / ae set on SDXL must not leak into argv."""
+    import logging
+
+    cfg = _recipe(
+        base_model={
+            "arch": "sdxl",
+            "checkpoint": "/m",
+            "arch_paths": {"clip_l": "/m/clip_l", "t5xxl": "/m/t5"},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--clip_l=") for a in args)
+    assert not any(a.startswith("--t5xxl=") for a in args)
+    assert any("FLUX/SD3" in r.message for r in caplog.records)
+
+
+def test_b1_arch_paths_anima_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    cfg = _recipe(
+        base_model={
+            "arch": "sdxl",
+            "checkpoint": "/m",
+            "arch_paths": {"qwen3": "/m/q"},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--qwen3=") for a in args)
+    assert any("Anima-only" in r.message for r in caplog.records)
+
+
+def test_b1_arch_paths_byt5_warns_on_flux(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    cfg = _flux_recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {"byt5": "/m/byt5"},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--byt5=") for a in args)
+    assert any("HunyuanImage-only" in r.message for r in caplog.records)
+
+
+# --- Per-module LR (Anima) ------------------------------------------------
+
+
+def test_b1_module_lr_anima_full_emit() -> None:
+    cfg = _anima_recipe(
+        network={
+            "module_lr": {
+                "llm_adapter": 5e-5,
+                "self_attn": 1e-4,
+                "cross_attn": 2e-4,
+                "mlp": 3e-4,
+                "mod": 4e-4,
+            }
+        }
+    )
+    args = _argv(cfg)
+    assert "--llm_adapter_lr=5e-05" in args
+    assert "--self_attn_lr=0.0001" in args
+    assert "--cross_attn_lr=0.0002" in args
+    assert "--mlp_lr=0.0003" in args
+    assert "--mod_lr=0.0004" in args
+
+
+def test_b1_module_lr_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    cfg = _recipe(network={"module_lr": {"self_attn": 1e-4}})
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--self_attn_lr") for a in args)
+    assert any("module_lr" in r.message for r in caplog.records)
+
+
+# --- NetworkConfig new init/base-weights fields ---------------------------
+
+
+def test_b1_network_init_from_emits_network_weights() -> None:
+    cfg = _recipe(network={"init_from": "/lora/base.safetensors"})
+    args = _argv(cfg)
+    assert any(a.startswith("--network_weights=") for a in args)
+
+
+def test_b1_network_dim_from_weights_flag() -> None:
+    cfg = _recipe(
+        network={
+            "init_from": "/lora/base.safetensors",
+            "dim_from_weights": "/lora/base.safetensors",
+        }
+    )
+    args = _argv(cfg)
+    assert any(a.startswith("--network_weights=") for a in args)
+    assert "--dim_from_weights" in args
+
+
+def test_b1_network_base_weights_with_multipliers() -> None:
+    cfg = _recipe(
+        network={
+            "base_weights": ["/lora/a.safetensors", "/lora/b.safetensors"],
+            "base_weights_multiplier": [0.7, 0.3],
+        }
+    )
+    args = _argv(cfg)
+    assert "--base_weights" in args
+    bw_idx = args.index("--base_weights")
+    # Path values are platform-normalised; check the basename.
+    assert "a.safetensors" in args[bw_idx + 1]
+    assert "b.safetensors" in args[bw_idx + 2]
+    assert "--base_weights_multiplier" in args
+    bm_idx = args.index("--base_weights_multiplier")
+    assert args[bm_idx + 1] == "0.7"
+    assert args[bm_idx + 2] == "0.3"
+
+
+# --- Composite kitchen-sink ----------------------------------------------
+
+
+def test_b1_kitchen_sink_full_bf16_plus_fp8_plus_cache_te_disk() -> None:
+    """Real-world combo: bf16 mixed precision + full_bf16 + fp8_base +
+    cache_text_encoder_outputs_to_disk + multires_noise + max_grad_norm.
+    All must coexist on a single SDXL recipe without conflicts."""
+    cfg = _recipe(
+        optimization={
+            "full_bf16": True,
+            "fp8_base": True,
+            "cache_text_encoder_outputs_to_disk": True,
+        },
+        loss={
+            "multires_noise_iterations": 6,
+            "multires_noise_discount": 0.4,
+        },
+        optimizer={"max_grad_norm": 0.5},
+    )
+    args = _argv(cfg)
+    assert "--mixed_precision=bf16" in args
+    assert "--full_bf16" in args
+    assert "--fp8_base" in args
+    assert "--cache_text_encoder_outputs_to_disk" in args
+    assert "--multires_noise_iterations=6" in args
+    assert "--multires_noise_discount=0.4" in args
+    assert "--max_grad_norm=0.5" in args
+
+
+def test_b1_kitchen_sink_flux_full_arch_paths_plus_flow_match() -> None:
+    """FLUX recipe with arch_paths + flow_match + advanced loss + optimization."""
+    cfg = _flux_recipe(
+        base_model={
+            "arch": "flux",
+            "checkpoint": "/m/flux",
+            "arch_paths": {
+                "clip_l": "/m/clip_l",
+                "t5xxl": "/m/t5",
+                "ae": "/m/ae",
+                "guidance_scale": 1.0,
+                "apply_t5_attn_mask": True,
+            },
+        },
+        flow_match={
+            "timestep_sampling": "logit_normal",
+            "discrete_flow_shift": 3.0,
+            "weighting_scheme": "logit_normal",
+        },
+        optimization={
+            "full_bf16": True,
+            "fp8_base": True,
+            "blocks_to_swap": 16,
+            "cache_text_encoder_outputs": True,
+        },
+        loss={"zero_terminal_snr": True},
+    )
+    args = _argv(cfg)
+    for flag in (
+        "--apply_t5_attn_mask",
+        "--timestep_sampling=logit_normal",
+        "--discrete_flow_shift=3.0",
+        "--weighting_scheme=logit_normal",
+        "--full_bf16",
+        "--fp8_base",
+        "--blocks_to_swap=16",
+        "--cache_text_encoder_outputs",
+        "--zero_terminal_snr",
+    ):
+        assert flag in args, flag
+    # Path comparisons normalise the OS separator.
+    assert any(a.startswith("--clip_l=") and "clip_l" in a for a in args)
+    assert any(a.startswith("--t5xxl=") and "t5" in a for a in args)
+    assert any(a.startswith("--ae=") and "ae" in a for a in args)
+    assert any(a.startswith("--guidance_scale=1.0") for a in args)
+
+
+def test_b1_default_recipe_argv_byte_identical_after_b1() -> None:
+    """Anchor test: producing argv from a default-only recipe must remain
+    a stable list with the existing fields (sanity check the new helpers
+    don't slip in any defaults)."""
+    args = _argv(_recipe(), ws=Path("/ws"))
+    expected_anchors = [
+        "--network_module=networks.lora",
+        "--network_dim=32",
+        "--network_alpha=16",
+        "--network_train_unet_only",
+        "--optimizer_type=AdamW8bit",
+        "--learning_rate=0.0001",
+        "--lr_scheduler=cosine_with_restarts",
+        "--lr_warmup_steps=100",
+        "--max_train_epochs=10",
+        "--train_batch_size=1",
+        "--gradient_accumulation_steps=2",
+        "--mixed_precision=bf16",
+        "--gradient_checkpointing",
+        "--cache_latents",
+        "--save_model_as=safetensors",
+        "--save_precision=fp16",
+        "--save_state",
+        "--save_state_on_train_end",
+    ]
+    for flag in expected_anchors:
+        assert flag in args, flag
+    # Path-bearing flags use platform separators; check prefix.
+    assert any(a.startswith("--pretrained_model_name_or_path=") for a in args)
+
