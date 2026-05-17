@@ -143,6 +143,15 @@ export interface BootstrapStartResponse {
   backend?: BackendId
 }
 
+export interface AttentionBackendsResponse {
+  /** Compute capability of the first NVIDIA GPU, e.g. "8.9". null when none. */
+  compute_capability: string | null
+  /** Backends usable on this host (subset of `all`). */
+  supported: string[]
+  /** Canonical superset of recipe-level attention.training values. */
+  all: string[]
+}
+
 export interface BootstrapRequestBody {
   backend?: BackendId
   target?: string | null
@@ -510,6 +519,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ backend }),
     }),
+  getAttentionBackends: () =>
+    http<AttentionBackendsResponse>("/system/attention-backends"),
+  installFlashAttn: (backend: BackendId, version: "3" | "4") =>
+    http<{ session_id: string; status: string; backend: BackendId }>(
+      "/backend/install-flash-attn",
+      {
+        method: "POST",
+        body: JSON.stringify({ backend, version }),
+      },
+    ),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
   getRuntimeStatus: () =>

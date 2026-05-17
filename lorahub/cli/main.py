@@ -69,7 +69,7 @@ def info(
     cfg = load_config(config)
     backend = KohyaBackend()
 
-    script, argv, _files = compile_config(cfg, workspace=Path.cwd() / "_dryrun")
+    script, argv, _files, _env = compile_config(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
     table = Table(title="Config summary", show_header=False, expand=False)

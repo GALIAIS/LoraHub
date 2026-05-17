@@ -20,13 +20,18 @@ def _recipe(**overrides: object) -> TrainingConfig:
 
 
 def _argv(cfg: TrainingConfig, ws: Path = Path("/ws")) -> list[str]:
-    _, args, _files = compile_config(cfg, ws)
+    _, args, _files, _env = compile_config(cfg, ws)
     return args
 
 
 def _files(cfg: TrainingConfig, ws: Path = Path("/ws")) -> dict[Path, str]:
-    _, _args, files = compile_config(cfg, ws)
+    _, _args, files, _env = compile_config(cfg, ws)
     return files
+
+
+def _compile_env(cfg: TrainingConfig, ws: Path = Path("/ws")) -> dict[str, str]:
+    _, _args, _files, env = compile_config(cfg, ws)
+    return env
 
 
 def _dataset_toml(cfg: TrainingConfig, ws: Path = Path("/ws")) -> str:
@@ -46,7 +51,7 @@ def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
                 "dataset": {"source": "/d"},
             }
         )
-        s, _, _ = compile_config(cfg, tmp_path)
+        s, _, _, _ = compile_config(cfg, tmp_path)
         assert s == script
 
 
@@ -61,23 +66,23 @@ def _arch_recipe(arch: str) -> TrainingConfig:
 
 def test_pick_script_anima(tmp_path: Path) -> None:
     """Anima uses its own entry script per kohya's README."""
-    s, _, _ = compile_config(_arch_recipe("anima"), tmp_path)
+    s, _, _, _ = compile_config(_arch_recipe("anima"), tmp_path)
     assert s == "anima_train_network.py"
 
 
 def test_pick_script_lumina(tmp_path: Path) -> None:
-    s, _, _ = compile_config(_arch_recipe("lumina"), tmp_path)
+    s, _, _, _ = compile_config(_arch_recipe("lumina"), tmp_path)
     assert s == "lumina_train_network.py"
 
 
 def test_pick_script_hunyuan_image(tmp_path: Path) -> None:
-    s, _, _ = compile_config(_arch_recipe("hunyuan_image"), tmp_path)
+    s, _, _, _ = compile_config(_arch_recipe("hunyuan_image"), tmp_path)
     assert s == "hunyuan_image_train_network.py"
 
 
 def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
     """sd-scripts ships sd1.x/2.x in the same train_network.py entry script."""
-    s, _, _ = compile_config(_arch_recipe("sd2"), tmp_path)
+    s, _, _, _ = compile_config(_arch_recipe("sd2"), tmp_path)
     assert s == "train_network.py"
 
 
@@ -254,7 +259,7 @@ def test_sampling_attention_non_default_compiles_for_every_kohya_arch(
             }
         )
         # Should not raise; argv stays free of `--attn_mode` regardless of arch.
-        _, args, _ = compile_config(cfg, Path("/ws"))
+        _, args, _files, _env = compile_config(cfg, Path("/ws"))
         assert not any(a.startswith("--attn_mode") for a in args), arch
 
 
@@ -624,4 +629,91 @@ def test_optimization_full_kitchen_sink_on_flux() -> None:
     assert "--fused_backward_pass" in args
     assert "--full_bf16" in args
     assert "--blocks_to_swap=16" in args
+# attention.training -> kohya argv + env overrides
+# --------------------------------------------------------------------------- #
+
+
+def test_attention_auto_emits_no_argv() -> None:
+    """`auto` keeps kohya's own default — we never emit attention argv."""
+    args = _argv(_recipe())
+    assert not any(a.startswith("--attn_mode") for a in args)
+    assert "--xformers" not in args
+    assert "--sdpa" not in args
+    assert "--split_attn" not in args
+
+
+def test_attention_torch_emits_attn_mode() -> None:
+    args = _argv(_recipe(attention={"training": "torch"}))
+    assert "--attn_mode=torch" in args
+
+
+def test_attention_sdpa_emits_sdpa_flag() -> None:
+    args = _argv(_recipe(attention={"training": "sdpa"}))
+    assert "--sdpa" in args
+
+
+def test_attention_xformers_with_split() -> None:
+    cfg = _recipe(attention={"training": "xformers", "split": True})
+    args = _argv(cfg)
+    assert "--xformers" in args
+    assert "--split_attn" in args
+
+
+def test_attention_xformers_without_split() -> None:
+    args = _argv(_recipe(attention={"training": "xformers"}))
+    assert "--xformers" in args
+    assert "--split_attn" not in args
+
+
+def test_attention_flash_emits_attn_mode() -> None:
+    args = _argv(_recipe(attention={"training": "flash"}))
+    assert "--attn_mode=flash" in args
+
+
+def test_attention_flex_falls_back_to_sdpa(caplog: pytest.LogCaptureFixture) -> None:
+    """flex isn't supported by kohya; we drop to sdpa with a warning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        args = _argv(_recipe(attention={"training": "flex"}))
+    assert "--sdpa" in args
+    assert any("flex" in rec.message for rec in caplog.records)
+
+
+def test_attention_flash3_sets_env_override() -> None:
+    cfg = _recipe(attention={"training": "flash3"})
+    _, args, _files, env = compile_config(cfg, Path("/ws"))
+    assert "--attn_mode=flash" in args
+    assert env.get("LORAHUB_KOHYA_ATTN_OVERRIDE") == "flash3"
+
+
+def test_attention_flash4_sets_env_override() -> None:
+    cfg = _recipe(attention={"training": "flash4"})
+    _, args, _files, env = compile_config(cfg, Path("/ws"))
+    assert "--attn_mode=flash" in args
+    assert env.get("LORAHUB_KOHYA_ATTN_OVERRIDE") == "flash4"
+
+
+def test_attention_default_env_is_empty() -> None:
+    """Backends that don't need an env override get an empty mapping."""
+    _, _args, _files, env = compile_config(_recipe(), Path("/ws"))
+    assert env == {}
+
+
+def test_attn_patch_module_imports_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Importing the patch module without the env var is a no-op.
+
+    The host venv almost certainly doesn't have flash_attn_interface
+    installed; calling apply() should still return False without raising.
+    """
+    from lorahub.core.backends.kohya import _attn_patch
+
+    monkeypatch.delenv(_attn_patch.OVERRIDE_ENV, raising=False)
+    assert _attn_patch.apply() is False
+    monkeypatch.setenv(_attn_patch.OVERRIDE_ENV, "")
+    assert _attn_patch.apply() is False
+    monkeypatch.setenv(_attn_patch.OVERRIDE_ENV, "flash3")
+    # Without flash_attn_interface installed this still returns False
+    # (and logs a warning) instead of crashing.
+    assert _attn_patch.apply() is False
 

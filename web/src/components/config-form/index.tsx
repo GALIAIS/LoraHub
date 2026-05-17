@@ -21,8 +21,10 @@ import {
   SlidersHorizontal,
   Wand2,
   Workflow,
+  Zap,
 } from "lucide-react"
 import type { ValidationFieldError } from "@/lib/api"
+import { AttentionFields } from "./sections/attention"
 import { BaseModelFields } from "./sections/base-model"
 import { DatasetFields } from "./sections/dataset"
 import { NetworkFields } from "./sections/network"
@@ -120,6 +122,14 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         defaultOpen
       >
         <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
+        icon={<Zap className="size-3.5" />}
+        title="注意力内核"
+        subtitle="Flash / xformers / sdpa；按 GPU 计算能力自动门控"
+      >
+        <AttentionFields value={value.attention} set={set} errorMap={errorMap} />
       </Section>
 
       <Section

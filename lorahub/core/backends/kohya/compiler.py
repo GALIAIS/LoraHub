@@ -14,6 +14,10 @@ from lorahub.core.config.schema import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
+# Env var read by ``_attn_patch`` inside the kohya subprocess to swap in
+# the FA3 / FA4 dispatcher. Empty / unset means "leave attention alone".
+_ATTN_OVERRIDE_ENV = "LORAHUB_KOHYA_ATTN_OVERRIDE"
+
 # Map our optimizer names to kohya's --optimizer_type values
 _OPTIMIZER_MAP: dict[str, str] = {
     "adamw": "AdamW",
@@ -53,17 +57,23 @@ class CompilationError(ValueError):
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
-) -> tuple[str, list[str], dict[Path, str]]:
-    """Translate a recipe into (script_name, argv, files_to_write).
+) -> tuple[str, list[str], dict[Path, str], dict[str, str]]:
+    """Translate a recipe into (script_name, argv, files_to_write, env).
 
     `files_to_write` is a mapping of absolute path to file content that the
     caller must write before launching the subprocess (currently just
     `<workspace>/dataset.toml`). Returning it instead of writing it ourselves
     keeps the compiler a pure function.
+
+    `env` carries process-level overrides the runner must merge into the
+    spawn environment — currently used by the FA3 / FA4 attention path so
+    the in-process monkey-patch (`_attn_patch.py`) knows which dispatcher
+    to substitute. Always a dict; empty when no overrides are needed.
     """
     script = _pick_script(cfg.base_model.arch)
     args: list[str] = []
     files: dict[Path, str] = {}
+    env: dict[str, str] = {}
 
     _emit_model_args(cfg, args)
     _emit_dataset_args(cfg, workspace, args, files)
@@ -72,6 +82,7 @@ def compile_config(
     _emit_schedule_args(cfg, args)
     _emit_precision_args(cfg, args)
     _emit_loss_args(cfg, args)
+    _emit_attention_args(cfg, args, env)
     _emit_output_args(cfg, workspace, args)
     _emit_sampling_args(cfg, workspace, args)
     _emit_resume_args(cfg, args)
@@ -80,7 +91,7 @@ def compile_config(
     _emit_variant_args(cfg, args)
     _emit_extra_args(cfg, args)
 
-    return script, args, files
+    return script, args, files, env
 
 
 # Map our base_model.arch literals to the kohya sd-scripts entry script that
@@ -307,6 +318,79 @@ def _emit_loss_args(cfg: TrainingConfig, args: list[str]) -> None:
         args.append("--scale_v_pred_loss_like_noise_pred")
     if loss.v_parameterization:
         args.append("--v_parameterization")
+
+
+def _emit_attention_args(
+    cfg: TrainingConfig,
+    args: list[str],
+    env: dict[str, str],
+) -> None:
+    """Translate ``cfg.attention.training`` into kohya argv + env overrides.
+
+    kohya sd-scripts expose attention selection as a mix of dedicated
+    booleans (`--xformers`, `--sdpa`) and a free-form `--attn_mode` flag.
+    The exact spelling differs by entry script, but every modern script
+    (sdxl/sd3/flux/lumina/anima/hunyuan_image) understands `--xformers`
+    and `--sdpa`; the FLUX and SD3 trainers additionally accept
+    `--attn_mode=flash` for FlashAttention 2.
+
+    FA3 and FA4 are not first-class in kohya. We emit `--attn_mode flash`
+    (so sd-scripts loads its FA path) and stash the requested upgrade in
+    the ``LORAHUB_KOHYA_ATTN_OVERRIDE`` env var. The companion module
+    ``_attn_patch.py`` reads that var inside the subprocess and swaps the
+    attention dispatcher to ``flash_attn_interface`` (FA3) or the FA4 API
+    before kohya's modules import it. Loading the patch is the runner's
+    responsibility (see ``runner.py``).
+
+    `flex` (`torch.nn.attention.flex_attention`) has no kohya argv yet, so
+    we drop back to sdpa with a warning rather than emit a flag the trainer
+    will reject. `auto` emits no attention argv so kohya keeps its default
+    (sdpa for most arches today).
+    """
+    backend = cfg.attention.training
+    split = cfg.attention.split
+
+    if backend == "auto":
+        # Trust kohya's own default; nothing to emit. `--split_attn` only
+        # makes sense alongside an explicit attention choice.
+        return
+
+    if backend == "torch":
+        args.append("--attn_mode=torch")
+        return
+
+    if backend == "sdpa":
+        # `--sdpa` is the historically-stable spelling across every
+        # sd-scripts entry; `--attn_mode=sdpa` is accepted by the newer
+        # FLUX/SD3 trainers but `--sdpa` works everywhere.
+        args.append("--sdpa")
+        return
+
+    if backend == "flex":
+        logger.warning(
+            "attention.training='flex' is not supported by kohya; "
+            "falling back to sdpa"
+        )
+        args.append("--sdpa")
+        return
+
+    if backend == "xformers":
+        args.append("--xformers")
+        if split:
+            args.append("--split_attn")
+        return
+
+    if backend == "flash":
+        args.append("--attn_mode=flash")
+        return
+
+    if backend in ("flash3", "flash4"):
+        # kohya itself only ships FA2 wiring. We tell sd-scripts to load
+        # `--attn_mode=flash` and let the in-process patch promote the
+        # dispatcher to FA3/FA4 via flash_attn_interface or the FA4 API.
+        args.append("--attn_mode=flash")
+        env[_ATTN_OVERRIDE_ENV] = backend
+        return
 
 
 def _emit_output_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -> None:

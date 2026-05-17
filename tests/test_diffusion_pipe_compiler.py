@@ -559,4 +559,42 @@ def test_sampling_attention_non_default_warns_and_no_toml_drift(
         "sampling.attention" in rec.message and "sageattn" in rec.message
         for rec in caplog.records
     ), [rec.message for rec in caplog.records]
+# attention.training: dp auto-detects, so it's mostly advisory
+# --------------------------------------------------------------------------- #
+
+
+def test_attention_default_emits_no_marker_comment() -> None:
+    """Vanilla recipes shouldn't grow an attention comment."""
+    main = _main_toml(_recipe())
+    assert "attention.training" not in main
+
+
+def test_attention_flash3_compiles_without_error() -> None:
+    """`flash3` is purely advisory on dp — compile_config must succeed."""
+    cfg = _recipe(attention={"training": "flash3"})
+    argv, files = _compile(cfg, Path("/ws"))
+    # argv shape stays unchanged
+    assert argv[0] == "--deepspeed"
+    assert "--config" in argv
+    main_path = Path("/ws").resolve() / "diffusion_pipe.toml"
+    assert "flash3" in files[main_path]
+
+
+def test_attention_flash4_compiles_without_error() -> None:
+    cfg = _recipe(attention={"training": "flash4"})
+    argv, files = _compile(cfg, Path("/ws"))
+    assert "--deepspeed" in argv
+    main_path = Path("/ws").resolve() / "diffusion_pipe.toml"
+    assert "flash4" in files[main_path]
+
+
+def test_attention_xformers_logs_but_compiles(caplog: pytest.LogCaptureFixture) -> None:
+    """dp doesn't honour xformers; log a warning but never error."""
+    import logging
+
+    cfg = _recipe(attention={"training": "xformers"})
+    with caplog.at_level(logging.WARNING):
+        argv, _files = _compile(cfg, Path("/ws"))
+    assert "--deepspeed" in argv
+    assert any("xformers" in rec.message for rec in caplog.records)
 

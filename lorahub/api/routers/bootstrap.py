@@ -196,3 +196,49 @@ def _build_deps_runner(
             installer.install_requirements(plan, progress=progress)
 
     return runner
+
+
+# --------------------------------------------------------------------------- #
+# FlashAttention 3 / 4 install
+# --------------------------------------------------------------------------- #
+#
+# FlashAttention 3 (Hopper) and 4 (Hopper/Blackwell beta) ship as private
+# nightly wheels; their PyPI presence and exact distribution name move
+# around (the kernel team has shipped them under `flash-attn`, `flash-attn-3`,
+# and `flash-attn-4` at various points). Rather than guess and risk
+# typo-squat installs, this endpoint refuses with 501 + a pointer to the
+# upstream README so the user installs the correct wheel manually.
+#
+# The frontend reads this 501 + the `install_doc_url` and renders a
+# "Install manually" link instead of a one-click button.
+
+_FLASH_ATTN_DOC_URL = "https://github.com/Dao-AILab/flash-attention#installation-and-features"
+
+
+class InstallFlashAttnRequest(BaseModel):
+    backend: Literal["kohya", "diffusion-pipe"] = "diffusion-pipe"
+    version: Literal["3", "4"] = "3"
+
+
+@router.post("/backend/install-flash-attn", status_code=501)
+async def install_flash_attn(req: InstallFlashAttnRequest) -> dict[str, Any]:
+    """Install FA3/FA4 into a backend's venv.
+
+    Currently a stub: FA3/FA4 wheel naming is unstable and the right install
+    command depends on CUDA version + glibc + GPU silicon. We surface a 501
+    plus the upstream installation URL so the user does it once by hand
+    rather than have us ship a flaky autoresolver.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "message": (
+                f"Automatic FlashAttention {req.version} install is not "
+                f"implemented yet — install the wheel into the {req.backend} "
+                "venv manually."
+            ),
+            "backend": req.backend,
+            "version": req.version,
+            "install_doc_url": _FLASH_ATTN_DOC_URL,
+        },
+    )

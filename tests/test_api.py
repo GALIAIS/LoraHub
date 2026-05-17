@@ -2845,3 +2845,92 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     assert b["total"] == 2
     assert b["failed"] == 2
     assert b["name_prefix"] == "bravo"
+
+
+# --------------------------------------------------------------------------- #
+# Attention backend endpoints
+# --------------------------------------------------------------------------- #
+
+
+def test_attention_backends_endpoint_shape(client: TestClient) -> None:
+    """`GET /api/system/attention-backends` returns a stable, typed shape."""
+    r = client.get("/api/system/attention-backends")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body.keys()) == {"compute_capability", "supported", "all"}
+    assert body["compute_capability"] is None or isinstance(body["compute_capability"], str)
+    assert isinstance(body["supported"], list)
+    assert isinstance(body["all"], list)
+    # `all` is the canonical superset; `supported` must be a subset of it.
+    assert set(body["supported"]).issubset(body["all"])
+    # The PyTorch-native quartet is always available.
+    assert {"auto", "torch", "sdpa", "flex"}.issubset(body["supported"])
+
+
+def test_attention_backends_endpoint_uses_first_nvidia_gpu(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the host has an NVIDIA GPU, its compute_cap drives the supported set."""
+    from lorahub.api import system_stats
+
+    fake = system_stats.SystemSnapshot(
+        timestamp=0.0,
+        host=system_stats.HostInfo(hostname="x", system="X", release="x", python="x"),
+        cpu=system_stats.CpuStats(cores_logical=1, cores_physical=1, usage_percent=0.0),
+        memory=system_stats.MemoryStats(total_bytes=1, used_bytes=0, available_bytes=1, percent=0.0),
+        disks=[],
+        gpus=[
+            system_stats.GpuStats(
+                index=0,
+                name="H100",
+                driver="555",
+                memory_total_bytes=None,
+                memory_used_bytes=None,
+                memory_free_bytes=None,
+                utilization_percent=None,
+                temperature_c=None,
+                power_w=None,
+                power_limit_w=None,
+                fan_percent=None,
+                vendor="nvidia",
+                compute_capability="9.0",
+            )
+        ],
+        has_psutil=False,
+        has_nvidia_smi=True,
+    )
+    # Patch the symbol the router imports rather than the module under test;
+    # FastAPI bound it at import time.
+    from lorahub.api.routers import system as system_router
+
+    monkeypatch.setattr(system_router, "collect_snapshot", lambda: fake)
+
+    body = client.get("/api/system/attention-backends").json()
+    assert body["compute_capability"] == "9.0"
+    assert "flash3" in body["supported"]
+    assert "flash4" in body["supported"]
+
+
+def test_install_flash_attn_returns_501(client: TestClient) -> None:
+    """The conservative path: refuse the auto-install with a doc URL."""
+    r = client.post(
+        "/api/backend/install-flash-attn",
+        json={"backend": "kohya", "version": "3"},
+    )
+    assert r.status_code == 501
+    detail = r.json()["detail"]
+    assert detail["backend"] == "kohya"
+    assert detail["version"] == "3"
+    assert "install_doc_url" in detail
+    assert detail["install_doc_url"].startswith("https://")
+
+
+def test_install_flash_attn_validates_version(client: TestClient) -> None:
+    """Body shape is validated by pydantic before the 501 fires."""
+    r = client.post(
+        "/api/backend/install-flash-attn",
+        json={"backend": "kohya", "version": "5"},  # invalid literal
+    )
+    assert r.status_code == 422
+

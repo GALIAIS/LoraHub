@@ -1639,5 +1639,69 @@ __all__ = [
     "PublicIpInfo",
     "SystemSnapshot",
     "TcpConnectionStats",
+    "ALL_ATTENTION_BACKENDS",
+    "attention_backends_for_gpu",
     "collect_snapshot",
 ]
+
+
+# Canonical superset of attention backends LoraHub knows how to translate
+# at the recipe level (see schema.AttentionConfig.training). The frontend
+# disables anything missing from `attention_backends_for_gpu(...)` so the
+# user can't pick a kernel their GPU can't run.
+ALL_ATTENTION_BACKENDS: tuple[str, ...] = (
+    "auto",
+    "torch",
+    "sdpa",
+    "flex",
+    "xformers",
+    "flash",
+    "flash3",
+    "flash4",
+)
+
+
+def attention_backends_for_gpu(cap: str | None) -> list[str]:
+    """Return the attention backends usable on a GPU with compute cap ``cap``.
+
+    The compute-capability gating is conservative on purpose — we'd rather
+    grey out a kernel that *might* work than let the trainer crash inside
+    sd-scripts. References:
+
+    * FlashAttention 2 needs sm_80+ (Ampere); RTX 30/40, A/H100 are fine.
+    * FlashAttention 3 is Hopper-only (sm_90).
+    * FlashAttention 4 (beta) supports Hopper and the early Blackwell
+      sm_10x/sm_12x silicon; the FA3 Hopper-only kernels don't run on
+      Blackwell directly.
+    * xformers ships official wheels up through Hopper; Blackwell support
+      is still trickling into nightly builds, so we mark it unsupported on
+      sm_10+ rather than promise wheels that don't yet exist.
+
+    A non-NVIDIA GPU (or no GPU detected) gets the safe set: PyTorch-native
+    kernels only.
+    """
+    safe = ["auto", "torch", "sdpa", "flex"]
+    if not cap:
+        return safe
+
+    raw = cap.strip()
+    try:
+        major_str, _, _ = raw.partition(".")
+        major = int(major_str)
+    except (TypeError, ValueError):
+        return safe
+
+    if major < 8:
+        # Volta (sm_70/72): no FlashAttention, but xformers ships a fallback.
+        return [*safe, "xformers"]
+    if major == 8:
+        # Ampere (sm_80/86) + Ada Lovelace (sm_89): FA2 yes, FA3/FA4 no.
+        return [*safe, "xformers", "flash"]
+    if major == 9:
+        # Hopper (sm_90): the only family that runs FA3.
+        return [*safe, "xformers", "flash", "flash3", "flash4"]
+    if major >= 10:
+        # Blackwell (sm_100/120): FA2 + FA4 land but xformers wheels and
+        # FA3 are not generally available yet.
+        return [*safe, "flash", "flash4"]
+    return safe
