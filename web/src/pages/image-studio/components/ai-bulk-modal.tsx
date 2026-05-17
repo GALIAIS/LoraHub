@@ -21,7 +21,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   const [activeTab, setActiveTab] = useState<AiBulkTab>("smart-caption")
   const [device, setDevice] = useState("auto")
   const [mergeStrategy, setMergeStrategy] = useState("replace")
-  const [taggerModel, setTaggerModel] = useState("wd-swinv2-v3")
+  const [taggerModel, setTaggerModel] = useState("wd-eva02-large-v3")
   const [generalThreshold, setGeneralThreshold] = useState(0.35)
   const [characterThreshold, setCharacterThreshold] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
@@ -192,6 +192,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setTaggerModel(e.target.value)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
+                  <option value="wd-eva02-large-v3">WD EVA02 Large v3 (推荐)</option>
                   <option value="wd-swinv2-v3">WD SwinV2 v3</option>
                   <option value="wd-vit-v3">WD ViT v3</option>
                   <option value="wd-convnext-v3">WD ConvNext v3</option>

@@ -23,7 +23,7 @@ from lorahub.core.net import hf_download
 if TYPE_CHECKING:
     import onnxruntime as ort
 
-DEFAULT_MODEL = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _RATING_CATEGORY = 9
 _GENERAL_CATEGORY = 0

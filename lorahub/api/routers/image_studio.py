@@ -791,87 +791,157 @@ def batch_delete(body: BatchDeleteSelectInput) -> dict[str, Any]:
 # Smart caption (WD14 + Vision LLM)
 # --------------------------------------------------------------------------- #
 
-# Style words that pollute caption when training a *style* LoRA — these
-# describe the visual style itself and must be stripped from the caption,
-# otherwise the model anchors the style on the words instead of the latent.
-_STYLE_TAGS_TO_STRIP = {
-    "anime", "anime style", "anime coloring", "anime screencap", "manga",
-    "illustration", "comic", "cartoon", "western comics (style)",
-    "cel shading", "cel-shaded", "flat color", "flat colors", "flat shading",
-    "pixel art", "chibi", "sketch", "lineart", "line art", "monochrome",
-    "watercolor", "watercolor (medium)", "oil painting (medium)",
-    "concept art", "official art", "key visual", "promotional art",
-    "screencap", "official style", "studio ghibli style",
-    "realistic", "photorealistic", "photo", "photograph", "3d", "3d (artwork)",
-    "render", "cgi", "unreal engine", "octane render",
-    "highres", "absurdres", "best quality", "masterpiece",
-    "traditional media", "digital media", "digital painting",
+# Tags that are pure quality/medium noise (the Anima header carries quality
+# explicitly, so don't double-print them in the general-tag section).
+_QUALITY_NOISE_TAGS = {
+    "highres", "absurdres", "best quality", "masterpiece", "high quality",
+    "low quality", "worst quality", "normal quality", "lowres",
+    "official art", "key visual", "promotional art", "screencap",
     "artist name", "signature", "watermark", "logo", "english text",
     "dated", "twitter username", "patreon username", "artist logo",
 }
 
+# Map WD14 rating tag -> Anima rating keyword for the header line.
+_RATING_MAP = {
+    "general": "safe",
+    "sensitive": "sensitive",
+    "questionable": "nsfw",
+    "explicit": "nsfw",
+}
+
 _SMART_CAPTION_PROMPT_STYLE = (
-    "You are writing a training caption for a STYLE LoRA. The model must learn the visual "
-    "style by seeing it across many captions, so the caption must describe ONLY the content "
-    "(subject, pose, clothing, expression, background, composition, lighting) and must NEVER "
-    "name the art style, medium, or quality.\n\n"
-    "Strict rules:\n"
-    "  - Do NOT mention: anime, manga, illustration, cartoon, cel shading, flat color, "
-    "    digital painting, watercolor, sketch, lineart, pixel art, chibi, 3d, render, "
-    "    photorealistic, photograph, official art, screencap, masterpiece, best quality, "
-    "    highres, absurdres, signature, watermark, artist name.\n"
-    "  - Do NOT use vague aesthetic words like beautiful, stunning, gorgeous, detailed.\n"
-    "  - Describe what is in the frame as if it were a real scene, in plain natural English.\n"
-    "  - One paragraph, 2-4 sentences, concrete nouns and verbs.\n"
-    "  - Mention: subject (gender/age if obvious), pose / action, clothing items and colors, "
-    "    facial expression, hair, background or setting, framing (close-up / full body / "
-    "    from behind / etc), lighting if distinctive.\n\n"
-    "Reference WD14 tags (you may borrow concrete content tags but ignore any style/quality "
-    "tags above): {tags}\n\n"
-    "Write the caption now."
+    "You are writing the natural-language sentence that will sit inside an Anima training "
+    "caption for a STYLE LoRA. The reader is the text encoder; your sentence must teach it "
+    "the visual style of the image.\n\n"
+    "Write 2-3 sentences in plain English describing:\n"
+    "  - the artistic medium and rendering (e.g. clean lineart with soft cel shading, "
+    "    painterly highlights, halftone screentone, vivid saturated palette, soft pastel "
+    "    palette, dynamic angle, painterly background)\n"
+    "  - lighting and color mood (warm/cool/neon/golden hour/etc.)\n"
+    "  - composition and framing (close-up portrait, dynamic low angle, full-body shot, etc.)\n"
+    "  - the subject and pose ONLY at a high level (one girl in a dynamic pose, a group on "
+    "    a ship deck), without enumerating clothing items or accessories.\n\n"
+    "Do NOT begin with a trigger word, header, or label — output ONLY the sentences. "
+    "Do NOT use vague praise (beautiful, stunning, gorgeous, amazing).\n\n"
+    "Reference WD14 general tags (for grounding only): {tags}"
 )
 
 _SMART_CAPTION_PROMPT_CHARACTER = (
-    "You are writing a training caption for a CHARACTER LoRA. The model must learn the "
-    "character's identity, so the caption must describe everything EXCEPT the character's "
-    "fixed identity features.\n\n"
-    "Strict rules:\n"
-    "  - Do NOT describe: the character's face, eye color, hair color, hair style, "
-    "    hair length, signature outfit, or any identity-defining trait. These are what the "
-    "    LoRA is supposed to learn.\n"
-    "  - DO describe: pose, action, expression, clothing variations, accessories, "
-    "    background, lighting, framing, camera angle, mood.\n"
-    "  - One paragraph, 2-4 sentences, concrete and natural.\n\n"
-    "Reference WD14 tags: {tags}\n\nWrite the caption now."
+    "You are writing the natural-language sentences that will sit inside an Anima training "
+    "caption for a CHARACTER LoRA. The model must learn the character's fixed identity from "
+    "the latent, so your sentences must describe what VARIES across images.\n\n"
+    "Write 2-3 sentences focusing on:\n"
+    "  - pose, action, expression\n"
+    "  - position/direction inside the frame (e.g. \"standing on the left side of the image, "
+    "    looking back over her shoulder\")\n"
+    "  - background and setting\n"
+    "  - framing (close-up, full body, from behind, etc.)\n"
+    "  - lighting/mood\n\n"
+    "Do NOT describe: hair color, eye color, hair style/length, the character's signature "
+    "outfit, or any other fixed identity feature. Do NOT begin with a trigger word or label "
+    "— output ONLY the sentences.\n\n"
+    "Reference WD14 general tags: {tags}"
 )
 
 _SMART_CAPTION_PROMPT_GENERAL = (
-    "Based on the following WD14 tags and the image, write an optimized training caption.\n"
-    "WD14 tags: {tags}\n"
-    "Write a natural language caption suitable for LoRA training. Include all relevant details "
-    "about the subject, pose, clothing, background, and composition. Be concise but complete."
+    "Write a 2-3 sentence natural-language description of the image for LoRA training. "
+    "Cover subject, pose, clothing, background, lighting, composition. Plain English, no "
+    "headers or labels.\n\nReference WD14 tags: {tags}"
 )
 
 
-def _filter_style_tags(tags_str: str) -> str:
-    """Drop style/quality WD14 tags so they don't leak into a style-LoRA caption."""
-    parts = [t.strip() for t in tags_str.split(",") if t.strip()]
-    kept = [t for t in parts if t.lower() not in _STYLE_TAGS_TO_STRIP]
-    return ", ".join(kept)
+def _drop_tags(tags: list[str], drop: set[str]) -> list[str]:
+    """Case-insensitive filter — keep order, drop matches."""
+    return [t for t in tags if t.lower() not in drop]
+
+
+def _split_normalize_tags(raw: str) -> list[str]:
+    """Split a comma list, lowercase, dedupe in-order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for piece in raw.split(","):
+        t = piece.strip().lower()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _build_anima_caption(
+    *,
+    rating_tag: str | None,
+    general_tags: list[str],
+    character_tags: list[str],
+    nl_text: str,
+    caption_mode: str,
+    trigger_word: str | None,
+) -> str:
+    """Assemble an Anima-format caption.
+
+    Layout:
+      masterpiece, best quality, score_7, <safe|sensitive|nsfw>,
+      [1girl/1boy/etc], [character_trigger or @artist], [series],
+      <NL paragraph>,
+      <remaining general tags>
+    """
+    rating = _RATING_MAP.get((rating_tag or "").lower(), "safe")
+    header = f"masterpiece, best quality, score_7, {rating}"
+
+    # Pick subject-count tag (1girl, 2girls, 1boy, etc.) from general — Anima
+    # wants this immediately after the header.
+    subject_tags: list[str] = []
+    rest_general: list[str] = []
+    subject_pattern = (
+        "1girl", "2girls", "3girls", "4girls", "5girls", "6+girls",
+        "1boy", "2boys", "3boys", "multiple_girls", "multiple_boys",
+        "solo", "no humans",
+    )
+    for t in general_tags:
+        if t in subject_pattern:
+            subject_tags.append(t)
+        else:
+            rest_general.append(t)
+
+    # Trigger / character / artist line.
+    trigger_part: list[str] = []
+    trig = (trigger_word or "").strip().lower()
+    if trig:
+        if caption_mode == "style":
+            # Style LoRA → format as @artist-style trigger if not already.
+            if not trig.startswith("@"):
+                trig = f"@{trig}"
+        trigger_part.append(trig)
+    # WD14 character predictions go on the same line as identity hints.
+    trigger_part.extend(character_tags)
+
+    line2 = ", ".join([*subject_tags, *trigger_part])
+
+    # Clean general tag tail: drop quality noise (header already covers it).
+    tail = _drop_tags(rest_general, _QUALITY_NOISE_TAGS)
+    tail_str = ", ".join(tail)
+
+    parts = [header]
+    if line2:
+        parts.append(line2)
+    if nl_text.strip():
+        parts.append(nl_text.strip())
+    if tail_str:
+        parts.append(tail_str)
+    return ",\n".join(parts)
 
 
 class SmartCaptionBatchInput(BaseModel):
     path: str
     recursive: bool = False
-    taggerModel: str = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+    taggerModel: str = "SmilingWolf/wd-eva02-large-tagger-v3"
     visionTask: str = "tagging.assist"
     mergeStrategy: str = "replace"
     device: str = "auto"
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
-    captionMode: str = "general"  # general | style | character
-    triggerWord: str | None = None  # prepended to every caption for activation
-    stripStyleTags: bool = True  # drop style/quality tags from WD14 output
+    captionMode: str = "style"  # general | style | character
+    triggerWord: str | None = None
+    stripStyleTags: bool = True  # accepted for compat; cleanup is built-in
 
 
 def _smart_caption_single_image(
@@ -892,11 +962,18 @@ def _smart_caption_single_image(
 
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
 
-    # Step 1: WD14 tagging (drop style/quality tags for style LoRA)
+    # Step 1: WD14 tagging — keep general/character/rating separately so we
+    # can place them in the Anima header / line2 / tail rather than dump them
+    # all into one comma list.
     tag_result = tagger.tag_image(img_path)
-    tags_str = tag_result.caption(underscores=False, include_character=True)
-    if strip_style_tags and caption_mode == "style":
-        tags_str = _filter_style_tags(tags_str)
+    general_tags_underscore = [t.name for t in tag_result.general]
+    general_tags = [t.replace("_", " ").lower() for t in general_tags_underscore]
+    character_tags = [
+        t.name.replace("_", " ").lower() for t in tag_result.character
+    ]
+    rating_name = tag_result.rating.name if tag_result.rating else None
+    # Tags shown to the VLM as content grounding (drop noise either way).
+    tags_for_prompt = ", ".join(_drop_tags(general_tags, _QUALITY_NOISE_TAGS))
 
     # Step 2: Prepare image for vision LLM
     mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
@@ -910,7 +987,7 @@ def _smart_caption_single_image(
         prompt_template = _SMART_CAPTION_PROMPT_CHARACTER
     else:
         prompt_template = _SMART_CAPTION_PROMPT_GENERAL
-    prompt_text = prompt_template.format(tags=tags_str)
+    prompt_text = prompt_template.format(tags=tags_for_prompt)
 
     messages: list[dict[str, Any]] = []
     if route.system_prompt:
@@ -932,21 +1009,24 @@ def _smart_caption_single_image(
         route=route,
     )
 
-    # Step 4: Save caption (inject trigger word at the very front for activation)
-    caption_body = result.content.strip()
-    trigger = (trigger_word or "").strip()
-    if trigger and not caption_body.lower().startswith(trigger.lower()):
-        caption_body = f"{trigger}, {caption_body}"
+    # Step 4: Assemble the Anima-format caption (header + line2 + NL + tail).
+    nl_text = result.content.strip()
+    new_caption = _build_anima_caption(
+        rating_tag=rating_name,
+        general_tags=general_tags,
+        character_tags=character_tags,
+        nl_text=nl_text,
+        caption_mode=caption_mode,
+        trigger_word=trigger_word,
+    )
 
     caption_path = img_path.with_suffix(".txt")
     existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
-
     if merge_strategy == "append":
-        new_caption = (existing.strip() + ", " + caption_body).strip(", ")
+        new_caption = (existing.strip() + "\n" + new_caption).strip()
     elif merge_strategy == "prepend":
-        new_caption = (caption_body + ", " + existing.strip()).strip(", ")
-    else:  # replace
-        new_caption = caption_body
+        new_caption = (new_caption + "\n" + existing.strip()).strip()
+    # else replace — keep as-is.
 
     caption_path.write_text(new_caption, encoding="utf-8")
 
@@ -964,7 +1044,7 @@ def _smart_caption_single_image(
 
     return {
         "path": str(img_path),
-        "wd14Tags": tags_str,
+        "wd14Tags": ", ".join(general_tags),
         "caption": new_caption,
     }
 
@@ -1020,13 +1100,13 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
 
 class SmartCaptionSingleInput(BaseModel):
     path: str
-    taggerModel: str = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+    taggerModel: str = "SmilingWolf/wd-eva02-large-tagger-v3"
     visionTask: str = "tagging.assist"
     mergeStrategy: str = "replace"
     device: str = "auto"
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
-    captionMode: str = "general"
+    captionMode: str = "style"
     triggerWord: str | None = None
     stripStyleTags: bool = True
 
