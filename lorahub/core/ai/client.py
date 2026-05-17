@@ -99,12 +99,13 @@ def _post_chat(
     body: dict[str, Any],
     timeout: float,
 ) -> dict[str, Any]:
-    import requests  # noqa: PLC0415
+    import httpx  # noqa: PLC0415
 
     url = f"{base_url.rstrip('/')}/chat/completions"
     try:
-        r = requests.post(url, headers=headers, json=body, timeout=timeout)
-    except requests.RequestException as exc:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(url, headers=headers, json=body)
+    except httpx.HTTPError as exc:
         raise AIError(
             f"network error reaching {base_url}: {exc}",
             status_code=None,
@@ -129,12 +130,13 @@ def _get_models(
     headers: dict[str, str],
     timeout: float,
 ) -> list[dict[str, Any]]:
-    import requests  # noqa: PLC0415
+    import httpx  # noqa: PLC0415
 
     url = f"{base_url.rstrip('/')}/models"
     try:
-        r = requests.get(url, headers=headers, timeout=timeout)
-    except requests.RequestException as exc:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
         raise AIError(
             f"network error reaching {url}: {exc}",
             retryable=True,
