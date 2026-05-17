@@ -442,3 +442,119 @@ def test_optimizer_args_user_overrides_dedicated_fields() -> None:
     user_idx = tail.index("betas=0.5,0.5")
     if default_idx != -1:
         assert default_idx < user_idx
+
+
+# --------------------------------------------------------------------------- #
+# OptimizationConfig: torch_compile / fused_backward_pass / full_bf16 /
+# blocks_to_swap argv emission.
+# --------------------------------------------------------------------------- #
+
+
+def test_optimization_default_emits_no_flags() -> None:
+    """Bare OptimizationConfig() leaves the argv untouched (kohya defaults)."""
+    args = _argv(_recipe())
+    for flag in (
+        "--torch_compile",
+        "--fused_backward_pass",
+        "--full_bf16",
+        "--blocks_to_swap",
+    ):
+        assert not any(a.startswith(flag) for a in args), flag
+
+
+def test_optimization_torch_compile_emits_flag() -> None:
+    cfg = _recipe(optimization={"torch_compile": True})
+    assert "--torch_compile" in _argv(cfg)
+
+
+def test_optimization_fused_backward_pass_emits_flag() -> None:
+    cfg = _recipe(optimization={"fused_backward_pass": True})
+    assert "--fused_backward_pass" in _argv(cfg)
+
+
+def test_optimization_full_bf16_coexists_with_mixed_precision() -> None:
+    """`--full_bf16` is additive: it lands alongside `--mixed_precision=bf16`."""
+    cfg = _recipe(optimization={"full_bf16": True})
+    args = _argv(cfg)
+    assert "--full_bf16" in args
+    assert "--mixed_precision=bf16" in args
+
+
+def test_optimization_blocks_to_swap_emits_for_flux() -> None:
+    """FLUX ships --blocks_to_swap in flux_train_network.py."""
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
+            "dataset": {"source": "/d"},
+            "optimization": {"blocks_to_swap": 12},
+        }
+    )
+    assert "--blocks_to_swap=12" in _argv(cfg)
+
+
+def test_optimization_blocks_to_swap_emits_for_sd3() -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "sd3", "checkpoint": "/m/sd3"},
+            "dataset": {"source": "/d"},
+            "optimization": {"blocks_to_swap": 4},
+        }
+    )
+    assert "--blocks_to_swap=4" in _argv(cfg)
+
+
+def test_optimization_blocks_to_swap_skipped_for_sdxl(caplog) -> None:
+    """SDXL's sd-scripts entry has no --blocks_to_swap; we drop the flag + warn."""
+    import logging
+
+    cfg = _recipe(optimization={"blocks_to_swap": 8})
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--blocks_to_swap") for a in args)
+    assert any("blocks_to_swap" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.parametrize("arch", ["sd15", "sd2", "sdxl"])
+def test_optimization_blocks_to_swap_skipped_for_unsupported_arches(
+    arch: str, caplog
+) -> None:
+    import logging
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": arch, "checkpoint": "/m"},
+            "dataset": {"source": "/d"},
+            "optimization": {"blocks_to_swap": 6},
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
+        args = _argv(cfg)
+    assert not any(a.startswith("--blocks_to_swap") for a in args)
+
+
+def test_optimization_blocks_to_swap_zero_is_silent() -> None:
+    """blocks_to_swap=0 (default) emits no flag and no warning."""
+    cfg = _recipe(optimization={"blocks_to_swap": 0})
+    args = _argv(cfg)
+    assert not any(a.startswith("--blocks_to_swap") for a in args)
+
+
+def test_optimization_full_kitchen_sink_on_flux() -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
+            "dataset": {"source": "/d"},
+            "optimization": {
+                "torch_compile": True,
+                "fused_backward_pass": True,
+                "full_bf16": True,
+                "blocks_to_swap": 16,
+            },
+        }
+    )
+    args = _argv(cfg)
+    assert "--torch_compile" in args
+    assert "--fused_backward_pass" in args
+    assert "--full_bf16" in args
+    assert "--blocks_to_swap=16" in args
+

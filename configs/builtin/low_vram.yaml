@@ -1,0 +1,68 @@
+# Built-in recipe template: SDXL LoRA tuned for an 8GB VRAM budget.
+# Stacks every memory-saving switch lorahub knows about: torch.compile,
+# fused backward pass, full bf16, and 8 transformer blocks swapped to CPU.
+# REQUIRED before saving: base_model.checkpoint, dataset.source.
+
+_template:
+  name: 低显存预设 (8GB)
+  description: SDXL 角色 LoRA，开启 torch_compile / fused_backward / full_bf16 / blocks_to_swap=8 以塞进 8GB 显存。
+  arch: sdxl
+
+_placeholders:
+  - key: name
+    label: 配方 / 输出名称
+    path_field: output.name
+    placeholder: my_character_v1
+  - key: checkpoint
+    label: SDXL 基础模型检查点
+    path_field: base_model.checkpoint
+    placeholder: C:\models\sdxl_base.safetensors
+  - key: dataset
+    label: 数据集目录
+    path_field: dataset.source
+    placeholder: ./datasets/my_character
+
+base_model:
+  arch: sdxl
+  checkpoint: ""
+
+dataset:
+  source: ""
+  resolution: [1024, 1024]
+  num_repeats: 10
+
+network:
+  type: lora
+  rank: 16
+  alpha: 8
+  target_unet: true
+  target_text_encoder: false
+
+optimizer:
+  type: adamw8bit
+  lr:
+    unet: 1.0e-4
+    text_encoder: 5.0e-5
+  schedule: cosine_with_restarts
+  warmup_steps: 100
+
+schedule:
+  epochs: 10
+  batch_size: 1
+  grad_accum: 4
+
+precision: bf16
+gradient_checkpointing: true
+cache_latents: true
+
+optimization:
+  torch_compile: true
+  fused_backward_pass: true
+  full_bf16: true
+  blocks_to_swap: 8
+
+sampling:
+  enabled: false
+
+output:
+  save_dtype: fp16

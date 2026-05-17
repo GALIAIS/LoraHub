@@ -7,9 +7,12 @@ we can unit-test thoroughly without touching disk or GPU.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from lorahub.core.config.schema import TrainingConfig
+
+logger = logging.getLogger(__name__)
 
 # Map our optimizer names to kohya's --optimizer_type values
 _OPTIMIZER_MAP: dict[str, str] = {
@@ -20,6 +23,19 @@ _OPTIMIZER_MAP: dict[str, str] = {
     "prodigy": "Prodigy",
     "dadaptation": "DAdaptation",
 }
+
+# Arches whose sd-scripts entry script ships the `--blocks_to_swap` flag.
+# FLUX / SD3 / Lumina / Anima / Hunyuan Image expose CPU-offload-per-block;
+# SD1.x / SD2.x / SDXL do not. Emitting `--blocks_to_swap` to a script that
+# doesn't accept it would make argparse explode at launch time, so we drop
+# the flag (with a warning) for the unsupported arches.
+_BLOCKS_TO_SWAP_ARCHES: frozenset[str] = frozenset({
+    "flux",
+    "sd3",
+    "lumina",
+    "anima",
+    "hunyuan_image",
+})
 
 # Map our network types to kohya's --network_module
 _NETWORK_MODULE_MAP: dict[str, str] = {
@@ -60,6 +76,7 @@ def compile_config(
     _emit_sampling_args(cfg, workspace, args)
     _emit_resume_args(cfg, args)
     _emit_validation_args(cfg, args)
+    _emit_optimization_args(cfg, args)
     _emit_variant_args(cfg, args)
     _emit_extra_args(cfg, args)
 
@@ -370,6 +387,42 @@ def _emit_variant_args(cfg: TrainingConfig, args: list[str]) -> None:
     variant = cfg.base_model.arch_variant
     if variant == "pony":
         args.append("--clip_skip=2")
+
+
+def _emit_optimization_args(cfg: TrainingConfig, args: list[str]) -> None:
+    """Emit kohya speed/VRAM toggles from ``cfg.optimization``.
+
+    All four knobs map to flags that exist in (some) sd-scripts entry
+    scripts. We emit them when set; ``--blocks_to_swap`` is gated on the
+    handful of architectures whose train script defines the argparse
+    option (FLUX/SD3/Lumina/Anima/HunyuanImage). For other arches (notably
+    SDXL/SD1.x/SD2.x) sd-scripts has no such flag and emitting it would
+    make argparse abort, so we skip + warn instead.
+
+    ``--full_bf16`` coexists with ``--mixed_precision``: sd-scripts treats
+    it as an additive escalation that pushes optimizer state and grads to
+    bf16 on top of the mixed-precision forward, so both flags landing on
+    the argv is intentional.
+    """
+    o = cfg.optimization
+    if o.torch_compile:
+        args.append("--torch_compile")
+    if o.fused_backward_pass:
+        args.append("--fused_backward_pass")
+    if o.full_bf16:
+        args.append("--full_bf16")
+    if o.blocks_to_swap > 0:
+        if cfg.base_model.arch in _BLOCKS_TO_SWAP_ARCHES:
+            args.append(f"--blocks_to_swap={o.blocks_to_swap}")
+        else:
+            logger.warning(
+                "kohya: --blocks_to_swap is not supported for arch=%r; "
+                "ignoring optimization.blocks_to_swap=%d "
+                "(supported arches: %s)",
+                cfg.base_model.arch,
+                o.blocks_to_swap,
+                sorted(_BLOCKS_TO_SWAP_ARCHES),
+            )
 
 
 def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:

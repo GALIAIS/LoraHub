@@ -1656,7 +1656,13 @@ def test_list_templates_returns_validated_configs(client: TestClient) -> None:
     body = r.json()
 
     ids = {t["id"] for t in body["templates"]}
-    assert ids == {"sdxl_character", "sdxl_style", "sd15_character", "blank"}
+    assert ids == {
+        "sdxl_character",
+        "sdxl_style",
+        "sd15_character",
+        "blank",
+        "low_vram",
+    }
 
     # Each template recipe must round-trip through the schema.
     for tpl in body["templates"]:

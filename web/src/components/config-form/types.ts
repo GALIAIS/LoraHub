@@ -127,6 +127,12 @@ export interface ConfigFormValue {
     every_n_epochs?: number
     max_samples?: number | null
   }
+  optimization?: {
+    torch_compile?: boolean
+    fused_backward_pass?: boolean
+    full_bf16?: boolean
+    blocks_to_swap?: number
+  }
   [k: string]: unknown
 }
 

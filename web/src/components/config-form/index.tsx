@@ -16,6 +16,7 @@ import {
   Image,
   Layers,
   PaintBucket,
+  Rocket,
   Settings2,
   SlidersHorizontal,
   Wand2,
@@ -29,6 +30,7 @@ import { OptimizerFields } from "./sections/optimizer"
 import { LossFields } from "./sections/loss"
 import { ScheduleFields } from "./sections/schedule"
 import { PrecisionFields } from "./sections/precision"
+import { OptimizationFields } from "./sections/optimization"
 import { SamplingFields } from "./sections/sampling"
 import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
@@ -126,6 +128,18 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         subtitle="混合精度、梯度检查点、潜变量缓存"
       >
         <PrecisionFields value={value} set={set} errorMap={errorMap} />
+      </Section>
+
+      <Section
+        icon={<Rocket className="size-3.5" />}
+        title="训练优化"
+        subtitle="torch_compile / full_bf16 / blocks_to_swap 等显存与速度开关"
+      >
+        <OptimizationFields
+          value={value.optimization}
+          set={set}
+          errorMap={errorMap}
+        />
       </Section>
 
       <Section

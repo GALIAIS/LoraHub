@@ -153,8 +153,18 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
         f"gradient_clipping = {opts.gradient_clipping}",
         f"warmup_steps = {cfg.optimizer.warmup_steps}",
     ]
-    if opts.blocks_to_swap > 0:
-        parts.append(f"blocks_to_swap = {opts.blocks_to_swap}")
+    # Top-level `cfg.optimization.blocks_to_swap` is the cross-backend
+    # source of truth. We keep `backend.diffusion_pipe.blocks_to_swap` for
+    # backwards compatibility: when the top-level value is unset (default
+    # 0) we fall back to the dp-specific knob so older recipes still emit
+    # the same TOML they did before.
+    blocks_to_swap = (
+        cfg.optimization.blocks_to_swap
+        if cfg.optimization.blocks_to_swap > 0
+        else opts.blocks_to_swap
+    )
+    if blocks_to_swap > 0:
+        parts.append(f"blocks_to_swap = {blocks_to_swap}")
     if opts.compile:
         parts.append("compile = true")
     scheduler = _scheduler_for(cfg.optimizer.schedule)
@@ -276,9 +286,15 @@ def _optimizer_section(cfg: TrainingConfig) -> list[str]:
         f"weight_decay = {o.weight_decay}",
         f"eps = {o.eps}",
     ]
+    # `cfg.optimization.full_bf16` -> dp `optim_dtype = "bf16"`. dp's
+    # train.py drives optimizer-state precision off the optimizer block's
+    # `optim_dtype` key; emitting it here matches the kohya `--full_bf16`
+    # behaviour the recipe is asking for.
+    if cfg.optimization.full_bf16:
+        parts.append(f"optim_dtype = {_toml_str('bf16')}")
+    seen = {"type", "lr", "betas", "weight_decay", "eps", "optim_dtype"}
     # Free-form optimizer_args -> toml lines. Keys win over the dedicated
     # fields when names collide (matches the kohya backend's behaviour).
-    seen = {"type", "lr", "betas", "weight_decay", "eps"}
     for key, value in o.optimizer_args.items():
         if key in seen:
             # Replace the prior entry instead of appending a duplicate.

@@ -68,3 +68,46 @@ def test_example_recipe_loads() -> None:
         cfg = load_config(config_path)
         assert cfg.base_model.arch == "sdxl"
         assert cfg.schedule.batch_size == 1
+
+
+# --------------------------------------------------------------------------- #
+# OptimizationConfig defaults & validation
+# --------------------------------------------------------------------------- #
+
+
+def test_optimization_defaults_are_all_off() -> None:
+    """Bare TrainingConfig() should leave every optimization toggle at upstream defaults."""
+    cfg = TrainingConfig.model_validate(MINIMAL_RECIPE)
+    assert cfg.optimization.torch_compile is False
+    assert cfg.optimization.fused_backward_pass is False
+    assert cfg.optimization.full_bf16 is False
+    assert cfg.optimization.blocks_to_swap == 0
+
+
+def test_optimization_blocks_to_swap_must_be_non_negative() -> None:
+    bad = {
+        **MINIMAL_RECIPE,
+        "optimization": {"blocks_to_swap": -1},
+    }
+    with pytest.raises(Exception, match="blocks_to_swap"):
+        TrainingConfig.model_validate(bad)
+
+
+def test_optimization_kitchen_sink_round_trip() -> None:
+    """All four flags can be set together and survive a model_dump round-trip."""
+    cfg = TrainingConfig.model_validate(
+        {
+            **MINIMAL_RECIPE,
+            "optimization": {
+                "torch_compile": True,
+                "fused_backward_pass": True,
+                "full_bf16": True,
+                "blocks_to_swap": 8,
+            },
+        }
+    )
+    assert cfg.optimization.torch_compile is True
+    assert cfg.optimization.fused_backward_pass is True
+    assert cfg.optimization.full_bf16 is True
+    assert cfg.optimization.blocks_to_swap == 8
+

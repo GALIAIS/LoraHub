@@ -450,3 +450,86 @@ def test_dp_model_paths_override_default_diffusers_path() -> None:
     assert main.count("diffusers_path =") == 1
     assert 'diffusers_path = "/explicit/override"' in main
     assert "/auto/inferred" not in main
+
+
+# --------------------------------------------------------------------------- #
+# OptimizationConfig: torch_compile / fused_backward_pass are no-ops on dp;
+# full_bf16 maps to optim_dtype="bf16"; blocks_to_swap top-level wins over
+# the legacy `backend.diffusion_pipe.blocks_to_swap`.
+# --------------------------------------------------------------------------- #
+
+
+def test_dp_full_bf16_emits_optim_dtype() -> None:
+    cfg = _recipe(optimization={"full_bf16": True})
+    main = _main_toml(cfg)
+    assert 'optim_dtype = "bf16"' in main
+
+
+def test_dp_full_bf16_default_omits_optim_dtype() -> None:
+    main = _main_toml(_recipe())
+    assert "optim_dtype" not in main
+
+
+def test_dp_blocks_to_swap_top_level_wins_over_dp_options() -> None:
+    """`cfg.optimization.blocks_to_swap` overrides the dp-specific knob."""
+    cfg = _recipe(
+        optimization={"blocks_to_swap": 12},
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"blocks_to_swap": 3},
+        },
+    )
+    main = _main_toml(cfg)
+    assert "blocks_to_swap = 12" in main
+    assert "blocks_to_swap = 3" not in main
+
+
+def test_dp_blocks_to_swap_legacy_field_still_works() -> None:
+    """Old recipes setting only `backend.diffusion_pipe.blocks_to_swap` still emit."""
+    cfg = _recipe(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"blocks_to_swap": 7},
+        },
+    )
+    main = _main_toml(cfg)
+    assert "blocks_to_swap = 7" in main
+
+
+def test_dp_blocks_to_swap_emitted_from_top_level() -> None:
+    cfg = _recipe(optimization={"blocks_to_swap": 5})
+    main = _main_toml(cfg)
+    assert "blocks_to_swap = 5" in main
+
+
+def test_dp_torch_compile_optimization_field_is_noop() -> None:
+    """dp ignores `cfg.optimization.torch_compile` (its own `compile` flag still works)."""
+    cfg = _recipe(optimization={"torch_compile": True})
+    main = _main_toml(cfg)
+    # No `compile = true` from the optimization knob alone.
+    assert "compile = true" not in main
+
+
+def test_dp_fused_backward_pass_optimization_field_is_noop() -> None:
+    """dp has no fused-backward concept; the field shouldn't fail compilation."""
+    cfg = _recipe(optimization={"fused_backward_pass": True})
+    # Just verify it compiles cleanly without crashing.
+    main = _main_toml(cfg)
+    assert "fused_backward" not in main
+
+
+def test_dp_optimization_kitchen_sink() -> None:
+    cfg = _recipe(
+        optimization={
+            "torch_compile": True,
+            "fused_backward_pass": True,
+            "full_bf16": True,
+            "blocks_to_swap": 9,
+        }
+    )
+    main = _main_toml(cfg)
+    assert "blocks_to_swap = 9" in main
+    assert 'optim_dtype = "bf16"' in main
+    # torch_compile / fused_backward_pass remain dp no-ops.
+    assert "fused_backward" not in main
+
