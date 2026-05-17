@@ -83,6 +83,13 @@ export interface ConfigFormValue {
     prompts_file?: string | null
     resolution?: [number, number] | number[]
     seed?: number
+    // Attention backend reserved for the sample/validation path. Mirrors
+    // SamplingConfig.attention in lorahub/core/config/schema.py. Today both
+    // backends emit a warning and skip wiring this through (training stays
+    // on its own attention kernel so SageAttention's missing backward
+    // can't poison gradients); the field is preserved so authored recipes
+    // stay valid once the wrapper lands.
+    attention?: string
   }
   output?: {
     name?: string

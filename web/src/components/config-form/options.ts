@@ -106,3 +106,15 @@ export const PARTITION_METHOD_OPTIONS = [
   { value: "uniform", label: "uniform (按层数均分)" },
   { value: "type:transformer_layer", label: "type:transformer_layer" },
 ] as const
+
+// 仅作用于采样/验证前向，不会污染训练梯度。当前后端只占位记录、不真正切换内核
+// （SageAttention 仅有量化前向，反向缺失，参见 schema 注释）；用户选了非默认值
+// 时 compiler 会打 warning 而不会 emit `--attn_mode`。
+export const SAMPLING_ATTENTION_OPTIONS = [
+  { value: "default", label: "默认（沿用训练通道）" },
+  { value: "torch", label: "torch（SDPA，调试用）" },
+  { value: "sdpa", label: "sdpa（PyTorch 原生）" },
+  { value: "xformers", label: "xformers" },
+  { value: "flash", label: "flash（FlashAttention 2）" },
+  { value: "sageattn", label: "sageattn（INT8 量化前向，仅采样）" },
+] as const

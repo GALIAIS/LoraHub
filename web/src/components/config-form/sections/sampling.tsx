@@ -1,6 +1,7 @@
 import { memo } from "react"
+import { SAMPLING_ATTENTION_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { IntInput, PathInput, ResolutionInput, Row, ToggleSwitch } from "../widgets"
+import { EnumSelect, IntInput, PathInput, ResolutionInput, Row, ToggleSwitch } from "../widgets"
 
 export const SamplingFields = memo(function SamplingFields({
   value = {},
@@ -45,6 +46,17 @@ export const SamplingFields = memo(function SamplingFields({
           </Row>
           <Row label="随机种子">
             <IntInput value={v.seed ?? 42} onChange={(n) => set(["sampling", "seed"], n ?? 42)} />
+          </Row>
+          <Row
+            label="采样 Attention"
+            description="仅采样/验证前向使用，不影响训练梯度。当前为占位字段：选择非默认值会被记录但暂不生效（待运行时 wrapper），训练仍走 attention.training 指定的内核。"
+            errors={errorMap.get("sampling.attention")}
+          >
+            <EnumSelect
+              value={v.attention ?? "default"}
+              onChange={(s) => set(["sampling", "attention"], s || "default")}
+              options={SAMPLING_ATTENTION_OPTIONS}
+            />
           </Row>
         </>
       )}
