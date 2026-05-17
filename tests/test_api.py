@@ -79,7 +79,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # would otherwise leak rows through the module-level singletons.
     monkeypatch.setattr(app_mod, "_sweep_store", None)
     monkeypatch.setattr(app_mod, "_session_store", None)
-    monkeypatch.setattr(app_mod, "_ai_credentials_store", None)
+    monkeypatch.setattr(app_mod, "_ai_store", None)
     monkeypatch.chdir(tmp_path)
     return TestClient(app_mod.app)
 

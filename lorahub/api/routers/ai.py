@@ -1,304 +1,578 @@
-"""HTTP API for the AI provider subsystem.
+"""HTTP API for the ShiroManager-shaped AI subsystem.
 
-Three concerns:
+Endpoint surface mirrors `src/lib/shiro-api.ts` 1:1:
 
-1. **Catalogue** — `GET /api/ai/providers` lists every registered
-   provider's descriptor (id / display name / models / docs URL /
-   whether base_url is user-configurable).
-2. **Credential CRUD** — get/list/upsert/delete rows in
-   `runs/ai_credentials.sqlite`. The `api_key` is masked on read so a
-   shoulder-surfer can't pull it from the dashboard.
-3. **Live calls** — `POST /api/ai/test` does a 1-token "say hi" round
-   trip to confirm the credential works; `POST /api/ai/chat` is the
-   general-purpose proxy other features (vision tagging, dataset
-   analysis, caption rewrite, error diagnostics) call into.
+    GET    /api/ai/providers
+    GET    /api/ai/providers/{id}
+    PUT    /api/ai/providers
+    DELETE /api/ai/providers/{id}
+    GET    /api/ai/models
+    PUT    /api/ai/models
+    DELETE /api/ai/models/{id}
+    POST   /api/ai/providers/{id}/discover-models
+    GET    /api/ai/routes
+    PUT    /api/ai/routes
+    POST   /api/ai/test
+    POST   /api/ai/invoke
+
+Plus a couple of LoraHub-specific extras kept out of the panel UI:
+    POST   /api/ai/keys/{id}/reset-runtime   reset a single key's stats
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.api.ai_credentials_store import (
-    AICredential,
-    AICredentialStore,
-    default_ai_credentials_path,
+from lorahub.api.ai_store import (
+    AIModel,
+    AIProvider,
+    AIProviderKey,
+    AIProviderKeyRuntime,
+    AIRoute,
+    AIStore,
+    default_ai_store_path,
 )
-from lorahub.core.ai import list_providers
-from lorahub.core.ai.dispatch import build_provider, load_provider
-from lorahub.core.ai.provider_base import (
-    ChatMessage,
-    ChatOptions,
-    ProviderError,
-)
+from lorahub.core.ai import client as ai_client
 
 router = APIRouter(prefix="/api")
-_log = logging.getLogger(__name__)
 
 
-def _store() -> AICredentialStore:
-    """Reach for the lifespan-initialised store on the app module.
+# --------------------------------------------------------------------------- #
+# Lifespan singleton bootstrap
+# --------------------------------------------------------------------------- #
 
-    Test fixtures monkeypatch ``app_module._ai_credentials_store`` to a
-    per-test SQLite file before issuing requests, so routers must look
-    up the symbol dynamically rather than caching at import time.
+
+def _store() -> AIStore:
+    """Return the live AIStore, creating it lazily if lifespan didn't.
+
+    Tests monkeypatch ``app_module._ai_store`` to a per-test path before
+    issuing requests, so we resolve the symbol dynamically rather than
+    capturing it at module import.
     """
-    store = getattr(app_module, "_ai_credentials_store", None)
+    store = getattr(app_module, "_ai_store", None)
     if store is None:
-        store = AICredentialStore(default_ai_credentials_path())
-        app_module._ai_credentials_store = store
+        store = AIStore(default_ai_store_path())
+        app_module._ai_store = store  # type: ignore[attr-defined]
     return store
 
 
 # --------------------------------------------------------------------------- #
-# Catalogue
+# Request / response shapes (ShiroManager-flavoured camelCase on the wire,
+# snake_case in Python; pydantic handles the bridge)
 # --------------------------------------------------------------------------- #
 
 
-@router.get("/ai/providers")
-def get_providers() -> dict[str, Any]:
-    """Static catalogue + live credential status for every provider."""
-    store = _store()
-    creds = {c.provider: c for c in store.list()}
-    out: list[dict[str, Any]] = []
-    for d in list_providers():
-        cred = creds.get(d.id)
-        out.append(
-            {
-                "id": d.id,
-                "name": d.name,
-                "homepage": d.homepage,
-                "docs_url": d.docs_url,
-                "auth_help": d.auth_help,
-                "default_base_url": d.default_base_url,
-                "default_model": d.default_model,
-                "custom_base_url": d.custom_base_url,
-                "models": [
-                    {"id": m.id, "label": m.label, "vision": m.vision, "context": m.context}
-                    for m in d.models
-                ],
-                "configured": cred is not None and bool(cred.api_key),
-                "enabled": cred.enabled if cred else False,
-                "current_base_url": (cred.base_url if cred else None),
-                "current_default_model": (cred.default_model if cred else None),
-            }
-        )
-    return {"providers": out}
-
-
-# --------------------------------------------------------------------------- #
-# Credential CRUD
-# --------------------------------------------------------------------------- #
-
-
-def _mask_key(key: str | None) -> str | None:
+def _key_preview(key: str) -> str:
     if not key:
-        return None
+        return ""
     if len(key) <= 8:
         return "*" * len(key)
     return f"{key[:4]}...{key[-4:]}"
 
 
-def _serialize_credential(cred: AICredential, *, reveal: bool = False) -> dict[str, Any]:
+def _serialise_key(k: AIProviderKey) -> dict[str, Any]:
     return {
-        "provider": cred.provider,
-        "api_key": cred.api_key if reveal else _mask_key(cred.api_key),
-        "api_key_set": bool(cred.api_key),
-        "base_url": cred.base_url,
-        "default_model": cred.default_model,
-        "enabled": cred.enabled,
-        "updated_at": cred.updated_at.isoformat() if cred.updated_at else None,
+        "id": k.id,
+        "preview": _key_preview(k.api_key),
+        "createdAt": k.created_at,
+        "updatedAt": k.updated_at,
+        "runtime": {
+            "requestCount": k.runtime.request_count,
+            "successCount": k.runtime.success_count,
+            "failureCount": k.runtime.failure_count,
+            "consecutiveFailures": k.runtime.consecutive_failures,
+            "lastUsedAt": k.runtime.last_used_at,
+            "lastSucceededAt": k.runtime.last_succeeded_at,
+            "lastFailedAt": k.runtime.last_failed_at,
+            "lastError": k.runtime.last_error,
+            "cooldownUntil": k.runtime.cooldown_until,
+        },
     }
 
 
-class UpsertCredentialRequest(BaseModel):
-    provider: str
-    api_key: str | None = None
-    base_url: str | None = None
-    default_model: str | None = None
-    enabled: bool = True
+def _serialise_provider(
+    store: AIStore, p: AIProvider
+) -> dict[str, Any]:
+    keys = store.list_keys(p.id)
+    return {
+        "id": p.id,
+        "name": p.name,
+        "kind": p.kind,
+        "baseUrl": p.base_url,
+        "organization": p.organization,
+        "project": p.project,
+        "headers": p.headers,
+        "enabled": p.enabled,
+        "hasApiKey": any(k.api_key for k in keys),
+        "apiKeyPreview": _key_preview(keys[0].api_key) if keys else "",
+        "apiKeyCount": len(keys),
+        "apiKeySelectionMode": p.selection_mode,
+        "apiKeys": [_serialise_key(k) for k in keys],
+        "createdAt": p.created_at,
+        "updatedAt": p.updated_at,
+    }
 
 
-@router.get("/ai/credentials")
-def list_credentials() -> dict[str, Any]:
-    return {"credentials": [_serialize_credential(c) for c in _store().list()]}
+def _serialise_model(m: AIModel) -> dict[str, Any]:
+    return {
+        "id": m.id,
+        "providerId": m.provider_id,
+        "modelId": m.model_id,
+        "displayName": m.display_name,
+        "source": m.source,
+        "enabled": m.enabled,
+        "raw": m.raw,
+        "createdAt": m.created_at,
+        "updatedAt": m.updated_at,
+    }
 
 
-@router.put("/ai/credentials")
-def upsert_credential(req: UpsertCredentialRequest) -> dict[str, Any]:
-    valid_ids = {d.id for d in list_providers()}
-    if req.provider not in valid_ids:
-        raise HTTPException(
-            status_code=400,
-            detail=f"unknown provider {req.provider!r}; expected one of {sorted(valid_ids)}",
-        )
-    cred = AICredential(
-        provider=req.provider,
-        api_key=(req.api_key or None),
-        base_url=(req.base_url or None),
-        default_model=(req.default_model or None),
-        enabled=req.enabled,
-    )
-    _store().upsert(cred)
-    return {"credential": _serialize_credential(_store().get(req.provider) or cred)}
-
-
-@router.delete("/ai/credentials/{provider}")
-def delete_credential(provider: str) -> dict[str, Any]:
-    deleted = _store().delete(provider)
-    return {"deleted": deleted, "provider": provider}
+def _serialise_route(r: AIRoute) -> dict[str, Any]:
+    return {
+        "taskId": r.task_id,
+        "providerId": r.provider_id,
+        "modelId": r.model_id,
+        "systemPrompt": r.system_prompt,
+        "stream": r.stream,
+        "temperature": r.temperature,
+        "topP": r.top_p,
+        "frequencyPenalty": r.frequency_penalty,
+        "presencePenalty": r.presence_penalty,
+        "maxOutputTokens": r.max_output_tokens,
+        "seed": r.seed,
+        "reasoningEffort": r.reasoning_effort,
+        "thinkingBudgetTokens": r.thinking_budget_tokens,
+        "includeReasoning": r.include_reasoning,
+        "stopSequences": r.stop_sequences,
+        "extraBodyJson": r.extra_body_json,
+        "enabled": r.enabled,
+        "createdAt": r.created_at,
+        "updatedAt": r.updated_at,
+    }
 
 
 # --------------------------------------------------------------------------- #
-# Live calls
+# Providers
+# --------------------------------------------------------------------------- #
+
+
+class ProviderKeyDraft(BaseModel):
+    id: str | None = None
+    value: str | None = None  # full plaintext; absent means "keep existing"
+    preview: str | None = None  # ignored on input, recomputed on save
+
+
+class ProviderDraft(BaseModel):
+    id: str | None = None
+    name: str
+    kind: str = "openai-compatible"
+    baseUrl: str = ""
+    organization: str = ""
+    project: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+    apiKeySelectionMode: str = "round_robin"
+    apiKeys: list[ProviderKeyDraft] | None = None
+    apiKey: str | None = None  # legacy single-key shortcut
+    clearApiKey: bool = False
+
+
+@router.get("/ai/providers")
+def list_providers() -> dict[str, Any]:
+    s = _store()
+    return {"providers": [_serialise_provider(s, p) for p in s.list_providers()]}
+
+
+@router.get("/ai/providers/{provider_id}")
+def get_provider(provider_id: str) -> dict[str, Any]:
+    s = _store()
+    p = s.get_provider(provider_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="provider not found")
+    return _serialise_provider(s, p)
+
+
+def _resolve_keys(
+    s: AIStore,
+    provider_id: str,
+    drafts: list[ProviderKeyDraft] | None,
+    legacy_single: str | None,
+    clear: bool,
+) -> list[AIProviderKey] | None:
+    """Translate the ProviderDraft key shape into AIProviderKey list, or
+    None if the request didn't touch keys at all (so we don't wipe).
+    """
+    if clear:
+        return []
+    if drafts is not None:
+        existing = {k.id: k for k in s.list_keys(provider_id)}
+        out: list[AIProviderKey] = []
+        for d in drafts:
+            value = d.value
+            if not value and d.id and d.id in existing:
+                value = existing[d.id].api_key  # keep prior value
+            if not value:
+                continue
+            out.append(
+                AIProviderKey(
+                    id=d.id or "",
+                    provider_id=provider_id,
+                    api_key=value,
+                )
+            )
+        return out
+    if legacy_single is not None:
+        return [
+            AIProviderKey(
+                id="", provider_id=provider_id, api_key=legacy_single
+            )
+        ]
+    return None
+
+
+@router.put("/ai/providers")
+def upsert_provider(req: ProviderDraft) -> dict[str, Any]:
+    s = _store()
+    provider = AIProvider(
+        id=req.id or "",
+        name=req.name,
+        kind=req.kind or "openai-compatible",
+        base_url=req.baseUrl,
+        organization=req.organization,
+        project=req.project,
+        headers=dict(req.headers),
+        enabled=req.enabled,
+        selection_mode=req.apiKeySelectionMode or "round_robin",
+        last_key_index=-1,
+    )
+    saved = s.upsert_provider(provider)
+    keys = _resolve_keys(s, saved.id, req.apiKeys, req.apiKey, req.clearApiKey)
+    if keys is not None:
+        s.replace_keys(saved.id, keys)
+    fresh = s.get_provider(saved.id)
+    assert fresh is not None
+    return {"provider": _serialise_provider(s, fresh)}
+
+
+@router.delete("/ai/providers/{provider_id}")
+def delete_provider(provider_id: str) -> dict[str, Any]:
+    deleted = _store().delete_provider(provider_id)
+    return {"ok": deleted, "providerId": provider_id}
+
+
+# --------------------------------------------------------------------------- #
+# Models
+# --------------------------------------------------------------------------- #
+
+
+class ModelDraft(BaseModel):
+    id: str | None = None
+    providerId: str
+    modelId: str
+    displayName: str
+    source: str = "manual"
+    enabled: bool = True
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/ai/models")
+def list_models(provider_id: str | None = None) -> dict[str, Any]:
+    return {
+        "models": [
+            _serialise_model(m) for m in _store().list_models(provider_id)
+        ]
+    }
+
+
+@router.put("/ai/models")
+def upsert_model(req: ModelDraft) -> dict[str, Any]:
+    s = _store()
+    if s.get_provider(req.providerId) is None:
+        raise HTTPException(status_code=400, detail="providerId not found")
+    saved = s.upsert_model(
+        AIModel(
+            id=req.id or "",
+            provider_id=req.providerId,
+            model_id=req.modelId,
+            display_name=req.displayName or req.modelId,
+            source=req.source,
+            enabled=req.enabled,
+            raw=dict(req.raw),
+        )
+    )
+    return {"model": _serialise_model(saved)}
+
+
+@router.delete("/ai/models/{model_id}")
+def delete_model(model_id: str) -> dict[str, Any]:
+    deleted = _store().delete_model(model_id)
+    return {"ok": deleted, "modelId": model_id}
+
+
+@router.post("/ai/providers/{provider_id}/discover-models")
+def discover_models(provider_id: str) -> dict[str, Any]:
+    try:
+        models = ai_client.discover_models(_store(), provider_id)
+    except ai_client.AIError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 502, detail=str(exc)
+        ) from exc
+    return {"models": [_serialise_model(m) for m in models]}
+
+
+# --------------------------------------------------------------------------- #
+# Routes (task -> provider+model+sampling)
+# --------------------------------------------------------------------------- #
+
+
+class RouteDraft(BaseModel):
+    taskId: str
+    providerId: str | None = None
+    modelId: str | None = None
+    systemPrompt: str = ""
+    stream: bool | None = None
+    temperature: float | None = None
+    topP: float | None = None
+    frequencyPenalty: float | None = None
+    presencePenalty: float | None = None
+    maxOutputTokens: int | None = None
+    seed: int | None = None
+    reasoningEffort: str | None = None
+    thinkingBudgetTokens: int | None = None
+    includeReasoning: bool | None = None
+    stopSequences: list[str] = Field(default_factory=list)
+    extraBodyJson: str = ""
+    enabled: bool = True
+
+
+@router.get("/ai/routes")
+def list_routes() -> dict[str, Any]:
+    return {"routes": [_serialise_route(r) for r in _store().list_routes()]}
+
+
+@router.put("/ai/routes")
+def upsert_route(req: RouteDraft) -> dict[str, Any]:
+    saved = _store().upsert_route(
+        AIRoute(
+            task_id=req.taskId,
+            provider_id=req.providerId,
+            model_id=req.modelId,
+            system_prompt=req.systemPrompt,
+            stream=req.stream,
+            temperature=req.temperature,
+            top_p=req.topP,
+            frequency_penalty=req.frequencyPenalty,
+            presence_penalty=req.presencePenalty,
+            max_output_tokens=req.maxOutputTokens,
+            seed=req.seed,
+            reasoning_effort=req.reasoningEffort,
+            thinking_budget_tokens=req.thinkingBudgetTokens,
+            include_reasoning=req.includeReasoning,
+            stop_sequences=list(req.stopSequences),
+            extra_body_json=req.extraBodyJson,
+            enabled=req.enabled,
+        )
+    )
+    return {"route": _serialise_route(saved)}
+
+
+# --------------------------------------------------------------------------- #
+# Test + invoke
 # --------------------------------------------------------------------------- #
 
 
 class TestRequest(BaseModel):
-    provider: str
-    api_key: str | None = None
-    base_url: str | None = None
-    model: str | None = None
+    providerId: str
+    modelId: str | None = None
+    prompt: str | None = None
+    systemPrompt: str | None = None
+    stream: bool | None = None
+    temperature: float | None = None
+    topP: float | None = None
+    frequencyPenalty: float | None = None
+    presencePenalty: float | None = None
+    maxOutputTokens: int | None = None
+    seed: int | None = None
+    reasoningEffort: str | None = None
+    thinkingBudgetTokens: int | None = None
+    includeReasoning: bool | None = None
+    stopSequences: list[str] | None = None
+    extraBodyJson: str | None = None
 
 
-@router.post("/ai/test")
-def test_credential(req: TestRequest) -> dict[str, Any]:
-    """Confirm a key works without persisting it.
-
-    Useful for a "Test" button next to the API-key field — we build a
-    transient AICredential from the request, send a tiny prompt, and
-    return either ``{ok: true, model, sample}`` or ``{ok: false, error}``.
-    No state is mutated.
-    """
-    valid_ids = {d.id for d in list_providers()}
-    if req.provider not in valid_ids:
-        raise HTTPException(
-            status_code=400,
-            detail=f"unknown provider {req.provider!r}",
-        )
-    # Use the request's overrides; fall back to the saved credential when
-    # the user clicked Test on an existing row.
-    saved = _store().get(req.provider)
-    cred = AICredential(
-        provider=req.provider,
-        api_key=req.api_key or (saved.api_key if saved else None),
-        base_url=req.base_url or (saved.base_url if saved else None),
-        default_model=req.model or (saved.default_model if saved else None),
-        enabled=True,
-    )
-    try:
-        provider = build_provider(cred)
-        result = provider.chat(
-            [ChatMessage(role="user", content="Reply with the single word: ok.")],
-            ChatOptions(
-                model=req.model or (saved.default_model if saved else None),
-                max_tokens=8,
-                temperature=0.0,
-                timeout_s=15.0,
-            ),
-        )
-    except ProviderError as exc:
-        return {
-            "ok": False,
-            "error": str(exc),
-            "status_code": exc.status_code,
-            "retryable": exc.retryable,
-        }
+def _sampling_from_test(req: TestRequest) -> dict[str, Any]:
     return {
-        "ok": True,
-        "model": result.model,
-        "sample": result.text[:200],
-        "usage_input_tokens": result.usage_input_tokens,
-        "usage_output_tokens": result.usage_output_tokens,
+        "stream": req.stream,
+        "temperature": req.temperature,
+        "top_p": req.topP,
+        "frequency_penalty": req.frequencyPenalty,
+        "presence_penalty": req.presencePenalty,
+        "max_output_tokens": req.maxOutputTokens,
+        "seed": req.seed,
+        "reasoning_effort": req.reasoningEffort,
+        "thinking_budget_tokens": req.thinkingBudgetTokens,
+        "include_reasoning": req.includeReasoning,
+        "stop": req.stopSequences,
     }
 
 
-class ChatRequest(BaseModel):
-    provider: str
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    model: str | None = None
-    temperature: float = 0.2
-    max_tokens: int | None = None
-    response_format: str = "text"  # "text" | "json"
-    stream: bool = False
-    timeout_s: float = 60.0
-    extra: dict[str, Any] = Field(default_factory=dict)
+@router.post("/ai/test")
+def test_connection(req: TestRequest) -> dict[str, Any]:
+    sampling = {k: v for k, v in _sampling_from_test(req).items() if v is not None}
+    result = ai_client.test_connection(
+        _store(),
+        provider_id=req.providerId,
+        model_id=req.modelId,
+        prompt=req.prompt,
+        system_prompt=req.systemPrompt,
+        sampling=sampling,
+    )
+    completion = None
+    if result.completion is not None:
+        c = result.completion
+        completion = {
+            "taskId": "test",
+            "providerId": c.provider_id,
+            "providerName": c.provider_name,
+            "modelId": c.model_id,
+            "content": c.content,
+            "reasoning": c.reasoning,
+            "finishReason": c.finish_reason,
+            "usage": {
+                "promptTokens": c.usage_input_tokens,
+                "completionTokens": c.usage_output_tokens,
+                "totalTokens": c.usage_total_tokens,
+            },
+        }
+    return {
+        "ok": result.ok,
+        "providerId": result.provider_id,
+        "providerName": result.provider_name,
+        "modelCount": len(result.models),
+        "models": [
+            {
+                "id": item.get("id"),
+                "object": item.get("object", "model"),
+                "ownedBy": item.get("owned_by"),
+            }
+            for item in result.models
+        ],
+        "completion": completion,
+        "error": result.error,
+    }
 
 
-def _coerce_messages(raw: list[dict[str, Any]]) -> list[ChatMessage]:
-    out: list[ChatMessage] = []
-    for m in raw:
-        role = m.get("role")
-        content = m.get("content")
-        if role not in {"system", "user", "assistant"}:
-            raise HTTPException(
-                status_code=400,
-                detail=f"invalid message role {role!r}",
-            )
-        if not isinstance(content, str | list):
-            raise HTTPException(
-                status_code=400,
-                detail="message.content must be a string or a list of parts",
-            )
-        out.append(ChatMessage(role=role, content=content))
-    return out
+class InvokeRequest(BaseModel):
+    taskId: str
+    prompt: str
+    systemPrompt: str | None = None
+    stream: bool | None = None
+    temperature: float | None = None
+    topP: float | None = None
+    frequencyPenalty: float | None = None
+    presencePenalty: float | None = None
+    maxOutputTokens: int | None = None
+    seed: int | None = None
+    reasoningEffort: str | None = None
+    thinkingBudgetTokens: int | None = None
+    includeReasoning: bool | None = None
+    stopSequences: list[str] | None = None
+    extraBodyJson: str | None = None
 
 
-@router.post("/ai/chat")
-async def chat(req: ChatRequest):
-    if req.response_format not in {"text", "json"}:
+@router.post("/ai/invoke")
+def invoke_task(req: InvokeRequest) -> dict[str, Any]:
+    s = _store()
+    route = s.get_route(req.taskId)
+    if route is None:
+        # Fall back to global.default if no per-task row exists.
+        route = s.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(
-            status_code=400,
-            detail="response_format must be 'text' or 'json'",
+            status_code=409,
+            detail=f"no AI route configured for task {req.taskId!r}; "
+            "set one in Settings -> AI providers.",
         )
-    try:
-        provider = load_provider(_store(), req.provider)
-    except ProviderError as exc:
+    if not route.enabled:
         raise HTTPException(
-            status_code=exc.status_code or 500,
-            detail=str(exc),
+            status_code=409,
+            detail=f"AI route for task {req.taskId!r} is disabled",
+        )
+
+    overrides: dict[str, Any] = {}
+    if req.systemPrompt is None:
+        system_prompt = route.system_prompt
+    else:
+        system_prompt = req.systemPrompt
+    if req.stream is not None:
+        overrides["stream"] = req.stream
+    if req.temperature is not None:
+        overrides["temperature"] = req.temperature
+    if req.topP is not None:
+        overrides["top_p"] = req.topP
+    if req.frequencyPenalty is not None:
+        overrides["frequency_penalty"] = req.frequencyPenalty
+    if req.presencePenalty is not None:
+        overrides["presence_penalty"] = req.presencePenalty
+    if req.maxOutputTokens is not None:
+        overrides["max_output_tokens"] = req.maxOutputTokens
+    if req.seed is not None:
+        overrides["seed"] = req.seed
+    if req.reasoningEffort is not None:
+        overrides["reasoning_effort"] = req.reasoningEffort
+    if req.thinkingBudgetTokens is not None:
+        overrides["thinking_budget_tokens"] = req.thinkingBudgetTokens
+    if req.includeReasoning is not None:
+        overrides["include_reasoning"] = req.includeReasoning
+    if req.stopSequences is not None:
+        overrides["stop"] = req.stopSequences
+
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": req.prompt})
+
+    try:
+        result = ai_client.invoke(
+            s,
+            provider_id=route.provider_id,
+            model_id=route.model_id,
+            messages=messages,
+            route=route,
+            overrides=overrides,
+            extra_body_json=req.extraBodyJson or route.extra_body_json,
+        )
+    except ai_client.AIError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 502, detail=str(exc)
         ) from exc
 
-    options = ChatOptions(
-        model=req.model,
-        temperature=req.temperature,
-        max_tokens=req.max_tokens,
-        response_format=req.response_format,  # type: ignore[arg-type]
-        timeout_s=req.timeout_s,
-        extra=dict(req.extra),
-    )
-    messages = _coerce_messages(req.messages)
+    return {
+        "taskId": req.taskId,
+        "providerId": result.provider_id,
+        "providerName": result.provider_name,
+        "modelId": result.model_id,
+        "content": result.content,
+        "reasoning": result.reasoning,
+        "finishReason": result.finish_reason,
+        "usage": {
+            "promptTokens": result.usage_input_tokens,
+            "completionTokens": result.usage_output_tokens,
+            "totalTokens": result.usage_total_tokens,
+        },
+    }
 
-    if not req.stream:
-        try:
-            result = provider.chat(messages, options)
-        except ProviderError as exc:
-            raise HTTPException(
-                status_code=exc.status_code or 502,
-                detail=str(exc),
-            ) from exc
-        return {
-            "text": result.text,
-            "model": result.model,
-            "finish_reason": result.finish_reason,
-            "usage_input_tokens": result.usage_input_tokens,
-            "usage_output_tokens": result.usage_output_tokens,
-        }
 
-    async def gen():
-        try:
-            async for chunk in provider.chat_stream(messages, options):
-                # SSE-style framing so the frontend can consume with a
-                # tiny line-buffer parser instead of pulling in a full
-                # WebSocket dependency.
-                yield f"data: {chunk}\n\n"
-            yield "data: [DONE]\n\n"
-        except ProviderError as exc:
-            yield f"event: error\ndata: {exc}\n\n"
+# --------------------------------------------------------------------------- #
+# Misc maintenance
+# --------------------------------------------------------------------------- #
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+
+@router.post("/ai/keys/{key_id}/reset-runtime")
+def reset_key_runtime(key_id: str) -> dict[str, Any]:
+    _store().reset_key_runtime(key_id)
+    return {"ok": True, "keyId": key_id}

@@ -41,9 +41,9 @@ from lorahub.api.bootstrap_session import (
     _BootstrapSession,
     default_build_bootstrap_runner,
 )
-from lorahub.api.ai_credentials_store import (
-    AICredentialStore,
-    default_ai_credentials_path,
+from lorahub.api.ai_store import (
+    AIStore,
+    default_ai_store_path,
 )
 from lorahub.api.helpers import _resolve_web_dist
 from lorahub.api.jobs_helpers import _job_events
@@ -71,7 +71,7 @@ _bootstrap_session: _BootstrapSession | None = None
 # SQLite files; tests monkeypatch them to in-memory or per-test paths.
 _sweep_store: SweepStore | None = None
 _session_store: SessionStore | None = None
-_ai_credentials_store: AICredentialStore | None = None
+_ai_store: AIStore | None = None
 
 
 @asynccontextmanager
@@ -95,13 +95,39 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_credentials_store  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
-    if _ai_credentials_store is None:
-        _ai_credentials_store = AICredentialStore(default_ai_credentials_path())
+    if _ai_store is None:
+        _ai_store = AIStore(default_ai_store_path())
+        # Seed empty routes for the LoraHub task ids so the Settings UI
+        # has something to render on a fresh install. Each row carries
+        # `enabled=True` + null provider/model — the user picks them in
+        # the routes panel. We don't overwrite existing rows.
+        from lorahub.api.ai_store import AIRoute  # noqa: PLC0415
+
+        _LORAHUB_TASKS: tuple[tuple[str, str], ...] = (
+            ("global.default", "未单独配置的任务都走这里"),
+            ("tagging.assist", "VLM 给图补充 wd14 不擅长的描述"),
+            ("caption.rewrite", "把 wd14 标签改写为自然语言或统一格式"),
+            ("dataset.analyze", "对扫描结果做诊断 — caption 长度、tag 分布"),
+            ("training.diagnose", "解读 loss / grad_norm 曲线给优化建议"),
+            ("error.diagnose", "训练或安装失败时给修复建议"),
+        )
+        for task_id, hint in _LORAHUB_TASKS:
+            if _ai_store.get_route(task_id) is None:
+                _ai_store.upsert_route(
+                    AIRoute(
+                        task_id=task_id,
+                        provider_id=None,
+                        model_id=None,
+                        system_prompt="",
+                        enabled=True,
+                    )
+                )
+                log.debug("seeded empty AI route for %s (%s)", task_id, hint)
 
     # Auto-resume: replay interrupted jobs that have a usable checkpoint.
     # Done before scheduler.start() so resumed work lands at the head of

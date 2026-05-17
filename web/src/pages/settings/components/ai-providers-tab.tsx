@@ -5,17 +5,25 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  ExternalLink,
+  Layers,
   Loader2,
+  Plus,
   Save,
+  Search,
+  Settings2,
   Trash2,
   XCircle,
-  Zap,
 } from "lucide-react"
 import {
   api,
-  type AIProviderEntry,
-  type AITestResult,
+  AI_TASK_IDS,
+  type AIConnectionTestResult,
+  type AIKeySelectionMode,
+  type AIModelRecord,
+  type AIProviderDraft,
+  type AIProviderRecord,
+  type AIRouteRecord,
+  type AITaskId,
 } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -28,7 +36,6 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -36,304 +43,533 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
-/**
- * Settings → AI 服务商
- *
- * One card per provider; each card lets the user paste a key, optionally
- * override base_url + default model, save, test, delete. All keys live
- * in the dedicated `runs/ai_credentials.sqlite` so they don't pollute
- * the main settings.json.
- */
+const TASK_LABELS: Record<AITaskId, string> = {
+  "global.default": "默认 (兜底)",
+  "tagging.assist": "VLM 补打标签",
+  "caption.rewrite": "Caption 改写",
+  "dataset.analyze": "数据集分析",
+  "training.diagnose": "训练诊断",
+  "error.diagnose": "错误自助",
+}
+
+const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
+  "global.default": "其它任务未单独配置时的兜底路由",
+  "tagging.assist": "用 VLM 给图补充 wd14 不擅长的描述 (光照、角度、自然语言)",
+  "caption.rewrite": "把 wd14 标签改写为自然语言或统一格式",
+  "dataset.analyze": "对扫描结果做诊断 — caption 长度、tag 分布等",
+  "training.diagnose": "解读 loss/grad_norm 曲线给优化建议",
+  "error.diagnose": "训练 / 安装失败时给出修复建议",
+}
+
+const SELECTION_MODES: { value: AIKeySelectionMode; label: string }[] = [
+  { value: "round_robin", label: "轮询" },
+  { value: "random", label: "随机" },
+]
+
+const REASONING_EFFORTS = ["low", "medium", "high"] as const
+
 export function AIProvidersTab() {
+  const [activePanel, setActivePanel] = useState<"providers" | "routes">(
+    "providers",
+  )
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant={activePanel === "providers" ? "default" : "outline"}
+          onClick={() => setActivePanel("providers")}
+          className="h-8"
+        >
+          <Settings2 className="size-3.5" /> 服务商 / 模型
+        </Button>
+        <Button
+          size="sm"
+          variant={activePanel === "routes" ? "default" : "outline"}
+          onClick={() => setActivePanel("routes")}
+          className="h-8"
+        >
+          <Layers className="size-3.5" /> 任务路由
+        </Button>
+      </div>
+      {activePanel === "providers" ? <ProvidersPanel /> : <RoutesPanel />}
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// Providers panel: list + edit form
+// --------------------------------------------------------------------------- //
+
+function ProvidersPanel() {
   const providers = useQuery({
     queryKey: ["ai-providers"],
     queryFn: api.aiListProviders,
   })
+  const [editing, setEditing] = useState<string | "new" | null>(null)
 
-  if (providers.isLoading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> 正在加载服务商目录…
-      </div>
-    )
-  }
-  if (providers.isError) {
-    return (
-      <div className="text-xs text-destructive font-mono">
-        {(providers.error as Error).message}
-      </div>
-    )
-  }
   const list = providers.data?.providers ?? []
-  const configured = list.filter((p) => p.configured).length
+  const editingProvider = useMemo(() => {
+    if (editing === "new") return null
+    if (editing == null) return null
+    return list.find((p) => p.id === editing) ?? null
+  }, [editing, list])
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-[4px] border border-border/60 bg-muted/20 px-4 py-3 text-sm flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Bot className="size-4 text-muted-foreground" />
-          <span>
-            已配置{" "}
-            <code className="font-mono font-semibold text-foreground">
-              {configured}
-            </code>{" "}
-            / {list.length} 家服务商
-          </span>
+    <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-medium flex items-center gap-2">
+            <Bot className="size-3.5 text-muted-foreground" />
+            服务商
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-[11px]"
+            onClick={() => setEditing("new")}
+          >
+            <Plus className="size-3" /> 新增
+          </Button>
         </div>
-        <p className="text-[11px] text-muted-foreground/85">
-          API Key 单独存于{" "}
-          <code className="font-mono">runs/ai_credentials.sqlite</code>,文件权限 600
-        </p>
+        {providers.isLoading && (
+          <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="size-3 animate-spin" /> 加载中…
+          </div>
+        )}
+        {providers.isError && (
+          <div className="text-[11px] text-destructive font-mono">
+            {(providers.error as Error).message}
+          </div>
+        )}
+        {list.length === 0 && !providers.isLoading && (
+          <div className="rounded-[4px] border border-dashed border-border/60 px-3 py-4 text-[11px] text-muted-foreground/85">
+            尚未配置服务商。点「新增」开始,可任意添加 OpenAI 兼容端点。
+          </div>
+        )}
+        <div className="space-y-1">
+          {list.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setEditing(p.id)}
+              className={cn(
+                "w-full text-left rounded-[3px] border px-2.5 py-1.5 text-[12px] transition-colors",
+                editing === p.id
+                  ? "border-primary bg-primary/5"
+                  : "border-border/60 hover:bg-muted/40",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium truncate">{p.name || "(未命名)"}</span>
+                {p.enabled ? (
+                  <Badge variant="secondary" className="text-[9px] rounded-[2px]">启用</Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[9px] rounded-[2px]">禁用</Badge>
+                )}
+              </div>
+              <div className="text-[10px] text-muted-foreground/85 mt-0.5 flex items-center gap-2">
+                <span className="font-mono truncate">{p.baseUrl || "(无 base URL)"}</span>
+                <span className="shrink-0">{p.apiKeyCount} keys</span>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
-
-      <div className="grid gap-3 md:grid-cols-2">
-        {list.map((p) => (
-          <ProviderCard key={p.id} entry={p} />
-        ))}
+      <div className="min-w-0">
+        {editing == null ? (
+          <div className="rounded-[6px] border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
+            选一个服务商开始编辑,或点上方「新增」添加。
+          </div>
+        ) : (
+          <ProviderForm
+            key={editing}
+            existing={editingProvider}
+            isNew={editing === "new"}
+            onDeleted={() => setEditing(null)}
+            onSaved={(id) => setEditing(id)}
+          />
+        )}
       </div>
     </div>
   )
 }
 
-function ProviderCard({ entry }: { entry: AIProviderEntry }) {
-  const qc = useQueryClient()
-  const [apiKey, setApiKey] = useState("")
-  const [baseUrl, setBaseUrl] = useState(entry.current_base_url ?? "")
-  const [defaultModel, setDefaultModel] = useState(
-    entry.current_default_model ?? entry.default_model ?? "",
-  )
-  const [enabled, setEnabled] = useState(entry.enabled || !entry.configured)
-  const [showKey, setShowKey] = useState(false)
-  const [testResult, setTestResult] = useState<AITestResult | null>(null)
+// --------------------------------------------------------------------------- //
+// Provider form
+// --------------------------------------------------------------------------- //
 
-  // Re-sync local form when the upstream entry changes (e.g. after a save).
+interface KeyDraftLocal {
+  id: string | null
+  preview: string
+  value: string
+  // Runtime is only populated for already-saved keys
+  requestCount?: number
+  successCount?: number
+  failureCount?: number
+  cooldownUntil?: string | null
+  lastError?: string | null
+}
+
+function makeDraft(provider: AIProviderRecord | null): {
+  name: string
+  baseUrl: string
+  organization: string
+  project: string
+  enabled: boolean
+  selectionMode: AIKeySelectionMode
+  keys: KeyDraftLocal[]
+  headersJson: string
+} {
+  return {
+    name: provider?.name ?? "",
+    baseUrl: provider?.baseUrl ?? "",
+    organization: provider?.organization ?? "",
+    project: provider?.project ?? "",
+    enabled: provider?.enabled ?? true,
+    selectionMode: provider?.apiKeySelectionMode ?? "round_robin",
+    keys: provider?.apiKeys.map((k) => ({
+      id: k.id,
+      preview: k.preview,
+      value: "",
+      requestCount: k.runtime.requestCount,
+      successCount: k.runtime.successCount,
+      failureCount: k.runtime.failureCount,
+      cooldownUntil: k.runtime.cooldownUntil,
+      lastError: k.runtime.lastError,
+    })) ?? [],
+    headersJson:
+      provider && Object.keys(provider.headers).length > 0
+        ? JSON.stringify(provider.headers, null, 2)
+        : "",
+  }
+}
+
+function ProviderForm({
+  existing,
+  isNew,
+  onSaved,
+  onDeleted,
+}: {
+  existing: AIProviderRecord | null
+  isNew: boolean
+  onSaved: (id: string) => void
+  onDeleted: () => void
+}) {
+  const qc = useQueryClient()
+  const [draft, setDraft] = useState(() => makeDraft(existing))
+  const [showKeyById, setShowKeyById] = useState<Record<string, boolean>>({})
+  const [test, setTest] = useState<AIConnectionTestResult | null>(null)
+
   useEffect(() => {
-    setBaseUrl(entry.current_base_url ?? "")
-    setDefaultModel(entry.current_default_model ?? entry.default_model ?? "")
-    setEnabled(entry.enabled || !entry.configured)
-  }, [entry.id, entry.current_base_url, entry.current_default_model, entry.default_model, entry.configured, entry.enabled])
+    setDraft(makeDraft(existing))
+    setTest(null)
+  }, [existing?.id, existing?.updatedAt, existing])
+
+  const headersError = (() => {
+    if (!draft.headersJson.trim()) return null
+    try {
+      const parsed = JSON.parse(draft.headersJson)
+      if (typeof parsed !== "object" || parsed == null || Array.isArray(parsed)) {
+        return "headers 必须是 JSON 对象"
+      }
+      return null
+    } catch (e) {
+      return (e as Error).message
+    }
+  })()
 
   const save = useMutation({
-    mutationFn: () =>
-      api.aiUpsertCredential({
-        provider: entry.id,
-        api_key: apiKey.trim() || null,
-        base_url: baseUrl.trim() || null,
-        default_model: defaultModel.trim() || null,
-        enabled,
-      }),
-    onSuccess: () => {
-      setApiKey("")
-      setTestResult(null)
+    mutationFn: async (): Promise<{ provider: AIProviderRecord }> => {
+      const headers = draft.headersJson.trim() ? JSON.parse(draft.headersJson) : {}
+      const payload: AIProviderDraft = {
+        id: existing?.id,
+        name: draft.name.trim(),
+        kind: "openai-compatible",
+        baseUrl: draft.baseUrl.trim(),
+        organization: draft.organization.trim(),
+        project: draft.project.trim(),
+        headers,
+        enabled: draft.enabled,
+        apiKeySelectionMode: draft.selectionMode,
+        apiKeys: draft.keys.map((k) => ({
+          id: k.id,
+          value: k.value || undefined,
+        })),
+      }
+      return api.aiSaveProvider(payload)
+    },
+    onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["ai-providers"] })
+      qc.invalidateQueries({ queryKey: ["ai-models"] })
+      onSaved(r.provider.id)
     },
   })
 
   const remove = useMutation({
-    mutationFn: () => api.aiDeleteCredential(entry.id),
+    mutationFn: () =>
+      existing ? api.aiDeleteProvider(existing.id) : Promise.resolve({ ok: false, providerId: "" }),
     onSuccess: () => {
-      setApiKey("")
-      setTestResult(null)
       qc.invalidateQueries({ queryKey: ["ai-providers"] })
+      onDeleted()
     },
   })
 
-  const test = useMutation({
+  const discover = useMutation({
     mutationFn: () =>
-      api.aiTestProvider({
-        provider: entry.id,
-        api_key: apiKey.trim() || null,
-        base_url: baseUrl.trim() || null,
-        model: defaultModel.trim() || null,
-      }),
-    onSuccess: (r) => setTestResult(r),
+      existing ? api.aiDiscoverModels(existing.id) : Promise.resolve({ models: [] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-models"] })
+    },
   })
 
-  const visionModelCount = useMemo(
-    () => entry.models.filter((m) => m.vision).length,
-    [entry.models],
-  )
+  const testConn = useMutation({
+    mutationFn: () =>
+      existing
+        ? api.aiTestConnection({ providerId: existing.id })
+        : Promise.resolve(null as unknown as AIConnectionTestResult),
+    onSuccess: (r) => setTest(r),
+  })
+
+  const canSave =
+    draft.name.trim() &&
+    draft.baseUrl.trim() &&
+    headersError == null &&
+    !save.isPending
 
   return (
-    <Card
-      className={cn(
-        "rounded-[6px] border-border/70 shadow-[var(--panel-shadow)] flex flex-col",
-        entry.configured && entry.enabled && "border-primary/40",
-      )}
-    >
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="text-base flex items-center gap-2">
-              {entry.name}
-              {entry.configured && entry.enabled && (
-                <Badge variant="secondary" className="rounded-[2px] text-[10px]">
-                  已启用
-                </Badge>
-              )}
-              {entry.configured && !entry.enabled && (
-                <Badge variant="outline" className="rounded-[2px] text-[10px]">
-                  已禁用
-                </Badge>
-              )}
-            </CardTitle>
-            <CardDescription className="text-[11px]">
-              {entry.models.length} 个模型
-              {visionModelCount > 0 && (
-                <>
-                  {" · "}
-                  <span className="text-foreground">{visionModelCount}</span>{" "}
-                  个支持视觉
-                </>
-              )}
-            </CardDescription>
-          </div>
-          {entry.docs_url && (
-            <a
-              href={entry.docs_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 shrink-0"
-            >
-              文档 <ExternalLink className="size-3" />
-            </a>
-          )}
-        </div>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">
+          {isNew ? "新建服务商" : draft.name || "(未命名)"}
+        </CardTitle>
+        <CardDescription className="text-[11px]">
+          所有服务商使用 OpenAI 兼容协议 (Bearer + /v1/chat/completions)。
+          可填任意自部署 / 公有云 / 中转 base URL。
+        </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-2.5 flex-1">
-        <p className="text-[11px] text-muted-foreground/85 leading-relaxed">
-          {entry.auth_help}
-        </p>
-        <div className="space-y-1.5">
-          <Label className="text-[11px]">API Key</Label>
-          <div className="relative">
+      <CardContent className="space-y-3">
+        <Field label="名称">
+          <Input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            placeholder="例: DeepSeek / 我的 Ollama"
+          />
+        </Field>
+        <Field label="Base URL">
+          <Input
+            value={draft.baseUrl}
+            onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+            placeholder="https://api.deepseek.com/v1"
+            className="font-mono text-[12px]"
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Organization (可选)">
             <Input
-              type={showKey ? "text" : "password"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={
-                entry.configured
-                  ? "已保存(留空保持不变)"
-                  : "粘贴你的 API Key"
-              }
-              className="font-mono text-[12px] pr-8"
+              value={draft.organization}
+              onChange={(e) => setDraft({ ...draft, organization: e.target.value })}
             />
-            <button
-              type="button"
-              onClick={() => setShowKey((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              {showKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-            </button>
-          </div>
+          </Field>
+          <Field label="Project (可选)">
+            <Input
+              value={draft.project}
+              onChange={(e) => setDraft({ ...draft, project: e.target.value })}
+            />
+          </Field>
         </div>
+        <Field
+          label="自定义 Headers (JSON)"
+          hint='形如 { "X-Foo": "bar" }; 留空表示无自定义 header'
+        >
+          <textarea
+            value={draft.headersJson}
+            onChange={(e) => setDraft({ ...draft, headersJson: e.target.value })}
+            placeholder='{ "X-Tenant": "abc" }'
+            className="font-mono text-[12px] w-full min-h-[60px] rounded-[3px] border border-input bg-background/76 px-2 py-1.5 text-foreground"
+          />
+          {headersError && (
+            <div className="text-[11px] font-mono text-destructive">{headersError}</div>
+          )}
+        </Field>
 
-        {entry.custom_base_url && (
-          <div className="space-y-1.5">
-            <Label className="text-[11px]">Base URL</Label>
-            <Input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={entry.default_base_url}
-              className="font-mono text-[12px]"
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={draft.enabled}
+              onCheckedChange={(v) => setDraft({ ...draft, enabled: v })}
             />
+            <Label className="text-[12px]">启用此服务商</Label>
           </div>
-        )}
-
-        <div className="space-y-1.5">
-          <Label className="text-[11px]">默认模型</Label>
-          {entry.models.length > 0 && !entry.custom_base_url ? (
+          <Field label="多 key 调度">
             <Select
-              value={defaultModel}
-              onValueChange={(v) => setDefaultModel(v ?? "")}
+              value={draft.selectionMode}
+              onValueChange={(v) =>
+                setDraft({ ...draft, selectionMode: (v ?? "round_robin") as AIKeySelectionMode })
+              }
             >
-              <SelectTrigger className="h-8 text-[12px] font-mono">
-                <SelectValue placeholder="选择模型" />
+              <SelectTrigger className="h-8 text-[12px] w-[7rem]">
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {entry.models.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    <span className="font-mono text-[12px]">{m.id}</span>
-                    <span className="ml-2 text-[11px] text-muted-foreground">
-                      {m.label}
-                      {m.vision && " · 视觉"}
-                    </span>
+                {SELECTION_MODES.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+          </Field>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-[12px]">API Keys</Label>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  keys: [...draft.keys, { id: null, preview: "", value: "" }],
+                })
+              }
+            >
+              <Plus className="size-3" /> 添加 key
+            </Button>
+          </div>
+          {draft.keys.length === 0 ? (
+            <div className="rounded-[3px] border border-dashed border-border/60 px-3 py-3 text-[11px] text-muted-foreground/85">
+              至少添加一个 API key 才能使用这家服务商。
+            </div>
           ) : (
-            <Input
-              value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder={entry.default_model ?? "model-id"}
-              className="font-mono text-[12px]"
-            />
+            <div className="space-y-2">
+              {draft.keys.map((k, idx) => {
+                const showId = k.id ?? `new-${idx}`
+                const visible = showKeyById[showId] ?? false
+                return (
+                  <div
+                    key={showId}
+                    className="rounded-[3px] border border-border/60 p-2 space-y-1.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Input
+                          type={visible ? "text" : "password"}
+                          value={k.value}
+                          onChange={(e) => {
+                            const next = [...draft.keys]
+                            next[idx] = { ...next[idx], value: e.target.value }
+                            setDraft({ ...draft, keys: next })
+                          }}
+                          placeholder={k.id ? `已保存 (${k.preview})` : "粘贴 API key"}
+                          className="font-mono text-[11px] pr-8"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowKeyById((m) => ({ ...m, [showId]: !visible }))
+                          }
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                        </button>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-1.5 text-destructive hover:text-destructive"
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            keys: draft.keys.filter((_, i) => i !== idx),
+                          })
+                        }
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                    {k.id && (
+                      <KeyRuntimeBadge k={k} />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <Label className="text-[11px] flex items-center gap-2">
-            启用
-            <Switch
-              checked={enabled}
-              onCheckedChange={(v) => setEnabled(v)}
-            />
-          </Label>
-        </div>
-
-        {testResult && (
+        {test && (
           <div
             className={cn(
               "rounded-[3px] border px-2 py-1.5 text-[11px] font-mono break-all",
-              testResult.ok
+              test.ok
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                 : "border-destructive/40 bg-destructive/5 text-destructive",
             )}
           >
-            {testResult.ok ? (
+            {test.ok ? (
               <span className="flex items-center gap-1">
                 <CheckCircle2 className="size-3.5 shrink-0" />
-                连接成功 · {testResult.model ?? "-"}
+                连接成功 · 发现 {test.modelCount} 个模型
               </span>
             ) : (
               <span className="flex items-start gap-1">
                 <XCircle className="size-3.5 shrink-0 mt-0.5" />
-                <span>{testResult.error ?? "请求失败"}</span>
+                <span>{test.error ?? "请求失败"}</span>
               </span>
             )}
           </div>
         )}
       </CardContent>
-      <div className="px-4 pb-3 pt-0 flex items-center justify-between gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={
-            test.isPending ||
-            (!apiKey.trim() && !entry.configured) ||
-            (entry.custom_base_url && !baseUrl.trim() && !entry.current_base_url)
-          }
-          onClick={() => test.mutate()}
-          className="h-7 text-[11px]"
-        >
-          {test.isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : (
-            <Zap className="size-3" />
-          )}
-          测试
-        </Button>
+      <div className="px-4 pb-3 pt-0 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
-          {entry.configured && (
+          {!isNew && existing && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => testConn.mutate()}
+                disabled={testConn.isPending}
+                className="h-7 text-[11px]"
+              >
+                {testConn.isPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="size-3" />
+                )}
+                测试
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => discover.mutate()}
+                disabled={discover.isPending}
+                className="h-7 text-[11px]"
+                title="从 /v1/models 拉取并刷新此服务商可用的模型列表"
+              >
+                {discover.isPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Search className="size-3" />
+                )}
+                发现模型
+              </Button>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {!isNew && existing && (
             <Button
               size="sm"
               variant="ghost"
+              className="h-7 text-[11px] text-destructive hover:text-destructive"
               onClick={() => remove.mutate()}
               disabled={remove.isPending}
-              className="h-7 text-[11px] text-destructive hover:text-destructive"
             >
               <Trash2 className="size-3" /> 删除
             </Button>
@@ -341,7 +577,7 @@ function ProviderCard({ entry }: { entry: AIProviderEntry }) {
           <Button
             size="sm"
             onClick={() => save.mutate()}
-            disabled={save.isPending}
+            disabled={!canSave}
             className="h-7 text-[11px]"
           >
             {save.isPending ? (
@@ -353,11 +589,437 @@ function ProviderCard({ entry }: { entry: AIProviderEntry }) {
           </Button>
         </div>
       </div>
-      {save.isError && (
+      {(save.isError || remove.isError || discover.isError || testConn.isError) && (
         <div className="px-4 pb-2 -mt-2 text-[11px] font-mono text-destructive">
-          {(save.error as Error).message}
+          {String(
+            (save.error || remove.error || discover.error || testConn.error) as Error,
+          )}
         </div>
       )}
+      {existing && <ProviderModelsTable provider={existing} />}
+    </Card>
+  )
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[11px]">{label}</Label>
+      {children}
+      {hint && (
+        <p className="text-[10px] text-muted-foreground/85 leading-relaxed">
+          {hint}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function KeyRuntimeBadge({ k }: { k: KeyDraftLocal }) {
+  const onCooldown = !!k.cooldownUntil && new Date(k.cooldownUntil) > new Date()
+  return (
+    <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
+      <span>请求 {k.requestCount ?? 0}</span>
+      <span className="text-emerald-600 dark:text-emerald-400">
+        ✓{k.successCount ?? 0}
+      </span>
+      <span className="text-destructive">
+        ✗{k.failureCount ?? 0}
+      </span>
+      {onCooldown && (
+        <Badge variant="destructive" className="text-[9px] rounded-[2px]">
+          冷却中
+        </Badge>
+      )}
+      {k.lastError && (
+        <span className="truncate text-destructive/85" title={k.lastError}>
+          · {k.lastError}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// Provider models table
+// --------------------------------------------------------------------------- //
+
+function ProviderModelsTable({ provider }: { provider: AIProviderRecord }) {
+  const qc = useQueryClient()
+  const models = useQuery({
+    queryKey: ["ai-models", provider.id],
+    queryFn: () => api.aiListModels(provider.id),
+  })
+  const [adding, setAdding] = useState(false)
+  const [newModelId, setNewModelId] = useState("")
+  const [newDisplayName, setNewDisplayName] = useState("")
+
+  const list = models.data?.models ?? []
+
+  const addModel = useMutation({
+    mutationFn: () =>
+      api.aiSaveModel({
+        providerId: provider.id,
+        modelId: newModelId.trim(),
+        displayName: newDisplayName.trim() || newModelId.trim(),
+        source: "manual",
+        enabled: true,
+      }),
+    onSuccess: () => {
+      setNewModelId("")
+      setNewDisplayName("")
+      setAdding(false)
+      qc.invalidateQueries({ queryKey: ["ai-models", provider.id] })
+    },
+  })
+
+  const removeModel = useMutation({
+    mutationFn: (id: string) => api.aiDeleteModel(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-models", provider.id] })
+    },
+  })
+
+  return (
+    <CardContent className="border-t border-border/60 pt-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-[12px] font-medium">模型 ({list.length})</div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-[11px]"
+          onClick={() => setAdding((v) => !v)}
+        >
+          <Plus className="size-3" /> 手工添加
+        </Button>
+      </div>
+      {adding && (
+        <div className="rounded-[3px] border border-border/60 p-2 mb-2 space-y-1.5">
+          <Input
+            value={newModelId}
+            onChange={(e) => setNewModelId(e.target.value)}
+            placeholder="model-id (如 gpt-4o-mini, deepseek-chat)"
+            className="font-mono text-[12px]"
+          />
+          <Input
+            value={newDisplayName}
+            onChange={(e) => setNewDisplayName(e.target.value)}
+            placeholder="显示名 (留空则用 model-id)"
+          />
+          <div className="flex justify-end gap-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-[11px]"
+              onClick={() => setAdding(false)}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-[11px]"
+              disabled={!newModelId.trim() || addModel.isPending}
+              onClick={() => addModel.mutate()}
+            >
+              {addModel.isPending ? <Loader2 className="size-3 animate-spin" /> : <Save className="size-3" />}
+              添加
+            </Button>
+          </div>
+        </div>
+      )}
+      {list.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground/85">
+          暂无模型。点「发现模型」从 /v1/models 自动拉取,或手动添加。
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {list.map((m) => (
+            <div
+              key={m.id}
+              className="flex items-center gap-2 px-2 py-1 rounded-[3px] border border-border/40 text-[12px]"
+            >
+              <span className="font-mono">{m.modelId}</span>
+              {m.displayName !== m.modelId && (
+                <span className="text-muted-foreground truncate">· {m.displayName}</span>
+              )}
+              <Badge
+                variant={m.source === "discovered" ? "secondary" : "outline"}
+                className="text-[9px] rounded-[2px]"
+              >
+                {m.source === "discovered" ? "已发现" : "手动"}
+              </Badge>
+              {!m.enabled && <Badge variant="outline" className="text-[9px]">禁用</Badge>}
+              <span className="ml-auto" />
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-1 text-destructive hover:text-destructive"
+                onClick={() => removeModel.mutate(m.id)}
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </CardContent>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// Routes panel: per-task (provider + model + system prompt + sampling)
+// --------------------------------------------------------------------------- //
+
+function RoutesPanel() {
+  const providers = useQuery({
+    queryKey: ["ai-providers"],
+    queryFn: api.aiListProviders,
+  })
+  const routes = useQuery({
+    queryKey: ["ai-routes"],
+    queryFn: api.aiListRoutes,
+  })
+  const allModels = useQuery({
+    queryKey: ["ai-models"],
+    queryFn: () => api.aiListModels(),
+  })
+
+  const providerList = providers.data?.providers ?? []
+  const routeMap = useMemo(() => {
+    const m = new Map<string, AIRouteRecord>()
+    for (const r of routes.data?.routes ?? []) m.set(r.taskId, r)
+    return m
+  }, [routes.data])
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-[4px] border border-border/60 bg-muted/20 px-4 py-2.5 text-[12px] text-muted-foreground/85">
+        每项 LoraHub 功能对应一个任务路由。未单独配置的任务使用「默认」兜底路由。
+      </div>
+      {AI_TASK_IDS.map((taskId) => (
+        <RouteRow
+          key={taskId}
+          taskId={taskId}
+          route={routeMap.get(taskId) ?? null}
+          providers={providerList}
+          allModels={allModels.data?.models ?? []}
+        />
+      ))}
+    </div>
+  )
+}
+
+function RouteRow({
+  taskId,
+  route,
+  providers,
+  allModels,
+}: {
+  taskId: AITaskId
+  route: AIRouteRecord | null
+  providers: AIProviderRecord[]
+  allModels: AIModelRecord[]
+}) {
+  const qc = useQueryClient()
+  const [providerId, setProviderId] = useState(route?.providerId ?? "")
+  const [modelId, setModelId] = useState(route?.modelId ?? "")
+  const [systemPrompt, setSystemPrompt] = useState(route?.systemPrompt ?? "")
+  const [enabled, setEnabled] = useState(route?.enabled ?? true)
+  const [advanced, setAdvanced] = useState(false)
+  const [temperature, setTemperature] = useState<string>(
+    route?.temperature?.toString() ?? "",
+  )
+  const [maxOutputTokens, setMaxOutputTokens] = useState<string>(
+    route?.maxOutputTokens?.toString() ?? "",
+  )
+  const [reasoningEffort, setReasoningEffort] = useState<string>(
+    route?.reasoningEffort ?? "",
+  )
+
+  useEffect(() => {
+    setProviderId(route?.providerId ?? "")
+    setModelId(route?.modelId ?? "")
+    setSystemPrompt(route?.systemPrompt ?? "")
+    setEnabled(route?.enabled ?? true)
+    setTemperature(route?.temperature?.toString() ?? "")
+    setMaxOutputTokens(route?.maxOutputTokens?.toString() ?? "")
+    setReasoningEffort(route?.reasoningEffort ?? "")
+  }, [route?.taskId, route?.updatedAt, route])
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.aiSaveRoute({
+        taskId,
+        providerId: providerId || null,
+        modelId: modelId || null,
+        systemPrompt,
+        temperature: temperature.trim() ? Number(temperature) : null,
+        maxOutputTokens: maxOutputTokens.trim() ? Number(maxOutputTokens) : null,
+        reasoningEffort: (reasoningEffort.trim() || null) as
+          | "low"
+          | "medium"
+          | "high"
+          | null,
+        stopSequences: route?.stopSequences ?? [],
+        extraBodyJson: route?.extraBodyJson ?? "",
+        enabled,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-routes"] })
+    },
+  })
+
+  const modelsForProvider = useMemo(
+    () =>
+      providerId
+        ? allModels.filter((m) => m.providerId === providerId && m.enabled)
+        : [],
+    [allModels, providerId],
+  )
+
+  return (
+    <Card className="rounded-[6px] border-border/70">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <CardTitle className="text-base">{TASK_LABELS[taskId]}</CardTitle>
+            <CardDescription className="text-[11px]">
+              {TASK_DESCRIPTIONS[taskId]} · <code className="font-mono">{taskId}</code>
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Switch
+              checked={enabled}
+              onCheckedChange={(v) => setEnabled(v)}
+            />
+            <span className="text-[11px] text-muted-foreground">启用</span>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="服务商">
+            <Select
+              value={providerId}
+              onValueChange={(v) => {
+                setProviderId(v ?? "")
+                setModelId("")
+              }}
+            >
+              <SelectTrigger className="h-8 text-[12px]">
+                <SelectValue placeholder="(继承默认)" />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="模型">
+            <Select
+              value={modelId}
+              onValueChange={(v) => setModelId(v ?? "")}
+              disabled={!providerId}
+            >
+              <SelectTrigger className="h-8 text-[12px] font-mono">
+                <SelectValue placeholder={providerId ? "选择" : "先选服务商"} />
+              </SelectTrigger>
+              <SelectContent>
+                {modelsForProvider.map((m) => (
+                  <SelectItem key={m.id} value={m.modelId}>
+                    {m.modelId}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+        <Field label="System Prompt">
+          <textarea
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            rows={2}
+            className="font-mono text-[12px] w-full rounded-[3px] border border-input bg-background/76 px-2 py-1.5"
+            placeholder="可选 — 会作为 system 消息加在用户 prompt 之前"
+          />
+        </Field>
+        <button
+          type="button"
+          onClick={() => setAdvanced((v) => !v)}
+          className="text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          {advanced ? "收起" : "展开"}采样参数
+        </button>
+        {advanced && (
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="temperature">
+              <Input
+                value={temperature}
+                onChange={(e) => setTemperature(e.target.value)}
+                placeholder="0.2"
+                className="h-8 text-[12px]"
+              />
+            </Field>
+            <Field label="max_output_tokens">
+              <Input
+                value={maxOutputTokens}
+                onChange={(e) => setMaxOutputTokens(e.target.value)}
+                placeholder="2048"
+                className="h-8 text-[12px]"
+              />
+            </Field>
+            <Field label="reasoning_effort">
+              <Select
+                value={reasoningEffort}
+                onValueChange={(v) => setReasoningEffort(v ?? "")}
+              >
+                <SelectTrigger className="h-8 text-[12px]">
+                  <SelectValue placeholder="(默认)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">(默认)</SelectItem>
+                  {REASONING_EFFORTS.map((e) => (
+                    <SelectItem key={e} value={e}>
+                      {e}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        )}
+      </CardContent>
+      <div className="px-4 pb-3 flex items-center justify-end gap-2">
+        {save.isError && (
+          <span className="text-[11px] font-mono text-destructive">
+            {(save.error as Error).message}
+          </span>
+        )}
+        <Button
+          size="sm"
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className="h-7 text-[11px]"
+        >
+          {save.isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <Save className="size-3" />
+          )}
+          保存
+        </Button>
+      </div>
     </Card>
   )
 }

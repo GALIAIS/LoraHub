@@ -629,52 +629,63 @@ export const api = {
     }),
   getTaggingSession: (sessionId: string) =>
     http<TaggingSession>(`/tagging/tag/${sessionId}`),
-  // ----- AI provider catalogue + credentials -----
+  // ----- AI subsystem (ShiroManager-shaped) -----
   aiListProviders: () =>
-    http<{ providers: AIProviderEntry[] }>("/ai/providers"),
-  aiListCredentials: () =>
-    http<{ credentials: AICredentialEntry[] }>("/ai/credentials"),
-  aiUpsertCredential: (body: {
-    provider: string
-    api_key?: string | null
-    base_url?: string | null
-    default_model?: string | null
-    enabled?: boolean
-  }) =>
-    http<{ credential: AICredentialEntry }>("/ai/credentials", {
+    http<{ providers: AIProviderRecord[] }>("/ai/providers"),
+  aiGetProvider: (id: string) =>
+    http<AIProviderRecord>(`/ai/providers/${encodeURIComponent(id)}`),
+  aiSaveProvider: (draft: AIProviderDraft) =>
+    http<{ provider: AIProviderRecord }>("/ai/providers", {
       method: "PUT",
-      body: JSON.stringify(body),
+      body: JSON.stringify(draft),
     }),
-  aiDeleteCredential: (provider: string) =>
-    http<{ deleted: boolean; provider: string }>(
-      `/ai/credentials/${encodeURIComponent(provider)}`,
+  aiDeleteProvider: (id: string) =>
+    http<{ ok: boolean; providerId: string }>(
+      `/ai/providers/${encodeURIComponent(id)}`,
       { method: "DELETE" },
     ),
-  aiTestProvider: (body: {
-    provider: string
-    api_key?: string | null
-    base_url?: string | null
-    model?: string | null
-  }) =>
-    http<AITestResult>("/ai/test", {
-      method: "POST",
-      body: JSON.stringify(body),
+  aiListModels: (providerId?: string) =>
+    http<{ models: AIModelRecord[] }>(
+      providerId
+        ? `/ai/models?provider_id=${encodeURIComponent(providerId)}`
+        : "/ai/models",
+    ),
+  aiSaveModel: (draft: AIModelDraft) =>
+    http<{ model: AIModelRecord }>("/ai/models", {
+      method: "PUT",
+      body: JSON.stringify(draft),
     }),
-  aiChat: (body: {
-    provider: string
-    messages: Array<{ role: "system" | "user" | "assistant"; content: unknown }>
-    model?: string | null
-    temperature?: number
-    max_tokens?: number | null
-    response_format?: "text" | "json"
-    stream?: boolean
-    timeout_s?: number
-    extra?: Record<string, unknown>
-  }) =>
-    http<AIChatResult>("/ai/chat", {
-      method: "POST",
-      body: JSON.stringify(body),
+  aiDeleteModel: (id: string) =>
+    http<{ ok: boolean; modelId: string }>(
+      `/ai/models/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  aiDiscoverModels: (providerId: string) =>
+    http<{ models: AIModelRecord[] }>(
+      `/ai/providers/${encodeURIComponent(providerId)}/discover-models`,
+      { method: "POST" },
+    ),
+  aiListRoutes: () => http<{ routes: AIRouteRecord[] }>("/ai/routes"),
+  aiSaveRoute: (draft: AIRouteDraft) =>
+    http<{ route: AIRouteRecord }>("/ai/routes", {
+      method: "PUT",
+      body: JSON.stringify(draft),
     }),
+  aiTestConnection: (input: AIConnectionTestInput) =>
+    http<AIConnectionTestResult>("/ai/test", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  aiInvokeTask: (input: AIInvokeTaskInput) =>
+    http<AIInvokeTaskResult>("/ai/invoke", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  aiResetKeyRuntime: (keyId: string) =>
+    http<{ ok: boolean; keyId: string }>(
+      `/ai/keys/${encodeURIComponent(keyId)}/reset-runtime`,
+      { method: "POST" },
+    ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
   probeMirrors: (
@@ -1033,56 +1044,209 @@ export interface ProbeResult {
   error: string | null
 }
 
-export interface AIModelInfo {
-  id: string
-  label: string
-  vision: boolean
-  context: number
+export type AIReasoningEffort = "low" | "medium" | "high"
+export type AIKeySelectionMode = "round_robin" | "random"
+export type AIModelSource = "manual" | "discovered"
+
+export const AI_TASK_IDS = [
+  "global.default",
+  "tagging.assist",
+  "caption.rewrite",
+  "dataset.analyze",
+  "training.diagnose",
+  "error.diagnose",
+] as const
+export type AITaskId = (typeof AI_TASK_IDS)[number]
+
+export interface AIProviderKeyRuntime {
+  requestCount: number
+  successCount: number
+  failureCount: number
+  consecutiveFailures: number
+  lastUsedAt: string | null
+  lastSucceededAt: string | null
+  lastFailedAt: string | null
+  lastError: string | null
+  cooldownUntil: string | null
 }
 
-export interface AIProviderEntry {
+export interface AIProviderKeyRecord {
+  id: string
+  preview: string
+  createdAt: string
+  updatedAt: string
+  runtime: AIProviderKeyRuntime
+}
+
+export interface AIProviderKeyDraft {
+  id?: string | null
+  value?: string
+  preview?: string
+}
+
+export interface AIProviderRecord {
   id: string
   name: string
-  homepage: string
-  docs_url: string
-  auth_help: string
-  default_base_url: string
-  default_model: string | null
-  custom_base_url: boolean
-  models: AIModelInfo[]
-  configured: boolean
+  kind: "openai-compatible"
+  baseUrl: string
+  organization: string
+  project: string
+  headers: Record<string, string>
   enabled: boolean
-  current_base_url: string | null
-  current_default_model: string | null
+  hasApiKey: boolean
+  apiKeyPreview: string
+  apiKeyCount: number
+  apiKeySelectionMode: AIKeySelectionMode
+  apiKeys: AIProviderKeyRecord[]
+  createdAt: string
+  updatedAt: string
 }
 
-export interface AICredentialEntry {
-  provider: string
-  api_key: string | null
-  api_key_set: boolean
-  base_url: string | null
-  default_model: string | null
-  enabled: boolean
-  updated_at: string | null
+export interface AIProviderDraft {
+  id?: string | null
+  name: string
+  kind?: "openai-compatible"
+  baseUrl?: string
+  organization?: string
+  project?: string
+  headers?: Record<string, string>
+  enabled?: boolean
+  apiKeySelectionMode?: AIKeySelectionMode
+  apiKeys?: AIProviderKeyDraft[]
+  apiKey?: string
+  clearApiKey?: boolean
 }
 
-export interface AITestResult {
+export interface AIModelRecord {
+  id: string
+  providerId: string
+  modelId: string
+  displayName: string
+  source: AIModelSource
+  enabled: boolean
+  raw: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AIModelDraft {
+  id?: string | null
+  providerId: string
+  modelId: string
+  displayName: string
+  source?: AIModelSource
+  enabled?: boolean
+  raw?: Record<string, unknown>
+}
+
+export interface AIRouteRecord {
+  taskId: string
+  providerId: string | null
+  modelId: string | null
+  systemPrompt: string
+  stream: boolean | null
+  temperature: number | null
+  topP: number | null
+  frequencyPenalty: number | null
+  presencePenalty: number | null
+  maxOutputTokens: number | null
+  seed: number | null
+  reasoningEffort: AIReasoningEffort | null
+  thinkingBudgetTokens: number | null
+  includeReasoning: boolean | null
+  stopSequences: string[]
+  extraBodyJson: string
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AIRouteDraft {
+  taskId: string
+  providerId?: string | null
+  modelId?: string | null
+  systemPrompt?: string
+  stream?: boolean | null
+  temperature?: number | null
+  topP?: number | null
+  frequencyPenalty?: number | null
+  presencePenalty?: number | null
+  maxOutputTokens?: number | null
+  seed?: number | null
+  reasoningEffort?: AIReasoningEffort | null
+  thinkingBudgetTokens?: number | null
+  includeReasoning?: boolean | null
+  stopSequences?: string[]
+  extraBodyJson?: string
+  enabled?: boolean
+}
+
+export interface AIConnectionTestInput {
+  providerId: string
+  modelId?: string | null
+  prompt?: string | null
+  systemPrompt?: string | null
+  stream?: boolean | null
+  temperature?: number | null
+  topP?: number | null
+  frequencyPenalty?: number | null
+  presencePenalty?: number | null
+  maxOutputTokens?: number | null
+  seed?: number | null
+  reasoningEffort?: AIReasoningEffort | null
+  thinkingBudgetTokens?: number | null
+  includeReasoning?: boolean | null
+  stopSequences?: string[] | null
+  extraBodyJson?: string | null
+}
+
+export interface AIInvokeTaskInput {
+  taskId: string
+  prompt: string
+  systemPrompt?: string | null
+  stream?: boolean | null
+  temperature?: number | null
+  topP?: number | null
+  frequencyPenalty?: number | null
+  presencePenalty?: number | null
+  maxOutputTokens?: number | null
+  seed?: number | null
+  reasoningEffort?: AIReasoningEffort | null
+  thinkingBudgetTokens?: number | null
+  includeReasoning?: boolean | null
+  stopSequences?: string[] | null
+  extraBodyJson?: string | null
+}
+
+export interface AIUsage {
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+}
+
+export interface AIInvokeTaskResult {
+  taskId: string
+  providerId: string
+  providerName: string
+  modelId: string
+  content: string
+  reasoning: string | null
+  finishReason: string | null
+  usage: AIUsage | null
+}
+
+export interface AIConnectionTestResult {
   ok: boolean
-  model?: string
-  sample?: string
-  usage_input_tokens?: number | null
-  usage_output_tokens?: number | null
-  error?: string
-  status_code?: number | null
-  retryable?: boolean
-}
-
-export interface AIChatResult {
-  text: string
-  model: string
-  finish_reason: string | null
-  usage_input_tokens: number | null
-  usage_output_tokens: number | null
+  providerId: string
+  providerName: string
+  modelCount: number
+  models: Array<{
+    id: string | null
+    object: string | null
+    ownedBy: string | null
+  }>
+  completion: AIInvokeTaskResult | null
+  error: string | null
 }
 
 /**
