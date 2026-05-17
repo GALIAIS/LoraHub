@@ -27,7 +27,13 @@ _STEP_RE = re.compile(
 _EPOCH_RE = re.compile(r"^epoch\s+(?P<cur>\d+)\s*/\s*(?P<total>\d+)\s*$", re.IGNORECASE)
 
 _SAVE_RE = re.compile(
-    r"\b(?:saving|saved)\b[^:\n]*?"
+    # Match `save`, `saving`, `saved`. sd-scripts uses three different
+    # phrasings depending on the script and whether it's a LoRA / full
+    # model / state save: `saving checkpoint: <path>`, `saved model to:
+    # <path>`, `save trained model as StableDiffusion checkpoint to
+    # <path>`. The `\b` boundary plus `[^:\n]*?` ahead of the separator
+    # absorbs the variable filler.
+    r"\bsav(?:e|ed|ing)\b[^:\n]*?"
     r"(?::\s*|\sat\s+|\sas\s+|\sto\s+)"
     r"(?P<path>[^\n]+?\.safetensors)\b",
     re.IGNORECASE,
@@ -37,6 +43,21 @@ _SAMPLE_RE = re.compile(
     r"\bsample\b[^:\n]*?"
     r"(?::\s*|\sat\s+|\sas\s+|\sto\s+)"
     r"(?P<path>[^\n]+?\.(?:png|jpg|jpeg|webp))\b",
+    re.IGNORECASE,
+)
+
+# kohya doesn't emit a "sample saved to <path>" line when sd-scripts writes
+# preview images — `train_util.sample_image_inference` just calls
+# `image.save()`. The closest stdout signal is the pre-write banner from
+# `library/train_util.py:6562`:
+#
+#   generating sample images at step / サンプル画像生成 ステップ: 100
+#
+# We match it and emit a sample_ready event with the step number so the
+# events tab can place a milestone on the timeline; the file path is
+# discovered separately via /api/jobs/{id}/files.
+_SAMPLE_BANNER_RE = re.compile(
+    r"generating sample images? at step.*?:\s*(?P<step>\d+)",
     re.IGNORECASE,
 )
 
@@ -176,6 +197,16 @@ class KohyaLineParser:
             return TrainingEvent(
                 type=EventType.sample_ready,
                 payload={"path": m.group("path")},
+                job_id=job_id,
+            )
+
+        # Fall-through banner match for sample generation: kohya doesn't print
+        # the saved file path so we surface the step instead. The frontend
+        # cross-references this against /files to render the actual image.
+        if (m := _SAMPLE_BANNER_RE.search(stripped)) is not None:
+            return TrainingEvent(
+                type=EventType.sample_ready,
+                payload={"step": int(m.group("step"))},
                 job_id=job_id,
             )
 

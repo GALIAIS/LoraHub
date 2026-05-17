@@ -79,6 +79,33 @@ def test_sample_ready_parsed() -> None:
     assert ev.payload["path"].endswith(".png")
 
 
+def test_sample_ready_from_banner_with_step() -> None:
+    # sd-scripts doesn't print the saved sample path, only a banner
+    # ahead of generation. We surface that as a sample_ready event so
+    # the timeline UI gets a milestone marker; the actual image path
+    # comes from /api/jobs/{id}/files.
+    ev = parse_line(
+        "generating sample images at step / サンプル画像生成 ステップ: 200",
+    )
+    assert ev is not None
+    assert ev.type is EventType.sample_ready
+    assert ev.payload["step"] == 200
+    assert "path" not in ev.payload
+
+
+def test_save_phrasing_full_model_checkpoint() -> None:
+    # `train.py` / `fine_tune.py` use a different phrasing than the
+    # LoRA-specific `saving checkpoint: <path>` line, so the SAVE
+    # regex must accept the verb `save` (not just saving/saved).
+    ev = parse_line(
+        "save trained model as StableDiffusion checkpoint to "
+        "/runs/foo/model_final.safetensors",
+    )
+    assert ev is not None
+    assert ev.type is EventType.checkpoint_saved
+    assert ev.payload["path"].endswith("model_final.safetensors")
+
+
 def test_arbitrary_log_line_kept_as_log() -> None:
     ev = parse_line("loading model from sdxl_base_1.0.safetensors")
     assert ev is not None
