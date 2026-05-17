@@ -473,6 +473,21 @@ class SamplingConfig(BaseModel):
     # `default` reuses the training backend; explicit choice overrides.
     attention: Literal["default", "torch", "sdpa", "xformers", "flash", "sageattn"] = "default"
 
+    # diffusion-pipe doesn't generate preview images on its own. When
+    # `enable_live_inference` is on, the lorahub job runner starts a
+    # background watcher that polls the workspace `output/step*` dirs
+    # and runs an in-process Anima inference for every new checkpoint
+    # using the prompt list at `prompts_file`. The PNGs land under
+    # `workspace/samples/` and a `sample_ready` event is emitted so
+    # the analysis-tab gallery picks them up live.
+    #
+    # Off by default — turning it on adds GPU pressure during the
+    # narrow window between checkpoints; only useful with the dp
+    # backend (kohya already produces previews via --sample_prompts).
+    enable_live_inference: bool = False
+    inference_steps: int = Field(24, ge=1)
+    inference_cfg: float = Field(5.0, gt=0)
+
 
 class AttentionConfig(BaseModel):
     """Selects the attention kernel for the training forward+backward pass.

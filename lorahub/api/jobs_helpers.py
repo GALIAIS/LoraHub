@@ -634,14 +634,104 @@ def _enqueue_launch(
             name=f"gpu-sampler-{job.id[-6:]}",
         )
         sampler.start()
+
+        # Optional: live-preview worker for diffusion-pipe runs. dp itself
+        # never renders sample images; this is the lorahub-side hook that
+        # turns each new dp checkpoint into a PNG using the user's
+        # `sampling.promptsFile`. Off by default (cfg.sampling.enable_live_inference).
+        preview_stop = threading.Event()
+        preview_thread = _maybe_start_preview_worker(
+            cfg, workspace, job.id, on_event, preview_stop,
+        )
+
         try:
             handle.wait(timeout=None)
         except Exception:  # noqa: BLE001
             log.exception("worker wait() failed for job %s", job.id)
         finally:
             sampler_stop.set()
+            preview_stop.set()
+            if preview_thread is not None:
+                preview_thread.join(timeout=5.0)
 
     sched.scheduler.submit(job.id, task)
+
+
+def _maybe_start_preview_worker(
+    cfg: TrainingConfig,
+    workspace: Path,
+    job_id: str,
+    on_event: Any,
+    stop_evt: threading.Event,
+) -> threading.Thread | None:
+    """Start a PreviewWorker thread if the recipe asks for it.
+
+    Returns the running daemon thread (so the caller can join on
+    shutdown) or None when the feature is disabled or prerequisites
+    are missing. Failures here are non-fatal — training never depends
+    on preview rendering.
+    """
+    sampling = cfg.sampling
+    if not sampling.enabled or not sampling.enable_live_inference:
+        return None
+    # Resolve the prompts file relative to the project root in the same
+    # way the rest of the recipe paths are absolutised at launch.
+    prompts_file = sampling.prompts_file
+    if prompts_file is None:
+        log.info(
+            "preview worker [%s]: enable_live_inference is on but no "
+            "sampling.prompts_file is configured — skipping",
+            job_id,
+        )
+        return None
+    if not Path(str(prompts_file)).is_file():
+        log.warning(
+            "preview worker [%s]: prompts file %s not found", job_id, prompts_file
+        )
+        return None
+
+    # Lazy import so the inference module isn't required for every job
+    # (and so a future torch import there can't break job launch).
+    try:
+        from lorahub.core.inference import (  # noqa: PLC0415
+            PreviewConfig,
+            PreviewWorker,
+            StubInference,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("preview worker [%s]: failed to import module", job_id)
+        return None
+
+    output_dir = (
+        Path(str(cfg.output.output_dir)).resolve()
+        if cfg.output.output_dir is not None
+        else (workspace / "output").resolve()
+    )
+    samples_dir = (workspace / "samples").resolve()
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
+    pcfg = PreviewConfig(
+        enabled=True,
+        prompts_file=Path(str(prompts_file)).resolve(),
+        default_steps=sampling.inference_steps,
+        default_cfg=sampling.inference_cfg,
+        samples_dir=samples_dir,
+        output_dir=output_dir,
+    )
+    worker = PreviewWorker(
+        config=pcfg,
+        inference=StubInference(),
+        on_event=on_event,
+        job_id=job_id,
+        stop_evt=stop_evt,
+    )
+    thread = threading.Thread(
+        target=worker.run,
+        daemon=True,
+        name=f"preview-{job_id[-6:]}",
+    )
+    thread.start()
+    return thread
 
 
 def _gpu_sampler_loop(

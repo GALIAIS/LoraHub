@@ -91,6 +91,15 @@ sampling:
   # scene / wide landscape, with @Kiko.L baked in. Edit the file to
   # re-target a different trigger or aesthetic.
   promptsFile: ./configs/sample_prompts/anima_default.txt
+  # diffusion-pipe doesn't render preview images on its own; lorahub
+  # spins up a watcher thread that renders one PNG per prompt for
+  # every new step{N} checkpoint dp drops in the output dir. The
+  # first iteration uses a stub backend that paints a deterministic
+  # placeholder PNG — wire up a real Anima inference in the second
+  # cut. Off by default for kohya recipes.
+  enableLiveInference: true
+  inferenceSteps: 24
+  inferenceCfg: 5.0
 
 output:
   name: lx_anima_style_lora

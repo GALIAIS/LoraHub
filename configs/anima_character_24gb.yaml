@@ -94,6 +94,13 @@ sampling:
   # full body / group / scene / wide landscape coverage). Swap the
   # trigger inside the file to match your character LoRA name.
   promptsFile: ./configs/sample_prompts/anima_default.txt
+  # See anima_style_24gb.yaml for context — dp doesn't render
+  # previews itself, so lorahub watches the output dir and renders
+  # one PNG per prompt per checkpoint. Stub backend until the
+  # real Anima inference lands.
+  enableLiveInference: true
+  inferenceSteps: 24
+  inferenceCfg: 5.0
 
 output:
   name: azurlane_char0_anima_lora
