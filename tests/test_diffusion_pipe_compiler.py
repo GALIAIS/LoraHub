@@ -460,7 +460,12 @@ def test_dp_model_paths_override_default_diffusers_path() -> None:
 
 
 def test_dp_full_bf16_emits_optim_dtype() -> None:
-    cfg = _recipe(optimization={"full_bf16": True})
+    # Plain torch AdamW accepts optim_dtype, so full_bf16 must surface
+    # it in the [optimizer] block.
+    cfg = _recipe(
+        optimization={"full_bf16": True},
+        optimizer={"type": "adamw"},
+    )
     main = _main_toml(cfg)
     assert 'optim_dtype = "bf16"' in main
 
@@ -468,6 +473,21 @@ def test_dp_full_bf16_emits_optim_dtype() -> None:
 def test_dp_full_bf16_default_omits_optim_dtype() -> None:
     main = _main_toml(_recipe())
     assert "optim_dtype" not in main
+
+
+def test_dp_full_bf16_with_8bit_optimizer_omits_optim_dtype() -> None:
+    # bitsandbytes AdamW8bit / its 4bit / lion_8bit cousins refuse the
+    # optim_dtype kwarg (state is fp32 by design). full_bf16 must be a
+    # no-op for these so dp doesn't crash with a TypeError.
+    for q_type in ("adamw8bit", "lion8bit", "paged_adamw_8bit", "adamw8bitkahan"):
+        cfg = _recipe(
+            optimization={"full_bf16": True},
+            optimizer={"type": q_type},
+        )
+        main = _main_toml(cfg)
+        assert "optim_dtype" not in main, (
+            f"{q_type} must not receive optim_dtype but compiler emitted it"
+        )
 
 
 def test_dp_blocks_to_swap_top_level_wins_over_dp_options() -> None:
@@ -519,13 +539,16 @@ def test_dp_fused_backward_pass_optimization_field_is_noop() -> None:
 
 
 def test_dp_optimization_kitchen_sink() -> None:
+    # full_bf16 surfaces optim_dtype only when the optimizer accepts it —
+    # explicit adamw here so the kitchen-sink assertion stays meaningful.
     cfg = _recipe(
         optimization={
             "torch_compile": True,
             "fused_backward_pass": True,
             "full_bf16": True,
             "blocks_to_swap": 9,
-        }
+        },
+        optimizer={"type": "adamw"},
     )
     main = _main_toml(cfg)
     assert "blocks_to_swap = 9" in main

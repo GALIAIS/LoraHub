@@ -558,11 +558,17 @@ def _optimizer_section(cfg: TrainingConfig) -> list[str]:
         f"weight_decay = {o.weight_decay}",
         f"eps = {o.eps}",
     ]
-    # `cfg.optimization.full_bf16` -> dp `optim_dtype = "bf16"`. dp's
-    # train.py drives optimizer-state precision off the optimizer block's
-    # `optim_dtype` key; emitting it here matches the kohya `--full_bf16`
-    # behaviour the recipe is asking for.
-    if cfg.optimization.full_bf16:
+    # `cfg.optimization.full_bf16` -> dp `optim_dtype = "bf16"`.
+    #
+    # dp/train.py forwards every key in the [optimizer] block straight to
+    # the optimizer constructor (klass(param_groups, **kwargs)). Most
+    # AdamW variants accept `optim_dtype` and use it to allocate the
+    # state in bf16, but the bitsandbytes 8-bit and 4-bit families keep
+    # state in fp32 by design and reject the kwarg with TypeError. So we
+    # only emit `optim_dtype` for optimizers we know accept it; for the
+    # rest we silently drop full_bf16 because the optimizer footprint is
+    # already tiny.
+    if cfg.optimization.full_bf16 and not _is_quantized_optimizer(opt_type):
         parts.append(f"optim_dtype = {_toml_str('bf16')}")
     # dp gradient_release: chunk-wise grad release for memory savings (see
     # `diffusion-pipe/train.py:407`). dp forces gradient_clipping=0 when
@@ -578,6 +584,28 @@ def _optimizer_section(cfg: TrainingConfig) -> list[str]:
             parts = [p for p in parts if not p.startswith(f"{key} =")]
         parts.append(f"{key} = {_toml_str(value)}")
     return parts
+
+
+# Optimizer types whose constructor refuses `optim_dtype`. Lower-cased for
+# case-insensitive matching against either the user's `optimizer.type`
+# string or its mapped diffusion-pipe equivalent.
+_QUANTIZED_OPTIMIZERS = {
+    "adamw8bit",
+    "adamw4bit",
+    "adamw_8bit",
+    "adamw_4bit",
+    "lion8bit",
+    "lion_8bit",
+    "paged_adamw_8bit",
+    "paged_adamw8bit",
+    "paged_lion_8bit",
+    "paged_lion8bit",
+    "adamw8bitkahan",
+}
+
+
+def _is_quantized_optimizer(name: str) -> bool:
+    return name.lower() in _QUANTIZED_OPTIMIZERS
 
 
 def _scheduler_for(name: str) -> str:
