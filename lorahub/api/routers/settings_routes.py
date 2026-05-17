@@ -45,6 +45,8 @@ class UpdateSettingsRequest(BaseModel):
     modelscope_token: str | None = None
     pypi_index_url: str | None = None
     download_proxy: str | None = None
+    huggingface_token: str | None = None
+    wandb_api_key: str | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -136,6 +138,8 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
         modelscope_token=_norm(req.modelscope_token),
         pypi_index_url=_norm(req.pypi_index_url),
         download_proxy=_norm(req.download_proxy),
+        huggingface_token=_norm(req.huggingface_token),
+        wandb_api_key=_norm(req.wandb_api_key),
         extra=current.extra,
     )
     store.save(new)

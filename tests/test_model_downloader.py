@@ -22,7 +22,17 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
     ]
 
     class FakeApi:
-        def model_info(self, repo_id: str, revision: str, files_metadata: bool):
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            self.endpoint = endpoint
+            self.token = token
+
+        def model_info(
+            self,
+            repo_id: str,
+            revision: str,
+            files_metadata: bool,
+            token: str | None = None,
+        ):
             assert repo_id == "owner/name"
             assert revision == "main"
             assert files_metadata is True
@@ -36,6 +46,8 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
         filename: str,
         revision: str,
         local_dir: str,
+        endpoint: str | None = None,
+        token: str | None = None,
     ) -> str:
         worker_names.add(threading.current_thread().name)
         out = Path(local_dir) / filename

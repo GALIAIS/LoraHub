@@ -109,6 +109,8 @@ export interface SettingsState {
   modelscope_token: string | null
   pypi_index_url: string | null
   download_proxy: string | null
+  huggingface_token: string | null
+  wandb_api_key: string | null
   extra: Record<string, unknown>
 }
 

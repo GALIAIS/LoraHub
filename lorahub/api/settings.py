@@ -53,6 +53,14 @@ class Settings:
     # HuggingFace endpoint mirror (set as HF_ENDPOINT env var on subprocess
     # launches). Leave empty for the official site.
     huggingface_endpoint: str | None = None
+    # Optional HuggingFace API token (HF_TOKEN). Required for gated repos
+    # (e.g. Black Forest Labs Flux). Stored as plain text; the JSON file
+    # is in the user data directory and not synced anywhere by lorahub.
+    huggingface_token: str | None = None
+    # Optional Weights & Biases API key. Forwarded as WANDB_API_KEY to
+    # training subprocesses so users don't need to `export` it from a
+    # shell before each run.
+    wandb_api_key: str | None = None
     # When true, downloads default to ModelScope where applicable.
     modelscope_enabled: bool = False
     # Optional access token for private ModelScope models.
@@ -316,6 +324,14 @@ def env_overrides(settings: Settings) -> dict[str, str]:
         overrides["HUGGINGFACE_HUB_ENDPOINT"] = hf
     if settings.modelscope_token and "MODELSCOPE_API_TOKEN" not in os.environ:
         overrides["MODELSCOPE_API_TOKEN"] = settings.modelscope_token
+    if settings.huggingface_token and "HF_TOKEN" not in os.environ:
+        # huggingface_hub reads HF_TOKEN preferentially; the legacy
+        # HUGGING_FACE_HUB_TOKEN is honored as a fallback for older
+        # clients (some upstream training scripts still look for it).
+        overrides["HF_TOKEN"] = settings.huggingface_token
+        overrides["HUGGING_FACE_HUB_TOKEN"] = settings.huggingface_token
+    if settings.wandb_api_key and "WANDB_API_KEY" not in os.environ:
+        overrides["WANDB_API_KEY"] = settings.wandb_api_key
     return overrides
 
 

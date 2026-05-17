@@ -32,20 +32,24 @@ import { cn } from "@/lib/utils"
 type Draft = {
   github_proxy: string
   huggingface_endpoint: string
+  huggingface_token: string
   modelscope_enabled: boolean
   modelscope_token: string
   pypi_index_url: string
   download_proxy: string
+  wandb_api_key: string
 }
 
 function buildDraft(s: SettingsState): Draft {
   return {
     github_proxy: s.github_proxy ?? "",
     huggingface_endpoint: s.huggingface_endpoint ?? "",
+    huggingface_token: s.huggingface_token ?? "",
     modelscope_enabled: s.modelscope_enabled,
     modelscope_token: s.modelscope_token ?? "",
     pypi_index_url: s.pypi_index_url ?? "",
     download_proxy: s.download_proxy ?? "",
+    wandb_api_key: s.wandb_api_key ?? "",
   }
 }
 
@@ -231,10 +235,12 @@ export function NetworkTab() {
   const dirty =
     draft.github_proxy !== (saved.github_proxy ?? "") ||
     draft.huggingface_endpoint !== (saved.huggingface_endpoint ?? "") ||
+    draft.huggingface_token !== (saved.huggingface_token ?? "") ||
     draft.modelscope_enabled !== saved.modelscope_enabled ||
     draft.modelscope_token !== (saved.modelscope_token ?? "") ||
     draft.pypi_index_url !== (saved.pypi_index_url ?? "") ||
-    draft.download_proxy !== (saved.download_proxy ?? "")
+    draft.download_proxy !== (saved.download_proxy ?? "") ||
+    draft.wandb_api_key !== (saved.wandb_api_key ?? "")
 
   const githubPresets = presetsQuery.data?.github_proxy ?? []
   const hfPresets = presetsQuery.data?.huggingface ?? []
@@ -296,12 +302,30 @@ export function NetworkTab() {
             <Label className="text-xs">自定义</Label>
             <Input
               value={draft.huggingface_endpoint}
-              placeholder="https://hf-mirror.com（留空表示官方站）"
+              placeholder="https://hf-mirror.com(留空表示官方站)"
               onChange={(e) =>
                 setDraft({ ...draft, huggingface_endpoint: e.target.value })
               }
               className="font-mono"
             />
+          </div>
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-start">
+            <Label className="text-xs pt-2">访问令牌</Label>
+            <div className="space-y-1">
+              <Input
+                type="password"
+                value={draft.huggingface_token}
+                placeholder="hf_xxx (受限仓库需要,如 black-forest-labs/FLUX)"
+                onChange={(e) =>
+                  setDraft({ ...draft, huggingface_token: e.target.value })
+                }
+                className="font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground/85 leading-relaxed">
+                作为 <code className="text-foreground">HF_TOKEN</code> 注入下载与训练子进程,
+                同时用于 hub API 鉴权。可在 huggingface.co/settings/tokens 创建。
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -417,6 +441,41 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
+      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="size-4 text-muted-foreground" />
+            Weights & Biases
+          </CardTitle>
+          <CardDescription>
+            训练任务可上报指标到 wandb。在此填写 API Key,系统会注入
+            <code className="text-foreground"> WANDB_API_KEY </code>
+            环境变量,无需在 shell 里 export。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-start">
+            <Label className="text-xs pt-2">API Key</Label>
+            <div className="space-y-1">
+              <Input
+                type="password"
+                value={draft.wandb_api_key}
+                placeholder="wandb API Key（留空则不启用 wandb 上报）"
+                onChange={(e) =>
+                  setDraft({ ...draft, wandb_api_key: e.target.value })
+                }
+                className="font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground/80">
+                在 wandb.ai/authorize 获取。仅当配方
+                <code> backend.diffusion_pipe.enable_wandb=true </code>
+                或 kohya wandb argv 启用时才会被读取。
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center gap-3 sticky bottom-4 bg-background/80 backdrop-blur rounded-[4px] border border-border/60 px-4 py-3 shadow-[var(--panel-shadow)]">
         <Button
           size="sm"
@@ -429,6 +488,8 @@ export function NetworkTab() {
               modelscope_token: draft.modelscope_token || null,
               pypi_index_url: draft.pypi_index_url || null,
               download_proxy: draft.download_proxy || null,
+              huggingface_token: draft.huggingface_token || null,
+              wandb_api_key: draft.wandb_api_key || null,
             })
           }
         >

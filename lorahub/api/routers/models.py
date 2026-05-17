@@ -115,6 +115,7 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         revision=req.revision,
         target_dir=target,
         huggingface_endpoint=settings.huggingface_endpoint,
+        huggingface_token=settings.huggingface_token,
         modelscope_token=settings.modelscope_token,
         threads=req.threads,
         proxy=settings.download_proxy,

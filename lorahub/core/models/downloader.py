@@ -23,6 +23,7 @@ class DownloadRequest:
     revision: str = "master"
     target_dir: Path | None = None
     huggingface_endpoint: str | None = None
+    huggingface_token: str | None = None
     modelscope_token: str | None = None
     threads: int = 4
     proxy: str | None = None  # socks5h://user:pass@host:port or http://...
@@ -63,12 +64,17 @@ def _file_size(item: dict[str, Any]) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _hf_list_files(repo_id: str, revision: str, endpoint: str | None) -> list[tuple[str, int]]:
+def _hf_list_files(
+    repo_id: str,
+    revision: str,
+    endpoint: str | None,
+    token: str | None = None,
+) -> list[tuple[str, int]]:
     """Return [(rfilename, size_bytes)] for every file in the snapshot."""
     from huggingface_hub import HfApi  # noqa: PLC0415
 
-    api = HfApi(endpoint=endpoint) if endpoint else HfApi()
-    info = api.model_info(repo_id, revision=revision, files_metadata=True)
+    api = HfApi(endpoint=endpoint, token=token) if (endpoint or token) else HfApi()
+    info = api.model_info(repo_id, revision=revision, files_metadata=True, token=token)
     out: list[tuple[str, int]] = []
     for sibling in info.siblings or []:
         size = getattr(sibling, "size", None) or 0
@@ -90,6 +96,7 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
     endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
+    token = (req.huggingface_token or "").strip() or None
     if req.proxy:
         os.environ["HTTPS_PROXY"] = req.proxy
         os.environ["HTTP_PROXY"] = req.proxy
@@ -105,7 +112,7 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    files = _hf_list_files(req.repo_id, revision, endpoint)
+    files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
     bytes_total = sum(size for _, size in files)
     _emit(
         progress,
@@ -126,6 +133,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
         }
         if endpoint:
             kw["endpoint"] = endpoint
+        if token:
+            kw["token"] = token
         hf_hub_download(**kw)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
