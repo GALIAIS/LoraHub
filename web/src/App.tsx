@@ -72,6 +72,20 @@ export default function App() {
     return () => media.removeEventListener("change", apply)
   }, [mode, accent])
 
+  useEffect(() => {
+    const prevent = (e: Event) => e.preventDefault()
+    document.addEventListener("contextmenu", prevent)
+    document.addEventListener("copy", prevent)
+    document.addEventListener("cut", prevent)
+    document.addEventListener("selectstart", prevent)
+    return () => {
+      document.removeEventListener("contextmenu", prevent)
+      document.removeEventListener("copy", prevent)
+      document.removeEventListener("cut", prevent)
+      document.removeEventListener("selectstart", prevent)
+    }
+  }, [])
+
   return (
     <div className="h-screen flex bg-background text-foreground overflow-hidden">
       <aside className="w-56 shrink-0 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1 overflow-y-auto">
