@@ -544,6 +544,48 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ version }),
     }),
+  storageUsage: () =>
+    http<{
+      filesystem: {
+        path: string
+        total_bytes: number
+        used_bytes: number
+        free_bytes: number
+      }
+      directories: Record<
+        "runs" | "runs_archive" | "models" | "huggingface_cache",
+        | { path: string | null; exists: boolean; bytes: number; files: number }
+        | null
+      >
+    }>("/storage/usage"),
+  storageListArchive: () =>
+    http<{
+      archive_root: string
+      entries: Array<{
+        name: string
+        path: string
+        bytes: number
+        files: number
+        mtime: number
+      }>
+    }>("/storage/archive"),
+  storageDeleteArchiveEntry: (name: string) =>
+    http<{ deleted: string; bytes_freed: number; files_removed: number }>(
+      `/storage/archive/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  storageClearArchive: () =>
+    http<{
+      deleted: string[]
+      bytes_freed: number
+      files_removed: number
+      failures: Array<{ name: string; error: string }>
+    }>("/storage/archive", { method: "DELETE" }),
+  storageClearHfCache: () =>
+    http<{ deleted: string; bytes_freed: number; files_removed: number }>(
+      "/storage/hf-cache",
+      { method: "DELETE" },
+    ),
   downloadModel: (
     body: {
       source: "huggingface" | "modelscope"
