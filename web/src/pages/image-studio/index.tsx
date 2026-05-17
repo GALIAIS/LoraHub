@@ -20,8 +20,12 @@ import {
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioDeleteOp,
+  imageStudioDedupeScan,
+  imageStudioDedupeClusters,
+  imageStudioBatchDelete,
   type ImageStudioItem,
   type ImageStudioDetailItem,
+  type DedupeCluster,
 } from "@/lib/api"
 
 export { ImageStudioPage }
@@ -32,6 +36,7 @@ function ImageStudioPage() {
   const page = Number(params.get("page") || "1")
   const sort = params.get("sort") || "name"
   const recursive = params.get("recursive") === "1"
+  const view = params.get("view") || "grid"
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [inputPath, setInputPath] = useState(path)
 
@@ -93,9 +98,28 @@ function ImageStudioPage() {
           next.set("page", "1")
           setParams(next)
         }} />
+        <div className="flex rounded border text-xs">
+          <button
+            type="button"
+            onClick={() => { const n = new URLSearchParams(params); n.set("view", "grid"); setParams(n) }}
+            className={`px-2 py-1 ${view === "grid" ? "bg-muted font-medium" : ""}`}
+          >
+            Grid
+          </button>
+          <button
+            type="button"
+            onClick={() => { const n = new URLSearchParams(params); n.set("view", "duplicates"); setParams(n) }}
+            className={`px-2 py-1 ${view === "duplicates" ? "bg-muted font-medium" : ""}`}
+          >
+            Duplicates
+          </button>
+        </div>
       </div>
 
       {/* Main content */}
+      {view === "duplicates" ? (
+        <DuplicatesView path={path} recursive={recursive} />
+      ) : (
       <div className="flex flex-1 min-h-0">
         {/* Image grid */}
         <div className="flex-1 overflow-y-auto p-3">
@@ -138,6 +162,7 @@ function ImageStudioPage() {
           />
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -145,6 +170,181 @@ function ImageStudioPage() {
 // --------------------------------------------------------------------------- //
 // Sub-components
 // --------------------------------------------------------------------------- //
+
+// --------------------------------------------------------------------------- //
+// Duplicates view
+// --------------------------------------------------------------------------- //
+
+function DuplicatesView({ path, recursive }: { path: string; recursive: boolean }) {
+  const queryClient = useQueryClient()
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+
+  const scanMutation = useMutation({
+    mutationFn: () => imageStudioDedupeScan({ path, recursive, algo: "phash64" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["image-studio", "clusters"] }),
+  })
+
+  const clustersQuery = useQuery({
+    queryKey: ["image-studio", "clusters", path],
+    queryFn: () => imageStudioDedupeClusters({ path, threshold: 10 }),
+    enabled: !!path,
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => imageStudioBatchDelete({ paths: Array.from(selectedPaths) }),
+    onSuccess: () => {
+      setSelectedPaths(new Set())
+      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+    },
+  })
+
+  const clusters = clustersQuery.data?.clusters ?? []
+
+  const togglePath = (p: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(p)) next.delete(p)
+      else next.add(p)
+      return next
+    })
+  }
+
+  const selectAllSuggested = () => {
+    const paths = new Set<string>()
+    for (const c of clusters) {
+      for (const m of c.members) {
+        if (m.path !== c.suggestedKeep) paths.add(m.path)
+      }
+    }
+    setSelectedPaths(paths)
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-4">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => scanMutation.mutate()}
+          disabled={scanMutation.isPending}
+          className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+        >
+          {scanMutation.isPending ? "Scanning..." : "Scan for duplicates"}
+        </button>
+        {clusters.length > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={selectAllSuggested}
+              className="rounded border px-2 py-1 text-xs hover:bg-muted"
+            >
+              Select all suggested
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {clusters.length} clusters, {selectedPaths.size} selected
+            </span>
+            {selectedPaths.size > 0 && (
+              <button
+                type="button"
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground disabled:opacity-50"
+              >
+                Delete selected ({selectedPaths.size})
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {clustersQuery.isLoading && (
+        <p className="text-sm text-muted-foreground">Loading clusters...</p>
+      )}
+
+      {clusters.length === 0 && !clustersQuery.isLoading && (
+        <p className="text-sm text-muted-foreground">
+          No duplicate clusters found. Click "Scan for duplicates" to analyze images.
+        </p>
+      )}
+
+      {clusters.map((cluster) => (
+        <ClusterCard
+          key={cluster.id}
+          cluster={cluster}
+          selectedPaths={selectedPaths}
+          onToggle={togglePath}
+        />
+      ))}
+    </div>
+  )
+}
+
+function ClusterCard({
+  cluster,
+  selectedPaths,
+  onToggle,
+}: {
+  cluster: DedupeCluster
+  selectedPaths: Set<string>
+  onToggle: (path: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="rounded-md border">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50"
+      >
+        <span className="font-medium">{cluster.id}</span>
+        <span className="text-xs text-muted-foreground">
+          {cluster.members.length} images
+        </span>
+        <span className="ml-auto text-xs">{expanded ? "▼" : "▶"}</span>
+      </button>
+      {expanded && (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2 border-t p-3">
+          {cluster.members.map((m) => {
+            const isKeep = m.path === cluster.suggestedKeep
+            const isSelected = selectedPaths.has(m.path)
+            return (
+              <div
+                key={m.path}
+                className={`relative flex flex-col overflow-hidden rounded border ${
+                  isKeep ? "border-green-500/50 ring-1 ring-green-500/30" : ""
+                } ${isSelected ? "border-destructive ring-1 ring-destructive/30" : ""}`}
+              >
+                <div className="aspect-square overflow-hidden bg-muted">
+                  <img
+                    src={`/api/datasets/thumb?path=${encodeURIComponent(m.path)}&size=128`}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <div className="flex items-center gap-1 px-1.5 py-1">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggle(m.path)}
+                    className="size-3"
+                  />
+                  <span className="flex-1 truncate text-[10px]">
+                    {m.path.split(/[/\\]/).pop()}
+                  </span>
+                </div>
+                {isKeep && (
+                  <div className="absolute right-1 top-1 rounded bg-green-600/80 px-1 py-0.5 text-[9px] font-medium text-white">
+                    Keep
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PathPrompt({
   value,

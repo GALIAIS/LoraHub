@@ -1496,3 +1496,60 @@ export async function imageStudioApplyOps(
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
   return r.json()
 }
+
+// --------------------------------------------------------------------------- //
+// Image Studio — Dedupe
+// --------------------------------------------------------------------------- //
+
+export interface DedupeClusterMember {
+  path: string
+  hash: string
+}
+
+export interface DedupeCluster {
+  id: string
+  kind: string
+  members: DedupeClusterMember[]
+  suggestedKeep: string
+}
+
+export async function imageStudioDedupeScan(body: {
+  path: string
+  recursive?: boolean
+  algo?: string
+  threshold?: number
+}): Promise<{ computed: number; total: number; errors: Array<{ path: string; error: string }> }> {
+  const r = await fetch(`${API_BASE}/image-studio/dedupe/scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function imageStudioDedupeClusters(params: {
+  path: string
+  kind?: string
+  threshold?: number
+}): Promise<{ clusters: DedupeCluster[] }> {
+  const qs = new URLSearchParams({ path: params.path })
+  if (params.kind) qs.set("kind", params.kind)
+  if (params.threshold != null) qs.set("threshold", String(params.threshold))
+  const r = await fetch(`${API_BASE}/image-studio/dedupe/clusters?${qs}`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function imageStudioBatchDelete(body: {
+  paths: string[]
+  forceFavorites?: boolean
+}): Promise<{ deletedCount: number; deleted: string[]; bytesFreed: number; errors: Array<{ path: string; error: string }> }> {
+  const r = await fetch(`${API_BASE}/image-studio/dedupe/batch-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+  return r.json()
+}
