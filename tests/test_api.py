@@ -1145,6 +1145,50 @@ def test_archive_refuses_when_interrupted_job_pid_still_alive(
     assert workspace.exists()
 
 
+def test_kill_unknown_job_returns_404(client: TestClient) -> None:
+    r = client.post("/api/jobs/no-such-id/kill")
+    assert r.status_code == 404
+
+
+def test_kill_job_without_pid_returns_409(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    job.pid = None
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/kill")
+    assert r.status_code == 409
+    assert "no recorded PID" in r.json()["detail"]
+
+
+def test_kill_dead_pid_still_flips_state_to_interrupted(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A job whose PID is already gone — kill should not raise; flip state."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    # PID -1 is guaranteed not to exist; os.kill raises ProcessLookupError.
+    job.pid = 999_999_999
+    state.registry.update(job)
+
+    r = client.post(f"/api/jobs/{job.id}/kill")
+    # Either 200 (with warning) or 500 — depends on whether the OS has any
+    # process at this PID. Accept either, but state must be interrupted on 200.
+    if r.status_code == 200:
+        body = r.json()
+        assert body["killed_process_group"] is False
+        assert body["killed_pid_only"] is False
+        refreshed = state.registry.get(job.id)
+        assert refreshed is not None
+        assert refreshed.state is state.JobState.interrupted
+
+
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

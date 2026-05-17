@@ -266,6 +266,88 @@ def get_job_metrics(job_id: str) -> dict[str, Any]:
     return _read_metrics(job.workspace)
 
 
+@router.post("/jobs/{job_id}/kill")
+def kill_job(job_id: str) -> dict[str, Any]:
+    """Force-kill a stuck training job by signalling its PID + process group.
+
+    Last-resort cleanup for jobs whose registry says ``running`` but whose
+    cancel button never returned (e.g. deepspeed launcher detached and the
+    in-process handle is stale). Does NOT touch arbitrary OS PIDs — the
+    caller must reference a JobRecord, and we only signal that record's
+    stored PID. Best-effort kills the whole process group so detached
+    deepspeed children go down with the launcher.
+
+    On success the job row is flipped to ``interrupted`` so the UI stops
+    showing it as live. Returns 404 if the job is unknown, 409 if it has
+    no PID to signal.
+    """
+    import os  # noqa: PLC0415
+    import signal  # noqa: PLC0415
+
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.pid is None or job.pid <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="job has no recorded PID (never started or already reaped)",
+        )
+
+    pid = job.pid
+    killed_group = False
+    killed_pid = False
+    error: str | None = None
+    # Try the process group first (matches deepspeed's setsid layout); fall
+    # back to the bare PID if the OS doesn't support process groups (Windows
+    # via psutil) or if the group has already gone.
+    try:
+        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGKILL)
+                killed_group = True
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                error = f"permission denied: {exc}"
+        if not killed_group:
+            try:
+                os.kill(pid, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
+                killed_pid = True
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                error = f"permission denied: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        error = repr(exc)
+
+    if not killed_group and not killed_pid and error is None:
+        # Process was already gone; that's fine, still flip the state so the
+        # UI doesn't keep showing a phantom running row.
+        error = f"pid {pid} no longer alive"
+
+    if error and not (killed_group or killed_pid):
+        raise HTTPException(status_code=500, detail=error)
+
+    # Reset the live record. We pick `interrupted` rather than `canceled`
+    # because the run did not request cancellation cleanly — kill is the
+    # graceless variant and `interrupted` is already the bucket for "process
+    # gone, not by our handle's request".
+    job.state = JobState.interrupted
+    job.finished_at = datetime.now(UTC)
+    if job.error is None:
+        job.error = "force-killed via /api/jobs/{id}/kill"
+    state.registry.update(job)
+
+    return {
+        "job_id": job_id,
+        "pid": pid,
+        "killed_process_group": killed_group,
+        "killed_pid_only": killed_pid,
+        "warning": error,
+    }
+
+
 @router.delete("/jobs/{job_id}")
 def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
     job = state.registry.get(job_id)

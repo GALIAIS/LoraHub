@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Square, RefreshCw, FolderOpen, Archive } from "lucide-react"
+import { Square, RefreshCw, FolderOpen, Archive, Skull } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import { StateBadge } from "../../dashboard"
@@ -47,9 +47,10 @@ export function JobDetail({
     refetchInterval: 2000,
   })
   const stream = useJobStream(jobId)
-  const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive">(null)
+  const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill">(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [killOpen, setKillOpen] = useState(false)
 
   // Fall back to a config-derived total step count when the backend hasn't
   // yet emitted a `total_steps` payload. We need the dataset image count,
@@ -84,6 +85,21 @@ export function JobDetail({
     if (!data) return
     await api.cancelJob(data.id)
     job.refetch()
+  }
+
+  async function onKill() {
+    if (!data) return
+    setBusy("kill")
+    setActionError(null)
+    try {
+      await api.killJob(data.id)
+      await job.refetch()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+      setKillOpen(false)
+    }
   }
 
   async function onRerun() {
@@ -194,8 +210,30 @@ export function JobDetail({
             </Button>
           )}
           {isLive && (
-            <Button variant="destructive" size="sm" onClick={onCancel}>
-              <Square className="size-3" /> 取消
+            <>
+              <Button variant="destructive" size="sm" onClick={onCancel}>
+                <Square className="size-3" /> 取消
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setKillOpen(true)}
+                title="强制 SIGKILL 进程组(用于卡死的训练任务)"
+                disabled={busy !== null || !data?.pid}
+              >
+                <Skull className="size-3" /> 强制终止
+              </Button>
+            </>
+          )}
+          {!isLive && data?.state === "interrupted" && data.pid && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setKillOpen(true)}
+              title="任务标记为 interrupted 但 PID 仍可能存活,可强制清理"
+              disabled={busy !== null}
+            >
+              <Skull className="size-3" /> 强制终止
             </Button>
           )}
         </div>
@@ -282,6 +320,31 @@ export function JobDetail({
               }}
             >
               <Archive className="size-3" /> 确认归档
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={killOpen} onOpenChange={setKillOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>强制终止训练任务</AlertDialogTitle>
+            <AlertDialogDescription>
+              将向 PID <code className="font-mono">{data?.pid ?? "—"}</code> 及其
+              进程组发送 SIGKILL。常用于训练僵死、取消按钮无响应的场景。
+              任务状态会被标记为 <code className="font-mono">interrupted</code>,
+              checkpoint 不受影响。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={(e) => {
+                e.preventDefault()
+                onKill()
+              }}
+            >
+              <Skull className="size-3" /> 确认强制终止
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

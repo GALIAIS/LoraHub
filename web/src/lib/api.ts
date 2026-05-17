@@ -430,6 +430,16 @@ export const api = {
     http<JobSummary>(`/jobs/${id}`, { method: "DELETE" }),
   rerunJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}/rerun`, { method: "POST" }),
+  resumeJob: (id: string) =>
+    http<JobSummary>(`/jobs/${id}/resume`, { method: "POST" }),
+  killJob: (id: string) =>
+    http<{
+      job_id: string
+      pid: number
+      killed_process_group: boolean
+      killed_pid_only: boolean
+      warning: string | null
+    }>(`/jobs/${id}/kill`, { method: "POST" }),
   revealJob: (id: string) =>
     http<{ opened: string }>(`/jobs/${id}/reveal`, { method: "POST" }),
   archiveJob: (id: string) =>
