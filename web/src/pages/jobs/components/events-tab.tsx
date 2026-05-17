@@ -1,23 +1,24 @@
 import { useState } from "react"
 import type { TrainingEvent } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import { EventRow } from "./event-row"
+import { EventTimeline } from "./event-timeline"
 import { TerminalLog } from "./terminal-log"
 
-type SubView = "structured" | "raw"
+type SubView = "timeline" | "raw"
 
 export function EventsTab({
   events,
   status,
+  jobId,
   fallbackTotalSteps = null,
 }: {
   events: TrainingEvent[]
   status: "idle" | "open" | "closed"
+  jobId: string | null
   fallbackTotalSteps?: number | null
 }) {
-  const [sub, setSub] = useState<SubView>("structured")
+  const [sub, setSub] = useState<SubView>("timeline")
   return (
     <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden flex flex-col h-full min-h-0">
       <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
@@ -28,7 +29,7 @@ export function EventsTab({
           <div className="inline-flex rounded-[4px] border border-border/60 bg-background/60 p-[2px]">
             {(
               [
-                { value: "structured", label: "结构化" },
+                { value: "timeline", label: "时间轴" },
                 { value: "raw", label: "原始日志" },
               ] as { value: SubView; label: string }[]
             ).map((opt) => (
@@ -58,19 +59,14 @@ export function EventsTab({
         </span>
       </CardHeader>
       <CardContent className="p-0 flex-1 min-h-0 flex flex-col">
-        {sub === "structured" ? (
-          <ScrollArea className="h-full flex-1 min-h-0">
-            <ul className="font-mono text-[12px] divide-y divide-border/30">
-              {events.length === 0 && (
-                <li className="px-4 py-6 text-muted-foreground text-center">
-                  正在等待事件…
-                </li>
-              )}
-              {events.map((e, i) => (
-                <EventRow key={i} event={e} fallbackTotalSteps={fallbackTotalSteps} />
-              ))}
-            </ul>
-          </ScrollArea>
+        {sub === "timeline" ? (
+          <div className="flex-1 min-h-0 p-3">
+            <EventTimeline
+              events={events}
+              jobId={jobId}
+              fallbackTotalSteps={fallbackTotalSteps}
+            />
+          </div>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col p-3">
             <TerminalLog events={events} fallbackTotalSteps={fallbackTotalSteps} />

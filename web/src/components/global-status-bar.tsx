@@ -2,10 +2,10 @@
  * Compact horizontal status bar pinned across the whole shell.
  *
  * Sources its data from useSystemStream so it stays in sync with the
- * dashboard's real-time payload. Falls back to a 10-second poll when the WS
- * isn't open. Always visible above the page header so the user never has
- * to leave the current page to know "is the GPU busy / is the network
- * downloading / am I online?".
+ * dashboard's real-time payload. Falls back to a 10-second poll when the
+ * live channel isn't open. Always visible above the page header so the
+ * user never has to leave the current page to know "is the GPU busy / is
+ * the network downloading / am I online?".
  */
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -119,7 +119,7 @@ function ConnectionDot({ live }: { live: boolean }) {
         "inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-[0.15em]",
         live ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
       )}
-      title={live ? "WebSocket 实时连接中" : "WebSocket 未连接，使用 10 秒轮询"}
+      title={live ? "实时事件流连接中" : "实时通道未连接，回退为 10 秒轮询"}
     >
       {live ? <Wifi className="size-3" /> : <WifiOff className="size-3" />}
       <span>{live ? "实时" : "轮询"}</span>

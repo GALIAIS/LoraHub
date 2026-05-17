@@ -29,9 +29,9 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from lorahub import __version__
@@ -216,6 +216,208 @@ for _r in all_routers:
 # every WS_PING_INTERVAL seconds while waiting on the queue so the proxy
 # always sees activity. Clients ignore type=ping frames.
 _WS_PING_INTERVAL = 25.0
+
+# Same idea for SSE — a `: comment` line counts as activity but is
+# discarded by EventSource so it never reaches the client's onmessage.
+_SSE_PING_INTERVAL = 25.0
+
+
+def _sse_format(*, data: str | None = None, event: str | None = None,
+                event_id: str | None = None, comment: str | None = None,
+                retry_ms: int | None = None) -> str:
+    """Format one SSE message frame.
+
+    Spec: each line prefixed with `field: value`, blank line terminates
+    the message. Multi-line `data` is split into multiple `data:` lines.
+    """
+    out: list[str] = []
+    if comment is not None:
+        out.append(f": {comment}")
+    if event_id is not None:
+        out.append(f"id: {event_id}")
+    if event is not None:
+        out.append(f"event: {event}")
+    if retry_ms is not None:
+        out.append(f"retry: {retry_ms}")
+    if data is not None:
+        for line in data.splitlines() or [""]:
+            out.append(f"data: {line}")
+    out.append("")  # blank line = end of message
+    return "\n".join(out) + "\n"
+
+
+def _resume_index_from_header(request: Request) -> int:
+    """Pick the resume offset from the SSE Last-Event-ID header.
+
+    Returns the index of the *next* event to send; 0 means "send everything
+    from the beginning". Bad input falls back to 0 so a corrupt cookie
+    can't deadlock the stream.
+    """
+    raw = request.headers.get("last-event-id")
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw) + 1)
+    except (TypeError, ValueError):
+        return 0
+
+
+@app.get("/api/jobs/{job_id}/sse")
+async def stream_events_sse(job_id: str, request: Request) -> StreamingResponse:
+    """SSE counterpart to /api/jobs/{job_id}/stream.
+
+    Each event is tagged with `id: <index>` where index = position in
+    the merged (replayed + live) sequence. On reconnect EventSource
+    sends `Last-Event-ID` automatically and we skip past it, so the
+    client never sees duplicates and never misses an event.
+
+    The legacy WS endpoint is preserved as a fallback.
+    """
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    resume_from = _resume_index_from_header(request)
+
+    async def gen() -> Any:  # AsyncIterator[str]
+        # Hint the client to back off 2s on a clean reconnect.
+        yield _sse_format(retry_ms=2000, comment="lorahub job stream")
+
+        queue: asyncio.Queue[TrainingEvent] = asyncio.Queue(maxsize=512)
+        state.registry.attach_listener(job_id, queue)
+        sent = 0
+        try:
+            replayed_terminal = False
+            for ev in _job_events(job):
+                if sent >= resume_from:
+                    yield _sse_format(
+                        event_id=str(sent),
+                        data=ev.to_json(),
+                    )
+                replayed_terminal = ev.type is EventType.done
+                sent += 1
+
+            terminal_state = job.state in {
+                JobState.succeeded,
+                JobState.failed,
+                JobState.canceled,
+                JobState.interrupted,
+            }
+            while not replayed_terminal and not terminal_state:
+                if await request.is_disconnected():
+                    return
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=_SSE_PING_INTERVAL)
+                except asyncio.TimeoutError:
+                    yield _sse_format(comment="ping")
+                    continue
+                yield _sse_format(event_id=str(sent), data=ev.to_json())
+                sent += 1
+                if ev.type is EventType.done:
+                    break
+        finally:
+            state.registry.detach_listener(job_id, queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            # Disable response buffering so events flush immediately
+            # past nginx and AutoDL's reverse proxy.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.get("/api/backend/bootstrap/sse")
+async def stream_bootstrap_sse(request: Request) -> StreamingResponse:
+    sess = _bootstrap_session
+    if sess is None:
+        raise HTTPException(status_code=404, detail="no bootstrap session")
+
+    resume_from = _resume_index_from_header(request)
+
+    async def gen() -> Any:
+        import json as _json  # noqa: PLC0415
+
+        yield _sse_format(retry_ms=2000, comment="lorahub bootstrap stream")
+
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
+        backlog = sess.attach(queue)
+        sent = 0
+        try:
+            for event in backlog:
+                if sent >= resume_from:
+                    yield _sse_format(
+                        event_id=str(sent),
+                        data=_json.dumps(event),
+                    )
+                sent += 1
+            if not sess.is_running():
+                return
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=_SSE_PING_INTERVAL)
+                except asyncio.TimeoutError:
+                    yield _sse_format(comment="ping")
+                    continue
+                if event.get("step") == "__terminal__":
+                    break
+                yield _sse_format(event_id=str(sent), data=_json.dumps(event))
+                sent += 1
+                if event.get("level") in {"done", "error"}:
+                    break
+        finally:
+            sess.detach(queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.get("/api/system/sse")
+async def stream_system_sse(request: Request) -> StreamingResponse:
+    """SSE telemetry — a host snapshot every second.
+
+    No replay buffer here: snapshots are stateless, the freshest one is
+    always good enough, so Last-Event-ID is ignored.
+    """
+    from lorahub.api.system_stats import collect_snapshot  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    async def gen() -> Any:
+        yield _sse_format(retry_ms=2000, comment="lorahub system stream")
+        sent = 0
+        while True:
+            if await request.is_disconnected():
+                return
+            try:
+                snap = collect_snapshot().to_dict()
+                yield _sse_format(event_id=str(sent), data=_json.dumps(snap))
+                sent += 1
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.websocket("/api/jobs/{job_id}/stream")

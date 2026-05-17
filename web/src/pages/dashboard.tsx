@@ -1,8 +1,8 @@
 /**
  * 实时数据面板：硬件状态 + 任务概览。
  *
- * 通过 WebSocket /api/system/stream 每秒接收一次系统快照；WS 不可用时回退到
- * 5 秒一次的 REST 轮询。任务统计仍走 /api/jobs（3 秒轮询）。
+ * 通过 SSE /api/system/sse 每秒接收一次系统快照（旧 WS 端点保留作 fallback），
+ * 实时通道不可用时降级为 5 秒一次的 REST 轮询。任务统计仍走 /api/jobs（3 秒轮询）。
  */
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -67,7 +67,7 @@ const POLL_INTERVAL_SYSTEM_MS = 5_000
 export function DashboardPage() {
   const stream = useSystemStream(true)
 
-  // WS 不通时降级为 5s REST 轮询，保证看板永远有数据。
+  // 实时通道不通时降级为 5s REST 轮询，保证看板永远有数据。
   const polled = useQuery({
     queryKey: ["system-stats"],
     queryFn: api.getSystemStats,
@@ -94,7 +94,7 @@ export function DashboardPage() {
     return { running, queued, succeeded, failed }
   }, [allJobs])
 
-  const wsLive = stream.status === "open"
+  const liveStream = stream.status === "open"
 
   return (
     <div className="h-full overflow-y-auto">
@@ -111,10 +111,10 @@ export function DashboardPage() {
           </div>
           <div className="flex items-center gap-2">
             <Badge
-              variant={wsLive ? "default" : "outline"}
+              variant={liveStream ? "default" : "outline"}
               className="rounded-[2px] uppercase text-[10px] tracking-[0.1em]"
             >
-              {wsLive ? "WS 连接" : "轮询模式"}
+              {liveStream ? "实时" : "轮询模式"}
             </Badge>
             {snapshot && (
               <Badge

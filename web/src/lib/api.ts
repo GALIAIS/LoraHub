@@ -796,87 +796,99 @@ export const api = {
 }
 
 /**
- * Live event stream over WebSocket. Returns the latest snapshot of buffered
- * events plus the connection state; reconnects on close while the job is alive.
+ * Live event stream. Prefers SSE (browser-native reconnect + Last-Event-ID
+ * resume) and falls back to WebSocket if EventSource isn't available or
+ * the SSE endpoint isn't reachable. The server keeps the legacy WS endpoint
+ * alive for compatibility, so old builds keep working too.
  *
- * Reconnection: the server sends a `{type: "ping"}` heartbeat every ~25s so
- * proxies don't kill the idle channel. We reconnect with exponential backoff
- * (capped at 5s) when the socket closes, and immediately when the tab regains
- * focus — that's the case where the browser parked the socket for a while.
+ * Resume semantics: the server tags every event with `id: <seq>`. On
+ * reconnect EventSource forwards the last seen id back via Last-Event-ID,
+ * and the server skips that many entries when replaying. So a tab nap or
+ * a proxy-induced drop never loses events from the user's POV.
  */
 export function useJobStream(jobId: string | null) {
   const [events, setEvents] = useState<TrainingEvent[]>([])
   const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const wsRef = useRef<WebSocket | null>(null)
+  const sourceRef = useRef<EventSource | WebSocket | null>(null)
 
   useEffect(() => {
     if (!jobId) return
     setEvents([])
 
     let cancelled = false
-    let backoff = 0
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const useSse = typeof EventSource !== "undefined"
 
-    function connect() {
-      if (cancelled) return
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const host = window.location.host || "127.0.0.1:18765"
-      const ws = new WebSocket(`${protocol}//${host}/api/jobs/${jobId}/stream`)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        backoff = 0
-        setStatus("open")
-      }
-      ws.onclose = () => {
+    function connectSse() {
+      const url = `/api/jobs/${encodeURIComponent(jobId!)}/sse`
+      const es = new EventSource(url)
+      sourceRef.current = es
+      es.onopen = () => setStatus("open")
+      es.onerror = () => {
+        // EventSource auto-reconnects after `retry: <ms>`, so we just
+        // mark closed and let the browser bring it back. Surface to UI.
         setStatus("closed")
-        scheduleRetry()
       }
-      ws.onerror = () => {}
-      ws.onmessage = (msg) => {
+      es.onmessage = (msg) => {
         try {
-          const event = JSON.parse(msg.data) as TrainingEvent | { type: "ping" }
-          // Heartbeats keep the proxy quiet; they're not real events.
-          if ((event as { type?: string }).type === "ping") return
-          setEvents((prev) => [...prev, event as TrainingEvent].slice(-500))
+          const event = JSON.parse(msg.data) as TrainingEvent
+          setEvents((prev) => [...prev, event].slice(-500))
         } catch {
           // ignore malformed frames
         }
       }
     }
 
-    function scheduleRetry() {
-      if (cancelled) return
-      retryTimer = setTimeout(() => {
-        retryTimer = null
-        connect()
-      }, backoff)
-      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
-    }
-
-    function onVisible() {
-      if (document.visibilityState !== "visible") return
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
-      // Tab woke up and the socket is dead — reconnect now instead of
-      // waiting on the backoff timer.
-      if (retryTimer) {
-        clearTimeout(retryTimer)
-        retryTimer = null
+    function connectWs() {
+      let backoff = 0
+      let retryTimer: ReturnType<typeof setTimeout> | null = null
+      function open() {
+        if (cancelled) return
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+        const host = window.location.host || "127.0.0.1:18765"
+        const ws = new WebSocket(`${protocol}//${host}/api/jobs/${jobId!}/stream`)
+        sourceRef.current = ws
+        ws.onopen = () => {
+          backoff = 0
+          setStatus("open")
+        }
+        ws.onclose = () => {
+          setStatus("closed")
+          if (cancelled) return
+          retryTimer = setTimeout(open, backoff)
+          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
+        }
+        ws.onerror = () => {}
+        ws.onmessage = (msg) => {
+          try {
+            const event = JSON.parse(msg.data) as TrainingEvent | { type: "ping" }
+            if ((event as { type?: string }).type === "ping") return
+            setEvents((prev) => [...prev, event as TrainingEvent].slice(-500))
+          } catch {
+            // ignore
+          }
+        }
       }
-      backoff = 0
-      connect()
+      open()
+      return () => {
+        if (retryTimer) clearTimeout(retryTimer)
+      }
     }
 
-    document.addEventListener("visibilitychange", onVisible)
-    connect()
+    let cleanupWs: (() => void) | undefined
+    if (useSse) {
+      connectSse()
+    } else {
+      cleanupWs = connectWs()
+    }
 
     return () => {
       cancelled = true
-      document.removeEventListener("visibilitychange", onVisible)
-      if (retryTimer) clearTimeout(retryTimer)
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
+      cleanupWs?.()
+      const s = sourceRef.current
+      if (s) {
+        if (s instanceof WebSocket) s.close()
+        else s.close()
+        sourceRef.current = null
       }
     }
   }, [jobId])
@@ -885,82 +897,84 @@ export function useJobStream(jobId: string | null) {
 }
 
 /**
- * Live bootstrap event stream over WebSocket. Mirrors `useJobStream` but talks
- * to the singleton backend-install session — it doesn't take an id because at
- * most one bootstrap can run at a time.
- *
- * Same heartbeat / reconnect strategy as useJobStream.
+ * Bootstrap event stream. SSE preferred, WS fallback. Same resume
+ * semantics as useJobStream.
  */
 export function useBootstrapStream(enabled: boolean) {
   const [events, setEvents] = useState<BootstrapEvent[]>([])
   const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const wsRef = useRef<WebSocket | null>(null)
+  const sourceRef = useRef<EventSource | WebSocket | null>(null)
 
   useEffect(() => {
     if (!enabled) return
     setEvents([])
 
     let cancelled = false
-    let backoff = 0
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const useSse = typeof EventSource !== "undefined"
 
-    function connect() {
-      if (cancelled) return
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const host = window.location.host || "127.0.0.1:18765"
-      const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        backoff = 0
-        setStatus("open")
-      }
-      ws.onclose = () => {
-        setStatus("closed")
-        scheduleRetry()
-      }
-      ws.onerror = () => {}
-      ws.onmessage = (msg) => {
+    function connectSse() {
+      const es = new EventSource(`/api/backend/bootstrap/sse`)
+      sourceRef.current = es
+      es.onopen = () => setStatus("open")
+      es.onerror = () => setStatus("closed")
+      es.onmessage = (msg) => {
         try {
-          const event = JSON.parse(msg.data) as BootstrapEvent | { type: "ping" }
-          if ((event as { type?: string }).type === "ping") return
-          setEvents((prev) => [...prev, event as BootstrapEvent].slice(-200))
+          const event = JSON.parse(msg.data) as BootstrapEvent
+          setEvents((prev) => [...prev, event].slice(-200))
         } catch {
-          // ignore malformed frames
+          // ignore
         }
       }
     }
 
-    function scheduleRetry() {
-      if (cancelled) return
-      retryTimer = setTimeout(() => {
-        retryTimer = null
-        connect()
-      }, backoff)
-      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
-    }
-
-    function onVisible() {
-      if (document.visibilityState !== "visible") return
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
-      if (retryTimer) {
-        clearTimeout(retryTimer)
-        retryTimer = null
+    function connectWs() {
+      let backoff = 0
+      let retryTimer: ReturnType<typeof setTimeout> | null = null
+      function open() {
+        if (cancelled) return
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+        const host = window.location.host || "127.0.0.1:18765"
+        const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
+        sourceRef.current = ws
+        ws.onopen = () => {
+          backoff = 0
+          setStatus("open")
+        }
+        ws.onclose = () => {
+          setStatus("closed")
+          if (cancelled) return
+          retryTimer = setTimeout(open, backoff)
+          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
+        }
+        ws.onerror = () => {}
+        ws.onmessage = (msg) => {
+          try {
+            const event = JSON.parse(msg.data) as BootstrapEvent | { type: "ping" }
+            if ((event as { type?: string }).type === "ping") return
+            setEvents((prev) => [...prev, event as BootstrapEvent].slice(-200))
+          } catch {
+            // ignore
+          }
+        }
       }
-      backoff = 0
-      connect()
+      open()
+      return () => {
+        if (retryTimer) clearTimeout(retryTimer)
+      }
     }
 
-    document.addEventListener("visibilitychange", onVisible)
-    connect()
+    let cleanupWs: (() => void) | undefined
+    if (useSse) connectSse()
+    else cleanupWs = connectWs()
 
     return () => {
       cancelled = true
-      document.removeEventListener("visibilitychange", onVisible)
-      if (retryTimer) clearTimeout(retryTimer)
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
+      cleanupWs?.()
+      const s = sourceRef.current
+      if (s) {
+        if (s instanceof WebSocket) s.close()
+        else s.close()
+        sourceRef.current = null
       }
     }
   }, [enabled])
@@ -1369,97 +1383,107 @@ export interface AIConnectionTestResult {
 }
 
 /**
- * Subscribe to /api/system/stream with smart automatic reconnection.
+ * Subscribe to /api/system/sse for hardware telemetry. Falls back to the
+ * legacy WS endpoint when EventSource isn't available.
  *
- * Reconnection strategy:
- *   - First disconnect: immediate retry (0ms)
- *   - Subsequent: exponential backoff 500ms -> 1s -> 2s -> 3s (capped)
- *   - Tab becomes visible: immediate reconnect if socket is closed
- *   - Network comes back online: immediate reconnect
- *   - Successful open resets backoff to 0
+ * SSE has the proxy-friendly story we want: no upgrade handshake, no
+ * AutoDL idle-kill (we send `: ping` comments), and the browser handles
+ * reconnection on its own with the `retry: <ms>` directive the server
+ * emits on connect.
  */
 export function useSystemStream(enabled = true) {
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
   const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const wsRef = useRef<WebSocket | null>(null)
+  const sourceRef = useRef<EventSource | WebSocket | null>(null)
 
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
-    let ws: WebSocket | null = null
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
-    let backoff = 0
+    const useSse = typeof EventSource !== "undefined"
 
-    function connect() {
-      if (cancelled) return
-      if (!navigator.onLine) return
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-      const host = window.location.host || "127.0.0.1:18765"
-      ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        backoff = 0
-        setStatus("open")
-      }
-      ws.onclose = () => {
-        setStatus("closed")
-        scheduleRetry()
-      }
-      ws.onerror = () => {}
-      ws.onmessage = (msg) => {
+    function connectSse() {
+      const es = new EventSource(`/api/system/sse`)
+      sourceRef.current = es
+      es.onopen = () => setStatus("open")
+      es.onerror = () => setStatus("closed")
+      es.onmessage = (msg) => {
         try {
           setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
-        } catch {}
+        } catch {
+          // ignore
+        }
       }
     }
 
-    function scheduleRetry() {
-      if (cancelled) return
-      retryTimer = setTimeout(() => {
+    function connectWs() {
+      let ws: WebSocket | null = null
+      let retryTimer: ReturnType<typeof setTimeout> | null = null
+      let backoff = 0
+      function open() {
+        if (cancelled) return
+        if (!navigator.onLine) return
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+        const host = window.location.host || "127.0.0.1:18765"
+        ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
+        sourceRef.current = ws
+        ws.onopen = () => {
+          backoff = 0
+          setStatus("open")
+        }
+        ws.onclose = () => {
+          setStatus("closed")
+          if (cancelled) return
+          retryTimer = setTimeout(open, backoff)
+          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 3000)
+        }
+        ws.onerror = () => {}
+        ws.onmessage = (msg) => {
+          try {
+            setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
+          } catch {
+            // ignore
+          }
+        }
+      }
+      function reconnectNow() {
+        if (cancelled) return
+        if (ws && ws.readyState === WebSocket.OPEN) return
+        if (retryTimer !== null) clearTimeout(retryTimer)
         retryTimer = null
-        connect()
-      }, backoff)
-      backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 3000)
+        backoff = 0
+        open()
+      }
+      function onVis() {
+        if (document.visibilityState === "visible") reconnectNow()
+      }
+      document.addEventListener("visibilitychange", onVis)
+      window.addEventListener("online", reconnectNow)
+      retryTimer = setTimeout(open, 30)
+      return () => {
+        document.removeEventListener("visibilitychange", onVis)
+        window.removeEventListener("online", reconnectNow)
+        if (retryTimer !== null) clearTimeout(retryTimer)
+      }
     }
 
-    function reconnectNow() {
-      if (cancelled) return
-      if (ws && ws.readyState === WebSocket.OPEN) return
-      if (retryTimer !== null) clearTimeout(retryTimer)
-      retryTimer = null
-      backoff = 0
-      connect()
-    }
-
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") reconnectNow()
-    }
-
-    function onOnline() {
-      reconnectNow()
-    }
-
-    document.addEventListener("visibilitychange", onVisibilityChange)
-    window.addEventListener("online", onOnline)
-
-    retryTimer = setTimeout(connect, 30)
+    let cleanupWs: (() => void) | undefined
+    if (useSse) connectSse()
+    else cleanupWs = connectWs()
 
     return () => {
       cancelled = true
-      document.removeEventListener("visibilitychange", onVisibilityChange)
-      window.removeEventListener("online", onOnline)
-      if (retryTimer !== null) clearTimeout(retryTimer)
-      const sock = ws
-      if (!sock) return
-      sock.onclose = null
-      sock.onerror = null
-      if (sock.readyState === WebSocket.CONNECTING) {
-        sock.addEventListener("open", () => sock.close(), { once: true })
-      } else if (sock.readyState === WebSocket.OPEN) {
-        sock.close()
+      cleanupWs?.()
+      const s = sourceRef.current
+      if (s) {
+        if (s instanceof WebSocket) {
+          s.onclose = null
+          s.onerror = null
+          if (s.readyState === WebSocket.OPEN) s.close()
+        } else {
+          s.close()
+        }
+        sourceRef.current = null
       }
-      wsRef.current = null
     }
   }, [enabled])
 

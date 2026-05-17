@@ -157,9 +157,8 @@ export function JobDetail({
           <div className="flex items-center gap-2 mb-1.5">
             {data && <StateBadge state={data.state} />}
             <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              WS{" "}
               {stream.status === "open"
-                ? "已连接"
+                ? "实时已连接"
                 : stream.status === "closed"
                   ? "已断开"
                   : "等待中"}
@@ -269,6 +268,7 @@ export function JobDetail({
               <EventsTab
                 events={events}
                 status={stream.status}
+                jobId={jobId}
                 fallbackTotalSteps={fallbackTotalSteps}
               />
             </div>
