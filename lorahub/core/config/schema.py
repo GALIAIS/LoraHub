@@ -133,8 +133,9 @@ class BucketConfig(BaseModel):
     # Useful for datasets with unusual aspect ratios.
     skip_image_resolution: bool = False
     # PIL resampling kernel. None lets the trainer pick its default.
+    # Mirrors kohya's --bucket_reso_steps companion flag's accepted set.
     resize_interpolation: Literal[
-        "lanczos", "bicubic", "bilinear", "box", "nearest", "hamming"
+        "lanczos", "nearest", "bilinear", "linear", "bicubic", "cubic", "area"
     ] | None = None
     # diffusion-pipe accepts an explicit AR list overriding min/max/num.
     # Each entry is a width/height ratio; only consumed by the dp compiler.
@@ -165,8 +166,10 @@ class CaptionConfig(BaseModel):
     # Compose-time prefix/suffix prepended/appended to every caption.
     prefix: str | None = None
     suffix: str | None = None
-    # Max tokenizer length (kohya: --max_token_length, valid: 75/150/225).
-    max_token_length: Literal[75, 150, 225] | None = None
+    # Max tokenizer length (kohya: --max_token_length, valid: 150/225;
+    # 75 is the implicit default when the flag is absent so it's
+    # represented as None here rather than an explicit value).
+    max_token_length: Literal[150, 225] | None = None
     # Token warmup (slow-start the tag count). kohya only.
     token_warmup_min: int | None = Field(default=None, ge=1)
     token_warmup_step: float | None = Field(default=None, ge=0)
