@@ -191,6 +191,69 @@ class SamplingConfig(BaseModel):
     prompts_file: Path | None = None
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
     seed: int = 42
+    # Attention backend used ONLY for sample image generation. Training
+    # forward stays on `cfg.attention.training`. SageAttention is the
+    # main motivator: its INT8 forward kernel has no matching backward
+    # so it would corrupt LoRA gradients in training, but it's safe and
+    # fast in the sample/validation pipeline (long-video previews on
+    # Wan / HunyuanVideo are where it pays off most).
+    # `default` reuses the training backend; explicit choice overrides.
+    attention: Literal["default", "torch", "sdpa", "xformers", "flash", "sageattn"] = "default"
+
+
+class AttentionConfig(BaseModel):
+    """Selects the attention kernel for the training forward+backward pass.
+
+    Backends with no working backward (every flavour of SageAttention) are
+    intentionally absent from this enum — they belong on
+    ``sampling.attention``. ``flash3`` / ``flash4`` require Hopper /
+    Blackwell hardware respectively; the runtime gates them by
+    compute-capability and falls back to ``flash`` (FlashAttention 2)
+    when the host can't run the chosen kernel.
+    """
+
+    training: Literal[
+        "auto",     # pick the best available kernel for this GPU
+        "torch",    # naive torch attention — debugging only
+        "sdpa",     # F.scaled_dot_product_attention (PyTorch native)
+        "flex",     # torch.nn.attention.flex_attention (PyTorch 2.5+)
+        "xformers",
+        "flash",    # FlashAttention 2 (Ampere/Ada/Hopper)
+        "flash3",   # FlashAttention 3 (Hopper-only)
+        "flash4",   # FlashAttention 4 beta (Hopper/Blackwell)
+    ] = "auto"
+    # Some backends require a memory-split attention path on kohya
+    # (notably xformers). Mirrors --split_attn.
+    split: bool = False
+
+
+class OptimizationConfig(BaseModel):
+    """Training-time speed / VRAM knobs that sit alongside the optimiser.
+
+    Each field lines up with an upstream argv or TOML key the per-backend
+    compilers already know how to emit. Defaults match upstream defaults
+    so existing recipes keep producing identical commands.
+    """
+
+    # PyTorch 2 graph compilation. kohya: --torch_compile. dp:
+    # `pipeline_model.compile(dynamic=True)` is currently unconditional
+    # in upstream's train.py, so dp ignores this knob (kept for parity
+    # of UI/recipe shape).
+    torch_compile: bool = False
+    # Fused LoRA backward + optimizer step. kohya: --fused_backward_pass.
+    # Saves one gradient buffer; LoRA-compatible. dp does not have an
+    # equivalent argv yet (its DeepSpeed pipeline orders bwd/step
+    # internally) — passing this through dp is a no-op.
+    fused_backward_pass: bool = False
+    # Train all parameters in bf16 (model + grads + optimizer states).
+    # kohya: --full_bf16. dp: optim_dtype="bf16".
+    full_bf16: bool = False
+    # Number of transformer blocks temporarily offloaded to CPU during
+    # the forward pass. kohya FLUX/SD3: --blocks_to_swap. dp:
+    # `blocks_to_swap` in TOML's [general] block (already supported via
+    # backend.diffusion_pipe.blocks_to_swap; this top-level mirror lets
+    # us share recipes across backends without two source-of-truth keys).
+    blocks_to_swap: int = Field(0, ge=0)
 
 
 class OutputConfig(BaseModel):
@@ -305,6 +368,8 @@ class TrainingConfig(BaseModel):
     backend: BackendConfig = Field(default_factory=lambda: BackendConfig())
     resume: ResumeConfig = Field(default_factory=lambda: ResumeConfig())
     validation: ValidationConfig = Field(default_factory=lambda: ValidationConfig())
+    attention: AttentionConfig = Field(default_factory=lambda: AttentionConfig())
+    optimization: OptimizationConfig = Field(default_factory=lambda: OptimizationConfig())
 
     model_config = {"extra": "forbid"}
 

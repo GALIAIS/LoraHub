@@ -141,6 +141,11 @@ class GpuStats:
     mem_clock_mhz: int | None = None
     sm_clock_max_mhz: int | None = None
     mem_clock_max_mhz: int | None = None
+    # CUDA compute capability ("8.6" for Ampere, "8.9" for Ada Lovelace,
+    # "9.0" for Hopper, "10.0"/"12.0" for Blackwell). Used by the
+    # frontend to gate attention-backend choices: FlashAttention 3
+    # requires 9.x, FlashAttention 4 needs 9.x or 10+.
+    compute_capability: str | None = None
 
 
 @dataclass
@@ -644,7 +649,8 @@ _GPU_QUERY = (
     "pcie.link.gen.current,pcie.link.width.current,"
     "pcie.link.gen.max,pcie.link.width.max,"
     "clocks.current.sm,clocks.current.memory,"
-    "clocks.max.sm,clocks.max.memory"
+    "clocks.max.sm,clocks.max.memory,"
+    "compute_cap"
 )
 
 
@@ -713,6 +719,7 @@ def _collect_nvidia_gpus(start_index: int = 0) -> list[GpuStats]:
                 mem_clock_mhz=_i(_at(16)),
                 sm_clock_max_mhz=_i(_at(17)),
                 mem_clock_max_mhz=_i(_at(18)),
+                compute_capability=(_at(19) or None),
             )
         )
     return out
