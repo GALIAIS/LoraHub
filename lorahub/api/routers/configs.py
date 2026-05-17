@@ -113,7 +113,7 @@ def validate_config(req: ValidateConfigRequest) -> dict[str, Any]:
 
 @router.get("/configs")
 def list_configs() -> dict[str, Any]:
-    """List YAML config templates discovered under the recipes/ directory."""
+    """List YAML config templates discovered under the configs/ directory."""
     base = _configs_dir()
     if not base.is_dir():
         return {"dir": str(base), "configs": []}
@@ -292,7 +292,7 @@ async def import_config(
 
 @router.post("/configs/{name}/duplicate", status_code=201)
 def duplicate_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
-    """Copy ``configs/<name>.yaml`` to ``recipes/<new_name>.yaml``.
+    """Copy ``configs/<name>.yaml`` to ``configs/<new_name>.yaml``.
 
     The source is opened through ``load_config`` first so callers get a 422 if
     they try to clone a malformed config — matching the error surface of save.
@@ -325,7 +325,7 @@ def duplicate_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
 
 @router.post("/configs/{name}/rename")
 def rename_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
-    """Atomically rename ``configs/<name>.yaml`` to ``recipes/<new_name>.yaml``."""
+    """Atomically rename ``configs/<name>.yaml`` to ``configs/<new_name>.yaml``."""
     src = _config_path(name)
     new_name = _validate_config_name(req.new_name)
     dst = _new_config_target(new_name)

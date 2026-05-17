@@ -567,7 +567,7 @@ def test_get_config_blocks_path_traversal(
 def test_config_schema_still_resolves_under_recipes_prefix(
     client: TestClient, configs_dir: Path
 ) -> None:
-    # /recipes/schema must keep working alongside /recipes/{name}
+    # /configs/schema must keep working alongside /configs/{name}
     r = client.get("/api/configs/schema")
     assert r.status_code == 200
     assert r.json()["title"] == "TrainingConfig"
@@ -2472,7 +2472,7 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
-# Recipe template instantiate (POST /api/recipes/templates/{id}/instantiate)
+# Recipe template instantiate (POST /api/configs/templates/{id}/instantiate)
 # --------------------------------------------------------------------------- #
 
 
