@@ -23,52 +23,52 @@ export const OptimizationFields = memo(function OptimizationFields({
   return (
     <>
       <Row
-        label="torch_compile"
+        label="torchCompile"
         description="kohya 训练加速；dp 已默认启用，保留此开关只为配方互通。"
       >
         <ToggleSwitch
-          checked={v.torch_compile ?? false}
-          onCheckedChange={(b) => set(["optimization", "torch_compile"], b)}
+          checked={v.torchCompile ?? false}
+          onCheckedChange={(b) => set(["optimization", "torchCompile"], b)}
         />
       </Row>
       <Row
-        label="fused_backward_pass"
+        label="fusedBackwardPass"
         description="kohya 专用，融合反向 + 优化器步进以节省显存；dp 暂无对应开关。"
       >
         <ToggleSwitch
-          checked={v.fused_backward_pass ?? false}
+          checked={v.fusedBackwardPass ?? false}
           onCheckedChange={(b) =>
-            set(["optimization", "fused_backward_pass"], b)
+            set(["optimization", "fusedBackwardPass"], b)
           }
         />
       </Row>
       <Row
-        label="full_bf16"
+        label="fullBf16"
         description="双后端通用，把模型 / 梯度 / 优化器状态全部放到 bf16，优化器内存约减半。"
       >
         <ToggleSwitch
-          checked={v.full_bf16 ?? false}
-          onCheckedChange={(b) => set(["optimization", "full_bf16"], b)}
+          checked={v.fullBf16 ?? false}
+          onCheckedChange={(b) => set(["optimization", "fullBf16"], b)}
         />
       </Row>
       <Row
-        label="full_fp16"
+        label="fullFp16"
         description="老一代 GPU 用：全 fp16 训练（包含优化器状态）。"
       >
         <ToggleSwitch
-          checked={v.full_fp16 ?? false}
-          onCheckedChange={(b) => set(["optimization", "full_fp16"], b)}
+          checked={v.fullFp16 ?? false}
+          onCheckedChange={(b) => set(["optimization", "fullFp16"], b)}
         />
       </Row>
       <Row
-        label="blocks_to_swap"
+        label="blocksToSwap"
         description="FLUX/SD3/dp 适用，把 N 个 transformer 块临时换出到 CPU 以省显存；SDXL 不支持。"
-        errors={errorMap.get("optimization.blocks_to_swap")}
+        errors={errorMap.get("optimization.blocksToSwap")}
       >
         <IntInput
           min={0}
-          value={v.blocks_to_swap ?? 0}
-          onChange={(n) => set(["optimization", "blocks_to_swap"], n ?? 0)}
+          value={v.blocksToSwap ?? 0}
+          onChange={(n) => set(["optimization", "blocksToSwap"], n ?? 0)}
         />
       </Row>
 
@@ -77,29 +77,29 @@ export const OptimizationFields = memo(function OptimizationFields({
           FP8 / 内存策略 / 缓存
         </summary>
         <div className="mt-3 space-y-3.5">
-          <Row label="fp8_base" description="FLUX/SD3/HunyuanImage 把 base 模型权重以 fp8 加载，显存约 -40%。">
+          <Row label="fp8Base" description="FLUX/SD3/HunyuanImage 把 base 模型权重以 fp8 加载，显存约 -40%。">
             <ToggleSwitch
-              checked={v.fp8_base ?? false}
-              onCheckedChange={(b) => set(["optimization", "fp8_base"], b)}
+              checked={v.fp8Base ?? false}
+              onCheckedChange={(b) => set(["optimization", "fp8Base"], b)}
             />
           </Row>
-          <Row label="fp8_base_unet" description="仅对 UNet 应用 fp8。">
+          <Row label="fp8BaseUnet" description="仅对 UNet 应用 fp8。">
             <ToggleSwitch
-              checked={v.fp8_base_unet ?? false}
-              onCheckedChange={(b) => set(["optimization", "fp8_base_unet"], b)}
+              checked={v.fp8BaseUnet ?? false}
+              onCheckedChange={(b) => set(["optimization", "fp8BaseUnet"], b)}
             />
           </Row>
-          <Row label="fp8_scaled" description="HunyuanImage 缩放 FP8（与 fp8_base 不同的算法）。">
+          <Row label="fp8Scaled" description="HunyuanImage 缩放 FP8（与 fp8_base 不同的算法）。">
             <ToggleSwitch
-              checked={v.fp8_scaled ?? false}
-              onCheckedChange={(b) => set(["optimization", "fp8_scaled"], b)}
+              checked={v.fp8Scaled ?? false}
+              onCheckedChange={(b) => set(["optimization", "fp8Scaled"], b)}
             />
           </Row>
-          <Row label="fp8_vl_text_encoder" description="HunyuanImage VL 文本编码器以 fp8 加载。">
+          <Row label="fp8VlTextEncoder" description="HunyuanImage VL 文本编码器以 fp8 加载。">
             <ToggleSwitch
-              checked={v.fp8_vl_text_encoder ?? false}
+              checked={v.fp8VlTextEncoder ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "fp8_vl_text_encoder"], b)
+                set(["optimization", "fp8VlTextEncoder"], b)
               }
             />
           </Row>
@@ -116,66 +116,66 @@ export const OptimizationFields = memo(function OptimizationFields({
             />
           </Row>
           <Row
-            label="no_half_vae"
+            label="noHalfVae"
             description="SDXL VAE 强制 fp32，避免半精度色彩异常。"
           >
             <ToggleSwitch
-              checked={v.no_half_vae ?? false}
-              onCheckedChange={(b) => set(["optimization", "no_half_vae"], b)}
+              checked={v.noHalfVae ?? false}
+              onCheckedChange={(b) => set(["optimization", "noHalfVae"], b)}
             />
           </Row>
           <Row
-            label="disable_mmap_load_safetensors"
+            label="disableMmapLoadSafetensors"
             description="禁用 safetensors mmap 加载（NFS / 网络盘必需）。"
           >
             <ToggleSwitch
-              checked={v.disable_mmap_load_safetensors ?? false}
+              checked={v.disableMmapLoadSafetensors ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "disable_mmap_load_safetensors"], b)
+                set(["optimization", "disableMmapLoadSafetensors"], b)
               }
             />
           </Row>
           <Row
-            label="cpu_offload_checkpointing"
+            label="cpuOffloadCheckpointing"
             description="梯度检查点 offload 到 CPU。"
           >
             <ToggleSwitch
-              checked={v.cpu_offload_checkpointing ?? false}
+              checked={v.cpuOffloadCheckpointing ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "cpu_offload_checkpointing"], b)
+                set(["optimization", "cpuOffloadCheckpointing"], b)
               }
             />
           </Row>
           <Row
-            label="unsloth_offload_checkpointing"
+            label="unslothOffloadCheckpointing"
             description="Anima 专用 unsloth offload。"
           >
             <ToggleSwitch
-              checked={v.unsloth_offload_checkpointing ?? false}
+              checked={v.unslothOffloadCheckpointing ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "unsloth_offload_checkpointing"], b)
+                set(["optimization", "unslothOffloadCheckpointing"], b)
               }
             />
           </Row>
           <Row
-            label="cache_text_encoder_outputs"
+            label="cacheTextEncoderOutputs"
             description="把文本编码器输出缓存到 RAM。"
           >
             <ToggleSwitch
-              checked={v.cache_text_encoder_outputs ?? false}
+              checked={v.cacheTextEncoderOutputs ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "cache_text_encoder_outputs"], b)
+                set(["optimization", "cacheTextEncoderOutputs"], b)
               }
             />
           </Row>
           <Row
-            label="cache_text_encoder_outputs_to_disk"
+            label="cacheTextEncoderOutputsToDisk"
             description="把文本编码器输出缓存到磁盘（释放显存）。"
           >
             <ToggleSwitch
-              checked={v.cache_text_encoder_outputs_to_disk ?? false}
+              checked={v.cacheTextEncoderOutputsToDisk ?? false}
               onCheckedChange={(b) =>
-                set(["optimization", "cache_text_encoder_outputs_to_disk"], b)
+                set(["optimization", "cacheTextEncoderOutputsToDisk"], b)
               }
             />
           </Row>

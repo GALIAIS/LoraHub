@@ -27,19 +27,19 @@ export const SamplingFields = memo(function SamplingFields({
           <Row label="每 N 回合一次">
             <IntInput
               min={1}
-              value={v.every_n_epochs ?? 1}
-              onChange={(n) => set(["sampling", "every_n_epochs"], n ?? 1)}
+              value={v.everyNEpochs ?? 1}
+              onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)}
             />
           </Row>
           <Row
             label="每 N 步一次"
-            description="kohya `--sample_every_n_steps`；与 every_n_epochs 互不冲突。留空仅按回合采样。"
-            errors={errorMap.get("sampling.every_n_steps")}
+            description="kohya `--sample_every_n_steps`；与 everyNEpochs 互不冲突。留空仅按回合采样。"
+            errors={errorMap.get("sampling.everyNSteps")}
           >
             <IntInput
               min={1}
-              value={v.every_n_steps ?? null}
-              onChange={(n) => set(["sampling", "every_n_steps"], n)}
+              value={v.everyNSteps ?? null}
+              onChange={(n) => set(["sampling", "everyNSteps"], n)}
               placeholder="（默认）"
             />
           </Row>
@@ -48,14 +48,14 @@ export const SamplingFields = memo(function SamplingFields({
             description="kohya `--sample_at_first`：第 0 步生成一组基线样图。"
           >
             <ToggleSwitch
-              checked={v.at_first ?? false}
-              onCheckedChange={(b) => set(["sampling", "at_first"], b)}
+              checked={v.atFirst ?? false}
+              onCheckedChange={(b) => set(["sampling", "atFirst"], b)}
             />
           </Row>
-          <Row label="提示词文件" description="纯文本，每行一条提示词。" errors={errorMap.get("sampling.prompts_file")}>
+          <Row label="提示词文件" description="纯文本，每行一条提示词。" errors={errorMap.get("sampling.promptsFile")}>
             <PathInput
-              value={v.prompts_file ?? ""}
-              onChange={(s) => set(["sampling", "prompts_file"], s || null)}
+              value={v.promptsFile ?? ""}
+              onChange={(s) => set(["sampling", "promptsFile"], s || null)}
               placeholder="./prompts.txt"
             />
           </Row>

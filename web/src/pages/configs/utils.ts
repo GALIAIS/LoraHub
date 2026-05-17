@@ -5,8 +5,8 @@ export function buildDefaults(): ConfigFormValue {
   // Minimal valid skeleton — enough that the form renders with sensible
   // starting values; the user only has to fill in the two paths.
   return {
-    schema_version: "1.0",
-    base_model: { arch: "sdxl", checkpoint: "" },
+    schemaVersion: "1.0",
+    baseModel: { arch: "sdxl", checkpoint: "" },
     dataset: { source: "", resolution: [1024, 1024] },
   }
 }
@@ -49,9 +49,9 @@ export function extractOverrides(
   return {
     datasetSource,
     outputName: asString(output.name),
-    batchSize: asString(schedule.batch_size),
+    batchSize: asString(schedule.batchSize),
     epochs: asString(schedule.epochs),
-    maxSteps: asString(schedule.max_steps),
+    maxSteps: asString(schedule.maxSteps),
   }
 }
 
@@ -83,7 +83,7 @@ export function applyOverrides(
 
   const batchSize = parsePositiveInt(overrides.batchSize)
   if (batchSize !== null) {
-    setIn(cloned, ["schedule", "batch_size"], batchSize)
+    setIn(cloned, ["schedule", "batchSize"], batchSize)
   }
   const epochs = parsePositiveInt(overrides.epochs)
   if (epochs !== null) {
@@ -91,7 +91,7 @@ export function applyOverrides(
   }
   const maxSteps = parsePositiveInt(overrides.maxSteps)
   if (maxSteps !== null) {
-    setIn(cloned, ["schedule", "max_steps"], maxSteps)
+    setIn(cloned, ["schedule", "maxSteps"], maxSteps)
   }
 
   return cloned

@@ -23,100 +23,100 @@ export const FlowMatchFields = memo(function FlowMatchFields({
   errorMap,
   arch,
 }: {
-  value: ConfigFormValue["flow_match"]
+  value: ConfigFormValue["flowMatch"]
   set: Setter
   errorMap: ErrorMap
   arch: string
 }) {
   if (!FLOW_MATCH_ARCHES.has(arch)) return null
   const v = value ?? {}
-  const k = (n: string) => `flow_match.${n}` as const
+  const k = (n: string) => `flowMatch.${n}` as const
   return (
     <>
       <Row
-        label="timestep_sampling"
+        label="timestepSampling"
         description="时间步采样方式。"
-        errors={errorMap.get(k("timestep_sampling"))}
+        errors={errorMap.get(k("timestepSampling"))}
       >
         <EnumSelect
-          value={v.timestep_sampling ?? ""}
-          onChange={(s) => set(["flow_match", "timestep_sampling"], s || null)}
+          value={v.timestepSampling ?? ""}
+          onChange={(s) => set(["flowMatch", "timestepSampling"], s || null)}
           options={FLOW_MATCH_TIMESTEP_OPTIONS}
         />
       </Row>
-      <Row label="sigmoid_scale" errors={errorMap.get(k("sigmoid_scale"))}>
+      <Row label="sigmoidScale" errors={errorMap.get(k("sigmoidScale"))}>
         <FloatInput
           step={0.01}
-          value={v.sigmoid_scale ?? null}
-          onChange={(n) => set(["flow_match", "sigmoid_scale"], n)}
+          value={v.sigmoidScale ?? null}
+          onChange={(n) => set(["flowMatch", "sigmoidScale"], n)}
           placeholder="（默认）"
         />
       </Row>
-      <Row label="model_prediction_type" errors={errorMap.get(k("model_prediction_type"))}>
+      <Row label="modelPredictionType" errors={errorMap.get(k("modelPredictionType"))}>
         <EnumSelect
-          value={v.model_prediction_type ?? ""}
+          value={v.modelPredictionType ?? ""}
           onChange={(s) =>
-            set(["flow_match", "model_prediction_type"], s || null)
+            set(["flowMatch", "modelPredictionType"], s || null)
           }
           options={FLOW_MATCH_PRED_TYPE_OPTIONS}
         />
       </Row>
       <Row
-        label="discrete_flow_shift"
+        label="discreteFlowShift"
         description="FLUX / Anima 离散 flow 时间步偏移。"
-        errors={errorMap.get(k("discrete_flow_shift"))}
+        errors={errorMap.get(k("discreteFlowShift"))}
       >
         <FloatInput
           step={0.1}
-          value={v.discrete_flow_shift ?? null}
-          onChange={(n) => set(["flow_match", "discrete_flow_shift"], n)}
+          value={v.discreteFlowShift ?? null}
+          onChange={(n) => set(["flowMatch", "discreteFlowShift"], n)}
           placeholder="（默认）"
         />
       </Row>
       <Row
-        label="training_shift"
+        label="trainingShift"
         description="SD3 训练时 shift。"
-        errors={errorMap.get(k("training_shift"))}
+        errors={errorMap.get(k("trainingShift"))}
       >
         <FloatInput
           step={0.1}
-          value={v.training_shift ?? null}
-          onChange={(n) => set(["flow_match", "training_shift"], n)}
+          value={v.trainingShift ?? null}
+          onChange={(n) => set(["flowMatch", "trainingShift"], n)}
           placeholder="（默认）"
         />
       </Row>
       <Row
-        label="weighting_scheme"
+        label="weightingScheme"
         description="FLUX/SD3 时间步加权方案。"
-        errors={errorMap.get(k("weighting_scheme"))}
+        errors={errorMap.get(k("weightingScheme"))}
       >
         <EnumSelect
-          value={v.weighting_scheme ?? ""}
-          onChange={(s) => set(["flow_match", "weighting_scheme"], s || null)}
+          value={v.weightingScheme ?? ""}
+          onChange={(s) => set(["flowMatch", "weightingScheme"], s || null)}
           options={FLOW_MATCH_WEIGHTING_OPTIONS}
         />
       </Row>
-      <Row label="logit_mean" errors={errorMap.get(k("logit_mean"))}>
+      <Row label="logitMean" errors={errorMap.get(k("logitMean"))}>
         <FloatInput
           step={0.01}
-          value={v.logit_mean ?? null}
-          onChange={(n) => set(["flow_match", "logit_mean"], n)}
+          value={v.logitMean ?? null}
+          onChange={(n) => set(["flowMatch", "logitMean"], n)}
           placeholder="（默认）"
         />
       </Row>
-      <Row label="logit_std" errors={errorMap.get(k("logit_std"))}>
+      <Row label="logitStd" errors={errorMap.get(k("logitStd"))}>
         <FloatInput
           step={0.01}
-          value={v.logit_std ?? null}
-          onChange={(n) => set(["flow_match", "logit_std"], n)}
+          value={v.logitStd ?? null}
+          onChange={(n) => set(["flowMatch", "logitStd"], n)}
           placeholder="（默认）"
         />
       </Row>
-      <Row label="mode_scale" errors={errorMap.get(k("mode_scale"))}>
+      <Row label="modeScale" errors={errorMap.get(k("modeScale"))}>
         <FloatInput
           step={0.01}
-          value={v.mode_scale ?? null}
-          onChange={(n) => set(["flow_match", "mode_scale"], n)}
+          value={v.modeScale ?? null}
+          onChange={(n) => set(["flowMatch", "modeScale"], n)}
           placeholder="（默认）"
         />
       </Row>

@@ -80,7 +80,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
     [value, onChange],
   )
 
-  const arch = value.base_model?.arch ?? ""
+  const arch = value.baseModel?.arch ?? ""
   // ArchPaths section is collapsed by default but auto-expands for arches
   // that almost always need a per-component path filled in.
   const archPathsAutoOpen =
@@ -99,7 +99,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         subtitle="选择架构与待微调的 .safetensors 检查点"
         defaultOpen
       >
-        <BaseModelFields value={value.base_model} set={set} errorMap={errorMap} />
+        <BaseModelFields value={value.baseModel} set={set} errorMap={errorMap} />
       </Section>
 
       <Section
@@ -109,7 +109,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         defaultOpen={archPathsAutoOpen}
       >
         <ArchPathsFields
-          value={value.base_model?.arch_paths}
+          value={value.baseModel?.archPaths}
           set={set}
           errorMap={errorMap}
           arch={arch}
@@ -165,7 +165,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
           subtitle="FLUX / SD3 / Lumina / Anima / HunyuanImage / chroma 专用"
         >
           <FlowMatchFields
-            value={value.flow_match}
+            value={value.flowMatch}
             set={set}
             errorMap={errorMap}
             arch={arch}
@@ -282,7 +282,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
           subtitle="仅在 diffusion-pipe 后端下生效"
         >
           <BackendDiffusionPipeFields
-            value={value.backend?.diffusion_pipe}
+            value={value.backend?.diffusionPipe}
             set={set}
             errorMap={errorMap}
           />

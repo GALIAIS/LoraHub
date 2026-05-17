@@ -40,11 +40,11 @@ export const OptimizerFields = memo(function OptimizerFields({
           onChange={(n) => set(["optimizer", "lr", "unet"], n ?? 1e-4)}
         />
       </Row>
-      <Row label="文本编码器学习率" errors={errorMap.get("optimizer.lr.text_encoder")}>
+      <Row label="文本编码器学习率" errors={errorMap.get("optimizer.lr.textEncoder")}>
         <FloatInput
           step={0.00001}
-          value={lr.text_encoder ?? 5e-5}
-          onChange={(n) => set(["optimizer", "lr", "text_encoder"], n ?? 5e-5)}
+          value={lr.textEncoder ?? 5e-5}
+          onChange={(n) => set(["optimizer", "lr", "textEncoder"], n ?? 5e-5)}
         />
       </Row>
       <Row label="学习率调度">
@@ -57,8 +57,8 @@ export const OptimizerFields = memo(function OptimizerFields({
       <Row label="预热步数">
         <IntInput
           min={0}
-          value={v.warmup_steps ?? 100}
-          onChange={(n) => set(["optimizer", "warmup_steps"], n ?? 0)}
+          value={v.warmupSteps ?? 100}
+          onChange={(n) => set(["optimizer", "warmupSteps"], n ?? 0)}
         />
       </Row>
 
@@ -98,12 +98,12 @@ export const OptimizerFields = memo(function OptimizerFields({
           <Row
             label="Weight Decay"
             description="L2 权重衰减系数。AdamW 默认 0。"
-            errors={errorMap.get("optimizer.weight_decay")}
+            errors={errorMap.get("optimizer.weightDecay")}
           >
             <FloatInput
               step={0.001}
-              value={v.weight_decay ?? 0}
-              onChange={(n) => set(["optimizer", "weight_decay"], n ?? 0)}
+              value={v.weightDecay ?? 0}
+              onChange={(n) => set(["optimizer", "weightDecay"], n ?? 0)}
             />
           </Row>
           <Row
@@ -118,105 +118,105 @@ export const OptimizerFields = memo(function OptimizerFields({
             />
           </Row>
           <Row
-            label="optimizer_args"
+            label="optimizerArgs"
             description="额外 key=value，每行一对。覆盖上面三项；用于 Lion / Prodigy 等的私有参数。"
-            errors={errorMap.get("optimizer.optimizer_args")}
+            errors={errorMap.get("optimizer.optimizerArgs")}
           >
             <KeyValueTextArea
-              value={v.optimizer_args}
-              onChange={(next) => set(["optimizer", "optimizer_args"], next)}
+              value={v.optimizerArgs}
+              onChange={(next) => set(["optimizer", "optimizerArgs"], next)}
               placeholder={"momentum = 0.9\ndecouple = True"}
             />
           </Row>
           <Row
-            label="max_grad_norm"
+            label="maxGradNorm"
             description="梯度范数裁剪上限；0 关闭裁剪。"
-            errors={errorMap.get("optimizer.max_grad_norm")}
+            errors={errorMap.get("optimizer.maxGradNorm")}
           >
             <FloatInput
               step={0.1}
-              value={v.max_grad_norm ?? 1.0}
-              onChange={(n) => set(["optimizer", "max_grad_norm"], n ?? 1.0)}
+              value={v.maxGradNorm ?? 1.0}
+              onChange={(n) => set(["optimizer", "maxGradNorm"], n ?? 1.0)}
             />
           </Row>
           <Row
-            label="scheduler_module"
+            label="schedulerModule"
             description="自定义 LR scheduler module（kohya `--lr_scheduler_type`）。"
-            errors={errorMap.get("optimizer.scheduler_module")}
+            errors={errorMap.get("optimizer.schedulerModule")}
           >
             <TextInput
               className="w-64"
-              value={v.scheduler_module ?? ""}
+              value={v.schedulerModule ?? ""}
               onChange={(s) =>
-                set(["optimizer", "scheduler_module"], s || null)
+                set(["optimizer", "schedulerModule"], s || null)
               }
               placeholder="（可选）"
             />
           </Row>
           <Row
-            label="scheduler_args"
+            label="schedulerArgs"
             description="scheduler 私有 kwargs（kohya `--lr_scheduler_args`）。"
-            errors={errorMap.get("optimizer.scheduler_args")}
+            errors={errorMap.get("optimizer.schedulerArgs")}
           >
             <KeyValueTextArea
-              value={v.scheduler_args}
-              onChange={(next) => set(["optimizer", "scheduler_args"], next)}
+              value={v.schedulerArgs}
+              onChange={(next) => set(["optimizer", "schedulerArgs"], next)}
               placeholder={"factor = 0.5\npatience = 5"}
             />
           </Row>
           <Row
-            label="scheduler_num_cycles"
+            label="schedulerNumCycles"
             description="cosine_with_restarts 重启次数。"
-            errors={errorMap.get("optimizer.scheduler_num_cycles")}
+            errors={errorMap.get("optimizer.schedulerNumCycles")}
           >
             <IntInput
               min={1}
-              value={v.scheduler_num_cycles ?? 1}
-              onChange={(n) => set(["optimizer", "scheduler_num_cycles"], n ?? 1)}
+              value={v.schedulerNumCycles ?? 1}
+              onChange={(n) => set(["optimizer", "schedulerNumCycles"], n ?? 1)}
             />
           </Row>
           <Row
-            label="scheduler_power"
+            label="schedulerPower"
             description="polynomial 衰减幂。"
-            errors={errorMap.get("optimizer.scheduler_power")}
+            errors={errorMap.get("optimizer.schedulerPower")}
           >
             <FloatInput
               step={0.1}
-              value={v.scheduler_power ?? 1.0}
-              onChange={(n) => set(["optimizer", "scheduler_power"], n ?? 1.0)}
+              value={v.schedulerPower ?? 1.0}
+              onChange={(n) => set(["optimizer", "schedulerPower"], n ?? 1.0)}
             />
           </Row>
           <Row
-            label="scheduler_timescale"
+            label="schedulerTimescale"
             description="inverse_sqrt 时间常数；留空使用默认。"
-            errors={errorMap.get("optimizer.scheduler_timescale")}
+            errors={errorMap.get("optimizer.schedulerTimescale")}
           >
             <IntInput
               min={1}
-              value={v.scheduler_timescale ?? null}
-              onChange={(n) => set(["optimizer", "scheduler_timescale"], n)}
+              value={v.schedulerTimescale ?? null}
+              onChange={(n) => set(["optimizer", "schedulerTimescale"], n)}
               placeholder="（默认）"
             />
           </Row>
           <Row
-            label="scheduler_min_lr_ratio"
+            label="schedulerMinLrRatio"
             description="cosine 最小 LR 比例（kohya `--lr_scheduler_min_lr_ratio`）。"
-            errors={errorMap.get("optimizer.scheduler_min_lr_ratio")}
+            errors={errorMap.get("optimizer.schedulerMinLrRatio")}
           >
             <FloatInput
               step={0.01}
-              value={v.scheduler_min_lr_ratio ?? null}
-              onChange={(n) => set(["optimizer", "scheduler_min_lr_ratio"], n)}
+              value={v.schedulerMinLrRatio ?? null}
+              onChange={(n) => set(["optimizer", "schedulerMinLrRatio"], n)}
               placeholder="（默认）"
             />
           </Row>
           <Row
-            label="gradient_release"
+            label="gradientRelease"
             description="dp 分块释放梯度以节省显存。"
           >
             <ToggleSwitch
-              checked={v.gradient_release ?? false}
-              onCheckedChange={(b) => set(["optimizer", "gradient_release"], b)}
+              checked={v.gradientRelease ?? false}
+              onCheckedChange={(b) => set(["optimizer", "gradientRelease"], b)}
             />
           </Row>
         </div>

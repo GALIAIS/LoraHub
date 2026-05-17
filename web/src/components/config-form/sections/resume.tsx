@@ -5,7 +5,7 @@ import { IntInput, PathInput, Row, ToggleSwitch } from "../widgets"
 /**
  * Checkpoint state writing for resume support (ResumeConfig in schema.py).
  *
- * State directories are large; use `save_state_every_n_epochs` to throttle
+ * State directories are large; use `saveStateEveryNEpochs` to throttle
  * writes if disk is tight.
  */
 export const ResumeFields = memo(function ResumeFields({
@@ -25,8 +25,8 @@ export const ResumeFields = memo(function ResumeFields({
         description="同时落盘 optimizer / scheduler 状态以便后续 resume。"
       >
         <ToggleSwitch
-          checked={v.save_state ?? true}
-          onCheckedChange={(b) => set(["resume", "save_state"], b)}
+          checked={v.saveState ?? true}
+          onCheckedChange={(b) => set(["resume", "saveState"], b)}
         />
       </Row>
       <Row
@@ -34,77 +34,77 @@ export const ResumeFields = memo(function ResumeFields({
         description="训练正常结束时再写一份 state（用于断点续训）。"
       >
         <ToggleSwitch
-          checked={v.save_state_at_end ?? true}
-          onCheckedChange={(b) => set(["resume", "save_state_at_end"], b)}
+          checked={v.saveStateAtEnd ?? true}
+          onCheckedChange={(b) => set(["resume", "saveStateAtEnd"], b)}
         />
       </Row>
       <Row
         label="每 N 回合保存状态"
         description="可选。State 目录较大，磁盘紧张时用此节流。留空则关闭周期性保存。"
-        errors={errorMap.get("resume.save_state_every_n_epochs")}
+        errors={errorMap.get("resume.saveStateEveryNEpochs")}
       >
         <IntInput
           min={1}
-          value={v.save_state_every_n_epochs ?? null}
-          onChange={(n) => set(["resume", "save_state_every_n_epochs"], n)}
+          value={v.saveStateEveryNEpochs ?? null}
+          onChange={(n) => set(["resume", "saveStateEveryNEpochs"], n)}
           placeholder="（不周期保存）"
         />
       </Row>
       <Row
-        label="resume_from"
+        label="resumeFrom"
         description="本地恢复路径（kohya `--resume`）。"
-        errors={errorMap.get("resume.resume_from")}
+        errors={errorMap.get("resume.resumeFrom")}
       >
         <PathInput
-          value={v.resume_from ?? ""}
-          onChange={(s) => set(["resume", "resume_from"], s || null)}
+          value={v.resumeFrom ?? ""}
+          onChange={(s) => set(["resume", "resumeFrom"], s || null)}
           placeholder="（可选）"
         />
       </Row>
       <Row
         label="保留最近 N 回合 state"
-        errors={errorMap.get("resume.save_last_n_epochs_state")}
+        errors={errorMap.get("resume.saveLastNEpochsState")}
       >
         <IntInput
           min={1}
-          value={v.save_last_n_epochs_state ?? null}
-          onChange={(n) => set(["resume", "save_last_n_epochs_state"], n)}
+          value={v.saveLastNEpochsState ?? null}
+          onChange={(n) => set(["resume", "saveLastNEpochsState"], n)}
           placeholder="（不限）"
         />
       </Row>
       <Row
         label="保留最近 N 步 state"
-        errors={errorMap.get("resume.save_last_n_steps_state")}
+        errors={errorMap.get("resume.saveLastNStepsState")}
       >
         <IntInput
           min={1}
-          value={v.save_last_n_steps_state ?? null}
-          onChange={(n) => set(["resume", "save_last_n_steps_state"], n)}
+          value={v.saveLastNStepsState ?? null}
+          onChange={(n) => set(["resume", "saveLastNStepsState"], n)}
           placeholder="（不限）"
         />
       </Row>
       <Row
-        label="skip_until_initial_step"
+        label="skipUntilInitialStep"
         description="resume 时跳到指定步（kohya）。"
       >
         <ToggleSwitch
-          checked={v.skip_until_initial_step ?? false}
-          onCheckedChange={(b) => set(["resume", "skip_until_initial_step"], b)}
+          checked={v.skipUntilInitialStep ?? false}
+          onCheckedChange={(b) => set(["resume", "skipUntilInitialStep"], b)}
         />
       </Row>
-      <Row label="initial_epoch" errors={errorMap.get("resume.initial_epoch")}>
+      <Row label="initialEpoch" errors={errorMap.get("resume.initialEpoch")}>
         <IntInput
           min={1}
-          value={v.initial_epoch ?? null}
-          onChange={(n) => set(["resume", "initial_epoch"], n)}
+          value={v.initialEpoch ?? null}
+          onChange={(n) => set(["resume", "initialEpoch"], n)}
           placeholder="（默认）"
         />
       </Row>
-      <Row label="initial_step" errors={errorMap.get("resume.initial_step")}>
+      <Row label="initialStep" errors={errorMap.get("resume.initialStep")}>
         <IntInput
           min={0}
-          value={v.initial_step ?? null}
-          onChange={(n) => set(["resume", "initial_step"], n)}
+          value={v.initialStep ?? null}
+          onChange={(n) => set(["resume", "initialStep"], n)}
           placeholder="（默认）"
         />
       </Row>

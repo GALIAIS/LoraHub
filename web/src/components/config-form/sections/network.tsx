@@ -18,7 +18,7 @@ export const NetworkFields = memo(function NetworkFields({
   // rejects conv_dim / conv_alpha on those types, so hide the fields.
   const supportsConv = type === "locon" || type === "loha"
   const swnEnabled =
-    v.scale_weight_norms !== null && v.scale_weight_norms !== undefined
+    v.scaleWeightNorms !== null && v.scaleWeightNorms !== undefined
   return (
     <>
       <Row label="网络类型">
@@ -53,8 +53,8 @@ export const NetworkFields = memo(function NetworkFields({
       </Row>
       <Row label="训练 U-Net" description="训练 U-Net（视觉变化所必需）。">
         <ToggleSwitch
-          checked={v.target_unet ?? true}
-          onCheckedChange={(b) => set(["network", "target_unet"], b)}
+          checked={v.targetUnet ?? true}
+          onCheckedChange={(b) => set(["network", "targetUnet"], b)}
         />
       </Row>
       <Row
@@ -62,8 +62,8 @@ export const NetworkFields = memo(function NetworkFields({
         description="一并训练文本编码器，速度更慢；有助于风格 / 概念的泛化。"
       >
         <ToggleSwitch
-          checked={v.target_text_encoder ?? false}
-          onCheckedChange={(b) => set(["network", "target_text_encoder"], b)}
+          checked={v.targetTextEncoder ?? false}
+          onCheckedChange={(b) => set(["network", "targetTextEncoder"], b)}
         />
       </Row>
 
@@ -77,25 +77,25 @@ export const NetworkFields = memo(function NetworkFields({
               <Row
                 label="Conv Rank"
                 description="LyCORIS conv 层秩。仅对 locon / loha 生效。"
-                errors={errorMap.get("network.conv_dim")}
+                errors={errorMap.get("network.convDim")}
               >
                 <IntInput
                   min={1}
                   max={512}
-                  value={v.conv_dim ?? null}
-                  onChange={(n) => set(["network", "conv_dim"], n)}
+                  value={v.convDim ?? null}
+                  onChange={(n) => set(["network", "convDim"], n)}
                   placeholder="（默认）"
                 />
               </Row>
               <Row
                 label="Conv Alpha"
                 description="LyCORIS conv 层 alpha。留空则与 alpha 相同。"
-                errors={errorMap.get("network.conv_alpha")}
+                errors={errorMap.get("network.convAlpha")}
               >
                 <IntInput
                   min={1}
-                  value={v.conv_alpha ?? null}
-                  onChange={(n) => set(["network", "conv_alpha"], n)}
+                  value={v.convAlpha ?? null}
+                  onChange={(n) => set(["network", "convAlpha"], n)}
                   placeholder="（与 alpha 相同）"
                 />
               </Row>
@@ -104,76 +104,76 @@ export const NetworkFields = memo(function NetworkFields({
           <Row
             label="Network Dropout"
             description="整网 dropout 概率（0..1）。"
-            errors={errorMap.get("network.network_dropout")}
+            errors={errorMap.get("network.networkDropout")}
           >
             <FloatInput
               step={0.05}
-              value={v.network_dropout ?? 0}
-              onChange={(n) => set(["network", "network_dropout"], n ?? 0)}
+              value={v.networkDropout ?? 0}
+              onChange={(n) => set(["network", "networkDropout"], n ?? 0)}
             />
           </Row>
           <Row
             label="Rank Dropout"
             description="低秩矩阵中按秩维度的 dropout（0..1）。"
-            errors={errorMap.get("network.rank_dropout")}
+            errors={errorMap.get("network.rankDropout")}
           >
             <FloatInput
               step={0.05}
-              value={v.rank_dropout ?? 0}
-              onChange={(n) => set(["network", "rank_dropout"], n ?? 0)}
+              value={v.rankDropout ?? 0}
+              onChange={(n) => set(["network", "rankDropout"], n ?? 0)}
             />
           </Row>
           <Row
             label="Module Dropout"
             description="按 LoRA 模块整体 dropout（0..1）。"
-            errors={errorMap.get("network.module_dropout")}
+            errors={errorMap.get("network.moduleDropout")}
           >
             <FloatInput
               step={0.05}
-              value={v.module_dropout ?? 0}
-              onChange={(n) => set(["network", "module_dropout"], n ?? 0)}
+              value={v.moduleDropout ?? 0}
+              onChange={(n) => set(["network", "moduleDropout"], n ?? 0)}
             />
           </Row>
           <Row
             label="Scale Weight Norms"
             description="`--scale_weight_norms` 最大范数；可选启用以约束权重大小。"
-            errors={errorMap.get("network.scale_weight_norms")}
+            errors={errorMap.get("network.scaleWeightNorms")}
           >
             <div className="flex items-center gap-3">
               <ToggleSwitch
                 checked={swnEnabled}
                 onCheckedChange={(b) =>
-                  set(["network", "scale_weight_norms"], b ? 1.0 : null)
+                  set(["network", "scaleWeightNorms"], b ? 1.0 : null)
                 }
               />
               {swnEnabled && (
                 <FloatInput
                   step={0.1}
-                  value={v.scale_weight_norms ?? 1.0}
-                  onChange={(n) => set(["network", "scale_weight_norms"], n)}
+                  value={v.scaleWeightNorms ?? 1.0}
+                  onChange={(n) => set(["network", "scaleWeightNorms"], n)}
                 />
               )}
             </div>
           </Row>
           <Row
-            label="init_from"
+            label="initFrom"
             description="基于已有 LoRA 续训（kohya `--network_weights`，dp `init_from_existing`）。"
-            errors={errorMap.get("network.init_from")}
+            errors={errorMap.get("network.initFrom")}
           >
             <PathInput
-              value={v.init_from ?? ""}
-              onChange={(s) => set(["network", "init_from"], s || null)}
+              value={v.initFrom ?? ""}
+              onChange={(s) => set(["network", "initFrom"], s || null)}
               placeholder="（可选）"
             />
           </Row>
           <Row
-            label="dim_from_weights"
+            label="dimFromWeights"
             description="kohya 从已加载权重读取 rank。"
-            errors={errorMap.get("network.dim_from_weights")}
+            errors={errorMap.get("network.dimFromWeights")}
           >
             <PathInput
-              value={v.dim_from_weights ?? ""}
-              onChange={(s) => set(["network", "dim_from_weights"], s || null)}
+              value={v.dimFromWeights ?? ""}
+              onChange={(s) => set(["network", "dimFromWeights"], s || null)}
               placeholder="（可选）"
             />
           </Row>
@@ -185,18 +185,18 @@ export const NetworkFields = memo(function NetworkFields({
             />
           </Row>
           <Row
-            label="base_weights"
+            label="baseWeights"
             description="训练前合并的 LoRA 路径列表，每行一个（kohya）。"
-            errors={errorMap.get("network.base_weights")}
+            errors={errorMap.get("network.baseWeights")}
           >
             <textarea
-              value={(v.base_weights ?? []).join("\n")}
+              value={(v.baseWeights ?? []).join("\n")}
               onChange={(e) => {
                 const lines = e.target.value
                   .split("\n")
                   .map((s) => s.trim())
                   .filter((s) => s.length > 0)
-                set(["network", "base_weights"], lines)
+                set(["network", "baseWeights"], lines)
               }}
               rows={3}
               className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
@@ -204,12 +204,12 @@ export const NetworkFields = memo(function NetworkFields({
             />
           </Row>
           <Row
-            label="base_weights_multiplier"
-            description="对应 base_weights 的合并强度，每行一个浮点数。长度必须与上一项一致。"
-            errors={errorMap.get("network.base_weights_multiplier")}
+            label="baseWeightsMultiplier"
+            description="对应 baseWeights 的合并强度，每行一个浮点数。长度必须与上一项一致。"
+            errors={errorMap.get("network.baseWeightsMultiplier")}
           >
             <textarea
-              value={(v.base_weights_multiplier ?? []).join("\n")}
+              value={(v.baseWeightsMultiplier ?? []).join("\n")}
               onChange={(e) => {
                 const nums = e.target.value
                   .split("\n")
@@ -217,7 +217,7 @@ export const NetworkFields = memo(function NetworkFields({
                   .filter((s) => s.length > 0)
                   .map((s) => parseFloat(s))
                   .filter((n) => !Number.isNaN(n))
-                set(["network", "base_weights_multiplier"], nums)
+                set(["network", "baseWeightsMultiplier"], nums)
               }}
               rows={3}
               className="font-mono w-full max-w-2xl rounded-[4px] border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground/60 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
@@ -225,17 +225,17 @@ export const NetworkFields = memo(function NetworkFields({
             />
           </Row>
           <Row
-            label="fuse_adapters"
+            label="fuseAdapters"
             description="dp 训练前融合的 LoRA 列表（JSON 数组，每项 {path, multiplier}）。"
-            errors={errorMap.get("network.fuse_adapters")}
+            errors={errorMap.get("network.fuseAdapters")}
           >
             <textarea
-              value={JSON.stringify(v.fuse_adapters ?? [], null, 2)}
+              value={JSON.stringify(v.fuseAdapters ?? [], null, 2)}
               onChange={(e) => {
                 try {
                   const parsed = JSON.parse(e.target.value || "[]")
                   if (Array.isArray(parsed)) {
-                    set(["network", "fuse_adapters"], parsed)
+                    set(["network", "fuseAdapters"], parsed)
                   }
                 } catch {
                   // 当用户编辑中途 JSON 不合法时静默忽略，让其继续输入。
@@ -247,10 +247,10 @@ export const NetworkFields = memo(function NetworkFields({
             />
           </Row>
           <Row
-            label="module_lr"
+            label="moduleLr"
             description="Anima/Wan 多组件模型的 per-submodule LR。留空走全局 unet LR。"
           >
-            <PerModuleLREditor value={v.module_lr ?? null} set={set} errorMap={errorMap} />
+            <PerModuleLREditor value={v.moduleLr ?? null} set={set} errorMap={errorMap} />
           </Row>
         </div>
       </details>
@@ -263,7 +263,7 @@ const PerModuleLREditor = memo(function PerModuleLREditor({
   set,
   errorMap,
 }: {
-  value: NonNullable<ConfigFormValue["network"]>["module_lr"]
+  value: NonNullable<ConfigFormValue["network"]>["moduleLr"]
   set: Setter
   errorMap: ErrorMap
 }) {
@@ -274,22 +274,22 @@ const PerModuleLREditor = memo(function PerModuleLREditor({
       <ToggleSwitch
         checked={enabled}
         onCheckedChange={(b) =>
-          set(["network", "module_lr"], b ? {} : null)
+          set(["network", "moduleLr"], b ? {} : null)
         }
       />
       {enabled && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-          {(["llm_adapter", "self_attn", "cross_attn", "mlp", "mod"] as const).map(
+          {(["llmAdapter", "selfAttn", "crossAttn", "mlp", "mod"] as const).map(
             (key) => (
               <div key={key}>
                 <div className="text-[11px] text-muted-foreground">{key}</div>
                 <FloatInput
                   step={1e-5}
                   value={v[key] ?? null}
-                  onChange={(n) => set(["network", "module_lr", key], n)}
+                  onChange={(n) => set(["network", "moduleLr", key], n)}
                   placeholder="（继承）"
                 />
-                {errorMap.get(`network.module_lr.${key}`)?.map((m, i) => (
+                {errorMap.get(`network.moduleLr.${key}`)?.map((m, i) => (
                   <div key={i} className="text-[10px] text-destructive">
                     {m}
                   </div>

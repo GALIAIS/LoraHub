@@ -32,7 +32,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
   arch: string
 }) {
   const v = value ?? {}
-  const p = (k: keyof ArchPathsValue) => `base_model.arch_paths.${k}` as const
+  const p = (k: keyof ArchPathsValue) => `baseModel.archPaths.${k}` as const
   // Per-arch hint — purely informational; the schema doesn't actually
   // enforce a subset, so we just nudge users towards the relevant inputs.
   const hint = (() => {
@@ -58,31 +58,31 @@ export const ArchPathsFields = memo(function ArchPathsFields({
       </div>
 
       <SubGroup label="FLUX / SD3 组件">
-        <Row label="clip_l" errors={errorMap.get(p("clip_l"))}>
+        <Row label="clipL" errors={errorMap.get(p("clipL"))}>
           <PathInput
-            value={v.clip_l ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "clip_l"], s || null)}
+            value={v.clipL ?? ""}
+            onChange={(s) => set(["baseModel", "archPaths", "clipL"], s || null)}
             placeholder="（可选）"
           />
         </Row>
-        <Row label="clip_g" errors={errorMap.get(p("clip_g"))}>
+        <Row label="clipG" errors={errorMap.get(p("clipG"))}>
           <PathInput
-            value={v.clip_g ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "clip_g"], s || null)}
+            value={v.clipG ?? ""}
+            onChange={(s) => set(["baseModel", "archPaths", "clipG"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="t5xxl" errors={errorMap.get(p("t5xxl"))}>
           <PathInput
             value={v.t5xxl ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "t5xxl"], s || null)}
+            onChange={(s) => set(["baseModel", "archPaths", "t5xxl"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="ae" description="FLUX autoencoder。" errors={errorMap.get(p("ae"))}>
           <PathInput
             value={v.ae ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "ae"], s || null)}
+            onChange={(s) => set(["baseModel", "archPaths", "ae"], s || null)}
             placeholder="（可选）"
           />
         </Row>
@@ -92,24 +92,24 @@ export const ArchPathsFields = memo(function ArchPathsFields({
         <Row label="qwen3" errors={errorMap.get(p("qwen3"))}>
           <PathInput
             value={v.qwen3 ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "qwen3"], s || null)}
+            onChange={(s) => set(["baseModel", "archPaths", "qwen3"], s || null)}
             placeholder="（可选）"
           />
         </Row>
-        <Row label="llm_adapter" errors={errorMap.get(p("llm_adapter"))}>
+        <Row label="llmAdapter" errors={errorMap.get(p("llmAdapter"))}>
           <PathInput
-            value={v.llm_adapter ?? ""}
+            value={v.llmAdapter ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "llm_adapter"], s || null)
+              set(["baseModel", "archPaths", "llmAdapter"], s || null)
             }
             placeholder="（可选）"
           />
         </Row>
-        <Row label="t5_tokenizer" errors={errorMap.get(p("t5_tokenizer"))}>
+        <Row label="t5Tokenizer" errors={errorMap.get(p("t5Tokenizer"))}>
           <PathInput
-            value={v.t5_tokenizer ?? ""}
+            value={v.t5Tokenizer ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "t5_tokenizer"], s || null)
+              set(["baseModel", "archPaths", "t5Tokenizer"], s || null)
             }
             placeholder="（可选）"
           />
@@ -121,16 +121,16 @@ export const ArchPathsFields = memo(function ArchPathsFields({
           <PathInput
             value={v.transformer ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "transformer"], s || null)
+              set(["baseModel", "archPaths", "transformer"], s || null)
             }
             placeholder="（可选）"
           />
         </Row>
-        <Row label="text_encoder" errors={errorMap.get(p("text_encoder"))}>
+        <Row label="textEncoder" errors={errorMap.get(p("textEncoder"))}>
           <PathInput
-            value={v.text_encoder ?? ""}
+            value={v.textEncoder ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "text_encoder"], s || null)
+              set(["baseModel", "archPaths", "textEncoder"], s || null)
             }
             placeholder="（可选）"
           />
@@ -138,46 +138,46 @@ export const ArchPathsFields = memo(function ArchPathsFields({
         <Row label="llm" description="Anima Qwen3 / HunyuanVideo LLM。" errors={errorMap.get(p("llm"))}>
           <PathInput
             value={v.llm ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "llm"], s || null)}
+            onChange={(s) => set(["baseModel", "archPaths", "llm"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="byt5" description="HunyuanImage byT5。" errors={errorMap.get(p("byt5"))}>
           <PathInput
             value={v.byt5 ?? ""}
-            onChange={(s) => set(["base_model", "arch_paths", "byt5"], s || null)}
+            onChange={(s) => set(["baseModel", "archPaths", "byt5"], s || null)}
             placeholder="（可选）"
           />
         </Row>
       </SubGroup>
 
       <SubGroup label="Token 长度上限">
-        <Row label="t5xxl_max_token_length" errors={errorMap.get(p("t5xxl_max_token_length"))}>
+        <Row label="t5xxlMaxTokenLength" errors={errorMap.get(p("t5xxlMaxTokenLength"))}>
           <IntInput
             min={1}
-            value={v.t5xxl_max_token_length ?? null}
+            value={v.t5xxlMaxTokenLength ?? null}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "t5xxl_max_token_length"], n)
+              set(["baseModel", "archPaths", "t5xxlMaxTokenLength"], n)
             }
             placeholder="（默认）"
           />
         </Row>
-        <Row label="qwen3_max_token_length" errors={errorMap.get(p("qwen3_max_token_length"))}>
+        <Row label="qwen3MaxTokenLength" errors={errorMap.get(p("qwen3MaxTokenLength"))}>
           <IntInput
             min={1}
-            value={v.qwen3_max_token_length ?? null}
+            value={v.qwen3MaxTokenLength ?? null}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "qwen3_max_token_length"], n)
+              set(["baseModel", "archPaths", "qwen3MaxTokenLength"], n)
             }
             placeholder="（默认）"
           />
         </Row>
-        <Row label="t5_max_token_length" errors={errorMap.get(p("t5_max_token_length"))}>
+        <Row label="t5MaxTokenLength" errors={errorMap.get(p("t5MaxTokenLength"))}>
           <IntInput
             min={1}
-            value={v.t5_max_token_length ?? null}
+            value={v.t5MaxTokenLength ?? null}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "t5_max_token_length"], n)
+              set(["baseModel", "archPaths", "t5MaxTokenLength"], n)
             }
             placeholder="（默认）"
           />
@@ -185,67 +185,67 @@ export const ArchPathsFields = memo(function ArchPathsFields({
       </SubGroup>
 
       <SubGroup label="Attention 掩码与 dropout（FLUX / SD3）">
-        <Row label="apply_t5_attn_mask" description="对 T5 输出施加 attention mask。">
+        <Row label="applyT5AttnMask" description="对 T5 输出施加 attention mask。">
           <ToggleSwitch
-            checked={v.apply_t5_attn_mask ?? false}
+            checked={v.applyT5AttnMask ?? false}
             onCheckedChange={(b) =>
-              set(["base_model", "arch_paths", "apply_t5_attn_mask"], b)
+              set(["baseModel", "archPaths", "applyT5AttnMask"], b)
             }
           />
         </Row>
-        <Row label="apply_lg_attn_mask" description="对 CLIP-L/G 输出施加 attention mask。">
+        <Row label="applyLgAttnMask" description="对 CLIP-L/G 输出施加 attention mask。">
           <ToggleSwitch
-            checked={v.apply_lg_attn_mask ?? false}
+            checked={v.applyLgAttnMask ?? false}
             onCheckedChange={(b) =>
-              set(["base_model", "arch_paths", "apply_lg_attn_mask"], b)
+              set(["baseModel", "archPaths", "applyLgAttnMask"], b)
             }
           />
         </Row>
-        <Row label="t5_dropout_rate" errors={errorMap.get(p("t5_dropout_rate"))}>
+        <Row label="t5DropoutRate" errors={errorMap.get(p("t5DropoutRate"))}>
           <FloatInput
             step={0.05}
-            value={v.t5_dropout_rate ?? 0}
+            value={v.t5DropoutRate ?? 0}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "t5_dropout_rate"], n ?? 0)
+              set(["baseModel", "archPaths", "t5DropoutRate"], n ?? 0)
             }
           />
         </Row>
-        <Row label="clip_l_dropout_rate" errors={errorMap.get(p("clip_l_dropout_rate"))}>
+        <Row label="clipLDropoutRate" errors={errorMap.get(p("clipLDropoutRate"))}>
           <FloatInput
             step={0.05}
-            value={v.clip_l_dropout_rate ?? 0}
+            value={v.clipLDropoutRate ?? 0}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "clip_l_dropout_rate"], n ?? 0)
+              set(["baseModel", "archPaths", "clipLDropoutRate"], n ?? 0)
             }
           />
         </Row>
-        <Row label="clip_g_dropout_rate" errors={errorMap.get(p("clip_g_dropout_rate"))}>
+        <Row label="clipGDropoutRate" errors={errorMap.get(p("clipGDropoutRate"))}>
           <FloatInput
             step={0.05}
-            value={v.clip_g_dropout_rate ?? 0}
+            value={v.clipGDropoutRate ?? 0}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "clip_g_dropout_rate"], n ?? 0)
+              set(["baseModel", "archPaths", "clipGDropoutRate"], n ?? 0)
             }
           />
         </Row>
         <Row
-          label="pos_emb_random_crop_rate"
+          label="posEmbRandomCropRate"
           description="SD3 位置编码随机 crop 概率。"
-          errors={errorMap.get(p("pos_emb_random_crop_rate"))}
+          errors={errorMap.get(p("posEmbRandomCropRate"))}
         >
           <FloatInput
             step={0.05}
-            value={v.pos_emb_random_crop_rate ?? 0}
+            value={v.posEmbRandomCropRate ?? 0}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "pos_emb_random_crop_rate"], n ?? 0)
+              set(["baseModel", "archPaths", "posEmbRandomCropRate"], n ?? 0)
             }
           />
         </Row>
-        <Row label="enable_scaled_pos_embed" description="SD3 启用缩放位置编码。">
+        <Row label="enableScaledPosEmbed" description="SD3 启用缩放位置编码。">
           <ToggleSwitch
-            checked={v.enable_scaled_pos_embed ?? false}
+            checked={v.enableScaledPosEmbed ?? false}
             onCheckedChange={(b) =>
-              set(["base_model", "arch_paths", "enable_scaled_pos_embed"], b)
+              set(["baseModel", "archPaths", "enableScaledPosEmbed"], b)
             }
           />
         </Row>
@@ -253,63 +253,63 @@ export const ArchPathsFields = memo(function ArchPathsFields({
 
       <SubGroup label="FLUX guidance / TE 设备 / VAE 内存">
         <Row
-          label="guidance_scale"
+          label="guidanceScale"
           description="FLUX dev 蒸馏版需要烘焙到 LoRA 的 guidance。留空跳过。"
-          errors={errorMap.get(p("guidance_scale"))}
+          errors={errorMap.get(p("guidanceScale"))}
         >
           <FloatInput
             step={0.1}
-            value={v.guidance_scale ?? null}
-            onChange={(n) => set(["base_model", "arch_paths", "guidance_scale"], n)}
+            value={v.guidanceScale ?? null}
+            onChange={(n) => set(["baseModel", "archPaths", "guidanceScale"], n)}
             placeholder="（默认）"
           />
         </Row>
-        <Row label="t5xxl_device" description="例如 cuda / cuda:1 / cpu。">
+        <Row label="t5xxlDevice" description="例如 cuda / cuda:1 / cpu。">
           <TextInput
             className="w-48"
-            value={v.t5xxl_device ?? ""}
+            value={v.t5xxlDevice ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "t5xxl_device"], s || null)
+              set(["baseModel", "archPaths", "t5xxlDevice"], s || null)
             }
             placeholder="（默认）"
           />
         </Row>
-        <Row label="t5xxl_dtype">
+        <Row label="t5xxlDtype">
           <EnumSelect
-            value={v.t5xxl_dtype ?? ""}
+            value={v.t5xxlDtype ?? ""}
             onChange={(s) =>
-              set(["base_model", "arch_paths", "t5xxl_dtype"], s || null)
+              set(["baseModel", "archPaths", "t5xxlDtype"], s || null)
             }
             options={T5_DTYPE_OPTIONS}
           />
         </Row>
         <Row
-          label="vae_chunk_size"
+          label="vaeChunkSize"
           description="Anima / HunyuanImage / Wan VAE 分块大小（节省显存）。"
-          errors={errorMap.get(p("vae_chunk_size"))}
+          errors={errorMap.get(p("vaeChunkSize"))}
         >
           <IntInput
             min={1}
-            value={v.vae_chunk_size ?? null}
+            value={v.vaeChunkSize ?? null}
             onChange={(n) =>
-              set(["base_model", "arch_paths", "vae_chunk_size"], n)
+              set(["baseModel", "archPaths", "vaeChunkSize"], n)
             }
             placeholder="（默认）"
           />
         </Row>
-        <Row label="vae_disable_cache" description="禁用 VAE 输出缓存。">
+        <Row label="vaeDisableCache" description="禁用 VAE 输出缓存。">
           <ToggleSwitch
-            checked={v.vae_disable_cache ?? false}
+            checked={v.vaeDisableCache ?? false}
             onCheckedChange={(b) =>
-              set(["base_model", "arch_paths", "vae_disable_cache"], b)
+              set(["baseModel", "archPaths", "vaeDisableCache"], b)
             }
           />
         </Row>
-        <Row label="text_encoder_cpu" description="把文本编码器固定在 CPU。">
+        <Row label="textEncoderCpu" description="把文本编码器固定在 CPU。">
           <ToggleSwitch
-            checked={v.text_encoder_cpu ?? false}
+            checked={v.textEncoderCpu ?? false}
             onCheckedChange={(b) =>
-              set(["base_model", "arch_paths", "text_encoder_cpu"], b)
+              set(["baseModel", "archPaths", "textEncoderCpu"], b)
             }
           />
         </Row>

@@ -22,68 +22,68 @@ export const DataLoaderFields = memo(function DataLoaderFields({
   return (
     <>
       <Row
-        label="num_workers"
+        label="numWorkers"
         description="DataLoader worker 数；0 表示主进程。"
-        errors={errorMap.get("dataloader.num_workers")}
+        errors={errorMap.get("dataloader.numWorkers")}
       >
         <IntInput
           min={0}
-          value={v.num_workers ?? 8}
-          onChange={(n) => set(["dataloader", "num_workers"], n ?? 0)}
+          value={v.numWorkers ?? 8}
+          onChange={(n) => set(["dataloader", "numWorkers"], n ?? 0)}
         />
       </Row>
       <Row
-        label="persistent_workers"
+        label="persistentWorkers"
         description="跨 epoch 保持 worker 进程，省启动开销。"
       >
         <ToggleSwitch
-          checked={v.persistent_workers ?? false}
-          onCheckedChange={(b) => set(["dataloader", "persistent_workers"], b)}
+          checked={v.persistentWorkers ?? false}
+          onCheckedChange={(b) => set(["dataloader", "persistentWorkers"], b)}
         />
       </Row>
       <Row
-        label="vae_batch_size"
+        label="vaeBatchSize"
         description="VAE 编码阶段的批大小。"
-        errors={errorMap.get("dataloader.vae_batch_size")}
+        errors={errorMap.get("dataloader.vaeBatchSize")}
       >
         <IntInput
           min={1}
-          value={v.vae_batch_size ?? 1}
-          onChange={(n) => set(["dataloader", "vae_batch_size"], n ?? 1)}
+          value={v.vaeBatchSize ?? 1}
+          onChange={(n) => set(["dataloader", "vaeBatchSize"], n ?? 1)}
         />
       </Row>
       <Row
-        label="text_encoder_batch_size"
+        label="textEncoderBatchSize"
         description="文本编码阶段的批大小（kohya）。留空使用默认。"
-        errors={errorMap.get("dataloader.text_encoder_batch_size")}
+        errors={errorMap.get("dataloader.textEncoderBatchSize")}
       >
         <IntInput
           min={1}
-          value={v.text_encoder_batch_size ?? null}
-          onChange={(n) => set(["dataloader", "text_encoder_batch_size"], n)}
+          value={v.textEncoderBatchSize ?? null}
+          onChange={(n) => set(["dataloader", "textEncoderBatchSize"], n)}
           placeholder="（默认）"
         />
       </Row>
       <Row
-        label="cache_shuffle_num"
+        label="cacheShuffleNum"
         description="预缓存阶段打乱样本数；0 保持原顺序。"
-        errors={errorMap.get("dataloader.cache_shuffle_num")}
+        errors={errorMap.get("dataloader.cacheShuffleNum")}
       >
         <IntInput
           min={0}
-          value={v.cache_shuffle_num ?? 0}
-          onChange={(n) => set(["dataloader", "cache_shuffle_num"], n ?? 0)}
+          value={v.cacheShuffleNum ?? 0}
+          onChange={(n) => set(["dataloader", "cacheShuffleNum"], n ?? 0)}
         />
       </Row>
       <Row
-        label="map_num_proc"
+        label="mapNumProc"
         description="dp 数据集 map 的并行进程数。留空使用默认。"
-        errors={errorMap.get("dataloader.map_num_proc")}
+        errors={errorMap.get("dataloader.mapNumProc")}
       >
         <IntInput
           min={1}
-          value={v.map_num_proc ?? null}
-          onChange={(n) => set(["dataloader", "map_num_proc"], n)}
+          value={v.mapNumProc ?? null}
+          onChange={(n) => set(["dataloader", "mapNumProc"], n)}
           placeholder="（默认）"
         />
       </Row>

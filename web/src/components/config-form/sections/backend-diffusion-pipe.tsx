@@ -18,7 +18,7 @@ import {
 } from "../widgets"
 
 /**
- * Editor for `backend.diffusion_pipe` (DiffusionPipeOptions in schema.py).
+ * Editor for `backend.diffusionPipe` (DiffusionPipeOptions in schema.py).
  *
  * Only mounted when the user picks the diffusion-pipe backend; the kohya
  * backend ignores this entire branch. Fields are grouped to keep the long
@@ -30,51 +30,51 @@ export const BackendDiffusionPipeFields = memo(
     set,
     errorMap,
   }: {
-    value: NonNullable<ConfigFormValue["backend"]>["diffusion_pipe"]
+    value: NonNullable<ConfigFormValue["backend"]>["diffusionPipe"]
     set: Setter
     errorMap: ErrorMap
   }) {
     const v = value ?? {}
-    const evalEnabled = v.eval_every_n_epochs !== null && v.eval_every_n_epochs !== undefined
+    const evalEnabled = v.evalEveryNEpochs !== null && v.evalEveryNEpochs !== undefined
     return (
       <>
         <SubGroup label="性能与切分">
           <Row
             label="Pipeline Stages"
             description="将模型沿层切分到多 GPU 的份数（1 表示不切）。"
-            errors={errorMap.get("backend.diffusion_pipe.pipeline_stages")}
+            errors={errorMap.get("backend.diffusionPipe.pipelineStages")}
           >
             <IntInput
               min={1}
-              value={v.pipeline_stages ?? 1}
+              value={v.pipelineStages ?? 1}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "pipeline_stages"], n ?? 1)
+                set(["backend", "diffusionPipe", "pipelineStages"], n ?? 1)
               }
             />
           </Row>
           <Row
             label="Blocks To Swap"
             description="CPU offload 的 transformer block 数；显存吃紧时调高。"
-            errors={errorMap.get("backend.diffusion_pipe.blocks_to_swap")}
+            errors={errorMap.get("backend.diffusionPipe.blocksToSwap")}
           >
             <IntInput
               min={0}
-              value={v.blocks_to_swap ?? 0}
+              value={v.blocksToSwap ?? 0}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "blocks_to_swap"], n ?? 0)
+                set(["backend", "diffusionPipe", "blocksToSwap"], n ?? 0)
               }
             />
           </Row>
           <Row
             label="Caching Batch Size"
             description="VAE / 文本嵌入预缓存阶段的批大小。"
-            errors={errorMap.get("backend.diffusion_pipe.caching_batch_size")}
+            errors={errorMap.get("backend.diffusionPipe.cachingBatchSize")}
           >
             <IntInput
               min={1}
-              value={v.caching_batch_size ?? 1}
+              value={v.cachingBatchSize ?? 1}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "caching_batch_size"], n ?? 1)
+                set(["backend", "diffusionPipe", "cachingBatchSize"], n ?? 1)
               }
             />
           </Row>
@@ -82,28 +82,28 @@ export const BackendDiffusionPipeFields = memo(
             <ToggleSwitch
               checked={v.compile ?? false}
               onCheckedChange={(b) =>
-                set(["backend", "diffusion_pipe", "compile"], b)
+                set(["backend", "diffusionPipe", "compile"], b)
               }
             />
           </Row>
           <Row
             label="Gradient Clipping"
             description="梯度范数裁剪上限。"
-            errors={errorMap.get("backend.diffusion_pipe.gradient_clipping")}
+            errors={errorMap.get("backend.diffusionPipe.gradientClipping")}
           >
             <FloatInput
               step={0.1}
-              value={v.gradient_clipping ?? 1.0}
+              value={v.gradientClipping ?? 1.0}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "gradient_clipping"], n ?? 1.0)
+                set(["backend", "diffusionPipe", "gradientClipping"], n ?? 1.0)
               }
             />
           </Row>
           <Row label="Partition Method" description="pipeline 分片策略。">
             <EnumSelect
-              value={v.partition_method ?? "parameters"}
+              value={v.partitionMethod ?? "parameters"}
               onChange={(t) =>
-                set(["backend", "diffusion_pipe", "partition_method"], t)
+                set(["backend", "diffusionPipe", "partitionMethod"], t)
               }
               options={PARTITION_METHOD_OPTIONS}
             />
@@ -111,24 +111,24 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="Steps Per Print"
             description="每多少步 flush 一次训练日志。"
-            errors={errorMap.get("backend.diffusion_pipe.steps_per_print")}
+            errors={errorMap.get("backend.diffusionPipe.stepsPerPrint")}
           >
             <IntInput
               min={1}
-              value={v.steps_per_print ?? 1}
+              value={v.stepsPerPrint ?? 1}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "steps_per_print"], n ?? 1)
+                set(["backend", "diffusionPipe", "stepsPerPrint"], n ?? 1)
               }
             />
           </Row>
           <Row
             label="Partition Split"
-            description="manual 切分时各 stage 的层数列表，逗号分隔（长度 = pipeline_stages - 1）。"
-            errors={errorMap.get("backend.diffusion_pipe.partition_split")}
+            description="manual 切分时各 stage 的层数列表，逗号分隔（长度 = pipelineStages - 1）。"
+            errors={errorMap.get("backend.diffusionPipe.partitionSplit")}
           >
             <TextInput
               className="w-64"
-              value={(v.partition_split ?? []).join(",")}
+              value={(v.partitionSplit ?? []).join(",")}
               onChange={(s) => {
                 const list = s
                   .split(",")
@@ -137,7 +137,7 @@ export const BackendDiffusionPipeFields = memo(
                   .map((x) => parseInt(x, 10))
                   .filter((n) => !Number.isNaN(n))
                 set(
-                  ["backend", "diffusion_pipe", "partition_split"],
+                  ["backend", "diffusionPipe", "partitionSplit"],
                   list.length ? list : null,
                 )
               }}
@@ -149,10 +149,10 @@ export const BackendDiffusionPipeFields = memo(
             description="管线并行 + 重入式激活检查点（dp 限定场景）。"
           >
             <ToggleSwitch
-              checked={v.reentrant_activation_checkpointing ?? false}
+              checked={v.reentrantActivationCheckpointing ?? false}
               onCheckedChange={(b) =>
                 set(
-                  ["backend", "diffusion_pipe", "reentrant_activation_checkpointing"],
+                  ["backend", "diffusionPipe", "reentrantActivationCheckpointing"],
                   b,
                 )
               }
@@ -161,13 +161,13 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="Force Constant LR"
             description="忽略 scheduler，强制使用恒定 LR（resume 调试用）。"
-            errors={errorMap.get("backend.diffusion_pipe.force_constant_lr")}
+            errors={errorMap.get("backend.diffusionPipe.forceConstantLr")}
           >
             <FloatInput
               step={1e-5}
-              value={v.force_constant_lr ?? null}
+              value={v.forceConstantLr ?? null}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "force_constant_lr"], n)
+                set(["backend", "diffusionPipe", "forceConstantLr"], n)
               }
               placeholder="（默认）"
             />
@@ -175,13 +175,13 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="Uncond Fraction"
             description="CFG 风格训练：丢弃 caption 的步数比例（0..1）。"
-            errors={errorMap.get("backend.diffusion_pipe.uncond_fraction")}
+            errors={errorMap.get("backend.diffusionPipe.uncondFraction")}
           >
             <FloatInput
               step={0.05}
-              value={v.uncond_fraction ?? 0}
+              value={v.uncondFraction ?? 0}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "uncond_fraction"], n ?? 0)
+                set(["backend", "diffusionPipe", "uncondFraction"], n ?? 0)
               }
             />
           </Row>
@@ -190,22 +190,22 @@ export const BackendDiffusionPipeFields = memo(
             description="Tensorboard X 轴用 examples 而不是 steps。"
           >
             <ToggleSwitch
-              checked={v.x_axis_examples ?? false}
+              checked={v.xAxisExamples ?? false}
               onCheckedChange={(b) =>
-                set(["backend", "diffusion_pipe", "x_axis_examples"], b)
+                set(["backend", "diffusionPipe", "xAxisExamples"], b)
               }
             />
           </Row>
           <Row
             label="Logging Steps"
             description="每多少步写一次 wandb / tensorboard。"
-            errors={errorMap.get("backend.diffusion_pipe.logging_steps")}
+            errors={errorMap.get("backend.diffusionPipe.loggingSteps")}
           >
             <IntInput
               min={1}
-              value={v.logging_steps ?? 1}
+              value={v.loggingSteps ?? 1}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "logging_steps"], n ?? 1)
+                set(["backend", "diffusionPipe", "loggingSteps"], n ?? 1)
               }
             />
           </Row>
@@ -216,15 +216,15 @@ export const BackendDiffusionPipeFields = memo(
             label="Image Micro Batch Size"
             description="混合训练时单 GPU 图像 micro batch。"
             errors={errorMap.get(
-              "backend.diffusion_pipe.image_micro_batch_size_per_gpu",
+              "backend.diffusionPipe.imageMicroBatchSizePerGpu",
             )}
           >
             <IntInput
               min={1}
-              value={v.image_micro_batch_size_per_gpu ?? null}
+              value={v.imageMicroBatchSizePerGpu ?? null}
               onChange={(n) =>
                 set(
-                  ["backend", "diffusion_pipe", "image_micro_batch_size_per_gpu"],
+                  ["backend", "diffusionPipe", "imageMicroBatchSizePerGpu"],
                   n,
                 )
               }
@@ -235,18 +235,18 @@ export const BackendDiffusionPipeFields = memo(
             label="Image Eval Micro Batch Size"
             description="混合训练评估时单 GPU 图像 micro batch。"
             errors={errorMap.get(
-              "backend.diffusion_pipe.image_eval_micro_batch_size_per_gpu",
+              "backend.diffusionPipe.imageEvalMicroBatchSizePerGpu",
             )}
           >
             <IntInput
               min={1}
-              value={v.image_eval_micro_batch_size_per_gpu ?? null}
+              value={v.imageEvalMicroBatchSizePerGpu ?? null}
               onChange={(n) =>
                 set(
                   [
                     "backend",
-                    "diffusion_pipe",
-                    "image_eval_micro_batch_size_per_gpu",
+                    "diffusionPipe",
+                    "imageEvalMicroBatchSizePerGpu",
                   ],
                   n,
                 )
@@ -259,9 +259,9 @@ export const BackendDiffusionPipeFields = memo(
             description="视频片段抽取策略。"
           >
             <EnumSelect
-              value={v.video_clip_mode ?? "single_beginning"}
+              value={v.videoClipMode ?? "single_beginning"}
               onChange={(s) =>
-                set(["backend", "diffusion_pipe", "video_clip_mode"], s)
+                set(["backend", "diffusionPipe", "videoClipMode"], s)
               }
               options={DP_VIDEO_CLIP_MODE_OPTIONS}
             />
@@ -271,10 +271,10 @@ export const BackendDiffusionPipeFields = memo(
         <SubGroup label="dtype / 时间步采样">
           <Row label="Transformer dtype">
             <EnumSelect
-              value={v.transformer_dtype ?? ""}
+              value={v.transformerDtype ?? ""}
               onChange={(s) =>
                 set(
-                  ["backend", "diffusion_pipe", "transformer_dtype"],
+                  ["backend", "diffusionPipe", "transformerDtype"],
                   s || null,
                 )
               }
@@ -283,10 +283,10 @@ export const BackendDiffusionPipeFields = memo(
           </Row>
           <Row label="Diffusion model dtype">
             <EnumSelect
-              value={v.diffusion_model_dtype ?? ""}
+              value={v.diffusionModelDtype ?? ""}
               onChange={(s) =>
                 set(
-                  ["backend", "diffusion_pipe", "diffusion_model_dtype"],
+                  ["backend", "diffusionPipe", "diffusionModelDtype"],
                   s || null,
                 )
               }
@@ -295,10 +295,10 @@ export const BackendDiffusionPipeFields = memo(
           </Row>
           <Row label="Timestep sample method">
             <EnumSelect
-              value={v.timestep_sample_method ?? ""}
+              value={v.timestepSampleMethod ?? ""}
               onChange={(s) =>
                 set(
-                  ["backend", "diffusion_pipe", "timestep_sample_method"],
+                  ["backend", "diffusionPipe", "timestepSampleMethod"],
                   s || null,
                 )
               }
@@ -311,14 +311,14 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="每 N 回合验证"
             description="可选；勾选后才写入 [eval] 段。"
-            errors={errorMap.get("backend.diffusion_pipe.eval_every_n_epochs")}
+            errors={errorMap.get("backend.diffusionPipe.evalEveryNEpochs")}
           >
             <div className="flex items-center gap-3">
               <ToggleSwitch
                 checked={evalEnabled}
                 onCheckedChange={(b) =>
                   set(
-                    ["backend", "diffusion_pipe", "eval_every_n_epochs"],
+                    ["backend", "diffusionPipe", "evalEveryNEpochs"],
                     b ? 1 : null,
                   )
                 }
@@ -326,10 +326,10 @@ export const BackendDiffusionPipeFields = memo(
               {evalEnabled && (
                 <IntInput
                   min={1}
-                  value={v.eval_every_n_epochs ?? 1}
+                  value={v.evalEveryNEpochs ?? 1}
                   onChange={(n) =>
                     set(
-                      ["backend", "diffusion_pipe", "eval_every_n_epochs"],
+                      ["backend", "diffusionPipe", "evalEveryNEpochs"],
                       n ?? 1,
                     )
                   }
@@ -339,26 +339,26 @@ export const BackendDiffusionPipeFields = memo(
           </Row>
           <Row
             label="每 N 步验证"
-            errors={errorMap.get("backend.diffusion_pipe.eval_every_n_steps")}
+            errors={errorMap.get("backend.diffusionPipe.evalEveryNSteps")}
           >
             <IntInput
               min={1}
-              value={v.eval_every_n_steps ?? null}
+              value={v.evalEveryNSteps ?? null}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "eval_every_n_steps"], n)
+                set(["backend", "diffusionPipe", "evalEveryNSteps"], n)
               }
               placeholder="（默认）"
             />
           </Row>
           <Row
             label="每 N 样本验证"
-            errors={errorMap.get("backend.diffusion_pipe.eval_every_n_examples")}
+            errors={errorMap.get("backend.diffusionPipe.evalEveryNExamples")}
           >
             <IntInput
               min={1}
-              value={v.eval_every_n_examples ?? null}
+              value={v.evalEveryNExamples ?? null}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "eval_every_n_examples"], n)
+                set(["backend", "diffusionPipe", "evalEveryNExamples"], n)
               }
               placeholder="（默认）"
             />
@@ -368,9 +368,9 @@ export const BackendDiffusionPipeFields = memo(
             description="第一步训练之前先跑一次评估。"
           >
             <ToggleSwitch
-              checked={v.eval_before_first_step ?? false}
+              checked={v.evalBeforeFirstStep ?? false}
               onCheckedChange={(b) =>
-                set(["backend", "diffusion_pipe", "eval_before_first_step"], b)
+                set(["backend", "diffusionPipe", "evalBeforeFirstStep"], b)
               }
             />
           </Row>
@@ -378,15 +378,15 @@ export const BackendDiffusionPipeFields = memo(
             label="评估批大小"
             description="单 GPU 的 micro-batch 大小。"
             errors={errorMap.get(
-              "backend.diffusion_pipe.eval_micro_batch_size_per_gpu",
+              "backend.diffusionPipe.evalMicroBatchSizePerGpu",
             )}
           >
             <IntInput
               min={1}
-              value={v.eval_micro_batch_size_per_gpu ?? 1}
+              value={v.evalMicroBatchSizePerGpu ?? 1}
               onChange={(n) =>
                 set(
-                  ["backend", "diffusion_pipe", "eval_micro_batch_size_per_gpu"],
+                  ["backend", "diffusionPipe", "evalMicroBatchSizePerGpu"],
                   n ?? 1,
                 )
               }
@@ -396,18 +396,18 @@ export const BackendDiffusionPipeFields = memo(
             label="评估梯度累积"
             description="评估期梯度累积步数（影响 perplexity / loss 平均口径）。"
             errors={errorMap.get(
-              "backend.diffusion_pipe.eval_gradient_accumulation_steps",
+              "backend.diffusionPipe.evalGradientAccumulationSteps",
             )}
           >
             <IntInput
               min={1}
-              value={v.eval_gradient_accumulation_steps ?? 1}
+              value={v.evalGradientAccumulationSteps ?? 1}
               onChange={(n) =>
                 set(
                   [
                     "backend",
-                    "diffusion_pipe",
-                    "eval_gradient_accumulation_steps",
+                    "diffusionPipe",
+                    "evalGradientAccumulationSteps",
                   ],
                   n ?? 1,
                 )
@@ -419,10 +419,10 @@ export const BackendDiffusionPipeFields = memo(
             description="评估时跳过 block_swap（评估占用更小）。"
           >
             <ToggleSwitch
-              checked={v.disable_block_swap_for_eval ?? false}
+              checked={v.disableBlockSwapForEval ?? false}
               onCheckedChange={(b) =>
                 set(
-                  ["backend", "diffusion_pipe", "disable_block_swap_for_eval"],
+                  ["backend", "diffusionPipe", "disableBlockSwapForEval"],
                   b,
                 )
               }
@@ -431,16 +431,16 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="Eval Datasets"
             description="独立评估数据集列表（JSON 数组，每项 {name, config_path}）。"
-            errors={errorMap.get("backend.diffusion_pipe.eval_datasets")}
+            errors={errorMap.get("backend.diffusionPipe.evalDatasets")}
           >
             <textarea
-              value={JSON.stringify(v.eval_datasets ?? [], null, 2)}
+              value={JSON.stringify(v.evalDatasets ?? [], null, 2)}
               onChange={(e) => {
                 try {
                   const parsed = JSON.parse(e.target.value || "[]")
                   if (Array.isArray(parsed)) {
                     set(
-                      ["backend", "diffusion_pipe", "eval_datasets"],
+                      ["backend", "diffusionPipe", "evalDatasets"],
                       parsed,
                     )
                   }
@@ -457,17 +457,17 @@ export const BackendDiffusionPipeFields = memo(
 
         <SubGroup label="DeepSpeed Checkpoint">
           <Row
-            label="checkpoint_every_n_epochs"
+            label="checkpointEveryNEpochs"
             errors={errorMap.get(
-              "backend.diffusion_pipe.checkpoint_every_n_epochs",
+              "backend.diffusionPipe.checkpointEveryNEpochs",
             )}
           >
             <IntInput
               min={1}
-              value={v.checkpoint_every_n_epochs ?? null}
+              value={v.checkpointEveryNEpochs ?? null}
               onChange={(n) =>
                 set(
-                  ["backend", "diffusion_pipe", "checkpoint_every_n_epochs"],
+                  ["backend", "diffusionPipe", "checkpointEveryNEpochs"],
                   n,
                 )
               }
@@ -475,17 +475,17 @@ export const BackendDiffusionPipeFields = memo(
             />
           </Row>
           <Row
-            label="checkpoint_every_n_minutes"
+            label="checkpointEveryNMinutes"
             errors={errorMap.get(
-              "backend.diffusion_pipe.checkpoint_every_n_minutes",
+              "backend.diffusionPipe.checkpointEveryNMinutes",
             )}
           >
             <IntInput
               min={1}
-              value={v.checkpoint_every_n_minutes ?? null}
+              value={v.checkpointEveryNMinutes ?? null}
               onChange={(n) =>
                 set(
-                  ["backend", "diffusion_pipe", "checkpoint_every_n_minutes"],
+                  ["backend", "diffusionPipe", "checkpointEveryNMinutes"],
                   n,
                 )
               }
@@ -497,18 +497,18 @@ export const BackendDiffusionPipeFields = memo(
         <SubGroup label="监控">
           <Row label="启用 W&amp;B" description="把 loss / metrics 推送到 wandb。">
             <ToggleSwitch
-              checked={v.enable_wandb ?? false}
+              checked={v.enableWandb ?? false}
               onCheckedChange={(b) =>
-                set(["backend", "diffusion_pipe", "enable_wandb"], b)
+                set(["backend", "diffusionPipe", "enableWandb"], b)
               }
             />
           </Row>
           <Row label="Tracker 名称" description="W&amp;B project / tracker 名。">
             <TextInput
               className="w-64"
-              value={v.tracker_name ?? ""}
+              value={v.trackerName ?? ""}
               onChange={(s) =>
-                set(["backend", "diffusion_pipe", "tracker_name"], s || null)
+                set(["backend", "diffusionPipe", "trackerName"], s || null)
               }
               placeholder="（可选）"
             />
@@ -516,9 +516,9 @@ export const BackendDiffusionPipeFields = memo(
           <Row label="Run 名称" description="W&amp;B run 名；留空自动派生。">
             <TextInput
               className="w-64"
-              value={v.run_name ?? ""}
+              value={v.runName ?? ""}
               onChange={(s) =>
-                set(["backend", "diffusion_pipe", "run_name"], s || null)
+                set(["backend", "diffusionPipe", "runName"], s || null)
               }
               placeholder="（可选）"
             />
@@ -528,37 +528,37 @@ export const BackendDiffusionPipeFields = memo(
         <SubGroup label="AR Bucket">
           <Row
             label="最小宽高比"
-            errors={errorMap.get("backend.diffusion_pipe.min_ar")}
+            errors={errorMap.get("backend.diffusionPipe.minAr")}
           >
             <FloatInput
               step={0.1}
-              value={v.min_ar ?? 0.5}
+              value={v.minAr ?? 0.5}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "min_ar"], n ?? 0.5)
+                set(["backend", "diffusionPipe", "minAr"], n ?? 0.5)
               }
             />
           </Row>
           <Row
             label="最大宽高比"
-            errors={errorMap.get("backend.diffusion_pipe.max_ar")}
+            errors={errorMap.get("backend.diffusionPipe.maxAr")}
           >
             <FloatInput
               step={0.1}
-              value={v.max_ar ?? 2.0}
+              value={v.maxAr ?? 2.0}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "max_ar"], n ?? 2.0)
+                set(["backend", "diffusionPipe", "maxAr"], n ?? 2.0)
               }
             />
           </Row>
           <Row
             label="AR Bucket 数"
-            errors={errorMap.get("backend.diffusion_pipe.num_ar_buckets")}
+            errors={errorMap.get("backend.diffusionPipe.numArBuckets")}
           >
             <IntInput
               min={1}
-              value={v.num_ar_buckets ?? 7}
+              value={v.numArBuckets ?? 7}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "num_ar_buckets"], n ?? 7)
+                set(["backend", "diffusionPipe", "numArBuckets"], n ?? 7)
               }
             />
           </Row>
@@ -566,15 +566,15 @@ export const BackendDiffusionPipeFields = memo(
 
         <SubGroup label="模型路径">
           <Row
-            label="model_paths"
+            label="modelPaths"
             description="dp [model] 段的额外路径键值。每行一对，例如 transformer_path = /path/to.safetensors。"
-            errors={errorMap.get("backend.diffusion_pipe.model_paths")}
+            errors={errorMap.get("backend.diffusionPipe.modelPaths")}
           >
             <KeyValueTextArea
               rows={5}
-              value={v.model_paths}
+              value={v.modelPaths}
               onChange={(next) =>
-                set(["backend", "diffusion_pipe", "model_paths"], next)
+                set(["backend", "diffusionPipe", "modelPaths"], next)
               }
               placeholder={
                 "transformer_path = /path/to/transformer.safetensors\nvae_path = /path/to/vae.safetensors\nllm_path = /path/to/llm"
@@ -587,13 +587,13 @@ export const BackendDiffusionPipeFields = memo(
           <Row
             label="Cache Shuffle Num"
             description="预缓存阶段打乱样本数；0 保持原顺序。"
-            errors={errorMap.get("backend.diffusion_pipe.cache_shuffle_num")}
+            errors={errorMap.get("backend.diffusionPipe.cacheShuffleNum")}
           >
             <IntInput
               min={0}
-              value={v.cache_shuffle_num ?? 0}
+              value={v.cacheShuffleNum ?? 0}
               onChange={(n) =>
-                set(["backend", "diffusion_pipe", "cache_shuffle_num"], n ?? 0)
+                set(["backend", "diffusionPipe", "cacheShuffleNum"], n ?? 0)
               }
             />
           </Row>
@@ -602,9 +602,9 @@ export const BackendDiffusionPipeFields = memo(
             description="忽略 caption 为空的样本。"
           >
             <ToggleSwitch
-              checked={v.skip_empty_caption ?? true}
+              checked={v.skipEmptyCaption ?? true}
               onCheckedChange={(b) =>
-                set(["backend", "diffusion_pipe", "skip_empty_caption"], b)
+                set(["backend", "diffusionPipe", "skipEmptyCaption"], b)
               }
             />
           </Row>

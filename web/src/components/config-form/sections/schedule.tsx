@@ -17,17 +17,17 @@ export const ScheduleFields = memo(function ScheduleFields({
       <Row label="训练回合 (Epochs)" errors={errorMap.get("schedule.epochs")}>
         <IntInput min={1} value={v.epochs ?? 10} onChange={(n) => set(["schedule", "epochs"], n ?? 1)} />
       </Row>
-      <Row label="批大小 (Batch)" errors={errorMap.get("schedule.batch_size")}>
-        <IntInput min={1} value={v.batch_size ?? 1} onChange={(n) => set(["schedule", "batch_size"], n ?? 1)} />
+      <Row label="批大小 (Batch)" errors={errorMap.get("schedule.batchSize")}>
+        <IntInput min={1} value={v.batchSize ?? 1} onChange={(n) => set(["schedule", "batchSize"], n ?? 1)} />
       </Row>
-      <Row label="梯度累积" description="有效批量 = batch × grad_accum。">
-        <IntInput min={1} value={v.grad_accum ?? 2} onChange={(n) => set(["schedule", "grad_accum"], n ?? 1)} />
+      <Row label="梯度累积" description="有效批量 = batch × gradAccum。">
+        <IntInput min={1} value={v.gradAccum ?? 2} onChange={(n) => set(["schedule", "gradAccum"], n ?? 1)} />
       </Row>
       <Row label="最大步数" description="可选硬性上限；留空则跑完所有回合。">
         <IntInput
           min={1}
-          value={v.max_steps ?? null}
-          onChange={(n) => set(["schedule", "max_steps"], n)}
+          value={v.maxSteps ?? null}
+          onChange={(n) => set(["schedule", "maxSteps"], n)}
           placeholder="（不限）"
         />
       </Row>
@@ -43,14 +43,14 @@ export const ScheduleFields = memo(function ScheduleFields({
         />
       </Row>
       <Row
-        label="lr_decay_steps"
+        label="lrDecaySteps"
         description="cosine / linear 衰减的步数窗口；留空使用全程长度。"
-        errors={errorMap.get("schedule.lr_decay_steps")}
+        errors={errorMap.get("schedule.lrDecaySteps")}
       >
         <IntInput
           min={1}
-          value={v.lr_decay_steps ?? null}
-          onChange={(n) => set(["schedule", "lr_decay_steps"], n)}
+          value={v.lrDecaySteps ?? null}
+          onChange={(n) => set(["schedule", "lrDecaySteps"], n)}
           placeholder="（默认）"
         />
       </Row>

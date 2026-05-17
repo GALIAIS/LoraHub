@@ -34,31 +34,31 @@ export const AugmentationFields = memo(function AugmentationFields({
       </Row>
       <Row label="随机裁剪" description="启用随机裁剪。">
         <ToggleSwitch
-          checked={v.random_crop ?? false}
-          onCheckedChange={(b) => set(["augmentation", "random_crop"], b)}
+          checked={v.randomCrop ?? false}
+          onCheckedChange={(b) => set(["augmentation", "randomCrop"], b)}
         />
       </Row>
       <Row
-        label="face_crop_aug_range"
+        label="faceCropAugRange"
         description="kohya 三元组 `min_face_size,target_size,max_face_size`。"
-        errors={errorMap.get("augmentation.face_crop_aug_range")}
+        errors={errorMap.get("augmentation.faceCropAugRange")}
       >
         <TextInput
           className="w-64"
-          value={v.face_crop_aug_range ?? ""}
+          value={v.faceCropAugRange ?? ""}
           onChange={(s) =>
-            set(["augmentation", "face_crop_aug_range"], s || null)
+            set(["augmentation", "faceCropAugRange"], s || null)
           }
           placeholder="例如 256,512,1024"
         />
       </Row>
       <Row
-        label="alpha_mask"
+        label="alphaMask"
         description="使用图像 alpha 通道作为 masked-loss 掩码。"
       >
         <ToggleSwitch
-          checked={v.alpha_mask ?? false}
-          onCheckedChange={(b) => set(["augmentation", "alpha_mask"], b)}
+          checked={v.alphaMask ?? false}
+          onCheckedChange={(b) => set(["augmentation", "alphaMask"], b)}
         />
       </Row>
     </>

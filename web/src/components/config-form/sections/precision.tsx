@@ -25,8 +25,8 @@ export const PrecisionFields = memo(function PrecisionFields({
         description="以约 20% 吞吐为代价节省显存。8GB 显卡几乎必开。"
       >
         <ToggleSwitch
-          checked={value.gradient_checkpointing ?? true}
-          onCheckedChange={(b) => set(["gradient_checkpointing"], b)}
+          checked={value.gradientCheckpointing ?? true}
+          onCheckedChange={(b) => set(["gradientCheckpointing"], b)}
         />
       </Row>
       <Row
@@ -34,44 +34,44 @@ export const PrecisionFields = memo(function PrecisionFields({
         description="提前用 VAE 编码图片并存盘，大幅提速但占额外硬盘。"
       >
         <ToggleSwitch
-          checked={value.cache_latents ?? true}
-          onCheckedChange={(b) => set(["cache_latents"], b)}
+          checked={value.cacheLatents ?? true}
+          onCheckedChange={(b) => set(["cacheLatents"], b)}
         />
       </Row>
       <Row
-        label="cache_latents_to_disk"
+        label="cacheLatentsToDisk"
         description="把潜变量缓存写到磁盘（释放内存）。"
       >
         <ToggleSwitch
-          checked={value.cache_latents_to_disk ?? false}
-          onCheckedChange={(b) => set(["cache_latents_to_disk"], b)}
+          checked={value.cacheLatentsToDisk ?? false}
+          onCheckedChange={(b) => set(["cacheLatentsToDisk"], b)}
         />
       </Row>
       <Row
-        label="skip_cache_check"
+        label="skipCacheCheck"
         description="跳过缓存一致性检查，加速冷启动。"
       >
         <ToggleSwitch
-          checked={value.skip_cache_check ?? false}
-          onCheckedChange={(b) => set(["skip_cache_check"], b)}
+          checked={value.skipCacheCheck ?? false}
+          onCheckedChange={(b) => set(["skipCacheCheck"], b)}
         />
       </Row>
       <Row
-        label="cache_info"
+        label="cacheInfo"
         description="把缓存元信息单独写出（kohya 调试用）。"
       >
         <ToggleSwitch
-          checked={value.cache_info ?? false}
-          onCheckedChange={(b) => set(["cache_info"], b)}
+          checked={value.cacheInfo ?? false}
+          onCheckedChange={(b) => set(["cacheInfo"], b)}
         />
       </Row>
       <Row
-        label="train_inpainting"
+        label="trainInpainting"
         description="启用 inpainting 训练目标。"
       >
         <ToggleSwitch
-          checked={value.train_inpainting ?? false}
-          onCheckedChange={(b) => set(["train_inpainting"], b)}
+          checked={value.trainInpainting ?? false}
+          onCheckedChange={(b) => set(["trainInpainting"], b)}
         />
       </Row>
     </>

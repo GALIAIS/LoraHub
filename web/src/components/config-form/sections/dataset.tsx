@@ -48,40 +48,40 @@ export const DatasetFields = memo(function DatasetFields({
       <Row label="重复次数" description="每个回合中每张图被使用的次数。">
         <IntInput
           min={1}
-          value={value.num_repeats}
-          onChange={(v) => set(["dataset", "num_repeats"], v ?? 1)}
+          value={value.numRepeats}
+          onChange={(v) => set(["dataset", "numRepeats"], v ?? 1)}
         />
       </Row>
       <Row
-        label="conditioning_dir"
+        label="conditioningDir"
         description="ControlNet / inpainting 条件图目录（kohya `--conditioning_data_dir`）。"
-        errors={errorMap.get("dataset.conditioning_dir")}
+        errors={errorMap.get("dataset.conditioningDir")}
       >
         <PathInput
-          value={value.conditioning_dir ?? ""}
-          onChange={(v) => set(["dataset", "conditioning_dir"], v || null)}
+          value={value.conditioningDir ?? ""}
+          onChange={(v) => set(["dataset", "conditioningDir"], v || null)}
           placeholder="（可选）"
         />
       </Row>
       <Row
-        label="reg_source"
+        label="regSource"
         description="DreamBooth 正则化数据集（kohya `--reg_data_dir`）。"
-        errors={errorMap.get("dataset.reg_source")}
+        errors={errorMap.get("dataset.regSource")}
       >
         <PathInput
-          value={value.reg_source ?? ""}
-          onChange={(v) => set(["dataset", "reg_source"], v || null)}
+          value={value.regSource ?? ""}
+          onChange={(v) => set(["dataset", "regSource"], v || null)}
           placeholder="（可选）"
         />
       </Row>
       <Row
-        label="frame_buckets"
+        label="frameBuckets"
         description="视频训练帧数桶，逗号分隔（例如 1,33,65）。默认 1（图像）。"
-        errors={errorMap.get("dataset.frame_buckets")}
+        errors={errorMap.get("dataset.frameBuckets")}
       >
         <TextInput
           className="w-64"
-          value={(value.frame_buckets ?? [1]).join(",")}
+          value={(value.frameBuckets ?? [1]).join(",")}
           onChange={(s) => {
             const list = s
               .split(",")
@@ -89,7 +89,7 @@ export const DatasetFields = memo(function DatasetFields({
               .filter((x) => x.length > 0)
               .map((x) => parseInt(x, 10))
               .filter((n) => !Number.isNaN(n))
-            set(["dataset", "frame_buckets"], list.length ? list : [1])
+            set(["dataset", "frameBuckets"], list.length ? list : [1])
           }}
           placeholder="1"
         />
@@ -134,44 +134,44 @@ export const DatasetFields = memo(function DatasetFields({
               </div>
             </div>
             <Row
-              label="no_upscale"
+              label="noUpscale"
               description="不要把小图放大到桶尺寸（kohya `--bucket_no_upscale`）。"
             >
               <ToggleSwitch
-                checked={bucket.no_upscale ?? false}
+                checked={bucket.noUpscale ?? false}
                 onCheckedChange={(v) =>
-                  set(["dataset", "bucket", "no_upscale"], v)
+                  set(["dataset", "bucket", "noUpscale"], v)
                 }
               />
             </Row>
             <Row
-              label="skip_image_resolution"
+              label="skipImageResolution"
               description="跳过图像分辨率合理性检查（kohya `--skip_image_resolution`）。"
             >
               <ToggleSwitch
-                checked={bucket.skip_image_resolution ?? false}
+                checked={bucket.skipImageResolution ?? false}
                 onCheckedChange={(v) =>
-                  set(["dataset", "bucket", "skip_image_resolution"], v)
+                  set(["dataset", "bucket", "skipImageResolution"], v)
                 }
               />
             </Row>
-            <Row label="resize_interpolation" description="PIL 重采样核。">
+            <Row label="resizeInterpolation" description="PIL 重采样核。">
               <EnumSelect
-                value={bucket.resize_interpolation ?? ""}
+                value={bucket.resizeInterpolation ?? ""}
                 onChange={(v) =>
-                  set(["dataset", "bucket", "resize_interpolation"], v || null)
+                  set(["dataset", "bucket", "resizeInterpolation"], v || null)
                 }
                 options={RESIZE_INTERPOLATION_OPTIONS}
               />
             </Row>
             <Row
-              label="ar_buckets"
+              label="arBuckets"
               description="dp 显式宽高比列表，逗号分隔（覆盖 min/max/num）。"
-              errors={errorMap.get("dataset.bucket.ar_buckets")}
+              errors={errorMap.get("dataset.bucket.arBuckets")}
             >
               <TextInput
                 className="w-64"
-                value={(bucket.ar_buckets ?? []).join(",")}
+                value={(bucket.arBuckets ?? []).join(",")}
                 onChange={(s) => {
                   const list = s
                     .split(",")
@@ -180,7 +180,7 @@ export const DatasetFields = memo(function DatasetFields({
                     .map((x) => parseFloat(x))
                     .filter((n) => !Number.isNaN(n))
                   set(
-                    ["dataset", "bucket", "ar_buckets"],
+                    ["dataset", "bucket", "arBuckets"],
                     list.length ? list : null,
                   )
                 }}
@@ -218,12 +218,12 @@ export const DatasetFields = memo(function DatasetFields({
         <Row
           label="丢弃概率"
           description="0-1 之间，每步随机丢弃单个标签的概率。"
-          errors={errorMap.get("dataset.caption.drop_rate")}
+          errors={errorMap.get("dataset.caption.dropRate")}
         >
           <FloatInput
             step={0.05}
-            value={caption.drop_rate ?? 0}
-            onChange={(v) => set(["dataset", "caption", "drop_rate"], v ?? 0)}
+            value={caption.dropRate ?? 0}
+            onChange={(v) => set(["dataset", "caption", "dropRate"], v ?? 0)}
           />
         </Row>
 
@@ -233,67 +233,67 @@ export const DatasetFields = memo(function DatasetFields({
           </summary>
           <div className="mt-3 space-y-3.5">
             <Row
-              label="dropout_every_n_epochs"
-              description="每 N 回合做一次 caption dropout（与 drop_rate 不同）。"
-              errors={errorMap.get("dataset.caption.dropout_every_n_epochs")}
+              label="dropoutEveryNEpochs"
+              description="每 N 回合做一次 caption dropout（与 dropRate 不同）。"
+              errors={errorMap.get("dataset.caption.dropoutEveryNEpochs")}
             >
               <IntInput
                 min={0}
-                value={caption.dropout_every_n_epochs ?? 0}
+                value={caption.dropoutEveryNEpochs ?? 0}
                 onChange={(n) =>
-                  set(["dataset", "caption", "dropout_every_n_epochs"], n ?? 0)
+                  set(["dataset", "caption", "dropoutEveryNEpochs"], n ?? 0)
                 }
               />
             </Row>
             <Row
-              label="tag_dropout_rate"
+              label="tagDropoutRate"
               description="单个 tag 维度的 dropout（0..1）。"
-              errors={errorMap.get("dataset.caption.tag_dropout_rate")}
+              errors={errorMap.get("dataset.caption.tagDropoutRate")}
             >
               <FloatInput
                 step={0.05}
-                value={caption.tag_dropout_rate ?? 0}
+                value={caption.tagDropoutRate ?? 0}
                 onChange={(n) =>
-                  set(["dataset", "caption", "tag_dropout_rate"], n ?? 0)
+                  set(["dataset", "caption", "tagDropoutRate"], n ?? 0)
                 }
               />
             </Row>
             <Row
-              label="keep_tokens"
+              label="keepTokens"
               description="前 N 个 tag 永不被打乱（典型用法：触发词锁在 0 位）。"
-              errors={errorMap.get("dataset.caption.keep_tokens")}
+              errors={errorMap.get("dataset.caption.keepTokens")}
             >
               <IntInput
                 min={0}
-                value={caption.keep_tokens ?? 0}
+                value={caption.keepTokens ?? 0}
                 onChange={(n) =>
-                  set(["dataset", "caption", "keep_tokens"], n ?? 0)
+                  set(["dataset", "caption", "keepTokens"], n ?? 0)
                 }
               />
             </Row>
             <Row
-              label="keep_tokens_separator"
-              description="自定义 keep_tokens 与可洗牌段之间的分隔符。"
+              label="keepTokensSeparator"
+              description="自定义 keepTokens 与可洗牌段之间的分隔符。"
             >
               <TextInput
                 className="w-32"
-                value={caption.keep_tokens_separator ?? ""}
+                value={caption.keepTokensSeparator ?? ""}
                 onChange={(s) =>
                   set(
-                    ["dataset", "caption", "keep_tokens_separator"],
+                    ["dataset", "caption", "keepTokensSeparator"],
                     s || null,
                   )
                 }
                 placeholder=","
               />
             </Row>
-            <Row label="secondary_separator" description="kohya 二级分隔符。">
+            <Row label="secondarySeparator" description="kohya 二级分隔符。">
               <TextInput
                 className="w-32"
-                value={caption.secondary_separator ?? ""}
+                value={caption.secondarySeparator ?? ""}
                 onChange={(s) =>
                   set(
-                    ["dataset", "caption", "secondary_separator"],
+                    ["dataset", "caption", "secondarySeparator"],
                     s || null,
                   )
                 }
@@ -301,13 +301,13 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="enable_wildcard"
+              label="enableWildcard"
               description="启用 caption 中 `{a|b|c}` 通配符（kohya `--enable_wildcard`）。"
             >
               <ToggleSwitch
-                checked={caption.enable_wildcard ?? false}
+                checked={caption.enableWildcard ?? false}
                 onCheckedChange={(b) =>
-                  set(["dataset", "caption", "enable_wildcard"], b)
+                  set(["dataset", "caption", "enableWildcard"], b)
                 }
               />
             </Row>
@@ -332,19 +332,19 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="max_token_length"
+              label="maxTokenLength"
               description="kohya `--max_token_length`：75 / 150 / 225。"
             >
               <EnumSelect
                 value={
-                  caption.max_token_length === null ||
-                  caption.max_token_length === undefined
+                  caption.maxTokenLength === null ||
+                  caption.maxTokenLength === undefined
                     ? ""
-                    : String(caption.max_token_length)
+                    : String(caption.maxTokenLength)
                 }
                 onChange={(s) =>
                   set(
-                    ["dataset", "caption", "max_token_length"],
+                    ["dataset", "caption", "maxTokenLength"],
                     s ? parseInt(s, 10) : null,
                   )
                 }
@@ -352,29 +352,29 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="token_warmup_min"
+              label="tokenWarmupMin"
               description="token warmup 最小 tag 数（kohya）。"
-              errors={errorMap.get("dataset.caption.token_warmup_min")}
+              errors={errorMap.get("dataset.caption.tokenWarmupMin")}
             >
               <IntInput
                 min={1}
-                value={caption.token_warmup_min ?? null}
+                value={caption.tokenWarmupMin ?? null}
                 onChange={(n) =>
-                  set(["dataset", "caption", "token_warmup_min"], n)
+                  set(["dataset", "caption", "tokenWarmupMin"], n)
                 }
                 placeholder="（默认）"
               />
             </Row>
             <Row
-              label="token_warmup_step"
+              label="tokenWarmupStep"
               description="token warmup 步数。"
-              errors={errorMap.get("dataset.caption.token_warmup_step")}
+              errors={errorMap.get("dataset.caption.tokenWarmupStep")}
             >
               <FloatInput
                 step={0.1}
-                value={caption.token_warmup_step ?? null}
+                value={caption.tokenWarmupStep ?? null}
                 onChange={(n) =>
-                  set(["dataset", "caption", "token_warmup_step"], n)
+                  set(["dataset", "caption", "tokenWarmupStep"], n)
                 }
                 placeholder="（默认）"
               />
@@ -391,15 +391,15 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="shuffle_delimiter"
+              label="shuffleDelimiter"
               description="dp tag shuffle 分隔符（默认 `, `）。"
             >
               <TextInput
                 className="w-32"
-                value={caption.shuffle_delimiter ?? ""}
+                value={caption.shuffleDelimiter ?? ""}
                 onChange={(s) =>
                   set(
-                    ["dataset", "caption", "shuffle_delimiter"],
+                    ["dataset", "caption", "shuffleDelimiter"],
                     s || null,
                   )
                 }
@@ -407,13 +407,13 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="shuffle_tags"
+              label="shuffleTags"
               description="dp legacy 整 caption 打乱模式。"
             >
               <ToggleSwitch
-                checked={caption.shuffle_tags ?? false}
+                checked={caption.shuffleTags ?? false}
                 onCheckedChange={(b) =>
-                  set(["dataset", "caption", "shuffle_tags"], b)
+                  set(["dataset", "caption", "shuffleTags"], b)
                 }
               />
             </Row>
@@ -432,7 +432,7 @@ export const DatasetFields = memo(function DatasetFields({
             onClick={() =>
               set(
                 ["dataset", "subsets"],
-                [...subsets, { path: "", num_repeats: 1 }],
+                [...subsets, { path: "", numRepeats: 1 }],
               )
             }
           >
@@ -476,31 +476,31 @@ export const DatasetFields = memo(function DatasetFields({
                 placeholder="./datasets/subset"
               />
             </Row>
-            <Row label="num_repeats">
+            <Row label="numRepeats">
               <IntInput
                 min={1}
-                value={sub.num_repeats ?? 1}
+                value={sub.numRepeats ?? 1}
                 onChange={(n) =>
-                  set(["dataset", "subsets", idx, "num_repeats"], n ?? 1)
+                  set(["dataset", "subsets", idx, "numRepeats"], n ?? 1)
                 }
               />
             </Row>
-            <Row label="mask_path" description="可选。掩码目录与图像目录布局一致。">
+            <Row label="maskPath" description="可选。掩码目录与图像目录布局一致。">
               <PathInput
-                value={sub.mask_path ?? ""}
+                value={sub.maskPath ?? ""}
                 onChange={(s) =>
-                  set(["dataset", "subsets", idx, "mask_path"], s || null)
+                  set(["dataset", "subsets", idx, "maskPath"], s || null)
                 }
                 placeholder="（可选）"
               />
             </Row>
-            <Row label="caption_prefix">
+            <Row label="captionPrefix">
               <TextInput
                 className="w-64"
-                value={sub.caption_prefix ?? ""}
+                value={sub.captionPrefix ?? ""}
                 onChange={(s) =>
                   set(
-                    ["dataset", "subsets", idx, "caption_prefix"],
+                    ["dataset", "subsets", idx, "captionPrefix"],
                     s || null,
                   )
                 }
@@ -508,12 +508,12 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
-              label="ar_buckets"
-              description="子集级 ar_buckets（dp）。逗号分隔。"
+              label="arBuckets"
+              description="子集级 arBuckets（dp）。逗号分隔。"
             >
               <TextInput
                 className="w-64"
-                value={(sub.ar_buckets ?? []).join(",")}
+                value={(sub.arBuckets ?? []).join(",")}
                 onChange={(s) => {
                   const list = s
                     .split(",")
@@ -522,7 +522,7 @@ export const DatasetFields = memo(function DatasetFields({
                     .map((x) => parseFloat(x))
                     .filter((n) => !Number.isNaN(n))
                   set(
-                    ["dataset", "subsets", idx, "ar_buckets"],
+                    ["dataset", "subsets", idx, "arBuckets"],
                     list.length ? list : null,
                   )
                 }}

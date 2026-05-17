@@ -106,7 +106,7 @@ def validate_config(req: ValidateConfigRequest) -> dict[str, Any]:
 
     return {
         "valid": True,
-        "normalized": cfg.model_dump(mode="json"),
+        "normalized": cfg.model_dump(mode="json", by_alias=True),
         "preflight": _preflight_config(cfg),
     }
 
@@ -364,7 +364,7 @@ def get_config(name: str) -> dict[str, Any]:
     parsed: dict[str, Any] | None = None
     error: str | None = None
     try:
-        parsed = load_config(path).model_dump(mode="json")
+        parsed = load_config(path).model_dump(mode="json", by_alias=True)
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
     return {

@@ -5,75 +5,76 @@
  * it needs without dragging in widgets or option lists.
  *
  * The shape mirrors `lorahub/core/config/schema.py` (TrainingConfig + nested
- * pydantic models). Every field that the python schema accepts has a matching
- * (optional) entry here so the form can persist untouched fields verbatim
- * across save / reload roundtrips.
+ * pydantic models). Field names are camelCase to match the YAML wire format
+ * after the schema-wide alias_generator=to_camel migration; the Python schema
+ * still accepts both snake_case and camelCase, so server-side input never
+ * breaks even if a few callers haven't migrated yet.
  */
 import type { ValidationFieldError } from "@/lib/api"
 
 export interface ArchPathsValue {
   // FLUX / SD3 / FLUX2 component checkpoints
-  clip_l?: string | null
-  clip_g?: string | null
+  clipL?: string | null
+  clipG?: string | null
   t5xxl?: string | null
   ae?: string | null
   // Generic (Anima / Wan / HunyuanImage / chroma)
   transformer?: string | null
-  text_encoder?: string | null
+  textEncoder?: string | null
   llm?: string | null
   byt5?: string | null
   // Anima-specific
   qwen3?: string | null
-  t5_tokenizer?: string | null
-  llm_adapter?: string | null
+  t5Tokenizer?: string | null
+  llmAdapter?: string | null
   // Token length caps
-  t5xxl_max_token_length?: number | null
-  qwen3_max_token_length?: number | null
-  t5_max_token_length?: number | null
+  t5xxlMaxTokenLength?: number | null
+  qwen3MaxTokenLength?: number | null
+  t5MaxTokenLength?: number | null
   // Attention masking + dropout
-  apply_t5_attn_mask?: boolean
-  apply_lg_attn_mask?: boolean
-  t5_dropout_rate?: number
-  clip_l_dropout_rate?: number
-  clip_g_dropout_rate?: number
+  applyT5AttnMask?: boolean
+  applyLgAttnMask?: boolean
+  t5DropoutRate?: number
+  clipLDropoutRate?: number
+  clipGDropoutRate?: number
   // SD3 positional-embed crop
-  pos_emb_random_crop_rate?: number
-  enable_scaled_pos_embed?: boolean
+  posEmbRandomCropRate?: number
+  enableScaledPosEmbed?: boolean
   // FLUX dev distilled guidance
-  guidance_scale?: number | null
+  guidanceScale?: number | null
   // TE device / dtype
-  t5xxl_device?: string | null
-  t5xxl_dtype?: string | null
+  t5xxlDevice?: string | null
+  t5xxlDtype?: string | null
   // VAE / TE memory tweaks
-  vae_chunk_size?: number | null
-  vae_disable_cache?: boolean
-  text_encoder_cpu?: boolean
+  vaeChunkSize?: number | null
+  vaeDisableCache?: boolean
+  textEncoderCpu?: boolean
 }
 
 export interface PerModuleLRValue {
-  llm_adapter?: number | null
-  self_attn?: number | null
-  cross_attn?: number | null
+  llmAdapter?: number | null
+  selfAttn?: number | null
+  crossAttn?: number | null
   mlp?: number | null
   mod?: number | null
 }
 
 export interface DatasetSubsetValue {
   path?: string
-  num_repeats?: number
-  mask_path?: string | null
-  ar_buckets?: number[] | null
-  caption_prefix?: string | null
+  numRepeats?: number
+  maskPath?: string | null
+  arBuckets?: number[] | null
+  captionPrefix?: string | null
 }
 
 export interface ConfigFormValue {
-  schema_version?: string
-  base_model: {
+  schemaVersion?: string
+  baseModel: {
     arch: string
-    arch_variant?: string
+    archVariant?: string
     checkpoint: string
     vae?: string | null
-    arch_paths?: ArchPathsValue
+    archPaths?: ArchPathsValue
   }
   dataset: {
     source: string
@@ -83,250 +84,253 @@ export interface ConfigFormValue {
       min?: number
       max?: number
       step?: number
-      no_upscale?: boolean
-      skip_image_resolution?: boolean
-      resize_interpolation?: string | null
-      ar_buckets?: number[] | null
+      noUpscale?: boolean
+      skipImageResolution?: boolean
+      resizeInterpolation?: string | null
+      arBuckets?: number[] | null
     }
     caption?: {
       strategy?: string
       ext?: string
       shuffle?: boolean
-      drop_rate?: number
-      dropout_every_n_epochs?: number
-      tag_dropout_rate?: number
-      keep_tokens?: number
-      keep_tokens_separator?: string | null
-      secondary_separator?: string | null
-      enable_wildcard?: boolean
+      dropRate?: number
+      dropoutEveryNEpochs?: number
+      tagDropoutRate?: number
+      keepTokens?: number
+      keepTokensSeparator?: string | null
+      secondarySeparator?: string | null
+      enableWildcard?: boolean
       prefix?: string | null
       suffix?: string | null
-      max_token_length?: number | null
-      token_warmup_min?: number | null
-      token_warmup_step?: number | null
+      maxTokenLength?: number | null
+      tokenWarmupMin?: number | null
+      tokenWarmupStep?: number | null
       weighted?: boolean
-      shuffle_delimiter?: string | null
-      shuffle_tags?: boolean
+      shuffleDelimiter?: string | null
+      shuffleTags?: boolean
     }
-    num_repeats?: number
-    val_split?: number
+    numRepeats?: number
+    valSplit?: number
     subsets?: DatasetSubsetValue[]
-    frame_buckets?: number[]
-    conditioning_dir?: string | null
-    reg_source?: string | null
+    frameBuckets?: number[]
+    conditioningDir?: string | null
+    regSource?: string | null
   }
   network?: {
     type?: string
     rank?: number
     alpha?: number
-    target_unet?: boolean
-    target_text_encoder?: boolean
-    conv_dim?: number | null
-    conv_alpha?: number | null
-    network_dropout?: number
-    rank_dropout?: number
-    module_dropout?: number
-    scale_weight_norms?: number | null
-    init_from?: string | null
-    dim_from_weights?: string | null
-    base_weights?: string[]
-    base_weights_multiplier?: number[]
-    fuse_adapters?: Array<Record<string, unknown>>
-    module_lr?: PerModuleLRValue | null
+    targetUnet?: boolean
+    targetTextEncoder?: boolean
+    convDim?: number | null
+    convAlpha?: number | null
+    networkDropout?: number
+    rankDropout?: number
+    moduleDropout?: number
+    scaleWeightNorms?: number | null
+    initFrom?: string | null
+    dimFromWeights?: string | null
+    baseWeights?: string[]
+    baseWeightsMultiplier?: number[]
+    fuseAdapters?: Array<Record<string, unknown>>
+    moduleLr?: PerModuleLRValue | null
     dtype?: string | null
   }
   optimizer?: {
     type?: string
-    lr?: { unet?: number; text_encoder?: number }
+    lr?: { unet?: number; textEncoder?: number }
     schedule?: string
-    warmup_steps?: number
+    warmupSteps?: number
     betas?: [number, number] | number[]
-    weight_decay?: number
+    weightDecay?: number
     eps?: number
-    optimizer_args?: Record<string, string>
-    max_grad_norm?: number
-    scheduler_module?: string | null
-    scheduler_args?: Record<string, string>
-    scheduler_num_cycles?: number
-    scheduler_power?: number
-    scheduler_timescale?: number | null
-    scheduler_min_lr_ratio?: number | null
-    gradient_release?: boolean
+    optimizerArgs?: Record<string, string>
+    maxGradNorm?: number
+    schedulerModule?: string | null
+    schedulerArgs?: Record<string, string>
+    schedulerNumCycles?: number
+    schedulerPower?: number
+    schedulerTimescale?: number | null
+    schedulerMinLrRatio?: number | null
+    gradientRelease?: boolean
   }
   loss?: {
-    min_snr_gamma?: number | null
-    noise_offset?: number
-    noise_offset_random_strength?: boolean
-    multires_noise_iterations?: number | null
-    multires_noise_discount?: number
-    adaptive_noise_scale?: number | null
-    ip_noise_gamma?: number | null
-    ip_noise_gamma_random_strength?: boolean
-    zero_terminal_snr?: boolean
-    min_timestep?: number | null
-    max_timestep?: number | null
-    prior_loss_weight?: number
-    loss_type?: string
-    huber_schedule?: string | null
-    huber_c?: number | null
-    huber_scale?: number | null
-    debiased_estimation?: boolean
-    masked_loss?: boolean
-    scale_v_pred_loss_like_noise_pred?: boolean
-    v_parameterization?: boolean
-    v_pred_like_loss?: number | null
-    pseudo_huber_c?: number | null
+    minSnrGamma?: number | null
+    noiseOffset?: number
+    noiseOffsetRandomStrength?: boolean
+    multiresNoiseIterations?: number | null
+    multiresNoiseDiscount?: number
+    adaptiveNoiseScale?: number | null
+    ipNoiseGamma?: number | null
+    ipNoiseGammaRandomStrength?: boolean
+    zeroTerminalSnr?: boolean
+    minTimestep?: number | null
+    maxTimestep?: number | null
+    priorLossWeight?: number
+    lossType?: string
+    huberSchedule?: string | null
+    huberC?: number | null
+    huberScale?: number | null
+    debiasedEstimation?: boolean
+    maskedLoss?: boolean
+    scaleVPredLossLikeNoisePred?: boolean
+    vParameterization?: boolean
+    vPredLikeLoss?: number | null
+    pseudoHuberC?: number | null
   }
-  flow_match?: {
-    timestep_sampling?: string | null
-    sigmoid_scale?: number | null
-    model_prediction_type?: string | null
-    discrete_flow_shift?: number | null
-    training_shift?: number | null
-    weighting_scheme?: string | null
-    logit_mean?: number | null
-    logit_std?: number | null
-    mode_scale?: number | null
+  flowMatch?: {
+    timestepSampling?: string | null
+    sigmoidScale?: number | null
+    modelPredictionType?: string | null
+    discreteFlowShift?: number | null
+    trainingShift?: number | null
+    weightingScheme?: string | null
+    logitMean?: number | null
+    logitStd?: number | null
+    modeScale?: number | null
   }
   schedule?: {
     epochs?: number
-    batch_size?: number
-    grad_accum?: number
-    max_steps?: number | null
+    batchSize?: number
+    gradAccum?: number
+    maxSteps?: number | null
     seed?: number | null
-    lr_decay_steps?: number | null
+    lrDecaySteps?: number | null
   }
   precision?: string
-  gradient_checkpointing?: boolean
-  cache_latents?: boolean
-  cache_latents_to_disk?: boolean
-  skip_cache_check?: boolean
-  cache_info?: boolean
-  train_inpainting?: boolean
+  gradientCheckpointing?: boolean
+  cacheLatents?: boolean
+  cacheLatentsToDisk?: boolean
+  skipCacheCheck?: boolean
+  cacheInfo?: boolean
+  trainInpainting?: boolean
   sampling?: {
     enabled?: boolean
-    every_n_epochs?: number
-    every_n_steps?: number | null
-    at_first?: boolean
-    prompts_file?: string | null
+    everyNEpochs?: number
+    everyNSteps?: number | null
+    atFirst?: boolean
+    promptsFile?: string | null
     resolution?: [number, number] | number[]
     seed?: number
     attention?: string
   }
   output?: {
     name?: string
-    save_every_n_epochs?: number
-    save_every_n_steps?: number | null
-    save_every_n_examples?: number | null
-    save_last_n_epochs?: number | null
-    save_last_n_steps?: number | null
-    save_dtype?: string
-    output_dir?: string | null
-    training_comment?: string | null
-    no_metadata?: boolean
+    saveEveryNEpochs?: number
+    saveEveryNSteps?: number | null
+    saveEveryNExamples?: number | null
+    saveLastNEpochs?: number | null
+    saveLastNSteps?: number | null
+    saveDtype?: string
+    outputDir?: string | null
+    trainingComment?: string | null
+    noMetadata?: boolean
     metadata?: Record<string, string>
   }
   backend?: {
     type?: string
-    pin_version?: string | null
-    sd_scripts_path?: string | null
-    python_executable?: string | null
-    extra_args?: Record<string, unknown>
-    diffusion_pipe?: {
-      pipeline_stages?: number
-      gradient_clipping?: number
-      partition_method?: string
-      partition_split?: number[] | null
-      caching_batch_size?: number
-      steps_per_print?: number
-      blocks_to_swap?: number
+    pinVersion?: string | null
+    sdScriptsPath?: string | null
+    pythonExecutable?: string | null
+    extraArgs?: Record<string, unknown>
+    diffusionPipe?: {
+      pipelineStages?: number
+      gradientClipping?: number
+      partitionMethod?: string
+      partitionSplit?: number[] | null
+      cachingBatchSize?: number
+      stepsPerPrint?: number
+      blocksToSwap?: number
       compile?: boolean
-      reentrant_activation_checkpointing?: boolean
-      disable_block_swap_for_eval?: boolean
-      image_micro_batch_size_per_gpu?: number | null
-      image_eval_micro_batch_size_per_gpu?: number | null
-      eval_gradient_accumulation_steps?: number
-      eval_every_n_epochs?: number | null
-      eval_every_n_steps?: number | null
-      eval_every_n_examples?: number | null
-      eval_before_first_step?: boolean
-      eval_micro_batch_size_per_gpu?: number
-      checkpoint_every_n_epochs?: number | null
-      checkpoint_every_n_minutes?: number | null
-      force_constant_lr?: number | null
-      uncond_fraction?: number
-      x_axis_examples?: boolean
-      logging_steps?: number
-      transformer_dtype?: string | null
-      diffusion_model_dtype?: string | null
-      timestep_sample_method?: string | null
-      eval_datasets?: Array<Record<string, string>>
-      video_clip_mode?: string
-      enable_wandb?: boolean
-      tracker_name?: string | null
-      run_name?: string | null
-      min_ar?: number
-      max_ar?: number
-      num_ar_buckets?: number
-      cache_shuffle_num?: number
-      skip_empty_caption?: boolean
-      model_paths?: Record<string, string>
+      reentrantActivationCheckpointing?: boolean
+      disableBlockSwapForEval?: boolean
+      imageMicroBatchSizePerGpu?: number | null
+      imageEvalMicroBatchSizePerGpu?: number | null
+      evalGradientAccumulationSteps?: number
+      evalEveryNEpochs?: number | null
+      evalEveryNSteps?: number | null
+      evalEveryNExamples?: number | null
+      evalBeforeFirstStep?: boolean
+      evalMicroBatchSizePerGpu?: number
+      checkpointEveryNEpochs?: number | null
+      checkpointEveryNMinutes?: number | null
+      forceConstantLr?: number | null
+      uncondFraction?: number
+      xAxisExamples?: boolean
+      loggingSteps?: number
+      transformerDtype?: string | null
+      diffusionModelDtype?: string | null
+      timestepSampleMethod?: string | null
+      evalDatasets?: Array<Record<string, string>>
+      videoClipMode?: string
+      enableWandb?: boolean
+      trackerName?: string | null
+      runName?: string | null
+      minAr?: number
+      maxAr?: number
+      numArBuckets?: number
+      cacheShuffleNum?: number
+      skipEmptyCaption?: boolean
+      // NOTE: keys inside `modelPaths` are passed verbatim to diffusion-pipe
+      // TOML, which expects literal snake_case (transformer_path / vae_path /
+      // llm_path / ...). Do NOT rename these or dp won't recognise them.
+      modelPaths?: Record<string, string>
     }
   }
   resume?: {
-    save_state?: boolean
-    save_state_at_end?: boolean
-    save_state_every_n_epochs?: number | null
-    resume_from?: string | null
-    save_last_n_epochs_state?: number | null
-    save_last_n_steps_state?: number | null
-    skip_until_initial_step?: boolean
-    initial_epoch?: number | null
-    initial_step?: number | null
+    saveState?: boolean
+    saveStateAtEnd?: boolean
+    saveStateEveryNEpochs?: number | null
+    resumeFrom?: string | null
+    saveLastNEpochsState?: number | null
+    saveLastNStepsState?: number | null
+    skipUntilInitialStep?: boolean
+    initialEpoch?: number | null
+    initialStep?: number | null
   }
   validation?: {
-    every_n_epochs?: number
-    every_n_steps?: number | null
-    max_samples?: number | null
+    everyNEpochs?: number
+    everyNSteps?: number | null
+    maxSamples?: number | null
     seed?: number | null
   }
   optimization?: {
-    torch_compile?: boolean
-    fused_backward_pass?: boolean
-    full_bf16?: boolean
-    full_fp16?: boolean
-    blocks_to_swap?: number
-    fp8_base?: boolean
-    fp8_base_unet?: boolean
-    fp8_scaled?: boolean
-    fp8_vl_text_encoder?: boolean
+    torchCompile?: boolean
+    fusedBackwardPass?: boolean
+    fullBf16?: boolean
+    fullFp16?: boolean
+    blocksToSwap?: number
+    fp8Base?: boolean
+    fp8BaseUnet?: boolean
+    fp8Scaled?: boolean
+    fp8VlTextEncoder?: boolean
     lowram?: boolean
     highvram?: boolean
-    no_half_vae?: boolean
-    disable_mmap_load_safetensors?: boolean
-    cpu_offload_checkpointing?: boolean
-    unsloth_offload_checkpointing?: boolean
-    cache_text_encoder_outputs?: boolean
-    cache_text_encoder_outputs_to_disk?: boolean
+    noHalfVae?: boolean
+    disableMmapLoadSafetensors?: boolean
+    cpuOffloadCheckpointing?: boolean
+    unslothOffloadCheckpointing?: boolean
+    cacheTextEncoderOutputs?: boolean
+    cacheTextEncoderOutputsToDisk?: boolean
   }
   attention?: {
     training?: string
     split?: boolean
   }
   dataloader?: {
-    num_workers?: number
-    persistent_workers?: boolean
-    vae_batch_size?: number
-    text_encoder_batch_size?: number | null
-    cache_shuffle_num?: number
-    map_num_proc?: number | null
+    numWorkers?: number
+    persistentWorkers?: boolean
+    vaeBatchSize?: number
+    textEncoderBatchSize?: number | null
+    cacheShuffleNum?: number
+    mapNumProc?: number | null
   }
   augmentation?: {
     flip?: boolean
     color?: boolean
-    random_crop?: boolean
-    face_crop_aug_range?: string | null
-    alpha_mask?: boolean
+    randomCrop?: boolean
+    faceCropAugRange?: string | null
+    alphaMask?: boolean
   }
   [k: string]: unknown
 }
@@ -352,11 +356,32 @@ export function setIn<T extends object>(
   return cloned
 }
 
+// pydantic returns validation error `loc` paths using the Python field name
+// (snake_case). Form paths and labels are camelCase, so we normalise the loc
+// segments before keying the map. Numeric indices and modelPaths' verbatim
+// snake keys must pass through unchanged.
+const _MODEL_PATHS_VERBATIM = /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/
+function _snakeToCamelSegment(s: string, parent: string | number | undefined): string {
+  if (typeof s !== "string") return s
+  // Don't mangle keys nested under modelPaths — those are dp TOML literals.
+  if (parent === "modelPaths" && _MODEL_PATHS_VERBATIM.test(s)) return s
+  if (!s.includes("_")) return s
+  return s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase())
+}
+
 export function buildErrorMap(errors: ValidationFieldError[] | undefined): ErrorMap {
   const m = new Map<string, string[]>()
   if (!errors) return m
   for (const e of errors) {
-    const key = e.loc.join(".")
+    const segments: (string | number)[] = []
+    for (const seg of e.loc) {
+      if (typeof seg === "number") {
+        segments.push(seg)
+      } else {
+        segments.push(_snakeToCamelSegment(seg, segments[segments.length - 1]))
+      }
+    }
+    const key = segments.join(".")
     const arr = m.get(key) ?? []
     arr.push(e.msg)
     m.set(key, arr)

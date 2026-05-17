@@ -19,8 +19,8 @@ def load_config(path: Path) -> TrainingConfig:
 
 
 def dump_config(config: TrainingConfig, path: Path) -> None:
-    """Serialize a TrainingConfig back to YAML."""
-    data = config.model_dump(mode="json", exclude_none=True)
+    """Serialize a TrainingConfig back to YAML using camelCase aliases."""
+    data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
     path.write_text(
         yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False),
         encoding="utf-8",

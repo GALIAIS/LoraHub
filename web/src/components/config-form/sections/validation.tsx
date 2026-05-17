@@ -19,55 +19,55 @@ export const ValidationFields = memo(function ValidationFields({
   set: Setter
   errorMap: ErrorMap
 }) {
-  const valSplit = value.dataset?.val_split ?? 0
+  const valSplit = value.dataset?.valSplit ?? 0
   const v = value.validation ?? {}
   return (
     <>
       <Row
         label="留出比例"
         description="0 关闭验证；上限 0.5。例如 0.1 表示 10% 数据留作验证集。"
-        errors={errorMap.get("dataset.val_split")}
+        errors={errorMap.get("dataset.valSplit")}
       >
         <FloatInput
           step={0.01}
           value={valSplit}
           onChange={(n) =>
-            set(["dataset", "val_split"], Math.max(0, Math.min(0.49, n ?? 0)))
+            set(["dataset", "valSplit"], Math.max(0, Math.min(0.49, n ?? 0)))
           }
         />
       </Row>
       <Row
         label="每 N 回合验证一次"
         description="仅在留出比例 > 0 时生效。"
-        errors={errorMap.get("validation.every_n_epochs")}
+        errors={errorMap.get("validation.everyNEpochs")}
       >
         <IntInput
           min={1}
-          value={v.every_n_epochs ?? 1}
-          onChange={(n) => set(["validation", "every_n_epochs"], n ?? 1)}
+          value={v.everyNEpochs ?? 1}
+          onChange={(n) => set(["validation", "everyNEpochs"], n ?? 1)}
         />
       </Row>
       <Row
         label="最大验证样本数"
         description="可选。验证集很大时用来限制每次评估的步数；留空则全跑。"
-        errors={errorMap.get("validation.max_samples")}
+        errors={errorMap.get("validation.maxSamples")}
       >
         <IntInput
           min={1}
-          value={v.max_samples ?? null}
-          onChange={(n) => set(["validation", "max_samples"], n)}
+          value={v.maxSamples ?? null}
+          onChange={(n) => set(["validation", "maxSamples"], n)}
           placeholder="（不限）"
         />
       </Row>
       <Row
         label="每 N 步验证"
-        description="可选。与 every_n_epochs 互不冲突；留空仅按回合验证。"
-        errors={errorMap.get("validation.every_n_steps")}
+        description="可选。与 everyNEpochs 互不冲突；留空仅按回合验证。"
+        errors={errorMap.get("validation.everyNSteps")}
       >
         <IntInput
           min={1}
-          value={v.every_n_steps ?? null}
-          onChange={(n) => set(["validation", "every_n_steps"], n)}
+          value={v.everyNSteps ?? null}
+          onChange={(n) => set(["validation", "everyNSteps"], n)}
           placeholder="（默认）"
         />
       </Row>
