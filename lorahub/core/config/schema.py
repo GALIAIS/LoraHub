@@ -8,6 +8,30 @@ The schema deliberately mirrors the union of kohya-ss/sd-scripts argv and
 tdrussell/diffusion-pipe TOML keys. Each backend's compiler emits whichever
 fields its upstream understands and silently ignores the rest, so the same
 recipe can be retargeted between backends with minimal edits.
+
+Field consumption is split across three layers, which can be confusing when
+spelunking a single field "is anyone reading this?":
+
+  1. **Compiler-level fields** (``schedule.epochs``, ``optimizer.lr.unet``,
+     ``loss.min_snr_gamma``, ...). Read by ``lorahub.core.backends.<kohya|
+     diffusion_pipe>.compiler`` and emitted to argv / TOML. Most fields
+     live here.
+
+  2. **Runtime-level fields** (``sampling.enable_live_inference``,
+     ``sampling.inference_steps`` / ``inference_cfg``,
+     ``backend.sd_scripts_path``, ``backend.python_executable``,
+     ``backend.pin_version``). The compiler doesn't read these; they're
+     consumed by ``lorahub.api.jobs_helpers`` (live preview worker) or
+     ``lorahub.api.routers.bootstrap`` (which kohya checkout to install).
+
+  3. **UI-only fields** (``schema_version``, ``dataset.caption.strategy``).
+     Frontend form gates UI controls on these; backends ignore them.
+     Kept in the schema so YAML files round-trip cleanly through the UI.
+
+When a backend declares a field unsupported, it should ``_track`` it via
+the compiler's `dropped` audit list rather than failing — so a config
+written for kohya can still validate (and partially compile) under
+diffusion-pipe.
 """
 
 from __future__ import annotations
@@ -162,6 +186,12 @@ class BucketConfig(BaseModel):
 class CaptionConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
+    # NOTE: ``strategy`` is consumed by the front-end form (it gates
+    # which UI controls render). The kohya / diffusion-pipe compilers
+    # don't read it — they always look for an ``<image>.txt`` companion
+    # file regardless of strategy. Keep it in the schema so configs
+    # round-trip cleanly through the UI, but treat it as documentation
+    # of intent rather than a backend-driving knob.
     strategy: Literal["tag_file", "filename", "none"] = "tag_file"
     ext: str = ".txt"
     shuffle: bool = True

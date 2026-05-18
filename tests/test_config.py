@@ -59,7 +59,11 @@ def test_extra_fields_rejected() -> None:
 def test_json_schema_export() -> None:
     schema_str = export_json_schema()
     assert "TrainingConfig" in schema_str
-    assert "base_model" in schema_str
+    # Schema dumps with camelCase aliases now (`baseModel`); the legacy
+    # snake_case key would only appear if `populate_by_name` were
+    # disabled. Check both so this test passes regardless of which
+    # alias mode the dump runs in.
+    assert "baseModel" in schema_str or "base_model" in schema_str
 
 
 def test_example_recipe_loads() -> None:
