@@ -1,9 +1,25 @@
-"""Sweep — batch-enqueue a cartesian-product grid over a base config.
+"""Sweep — batch-enqueue variants from grid / random / TPE search.
 
-The sweep endpoint takes one validated base config plus N axes, materialises
-every cartesian-product variant via :class:`SweepPlan`, and pushes each one
-through :func:`_launch_job` so the scheduler runs them serially under the
-existing single-slot concurrency model.
+The sweep endpoint takes one validated base config plus N axes, drives a
+:class:`MaterialisedSweep` to produce variants one at a time, and pushes
+each one through :func:`_launch_job` so the scheduler runs them serially
+under the existing single-slot concurrency model.
+
+Three modes are accepted:
+
+* ``"grid"`` — the legacy default. Cartesian product over each axis's
+  enumerated values; ``n_trials`` is ignored.
+* ``"random"`` — independent draws from each axis distribution; emits
+  ``n_trials`` variants.
+* ``"tpe"`` — Optuna Tree-structured Parzen Estimator; needs the
+  optional ``[sweep]`` extra. A missing optuna install surfaces as
+  HTTP 503.
+
+Adaptive modes (random / tpe) currently materialise their full
+``n_trials`` batch up front. TPE without per-trial feedback still
+runs — it falls back to its prior — but to actually benefit from
+TPE's adaptive behaviour we need the metric-stream → ``report_trial``
+loop, which is cut3.
 
 Each spawned :class:`JobRecord` is stamped with
 ``metadata = {"sweep_id": ..., "axis_values": {...}}`` so a later
@@ -16,17 +32,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import ulid
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from lorahub.api import state
 from lorahub.api.jobs_helpers import _launch_job
 from lorahub.api.state import JobRecord, JobState
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
+    SamplerUnavailableError,
     SweepAxis,
     SweepError,
     SweepPlan,
@@ -76,15 +93,68 @@ def _job_name(job: JobRecord) -> str | None:
 
 
 class SweepAxisRequest(BaseModel):
+    """One axis of the search space.
+
+    `kind` selects the distribution:
+
+    * ``categorical`` (default) — uses ``values`` as-is.
+    * ``int_uniform`` / ``uniform`` / ``loguniform`` — uses
+      ``low`` / ``high`` (and optional ``step``); ``values`` is
+      ignored. Loguniform requires ``low > 0``.
+
+    Categorical with ``values=[]`` and a numeric kind without
+    ``low``/``high`` are both rejected at the core layer; we mirror
+    only the obvious shape check here so the user gets a 400 instead
+    of a 500.
+    """
+
     path: str
-    values: list[Any] = Field(min_length=1)
+    kind: Literal["categorical", "uniform", "loguniform", "int_uniform"] = "categorical"
+    values: list[Any] = Field(default_factory=list)
+    low: float | None = None
+    high: float | None = None
+    step: float | None = None
+
+    @model_validator(mode="after")
+    def _check_kind_shape(self) -> SweepAxisRequest:
+        if self.kind == "categorical":
+            if not self.values:
+                msg = f"axis {self.path!r} (categorical) needs at least one value"
+                raise ValueError(msg)
+        else:
+            if self.low is None or self.high is None:
+                msg = f"axis {self.path!r} ({self.kind}) needs both `low` and `high`"
+                raise ValueError(msg)
+        return self
 
 
 class CreateSweepRequest(BaseModel):
+    """Sweep submission payload.
+
+    `mode` defaults to ``"grid"`` so callers that pre-date cut2 keep
+    working without changes. Random / TPE modes require ``n_trials``
+    (validated downstream by SweepPlan); ``seed`` lets the user
+    reproduce a random/TPE sweep across reruns.
+    """
+
     base_config: dict[str, Any]
     axes: list[SweepAxisRequest] = Field(min_length=1)
     name_template: str = "{base}-{i:03d}"
     workspace_root: str | None = None
+    mode: Literal["grid", "random", "tpe"] = "grid"
+    n_trials: int | None = None
+    seed: int | None = None
+
+
+def _to_core_axis(a: SweepAxisRequest) -> SweepAxis:
+    return SweepAxis(
+        path=a.path,
+        kind=a.kind,
+        values=list(a.values),
+        low=a.low,
+        high=a.high,
+        step=a.step,
+    )
 
 
 @router.post("/sweeps", status_code=202)
@@ -93,9 +163,11 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
 
     Errors:
       422 — base config fails schema validation
-      400 — axis path doesn't resolve in base, or grid is too large, or a
-            materialised variant fails schema validation (likely caused by
-            an axis value that violates a pydantic constraint)
+      400 — axis path doesn't resolve in base, axis shape is invalid,
+            grid is too large, ``n_trials`` is missing for random/tpe,
+            or a materialised variant fails schema validation (likely
+            caused by an axis value that violates a pydantic constraint)
+      503 — ``mode="tpe"`` requested but optuna is not installed
     """
     try:
         TrainingConfig.model_validate(req.base_config)
@@ -104,13 +176,29 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
             status_code=422, detail=f"base_config is invalid: {exc}"
         ) from exc
 
-    plan = SweepPlan(
-        base_config=req.base_config,
-        axes=[SweepAxis(path=a.path, values=a.values) for a in req.axes],
-        name_template=req.name_template,
-    )
     try:
-        variants = plan.expand()
+        plan = SweepPlan(
+            base_config=req.base_config,
+            axes=[_to_core_axis(a) for a in req.axes],
+            name_template=req.name_template,
+            mode=req.mode,
+            n_trials=req.n_trials,
+            seed=req.seed,
+        )
+    except SweepError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Drive the sweep through MaterialisedSweep so all three modes go
+    # through the same code path. For grid this is equivalent to the
+    # legacy `expand()`; for random/tpe it lazily yields one variant
+    # at a time. We currently still drain the iterator up front so the
+    # API response shape (variants[]) stays the same — making this
+    # truly streaming is part of cut3 (metric feedback loop).
+    try:
+        materialised = plan.materialize()
+    except SamplerUnavailableError as exc:
+        # Optuna isn't installed; tell the caller exactly how to fix it.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SweepTooLargeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SweepError as exc:
@@ -125,7 +213,14 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
 
     summary_variants: list[dict[str, Any]] = []
     job_ids: list[str] = []
-    for i, (variant_name, variant_config) in enumerate(variants, start=1):
+    while True:
+        try:
+            nxt = materialised.next_variant()
+        except SweepError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if nxt is None:
+            break
+        variant_name, variant_config, axis_values = nxt
         try:
             cfg_v = TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
@@ -137,7 +232,6 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                 ),
             ) from exc
 
-        axis_values = plan.axis_values_for(i)
         workspace_v = (workspace_root / variant_name).resolve()
         metadata = {
             "sweep_id": sweep_id,
@@ -171,9 +265,12 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                 name=req.name_template,
                 name_prefix=_common_prefix([v["name"] for v in summary_variants]),
                 plan={
-                    "axes": [{"path": a.path, "values": a.values} for a in req.axes],
+                    "axes": [_axis_dump(a) for a in req.axes],
                     "name_template": req.name_template,
                     "workspace_root": str(workspace_root),
+                    "mode": req.mode,
+                    "n_trials": req.n_trials,
+                    "seed": req.seed,
                 },
                 base_config=req.base_config,
                 job_ids=job_ids,
@@ -184,7 +281,21 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         "sweep_id": sweep_id,
         "job_ids": job_ids,
         "variants": summary_variants,
+        "mode": req.mode,
     }
+
+
+def _axis_dump(a: SweepAxisRequest) -> dict[str, Any]:
+    """Round-trip-friendly axis JSON: drop fields irrelevant to `kind`."""
+    out: dict[str, Any] = {"path": a.path, "kind": a.kind}
+    if a.kind == "categorical":
+        out["values"] = list(a.values)
+    else:
+        out["low"] = a.low
+        out["high"] = a.high
+        if a.step is not None:
+            out["step"] = a.step
+    return out
 
 
 @router.get("/sweeps/{sweep_id}")
@@ -258,6 +369,10 @@ def list_sweeps() -> dict[str, Any]:
             continue
         groups[sweep_id].append(job)
 
+    # Index records by id once so each live sweep can pick up its
+    # persisted plan (mode / n_trials / seed) without N round-trips.
+    records_by_id = {r.id: r for r in _list_sweep_records()}
+
     summaries: list[dict[str, Any]] = []
     for sweep_id, jobs in groups.items():
         counts = {s.value: 0 for s in JobState}
@@ -271,6 +386,8 @@ def list_sweeps() -> dict[str, Any]:
         latest = max(
             (j.finished_at or j.started_at or j.created_at) for j in jobs
         )
+        record = records_by_id.get(sweep_id)
+        plan = record.plan if record else {}
         summaries.append(
             {
                 "sweep_id": sweep_id,
@@ -285,14 +402,24 @@ def list_sweeps() -> dict[str, Any]:
                 "canceling": counts[JobState.canceling.value],
                 "earliest_created_at": earliest.isoformat(),
                 "latest_modified_at": latest.isoformat(),
+                # Surface the search strategy so the UI can group/badge
+                # sweeps by mode without round-tripping to GET /sweeps/{id}.
+                # Older records predate cut2 and don't carry these keys —
+                # default to "grid" so the UI stays consistent.
+                "mode": plan.get("mode", "grid") if isinstance(plan, dict) else "grid",
+                "n_trials": (
+                    plan.get("n_trials") if isinstance(plan, dict) else None
+                ),
+                "seed": plan.get("seed") if isinstance(plan, dict) else None,
             }
         )
 
     # Merge in store-only sweeps (every child job archived/deleted).
     seen = {s["sweep_id"] for s in summaries}
-    for record in _list_sweep_records():
+    for record in records_by_id.values():
         if record.id in seen:
             continue
+        plan = record.plan if isinstance(record.plan, dict) else {}
         summaries.append(
             {
                 "sweep_id": record.id,
@@ -308,6 +435,9 @@ def list_sweeps() -> dict[str, Any]:
                 "earliest_created_at": record.created_at.isoformat(),
                 "latest_modified_at": record.created_at.isoformat(),
                 "archived": True,
+                "mode": plan.get("mode", "grid"),
+                "n_trials": plan.get("n_trials"),
+                "seed": plan.get("seed"),
             }
         )
 

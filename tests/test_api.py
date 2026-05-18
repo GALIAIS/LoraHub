@@ -2784,6 +2784,104 @@ def test_sweep_metadata_persists_across_restart(
         "sweep_id": sweep_id,
         "axis_values": {"network.rank": 16},
     }
+
+
+def test_create_sweep_random_mode_emits_n_trials(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`mode='random' + n_trials=4` must spawn exactly 4 jobs from a numeric axis."""
+    from lorahub.api import state as state_mod
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append({"workspace": workspace, "metadata": metadata})
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "random",
+        "n_trials": 4,
+        "seed": 11,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["mode"] == "random"
+    assert len(body["variants"]) == 4
+    assert len(captured) == 4
+    # Every captured rank lives inside the declared range.
+    for c in captured:
+        rank = c["metadata"]["axis_values"]["network.rank"]
+        assert 8 <= rank <= 64
+
+
+def test_create_sweep_random_without_n_trials_400(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Random mode without ``n_trials`` is a user error 鈥?400, not 500."""
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "values": [16, 32]}],
+        "mode": "random",
+        # n_trials missing
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 400
+    assert "n_trials" in r.json()["detail"]
+
+
+def test_create_sweep_tpe_without_optuna_503(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`mode='tpe'` with optuna missing must surface as a 503 with install hint."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "optuna", None)
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 3,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 503, r.text
+    detail = r.json()["detail"]
+    # Detail must carry the install hint so the error is actionable.
+    assert "lorahub[sweep]" in detail or "optuna" in detail
+
+
+def test_create_sweep_numeric_axis_missing_low_high_422(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Numeric axis with no `low`/`high` is rejected by the request schema."""
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform"}],
+        "mode": "grid",
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    # FastAPI's pydantic validator returns 422 for malformed request bodies.
+    assert r.status_code == 422, r.text
+
+
 def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     """GET /api/sweeps groups every metadata-tagged job by ``sweep_id``.
 

@@ -361,7 +361,7 @@ class SweepPlan:
         """
         return self._enumerate(self._effective_n_trials())
 
-    def materialize(self, n_trials: int | None = None) -> "MaterialisedSweep":
+    def materialize(self, n_trials: int | None = None) -> MaterialisedSweep:
         """Stateful materialisation. Yields trials lazily.
 
         Callers iterate ``MaterialisedSweep`` to get one variant at a
