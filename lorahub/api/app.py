@@ -537,9 +537,21 @@ if _WEB_DIST is not None:
 
     _INDEX = _WEB_ROOT / "index.html"
 
+    # `index.html` references hashed chunk filenames under /assets. After a
+    # redeploy the chunk hashes change and the old ones get rotated out;
+    # the only way for browsers to discover the new ones is to re-fetch
+    # index.html. Setting `Cache-Control: no-store` on the entry point —
+    # but NOT on /assets/* (those are content-hashed and immutable) —
+    # forces every navigation to revalidate the HTML while preserving CDN
+    # / browser caching for the heavy JS / CSS bundles.
+    _INDEX_HEADERS = {
+        "Cache-Control": "no-store, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
     @app.get("/", include_in_schema=False)
     def _index() -> FileResponse:
-        return FileResponse(_INDEX)
+        return FileResponse(_INDEX, headers=_INDEX_HEADERS)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def _spa_fallback(full_path: str) -> Response:
@@ -554,7 +566,11 @@ if _WEB_DIST is not None:
         except ValueError:
             raise HTTPException(status_code=404, detail="not found") from None
         if candidate.is_file():
+            # Static files other than index.html (favicon, woff2 fonts, …)
+            # don't carry hashes; let the browser cache them lightly.
             return FileResponse(candidate)
-        return FileResponse(_INDEX)
+        # SPA route fallback hits index.html — same no-store treatment so
+        # deep-link refreshes pick up the latest chunk pointers.
+        return FileResponse(_INDEX, headers=_INDEX_HEADERS)
 else:
     log.info("web/dist not found — serving API only (run `npm run build` in web/)")
