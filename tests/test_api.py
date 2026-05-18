@@ -3614,6 +3614,22 @@ def test_rebuild_restores_streaming_advance_context(
 # --------------------------------------------------------------------------- #
 
 
+def test_system_cluster_endpoint_returns_advisory(client: TestClient) -> None:
+    """B8: /api/system/cluster reports DeepSpeed launcher readiness.
+
+    On the test host dp may or may not be configured; the endpoint must
+    still return 200 with a meaningful payload (`ready` boolean +
+    `deepspeed_path` / `hostfile` advisory fields) rather than a 5xx.
+    """
+    r = client.get("/api/system/cluster")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "ready" in body
+    assert "deepspeed_path" in body
+    assert "hostfile" in body
+    assert isinstance(body["ready"], bool)
+
+
 def test_attention_backends_endpoint_shape(client: TestClient) -> None:
     """`GET /api/system/attention-backends` returns a stable, typed shape."""
     r = client.get("/api/system/attention-backends")

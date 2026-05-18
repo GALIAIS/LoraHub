@@ -270,7 +270,7 @@ def test_launch_writes_toml_files_and_runs_subprocess(
     recipe = TrainingConfig.model_validate(
         {
             "base_model": {"arch": "sdxl", "checkpoint": str(_make_recipe(tmp_path, repo, arch="sdxl").base_model.checkpoint)},
-            "dataset": {"source": str((tmp_path / "data"))},
+            "dataset": {"source": str(tmp_path / "data")},
             "schedule": {"epochs": 1, "batch_size": 1},
             "sampling": {"enabled": False},
             "backend": {
@@ -301,3 +301,129 @@ def test_launch_writes_toml_files_and_runs_subprocess(
     assert EventType.epoch_end in types
     assert EventType.checkpoint_saved in types
     assert types[-1] is EventType.done
+
+
+# --------------------------------------------------------------------------- #
+# B8 — Multi-node DeepSpeed launcher
+# --------------------------------------------------------------------------- #
+
+
+def test_dp_runner_passes_multi_node_launcher_flags(tmp_path: Path) -> None:
+    """B8: when recipe.backend.diffusionPipe.multiNode is set,
+    the runner prepends ``--hostfile`` / ``--num_nodes`` (etc.) to the
+    deepspeed argv BEFORE the train.py path. DeepSpeed's launcher parses
+    its own argv up to ``train.py`` so the order matters; this test
+    locks both presence + ordering.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from lorahub.core.backends.diffusion_pipe.runner import DiffusionPipeRunner
+
+    repo = tmp_path / "dp"
+    repo.mkdir()
+    (repo / "train.py").write_text("# stub\n", encoding="utf-8")
+    bindir = repo / "venv" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    deepspeed_bin = bindir / "deepspeed"
+    deepspeed_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    deepspeed_bin.chmod(0o755) if sys.platform != "win32" else None
+
+    captured: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        runner = DiffusionPipeRunner(
+            python=bindir / "python",
+            repo=repo,
+            argv=["--deepspeed", "--config", "x.toml"],
+            workspace=tmp_path / "ws",
+            on_event=lambda _e: None,
+            launcher_args=[
+                "--hostfile", "/abs/hostfile",
+                "--num_nodes", "4",
+                "--master_addr", "10.0.0.1",
+                "--master_port", "29501",
+            ],
+        )
+        runner.start()
+
+    assert len(captured) == 1
+    argv = captured[0]
+    # deepspeed bin first
+    assert argv[0].endswith("deepspeed") or argv[0].endswith("deepspeed.exe")
+    # launcher args come BEFORE train.py
+    train_idx = next(i for i, x in enumerate(argv) if x.endswith("train.py"))
+    hostfile_idx = argv.index("--hostfile")
+    num_nodes_idx = argv.index("--num_nodes")
+    master_addr_idx = argv.index("--master_addr")
+    master_port_idx = argv.index("--master_port")
+    assert hostfile_idx < train_idx
+    assert num_nodes_idx < train_idx
+    assert master_addr_idx < train_idx
+    assert master_port_idx < train_idx
+    # values land where expected
+    assert argv[hostfile_idx + 1] == "/abs/hostfile"
+    assert argv[num_nodes_idx + 1] == "4"
+    assert argv[master_addr_idx + 1] == "10.0.0.1"
+    assert argv[master_port_idx + 1] == "29501"
+    # recipe argv preserved AFTER train.py
+    assert "--deepspeed" in argv[train_idx + 1 :]
+    assert "--config" in argv[train_idx + 1 :]
+
+
+def test_dp_runner_no_launcher_args_when_single_node(tmp_path: Path) -> None:
+    """Single-node path: launcher_args=None → no --hostfile leaks in."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from lorahub.core.backends.diffusion_pipe.runner import DiffusionPipeRunner
+
+    repo = tmp_path / "dp"
+    repo.mkdir()
+    (repo / "train.py").write_text("# stub\n", encoding="utf-8")
+    bindir = repo / "venv" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    (bindir / "deepspeed").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    captured: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        runner = DiffusionPipeRunner(
+            python=bindir / "python",
+            repo=repo,
+            argv=["--deepspeed"],
+            workspace=tmp_path / "ws",
+            on_event=lambda _e: None,
+        )
+        runner.start()
+
+    argv = captured[0]
+    for flag in ("--hostfile", "--num_nodes", "--master_addr", "--master_port"):
+        assert flag not in argv, f"single-node should not emit {flag}"
+
+
+def test_multi_node_schema_requires_num_nodes_ge_2() -> None:
+    """schema validates num_nodes >= 2 — single-node use should leave the
+    whole multi_node block None instead of setting num_nodes=1."""
+    import pydantic
+
+    from lorahub.core.config.schema import MultiNodeConfig
+
+    # 2+ is fine
+    MultiNodeConfig(hostfile="/x", num_nodes=2)
+    MultiNodeConfig(hostfile="/x", num_nodes=8)
+    # 1 should fail
+    with pytest.raises(pydantic.ValidationError):
+        MultiNodeConfig(hostfile="/x", num_nodes=1)

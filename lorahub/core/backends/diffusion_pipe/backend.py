@@ -145,6 +145,20 @@ class DiffusionPipeBackend:
             path.write_text(content, encoding="utf-8")
 
         job_id = str(ulid.new())
+        # Multi-node launcher args (B8) — when the recipe has
+        # `backend.diffusionPipe.multiNode` set, forward the DeepSpeed
+        # launcher flags so the run spans multiple machines. dp's own
+        # train.py is unaffected; this only changes the launcher.
+        launcher_args: list[str] = []
+        dp_opts = cfg.backend.diffusion_pipe
+        if dp_opts is not None and dp_opts.multi_node is not None:
+            mn = dp_opts.multi_node
+            launcher_args += ["--hostfile", str(mn.hostfile)]
+            launcher_args += ["--num_nodes", str(mn.num_nodes)]
+            if mn.master_addr:
+                launcher_args += ["--master_addr", mn.master_addr]
+            if mn.master_port is not None:
+                launcher_args += ["--master_port", str(mn.master_port)]
         runner = DiffusionPipeRunner(
             python=bootstrap_env.python_executable,
             repo=bootstrap_env.repo_path,
@@ -153,6 +167,7 @@ class DiffusionPipeBackend:
             on_event=on_event,
             job_id=job_id,
             env=env,
+            launcher_args=launcher_args,
         )
         runner.start()
 

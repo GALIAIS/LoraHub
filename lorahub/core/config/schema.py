@@ -655,6 +655,33 @@ class OutputConfig(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class MultiNodeConfig(BaseModel):
+    """Multi-node DeepSpeed launcher knobs (forwarded to ``deepspeed`` CLI).
+
+    DeepSpeed itself reads the hostfile to discover workers and rsyncs
+    code. LoraHub doesn't manage the rsync — the user is responsible for
+    keeping the diffusion-pipe checkout + venv on every node. The
+    configured ``master_addr`` must be reachable from every worker; if
+    omitted DeepSpeed picks the first hostfile entry's hostname, which
+    is fine for tightly-coupled clusters.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    # Path to the DeepSpeed-format hostfile. Each line: ``host slots=N``.
+    # Resolved relative to cwd if not absolute.
+    hostfile: Path
+    # Total node count. DeepSpeed cross-checks against the hostfile and
+    # raises if they disagree, so this is mostly a safety check + a
+    # sanity gate before launch.
+    num_nodes: int = Field(ge=2)
+    # Optional explicit master address for rendezvous. Leave None to let
+    # DeepSpeed auto-discover from the hostfile's first host.
+    master_addr: str | None = None
+    # Optional master port. DeepSpeed default is 29500.
+    master_port: int | None = Field(default=None, ge=1024, le=65535)
+
+
 class DiffusionPipeOptions(BaseModel):
     """diffusion-pipe specific knobs not represented anywhere else.
 
@@ -730,6 +757,14 @@ class DiffusionPipeOptions(BaseModel):
     # ArchPathsConfig. Most arches should now use cfg.base_model.arch_paths
     # instead; this remains for upstream additions we haven't typed yet.
     model_paths: dict[str, str] = Field(default_factory=dict)
+
+    # ---- Multi-node DeepSpeed launcher (B8) ----
+    # When set, the dp runner forwards ``--hostfile`` / ``--num_nodes`` /
+    # ``--master_addr`` to the deepspeed launcher so a job spans multiple
+    # machines. Single-node training (the common case) leaves this None.
+    # The hostfile is the standard DeepSpeed shape — one line per host
+    # in the form ``hostname slots=N``.
+    multi_node: MultiNodeConfig | None = None
 
 
 class AnimaLoraMethodLoraConfig(BaseModel):
