@@ -36,6 +36,7 @@ import logging
 import math
 import threading
 from pathlib import Path
+from typing import Any
 
 from lorahub.api.state import JobRecord
 from lorahub.core.sweep import MaterialisedSweep
@@ -175,9 +176,135 @@ def report_terminal_job(job: JobRecord) -> None:
         unregister_sweep(sweep_id)
 
 
+def rebuild_active_sweeps(state_module: Any, sweep_store: Any) -> int:
+    """Re-register live sweeps from persisted state on app startup.
+
+    A server restart wipes ``_active_sweeps``. Without this hook, any
+    in-flight TPE sweep silently degrades — the dangling RUNNING trials
+    in the optuna RDB never receive their score, and the next call to
+    :meth:`MaterialisedSweep.next_variant` (if the user re-asks for a
+    fresh batch) starts cold instead of consulting prior trials.
+
+    For every sweep in ``sweep_store`` whose ``plan`` carries a TPE
+    ``study_path``, we rebuild the SweepPlan from the stored axes /
+    base_config and call ``materialize()`` against the same sqlite
+    file. The resulting MaterialisedSweep gets registered under its
+    sweep_id so the next terminal-job callback for one of its
+    children lands on the right sampler.
+
+    Sweeps with no ``study_path`` (grid / random) are skipped — they
+    have nothing in-memory worth restoring; their pareto data still
+    surfaces from JobRecord history.
+
+    Returns the number of sweeps re-registered. Best-effort: a missing
+    optuna install or an unreadable sqlite file just skips that sweep
+    instead of failing startup.
+    """
+    if sweep_store is None:
+        return 0
+
+    # Lazy imports — sweep_runtime is imported during normal request
+    # paths and shouldn't drag SweepPlan / SweepAxis until restart.
+    from lorahub.core.sweep import (  # noqa: PLC0415
+        SamplerUnavailableError,
+        SweepError,
+        SweepPlan,
+    )
+
+    rebuilt = 0
+    try:
+        records = sweep_store.list()
+    except Exception:  # noqa: BLE001
+        log.exception("sweep rebuild: list() failed")
+        return 0
+
+    # Index live JobRecords by sweep_id so we can decide whether a
+    # sweep still has in-flight or unreported trials worth restoring.
+    by_sweep: dict[str, list[Any]] = {}
+    for j in state_module.registry.list():
+        meta = j.metadata if isinstance(j.metadata, dict) else None
+        if not meta:
+            continue
+        sid = meta.get("sweep_id")
+        if isinstance(sid, str):
+            by_sweep.setdefault(sid, []).append(j)
+
+    for record in records:
+        plan_dict = record.plan if isinstance(record.plan, dict) else {}
+        study_path_str = plan_dict.get("study_path")
+        if not study_path_str:
+            continue  # grid / random — no live state worth restoring
+        study_path = Path(study_path_str)
+        if not study_path.is_file():
+            # The sqlite file is gone (manual cleanup, missing volume).
+            # Skip rather than spam the log every restart.
+            continue
+
+        # Skip sweeps where every child is already terminal — any
+        # dangling trials in the RDB will never get a score now, and
+        # no future job-completion callback will arrive.
+        children = by_sweep.get(record.id, [])
+        if children and all(_is_terminal(j) for j in children):
+            continue
+
+        try:
+            axes = [_axis_from_dump(a) for a in plan_dict.get("axes", [])]
+            plan = SweepPlan(
+                base_config=record.base_config,
+                axes=axes,
+                name_template=plan_dict.get("name_template", "{base}-{i:03d}"),
+                mode=plan_dict.get("mode", "tpe"),
+                n_trials=plan_dict.get("n_trials"),
+                seed=plan_dict.get("seed"),
+                storage_path=study_path,
+                study_name=record.id,
+            )
+            materialised = plan.materialize()
+        except SamplerUnavailableError:
+            log.warning(
+                "sweep %s: optuna not installed; skipping rebuild", record.id
+            )
+            continue
+        except SweepError:
+            log.exception("sweep %s: rebuild failed (plan invalid)", record.id)
+            continue
+        except Exception:  # noqa: BLE001
+            log.exception("sweep %s: rebuild failed", record.id)
+            continue
+
+        register_sweep(record.id, materialised)
+        rebuilt += 1
+
+    if rebuilt:
+        log.info("rebuilt %d active sweep(s) on startup", rebuilt)
+    return rebuilt
+
+
+def _is_terminal(job: Any) -> bool:
+    """Lazy state.JobState terminal check — avoids a top-level cycle."""
+    from lorahub.api.jobs_helpers import _TERMINAL_STATES  # noqa: PLC0415
+
+    return job.state in _TERMINAL_STATES
+
+
+def _axis_from_dump(dumped: dict[str, Any]) -> Any:
+    """Inverse of routers.sweeps._axis_dump — used only by the rebuild path."""
+    from lorahub.core.sweep import SweepAxis  # noqa: PLC0415
+
+    return SweepAxis(
+        path=dumped["path"],
+        kind=dumped.get("kind", "categorical"),
+        values=list(dumped.get("values") or []),
+        low=dumped.get("low"),
+        high=dumped.get("high"),
+        step=dumped.get("step"),
+    )
+
+
 __all__ = [
     "_active_sweeps",
     "get_active",
+    "rebuild_active_sweeps",
     "register_sweep",
     "report_terminal_job",
     "reset_for_tests",

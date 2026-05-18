@@ -3205,6 +3205,130 @@ def test_tpe_feedback_failed_job_reports_inf(
     assert math.isinf(scores[1])
 
 
+def test_tpe_sweep_survives_restart(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end recovery: TPE sweep -> wipe in-memory registry -> rebuild ->
+    pending trial's score still lands on the right RUNNING trial in the RDB.
+
+    This is the core cut4.A guarantee. Without ``rebuild_active_sweeps``
+    the second ``report_terminal_job`` after the simulated restart would
+    no-op (no live MaterialisedSweep) and the dangling RUNNING trial in
+    the optuna sqlite would never receive its score.
+    """
+    pytest.importorskip("optuna", reason="optuna is optional")
+    import optuna
+
+    from lorahub.api import app as app_mod
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+    from lorahub.api.sweep_store import SweepStore
+
+    # The fresh-fixture sets _sweep_store=None; we need a real one for
+    # the rebuild path to have something to read on restart.
+    monkeypatch.setattr(app_mod, "_sweep_store", SweepStore(tmp_path / "sweeps.sqlite"))
+
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 2,
+        "seed": 7,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    sweep_id = r.json()["sweep_id"]
+
+    # Reach into the SweepStore directly to confirm study_path landed
+    # in the persisted plan — the rebuild path keys off this field.
+    record = app_mod._sweep_store.get(sweep_id)
+    assert record is not None
+    assert record.plan["study_path"], "study_path must persist in the plan"
+    study_path = Path(record.plan["study_path"])
+    assert study_path.is_file()
+
+    # Report trial #1 normally so we have one COMPLETE trial in the RDB.
+    _write_events_jsonl(captured[0].workspace, loss=0.5)
+    captured[0].state = state.JobState.succeeded
+    state_mod.registry.update(captured[0])
+    sweep_runtime.report_terminal_job(captured[0])
+
+    # SIMULATE RESTART: drop the in-memory registry. The optuna sqlite
+    # still has trial #2 in RUNNING; the live MaterialisedSweep is gone.
+    sweep_runtime.reset_for_tests()
+    assert sweep_runtime.get_active(sweep_id) is None
+
+    # Rebuild from the persisted plan + sweep_store, the way startup does.
+    rebuilt_count = sweep_runtime.rebuild_active_sweeps(state_mod, app_mod._sweep_store)
+    assert rebuilt_count == 1
+    assert sweep_runtime.get_active(sweep_id) is not None
+
+    # Now report trial #2: the rebuilt sampler must find the dangling
+    # RUNNING trial by its axis_values and tell() the right row.
+    _write_events_jsonl(captured[1].workspace, loss=0.2)
+    captured[1].state = state.JobState.succeeded
+    state_mod.registry.update(captured[1])
+    sweep_runtime.report_terminal_job(captured[1])
+
+    # Open the study one more time (read-only path) and verify both
+    # trials are COMPLETE with the right values.
+    storage_url = f"sqlite:///{study_path.as_posix()}"
+    study = optuna.load_study(study_name=sweep_id, storage=storage_url)
+    completed = study.get_trials(states=(optuna.trial.TrialState.COMPLETE,))
+    assert len(completed) == 2
+    values = sorted(t.value for t in completed)
+    assert values == [pytest.approx(0.2), pytest.approx(0.5)]
+
+
+def test_rebuild_skips_grid_random_sweeps(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Grid / random sweeps have no study to restore — rebuild must skip them
+    rather than crashing on a missing study_path."""
+    from lorahub.api import app as app_mod
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "values": [16, 32]}],
+        "mode": "grid",
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202
+
+    sweep_runtime.reset_for_tests()
+    rebuilt = sweep_runtime.rebuild_active_sweeps(state_mod, app_mod._sweep_store)
+    assert rebuilt == 0
+
+
 # --------------------------------------------------------------------------- #
 # Attention backend endpoints
 # --------------------------------------------------------------------------- #

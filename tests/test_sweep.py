@@ -283,3 +283,77 @@ def test_tpe_without_optuna_raises_sampler_unavailable(
     monkeypatch.setitem(sys.modules, "optuna", None)
     with pytest.raises(SamplerUnavailableError, match="optuna"):
         plan.materialize()
+
+
+# --------------------------------------------------------------------------- #
+# RDBStorage persistence (B4 cut4.A)
+# --------------------------------------------------------------------------- #
+
+
+def test_tpe_study_round_trips_through_sqlite(tmp_path: Path) -> None:
+    """Reopening the same `storage_path` must surface every prior trial.
+
+    Drops two completed trials with controlled scores, throws the sampler
+    away, opens a fresh OptunaTPESampler against the same sqlite file,
+    and verifies the prior trials are visible to the new study (the
+    primary thing the cut4.A restart story relies on).
+    """
+    pytest.importorskip("optuna", reason="optuna is optional")
+    from lorahub.core.sweep import OptunaTPESampler, SweepAxis
+
+    db = tmp_path / "study.db"
+    axes = [
+        SweepAxis(path="network.rank", kind="int_uniform", low=8, high=64),
+        SweepAxis(path="optimizer.lr.unet", kind="loguniform", low=1e-5, high=1e-3),
+    ]
+    s1 = OptunaTPESampler(axes, seed=11, storage_path=db, study_name="t")
+    a1 = s1.suggest()
+    s1.report(a1, 0.42)
+    a2 = s1.suggest()
+    s1.report(a2, 0.18)
+
+    # Throw the live sampler away — no shared in-memory state with s2.
+    del s1
+
+    s2 = OptunaTPESampler(axes, seed=11, storage_path=db, study_name="t")
+    completed = s2._study.get_trials(deepcopy=False)
+    assert len(completed) == 2
+    values = sorted(t.value for t in completed)
+    assert values == [pytest.approx(0.18), pytest.approx(0.42)]
+
+
+def test_tpe_report_after_restart_finds_running_trial(tmp_path: Path) -> None:
+    """Restart wipes `_pending` but leaves a RUNNING trial in the RDB.
+
+    The restart-recovery contract is: ask -> simulate restart by
+    constructing a new sampler against the same study -> report by
+    axis_values lands on the dangling RUNNING trial. Without the
+    fallback path the report would silently no-op.
+    """
+    pytest.importorskip("optuna", reason="optuna is optional")
+    import optuna
+
+    from lorahub.core.sweep import OptunaTPESampler, SweepAxis
+
+    db = tmp_path / "study.db"
+    axes = [SweepAxis(path="network.rank", kind="int_uniform", low=8, high=64)]
+    s1 = OptunaTPESampler(axes, seed=3, storage_path=db, study_name="r")
+    suggested = s1.suggest()
+    # Drop the live sampler — `_pending` goes with it.
+    del s1
+
+    s2 = OptunaTPESampler(axes, seed=3, storage_path=db, study_name="r")
+    # Before report: one RUNNING trial in the RDB.
+    assert (
+        len(s2._study.get_trials(states=(optuna.trial.TrialState.RUNNING,)))
+        == 1
+    )
+    s2.report(suggested, 0.27)
+    # After report: zero RUNNING, one COMPLETE.
+    assert (
+        len(s2._study.get_trials(states=(optuna.trial.TrialState.RUNNING,)))
+        == 0
+    )
+    completed = s2._study.get_trials(states=(optuna.trial.TrialState.COMPLETE,))
+    assert len(completed) == 1
+    assert completed[0].value == pytest.approx(0.27)

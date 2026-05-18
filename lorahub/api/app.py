@@ -163,6 +163,19 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     except Exception:  # noqa: BLE001
         log.exception("auto-resume hook failed; continuing startup")
 
+    # Sweep restart recovery: rebuild MaterialisedSweep instances for
+    # any TPE sweep whose study sqlite file still exists. Without this,
+    # in-flight TPE sweeps silently degrade after a server restart —
+    # dangling RUNNING trials in the RDB never get their score, and
+    # the live registry stays empty so the next ask() ignores prior
+    # work. Best-effort: a missing optuna install just skips it.
+    try:
+        from lorahub.api import sweep_runtime  # noqa: PLC0415
+
+        sweep_runtime.rebuild_active_sweeps(state, _sweep_store)
+    except Exception:  # noqa: BLE001
+        log.exception("sweep rebuild hook failed; continuing startup")
+
     # Resize the module-level scheduler from persisted Settings before
     # workers start. We reach for the *current* `_settings_store` symbol
     # rather than a captured reference so test monkeypatches still apply.

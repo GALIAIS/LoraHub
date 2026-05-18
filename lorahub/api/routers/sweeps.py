@@ -38,6 +38,7 @@ the job row in SQLite, so sweep_id grouping survives a server restart.
 
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
@@ -196,6 +197,26 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
     except SweepError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    sweep_id = str(ulid.new())
+    workspace_root = (
+        Path(req.workspace_root).resolve()
+        if req.workspace_root
+        else (Path.cwd() / "runs").resolve()
+    )
+
+    # For TPE, point the study at a per-sweep sqlite file under the
+    # workspace root. Reopening the same path on a future restart
+    # restores every prior trial — completed ones feed the TPE prior,
+    # RUNNING ones (left dangling by the restart) get matched by their
+    # axis_values when their job's terminal callback fires. Grid /
+    # random ignore storage_path so this is a no-op for them.
+    study_path: Path | None = None
+    if req.mode == "tpe":
+        study_path = workspace_root / "_sweeps" / sweep_id / "study.db"
+        plan = dataclasses.replace(
+            plan, storage_path=study_path, study_name=sweep_id
+        )
+
     # Drive the sweep through MaterialisedSweep so all three modes go
     # through the same code path. For grid this is equivalent to the
     # legacy `expand()`; for random/tpe it lazily yields one variant
@@ -216,13 +237,6 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SweepError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    sweep_id = str(ulid.new())
-    workspace_root = (
-        Path(req.workspace_root).resolve()
-        if req.workspace_root
-        else (Path.cwd() / "runs").resolve()
-    )
 
     # Register the sweep BEFORE launching any child job — the launch
     # closure runs in a worker thread and may transition the job to a
@@ -290,6 +304,7 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                     "mode": req.mode,
                     "n_trials": req.n_trials,
                     "seed": req.seed,
+                    "study_path": str(study_path) if study_path else None,
                 },
                 base_config=req.base_config,
                 job_ids=job_ids,

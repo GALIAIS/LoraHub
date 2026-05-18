@@ -32,6 +32,7 @@ import itertools
 import math
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 # Hard ceiling on the number of variants produced by a single SweepPlan.
@@ -230,8 +231,15 @@ class OptunaTPESampler:
 
     The study minimises by default (lower loss is better); flip
     ``direction`` to ``"maximize"`` when wiring up a "higher score
-    wins" metric. The study is held in-memory only; persistence
-    across restarts will live in :class:`SweepStore` when we wire it.
+    wins" metric.
+
+    Persistence: when ``storage_path`` is provided, the study is backed
+    by a SQLite file via Optuna's RDBStorage. Reopening the same path
+    loads every prior trial — completed trials feed the TPE prior,
+    RUNNING trials (left dangling by a server restart) are matched in
+    :meth:`report` by their ``params`` so the metric still lands on
+    the right trial. Without ``storage_path`` the study is in-memory
+    only (the original cut1 behaviour, kept for tests).
     """
 
     def __init__(
@@ -239,6 +247,8 @@ class OptunaTPESampler:
         axes: list[SweepAxis],
         seed: int | None = None,
         direction: Literal["minimize", "maximize"] = "minimize",
+        storage_path: Path | None = None,
+        study_name: str | None = None,
     ) -> None:
         try:
             import optuna  # noqa: PLC0415
@@ -255,13 +265,29 @@ class OptunaTPESampler:
         # Silence Optuna's chatty per-trial INFO logger; we surface
         # progress through TrainingEvent / sweep_progress instead.
         optuna.logging.set_verbosity(optuna.logging.WARNING)
-        self._study = optuna.create_study(
-            direction=direction,
-            sampler=sampler,
-        )
+        if storage_path is not None:
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            # `sqlite:///abs_path` is what RDBStorage wants. On Windows
+            # the absolute path starts with a drive letter, which Optuna
+            # accepts as `sqlite:///C:/path/to.db`.
+            url = f"sqlite:///{storage_path.as_posix()}"
+            self._study = optuna.create_study(
+                direction=direction,
+                sampler=sampler,
+                storage=url,
+                study_name=study_name or "lorahub-sweep",
+                load_if_exists=True,
+            )
+        else:
+            self._study = optuna.create_study(
+                direction=direction,
+                sampler=sampler,
+            )
         # Stash the in-flight Trial keyed by its frozen-axes tuple so
         # we can map a `report()` callback back to the right trial
-        # even if the caller reports out of order.
+        # even if the caller reports out of order. Restart wipes this
+        # map; :meth:`report` falls back to a study-side scan in that
+        # case, so the metric still lands on the right RUNNING trial.
         self._pending: dict[tuple[Any, ...], Any] = {}
 
     def suggest(self) -> dict[str, Any]:
@@ -276,10 +302,27 @@ class OptunaTPESampler:
     def report(self, axis_values: dict[str, Any], score: float) -> None:
         key = tuple(axis_values[a.path] for a in self._axes)
         trial = self._pending.pop(key, None)
-        if trial is None:
-            # Out-of-order or duplicate report; safe to ignore.
+        if trial is not None:
+            self._study.tell(trial, score)
             return
-        self._study.tell(trial, score)
+        # Restart fallback: _pending is empty after a process restart,
+        # but the RDB-backed study still has the dangling RUNNING trial.
+        # Find it by params and tell by trial_id so the score lands on
+        # the right row even though the live Trial object is gone.
+        running = self._study.get_trials(
+            states=(self._optuna.trial.TrialState.RUNNING,),
+            deepcopy=False,
+        )
+        for t in running:
+            if all(
+                _params_match(t.params.get(a.path), axis_values.get(a.path))
+                for a in self._axes
+            ):
+                self._study.tell(t.number, score)
+                return
+        # Truly orphan report (duplicate, or trial already completed):
+        # nothing to do. Don't surface — the run is already done, this
+        # is bookkeeping.
 
     def _suggest_one(self, trial: Any, axis: SweepAxis) -> Any:
         # Optuna API: each `suggest_*` keys off `axis.path` so a TPE
@@ -301,20 +344,43 @@ def make_sampler(
     *,
     seed: int | None = None,
     direction: Literal["minimize", "maximize"] = "minimize",
+    storage_path: Path | None = None,
+    study_name: str | None = None,
 ) -> Sampler:
     """Factory: pick the right Sampler for `mode`.
 
     Validation lives here (not in each Sampler's __init__) so the API
-    layer hits a single error class when `mode` is bad.
+    layer hits a single error class when `mode` is bad. ``storage_path``
+    + ``study_name`` are TPE-only — the other samplers ignore them.
     """
     if mode == "grid":
         return GridSampler(axes)
     if mode == "random":
         return RandomSampler(axes, seed=seed)
     if mode == "tpe":
-        return OptunaTPESampler(axes, seed=seed, direction=direction)
+        return OptunaTPESampler(
+            axes,
+            seed=seed,
+            direction=direction,
+            storage_path=storage_path,
+            study_name=study_name,
+        )
     msg = f"unknown sweep mode: {mode!r}"
     raise SweepError(msg)
+
+
+def _params_match(a: Any, b: Any) -> bool:
+    """True when an Optuna-stored param round-trips to the same value.
+
+    RDBStorage stringifies floats via repr; reading back can land at
+    e.g. 0.0001000000000001 vs 1e-4. Compare numerics with a relative
+    tolerance and fall back to ``==`` for everything else.
+    """
+    if a is None or b is None:
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-12)
+    return a == b
 
 
 # --------------------------------------------------------------------------- #
@@ -343,6 +409,10 @@ class SweepPlan:
     mode: SweepMode = "grid"
     n_trials: int | None = None
     seed: int | None = None
+    # Optional sqlite path for the TPE study. Reopening the same path
+    # restores every prior trial; ignored for grid / random.
+    storage_path: Path | None = None
+    study_name: str | None = None
 
     # ------------------------------------------------------------- #
     # Static (offline) materialisation — used by grid + the legacy
@@ -428,7 +498,13 @@ class SweepPlan:
         for axis in self.axes:
             _validate_path(self.base_config, axis.path)
 
-        sampler = make_sampler(self.mode, list(self.axes), seed=self.seed)
+        sampler = make_sampler(
+            self.mode,
+            list(self.axes),
+            seed=self.seed,
+            storage_path=self.storage_path,
+            study_name=self.study_name,
+        )
         base_name = (
             self.base_config.get("output", {}).get("name")
             if isinstance(self.base_config.get("output"), dict)
@@ -495,7 +571,11 @@ class MaterialisedSweep:
         for axis in self.plan.axes:
             _validate_path(self.plan.base_config, axis.path)
         self._sampler = make_sampler(
-            self.plan.mode, list(self.plan.axes), seed=self.plan.seed
+            self.plan.mode,
+            list(self.plan.axes),
+            seed=self.plan.seed,
+            storage_path=self.plan.storage_path,
+            study_name=self.plan.study_name,
         )
 
     @property
