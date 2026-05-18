@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { PathDisplay } from "@/components/path-display"
 import { Download, ExternalLink } from "lucide-react"
 import { fmtBytes, fmtUnixSeconds, TERMINAL_STATES } from "../utils"
 
@@ -155,8 +156,9 @@ export function FilesTab({
 
   return (
     <div className="space-y-4">
-      <div className="text-[11px] text-muted-foreground font-mono truncate">
-        工作区 {data.workspace}
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span className="shrink-0">工作区</span>
+        <PathDisplay path={data.workspace} tailSegments={3} block className="min-w-0" />
       </div>
 
       <Card className="overflow-hidden">

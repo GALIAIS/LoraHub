@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { PathDisplay } from "@/components/path-display"
 import { toast } from "sonner"
 import {
   BarChart3,
@@ -241,9 +242,12 @@ export function JobDetail({
             {jobId}
           </div>
           {data && (
-            <div className="text-xs text-muted-foreground mt-1 font-mono truncate">
-              {data.workspace}
-            </div>
+            <PathDisplay
+              path={data.workspace}
+              tailSegments={3}
+              block
+              className="text-xs text-muted-foreground mt-1"
+            />
           )}
           {actionError && (
             <div className="text-[11px] text-destructive mt-2 break-all">

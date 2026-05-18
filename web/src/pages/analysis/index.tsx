@@ -30,6 +30,7 @@ import { useJobsList } from "@/lib/queries/jobs"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { PathDisplay } from "@/components/path-display"
 import { cn } from "@/lib/utils"
 import {
   COMPARE_LIMIT,
@@ -236,9 +237,12 @@ export function AnalysisPage() {
                     : activeJob?.id}
                 </div>
                 {activeJob?.workspace && !isCompareRoute && (
-                  <div className="text-xs text-muted-foreground mt-1 font-mono truncate">
-                    {activeJob.workspace}
-                  </div>
+                  <PathDisplay
+                    path={activeJob.workspace}
+                    tailSegments={3}
+                    block
+                    className="text-xs text-muted-foreground mt-1"
+                  />
                 )}
               </div>
               {activeJob && !isCompareRoute && (
