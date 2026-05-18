@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import App from "./App"
 import { JobsPage } from "./pages/jobs"
+import { AnalysisPage } from "./pages/analysis"
 import { DashboardPage } from "./pages/dashboard"
 import { ConfigsPage } from "./pages/configs"
 import { DatasetsPage } from "./pages/datasets"
@@ -32,6 +33,9 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<App />}>
             <Route index element={<DashboardPage />} />
             <Route path="jobs" element={<JobsPage />} />
+            <Route path="analysis" element={<AnalysisPage />} />
+            <Route path="analysis/compare" element={<AnalysisPage />} />
+            <Route path="analysis/:jobId" element={<AnalysisPage />} />
             <Route path="sweeps" element={<SweepsPage />} />
             <Route path="configs" element={<ConfigsPage />} />
             <Route path="datasets" element={<DatasetsPage />} />

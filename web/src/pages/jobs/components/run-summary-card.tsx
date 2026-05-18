@@ -17,7 +17,14 @@
  * stats.
  */
 import { useEffect, useMemo, useState } from "react"
-import { ArrowDownRight, ChevronDown, Hourglass, Zap } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import {
+  ArrowDownRight,
+  BarChart3,
+  ChevronDown,
+  Hourglass,
+  Zap,
+} from "lucide-react"
 import { Card, CardContent, CardTitle } from "@/components/ui/card"
 import type { JobDetail, JobMetricsResponse } from "@/lib/api"
 import { fmtDuration } from "../utils"
@@ -34,6 +41,7 @@ interface Props {
 }
 
 export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
+  const navigate = useNavigate()
   const summary = useMemo(
     () => deriveSummary(job, metrics, fallbackTotalSteps),
     [job, metrics, fallbackTotalSteps],
@@ -57,30 +65,54 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
 
   return (
     <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
-      <button
-        type="button"
-        onClick={() => setCollapsed((v) => !v)}
-        aria-expanded={!collapsed}
+      <div
         className={cn(
-          "w-full text-left flex items-center justify-between gap-3",
+          "w-full flex items-center justify-between gap-3",
           "py-2.5 px-4 bg-muted/40 hover:bg-muted/60 transition-colors",
           collapsed ? "border-b-0" : "border-b border-border/60",
         )}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          className="flex items-center gap-3 min-w-0 text-left flex-1 hover:text-foreground transition-colors"
+        >
           <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground shrink-0">
             训练健康摘要
           </CardTitle>
           {collapsed && <CollapsedSnapshot summary={summary} />}
-        </div>
-        <ChevronDown
-          className={cn(
-            "size-3.5 text-muted-foreground/80 shrink-0 transition-transform",
-            collapsed ? "-rotate-90" : "rotate-0",
+        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {job?.id && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                navigate(`/analysis/${job.id}`)
+              }}
+              title="在分析工作台打开 (loss / AI 分析)"
+              className="inline-flex items-center gap-1 rounded-[3px] border border-transparent px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-border/60 hover:bg-background/60 hover:text-foreground"
+            >
+              <BarChart3 className="size-3" /> 分析
+            </button>
           )}
-          aria-hidden
-        />
-      </button>
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            aria-label={collapsed ? "展开摘要" : "折叠摘要"}
+            className="p-1 text-muted-foreground/80 hover:text-foreground"
+          >
+            <ChevronDown
+              className={cn(
+                "size-3.5 transition-transform",
+                collapsed ? "-rotate-90" : "rotate-0",
+              )}
+              aria-hidden
+            />
+          </button>
+        </div>
+      </div>
       {!collapsed && (
         <CardContent className="p-3 grid gap-3 grid-cols-1 md:grid-cols-3">
           <ProgressBlock summary={summary} />

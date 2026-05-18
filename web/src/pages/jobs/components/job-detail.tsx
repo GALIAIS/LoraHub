@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate } from "react-router-dom"
 import { api, useJobStream } from "@/lib/api"
 import {
   AlertDialog,
@@ -14,7 +15,14 @@ import {
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Square, RefreshCw, FolderOpen, Archive, Skull } from "lucide-react"
+import {
+  BarChart3,
+  Square,
+  RefreshCw,
+  FolderOpen,
+  Archive,
+  Skull,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import { StateBadge } from "../../dashboard"
@@ -22,13 +30,10 @@ import { TERMINAL_STATES } from "../utils"
 import { expectedTotalSteps } from "../utils"
 import { OverviewTab } from "./overview-tab"
 import { EventsTab } from "./events-tab"
-import { MetricsTab } from "./metrics-tab"
-import { AnalysisTab } from "./analysis-tab"
 import { FilesTab } from "./files-tab"
 import { RunSummaryCard } from "./run-summary-card"
-import { CompareTab } from "./compare-tab"
 
-type TabKey = "overview" | "events" | "metrics" | "analysis" | "files" | "compare"
+type TabKey = "overview" | "events" | "files"
 
 export function JobDetail({
   jobId,
@@ -42,6 +47,7 @@ export function JobDetail({
   compareIds: string[]
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<TabKey>("overview")
   const job = useQuery({
     queryKey: ["job", jobId],
@@ -94,7 +100,11 @@ export function JobDetail({
   const events = stream.events
   const isLive = data?.state === "running"
   const isTerminal = data ? TERMINAL_STATES.has(data.state) : false
-  const showCompare = compareMode && compareIds.length >= 2
+  // Compare-mode in the jobs page is a *jumping-off point*: we keep the
+  // checkbox UX in the sidebar, but the actual compare panels live on
+  // the analysis workbench so the detail view stays focused on running
+  // / inspecting one job.
+  const showCompareJumpButton = compareMode && compareIds.length >= 2
 
   async function onCancel() {
     if (!data) return
@@ -196,6 +206,25 @@ export function JobDetail({
           <Button
             variant="outline"
             size="sm"
+            onClick={() =>
+              navigate(
+                showCompareJumpButton
+                  ? `/analysis/compare?ids=${compareIds.join(",")}`
+                  : `/analysis/${jobId}`,
+              )
+            }
+            title={
+              showCompareJumpButton
+                ? "在分析工作台中对比所选任务"
+                : "打开训练分析工作台"
+            }
+          >
+            <BarChart3 className="size-3" />{" "}
+            {showCompareJumpButton ? "对比分析" : "深入分析"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onReveal}
             disabled={!data || busy !== null}
             title="在文件管理器中打开工作区"
@@ -270,10 +299,7 @@ export function JobDetail({
           <TabsList variant="line">
             <TabsTrigger value="overview">概览</TabsTrigger>
             <TabsTrigger value="events">事件</TabsTrigger>
-            <TabsTrigger value="metrics">指标曲线</TabsTrigger>
-            <TabsTrigger value="analysis">详细分析</TabsTrigger>
             <TabsTrigger value="files">产物文件</TabsTrigger>
-            {showCompare && <TabsTrigger value="compare">对比</TabsTrigger>}
           </TabsList>
         </div>
 
@@ -300,20 +326,6 @@ export function JobDetail({
               />
             </div>
           </TabsContent>
-          <TabsContent value="metrics" className="h-full">
-            <ScrollArea className="h-full">
-              <div className="px-7 py-5">
-                <MetricsTab jobId={jobId} jobState={data?.state} />
-              </div>
-            </ScrollArea>
-          </TabsContent>
-          <TabsContent value="analysis" className="h-full">
-            <ScrollArea className="h-full">
-              <div className="px-7 py-5">
-                <AnalysisTab jobId={jobId} jobState={data?.state} />
-              </div>
-            </ScrollArea>
-          </TabsContent>
           <TabsContent value="files" className="h-full">
             <ScrollArea className="h-full">
               <div className="px-7 py-5">
@@ -321,15 +333,6 @@ export function JobDetail({
               </div>
             </ScrollArea>
           </TabsContent>
-          {showCompare && (
-            <TabsContent value="compare" className="h-full">
-              <ScrollArea className="h-full">
-                <div className="px-7 py-5">
-                  <CompareTab compareIds={compareIds} />
-                </div>
-              </ScrollArea>
-            </TabsContent>
-          )}
         </div>
       </Tabs>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>

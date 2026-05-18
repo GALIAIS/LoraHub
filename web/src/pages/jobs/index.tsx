@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
+import { useNavigate, useSearchParams } from "react-router-dom"
+import { ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type JobSummary } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -46,6 +46,7 @@ export function JobsPage() {
   const [hideCompleted, setHideCompleted] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
+  const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
@@ -185,9 +186,26 @@ export function JobsPage() {
           onCompareModeChange={setCompareMode}
         />
         {compareMode && (
-          <div className="px-5 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground">
-            已选 {compareIds.length} / {COMPARE_LIMIT}
-            {compareIds.length >= COMPARE_LIMIT && " · 已达上限"}
+          <div className="px-5 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground flex items-center gap-2">
+            <span className="flex-1">
+              已选 {compareIds.length} / {COMPARE_LIMIT}
+              {compareIds.length >= COMPARE_LIMIT && " · 已达上限"}
+            </span>
+            {compareIds.length >= 2 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 text-[11px]"
+                onClick={() =>
+                  navigate(
+                    `/analysis/compare?ids=${compareIds.join(",")}`,
+                  )
+                }
+                title="到分析工作台对比 loss / 指标"
+              >
+                对比 <ArrowRight className="size-3" />
+              </Button>
+            )}
           </div>
         )}
         <ScrollArea className="flex-1 min-h-0">

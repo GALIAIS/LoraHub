@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { NavLink, Outlet } from "react-router-dom"
 import {
   Activity,
+  BarChart3,
   Database,
   Images,
   Info,
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils"
 const NAV = [
   { to: "/", label: "数据面板", icon: Activity },
   { to: "/jobs", label: "训练任务", icon: ListTree },
+  { to: "/analysis", label: "训练分析", icon: BarChart3 },
   { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal },
   { to: "/configs", label: "训练配置", icon: Layers },
   { to: "/datasets", label: "数据集", icon: Database },
