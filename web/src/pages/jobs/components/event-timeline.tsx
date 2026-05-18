@@ -91,6 +91,12 @@ interface Milestone {
 function buildMilestones(events: TrainingEvent[]): Milestone[] {
   const out: Milestone[] = []
   let spawnEmitted = false
+  // Track the latest (step, epoch) we've observed in any event; checkpoint
+  // / validation / sample events from dp don't carry step in the payload,
+  // so we hang the most recent train step on them retroactively. Without
+  // this the rail shows "保存检查点 · 步 ?" forever.
+  let lastSeenStep: number | null = null
+  let lastSeenEpoch: number | null = null
   // Open cache phase aggregator: collapses N progress events into one
   // milestone keyed by `phase`. We close the milestone (commit it) when
   // the next non-cache event arrives or when done==total.
@@ -111,6 +117,13 @@ function buildMilestones(events: TrainingEvent[]): Milestone[] {
 
   events.forEach((e, idx) => {
     const p = e.payload ?? {}
+
+    // Update the running step / epoch trackers eagerly so milestones
+    // emitted later in the same iteration can read from them.
+    if (e.type === "step" && typeof p.step === "number") {
+      lastSeenStep = p.step
+    }
+    if (typeof p.epoch === "number") lastSeenEpoch = p.epoch
 
     // First non-meta event for the run becomes the "spawn" anchor — we
     // synthesise it from whatever came first so the user has somewhere
@@ -165,7 +178,7 @@ function buildMilestones(events: TrainingEvent[]): Milestone[] {
         ts: e.timestamp,
         anchorIndex: idx,
         id: `val-${idx}`,
-        data: { ...p },
+        data: enrichWithStepEpoch(p, lastSeenStep, lastSeenEpoch),
       })
     } else if (e.type === "checkpoint_saved") {
       out.push({
@@ -173,7 +186,7 @@ function buildMilestones(events: TrainingEvent[]): Milestone[] {
         ts: e.timestamp,
         anchorIndex: idx,
         id: `ckpt-${idx}`,
-        data: { ...p },
+        data: enrichCheckpoint(p, lastSeenStep, lastSeenEpoch),
       })
     } else if (e.type === "sample_ready") {
       out.push({
@@ -181,7 +194,7 @@ function buildMilestones(events: TrainingEvent[]): Milestone[] {
         ts: e.timestamp,
         anchorIndex: idx,
         id: `sample-${idx}`,
-        data: { ...p },
+        data: enrichWithStepEpoch(p, lastSeenStep, lastSeenEpoch),
       })
     } else if (e.type === "oom") {
       out.push({
@@ -333,6 +346,41 @@ function cachePhaseLabel(name: string): string {
   if (name === "latents") return "潜空间缓存"
   if (name === "text_encoder") return "文本编码缓存"
   return name
+}
+
+// dp's checkpoint / validation / sample events don't include a step number,
+// but the user still expects to know "which step does this belong to".
+// Two strategies: (1) parse the path tail (`epoch5/...`, `step120.png`),
+// (2) fall back to the most recent step we observed in the event stream.
+function enrichWithStepEpoch(
+  payload: Record<string, unknown>,
+  lastSeenStep: number | null,
+  lastSeenEpoch: number | null,
+): Record<string, unknown> {
+  const enriched: Record<string, unknown> = { ...payload }
+  if (enriched.step == null && lastSeenStep != null) enriched.step = lastSeenStep
+  if (enriched.epoch == null && lastSeenEpoch != null)
+    enriched.epoch = lastSeenEpoch
+  return enriched
+}
+
+function enrichCheckpoint(
+  payload: Record<string, unknown>,
+  lastSeenStep: number | null,
+  lastSeenEpoch: number | null,
+): Record<string, unknown> {
+  const enriched = enrichWithStepEpoch(payload, lastSeenStep, lastSeenEpoch)
+  // Path-derived hints take priority over the live counter — dp writes
+  // `epoch5/` directories so the path is more authoritative than a step
+  // counter that's still ticking.
+  const path = typeof enriched.path === "string" ? (enriched.path as string) : null
+  if (path) {
+    const epochMatch = path.match(/epoch[-_]?(\d+)/i)
+    if (epochMatch) enriched.epoch = Number(epochMatch[1])
+    const stepMatch = path.match(/step[-_]?(\d+)/i)
+    if (stepMatch) enriched.step = Number(stepMatch[1])
+  }
+  return enriched
 }
 
 // ---------------------------------------------------------------------------

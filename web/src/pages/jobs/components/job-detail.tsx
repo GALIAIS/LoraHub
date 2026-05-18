@@ -281,7 +281,12 @@ export function JobDetail({
           <TabsContent value="overview" className="h-full">
             <ScrollArea className="h-full">
               <div className="px-7 py-5">
-                <OverviewTab jobId={jobId} job={data} events={events} />
+                <OverviewTab
+                  jobId={jobId}
+                  job={data}
+                  events={events}
+                  fallbackTotalSteps={fallbackTotalSteps}
+                />
               </div>
             </ScrollArea>
           </TabsContent>

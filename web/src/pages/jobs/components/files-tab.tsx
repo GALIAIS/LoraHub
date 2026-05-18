@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Table,
   TableBody,
@@ -170,13 +171,15 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <FileTable
-            jobId={jobId}
-            files={data.checkpoints}
-            actionLabel="下载"
-            actionIcon="download"
-            emptyHint="还没有保存的检查点。"
-          />
+          <ScrollArea className="max-h-[360px]">
+            <FileTable
+              jobId={jobId}
+              files={data.checkpoints}
+              actionLabel="下载"
+              actionIcon="download"
+              emptyHint="还没有保存的检查点。"
+            />
+          </ScrollArea>
         </CardContent>
       </Card>
 
@@ -190,7 +193,9 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <SampleGrid jobId={jobId} files={data.samples} />
+          <ScrollArea className="max-h-[480px]">
+            <SampleGrid jobId={jobId} files={data.samples} />
+          </ScrollArea>
         </CardContent>
       </Card>
 
@@ -204,13 +209,15 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <FileTable
-            jobId={jobId}
-            files={data.logs}
-            actionLabel="打开"
-            actionIcon="open"
-            emptyHint="没有日志文件。"
-          />
+          <ScrollArea className="max-h-[300px]">
+            <FileTable
+              jobId={jobId}
+              files={data.logs}
+              actionLabel="打开"
+              actionIcon="open"
+              emptyHint="没有日志文件。"
+            />
+          </ScrollArea>
         </CardContent>
       </Card>
 
@@ -224,13 +231,15 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <FileTable
-            jobId={jobId}
-            files={data.other}
-            actionLabel="下载"
-            actionIcon="download"
-            emptyHint="没有其他文件。"
-          />
+          <ScrollArea className="max-h-[300px]">
+            <FileTable
+              jobId={jobId}
+              files={data.other}
+              actionLabel="下载"
+              actionIcon="download"
+              emptyHint="没有其他文件。"
+            />
+          </ScrollArea>
         </CardContent>
       </Card>
     </div>

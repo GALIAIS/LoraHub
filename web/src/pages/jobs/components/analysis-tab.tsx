@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Download, ImageIcon, Sparkles, X, Loader2 } from "lucide-react"
+import {
+  Copy,
+  Check,
+  Download,
+  ImageIcon,
+  Sparkles,
+  X,
+  Loader2,
+} from "lucide-react"
 import { api } from "@/lib/api"
 import type {
   JobAnalysis,
@@ -12,6 +20,8 @@ import type {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Markdown } from "@/components/markdown"
+import { SeriesLineChart } from "./series-line-chart"
 import { TERMINAL_STATES } from "../utils"
 
 interface AnalysisTabProps {
@@ -89,6 +99,7 @@ function AICard({
 }) {
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const run = useMutation({
     mutationFn: () => api.analyzeJob(jobId),
     onSuccess: () => {
@@ -100,34 +111,87 @@ function AICard({
     },
   })
 
+  async function copyMd() {
+    if (!cached?.markdown) return
+    try {
+      await navigator.clipboard.writeText(cached.markdown)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function downloadMd() {
+    if (!cached?.markdown) return
+    const blob = new Blob([cached.markdown], {
+      type: "text/markdown;charset=utf-8",
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `analysis-${jobId.slice(-8)}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
       <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="size-3.5 text-primary" />
-          <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+        <div className="flex items-center gap-2 min-w-0">
+          <Sparkles className="size-3.5 text-primary shrink-0" />
+          <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground shrink-0">
             AI 分析总结
           </CardTitle>
           {cached && (
-            <span className="text-[10px] text-muted-foreground/70">
+            <span className="text-[10px] text-muted-foreground/70 truncate">
               {cached.model} · {new Date(cached.generated_at).toLocaleString()}
             </span>
           )}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-[11px]"
-          disabled={!canRun || run.isPending}
-          onClick={() => run.mutate()}
-        >
-          {run.isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : (
-            <Sparkles className="size-3" />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {cached && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={copyMd}
+                title="复制 Markdown 原文"
+              >
+                {copied ? (
+                  <Check className="size-3 text-emerald-500" />
+                ) : (
+                  <Copy className="size-3" />
+                )}
+                {copied ? "已复制" : "复制"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={downloadMd}
+                title="下载 .md 文件"
+              >
+                <Download className="size-3" /> 下载
+              </Button>
+            </>
           )}
-          {cached ? "重新分析" : "生成分析"}
-        </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px]"
+            disabled={!canRun || run.isPending}
+            onClick={() => run.mutate()}
+          >
+            {run.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Sparkles className="size-3" />
+            )}
+            {cached ? "重新分析" : "生成分析"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="p-4">
         {loading && (
@@ -152,11 +216,7 @@ function AICard({
         {error && (
           <div className="text-xs text-destructive break-all">分析失败：{error}</div>
         )}
-        {cached && (
-          <pre className="font-sans text-[12px] leading-relaxed whitespace-pre-wrap text-foreground/90">
-            {cached.markdown}
-          </pre>
-        )}
+        {cached && <Markdown source={cached.markdown} />}
       </CardContent>
     </Card>
   )
@@ -209,26 +269,25 @@ function ResourceTrendCard({
         )}
         {series && (
           <div className="space-y-3">
-            <ResourceLine
+            <SeriesLineChart
               label="GPU 利用率"
               unit="%"
               points={series.points.map((p) => ({ x: p.tMin, y: p.util }))}
               color="var(--chart-1)"
               yMax={100}
             />
-            <ResourceLine
+            <SeriesLineChart
               label="显存占用"
               unit="%"
               points={series.points.map((p) => ({ x: p.tMin, y: p.vramPct }))}
               color="var(--chart-2)"
               yMax={100}
             />
-            <ResourceLine
+            <SeriesLineChart
               label="温度"
               unit="°C"
               points={series.points.map((p) => ({ x: p.tMin, y: p.temp }))}
               color="var(--chart-3)"
-              yMax={null}
             />
             <div className="text-[10px] text-muted-foreground/70 text-right">
               横轴：分钟（共 {series.durationMin.toFixed(1)} min）
@@ -237,65 +296,6 @@ function ResourceTrendCard({
         )}
       </CardContent>
     </Card>
-  )
-}
-
-function ResourceLine({
-  label,
-  unit,
-  points,
-  color,
-  yMax,
-}: {
-  label: string
-  unit: string
-  points: Array<{ x: number; y: number | null }>
-  color: string
-  yMax: number | null
-}) {
-  const valid = points.filter((p): p is { x: number; y: number } => typeof p.y === "number")
-  if (valid.length === 0) {
-    return (
-      <div className="flex items-center gap-2 text-[11px]">
-        <span className="w-20 text-muted-foreground">{label}</span>
-        <span className="text-muted-foreground/60">未采集到</span>
-      </div>
-    )
-  }
-  const W = 600
-  const H = 48
-  const xs = valid.map((p) => p.x)
-  const ys = valid.map((p) => p.y)
-  const xMin = Math.min(...xs)
-  const xMax = Math.max(...xs) || 1
-  const yLo = Math.min(...ys, 0)
-  const yHi = yMax ?? Math.max(...ys, 1)
-  const yRange = yHi - yLo || 1
-  const path = valid
-    .map((p, i) => {
-      const x = ((p.x - xMin) / (xMax - xMin || 1)) * W
-      const y = H - ((p.y - yLo) / yRange) * H
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(" ")
-  const last = valid[valid.length - 1]
-  const min = Math.min(...ys)
-  const max = Math.max(...ys)
-  const avg = ys.reduce((a, b) => a + b, 0) / ys.length
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-20 text-[11px] text-muted-foreground shrink-0">{label}</span>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="flex-1 h-[40px]"
-        preserveAspectRatio="none"
-      >
-        <path d={path} fill="none" stroke={color} strokeWidth={1.5} />
-      </svg>
-      <span className="w-44 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-        当前 {last.y.toFixed(1)}{unit} · 均 {avg.toFixed(1)} · 峰 {max.toFixed(1)} · 谷 {min.toFixed(1)}
-      </span>
-    </div>
   )
 }
 
@@ -314,6 +314,14 @@ function MetricsTable({
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("step")
   const [sortDir, setSortDir] = useState<SortDir>("desc")
+
+  // Validation column is only useful when the recipe actually emitted
+  // val_loss events. Otherwise the column is a wall of "—" that looks
+  // like a bug. We collapse the column entirely and show a small inline
+  // note instead.
+  const hasValLoss = valLoss.some(
+    (v) => typeof v.val_loss === "number" && Number.isFinite(v.val_loss),
+  )
 
   const rows = useMemo<MetricRow[]>(() => {
     // Index validation loss by epoch so we can hang it off the
@@ -364,18 +372,20 @@ function MetricsTable({
   }
 
   function exportCsv() {
-    const header = ["step", "epoch", "train_loss", "val_loss", "timestamp"]
+    const baseHeader = ["step", "epoch", "train_loss", "timestamp"]
+    const header = hasValLoss
+      ? [...baseHeader.slice(0, 3), "val_loss", "timestamp"]
+      : baseHeader
     const lines = [header.join(",")]
     for (const r of sortedRows) {
-      lines.push(
-        [
-          r.step,
-          r.epoch ?? "",
-          r.trainLoss ?? "",
-          r.valLoss ?? "",
-          new Date(r.ts * 1000).toISOString(),
-        ].join(","),
-      )
+      const cols: Array<string | number> = [
+        r.step,
+        r.epoch ?? "",
+        r.trainLoss ?? "",
+      ]
+      if (hasValLoss) cols.push(r.valLoss ?? "")
+      cols.push(new Date(r.ts * 1000).toISOString())
+      lines.push(cols.join(","))
     }
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" })
     const url = URL.createObjectURL(blob)
@@ -393,6 +403,14 @@ function MetricsTable({
           指标表格
         </CardTitle>
         <div className="flex items-center gap-2">
+          {!hasValLoss && (
+            <span
+              className="text-[10px] text-muted-foreground/70"
+              title="recipe 未配置 validation.valSplit，所以验证 loss 列已隐藏"
+            >
+              未启用验证集
+            </span>
+          )}
           <span className="text-[10px] text-muted-foreground/70">
             {loading ? "加载中…" : `共 ${rows.length} 行`}
           </span>
@@ -421,9 +439,11 @@ function MetricsTable({
                 <SortHeader k="trainLoss" current={sortKey} dir={sortDir} onClick={toggleSort}>
                   train loss
                 </SortHeader>
-                <SortHeader k="valLoss" current={sortKey} dir={sortDir} onClick={toggleSort}>
-                  val loss
-                </SortHeader>
+                {hasValLoss && (
+                  <SortHeader k="valLoss" current={sortKey} dir={sortDir} onClick={toggleSort}>
+                    val loss
+                  </SortHeader>
+                )}
                 <SortHeader k="ts" current={sortKey} dir={sortDir} onClick={toggleSort}>
                   时间
                 </SortHeader>
@@ -432,7 +452,10 @@ function MetricsTable({
             <tbody>
               {sortedRows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-muted-foreground">
+                  <td
+                    colSpan={hasValLoss ? 5 : 4}
+                    className="py-8 text-center text-muted-foreground"
+                  >
                     暂无指标数据
                   </td>
                 </tr>
@@ -444,9 +467,11 @@ function MetricsTable({
                   <td className="px-3 py-1.5">
                     {r.trainLoss != null ? r.trainLoss.toFixed(4) : "—"}
                   </td>
-                  <td className="px-3 py-1.5">
-                    {r.valLoss != null ? r.valLoss.toFixed(4) : "—"}
-                  </td>
+                  {hasValLoss && (
+                    <td className="px-3 py-1.5">
+                      {r.valLoss != null ? r.valLoss.toFixed(4) : "—"}
+                    </td>
+                  )}
                   <td className="px-3 py-1.5 text-muted-foreground">
                     {new Date(r.ts * 1000).toLocaleTimeString()}
                   </td>

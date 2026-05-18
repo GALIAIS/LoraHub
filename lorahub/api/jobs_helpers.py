@@ -264,14 +264,37 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
 
             if etype == EventType.step.value:
                 if "loss" in payload:
-                    loss.append(
-                        {
-                            "step": payload.get("step"),
-                            "epoch": epoch_counter,
-                            "loss": payload.get("loss"),
-                            "ts": ts,
-                        }
+                    # Prefer the trainer-reported epoch when present (dp /
+                    # newer kohya parsers attach it to step events). The
+                    # counter fallback only kicks in for older parsers that
+                    # never emit `epoch` on step lines.
+                    raw_epoch = payload.get("epoch")
+                    epoch_value = (
+                        int(raw_epoch)
+                        if isinstance(raw_epoch, (int, float))
+                        else max(epoch_counter, 1)
                     )
+                    point: dict[str, Any] = {
+                        "step": payload.get("step"),
+                        "epoch": epoch_value,
+                        "loss": payload.get("loss"),
+                        "ts": ts,
+                    }
+                    # dp emits lr/iter_time/samples_per_sec alongside loss; we
+                    # forward them so the front-end can render LR + throughput
+                    # charts without a second request. Missing fields stay
+                    # absent rather than null so downstream `.filter(typeof ...)`
+                    # treats them as "not measured".
+                    for k_src, k_out in (
+                        ("lr", "lr"),
+                        ("iter_time_s", "iter_time_s"),
+                        ("samples_per_sec", "samples_per_sec"),
+                    ):
+                        if k_src in payload and isinstance(
+                            payload[k_src], (int, float)
+                        ):
+                            point[k_out] = payload[k_src]
+                    loss.append(point)
             elif etype == EventType.epoch_end.value:
                 epoch_counter += 1
                 epochs.append({"epoch": payload.get("epoch"), "ts": ts})

@@ -53,10 +53,12 @@ export function OverviewTab({
   jobId,
   job,
   events,
+  fallbackTotalSteps = null,
 }: {
   jobId: string
   job: JobSummary | undefined
   events: TrainingEvent[]
+  fallbackTotalSteps?: number | null
 }) {
   const isTerminal = job ? TERMINAL_STATES.has(job.state) : false
   const isRunning = job?.state === "running"
@@ -107,15 +109,18 @@ export function OverviewTab({
   const itPerSecRecent = computeItPerSec(recentStepSamples)
   const itPerSecAvg = computeItPerSec(stepSamples)
 
-  // ETA only makes sense once the config declared a total, otherwise we'd be
-  // dividing by zero. We prefer the most recent total_steps in case it grew.
+  // ETA only makes sense once we know a total, otherwise we'd be dividing
+  // by zero. Prefer the most recent payload-side total (event truth) and
+  // fall back to a config-derived estimate (provided by the parent) when
+  // the trainer hasn't reported one yet — dp's parser doesn't emit
+  // total_steps, so without the fallback this number stays "?".
   const totalSteps = useMemo(() => {
     for (let i = stepSamples.length - 1; i >= 0; i -= 1) {
       const v = stepSamples[i].totalSteps
       if (typeof v === "number" && v > 0) return v
     }
-    return null
-  }, [stepSamples])
+    return fallbackTotalSteps
+  }, [stepSamples, fallbackTotalSteps])
 
   const currentStep =
     stepSamples.length > 0 ? stepSamples[stepSamples.length - 1].step : null
@@ -175,7 +180,10 @@ export function OverviewTab({
           value={
             lastStep
               ? `${lastStep.payload.step ?? "?"} / ${
-                  lastStep.payload.total_steps ?? "?"
+                  (typeof lastStep.payload.total_steps === "number" &&
+                  lastStep.payload.total_steps > 0
+                    ? lastStep.payload.total_steps
+                    : totalSteps) ?? "?"
                 }`
               : "—"
           }
