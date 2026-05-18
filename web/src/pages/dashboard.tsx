@@ -41,6 +41,7 @@ import {
   type SystemSnapshot,
   type TcpConnectionStats,
 } from "@/lib/api"
+import { useJobsList } from "@/lib/queries/jobs"
 import {
   Card,
   CardContent,
@@ -61,7 +62,6 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
-const POLL_INTERVAL_JOBS_MS = 3_000
 const POLL_INTERVAL_SYSTEM_MS = 5_000
 
 export function DashboardPage() {
@@ -76,11 +76,7 @@ export function DashboardPage() {
 
   const snapshot: SystemSnapshot | null = stream.snapshot ?? polled.data ?? null
 
-  const jobs = useQuery({
-    queryKey: ["jobs"],
-    queryFn: api.listJobs,
-    refetchInterval: POLL_INTERVAL_JOBS_MS,
-  })
+  const jobs = useJobsList()
   const allJobs = jobs.data?.jobs ?? []
 
   const stats = useMemo(() => {

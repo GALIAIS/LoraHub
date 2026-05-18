@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react"
 import { api, type JobSummary } from "@/lib/api"
+import { useJobsList } from "@/lib/queries/jobs"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -71,13 +72,10 @@ export function AnalysisPage() {
 
   const activeJobId = params.jobId ?? null
 
-  // Job list driving the picker on the left. Refresh modestly while the
-  // user is on this page so live runs surface without a manual reload.
-  const jobs = useQuery({
-    queryKey: ["jobs"],
-    queryFn: api.listJobs,
-    refetchInterval: 4000,
-  })
+  // Job list driving the picker on the left. Polling cadence + live
+  // semantics are owned by `useJobsList` so this page no longer
+  // duplicates the `["jobs"]` observer with a divergent interval.
+  const jobs = useJobsList()
   const jobList: JobSummary[] = jobs.data?.jobs ?? []
 
   const [query, setQuery] = useState("")

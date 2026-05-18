@@ -19,6 +19,7 @@ import {
   Zap,
 } from "lucide-react"
 import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
+import { useJobsList } from "@/lib/queries/jobs"
 import { cn } from "@/lib/utils"
 
 const POLL_MS = 10_000
@@ -30,11 +31,7 @@ export function GlobalStatusBar() {
     queryFn: api.getSystemStats,
     refetchInterval: stream.status === "open" ? false : POLL_MS,
   })
-  const jobsQuery = useQuery({
-    queryKey: ["jobs"],
-    queryFn: api.listJobs,
-    refetchInterval: 5_000,
-  })
+  const jobsQuery = useJobsList()
 
   const snapshot: SystemSnapshot | null =
     stream.snapshot ?? polled.data ?? null

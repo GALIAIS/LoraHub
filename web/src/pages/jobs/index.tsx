@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react"
-import { api, type JobSummary } from "@/lib/api"
+import { type JobSummary } from "@/lib/api"
+import { useJobsList } from "@/lib/queries/jobs"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
@@ -95,11 +95,7 @@ export function JobsPage() {
     window.localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? "open" : "closed")
   }, [sidebarOpen])
 
-  const jobs = useQuery({
-    queryKey: ["jobs"],
-    queryFn: api.listJobs,
-    refetchInterval: 2000,
-  })
+  const jobs = useJobsList()
   const list = jobs.data?.jobs ?? []
 
   // Most recent first; the API gives us creation order, so reverse a copy.

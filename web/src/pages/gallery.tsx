@@ -7,6 +7,7 @@ import {
   type JobSummary,
   type SampleGalleryItem,
 } from "@/lib/api"
+import { useJobsList } from "@/lib/queries/jobs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -34,11 +35,7 @@ export function GalleryPage() {
     setPage(1)
   }, [selectedJobIds, pageSize])
 
-  const jobs = useQuery({
-    queryKey: ["jobs"],
-    queryFn: api.listJobs,
-    refetchInterval: 4000,
-  })
+  const jobs = useJobsList()
 
   // Refresh the gallery on a slow cadence so freshly produced samples
   // appear without forcing a manual reload, but not so fast that every
