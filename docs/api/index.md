@@ -1,6 +1,6 @@
 ---
 title: HTTP API
-description: REST + WebSocket surface for the LoraHub workbench.
+description: REST + SSE + WebSocket surface for the LoraHub workbench.
 ---
 
 # HTTP API
@@ -14,18 +14,22 @@ lorahub serve --port 18765
 ```
 
 The server binds to `127.0.0.1` by default and has no auth — safe for
-localhost only. Job metadata persists to SQLite at `runs/.lorahub.sqlite`;
-live handles and the recent event ring remain process-local.
+localhost only. Job metadata persists to SQLite at `runs/jobs.sqlite`;
+live event rings remain process-local. Sibling stores include
+`runs/ai.sqlite` (AI providers + routes), `runs/image_studio.sqlite`
+(annotations + phash + pending ops), `runs/sweeps.sqlite` (sweep plans),
+and `runs/sessions.sqlite` (long-running operation handles).
 
 ## Layout
 
 - All API routes live under `/api`.
-- The site root and `/{spa-path}` are reserved for the React frontend, mounted
-  from `web/dist` when the build artifact is present.
+- The site root and `/{spa-path}` are reserved for the React frontend,
+  mounted from `web/dist` when the build artefact is present.
 - Per-domain endpoint logic lives under `lorahub.api.routers.*` (one router
-  per resource: jobs, recipes, datasets, settings, ...).
-- WebSocket endpoints stay on the top-level FastAPI app to side-step
-  historical caveats with `APIRouter` + WS routes.
+  per resource: jobs, configs, datasets, settings, image_studio, ...).
+- Real-time channels prefer **SSE** at `/api/.../sse` with browser-native
+  reconnect and `Last-Event-ID` resume; legacy **WebSocket** endpoints at
+  `/api/.../stream` are kept as fallback. New clients should default to SSE.
 
 ## One-shot launcher
 

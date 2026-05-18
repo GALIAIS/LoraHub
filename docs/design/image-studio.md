@@ -256,21 +256,201 @@ Apply semantics per op:
 - `delete`: move file + sidecar to `runs/_image_studio_trash/<date>/`
 - `favorite`: flip `image_annotations.favorite` (no file mutation)
 
-### 6.5 Duplicates / near-dupes
+### 6.5 Similarity & duplicates
+
+The studio offers **two layers** of similarity, with deliberate cost +
+intent gradient:
+
+| Layer | Signal | Cost | Catches |
+|-------|--------|------|---------|
+| L1 — Perceptual hash | `phash64` / `dhash64` over downscaled greyscale | local, ~ms/image | identical files, mild crops, recompresses |
+| L2 — AI semantic | CLIP-style embedding via VLM **OR** pairwise VLM "are these the same scene?" | API call (token cost) | same outfit / pose / scene with different lighting, redrawn variants |
+
+L1 always runs first to seed candidate buckets; L2 runs only on the
+buckets you ask it to deepen. This keeps token spend bounded.
+
+#### 6.5.1 L1 — perceptual hash scan
 
 ```
 POST /api/image-studio/dedupe/scan
-     { path, algo: "phash64", recursive?, threshold? }
-->   202, runs in background; progress via session pattern (mirror tagging)
+     { path, recursive?, algo: "phash64"|"dhash64", threshold?: int }
+->   202 { session_id }                   -- background, progress streamed
 
-GET  /api/image-studio/dedupe/clusters?path=<dir>
-->   { clusters: [{ id, members: [{path, distance_to_centroid}], suggested_keep }] }
+GET  /api/image-studio/dedupe/clusters?path=<dir>&kind=phash
+->   {
+       clusters: [{
+         id, kind: "phash",
+         members: [{ path, distance_to_centroid, sha256_match }],
+         suggested_keep: <path>,
+         centroid_phash: "...",
+       }]
+     }
 ```
 
-The default keep heuristic: highest resolution, then largest file, then
-lexicographically first path. The user can override per cluster.
+Default keep heuristic: highest resolution → largest file → lex-first
+path. User can override per cluster, then commit.
 
-### 6.6 AI batch actions
+#### 6.5.2 L2 — AI semantic similarity
+
+Two modes; the user picks per scan:
+
+**Mode A — embedding-based (recommended)**: a single VLM-embedding call
+per image, results cached in `image_embeddings`. Once every image has
+an embedding we cluster by cosine similarity. **Cheap, scales to 1000+
+images, the right default**. Uses providers that expose
+`/v1/embeddings` (OpenAI, voyage-ai-style, anything OpenAI-compatible).
+Falls back to Mode B if the configured provider has no embedding model.
+
+**Mode B — pairwise VLM judge** (fallback / refinement): for each
+candidate pair from L1, send both images + the prompt "are these two
+training images near-duplicates of the same subject/scene? Answer:
+yes_strong | yes_weak | no". One round-trip per pair. Used to tighten
+L1 false-positives or de-confuse a cluster the user is unsure about
+("L1 says these are the same, AI confirm?").
+
+```
+POST /api/image-studio/similarity/scan
+     {
+       path, recursive?,
+       mode: "embedding" | "pairwise",
+       task: "similarity.score",      -- AI route id (new task)
+       seed_clusters?: [<phash_cluster_id>],   -- B mode: refine these
+       threshold?: float                       -- A mode: cosine threshold
+                                               -- B mode: which verdicts to keep
+     }
+-> 202 { session_id }
+```
+
+The session reuses the tagging-session shape so the existing progress
+bar component renders for free; per-cluster intermediate results are
+streamed so the user can act on the first cluster while the rest is
+still computing.
+
+```
+GET /api/image-studio/similarity/clusters?path=<dir>&kind=ai
+-> {
+     clusters: [{
+       id, kind: "ai",
+       confidence: 0.0-1.0,             -- mean cosine / mean verdict
+       members: [{
+         path,
+         similarity_to_keep: 0.0-1.0,
+         verdict: "yes_strong" | "yes_weak" | null,   -- B mode only
+         ai_reason: "...",                            -- optional VLM rationale
+       }],
+       suggested_keep: <path>,
+       suggested_delete: [<path>],     -- the rest, ranked worst-first
+     }]
+   }
+```
+
+`image_embeddings` table:
+
+```sql
+CREATE TABLE image_embeddings (
+    image_path TEXT NOT NULL,
+    model_id   TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    vector     BLOB NOT NULL,         -- float32 packed
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (image_path, model_id)
+);
+```
+
+The frontend defaults to **Mode A** with cosine threshold 0.92, surfaces
+both clusters (L1 + L2) interleaved in the same Duplicates tab, lets
+the user toggle "show L1 only / L2 only / both".
+
+### 6.6 Batch delete on similarity clusters
+
+The clusters tab is the primary "drop dataset weight" surface.
+Single-cluster keep-radio is flow A; batch-select-many-clusters is
+flow B.
+
+UI shape (Duplicates tab):
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Layer chips: [phash] [AI 语义]            筛选: 阈值 [0.92 ▾]   │
+│ 选择全部建议删除  共 38 张, 释放 ~412 MB     [批量删除]         │
+├────────────────────────────────────────────────────────────────┤
+│ Cluster #1  conf 0.97  保留 → A.png                             │
+│   ☐ A.png  (keep, 1024x1536, sharp)         ← suggested keep    │
+│   ☑ B.png  sim 0.99  AI: 同一姿势同光照                          │
+│   ☑ C.png  sim 0.96  AI: 同一姿势, 服装 微变                     │
+│   ☐ D.png  sim 0.91  AI: 不同角度  ← user UNCHECKED to keep      │
+├────────────────────────────────────────────────────────────────┤
+│ Cluster #2  ...                                                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- Each cluster is collapsed by default; clicking the header expands.
+- Each member has a checkbox; the **suggested_keep** image starts
+  unchecked, every other member starts checked-for-delete.
+- The header has a "全选/全不选" + a "保留全部" + a "复原 AI 建议" reset.
+- Top sticky bar **共选中 N 张, 估计释放 X MB** + 「批量删除」(soft).
+- Clicking 批量删除 opens an AlertDialog summarising N images, sample
+  thumbnails (first 6), required confirmation before commit.
+- Soft delete moves files + sidecars + annotations to
+  `runs/_image_studio_trash/<date>/`. The Maintenance tab's existing
+  trash-clear flow handles permanent deletion later.
+
+Endpoints:
+
+```
+POST /api/image-studio/similarity/select
+     {
+       path, recursive?,
+       layers: ["phash", "ai"],
+       threshold?: float,                  -- minimum confidence
+       strategy: "all_but_keep"            -- delete all members EXCEPT
+                                           --   the suggested_keep
+                | "all_high_confidence"    -- only clusters with conf >= X
+                | "selected",              -- explicit member list below
+       selected_paths?: [<path>]            -- when strategy=selected
+     }
+-> {
+     selection: {
+       cluster_id: [<path>, ...]            -- which paths in each cluster
+     },
+     total_count: 38,
+     total_bytes: 432_000_000,
+     sample_paths: [<first 6 for preview>],
+     warnings: [...]                        -- e.g. "would delete a favourite"
+   }
+
+POST /api/image-studio/similarity/batch-delete
+     { selection_token, paths_only?: bool }
+                       (selection_token returned by /select; one-shot,
+                        signed with the request body's hash to prevent
+                        the UI sending a stale list)
+-> {
+     deleted: [<path>, ...],
+     deleted_count, bytes_freed,
+     trash_dir: "runs/_image_studio_trash/2026-05-17/...",
+     errors: [{ path, reason }]
+   }
+```
+
+Server safeguards before commit:
+
+1. Every selected path must be under the same allowed root.
+2. Refuse to delete a path that is **the only** member left in a
+   cluster (defensive; UI shouldn't ever send this, but enforce anyway).
+3. Refuse if `paths` includes any image with `favorite=1` unless the
+   request body sets `force_favorites: true`.
+4. Cap any single batch at 1000 images; larger batches must come in
+   chunks (prevents a runaway click from nuking a folder).
+5. Selection tokens expire after 60s server-side so the user can't
+   page-stale a delete.
+
+The endpoint is an explicit two-step (select → confirm) rather than a
+one-shot DELETE. The first call is read-only and produces an
+auditable summary; the dialog renders the summary; the second call
+carries the token from the first. Mirrors how the existing
+`/api/storage/archive/clear` flow gates destructive ops.
+
+### 6.7 AI batch actions
 
 Mirror the existing tagging session pattern: 202 + WebSocket / poll
 status, persist terminal snapshots in `session_store` (table reused).
@@ -303,7 +483,7 @@ Equivalent endpoints:
   characteristic, suggest trigger words and their natural-language
   template
 
-### 6.7 Cost preview
+### 6.8 Cost preview
 
 ```
 POST /api/image-studio/ai/estimate
@@ -407,6 +587,50 @@ random sample of 8 captions from the dataset, suggest:
 
 User can apply the trigger word as a caption prefix to all images in
 one click via the bulk action runner.
+
+### 7.6 `similarity.score` — new task id
+
+Used by §6.5.2 mode B (pairwise judge). Single message body:
+
+```
+Compare two LoRA training images. Are they near-duplicates of the
+same subject and scene? Reply EXACTLY one of:
+- yes_strong   (same pose, framing, lighting; one is a near-recompress)
+- yes_weak     (same subject + outfit but different pose/light/angle)
+- no           (different subject OR materially different shot)
+Then on a new line: a short reason in Chinese, ≤ 20 words.
+```
+
+The two images are sent as the user message's `image_url` parts
+(see §7.1 schema extension). The response parser tolerates the model
+prepending the verdict with quotes / punctuation.
+
+### 7.7 `similarity.embed` — new task id (no chat)
+
+Routed to a provider's `/v1/embeddings` endpoint, not chat completions.
+Adds a small dispatcher branch in `lorahub/core/ai/client.py`:
+
+```python
+def embed(
+    store: AIStore,
+    *,
+    provider_id: str,
+    model_id: str,
+    inputs: list[str | bytes],         # text or image-bytes (base64)
+    timeout: float = 60.0,
+) -> list[list[float]]:
+    """POST <base>/v1/embeddings; returns one vector per input."""
+```
+
+Image embeddings are model-dependent — most OpenAI-compat providers
+don't accept images on this endpoint, so we accept text descriptions
+fallback: when the route is set to a text-only embedding model the
+studio falls back to embedding each image's `ai_caption` (computed
+in §7.1) instead of the pixels. This degrades gracefully and is
+explicitly surfaced in the UI.
+
+Result vectors land in `image_embeddings`, model id stamped so swapping
+embedding providers re-clusters from scratch.
 
 ## 8. Frontend layout
 

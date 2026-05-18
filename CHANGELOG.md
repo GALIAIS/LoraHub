@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **SSE event streams** at `/api/jobs/{id}/sse`, `/api/backend/bootstrap/sse`, and `/api/system/sse` with `Last-Event-ID` resume and monotone sequence IDs. WebSocket endpoints kept as fallback.
+- **Live preview for diffusion-pipe** — `PreviewWorker` watches checkpoint directories, converts PEFT LoRA to kohya format, runs Anima inference subprocess with GPU budget control (capped at `min(300s, 0.3 * delta_since_last)`).
+- **AI training analysis** — `POST /api/jobs/{id}/analyze` generates Markdown analysis of loss curves, learning rate schedules, and overfit signals via the AI router.
+- **GPU resource trends** — `/api/jobs/{id}/metrics` returns aggregated `gpu_samples` for VRAM/utilisation charts.
+- **Run-summary card** — collapsible health summary (progress, loss, hyperparams) on the job detail page.
+- **Event timeline** — dual-pane milestone rail + detail pane replacing the flat log list.
+- **Image Studio** — dedicated dataset manager with virtualized grid, multi-select, drag-and-drop upload, batch AI endpoints (smart-caption, quality scoring, deduplication, similarity scan).
+- **Smart caption** — WD14 + vision LLM combined captioning with `style` / `character` / `general` modes, trigger word injection, and style-tag stripping.
+- **Default sample prompts** — `configs/sample_prompts/anima_default.txt` ships 8 prompts covering portrait / cowboy / full body / group / scene / landscape.
+- **Anima config templates** — `anima_style_24gb` and `anima_character_24gb` for 4090/24GB cards with 200-step checkpoints and live preview enabled.
+- **Network presets endpoint** — `GET /api/network/presets` and `POST /api/network/probe` for suggesting network targets from a base-model checkpoint.
+
+### Changed
+
+- **camelCase config schema** — all config fields now use camelCase as the preferred wire form; `snake_case` remains accepted via Pydantic `populate_by_name`. YAML files, API payloads, and frontend form fields all emit camelCase.
+- **recipes/ -> configs/** — on-disk directory renamed from `recipes/` to `configs/`; REST endpoints moved from `/api/recipes` to `/api/configs`; Python type remains `TrainingConfig`.
+- **Checkpoint cadence** — Anima templates default to `saveEveryNSteps: 200` instead of per-epoch saves.
+- **dp compiler** — `optim_dtype` is no longer emitted for quantized optimizers (adamw8bit, lion8bit, etc.) to avoid TypeError in bitsandbytes.
+- **dp compiler** — step-based save cadence suppresses the epoch flag so dp/kohya don't double-save on aligned boundaries.
+- **Frontend SSE preference** — `useJobStream`, `useBootstrapStream`, and `useSystemStream` now prefer `EventSource` with automatic WS fallback.
+- **Status bar** — top-bar connection indicator reads "SSE" instead of the stale "WS" label.
+- **Documentation** — full rewrite of README and all docs/ pages to reflect current architecture (SSE, dp, Anima, Image Studio, live preview, 778 tests).
+
+### Fixed
+
+- **dp `steps: N loss: X` parsing** — diffusion-pipe's PipelineEngine stdout format was not recognised; added `_STEPS_LOSS_RE` regex to the dp parser.
+- **Relative path resolution** — dp training subprocess could not find model files because paths were relative to the project root, not the dp checkout. `_normalize_recipe_paths` now absolutises all path fields at launch.
+- **torch.compile inductor hang** — `compile: true` spawned a 32-worker Inductor pool that deadlocked on `unix_stream_data_wait`; set `compile: false` in both Anima configs.
+- **Cancel traceback rendering** — `KeyboardInterrupt` and `sigkill_handler` lines no longer render as red error events; both parsers filter them via `_CANCEL_HINTS`.
+- **Rerun not clearing old events** — `_relaunch_job_in_place` now unlinks `events.jsonl` and clears the in-memory deque for plain reruns.
+- **selectstart eating clicks** — removed document-level `selectstart` `preventDefault` that was swallowing sidebar navigation clicks; CSS `user-select: none` already handles text selection.
+- **Archive stealing active workspace** — added workspace-sharing check before allowing archive of a finished job.
+
 ## [0.2.0] - 2026-05-16
 
 First production-leaning release. LoraHub graduates from a CLI tracer bullet into a usable workbench: a full React + FastAPI control plane, a two-backend training matrix (kohya `sd-scripts` with 8 architectures plus `diffusion-pipe` with 21), an end-to-end data preparation pipeline, hyperparameter sweep tooling, and a published mkdocs documentation site. 474 tests cover the new surface area.

@@ -1,31 +1,38 @@
 ---
 title: End-to-end smoke test
-description: Run the full data → tag → train pipeline against a real character set.
+description: Run the full data → caption → train → preview pipeline against a real character set.
 ---
 
 # End-to-end smoke test
 
-Once you have kohya-ss/sd-scripts installed (set `LORAHUB_KOHYA_SD_SCRIPTS` or
-copy `.env.example`) and an SDXL base model on disk, the full path from zero
-to a trained LoRA looks like this:
+Once a backend is installed (set `LORAHUB_KOHYA_SD_SCRIPTS` /
+`LORAHUB_DIFFUSION_PIPE` or copy `.env.example`) and a base model is on disk,
+the full path from zero to a trained LoRA + live previews looks like this:
 
 ```powershell
 # 1. Pull a character's images from BangumiBase
 lorahub fetch-bangumi azurlaneanime 5 --output ./datasets/laffey --limit 50
 
-# 2. Auto-tag every image
+# 2. Caption every image — pick one of:
+
+#    a) Classic auto-tag (WD14 / WD-v3 ONNX, fastest):
 lorahub tag ./datasets/laffey
 
-# 3. Scaffold a recipe and edit it (point base_model.checkpoint at your SDXL .safetensors)
+#    b) Smart caption (WD14 + vision LLM, Anima-format):
+curl -X POST http://127.0.0.1:18765/api/image-studio/ai/smart-caption \
+     -H 'Content-Type: application/json' \
+     -d '{"path":"./datasets/laffey","captionMode":"character","triggerWord":"laffey"}'
+
+# 3. Scaffold a config and edit it (point baseModel.checkpoint at your model)
 lorahub init smoke
-notepad smoke.yaml
+notepad configs/smoke.yaml
 
 # 4. Sanity check
-lorahub validate smoke.yaml
-lorahub info     smoke.yaml
+lorahub validate configs/smoke.yaml
+lorahub info     configs/smoke.yaml
 
 # 5. Train
-lorahub train    smoke.yaml
+lorahub train    configs/smoke.yaml
 ```
 
 !!! success "Reference timing"
@@ -51,15 +58,15 @@ lorahub fetch-bangumi azurlaneanime 5 --preview --output ./datasets/akagi
 ```
 
 Each image lands next to an empty `.txt` caption file — fill them in (or
-auto-tag with `lorahub tag`) before training.
+auto-caption with the next steps) before training.
 
-## Auto-tag a dataset
+## Auto-tag with WD14 / JoyTag
 
-`lorahub tag` runs the WD14 / WD-v3 ONNX tagger over a directory and writes
-kohya-style `.txt` captions next to each image.
+`lorahub tag` runs a tagger over a directory and writes kohya-style `.txt`
+captions next to each image.
 
 ```powershell
-# Default thresholds (general=0.35, character=0.85), skips images that already have a non-empty caption
+# Default thresholds (general=0.35, character=0.85), skips images that already have captions
 lorahub tag ./datasets/akagi
 
 # Re-tag everything from scratch with a tighter general threshold
@@ -67,11 +74,14 @@ lorahub tag ./datasets/akagi --overwrite --general 0.45
 
 # Skip the character tag if you're training a style or concept LoRA
 lorahub tag ./datasets/akagi --no-include-character
+
+# JoyTag (PyTorch backend, ~5800-tag vocabulary, default 0.4 threshold)
+lorahub tag ./datasets/akagi --tagger joytag --joytag-threshold 0.4
 ```
 
-The first run downloads ~400 MB of ONNX weights from Hugging Face (cached for
-subsequent runs). CPU inference handles hundreds of images at ~1 s/image; for
-batch throughput install the GPU runtime:
+Default WD14 model is `SmilingWolf/wd-eva02-large-tagger-v3`. CPU inference
+handles hundreds of images at ~1 s/image; for batch throughput install the
+GPU runtime:
 
 ```powershell
 pip uninstall onnxruntime
@@ -83,20 +93,42 @@ lorahub tag ./datasets/akagi --device cuda
 present, otherwise falls back to CPU. `--device cuda` forces GPU and errors
 out with an actionable message if it isn't available.
 
-### JoyTag (PyTorch backend)
+## Smart caption (WD14 + vision LLM)
 
-LoraHub also ships a JoyTag adapter that hosts the
-[`fancyfeast/joytag`](https://huggingface.co/fancyfeast/joytag) ViT model
-end-to-end in PyTorch — useful when you want richer booru tags
-(~5800-tag vocabulary, default 0.4 threshold) than WD14. The architecture is
-vendored under `lorahub/core/tagging/_joytag_model.py` so no
-`timm` / `einops` / `transformers` extras are pulled in. Install the optional
-`tagging` extras to get PyTorch + safetensors:
+The Image Studio's smart-caption pipeline combines WD14 with a configured
+vision LLM to produce Anima-format captions:
 
-```powershell
-pip install "lorahub[tagging]"
-# or pick a CUDA wheel manually from https://pytorch.org/get-started/locally/
+```
+masterpiece, best quality, score_7, <safe|sensitive|nsfw>,
+<1girl/solo/character>, @<trigger>,
+<2-3 sentence natural-language description>,
+<remaining general tags>
 ```
 
-The first run downloads ~700 MB of safetensors weights plus `config.json` and
-`top_tags.txt` from the Hub.
+Three modes:
+
+- **style** — describe the medium and rendering on purpose so the model
+  binds the style to the trigger word.
+- **character** — skip fixed identity features (hair / eye colour, signature
+  outfit) so the model learns them from the latent.
+- **general** — describe everything; useful when the dataset isn't
+  trigger-word-driven.
+
+Each line you produce can be re-rendered into a preview image by the live
+preview worker if you train via diffusion-pipe (see the next section).
+
+## Live previews during training
+
+When you train with `diffusion-pipe`, lorahub spins up a background worker
+that watches `runs/<job>/output/{step|epoch}{N}/` and renders one PNG per
+prompt for every new checkpoint. Default prompts live at
+`configs/sample_prompts/anima_default.txt`; switch the trigger inside the
+file to retarget.
+
+The worker reacts in <1 s to `checkpoint_saved` events and falls back to a
+5 s polling tick. Per-checkpoint render budget keeps training throughput
+within ~30% of baseline. Skipped renders (low free VRAM, cancellation) are
+silently rescheduled — only true crashes raise an error event.
+
+The PNGs land in `workspace/samples/step{N}_{idx}.png` and surface live in
+the **Sample Gallery** of the Jobs page.
