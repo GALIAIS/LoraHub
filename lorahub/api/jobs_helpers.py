@@ -473,6 +473,17 @@ def _select_backend(cfg: TrainingConfig):  # type: ignore[no-untyped-def]
         return KohyaBackend()
     if backend_type == "diffusion-pipe":
         return DiffusionPipeBackend()
+    if backend_type == "anima_lora":
+        # Cut0: schema + dispatch in place; runner / compiler land in cut1+2.
+        # Surface a clear error so a user who flipped the type to anima_lora
+        # before the implementation lands gets a useful message instead of
+        # an opaque "unsupported backend".
+        msg = (
+            "anima_lora backend is registered but not yet implemented "
+            "(B5 anima_lora cut0 — compiler + runner ship in cut1/cut2). "
+            "Use backend.type='kohya' or 'diffusion-pipe' for now."
+        )
+        raise NotImplementedError(msg)
     msg = f"unsupported backend type: {backend_type!r}"
     raise ValueError(msg)
 

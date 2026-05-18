@@ -732,10 +732,232 @@ class DiffusionPipeOptions(BaseModel):
     model_paths: dict[str, str] = Field(default_factory=dict)
 
 
+class AnimaLoraMethodLoraConfig(BaseModel):
+    """Defaults for ``method = "lora"`` on the anima_lora backend.
+
+    The ``method = "lora"`` path on anima_lora is *not* the bare LoRA you'd
+    get on kohya — upstream stacks OrthoLoRA + T-LoRA on top by default.
+    Tracking those knobs here keeps the LoraHub schema explicit about the
+    stack instead of hiding it in the compiler.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    use_ortho: bool = True
+    # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
+    use_timestep_mask: bool = True
+    min_rank: int = Field(8, ge=1)
+    alpha_rank_scale: float = Field(1.0, gt=0)
+
+
+class AnimaLoraMethodPostfixConfig(BaseModel):
+    """Postfix tuning knobs (``networks/methods/postfix.py``).
+
+    Two modes: ``postfix`` is a free K×D tensor appended to the cached
+    adapter output; ``cond`` is caption-conditional with structural
+    orthogonality (Cayley rotation over an orthonormal basis).
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    mode: Literal["postfix", "cond"] = "cond"
+    cond_hidden_dim: int = Field(1024, ge=1)
+    splice_position: Literal["front_of_padding", "after_padding"] = "front_of_padding"
+    ortho_basis: Literal["svd_te", "random", "identity"] = "svd_te"
+    te_cache_dir: Path | None = None
+    svd_num_files: int = Field(1024, ge=1)
+    ortho_basis_seed: int = 0
+    lambda_init: float = Field(0.3, gt=0)
+
+
+class AnimaLoraMethodChimeraConfig(BaseModel):
+    """ChimeraHydra dual-pool routing config.
+
+    Content pool (router on pooled text features) + frequency pool
+    (FreqRouter on FEI bands) sum additively into one A matrix per
+    Linear. ``balance_w_*`` are per-router load-balance loss weights.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    balance_w_content: float = Field(2e-7, ge=0)
+    balance_w_freq: float = Field(5e-7, ge=0)
+    balance_loss_warmup_ratio: float = Field(0.4, ge=0.0, le=1.0)
+    fei_feature_dim: int = Field(2, ge=1)
+    sigma_feature_dim: int = Field(16, ge=1)
+
+
+class AnimaLoraMethodEasyControlConfig(BaseModel):
+    """EasyControl Phase 1: per-block conditioning LoRA + softmax gate.
+
+    ``b_cond_init = -10`` keeps step 0 identical to baseline DiT;
+    ``cond_token_count`` is the static pad length (lower for tight VRAM).
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    b_cond_init: float = -10.0
+    cond_scale: float = Field(1.0, gt=0)
+    apply_ffn_lora: bool = True
+    cond_token_count: int = Field(4096, ge=1)
+    drop_p: float = Field(0.1, ge=0.0, le=1.0)
+    cond_noise_max: float = Field(0.3, ge=0.0)
+
+
+class AnimaLoraMethodIPAdapterConfig(BaseModel):
+    """IP-Adapter: PE-Core encoder + resampler + per-block KV.
+
+    ``gate_lr`` is intentionally ~10× the global LR — upstream noted
+    that 8 epochs at 1e-4 only reached gate ``abs_max ~0.004`` without
+    the boost.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    encoder: Literal["PE-Core-L14-336", "PE-Core-G14-448"] = "PE-Core-L14-336"
+    resampler_layers: int = Field(2, ge=1)
+    resampler_heads: int = Field(8, ge=1)
+    ip_scale: float = Field(1.0, gt=0)
+    image_drop_p: float = Field(0.05, ge=0.0, le=1.0)
+    gate_lr: float = Field(1e-3, gt=0)
+    features_cache_to_disk: bool = True
+
+
+class AnimaLoraOptions(BaseModel):
+    """anima_lora backend specific knobs.
+
+    Independent from kohya / diffusion-pipe. Mirrors the upstream
+    ``base.toml`` + ``methods/<method>.toml`` + ``presets.toml`` chain
+    but presents one flat schema — the LoraHub compiler emits a
+    pre-merged anima_lora.toml so we don't replay the upstream merge
+    layering at runtime.
+
+    Method axis: ``method`` selects which of the five sub-configs (lora,
+    postfix, chimera, easycontrol, ip_adapter) is consumed by the
+    compiler. The other sub-configs may be populated and will simply
+    not surface in the emitted TOML — useful for keeping per-method
+    presets around without losing them across method switches.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    # ---- Method + preset axes ----
+    method: Literal[
+        "lora", "postfix", "chimera", "easycontrol", "ip_adapter"
+    ] = "lora"
+    preset: Literal[
+        "default", "low_vram", "graft", "half", "quarter", "tenth", "debug"
+    ] = "default"
+
+    # ---- Output ----
+    output_name: str = "anima_lora"
+
+    # ---- Network ----
+    network_module: str = "networks.lora_anima"
+    network_dim: int = Field(16, ge=1)
+    network_alpha: float = Field(16, gt=0)
+    network_train_unet_only: bool = True
+
+    # ---- Optimizer / schedule ----
+    optimizer_type: Literal["AdamW", "AdamW8bit", "Lion", "Prodigy"] = "AdamW"
+    lr_scheduler: Literal[
+        "constant", "cosine", "cosine_with_restarts", "linear", "polynomial"
+    ] = "constant"
+    learning_rate: float = Field(5.0e-5, gt=0)
+    max_train_epochs: int = Field(8, ge=1)
+    save_every_n_epochs: int = Field(2, ge=1)
+    checkpointing_epochs: int = Field(2, ge=1)
+    caption_dropout_rate: float = Field(0.1, ge=0.0, le=1.0)
+
+    # ---- Sampling / loss (flow-matching for Anima DiT) ----
+    timestep_sampling: Literal["sigmoid", "uniform", "logit_normal"] = "sigmoid"
+    sigmoid_scale: float = Field(1.0, gt=0)
+    discrete_flow_shift: float = Field(1.0, gt=0)
+    weighting_scheme: Literal["sigma_sqrt", "logit_normal", "mode", "cosmap"] | None = None
+    logit_mean: float | None = None
+    logit_std: float | None = None
+    mode_scale: float | None = None
+    # Variance-reduced flow-matching loss (AsymFlow §5.2). +40% step compute
+    # when enabled; leave None to skip.
+    vr_loss_weight: float | None = Field(default=None, ge=0)
+
+    # ---- Caching / data ----
+    cache_latents: bool = True
+    cache_latents_to_disk: bool = True
+    cache_text_encoder_outputs: bool = True
+    cache_text_encoder_outputs_to_disk: bool = True
+    cache_llm_adapter_outputs: bool = True
+    use_shuffled_caption_variants: bool = True
+    # Subset sampling — per-preset override (debug=0.001, tenth=0.1 etc).
+    sample_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
+    static_token_count: int = Field(4096, ge=1)
+    vae_chunk_size: int = Field(64, ge=1)
+    vae_disable_cache: bool = False
+    no_half_vae: bool = False
+
+    # ---- Attention / compile ----
+    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
+    xformers: bool = False
+    split_attn: bool = False
+    # ``compile_mode = "full"`` enables CUDAGraph capture via
+    # ``compile_inductor_mode = "reduce-overhead"``. Incompatible with
+    # gradient_checkpointing / blocks_to_swap.
+    compile_mode: Literal["blocks", "full"] | None = None
+    compile_inductor_mode: Literal[
+        "default", "reduce-overhead", "max-autotune"
+    ] | None = None
+    use_custom_down_autograd: bool = True
+
+    # ---- Memory / offload ----
+    blocks_to_swap: int = Field(0, ge=0)
+    gradient_checkpointing: bool = False
+    unsloth_offload_checkpointing: bool = False
+    cpu_offload_checkpointing: bool = False
+    mixed_precision: Literal["bf16", "fp16", "fp32"] = "bf16"
+
+    # ---- Validation (CMMD + sample-time) ----
+    use_cmmd: bool = False
+    validation_seed: int | None = None
+    validation_sample_steps: int | None = Field(default=None, ge=1)
+    validation_cfg_scale: float | None = Field(default=None, gt=0)
+
+    # ---- Method-specific sub-configs ----
+    # Only the sub-config matching `method` is consumed by the compiler;
+    # populating the others is allowed (lets users keep per-method
+    # presets across method switches) but harmless until selected.
+    lora: AnimaLoraMethodLoraConfig = Field(default_factory=AnimaLoraMethodLoraConfig)
+    postfix: AnimaLoraMethodPostfixConfig | None = None
+    chimera: AnimaLoraMethodChimeraConfig | None = None
+    easycontrol: AnimaLoraMethodEasyControlConfig | None = None
+    ip_adapter: AnimaLoraMethodIPAdapterConfig | None = None
+
+    @model_validator(mode="after")
+    def _check_method_subconfig_present(self) -> AnimaLoraOptions:
+        """When `method` ≠ 'lora', the matching sub-config must be set.
+
+        Lets us catch the "selected `method=postfix` but forgot to fill
+        the sub-config" error at validation time instead of crashing
+        the compiler with an attribute error.
+        """
+        if self.method == "postfix" and self.postfix is None:
+            msg = "method='postfix' requires the `postfix` sub-config to be set"
+            raise ValueError(msg)
+        if self.method == "chimera" and self.chimera is None:
+            msg = "method='chimera' requires the `chimera` sub-config to be set"
+            raise ValueError(msg)
+        if self.method == "easycontrol" and self.easycontrol is None:
+            msg = "method='easycontrol' requires the `easycontrol` sub-config to be set"
+            raise ValueError(msg)
+        if self.method == "ip_adapter" and self.ip_adapter is None:
+            msg = "method='ip_adapter' requires the `ipAdapter` sub-config to be set"
+            raise ValueError(msg)
+        return self
+
+
 class BackendConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    type: Literal["kohya", "diffusion-pipe"] = "kohya"
+    type: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
     pin_version: str | None = None
     sd_scripts_path: Path | None = None
     python_executable: Path | None = None
@@ -743,6 +965,9 @@ class BackendConfig(BaseModel):
     # Optional, dp-specific knobs. None means "use library defaults" so kohya
     # users never need to touch this field.
     diffusion_pipe: DiffusionPipeOptions | None = None
+    # Optional, anima_lora-specific knobs. None means "use anima_lora's own
+    # base.toml defaults so kohya / dp users never need to touch this.
+    anima_lora: AnimaLoraOptions | None = None
 
 
 class ResumeConfig(BaseModel):
