@@ -54,21 +54,23 @@ dependencies = [
     "opencv-python>=4.11.0.86",
     # Masking
     "pyyaml",
-    "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    # `sam3` removed — it pulls from facebookresearch/sam3.git (no PyPI
+    # release). Install on demand if you need `make mask`; see comment
+    # below the dependencies block.
     "segmentation-models-pytorch>=0.3.4",
     "albumentations>=1.4.0",
     "packaging",
     "pycocotools>=2.0.11",
-    # FA2 wheels — paired with the torch lines above. Switch the Windows
-    # FA2 wheel together with torch when toggling between stable and cuda132.
-    # flash-attn-4 (flash-attention-sm120) is disabled — kernel is unstable
-    # on our targets, see docs/methods/fa4.md.
-    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.17/flash_attn-2.8.3+cu132torch2.12-cp313-cp313-linux_x86_64.whl ; sys_platform == 'linux'",
-    # Windows: stable (default) — built against torch 2.11 + CUDA 13.0.
-    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.6/flash_attn-2.8.3+cu130torch2.11-cp313-cp313-win_amd64.whl ; sys_platform == 'win32'",
-    # Windows: cuda132 opt-in — trimmed FA2 (bf16 + head_dim=128 + non-causal)
-    # built against torch 2.12 + CUDA 13.2. See flash-attention/repack_wheel.py.
-    # "flash-attn @ https://github.com/sorryhyun/flash-attention-sm120-fix/releases/download/fa2cuda132/flash_attn-2.8.4-cp313-cp313-win_amd64.whl ; sys_platform == 'win32'",
+    # LoraHub fork: flash-attn / sam3 prebuilt-wheel URL pins removed
+    # so a vanilla `uv sync` works without GitHub access. flash-attn is
+    # an optional perf accelerator (anima_lora falls back to torch
+    # SDPA without it); install it separately if you need it:
+    #   uv pip install --python <.venv-python> \
+    #       "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.17/flash_attn-2.8.3+cu132torch2.12-cp313-cp313-linux_x86_64.whl"
+    # sam3 is only needed for the masking pipeline (`make mask`); it
+    # ships from a GitHub repo with no PyPI release, so install on
+    # demand:
+    #   uv pip install --python <.venv-python> "sam3 @ git+https://github.com/facebookresearch/sam3.git"
     "triton-windows>=3.6.0 ; sys_platform == 'win32'",
     "pyside6>=6.11.0",
     "ruff>=0.15.9",
@@ -101,12 +103,13 @@ dev = [
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
-# Both wheels are looked up from these indexes — the version pin in
-# `dependencies` (active vs. commented) decides which one resolves.
-extra-index-url = [
-    "https://download.pytorch.org/whl/cu132",
-    "https://download.pytorch.org/whl/cu130",
-]
+# LoraHub fork: extra-index-url for the PyTorch CDN was removed. The
+# default index (pypi.org or the user's mirror via `uv sync
+# --default-index`) is now the only source. PyTorch publishes torch
+# 2.11/2.12 to PyPI directly nowadays, so we don't strictly need a
+# CUDA-tagged extra index for torch>=2.11. Users who want a CUDA-
+# specific pin can pass `--extra-index-url <pytorch-mirror>` at sync
+# time, or restore the upstream block in this file.
 prerelease = "allow"
 override-dependencies = ["numpy>=2.0.0"]
 
