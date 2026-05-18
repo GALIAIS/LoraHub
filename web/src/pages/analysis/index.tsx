@@ -278,20 +278,38 @@ export function AnalysisPage() {
 function SingleJobView({ job }: { job: JobSummary }) {
   // Pull config_snapshot so the KPI strip can derive a total-steps
   // estimate without forcing the user to wait for the trainer to
-  // emit one. We don't fetch dataset thumbs here — the simple
-  // `max_steps` path covers most recipes; missing data just leaves
-  // progress as `step / ?` until the backend reports a total.
+  // emit one. dp's parser never emits `total_steps`; without an
+  // image-count-driven derivation the progress chip stays as
+  // `step / ?` for the whole run.
   const detail = useQuery({
     queryKey: ["job", job.id],
     queryFn: () => api.getJob(job.id),
     refetchInterval: 4000,
   })
+  const datasetSource = useMemo(() => {
+    const cfg = detail.data?.config_snapshot as
+      | Record<string, unknown>
+      | undefined
+    const ds = cfg?.["dataset"] as Record<string, unknown> | undefined
+    const src = ds?.["source"]
+    return typeof src === "string" ? src : null
+  }, [detail.data])
+  const datasetScan = useQuery({
+    queryKey: ["dataset-scan", datasetSource, true],
+    queryFn: () => api.scanDataset(datasetSource!, true, 0),
+    enabled: !!datasetSource,
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  })
   const fallbackTotalSteps = useMemo(() => {
     const cfg = detail.data?.config_snapshot as
       | Record<string, unknown>
       | undefined
-    return expectedTotalSteps(cfg ?? null, null)
-  }, [detail.data])
+    return expectedTotalSteps(
+      cfg ?? null,
+      datasetScan.data?.image_files ?? null,
+    )
+  }, [detail.data, datasetScan.data])
   return <AnalysisWorkbench job={job} fallbackTotalSteps={fallbackTotalSteps} />
 }
 
