@@ -250,10 +250,11 @@ def report_terminal_job(job: JobRecord) -> None:
 
     # Streaming advance: ask the sampler for the next trial *now* that
     # it has seen this trial's score, then hand it to the router-supplied
-    # launcher. Only fires when the router registered a context — grid
+    # launcher. Only fires when the sweep registered a context — grid
     # and random drained all variants up-front so there is nothing left
-    # to enqueue, and rebuilt sweeps deliberately don't get a context
-    # (the launch metadata is not persisted; cut4.C territory).
+    # to enqueue. Rebuilt sweeps now also get a context (cut4.C
+    # restored streaming via ``build_streaming_launch``); the advance
+    # path is identical to the original /api/sweeps create path.
     context = get_launch_context(sweep_id)
     if context is not None and sweep.remaining() > 0:
         try:
@@ -306,18 +307,15 @@ def rebuild_active_sweeps(state_module: Any, sweep_store: Any) -> int:
     have nothing in-memory worth restoring; their pareto data still
     surfaces from JobRecord history.
 
-    Streaming-advance gap (cut4.B → cut4.C): the rebuild path
-    deliberately registers each sweep **without** a
-    :class:`SweepLaunchContext`. The launch closure depends on the
-    router's process-local ``_launch_job`` plus the original
-    ``workspace_root`` and request payload — none of which is
-    reconstructible from the persisted plan alone. Concretely, after a
-    restart the sweep enters "score-only" mode: terminal-job callbacks
-    still feed scores into the sampler so the sqlite study stays
-    coherent, but the next trial is **not** auto-enqueued. Already-
-    enqueued or in-flight children continue to drain normally.
-    Persisting enough launch metadata to reconstruct the closure (or
-    re-spawning trials via a synthetic /sweeps re-POST) is cut4.C.
+    Streaming advance after restart (cut4.C): each rebuilt sweep also
+    gets a fresh :class:`SweepLaunchContext` reconstructed via
+    :func:`build_streaming_launch`. The required ingredients are the
+    sweep_id (``record.id``) and the original ``workspace_root``
+    persisted in ``plan["workspace_root"]``; ``_launch_job`` is the
+    same global symbol the router used at create time, so the rebuilt
+    closure is functionally identical to the one that ran before the
+    restart. In-flight TPE keeps advancing trial-by-trial even across
+    process boundaries.
 
     Returns the number of sweeps re-registered. Best-effort: a missing
     optuna install or an unreadable sqlite file just skips that sweep
@@ -395,7 +393,39 @@ def rebuild_active_sweeps(state_module: Any, sweep_store: Any) -> int:
             log.exception("sweep %s: rebuild failed", record.id)
             continue
 
-        register_sweep(record.id, materialised)
+        # cut4.C: rebuild the streaming launch closure too so the runtime
+        # can keep advancing TPE trials after a restart. Without this,
+        # the rebuilt sweep is "report-only" — score still lands in the
+        # study but next_variant() never gets enqueued, leaving the
+        # sweep stuck at whatever trial was running when the server
+        # died. workspace_root lives in the persisted plan, sweep_id is
+        # record.id, and `_launch_job` is the same global symbol the
+        # router used at create time, so the closure is functionally
+        # identical to the one the router built.
+        workspace_root_str = plan_dict.get("workspace_root")
+        context: SweepLaunchContext | None = None
+        if workspace_root_str:
+            try:
+                context = SweepLaunchContext(
+                    launch=build_streaming_launch(
+                        record.id, Path(workspace_root_str)
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "sweep %s: failed to rebuild streaming launch closure; "
+                    "score reporting will work but trial advance is suspended",
+                    record.id,
+                )
+                context = None
+        else:
+            log.info(
+                "sweep %s: plan missing workspace_root, advance suspended after "
+                "rebuild (recipe predates cut2)",
+                record.id,
+            )
+
+        register_sweep(record.id, materialised, context=context)
         rebuilt += 1
 
     if rebuilt:
@@ -424,10 +454,79 @@ def _axis_from_dump(dumped: dict[str, Any]) -> Any:
     )
 
 
+def build_streaming_launch(
+    sweep_id: str,
+    workspace_root: Path,
+) -> SweepLauncher:
+    """Construct a :class:`SweepLauncher` closure for ``sweep_id``.
+
+    Captures the launch metadata (``sweep_id`` + ``workspace_root``)
+    needed by the trial-by-trial advance path. Schema validation +
+    ``_launch_job`` invocation happen inside the closure so callers
+    don't carry a TrainingConfig dependency. Validation failures are
+    swallowed into a warning log + ``None`` return — by the time the
+    streaming hook fires, the original /api/sweeps caller is long
+    gone and propagating an HTTPException would crash the unrelated
+    job whose terminal hook is mid-flight.
+
+    Used by:
+      * ``routers.sweeps.create_sweep`` — registers the streaming
+        context inline so trial 2+ get auto-launched as trial N's
+        score lands.
+      * :func:`rebuild_active_sweeps` (cut4.C) — re-binds the same
+        closure shape after a server restart so in-flight TPE sweeps
+        keep advancing instead of stalling at the last finished trial.
+
+    The two call sites construct an identical closure modulo the
+    initial bootstrap path (the router also needs synchronous launch
+    for the very first trial; that part stays in the router and
+    raises HTTPException directly to the user).
+    """
+    # Late import: jobs_helpers imports sweep_runtime indirectly via
+    # the terminal-job hook; keeping `_launch_job` lazily resolved
+    # avoids a circular import at module load.
+    from lorahub.api.jobs_helpers import _launch_job  # noqa: PLC0415
+    from lorahub.core.config.schema import TrainingConfig  # noqa: PLC0415
+
+    def _streaming_launch(
+        variant_name: str,
+        variant_config: dict[str, Any],
+        axis_values: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            cfg_v = TrainingConfig.model_validate(variant_config)
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "sweep %s: streaming launch refused variant %s "
+                "(schema validation failed)",
+                sweep_id,
+                variant_name,
+            )
+            return None
+        workspace_v = (workspace_root / variant_name).resolve()
+        metadata = {
+            "sweep_id": sweep_id,
+            "variant_name": variant_name,
+            "axis_values": axis_values,
+        }
+        try:
+            return _launch_job(cfg_v, workspace_v, metadata=metadata)
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "sweep %s: streaming launch failed for variant %s",
+                sweep_id,
+                variant_name,
+            )
+            return None
+
+    return _streaming_launch
+
+
 __all__ = [
     "_active_sweeps",
     "SweepLaunchContext",
     "SweepLauncher",
+    "build_streaming_launch",
     "get_active",
     "get_launch_context",
     "rebuild_active_sweeps",

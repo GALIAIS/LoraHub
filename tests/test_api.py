@@ -3516,6 +3516,99 @@ def test_rebuild_skips_grid_random_sweeps(
     assert rebuilt == 0
 
 
+def test_rebuild_restores_streaming_advance_context(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cut4.C: after a restart, the rebuilt sweep can still advance.
+
+    Concretely: when a TPE sweep's terminal-job hook fires after a
+    restart, the rebuilt SweepLaunchContext must hand the next variant
+    back to ``_launch_job``. Without cut4.C the rebuilt sweep was
+    "report-only" — score landed in the study but no new job was
+    enqueued, leaving the sweep dead at the last finished trial.
+
+    We patch _launch_job at the module level so the streaming closure
+    rebuilt by ``build_streaming_launch`` records every dispatch
+    without touching the real scheduler. n_trials=3, drive trial 1 to
+    completion, simulate restart by clearing _active_sweeps, rebuild,
+    then drive trial 2's terminal hook — that hook should trigger
+    trial 3 via the rebuilt streaming context.
+    """
+    pytest.importorskip("optuna", reason="optuna is optional")
+
+    from lorahub.api import app as app_mod
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+    from lorahub.api.sweep_store import SweepStore
+
+    monkeypatch.setattr(app_mod, "_sweep_store", SweepStore(tmp_path / "sweeps.sqlite"))
+
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    # Patch in BOTH places: the router uses sweeps_router._launch_job
+    # for the bootstrap path; the rebuilt streaming closure imports
+    # _launch_job lazily from jobs_helpers.
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+    from lorahub.api import jobs_helpers as jh_mod
+
+    monkeypatch.setattr(jh_mod, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 3,
+        "seed": 9,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    sweep_id = r.json()["sweep_id"]
+    assert len(captured) == 1, "router should have launched only trial 1 (TPE streaming)"
+
+    # Trial 1 finishes — streaming hook fires, advance should enqueue trial 2.
+    _write_events_jsonl(captured[0].workspace, loss=0.5)
+    captured[0].state = state.JobState.succeeded
+    state_mod.registry.update(captured[0])
+    sweep_runtime.report_terminal_job(captured[0])
+    assert len(captured) == 2, "trial 1 terminal hook must enqueue trial 2"
+
+    # SIMULATE RESTART: drop everything in-memory.
+    sweep_runtime.reset_for_tests()
+    assert sweep_runtime.get_active(sweep_id) is None
+    assert sweep_runtime.get_launch_context(sweep_id) is None
+
+    # Rebuild the way startup does. Both the materialised sweep AND its
+    # SweepLaunchContext should come back.
+    rebuilt = sweep_runtime.rebuild_active_sweeps(state_mod, app_mod._sweep_store)
+    assert rebuilt == 1
+    assert sweep_runtime.get_active(sweep_id) is not None
+    rebuilt_context = sweep_runtime.get_launch_context(sweep_id)
+    assert rebuilt_context is not None, (
+        "cut4.C: rebuild must restore the launch context, not just the sampler"
+    )
+
+    # Now trial 2 finishes — its terminal hook should advance to trial 3
+    # via the rebuilt context.
+    _write_events_jsonl(captured[1].workspace, loss=0.3)
+    captured[1].state = state.JobState.succeeded
+    state_mod.registry.update(captured[1])
+    sweep_runtime.report_terminal_job(captured[1])
+    assert len(captured) == 3, (
+        "rebuilt streaming context must advance trial 3 after trial 2 finishes"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Attention backend endpoints
 # --------------------------------------------------------------------------- #
