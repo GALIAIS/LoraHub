@@ -21,6 +21,18 @@ Design:
   metrics report ``float('inf')`` — TPE treats infinity as a maximally
   bad outcome and keeps proposing trials elsewhere instead of stalling.
 
+* After every successful ``report_trial``, :func:`report_terminal_job`
+  invokes the sweep's :class:`SweepLaunchContext` (if any) to ask the
+  sampler for the *next* trial and enqueue it through the launch hook
+  the router stamped at ``register_sweep`` time. This is what makes the
+  TPE feedback loop streaming — the sampler observes the prior trial's
+  score before its next ``ask()`` runs, so the proposal is genuinely
+  adaptive instead of being a batch of independent draws made before
+  any feedback was available. Sweeps without a context (grid / random
+  drained up-front, or a TPE sweep rebuilt from disk on startup) just
+  no-op the advance — see ``rebuild_active_sweeps`` for the cut4.A
+  caveat.
+
 * The hook is wired from :func:`lorahub.api.jobs_helpers._launch_job`
   via the ``done``-event handler, plus the launch-exception path and
   the cancel/kill paths in :mod:`lorahub.api.routers.jobs`.
@@ -35,13 +47,41 @@ import json
 import logging
 import math
 import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from lorahub.api.state import JobRecord
-from lorahub.core.sweep import MaterialisedSweep
+from lorahub.core.sweep import MaterialisedSweep, SweepError
 
 log = logging.getLogger(__name__)
+
+
+# Callable signature the router hands us at register time. Takes the
+# tuple shape ``MaterialisedSweep.next_variant()`` returns and is
+# expected to enqueue exactly one job. Returning ``None`` signals the
+# router declined to launch (e.g. a stale variant that lost a schema
+# race) — the runtime logs and stops advancing rather than spinning.
+SweepLauncher = Callable[[str, dict[str, Any], dict[str, Any]], dict[str, Any] | None]
+
+
+@dataclass(slots=True)
+class SweepLaunchContext:
+    """Per-sweep launch closure registered alongside the MaterialisedSweep.
+
+    Populated by the router when it creates a streaming TPE sweep so the
+    terminal-job hook can ask for the next variant without a round-trip
+    through the HTTP layer. The closure must perform schema validation,
+    workspace setup, metadata stamping, and the actual ``_launch_job``
+    call — all of the per-trial side effects the router runs on the
+    happy path. ``None`` is a valid context value: rebuilt sweeps and
+    grid/random sweeps register without one and the runtime treats them
+    as "report-only" (no auto-advance).
+    """
+
+    launch: SweepLauncher
+
 
 # Module-level registry of in-flight TPE / random / grid sweeps.
 # Key is sweep_id, value is the live MaterialisedSweep that the router
@@ -50,18 +90,42 @@ log = logging.getLogger(__name__)
 # user-visible analytics still work after a restart; only the
 # adaptive sampler's internal Bayes model is lost.
 _active_sweeps: dict[str, MaterialisedSweep] = {}
+# Optional companion to ``_active_sweeps``: the launch context the
+# router stamped at create time. Only TPE registers one (grid/random
+# drain up-front so there is nothing left to advance). After a restart
+# rebuild this dict stays empty for the rebuilt sweep — see
+# :func:`rebuild_active_sweeps` for why we don't try to reconstruct it.
+_launch_contexts: dict[str, SweepLaunchContext] = {}
 _lock = threading.RLock()
 
 
-def register_sweep(sweep_id: str, sweep: MaterialisedSweep) -> None:
-    """Stash an active sweep so terminal-job callbacks can find it."""
+def register_sweep(
+    sweep_id: str,
+    sweep: MaterialisedSweep,
+    context: SweepLaunchContext | None = None,
+) -> None:
+    """Stash an active sweep + optional launch context.
+
+    ``context`` is only meaningful for streaming TPE — without it the
+    terminal-job hook reports the score but does not auto-advance.
+    Re-registering an existing ``sweep_id`` replaces both entries; the
+    last writer wins.
+    """
     with _lock:
         _active_sweeps[sweep_id] = sweep
+        if context is not None:
+            _launch_contexts[sweep_id] = context
+        else:
+            # Defensive: drop a stale context if a caller re-registers
+            # the same id without one. Otherwise advance() would call
+            # back into a closure whose closure-state may be invalid.
+            _launch_contexts.pop(sweep_id, None)
 
 
 def unregister_sweep(sweep_id: str) -> MaterialisedSweep | None:
-    """Drop a sweep from the live registry (e.g. once exhausted)."""
+    """Drop a sweep + its launch context from the live registry."""
     with _lock:
+        _launch_contexts.pop(sweep_id, None)
         return _active_sweeps.pop(sweep_id, None)
 
 
@@ -71,10 +135,17 @@ def get_active(sweep_id: str) -> MaterialisedSweep | None:
         return _active_sweeps.get(sweep_id)
 
 
+def get_launch_context(sweep_id: str) -> SweepLaunchContext | None:
+    """Return the registered launch context for ``sweep_id`` if any."""
+    with _lock:
+        return _launch_contexts.get(sweep_id)
+
+
 def reset_for_tests() -> None:
-    """Clear every active sweep — only safe to call from test fixtures."""
+    """Clear every active sweep + context — only safe from test fixtures."""
     with _lock:
         _active_sweeps.clear()
+        _launch_contexts.clear()
 
 
 def _read_final_score(workspace: Path) -> float:
@@ -145,6 +216,14 @@ def report_terminal_job(job: JobRecord) -> None:
     Failures inside the read path swallow into ``float('inf')`` so a
     crashed job still feeds back a "this region is bad" signal
     instead of stalling the study.
+
+    After the score lands, if the sweep still has trials remaining and
+    a :class:`SweepLaunchContext` was registered, the next variant is
+    pulled from the sampler and enqueued via the registered launcher.
+    The advance happens *after* the score is told back so a TPE
+    ``ask()`` sees the just-finished trial in its prior. Sweeps with
+    no context (rebuilt-after-restart, grid/random) skip the advance —
+    they are score-only sinks.
     """
     meta = job.metadata if isinstance(job.metadata, dict) else None
     if not meta:
@@ -168,6 +247,37 @@ def report_terminal_job(job: JobRecord) -> None:
             "sweep %s: report_trial failed for job %s", sweep_id, job.id
         )
         return
+
+    # Streaming advance: ask the sampler for the next trial *now* that
+    # it has seen this trial's score, then hand it to the router-supplied
+    # launcher. Only fires when the router registered a context — grid
+    # and random drained all variants up-front so there is nothing left
+    # to enqueue, and rebuilt sweeps deliberately don't get a context
+    # (the launch metadata is not persisted; cut4.C territory).
+    context = get_launch_context(sweep_id)
+    if context is not None and sweep.remaining() > 0:
+        try:
+            nxt = sweep.next_variant()
+        except SweepError:
+            log.exception(
+                "sweep %s: next_variant failed during streaming advance",
+                sweep_id,
+            )
+            nxt = None
+        if nxt is not None:
+            variant_name, variant_config, next_axis_values = nxt
+            try:
+                context.launch(variant_name, variant_config, next_axis_values)
+            except Exception:  # noqa: BLE001
+                # Launch failures here can't propagate — the *previous*
+                # trial's terminal hook is already mid-flight. Logging
+                # is the best we can do; the operator can re-launch
+                # the missing variant manually if desired.
+                log.exception(
+                    "sweep %s: streaming launch failed for variant %s",
+                    sweep_id,
+                    variant_name,
+                )
 
     # If every planned trial has reported back, evict the sweep so we
     # don't leak entries forever in long-lived deployments.
@@ -195,6 +305,19 @@ def rebuild_active_sweeps(state_module: Any, sweep_store: Any) -> int:
     Sweeps with no ``study_path`` (grid / random) are skipped — they
     have nothing in-memory worth restoring; their pareto data still
     surfaces from JobRecord history.
+
+    Streaming-advance gap (cut4.B → cut4.C): the rebuild path
+    deliberately registers each sweep **without** a
+    :class:`SweepLaunchContext`. The launch closure depends on the
+    router's process-local ``_launch_job`` plus the original
+    ``workspace_root`` and request payload — none of which is
+    reconstructible from the persisted plan alone. Concretely, after a
+    restart the sweep enters "score-only" mode: terminal-job callbacks
+    still feed scores into the sampler so the sqlite study stays
+    coherent, but the next trial is **not** auto-enqueued. Already-
+    enqueued or in-flight children continue to drain normally.
+    Persisting enough launch metadata to reconstruct the closure (or
+    re-spawning trials via a synthetic /sweeps re-POST) is cut4.C.
 
     Returns the number of sweeps re-registered. Best-effort: a missing
     optuna install or an unreadable sqlite file just skips that sweep
@@ -303,7 +426,10 @@ def _axis_from_dump(dumped: dict[str, Any]) -> Any:
 
 __all__ = [
     "_active_sweeps",
+    "SweepLaunchContext",
+    "SweepLauncher",
     "get_active",
+    "get_launch_context",
     "rebuild_active_sweeps",
     "register_sweep",
     "report_terminal_job",

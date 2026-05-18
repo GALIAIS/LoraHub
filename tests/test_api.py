@@ -3089,12 +3089,13 @@ def test_pareto_endpoint_skips_failed_trials_for_best(
 def test_tpe_feedback_loop_drives_sampler(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A TPE sweep must call ``MaterialisedSweep.report_trial`` once per finished job.
+    """A streaming TPE sweep must enqueue trial 1 up front, then advance trial-by-trial.
 
-    We bypass the real launcher (no kohya subprocess) and simulate the
-    terminal-state hook that ``jobs_helpers`` would normally fire when a
-    job's ``done`` event arrives. The active sweep registry should still
-    receive scores for every metadata-tagged variant.
+    cut4.B turned the router into a streaming launcher: ``POST /sweeps``
+    only ever calls ``_launch_job`` once for TPE, and each subsequent
+    call lands when the prior trial reports its score back via
+    :func:`sweep_runtime.report_terminal_job`. We bypass the real
+    launcher (no kohya subprocess) and drive each finish manually.
     """
     pytest.importorskip("optuna", reason="optuna is optional")
     from lorahub.api import state as state_mod
@@ -3129,32 +3130,106 @@ def test_tpe_feedback_loop_drives_sampler(
     body = r.json()
     sweep_id = body["sweep_id"]
 
-    # The router should have registered a live MaterialisedSweep.
+    # Streaming bootstrap: only the first trial is launched synchronously.
+    # The response counters reflect what the runtime still owes us.
+    assert body["launched_count"] == 1
+    assert body["pending_count"] == 2
+    assert body["n_trials_total"] == 3
+    assert len(body["job_ids"]) == 1
+    assert len(body["variants"]) == 1
+
+    # The router should have registered a live MaterialisedSweep + a
+    # launch context (TPE-only) so subsequent trials can be enqueued.
     active = sweep_runtime.get_active(sweep_id)
     assert active is not None, "sweep_runtime should track active TPE sweep"
-    assert len(captured) == 3
+    assert sweep_runtime.get_launch_context(sweep_id) is not None
+    assert len(captured) == 1
 
-    # Simulate per-job completion: write a fake events.jsonl with a
-    # decreasing loss curve, then fire the terminal hook.
+    # Drive the streaming feedback loop: each terminal report pushes the
+    # score back AND triggers the next variant to be launched.
     losses = [0.6, 0.4, 0.25]
-    for record, loss in zip(captured, losses, strict=True):
+    for i, loss in enumerate(losses):
+        record = captured[i]
         _write_events_jsonl(record.workspace, loss=loss)
         record.state = state.JobState.succeeded
         state_mod.registry.update(record)
         sweep_runtime.report_terminal_job(record)
+        # After each terminal report (except the last), the runtime
+        # should have just enqueued the next trial.
+        expected_launched = min(i + 2, 3)
+        assert len(captured) == expected_launched, (
+            f"after finish #{i + 1} expected {expected_launched} launches, got {len(captured)}"
+        )
 
-    # Active sweep auto-evicts once every trial has reported.
+    # All three trials launched, all three reported. Sweep auto-evicts
+    # once the budget is exhausted.
+    assert len(captured) == 3
     assert sweep_runtime.get_active(sweep_id) is None
+    assert sweep_runtime.get_launch_context(sweep_id) is None
     # ``reported_scores`` mirrors the feedback we pushed in.
     assert len(active.reported_scores) == 3
     reported_losses = [s for _, s in active.reported_scores]
     assert reported_losses == pytest.approx(losses)
 
 
-def test_tpe_feedback_failed_job_reports_inf(
+def test_tpe_streaming_advances_on_terminal(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed trial without events.jsonl must report as ``float('inf')`` so TPE keeps moving."""
+    """Mid-stream invariants: after trial 1 finishes, trial 2 is queued and
+    the sweep still owes one trial."""
+    pytest.importorskip("optuna", reason="optuna is optional")
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 3,
+        "seed": 13,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    sweep_id = r.json()["sweep_id"]
+
+    # Boot state: 1 launched, 2 pending in the sampler.
+    assert len(captured) == 1
+    active = sweep_runtime.get_active(sweep_id)
+    assert active is not None
+    assert active.remaining() == 2
+
+    # Finish trial 1. After the report the runtime should advance by one.
+    _write_events_jsonl(captured[0].workspace, loss=0.5)
+    captured[0].state = state.JobState.succeeded
+    state_mod.registry.update(captured[0])
+    sweep_runtime.report_terminal_job(captured[0])
+
+    # Mid-stream invariants.
+    assert len(captured) == 2
+    assert active.remaining() == 1
+    # Sweep is still active because trial 3 hasn't reported yet.
+    assert sweep_runtime.get_active(sweep_id) is not None
+
+
+def test_tpe_streaming_reports_inf_on_failed_trial(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed trial reports ``float('inf')`` and still triggers the next launch."""
     import math
 
     pytest.importorskip("optuna", reason="optuna is optional")
@@ -3188,14 +3263,126 @@ def test_tpe_feedback_failed_job_reports_inf(
     sweep_id = r.json()["sweep_id"]
     active = sweep_runtime.get_active(sweep_id)
     assert active is not None
+    # Trial 1 is launched eagerly; trial 2 is still pending in the sampler.
+    assert len(captured) == 1
 
-    # First trial: success with finite loss.
+    # Trial 1 fails before producing any events — the score is +inf and
+    # the runtime still advances trial 2.
+    captured[0].state = state.JobState.failed
+    state_mod.registry.update(captured[0])
+    sweep_runtime.report_terminal_job(captured[0])
+
+    assert len(captured) == 2
+    assert math.isinf(active.reported_scores[0][1])
+
+    # Trial 2: success with a finite loss.
+    _write_events_jsonl(captured[1].workspace, loss=0.3)
+    captured[1].state = state.JobState.succeeded
+    state_mod.registry.update(captured[1])
+    sweep_runtime.report_terminal_job(captured[1])
+
+    scores = [s for _, s in active.reported_scores]
+    assert math.isinf(scores[0])
+    assert scores[1] == pytest.approx(0.3)
+    # Budget exhausted: sweep auto-evicts.
+    assert sweep_runtime.get_active(sweep_id) is None
+
+
+def test_random_mode_drains_synchronously(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Random mode is non-adaptive — every trial must be launched up front.
+
+    Streaming would slow down random search for no benefit (the sampler
+    has no internal state worth feeding back). The router must keep
+    draining the iterator before returning.
+    """
+    from lorahub.api import state as state_mod
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append({"workspace": workspace, "metadata": metadata})
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "random",
+        "n_trials": 5,
+        "seed": 21,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert len(captured) == 5
+    assert body["launched_count"] == 5
+    assert body["pending_count"] == 0
+    assert body["n_trials_total"] == 5
+
+
+def test_tpe_feedback_failed_job_reports_inf(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed trial without events.jsonl must report as ``float('inf')`` so TPE keeps moving.
+
+    Streaming-aware variant: trial 1 is launched at create time. Trial 1
+    succeeds → runtime auto-launches trial 2 (which we then mark failed
+    to verify the inf-on-failure path).
+    """
+    import math
+
+    pytest.importorskip("optuna", reason="optuna is optional")
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 2,
+        "seed": 9,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202
+    sweep_id = r.json()["sweep_id"]
+    active = sweep_runtime.get_active(sweep_id)
+    assert active is not None
+    # Streaming bootstrap: only trial 1 launched.
+    assert len(captured) == 1
+
+    # Trial 1: success with finite loss → runtime auto-launches trial 2.
     _write_events_jsonl(captured[0].workspace, loss=0.3)
     captured[0].state = state.JobState.succeeded
     state_mod.registry.update(captured[0])
     sweep_runtime.report_terminal_job(captured[0])
+    assert len(captured) == 2
 
-    # Second trial: failed before producing any events — must report inf.
+    # Trial 2: failed before producing any events — must report inf.
     captured[1].state = state.JobState.failed
     state_mod.registry.update(captured[1])
     sweep_runtime.report_terminal_job(captured[1])

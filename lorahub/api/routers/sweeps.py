@@ -15,19 +15,38 @@ Three modes are accepted:
   optional ``[sweep]`` extra. A missing optuna install surfaces as
   HTTP 503.
 
-TPE feedback loop (cut3): the materialised sweep is registered in
-:mod:`lorahub.api.sweep_runtime`; whenever a child job hits a terminal
-state, ``report_terminal_job`` is invoked from the jobs layer and pushes
-the final ``loss`` / ``val_loss`` back into the sampler. Failed or
-metric-less trials report ``float('inf')`` so the study still steers
-away from the offending region instead of silently skipping it.
+Streaming vs batch (cut4.B): grid + random drain every variant up
+front and call ``_launch_job`` N times before the response returns —
+no adaptive feedback exists for them, so there is nothing to lose by
+asking the sampler N independent times in a row. TPE is different —
+its ``ask()`` returns a uniform draw until the *previous* trial's
+``tell()`` lands, so draining the batch up front would erase the
+sampler's adaptive advantage. For TPE we therefore launch only the
+**first** trial inside the request handler and let
+:func:`lorahub.api.sweep_runtime.report_terminal_job` ask for trial 2,
+trial 3, ... after each prior trial reports its score. The router's
+202 response carries only the trials launched synchronously
+(``launched_count`` / ``pending_count`` reflect the streaming split).
+
+TPE feedback loop (cut3 + cut4.B): the materialised sweep is registered
+in :mod:`lorahub.api.sweep_runtime` together with a
+:class:`SweepLaunchContext` closing over ``workspace_root`` /
+``base_config`` / ``name_template`` so the runtime can drive each
+subsequent trial without re-entering the HTTP layer. Whenever a child
+job hits a terminal state, ``report_terminal_job`` pushes the final
+``loss`` / ``val_loss`` back into the sampler **and then** asks for
+the next variant. Failed or metric-less trials report ``float('inf')``
+so the study still steers away from the offending region instead of
+silently skipping it; the next-trial advance still fires.
 
 The active-sweep registry is in-memory only — server restart loses the
-live Optuna study. Already-enqueued trials still run, but no further
-adaptive guidance is possible until their parent sweep is rebuilt
-(cut4). The ``/sweeps/{id}/pareto`` endpoint reads JobRecord history
-directly, so historical Pareto / best-trial reporting always survives
-a restart.
+live Optuna study and (intentionally) the launch context. Already-
+enqueued trials still run, dangling RUNNING trials get their score on
+completion, but the streaming auto-advance is suspended until cut4.C
+persists enough launch metadata for the rebuild path to reconstruct
+the context. The ``/sweeps/{id}/pareto`` endpoint reads JobRecord
+history directly, so historical Pareto / best-trial reporting always
+survives a restart.
 
 Each spawned :class:`JobRecord` is stamped with
 ``metadata = {"sweep_id": ..., "axis_values": {...}}`` so a later
@@ -39,6 +58,7 @@ the job row in SQLite, so sweep_id grouping survives a server restart.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
@@ -60,6 +80,8 @@ from lorahub.core.sweep import (
 )
 
 router = APIRouter(prefix="/api")
+
+log = logging.getLogger(__name__)
 
 
 def _common_prefix(names: list[str]) -> str:
@@ -220,14 +242,14 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
     # Drive the sweep through MaterialisedSweep so all three modes go
     # through the same code path. For grid this is equivalent to the
     # legacy `expand()`; for random/tpe it lazily yields one variant
-    # at a time. We still drain the iterator up front so the API
-    # response shape (variants[]) stays the same — but for TPE we
-    # *also* register the materialised sweep into the live registry
-    # below so per-job terminal callbacks can feed scores back into
-    # the sampler. The current draining is suboptimal for TPE (the
-    # full batch is asked-but-not-told before any job finishes); a
-    # truly streaming variant where each launch waits for the prior
-    # job's score is a future cut.
+    # at a time. Grid + random still drain the iterator up front so the
+    # API response shape stays the same — they are non-adaptive, so
+    # there is no advantage to deferring the launches. TPE is the
+    # streaming case: only the first trial is launched synchronously,
+    # and :mod:`lorahub.api.sweep_runtime` advances the sweep one trial
+    # at a time as each prior trial reports its score back. That makes
+    # the sampler's ``ask()`` actually adaptive instead of degrading
+    # to random when the study is empty at create time.
     try:
         materialised = plan.materialize()
     except SamplerUnavailableError as exc:
@@ -238,25 +260,27 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
     except SweepError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Register the sweep BEFORE launching any child job — the launch
-    # closure runs in a worker thread and may transition the job to a
-    # terminal state before we'd otherwise reach the registration call.
-    from lorahub.api.sweep_runtime import register_sweep  # noqa: PLC0415
-    register_sweep(sweep_id, materialised)
-
     summary_variants: list[dict[str, Any]] = []
     job_ids: list[str] = []
-    while True:
-        try:
-            nxt = materialised.next_variant()
-        except SweepError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if nxt is None:
-            break
-        variant_name, variant_config, axis_values = nxt
+
+    def _enqueue(
+        variant_name: str,
+        variant_config: dict[str, Any],
+        axis_values: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Validate one variant, launch it, and append to the response lists.
+
+        Returns the launcher's summary dict on success. ``None`` on
+        validation failure — the streaming path uses that to bail out
+        quietly (the prior trial's terminal hook can't raise an
+        HTTPException to the original caller anyway). The synchronous
+        bootstrap path raises HTTPException so the user sees a 400.
+        """
         try:
             cfg_v = TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
+            # Re-raise on the synchronous path so callers see a 400;
+            # the runtime advance path catches this and just logs.
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -283,6 +307,62 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                 "config_diff": axis_values,
             }
         )
+        return result
+
+    def _streaming_launch(
+        variant_name: str,
+        variant_config: dict[str, Any],
+        axis_values: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Launch closure handed to the runtime for post-bootstrap trials.
+
+        Mirrors ``_enqueue`` but swallows validation failures into a
+        warning log + ``None`` return — by the time we hit this path the
+        original /api/sweeps caller is long gone and HTTPException would
+        propagate up into the terminal-job hook of an unrelated job.
+        """
+        try:
+            return _enqueue(variant_name, variant_config, axis_values)
+        except HTTPException as exc:
+            log.warning(
+                "sweep %s: streaming launch refused variant %s: %s",
+                sweep_id,
+                variant_name,
+                exc.detail,
+            )
+            return None
+
+    # Register the sweep BEFORE launching any child job — the launch
+    # closure runs in a worker thread and may transition the job to a
+    # terminal state before we'd otherwise reach the registration call.
+    # TPE additionally registers a SweepLaunchContext so the runtime
+    # can advance trial-by-trial as each prior trial reports its score.
+    from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+        SweepLaunchContext,
+        register_sweep,
+    )
+    context: SweepLaunchContext | None = None
+    if req.mode == "tpe":
+        context = SweepLaunchContext(launch=_streaming_launch)
+    register_sweep(sweep_id, materialised, context=context)
+
+    # Bootstrap: grid + random fully drain here (their samplers are
+    # stateless so there is no benefit to streaming); TPE launches only
+    # the first trial and returns — subsequent trials are driven by
+    # report_terminal_job advancing the sweep one step per prior
+    # finish.
+    streaming = req.mode == "tpe"
+    while True:
+        try:
+            nxt = materialised.next_variant()
+        except SweepError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if nxt is None:
+            break
+        variant_name, variant_config, axis_values = nxt
+        _enqueue(variant_name, variant_config, axis_values)
+        if streaming:
+            break
 
     # Persist the sweep descriptor so a server restart can still recover
     # the original axes / base_config / job_ids — jobs.metadata only
@@ -316,6 +396,16 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         "job_ids": job_ids,
         "variants": summary_variants,
         "mode": req.mode,
+        # Streaming-aware counters: ``launched_count`` reflects what the
+        # router actually enqueued before returning (1 for TPE, N for
+        # grid/random). ``pending_count`` is what the runtime owes us
+        # via streaming advance — non-zero only for TPE that has more
+        # trials in its budget. ``n_trials_total`` is the planned total
+        # so clients can render progress without re-deriving it from
+        # the request shape.
+        "launched_count": len(job_ids),
+        "pending_count": materialised.remaining(),
+        "n_trials_total": materialised.n_trials,
     }
 
 
