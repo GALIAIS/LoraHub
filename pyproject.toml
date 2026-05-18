@@ -53,6 +53,11 @@ api = [
     "psutil>=5.9",
     "python-multipart>=0.0.9",
 ]
+sweep = [
+    # Optional: TPE / Bayesian search for the hyperparameter sweep
+    # endpoints. Grid + random search are always available.
+    "optuna>=3.6",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
