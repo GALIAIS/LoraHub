@@ -117,7 +117,9 @@ def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
     assert r.status_code == 200
     schema = r.json()
     assert schema["title"] == "TrainingConfig"
-    assert "base_model" in schema["$defs"] or "base_model" in str(schema)
+    # Schema is dumped with `by_alias=True` (camelCase) since the API/UI is the
+    # source of truth for the wire shape. Field names use the camelCase alias.
+    assert "baseModel" in str(schema)
 
 
 def test_list_jobs_starts_empty(client: TestClient) -> None:
@@ -545,7 +547,8 @@ def test_get_config_returns_content_and_parsed(
     body = r.json()
     assert body["name"] == "good"
     assert "base_model:" in body["content"]
-    assert body["parsed"]["base_model"]["arch"] == "sdxl"
+    # Parsed payload is dumped via `model_dump(..., by_alias=True)` -> camelCase.
+    assert body["parsed"]["baseModel"]["arch"] == "sdxl"
     assert body["error"] is None
 
 
@@ -598,7 +601,8 @@ def test_validate_config_returns_normalized_payload(
     assert r.status_code == 200
     body = r.json()
     assert body["valid"] is True
-    assert body["normalized"]["base_model"]["arch"] == "sdxl"
+    # `normalized` is dumped with by_alias=True -> camelCase.
+    assert body["normalized"]["baseModel"]["arch"] == "sdxl"
     # defaults should be filled in
     assert body["normalized"]["network"]["rank"] >= 1
     assert body["preflight"]["paths"]["checkpoint_exists"] is True
@@ -1751,8 +1755,9 @@ def test_import_config_from_yaml(
     saved = configs_dir / "imported.yaml"
     assert saved.is_file()
     # The persisted file is canonical YAML emitted by dump_config; just confirm
-    # it loads back to an equivalent TrainingConfig.
-    assert saved.read_text(encoding="utf-8").startswith("schema_version")
+    # it loads back to an equivalent TrainingConfig. dump_config writes with
+    # `by_alias=True`, so the canonical key is `schemaVersion` (camelCase).
+    assert saved.read_text(encoding="utf-8").startswith("schemaVersion")
 
 
 # --------------------------------------------------------------------------- #
@@ -2559,7 +2564,9 @@ def test_instantiate_template_substitutes_placeholders(
     saved = configs_dir / "myrun.yaml"
     assert saved.is_file()
     parsed = yaml.safe_load(saved.read_text(encoding="utf-8"))
-    assert parsed["base_model"]["checkpoint"] == str(ckpt)
+    # Persisted YAML is emitted via dump_config with by_alias=True, so the
+    # top-level keys are camelCase (`baseModel`, not `base_model`).
+    assert parsed["baseModel"]["checkpoint"] == str(ckpt)
     assert parsed["dataset"]["source"] == str(data)
     assert parsed["output"]["name"] == "myrun_out"
     # Sanity: the schedule values from the template survived.
