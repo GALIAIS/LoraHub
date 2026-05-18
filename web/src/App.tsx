@@ -80,23 +80,23 @@ export default function App() {
   }, [mode, accent])
 
   useEffect(() => {
-    // Block right-click / clipboard / drag-text-selection at the document
-    // level for the whole app. NOTE: do NOT use `selectstart` here — it
-    // fires whenever the mouse moves a couple of pixels during a click,
-    // and once we preventDefault it the browser treats the gesture as a
-    // drag and silently swallows the subsequent `click` event. That broke
-    // navigation (sidebar links sometimes wouldn't switch routes when the
-    // user clicked too quickly). Use the CSS `user-select: none` declared
-    // in index.css instead — it has the same visual effect without
-    // crippling click delivery.
+    // Block right-click only. We used to also blanket-block `copy` /
+    // `cut`, but that swallowed Ctrl-C on legitimate things the user
+    // wanted to copy — stack traces in error chips, workspace paths,
+    // command-line strings, model names. Selection is governed by the
+    // `user-select: none` declared on the body in index.css; any
+    // element that wants user copy support opts in with the
+    // `select-text` utility class instead.
+    //
+    // NOTE: do NOT add `selectstart` here either — it fires whenever
+    // the mouse moves a couple of pixels during a click, and once we
+    // preventDefault it the browser treats the gesture as a drag and
+    // silently swallows the subsequent `click` event. That broke
+    // sidebar navigation when users clicked too quickly.
     const prevent = (e: Event) => e.preventDefault()
     document.addEventListener("contextmenu", prevent)
-    document.addEventListener("copy", prevent)
-    document.addEventListener("cut", prevent)
     return () => {
       document.removeEventListener("contextmenu", prevent)
-      document.removeEventListener("copy", prevent)
-      document.removeEventListener("cut", prevent)
     }
   }, [])
 

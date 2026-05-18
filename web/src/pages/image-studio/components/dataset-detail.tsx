@@ -551,7 +551,27 @@ export function DatasetDetail() {
         onDelete={() => setPendingDeleteBulk(true)}
         onFavorite={() => batchFavMutation.mutate()}
         onAiBulk={() => setShowAiBulk(true)}
-        onExport={() => {/* TODO */}}
+        onExport={() => {
+          // Minimum-viable export: copy a newline-separated list of
+          // selected paths to the clipboard. Users can pipe that into
+          // any zip / rsync / cp -t workflow they already have. A
+          // proper server-side zip endpoint would be a separate
+          // milestone (see audit B5).
+          const paths = Array.from(multiSelected)
+          if (paths.length === 0) return
+          navigator.clipboard
+            .writeText(paths.join("\n"))
+            .then(() =>
+              toast.success(`已复制 ${paths.length} 条路径`, {
+                description: "粘贴到任意终端 / 资源管理器即可批量处理",
+              }),
+            )
+            .catch((err) =>
+              toast.error("复制失败", {
+                description: err instanceof Error ? err.message : String(err),
+              }),
+            )
+        }}
         onClear={() => setMultiSelected(new Set())}
       />
 
