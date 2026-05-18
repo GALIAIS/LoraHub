@@ -78,11 +78,16 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
     if plan.base_python is not None:
         args += ["--python", str(plan.base_python)]
     if plan.pypi_index:
-        # `uv sync` accepts the same --index-url as `uv pip install`.
-        # Forward only when the user opted in via Settings; we never
-        # rewrite the pinned download.pytorch.org URLs anima_lora's
-        # uv.lock points at.
-        args += ["--index-url", plan.pypi_index]
+        # Forward only when the user opted in via Settings. We use
+        # `--default-index` (uv ≥ 0.4) instead of the deprecated
+        # `--index-url` so future uv versions don't drop support.
+        # The pinned `download.pytorch.org/whl/cu13x` extra-index in
+        # anima_lora's pyproject still wins for torch wheels — there's
+        # no way to mirror those through PyPI. Only the non-torch
+        # packages (accelerate, diffusers, transformers, ~30 deps) get
+        # routed through the user's mirror, which is still a useful
+        # speedup in regions where pypi.org is slow.
+        args += ["--default-index", plan.pypi_index]
     label = f"uv sync -> {plan.venv_dir}"
     try:
         _uv.run_uv(args, step=label, progress=progress)
