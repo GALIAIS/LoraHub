@@ -29,20 +29,18 @@ import { api, type JobSummary } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import {
   COMPARE_LIMIT,
   STATE_LABELS,
   STATUS_FILTER_OPTIONS,
   TERMINAL_STATES,
+  expectedTotalSteps,
   type StatusFilter,
 } from "../jobs/utils"
-import { MetricsTab } from "../jobs/components/metrics-tab"
-import { AnalysisTab } from "../jobs/components/analysis-tab"
 import { CompareTab } from "../jobs/components/compare-tab"
 import { StateBadge } from "../dashboard"
-import { JobSummaryStrip } from "./components/job-summary-strip"
+import { AnalysisWorkbench } from "./components/analysis-workbench"
 
 const STATUS_GROUPS: Record<StatusFilter, (state: string) => boolean> = {
   all: () => true,
@@ -51,8 +49,6 @@ const STATUS_GROUPS: Record<StatusFilter, (state: string) => boolean> = {
   failed: (s) => s === "failed",
   canceled: (s) => s === "canceled" || s === "canceling" || s === "interrupted",
 }
-
-type AnalysisTabKey = "metrics" | "analysis" | "compare"
 
 export function AnalysisPage() {
   const params = useParams<{ jobId?: string }>()
@@ -74,13 +70,6 @@ export function AnalysisPage() {
   const isCompareRoute = compareIds.length >= 2
 
   const activeJobId = params.jobId ?? null
-
-  // Tab default depends on the route — `/analysis/compare` lands on the
-  // compare panel so the URL is the source of truth; everything else
-  // remembers the last picked sub-tab via local state.
-  const [tab, setTab] = useState<AnalysisTabKey>(
-    isCompareRoute ? "compare" : "metrics",
-  )
 
   // Job list driving the picker on the left. Refresh modestly while the
   // user is on this page so live runs surface without a manual reload.
@@ -266,70 +255,44 @@ export function AnalysisPage() {
               )}
             </header>
 
-            {activeJob && !isCompareRoute && <JobSummaryStrip jobId={activeJob.id} />}
+            {activeJob && !isCompareRoute && (
+              <ScrollArea className="flex-1 min-h-0">
+                <SingleJobView job={activeJob} />
+              </ScrollArea>
+            )}
 
-            <Tabs
-              value={tab}
-              onValueChange={(v) => setTab(v as AnalysisTabKey)}
-              className="flex-1 min-h-0 flex flex-col"
-            >
-              <div className="px-7 pt-3 pb-2 border-b border-border/60 bg-background/40">
-                <TabsList variant="line">
-                  <TabsTrigger value="metrics" disabled={isCompareRoute}>
-                    指标曲线
-                  </TabsTrigger>
-                  <TabsTrigger value="analysis" disabled={isCompareRoute}>
-                    AI 分析
-                  </TabsTrigger>
-                  <TabsTrigger value="compare">
-                    对比
-                    {compareIds.length > 0 && (
-                      <span className="ml-1 text-[10px] tabular-nums text-muted-foreground">
-                        {compareIds.length}
-                      </span>
-                    )}
-                  </TabsTrigger>
-                </TabsList>
-              </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <TabsContent value="metrics" className="h-full">
-                  <ScrollArea className="h-full">
-                    <div className="px-7 py-5">
-                      {activeJob && (
-                        <MetricsTab
-                          jobId={activeJob.id}
-                          jobState={activeJob.state}
-                        />
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-                <TabsContent value="analysis" className="h-full">
-                  <ScrollArea className="h-full">
-                    <div className="px-7 py-5">
-                      {activeJob && (
-                        <AnalysisTab
-                          jobId={activeJob.id}
-                          jobState={activeJob.state}
-                        />
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-                <TabsContent value="compare" className="h-full">
-                  <ScrollArea className="h-full">
-                    <div className="px-7 py-5">
-                      <CompareTab compareIds={compareIds} />
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-              </div>
-            </Tabs>
+            {isCompareRoute && (
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="px-7 py-5">
+                  <CompareTab compareIds={compareIds} />
+                </div>
+              </ScrollArea>
+            )}
           </>
         )}
       </section>
     </div>
   )
+}
+
+function SingleJobView({ job }: { job: JobSummary }) {
+  // Pull config_snapshot so the KPI strip can derive a total-steps
+  // estimate without forcing the user to wait for the trainer to
+  // emit one. We don't fetch dataset thumbs here — the simple
+  // `max_steps` path covers most recipes; missing data just leaves
+  // progress as `step / ?` until the backend reports a total.
+  const detail = useQuery({
+    queryKey: ["job", job.id],
+    queryFn: () => api.getJob(job.id),
+    refetchInterval: 4000,
+  })
+  const fallbackTotalSteps = useMemo(() => {
+    const cfg = detail.data?.config_snapshot as
+      | Record<string, unknown>
+      | undefined
+    return expectedTotalSteps(cfg ?? null, null)
+  }, [detail.data])
+  return <AnalysisWorkbench job={job} fallbackTotalSteps={fallbackTotalSteps} />
 }
 
 // ---------------------------------------------------------------------------

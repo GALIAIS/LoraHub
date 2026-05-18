@@ -361,7 +361,7 @@ function fmtVal(v: number): string {
   return v.toExponential(2)
 }
 
-function SeriesStatsCard({
+export function SeriesStatsCard({
   series,
   metrics,
 }: {

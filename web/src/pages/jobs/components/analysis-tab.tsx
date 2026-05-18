@@ -86,7 +86,7 @@ export function AnalysisTab({ jobId, jobState }: AnalysisTabProps) {
 // AI analysis card
 // ---------------------------------------------------------------------------
 
-function AICard({
+export function AICard({
   jobId,
   cached,
   loading,
@@ -216,7 +216,19 @@ function AICard({
         {error && (
           <div className="text-xs text-destructive break-all">分析失败：{error}</div>
         )}
-        {cached && <Markdown source={cached.markdown} />}
+        {cached && (
+          <div className="space-y-3">
+            {extractLead(cached.markdown) && (
+              <div className="rounded-[5px] border border-primary/20 bg-primary/5 px-3 py-2 text-[12.5px] leading-[1.55] text-foreground/90">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-primary/80 mb-1">
+                  结论
+                </div>
+                {extractLead(cached.markdown)}
+              </div>
+            )}
+            <Markdown source={cached.markdown} />
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -303,7 +315,7 @@ function ResourceTrendCard({
 // Metrics table
 // ---------------------------------------------------------------------------
 
-function MetricsTable({
+export function MetricsTable({
   loss,
   valLoss,
   loading,
@@ -532,7 +544,7 @@ function parseSampleMeta(path: string): { epoch: number | null; step: number | n
   }
 }
 
-function SamplesGallery({
+export function SamplesGallery({
   jobId,
   samples,
   loading,
@@ -632,4 +644,45 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
       />
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Markdown lead extractor
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull the first meaningful paragraph out of an AI-generated markdown
+ * document so the analysis card can render a hero "结论" block above
+ * the full body. We skip blank lines, headings, list items, code
+ * fences, and tables so the lead is always plain prose. Returns null
+ * if no such paragraph is found within the first 24 lines.
+ */
+function extractLead(md: string | null | undefined): string | null {
+  if (!md) return null
+  const lines = md.split(/\r?\n/).slice(0, 24)
+  let inFence = false
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    if (line.startsWith("```")) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    if (
+      line.startsWith("#") ||
+      line.startsWith("- ") ||
+      line.startsWith("* ") ||
+      /^\d+\.\s/.test(line) ||
+      line.startsWith("|") ||
+      line.startsWith(">")
+    ) {
+      continue
+    }
+    return line
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/\*(.+?)\*/g, "$1")
+      .replace(/`([^`]+?)`/g, "$1")
+  }
+  return null
 }
