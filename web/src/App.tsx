@@ -120,7 +120,10 @@ export default function App() {
           },
         }}
       />
-      <aside className="w-56 shrink-0 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1 overflow-y-auto">
+      <aside
+        aria-label="主导航"
+        className="w-56 shrink-0 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1 overflow-y-auto"
+      >
         <div className="px-2 mb-5 flex items-center gap-2">
           <div className="size-8 rounded-[6px] bg-primary text-primary-foreground grid place-items-center font-semibold tracking-tight text-sm">
             L
@@ -131,7 +134,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="flex flex-col gap-0.5">
+        <nav aria-label="工作台" className="flex flex-col gap-0.5">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -147,7 +150,12 @@ export default function App() {
                 )
               }
             >
-              <Icon className="size-3.5" />
+              {/* react-router's NavLink already sets aria-current="page"
+                  on the active link automatically — no manual prop
+                  needed. The icon is decorative; aria-hidden keeps it
+                  out of the accessibility tree so the link's accessible
+                  name comes from the label text alone. */}
+              <Icon className="size-3.5" aria-hidden />
               <span>{label}</span>
             </NavLink>
           ))}
