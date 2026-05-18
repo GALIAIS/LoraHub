@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Filter, FolderOpen, HelpCircle, Loader2, Sparkles, Tag } from "lucide-react"
+import { toast } from "sonner"
 import {
   imageStudioList,
   imageStudioGetImage,
@@ -16,6 +17,26 @@ import {
   getTaggingSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 import { FilterPanel } from "./filter-panel"
 import { ImageGrid } from "./image-grid"
 import { Inspector } from "./inspector"
@@ -43,6 +64,11 @@ export function DatasetDetail() {
   const [showAiBulk, setShowAiBulk] = useState(false)
   const [showTagging, setShowTagging] = useState(false)
   const [filters, setFilters] = useState<FilterState>(defaultFilters)
+  // AlertDialog targets — pinning either of these opens the modal;
+  // confirming triggers the destructive action, cancelling clears.
+  const [pendingDeleteSingle, setPendingDeleteSingle] =
+    useState<ImageStudioItem | null>(null)
+  const [pendingDeleteBulk, setPendingDeleteBulk] = useState(false)
   const [aiProgress, setAiProgress] = useState<{
     running: boolean
     label: string
@@ -124,11 +150,7 @@ export function DatasetDetail() {
           navigator.clipboard.writeText(item.path)
           break
         case "delete":
-          if (confirm(`确定要删除 "${item.name}" 吗？`)) {
-            imageStudioAddOp({ path: item.path, op: "delete", payload: {} })
-              .then(() => imageStudioApplyOps(item.path))
-              .then(() => queryClient.invalidateQueries({ queryKey: ["image-studio"] }))
-          }
+          setPendingDeleteSingle(item)
           break
       }
     },
@@ -304,10 +326,17 @@ export function DatasetDetail() {
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 border-b px-4 py-2">
-        <button type="button" onClick={goBack} className="rounded p-1 hover:bg-muted" title="返回数据集列表">
+      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="size-7 p-0"
+          onClick={goBack}
+          aria-label="返回数据集列表"
+          title="返回数据集列表"
+        >
           <FolderOpen className="size-4" />
-        </button>
+        </Button>
         <span className="font-medium text-sm">{datasetName}</span>
         <span className="font-mono text-xs text-muted-foreground truncate flex-1">{path}</span>
         {data && (
@@ -322,69 +351,97 @@ export function DatasetDetail() {
             setParams(next)
           }}
         />
-        <div className="flex rounded border text-xs">
-          <button
-            type="button"
-            onClick={() => { const n = new URLSearchParams(params); n.set("view", "grid"); setParams(n) }}
-            className={`px-2 py-1 ${view === "grid" ? "bg-muted font-medium" : ""}`}
+        {/* View switch — same chip style as analysis page filter chips
+            so the language stays consistent across the workbench. */}
+        <div
+          role="group"
+          aria-label="视图模式"
+          className="inline-flex h-7 items-center rounded-[4px] border border-border/60 bg-background overflow-hidden text-[11px]"
+        >
+          <ViewChip
+            active={view === "grid"}
+            onClick={() => {
+              const n = new URLSearchParams(params)
+              n.set("view", "grid")
+              setParams(n)
+            }}
           >
             网格
-          </button>
-          <button
-            type="button"
-            onClick={() => { const n = new URLSearchParams(params); n.set("view", "duplicates"); setParams(n) }}
-            className={`px-2 py-1 ${view === "duplicates" ? "bg-muted font-medium" : ""}`}
+          </ViewChip>
+          <span className="h-full w-px bg-border/60" aria-hidden />
+          <ViewChip
+            active={view === "duplicates"}
+            onClick={() => {
+              const n = new URLSearchParams(params)
+              n.set("view", "duplicates")
+              setParams(n)
+            }}
           >
             去重
-          </button>
+          </ViewChip>
         </div>
-        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-          <input
-            type="checkbox"
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+          <Switch
+            size="sm"
             checked={recursive}
-            onChange={(e) => {
+            onCheckedChange={(checked) => {
               const n = new URLSearchParams(params)
-              if (e.target.checked) n.set("recursive", "1")
+              if (checked) n.set("recursive", "1")
               else n.delete("recursive")
               n.set("page", "1")
               setParams(n)
             }}
-            className="size-3"
           />
           递归
         </label>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowFilters((v) => !v)}
-          className={`rounded p-1 hover:bg-muted ${showFilters ? "bg-muted text-primary" : "text-muted-foreground"}`}
+          className={cn(
+            "size-7 p-0",
+            showFilters && "bg-muted text-primary",
+          )}
+          aria-label="筛选面板"
+          aria-pressed={showFilters}
           title="筛选面板"
         >
           <Filter className="size-4" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowTagging((v) => !v)}
-          className={`rounded p-1 hover:bg-muted ${showTagging ? "bg-muted text-primary" : "text-muted-foreground"}`}
+          className={cn(
+            "size-7 p-0",
+            showTagging && "bg-muted text-primary",
+          )}
+          aria-label="WD14 标注"
+          aria-pressed={showTagging}
           title="WD14 标注"
         >
           <Tag className="size-4" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowAiBulk(true)}
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
+          className="size-7 p-0"
+          aria-label="AI 批量操作"
           title="AI 批量操作"
         >
           <Sparkles className="size-4" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowHelp(true)}
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
+          className="size-7 p-0"
+          aria-label="键盘快捷键 (?)"
           title="键盘快捷键 (?)"
         >
           <HelpCircle className="size-4" />
-        </button>
+        </Button>
       </div>
 
       {/* Upload drop zone */}
@@ -491,31 +548,143 @@ export function DatasetDetail() {
       {/* Batch toolbar */}
       <BatchToolbar
         count={multiSelected.size}
-        onDelete={() => {
-          if (confirm(`确定要删除选中的 ${multiSelected.size} 张图片吗？`)) {
-            batchDeleteMutation.mutate()
-          }
-        }}
+        onDelete={() => setPendingDeleteBulk(true)}
         onFavorite={() => batchFavMutation.mutate()}
         onAiBulk={() => setShowAiBulk(true)}
         onExport={() => {/* TODO */}}
         onClear={() => setMultiSelected(new Set())}
       />
+
+      <AlertDialog
+        open={!!pendingDeleteSingle}
+        onOpenChange={(open) => !open && setPendingDeleteSingle(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除图片</AlertDialogTitle>
+            <AlertDialogDescription>
+              将永久移除{" "}
+              <code className="font-mono">{pendingDeleteSingle?.name}</code>
+              {" "}及其标注。此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={(e) => {
+                e.preventDefault()
+                const target = pendingDeleteSingle
+                if (!target) return
+                imageStudioAddOp({
+                  path: target.path,
+                  op: "delete",
+                  payload: {},
+                })
+                  .then(() => imageStudioApplyOps(target.path))
+                  .then(() =>
+                    queryClient.invalidateQueries({
+                      queryKey: ["image-studio"],
+                    }),
+                  )
+                  .then(() => toast.success("已删除"))
+                  .catch((err) =>
+                    toast.error("删除失败", {
+                      description:
+                        err instanceof Error ? err.message : String(err),
+                    }),
+                  )
+                setPendingDeleteSingle(null)
+              }}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={pendingDeleteBulk}
+        onOpenChange={(open) => !open && setPendingDeleteBulk(false)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除图片</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除选中的 {multiSelected.size} 张图片及其标注,移动到
+              <code className="font-mono mx-1">_image_studio_trash/</code>
+              ,可在文件管理器中找回。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={(e) => {
+                e.preventDefault()
+                batchDeleteMutation.mutate()
+                setPendingDeleteBulk(false)
+              }}
+            >
+              确认删除 ({multiSelected.size})
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
 
+function ViewChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "px-2.5 h-full transition-colors",
+        active
+          ? "bg-muted font-medium text-foreground"
+          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+const SORT_OPTIONS = [
+  { value: "name", label: "名称" },
+  { value: "mtime", label: "修改时间" },
+  { value: "size", label: "大小" },
+] as const
+
 function SortSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <select
+    <Select
+      items={SORT_OPTIONS}
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="rounded border bg-background px-2 py-1 text-xs outline-none"
+      onValueChange={(v) => onChange(v as string)}
     >
-      <option value="name">名称</option>
-      <option value="mtime">修改时间</option>
-      <option value="size">大小</option>
-    </select>
+      <SelectTrigger className="h-7 text-[11px] min-w-[6.5rem]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {SORT_OPTIONS.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 

@@ -1,8 +1,19 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { FolderOpen, FolderPlus, Grid3x3, LayoutList } from "lucide-react"
+import { toast } from "sonner"
 import { datasetList, datasetCreate, datasetDelete } from "@/lib/api"
 import type { DatasetInfo } from "@/lib/api"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -19,6 +30,9 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
   const queryClient = useQueryClient()
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
   const [showCreate, setShowCreate] = useState(false)
+  // Pending delete: pinning the target dataset opens the AlertDialog;
+  // confirming fires the mutation, cancelling clears the pin.
+  const [pendingDelete, setPendingDelete] = useState<DatasetInfo | null>(null)
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets"],
@@ -31,13 +45,25 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
       queryClient.invalidateQueries({ queryKey: ["datasets"] })
       setShowCreate(false)
       onOpen(data.path)
+      toast.success("数据集已创建", { description: data.path })
+    },
+    onError: (e) => {
+      toast.error("创建失败", {
+        description: e instanceof Error ? e.message : String(e),
+      })
     },
   })
 
   const deleteMutation = useMutation({
     mutationFn: datasetDelete,
-    onSuccess: () => {
+    onSuccess: (_, name) => {
       queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      toast.success(`数据集 "${name}" 已删除`)
+    },
+    onError: (e) => {
+      toast.error("删除失败", {
+        description: e instanceof Error ? e.message : String(e),
+      })
     },
   })
 
@@ -49,12 +75,13 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
         onOpen(ds.path)
         break
       case "copy-path":
-        navigator.clipboard.writeText(ds.path)
+        navigator.clipboard
+          .writeText(ds.path)
+          .then(() => toast.success("路径已复制到剪贴板"))
+          .catch(() => toast.error("复制失败"))
         break
       case "delete":
-        if (confirm(`确定要删除数据集 "${ds.name}" 吗？`)) {
-          deleteMutation.mutate(ds.name)
-        }
+        setPendingDelete(ds)
         break
     }
   }
@@ -138,6 +165,37 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
           </div>
         )}
       </div>
+
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除数据集</AlertDialogTitle>
+            <AlertDialogDescription>
+              将永久移除数据集{" "}
+              <code className="font-mono">{pendingDelete?.name}</code>
+              {" "}及其所有图片和标注。此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={(e) => {
+                e.preventDefault()
+                if (pendingDelete) {
+                  deleteMutation.mutate(pendingDelete.name)
+                  setPendingDelete(null)
+                }
+              }}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
