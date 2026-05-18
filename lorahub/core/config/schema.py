@@ -823,6 +823,61 @@ class AnimaLoraMethodIPAdapterConfig(BaseModel):
     features_cache_to_disk: bool = True
 
 
+class AnimaLoraTurboConfig(BaseModel):
+    """DMD turbo distillation knobs (``scripts/distill_turbo.py``).
+
+    Decoupled-Hybrid DMD2 (Liu et al. arXiv:2511.22677): trains a
+    student LoRA + a fake LoRA on a frozen Anima DiT to bake CFG into
+    the student so a 4-step Euler sample matches the 28-step teacher
+    output at CFG=4. Output is a regular LoRA loaded via the standard
+    inference path with ``--infer_steps 4 --cfg 1.0``.
+
+    Mirrors the upstream ``configs/methods/turbo.toml`` schema. When
+    set on ``AnimaLoraOptions.turbo``, the compiler routes through
+    ``scripts/distill_turbo.py`` instead of ``train.py`` (no
+    accelerate launch, bespoke CLI surface).
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    # Top-level
+    iterations: int = Field(1000, ge=1)
+    batch_size: int = Field(1, ge=1)
+    seed: int = 42
+    use_custom_down_autograd: bool = True
+
+    # Network — student + fake LoRA capacities.
+    student_rank: int = Field(48, ge=1)
+    student_alpha: float = Field(48, gt=0)
+    fake_rank: int = Field(64, ge=1)
+    fake_alpha: float = Field(64, gt=0)
+    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
+
+    # DMD2 schedule (proposal §Schedule, paper Table 1 row 4).
+    student_steps: int = Field(4, ge=1)
+    teacher_cfg: float = Field(4.0, gt=0)
+    tau_ca_strategy: Literal["above_t", "uniform"] = "above_t"
+    tau_dm_strategy: Literal["uniform", "above_t"] = "uniform"
+    tau_ca_min_gap: float = Field(0.05, ge=0.0, lt=1.0)
+    tau_ca_skip_above_t: float = Field(0.95, gt=0.0, le=1.0)
+
+    # Optimization.
+    student_lr: float = Field(5e-6, gt=0)
+    fake_lr: float = Field(5e-5, gt=0)
+    fake_steps_per_student_step: int = Field(2, ge=1)
+    alpha_warmup_steps: int = Field(100, ge=0)
+    weight_decay: float = Field(0.0, ge=0.0)
+    grad_clip: float = Field(1.0, gt=0)
+
+    # Sampling.
+    t_distribution: Literal["uniform", "sigmoid"] = "uniform"
+    sigmoid_scale: float = Field(1.0, gt=0)
+
+    # I/O cadence.
+    save_every: int = Field(250, ge=1)
+    log_interval: int = Field(5, ge=1)
+
+
 class AnimaLoraOptions(BaseModel):
     """anima_lora backend specific knobs.
 
@@ -930,6 +985,11 @@ class AnimaLoraOptions(BaseModel):
     chimera: AnimaLoraMethodChimeraConfig | None = None
     easycontrol: AnimaLoraMethodEasyControlConfig | None = None
     ip_adapter: AnimaLoraMethodIPAdapterConfig | None = None
+    # DMD turbo distillation — orthogonal to method/preset axes. When
+    # set, the compiler routes through scripts/distill_turbo.py instead
+    # of train.py and the method/preset values are ignored. Output is
+    # still a regular LoRA loaded via the standard inference path.
+    turbo: AnimaLoraTurboConfig | None = None
 
     @model_validator(mode="after")
     def _check_method_subconfig_present(self) -> AnimaLoraOptions:

@@ -39,7 +39,11 @@ from lorahub.core.config.schema import (
     TrainingConfig,
 )
 
-__all__ = ["CompilationError", "compile_config"]
+__all__ = [
+    "CompilationError",
+    "compile_config",
+    "compile_turbo_config",
+]
 
 _log = logging.getLogger(__name__)
 
@@ -73,6 +77,15 @@ def compile_config(
         raise CompilationError(msg)
 
     opts = cfg.backend.anima_lora
+    if opts.turbo is not None:
+        msg = (
+            "AnimaLoraOptions.turbo is set — use compile_turbo_config() "
+            "instead of compile_config(). The backend.launch dispatch picks "
+            "the right path automatically; if you're calling compile_config "
+            "directly, drop opts.turbo first."
+        )
+        raise CompilationError(msg)
+
     _enforce_compile_constraints(opts)
 
     workspace = workspace.resolve()
@@ -371,3 +384,99 @@ def _fmt_float(v: float) -> str:
     examples.
     """
     return repr(v)
+
+
+def compile_turbo_config(
+    cfg: TrainingConfig,
+    workspace: Path,
+) -> tuple[list[str], dict[Path, str]]:
+    """Translate a TurboConfig into ``scripts/distill_turbo.py`` argv.
+
+    Distinct from :func:`compile_config` because turbo distillation
+    runs a **bespoke** trainer (Liu et al. arXiv:2511.22677 Decoupled-
+    Hybrid DMD2), not ``train.py``. No accelerate launcher, no
+    method/preset merge chain — every value flows through the script's
+    own argparse.
+
+    Returns the same ``(argv, files_to_write)`` shape as the regular
+    compiler so the backend.launch dispatch can swap runners cleanly.
+    ``files_to_write`` is always empty: distill_turbo.py owns its own
+    ``configs/methods/turbo.toml`` defaults; we only override via CLI
+    flags. The first argv element is **not** ``--config`` because
+    we'd rather have every value explicit at the CLI than rely on
+    upstream's TOML defaults that might drift.
+    """
+    if cfg.backend.type != "anima_lora":
+        msg = (
+            f"anima_lora compiler invoked on backend.type={cfg.backend.type!r}; "
+            "this is a programming error in the dispatch path"
+        )
+        raise CompilationError(msg)
+    if cfg.backend.anima_lora is None or cfg.backend.anima_lora.turbo is None:
+        msg = (
+            "compile_turbo_config requires backend.animaLora.turbo to be set; "
+            "use compile_config for the standard training path"
+        )
+        raise CompilationError(msg)
+
+    opts = cfg.backend.anima_lora
+    turbo = opts.turbo
+
+    workspace = workspace.resolve()
+    output_dir = workspace / "ckpt"
+    log_dir = workspace / "logs" / "turbo"
+
+    argv: list[str] = []
+
+    # ---- Top-level scalars ----
+    bm = cfg.base_model
+    if bm.checkpoint:
+        argv += ["--dit_path", str(bm.checkpoint)]
+    # Upstream's `data_dir` points at the LoRA cache folder
+    # (post_image_dataset/lora). We use cfg.dataset.source — the user is
+    # expected to have run ``make preprocess`` against image_dataset/
+    # already, just like the regular training path.
+    argv += ["--data_dir", str(cfg.dataset.source)]
+    argv += ["--output_dir", str(output_dir)]
+    argv += ["--output_name", opts.output_name]
+    argv += ["--iterations", str(turbo.iterations)]
+    argv += ["--batch_size", str(turbo.batch_size)]
+    argv += ["--seed", str(turbo.seed)]
+    if turbo.use_custom_down_autograd:
+        argv += ["--use_custom_down_autograd"]
+    else:
+        argv += ["--no_use_custom_down_autograd"]
+
+    # ---- Network ----
+    argv += ["--student_rank", str(turbo.student_rank)]
+    argv += ["--fake_rank", str(turbo.fake_rank)]
+    # student_alpha / fake_alpha aren't standalone CLI flags upstream
+    # (see distill_turbo.py:140-189) — they're TOML-only. The script
+    # reads them through `pick("network.student_alpha", default=rank)`
+    # so passing them as a [network] override would need a config TOML
+    # write. For cut4 we skip the override path: defaulting alpha=rank
+    # matches our schema defaults (48/48, 64/64). Future cut4.B can
+    # emit a turbo override TOML if users start needing alpha != rank.
+
+    # ---- Optimization ----
+    argv += ["--student_lr", _fmt_float(turbo.student_lr)]
+    argv += ["--fake_lr", _fmt_float(turbo.fake_lr)]
+    argv += ["--fake_steps_per_student_step", str(turbo.fake_steps_per_student_step)]
+    argv += ["--alpha_warmup_steps", str(turbo.alpha_warmup_steps)]
+    # `--alpha` overrides dmd.teacher_cfg per the script's argparse help.
+    argv += ["--alpha", _fmt_float(turbo.teacher_cfg)]
+
+    # ---- DMD schedule ----
+    argv += ["--student_steps", str(turbo.student_steps)]
+
+    # ---- Memory / kernels ----
+    argv += ["--blocks_to_swap", str(0)]  # turbo defaults to 0; no schema knob yet
+    argv += ["--attn_mode", turbo.attn_mode]
+
+    # ---- I/O cadence ----
+    argv += ["--save_every", str(turbo.save_every)]
+    argv += ["--log_interval", str(turbo.log_interval)]
+    argv += ["--log_dir", str(log_dir)]
+
+    files: dict[Path, str] = {}
+    return argv, files

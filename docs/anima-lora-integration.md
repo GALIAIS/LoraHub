@@ -262,8 +262,8 @@ cut3 实现 `AnimaLoraInferenceBackend`,注册到 B5 表,优先级高于现有
 | **cut0** | 本文档 + AnimaLoraOptions 全字段 schema + BackendConfig.type 枚举值 + dispatch NotImplementedError 占位 | schema 单元 + dispatch raise 单元 | 0.5d ✅ |
 | **cut1** | compiler + emit anima_lora.toml + method 路由 | 编译器逐 method snapshot | 1d ✅ |
 | **cut2** | bootstrap + backend.py + runner + jobs_helpers dispatch + VRAM | spawn 单元(patch subprocess)+ 集成测试(最短 step) | 1.5d ✅ |
-| **cut3** | preview backend 注册到 B5 表 | 注册表优先级单元 + spawn smoke | 0.5d |
-| **cut4** | DMD turbo (`scripts/distill_turbo.py`) 独立路径 | 待评估 | 3d |
+| **cut3** | preview backend 注册到 B5 表 | 注册表优先级单元 + spawn smoke | 0.5d ✅ |
+| **cut4** | DMD turbo (`scripts/distill_turbo.py`) 独立路径 | schema + compiler 分支 + turbo runner + parser + 测试 | 1d ✅ |
 
 ## 已知风险
 

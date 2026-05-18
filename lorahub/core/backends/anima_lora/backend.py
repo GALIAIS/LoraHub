@@ -23,8 +23,10 @@ from lorahub.core.backends.anima_lora import bootstrap as _bootstrap
 from lorahub.core.backends.anima_lora.compiler import (
     CompilationError,
     compile_config,
+    compile_turbo_config,
 )
 from lorahub.core.backends.anima_lora.runner import AnimaLoraRunner
+from lorahub.core.backends.anima_lora.turbo_runner import AnimaLoraTurboRunner
 from lorahub.core.backends.base import (
     ModelArch,
     Severity,
@@ -141,7 +143,17 @@ class AnimaLoraBackend:
             config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()
-        argv, files = compile_config(cfg, workspace)
+
+        # Branch: turbo distillation (scripts/distill_turbo.py) vs the
+        # regular train.py path. Turbo is picked when the recipe has
+        # backend.animaLora.turbo populated; both paths share workspace
+        # setup but diverge on argv shape + runner choice.
+        opts = cfg.backend.anima_lora
+        is_turbo = opts is not None and opts.turbo is not None
+        if is_turbo:
+            argv, files = compile_turbo_config(cfg, workspace)
+        else:
+            argv, files = compile_config(cfg, workspace)
         if extra_argv:
             argv = [*argv, *extra_argv]
         workspace.mkdir(parents=True, exist_ok=True)
@@ -152,15 +164,27 @@ class AnimaLoraBackend:
             path.write_text(content, encoding="utf-8")
 
         job_id = str(ulid.new())
-        runner = AnimaLoraRunner(
-            python=bootstrap_env.python_executable,
-            repo=bootstrap_env.repo_path,
-            argv=argv,
-            workspace=workspace,
-            on_event=on_event,
-            job_id=job_id,
-            env=env,
-        )
+        runner: AnimaLoraRunner | AnimaLoraTurboRunner
+        if is_turbo:
+            runner = AnimaLoraTurboRunner(
+                python=bootstrap_env.python_executable,
+                repo=bootstrap_env.repo_path,
+                argv=argv,
+                workspace=workspace,
+                on_event=on_event,
+                job_id=job_id,
+                env=env,
+            )
+        else:
+            runner = AnimaLoraRunner(
+                python=bootstrap_env.python_executable,
+                repo=bootstrap_env.repo_path,
+                argv=argv,
+                workspace=workspace,
+                on_event=on_event,
+                job_id=job_id,
+                env=env,
+            )
         runner.start()
 
         return TrainingHandle(
