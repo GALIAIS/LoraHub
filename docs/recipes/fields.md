@@ -139,6 +139,8 @@ Only consumed when `backend.type == "diffusion-pipe"`. Highlights:
 | `numArBuckets` | `int (>=1)` | `7` | Number of aspect-ratio buckets. **Biggest knob for cache disk usage** — each bucket stores its own VAE-encoded copy of every image, so 200 images × 11 buckets fills ~35 GB of latent cache before training even starts. The Anima recipe ships with `5`. |
 | `cacheShuffleNum` | `int (>=0)` | `0` | Shuffle the first N tags during caching (0 keeps order). |
 | `skipEmptyCaption` | `bool` | `true` | Skip images without caption files; `false` trains them with an empty caption. |
+| `checkpointEveryNMinutes` | `int (>=1) \| None` | `None` | Wall-clock cadence for **full DeepSpeed checkpoints** (optimizer state + LR scheduler step + dataloader epoch + a `latest` pointer). Required for `POST /api/jobs/{id}/resume` to work — `output.saveEveryNSteps` only writes the LoRA weights, not the optimiser state. The Anima recipes ship with `30`. |
+| `checkpointEveryNEpochs` | `int (>=1) \| None` | `None` | Same as above but anchored on epoch boundaries. Use only one of the two (mins is usually preferable since it survives long single-epoch runs). |
 | `modelPaths` | `dict[str, str]` | `{}` | Free-form per-arch path bag. **Keys are written verbatim to the dp TOML**, so they keep upstream's literal `snake_case` names (`transformer_path`, `vae_path`, `llm_path`). |
 
 `wandb_api_key` is intentionally absent from the config; diffusion-pipe
