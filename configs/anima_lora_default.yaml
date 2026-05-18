@@ -1,0 +1,172 @@
+# Anima LoRA — anima_lora 上游默认配置（原样翻译）
+#
+# 这份配置 100% 复刻 sorryhyun/anima_lora 的三层 merge 链：
+#   external/anima_lora/configs/base.toml
+#   + external/anima_lora/configs/methods/lora.toml
+#   + external/anima_lora/configs/presets.toml[default]
+#
+# 等价于在 anima_lora 目录里跑：
+#   make lora               # 即 PRESET=default METHOD=lora 默认走 lora.toml
+#   python tasks.py lora    # Windows 等价
+#
+# 默认堆叠：LoRA + OrthoLoRA + T-LoRA (Hydra / FeRA / ReFT 等高级路由保持
+# 关闭,需要的话改 method 字段或者去 anima_lora_starter.yaml 看注释)。
+
+schemaVersion: "1.0"
+
+baseModel:
+  arch: anima
+  # 上游 base.toml 的三个模型路径(相对 anima_lora/ 项目根)
+  checkpoint: ./external/anima_lora/models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./external/anima_lora/models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./external/anima_lora/models/vae/qwen_image_vae.safetensors
+
+# 数据集 — 上游 base.toml 用 image_dataset/ 作为源,post_image_dataset/lora 作
+# 为缓存。上游内部由 train.py 自己读 base.toml 的 source_image_dir /
+# resized_image_dir / lora_cache_dir,LoraHub schema 这边 dataset.source 应该
+# 指向已经 preprocessed 完的 cache 目录(post_image_dataset/lora)。
+# 训练前必须先在 anima_lora 项目根跑 `make preprocess` 生成 cache。
+dataset:
+  source: ./external/anima_lora/post_image_dataset/lora
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    min: 256
+    max: 2048
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt        # 上游 [general].caption_extension = '.txt'
+    shuffle: true    # 上游默认 shuffle 通过 use_shuffled_caption_variants 实现
+    dropRate: 0.1    # 上游 caption_dropout_rate = 0.1 (在 lora.toml)
+    keepTokens: 3    # 上游 [general].keep_tokens = 3
+  numRepeats: 1      # 上游 [[datasets.subsets]].num_repeats = 1
+
+# LoraHub schema 通用字段(对 anima_lora 后端不直接生效,真正字段在
+# backend.animaLora 段。这里填合理默认满足 schema 校验即可)
+network:
+  type: lora
+  rank: 16
+  alpha: 16
+
+optimizer:
+  type: AdamW
+  lr:
+    unet: 5.0e-5
+    textEncoder: 5.0e-5
+  scheduler:
+    type: constant
+
+schedule:
+  epochs: 8
+  batchSize: 1
+  seed: 42
+
+output:
+  name: anima_lora
+
+backend:
+  type: anima_lora
+
+  animaLora:
+    # === 上游 method = lora + preset = default(merge 链产物) ===
+    method: lora
+    preset: default
+
+    # base.toml: output_name
+    outputName: anima_lora
+
+    # base.toml: network_module + network_train_unet_only
+    networkModule: networks.lora_anima
+    networkTrainUnetOnly: true
+
+    # lora.toml: network_dim + network_alpha
+    networkDim: 16
+    networkAlpha: 16
+
+    # base.toml: optimizer_type + lr_scheduler
+    # lora.toml: learning_rate + max_train_epochs + save_every_n_epochs
+    optimizerType: AdamW
+    lrScheduler: constant
+    learningRate: 5.0e-5
+    maxTrainEpochs: 8
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+
+    # lora.toml: caption_dropout_rate + use_shuffled_caption_variants +
+    # cache_llm_adapter_outputs
+    captionDropoutRate: 0.1
+    useShuffledCaptionVariants: true
+    cacheLlmAdapterOutputs: true
+
+    # base.toml: 流匹配采样
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+
+    # base.toml: 缓存(LoraHub schema 默认就是 true,这里显式列出对应上游)
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+
+    # base.toml: 数据 / VAE
+    staticTokenCount: 4096
+    vaeChunkSize: 64
+    vaeDisableCache: true   # 上游 base.toml 默认 true
+
+    # base.toml: 注意力 / 编译
+    attnMode: flash
+    useCustomDownAutograd: true
+    # 上游 lora.toml: compile_inductor_mode = "reduce-overhead"
+    # compile_mode 在上游 lora.toml 里被注释掉(默认不开),与 LoraHub 一致
+    compileInductorMode: reduce-overhead
+
+    # base.toml: mixed_precision = "bf16"
+    mixedPrecision: bf16
+
+    # presets.toml [default]: blocks_to_swap = 0(显式)
+    blocksToSwap: 0
+    gradientCheckpointing: false        # 上游被注释,默认 false
+    unslothOffloadCheckpointing: false  # 上游被注释,默认 false
+
+    # base.toml: use_cmmd = false(LoraHub schema 默认就是 false)
+    useCmmd: false
+
+    # === method = lora 子配置(对应 lora.toml 默认堆叠) ===
+    # 上游默认开启 LoRA + OrthoLoRA + T-LoRA。Hydra / FeRA / ReFT 块在
+    # lora.toml 里被注释,这里也保持关闭(无字段就是关)。
+    lora:
+      useOrtho: true              # lora.toml: use_ortho = true
+      useTimestepMask: true       # lora.toml: use_timestep_mask = true
+      minRank: 8                  # lora.toml: min_rank = 8
+      alphaRankScale: 1.0         # lora.toml: alpha_rank_scale = 1.0
+
+# === 上游字段未在 LoraHub schema 暴露的清单(均为默认值,运行时由上游
+# train.py 自己应用) ===
+#
+# base.toml:
+#   save_model_as = "safetensors"
+#   skip_cache_check = true
+#   masked_loss = true
+#   torch_compile = true
+#   trim_crossattn_kv = false
+#   save_precision = "bf16"
+#   log_every_n_steps = 2
+#   dataloader_pin_memory = true
+#   persistent_data_loader_workers = false
+#   path_pattern = "*"
+#
+# lora.toml:
+#   logging_dir = "output/logs"
+#   log_with = "tensorboard"
+#
+# [[datasets]]:
+#   validation_split_num = 16
+#   validation_seed = 42
+#   recursive = true
+#
+# 这些都是上游 train.py 默认行为,通过 base.toml 的 `--config_file` 路径
+# 自动生效 — LoraHub 不需要在 CLI override 上重复传它们。如需自定义请
+# 直接修改 external/anima_lora/configs/base.toml(LoraHub fork 副本)。
