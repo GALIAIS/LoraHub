@@ -1,5 +1,7 @@
-import { memo, useCallback } from "react"
+import { memo, useCallback, useMemo } from "react"
+import type { BackendId } from "@/lib/api"
 import { ARCH_OPTIONS, ARCH_VARIANT_OPTIONS } from "../options"
+import { SUPPORTED_ARCHS_BY_BACKEND } from "../backend-meta"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import { EnumSelect, PathInput, Row } from "../widgets"
 
@@ -7,10 +9,19 @@ export const BaseModelFields = memo(function BaseModelFields({
   value,
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["baseModel"]
   set: Setter
   errorMap: ErrorMap
+  /**
+   * Currently selected backend. Drives the arch dropdown filter so users
+   * can't pick an arch the active backend doesn't actually train (kohya
+   * doesn't ship a flux2/wan trainer; anima_lora is anima-only). When
+   * undefined the editor falls back to showing every arch — used by the
+   * read-only preview where filtering would just hide info.
+   */
+  backendType?: BackendId | undefined
 }) {
   // archVariant only applies to SDXL; switching to anything else must clear
   // the variant or backend schema validation rejects the config. Both updates
@@ -28,13 +39,27 @@ export const BaseModelFields = memo(function BaseModelFields({
     [set, value],
   )
 
+  // Filter the arch list to only what the current backend supports. We
+  // keep the full ARCH_OPTIONS order (curated 常用 → 视频 → 实验) so the
+  // user-facing sort doesn't shuffle when they switch backends. If
+  // backendType is missing (preview / unconfigured) we surface every
+  // arch — the schema validator on save will catch any mismatch.
+  const filteredArchOptions = useMemo(() => {
+    if (!backendType) return ARCH_OPTIONS
+    const supported = SUPPORTED_ARCHS_BY_BACKEND[backendType]
+    if (!supported) return ARCH_OPTIONS
+    return ARCH_OPTIONS.filter((opt) =>
+      supported.has(opt.value as never),
+    )
+  }, [backendType])
+
   return (
     <>
       <Row label="架构" required errors={errorMap.get("baseModel.arch")}>
         <EnumSelect
           value={value.arch}
           onChange={onArchChange}
-          options={ARCH_OPTIONS}
+          options={filteredArchOptions}
         />
       </Row>
       {value.arch === "sdxl" && (

@@ -92,7 +92,8 @@ export const CAPTION_STRATEGY_OPTIONS = [
 
 export const BACKEND_OPTIONS = [
   { value: "kohya", label: "kohya-ss/sd-scripts" },
-  { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe (scaffold)" },
+  { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe" },
+  { value: "anima_lora", label: "sorryhyun/anima_lora (vendored)" },
 ] as const
 
 export const LOSS_TYPE_OPTIONS = [

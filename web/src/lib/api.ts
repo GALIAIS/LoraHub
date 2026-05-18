@@ -33,6 +33,8 @@ export interface ConfigListEntry {
   modified_at: number
   valid: boolean
   arch: string | null
+  /** Which training backend this config targets. Null when load() failed. */
+  backend: BackendId | null
   summary: string | null
   error: string | null
 }

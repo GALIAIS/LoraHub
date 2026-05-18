@@ -13,6 +13,14 @@ export type LaunchOverrides = {
 
 export type ArchFilter = "all" | "sdxl" | "sd15" | "flux" | "sd3"
 
+/**
+ * Backend filter for the configs list. ``"default"`` follows the user's
+ * Settings → 默认后端 selection — i.e. show only configs whose ``backend``
+ * field matches the workbench-level default. ``"all"`` is the explicit
+ * escape hatch.
+ */
+export type BackendFilter = "default" | "all" | "kohya" | "diffusion-pipe" | "anima_lora"
+
 export type SortOrder = "name-asc" | "name-desc" | "modified-desc"
 
 export type RowAction = "duplicate" | "rename" | "delete"

@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { shortenPath } from "../utils"
-import type { ArchFilter, SortOrder } from "../types"
+import type { ArchFilter, BackendFilter, SortOrder } from "../types"
 
 const ARCH_OPTIONS: { value: ArchFilter; label: string }[] = [
   { value: "all", label: "全部架构" },
@@ -17,6 +17,14 @@ const ARCH_OPTIONS: { value: ArchFilter; label: string }[] = [
   { value: "sd15", label: "SD 1.5" },
   { value: "flux", label: "FLUX" },
   { value: "sd3", label: "SD3" },
+]
+
+const BACKEND_FILTER_OPTIONS: { value: BackendFilter; label: string }[] = [
+  { value: "default", label: "跟随默认后端" },
+  { value: "all", label: "全部后端" },
+  { value: "kohya", label: "kohya" },
+  { value: "diffusion-pipe", label: "diffusion-pipe" },
+  { value: "anima_lora", label: "anima_lora" },
 ]
 
 const SORT_OPTIONS: { value: SortOrder; label: string }[] = [
@@ -33,6 +41,8 @@ export function ConfigsToolbar({
   onQueryChange,
   arch,
   onArchChange,
+  backend,
+  onBackendChange,
   sort,
   onSortChange,
   onCreate,
@@ -45,6 +55,8 @@ export function ConfigsToolbar({
   onQueryChange: (next: string) => void
   arch: ArchFilter
   onArchChange: (next: ArchFilter) => void
+  backend: BackendFilter
+  onBackendChange: (next: BackendFilter) => void
   sort: SortOrder
   onSortChange: (next: SortOrder) => void
   onCreate: () => void
@@ -77,6 +89,25 @@ export function ConfigsToolbar({
             placeholder="按名称搜索…"
             className="h-8 pl-7 text-xs"
           />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Select
+            items={BACKEND_FILTER_OPTIONS}
+            value={backend}
+            onValueChange={(v) => onBackendChange(v as BackendFilter)}
+          >
+            <SelectTrigger className="h-8 text-xs flex-1 min-w-[7rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {BACKEND_FILTER_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="flex items-center gap-2">

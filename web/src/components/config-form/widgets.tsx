@@ -29,7 +29,8 @@ export const useReadOnly = () => useContext(ReadOnlyContext)
 // ============================================================= Section ====
 
 interface SectionProps {
-  icon: React.ReactNode
+  /** Optional. When omitted the icon slot collapses so titles align flush. */
+  icon?: React.ReactNode
   title: string
   subtitle?: string
   defaultOpen?: boolean
@@ -49,9 +50,11 @@ export const Section = memo(function Section({
       className="group rounded-[6px] border border-border/60 bg-card/40 shadow-[var(--panel-shadow)] open:bg-card/60 transition-colors"
     >
       <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-        <span className="grid place-items-center size-7 rounded-[4px] bg-muted/50 text-muted-foreground">
-          {icon}
-        </span>
+        {icon && (
+          <span className="grid place-items-center size-7 rounded-[4px] bg-muted/50 text-muted-foreground">
+            {icon}
+          </span>
+        )}
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold tracking-tight">{title}</div>
           {subtitle && (
@@ -162,6 +165,8 @@ interface FloatInputProps {
   value: number | undefined | null
   onChange: (v: number | null) => void
   step?: number
+  min?: number
+  max?: number
   className?: string
   placeholder?: string
 }
@@ -171,6 +176,8 @@ export const FloatInput = memo(function FloatInput({
   value,
   onChange,
   step,
+  min,
+  max,
   className,
   placeholder,
 }: FloatInputProps) {
@@ -180,6 +187,8 @@ export const FloatInput = memo(function FloatInput({
       id={id}
       type="number"
       step={step ?? "any"}
+      min={min}
+      max={max}
       disabled={readOnly}
       value={value === null || value === undefined ? "" : String(value)}
       placeholder={placeholder}

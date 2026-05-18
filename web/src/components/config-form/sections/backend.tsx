@@ -1,9 +1,31 @@
 import { memo } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { BACKEND_BADGE } from "../backend-meta"
 import { BACKEND_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import { EnumSelect, PathInput, Row } from "../widgets"
+
+const BACKEND_DESCRIPTIONS: Record<string, string> = {
+  kohya:
+    "kohya-ss/sd-scripts。SD1.5 / SD2 / SDXL / SD3 / FLUX / Lumina / HunyuanImage / Anima 通用 LoRA / DreamBooth 训练。",
+  "diffusion-pipe":
+    "tdrussell/diffusion-pipe。DeepSpeed 流水并行,涵盖图像与视频(Wan / HunyuanVideo / LTX / Cosmos 等)。",
+  anima_lora:
+    "sorryhyun/anima_lora(随 LoraHub vendored)。仅训练 Anima DiT,带 OrthoLoRA / T-LoRA / Hydra / postfix / EasyControl / IP-Adapter / DMD turbo 蒸馏。",
+}
+
+const REPO_LABEL: Record<string, string> = {
+  kohya: "sd-scripts 路径",
+  "diffusion-pipe": "diffusion-pipe 路径",
+  anima_lora: "anima_lora 路径",
+}
+
+const REPO_PLACEHOLDER: Record<string, string> = {
+  kohya: "（使用设置中的默认值)",
+  "diffusion-pipe": "（使用设置中的默认值)",
+  anima_lora: "（默认 ./external/anima_lora,通常无需填写)",
+}
 
 export const BackendFields = memo(function BackendFields({
   value = {},
@@ -15,49 +37,68 @@ export const BackendFields = memo(function BackendFields({
   errorMap: ErrorMap
 }) {
   const v = value ?? {}
+  const type = v.type ?? "kohya"
+  const badge = BACKEND_BADGE[type as keyof typeof BACKEND_BADGE]
+  const description =
+    BACKEND_DESCRIPTIONS[type] ?? BACKEND_DESCRIPTIONS.kohya
+  const repoLabel = REPO_LABEL[type] ?? "仓库路径"
+  const repoPlaceholder = REPO_PLACEHOLDER[type] ?? "（使用设置中的默认值)"
+
   return (
     <>
-      <Row
-        label="后端"
-        description={
-          <>
-            「设置 &gt; Kohya 后端」管理工作区级默认值；此处按配置覆盖。
-          </>
-        }
-      >
-        <div className="flex items-center gap-2">
+      <Row label="后端" description={description}>
+        <div className="flex items-center gap-2 flex-wrap">
           <EnumSelect
-            value={v.type ?? "kohya"}
+            value={type}
             onChange={(t) => set(["backend", "type"], t)}
             options={BACKEND_OPTIONS}
           />
-          {v.type === "diffusion-pipe" && (
-            <Badge variant="outline" className="rounded-[2px] uppercase text-[10px]">
-              v0.3
+          {badge && (
+            <Badge
+              variant="outline"
+              className={`rounded-[2px] uppercase text-[10px] ${badge.toneClass}`}
+            >
+              {badge.label}
+            </Badge>
+          )}
+          {type === "anima_lora" && (
+            <Badge
+              variant="outline"
+              className="rounded-[2px] uppercase text-[10px] border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              title="anima_lora 源码随 LoraHub 一起分发,不需要单独 clone"
+            >
+              vendored
             </Badge>
           )}
         </div>
       </Row>
-      <Row label="sd-scripts 路径" errors={errorMap.get("backend.sdScriptsPath")}>
+      <Row label={repoLabel} errors={errorMap.get("backend.sdScriptsPath")}>
         <PathInput
           value={v.sdScriptsPath ?? ""}
           onChange={(s) => set(["backend", "sdScriptsPath"], s || null)}
-          placeholder="（使用设置中的默认值）"
+          placeholder={repoPlaceholder}
         />
       </Row>
       <Row label="Python 解释器" errors={errorMap.get("backend.pythonExecutable")}>
         <PathInput
           value={v.pythonExecutable ?? ""}
           onChange={(s) => set(["backend", "pythonExecutable"], s || null)}
-          placeholder="（使用设置中的默认值）"
+          placeholder={
+            type === "anima_lora"
+              ? "（默认 .venv/bin/python — 用 uv sync 后自动指向)"
+              : "（使用设置中的默认值)"
+          }
         />
       </Row>
-      <Row label="锁定版本" description="可选。锁定 sd-scripts 的 git ref / tag。">
+      <Row label="锁定版本" description="可选。锁定 sd-scripts / dp 的 git ref / tag(对 anima_lora 无效,vendored)。">
         <Input
           value={v.pinVersion ?? ""}
           className="font-mono w-64"
           onChange={(e) => set(["backend", "pinVersion"], e.target.value || null)}
-          placeholder="例如 main、sdxl、0.8.4"
+          placeholder={
+            type === "anima_lora" ? "(对 vendored 后端无效)" : "例如 main、sdxl、0.8.4"
+          }
+          disabled={type === "anima_lora"}
         />
       </Row>
     </>

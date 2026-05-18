@@ -130,6 +130,7 @@ def list_configs() -> dict[str, Any]:
             "modified_at": stat.st_mtime,
             "valid": False,
             "arch": None,
+            "backend": None,
             "summary": None,
             "error": None,
         }
@@ -137,6 +138,7 @@ def list_configs() -> dict[str, Any]:
             cfg = load_config(p)
             entry["valid"] = True
             entry["arch"] = cfg.base_model.arch
+            entry["backend"] = cfg.backend.type
             entry["summary"] = (
                 f"{cfg.base_model.arch} · "
                 f"{cfg.schedule.epochs} epoch(s) × bs {cfg.schedule.batch_size}"

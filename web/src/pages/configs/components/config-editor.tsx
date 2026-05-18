@@ -26,6 +26,16 @@ export function ConfigEditor({
     queryKey: ["config", isNew ? "__new__" : mode.name],
     queryFn: () => (isNew ? Promise.resolve(null) : api.getConfig(mode.name)),
   })
+  // Pull the workbench default backend so a fresh "新建" config opens
+  // pre-wired for whatever backend the user has actually configured
+  // (set in 设置 → 默认后端). Saved configs ignore this — they keep
+  // whatever backend they were saved with.
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+    staleTime: 60_000,
+  })
+  const defaultBackend = settingsQuery.data?.settings?.default_backend
 
   const [draft, setDraft] = useState<ConfigFormValue | null>(null)
   const [name, setName] = useState<string>(isNew ? "" : mode.name)
@@ -34,13 +44,17 @@ export function ConfigEditor({
   // Seed the draft from the source config (or sane defaults for new).
   useEffect(() => {
     if (isNew) {
-      setDraft(buildDefaults())
+      // Don't seed until settings have loaded — buildDefaults reads
+      // default_backend to pick the right initial arch + sub-config.
+      // First-load with settings undefined falls back to kohya which
+      // is fine; once settings land the effect re-fires and rebuilds.
+      setDraft(buildDefaults(defaultBackend))
       setName("")
     } else if (sourceQuery.data?.parsed) {
       setDraft(sourceQuery.data.parsed as unknown as ConfigFormValue)
       setName(mode.name)
     }
-  }, [isNew, sourceQuery.data, mode])
+  }, [isNew, sourceQuery.data, mode, defaultBackend])
 
   const validate = useMutation({
     mutationFn: () =>

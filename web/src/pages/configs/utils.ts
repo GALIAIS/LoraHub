@@ -1,14 +1,61 @@
 import type { ConfigFormValue } from "@/components/config-form"
+import { defaultArchFor } from "@/components/config-form/backend-meta"
+import type { BackendId } from "@/lib/api"
 import type { LaunchOverrides } from "./types"
 
-export function buildDefaults(): ConfigFormValue {
-  // Minimal valid skeleton — enough that the form renders with sensible
-  // starting values; the user only has to fill in the two paths.
-  return {
+/**
+ * Build the seed config a fresh "新建" creates.
+ *
+ * When called with the user's currently-default backend, the seed is
+ * pre-wired for that backend: arch picks a sensible default the
+ * backend supports (e.g. anima_lora → "anima"), and any backend-
+ * specific options block (animaLora, diffusionPipe) gets a stub so
+ * the editor opens with the right side-section already visible.
+ *
+ * Falls back to "kohya / sdxl" when no backend is provided — the
+ * legacy behaviour that pre-dates the multi-backend UI work.
+ */
+export function buildDefaults(backend?: BackendId): ConfigFormValue {
+  const effective = backend ?? "kohya"
+  const arch = defaultArchFor(effective)
+  const base: ConfigFormValue = {
     schemaVersion: "1.0",
-    baseModel: { arch: "sdxl", checkpoint: "" },
+    baseModel: { arch, checkpoint: "" },
     dataset: { source: "", resolution: [1024, 1024] },
+    backend: { type: effective },
   }
+  // Seed the per-backend options block so the editor opens with the
+  // right sub-section visible from the first paint, instead of forcing
+  // the user to flip the type field once before the section appears.
+  if (effective === "anima_lora") {
+    return {
+      ...base,
+      backend: {
+        ...base.backend,
+        animaLora: {
+          method: "lora",
+          preset: "default",
+          // OrthoLoRA + T-LoRA stack — matches upstream lora.toml.
+          lora: {
+            useOrtho: true,
+            useTimestepMask: true,
+            minRank: 8,
+            alphaRankScale: 1.0,
+          },
+        },
+      },
+    }
+  }
+  if (effective === "diffusion-pipe") {
+    return {
+      ...base,
+      backend: {
+        ...base.backend,
+        diffusionPipe: {},
+      },
+    }
+  }
+  return base
 }
 
 export function shortenPath(p: string): string {

@@ -2,6 +2,7 @@ import { Copy, FileCheck2, FileWarning, Pencil, Trash2 } from "lucide-react"
 import type { ConfigListEntry } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { BACKEND_BADGE } from "@/components/config-form/backend-meta"
 import { cn } from "@/lib/utils"
 import type { RowAction } from "../types"
 
@@ -16,6 +17,8 @@ export function ConfigRow({
   onSelect: () => void
   onAction: (action: RowAction) => void
 }) {
+  const backend = config.backend
+  const backendBadge = backend ? BACKEND_BADGE[backend] : undefined
   return (
     <li
       onClick={onSelect}
@@ -26,13 +29,27 @@ export function ConfigRow({
           : "border-l-2 border-l-transparent hover:bg-muted/40",
       )}
     >
-      <div className="flex items-center gap-2 mb-1 pr-20">
+      <div className="flex items-center gap-2 mb-1 pr-20 flex-wrap">
         {config.valid ? (
           <FileCheck2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />
         ) : (
           <FileWarning className="size-3.5 text-destructive" />
         )}
         <span className="text-sm font-medium truncate">{config.name}</span>
+        {/* Backend badge first — it's the coarsest filter the user is
+            scanning for. Arch goes after as a finer-grain hint. */}
+        {backendBadge && (
+          <Badge
+            variant="outline"
+            className={cn(
+              "rounded-[2px] uppercase text-[10px] tracking-[0.1em]",
+              backendBadge.toneClass,
+            )}
+            title={backendBadge.description}
+          >
+            {backendBadge.label}
+          </Badge>
+        )}
         {config.arch && (
           <Badge variant="outline" className="rounded-[2px] uppercase text-[10px] tracking-[0.1em]">
             {config.arch}

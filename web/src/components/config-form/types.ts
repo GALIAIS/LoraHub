@@ -276,6 +276,147 @@ export interface ConfigFormValue {
       // llm_path / ...). Do NOT rename these or dp won't recognise them.
       modelPaths?: Record<string, string>
     }
+    /**
+     * anima_lora-specific knobs. Mirrors `AnimaLoraOptions` in
+     * `lorahub/core/config/schema.py`. Empty / undefined = upstream
+     * defaults (lora.toml + presets.toml[default]).
+     */
+    animaLora?: {
+      method?: "lora" | "postfix" | "chimera" | "easycontrol" | "ip_adapter"
+      preset?:
+        | "default"
+        | "low_vram"
+        | "graft"
+        | "half"
+        | "quarter"
+        | "tenth"
+        | "debug"
+      outputName?: string
+      networkModule?: string
+      networkDim?: number
+      networkAlpha?: number
+      networkTrainUnetOnly?: boolean
+      optimizerType?: "AdamW" | "AdamW8bit" | "Lion" | "Prodigy"
+      lrScheduler?:
+        | "constant"
+        | "cosine"
+        | "cosine_with_restarts"
+        | "linear"
+        | "polynomial"
+      learningRate?: number
+      maxTrainEpochs?: number
+      saveEveryNEpochs?: number
+      checkpointingEpochs?: number
+      captionDropoutRate?: number
+      timestepSampling?: "sigmoid" | "uniform" | "logit_normal"
+      sigmoidScale?: number
+      discreteFlowShift?: number
+      weightingScheme?: "sigma_sqrt" | "logit_normal" | "mode" | "cosmap" | null
+      logitMean?: number | null
+      logitStd?: number | null
+      modeScale?: number | null
+      vrLossWeight?: number | null
+      cacheLatents?: boolean
+      cacheLatentsToDisk?: boolean
+      cacheTextEncoderOutputs?: boolean
+      cacheTextEncoderOutputsToDisk?: boolean
+      cacheLlmAdapterOutputs?: boolean
+      useShuffledCaptionVariants?: boolean
+      sampleRatio?: number | null
+      staticTokenCount?: number
+      vaeChunkSize?: number
+      vaeDisableCache?: boolean
+      noHalfVae?: boolean
+      attnMode?: "flash" | "torch" | "flex" | "sageattn" | "xformers"
+      xformers?: boolean
+      splitAttn?: boolean
+      compileMode?: "blocks" | "full" | null
+      compileInductorMode?:
+        | "default"
+        | "reduce-overhead"
+        | "max-autotune"
+        | null
+      useCustomDownAutograd?: boolean
+      blocksToSwap?: number
+      gradientCheckpointing?: boolean
+      unslothOffloadCheckpointing?: boolean
+      cpuOffloadCheckpointing?: boolean
+      mixedPrecision?: "bf16" | "fp16" | "fp32"
+      useCmmd?: boolean
+      validationSeed?: number | null
+      validationSampleSteps?: number | null
+      validationCfgScale?: number | null
+      // method = lora sub-config (default OrthoLoRA + T-LoRA stack).
+      lora?: {
+        useOrtho?: boolean
+        useTimestepMask?: boolean
+        minRank?: number
+        alphaRankScale?: number
+      }
+      postfix?: {
+        mode?: "postfix" | "cond"
+        condHiddenDim?: number
+        splicePosition?: "front_of_padding" | "after_padding"
+        orthoBasis?: "svd_te" | "random" | "identity"
+        teCacheDir?: string | null
+        svdNumFiles?: number
+        orthoBasisSeed?: number
+        lambdaInit?: number
+      }
+      chimera?: {
+        balanceWContent?: number
+        balanceWFreq?: number
+        balanceLossWarmupRatio?: number
+        feiFeatureDim?: number
+        sigmaFeatureDim?: number
+      }
+      easycontrol?: {
+        bCondInit?: number
+        condScale?: number
+        applyFfnLora?: boolean
+        condTokenCount?: number
+        dropP?: number
+        condNoiseMax?: number
+      }
+      ipAdapter?: {
+        encoder?: "PE-Core-L14-336" | "PE-Core-G14-448"
+        resamplerLayers?: number
+        resamplerHeads?: number
+        ipScale?: number
+        imageDropP?: number
+        gateLr?: number
+        featuresCacheToDisk?: boolean
+      }
+      // Turbo distillation — when set, compiler routes through
+      // scripts/distill_turbo.py instead of train.py.
+      turbo?: {
+        iterations?: number
+        batchSize?: number
+        seed?: number
+        useCustomDownAutograd?: boolean
+        studentRank?: number
+        studentAlpha?: number
+        fakeRank?: number
+        fakeAlpha?: number
+        attnMode?: "flash" | "torch" | "flex" | "sageattn" | "xformers"
+        studentSteps?: number
+        teacherCfg?: number
+        tauCaStrategy?: "above_t" | "uniform"
+        tauDmStrategy?: "uniform" | "above_t"
+        tauCaMinGap?: number
+        tauCaSkipAboveT?: number
+        studentLr?: number
+        fakeLr?: number
+        fakeStepsPerStudentStep?: number
+        alphaWarmupSteps?: number
+        weightDecay?: number
+        gradClip?: number
+        tDistribution?: "uniform" | "sigmoid"
+        sigmoidScale?: number
+        saveEvery?: number
+        logInterval?: number
+      }
+    }
   }
   resume?: {
     saveState?: boolean

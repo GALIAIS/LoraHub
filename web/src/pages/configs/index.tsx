@@ -17,7 +17,7 @@ import {
 } from "./components/row-action-dialogs"
 import { TemplateLibraryDialog } from "./components/template-library-dialog"
 import { ImportDialog } from "./components/import-dialog"
-import type { ArchFilter, Mode, RowAction, SortOrder } from "./types"
+import type { ArchFilter, BackendFilter, Mode, RowAction, SortOrder } from "./types"
 
 type LocationState = {
   overrideDataset?: string
@@ -33,6 +33,16 @@ const SIDEBAR_KEY = "lorahub.configs.sidebar"
 export function ConfigsPage() {
   const list = useQuery({ queryKey: ["configs"], queryFn: api.listConfigs })
   const configs = list.data?.configs ?? []
+  // Pull the workbench-level default backend so the configs list can
+  // filter to "the backend the user is actually using" by default.
+  // We don't gate the query on settings being loaded — until it lands
+  // we just show every config (filter falls through to "all").
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+    staleTime: 60_000,
+  })
+  const defaultBackend = settingsQuery.data?.settings?.default_backend
 
   const [mode, setMode] = useState<Mode | null>(null)
   // Pre-populated dataset path that flows in from the Datasets page via
@@ -42,6 +52,7 @@ export function ConfigsPage() {
 
   const [query, setQuery] = useState("")
   const [archFilter, setArchFilter] = useState<ArchFilter>("all")
+  const [backendFilter, setBackendFilter] = useState<BackendFilter>("default")
   const [sort, setSort] = useState<SortOrder>("name-asc")
 
   const [rowDialog, setRowDialog] = useState<RowDialogState>(null)
@@ -89,8 +100,21 @@ export function ConfigsPage() {
 
   const visibleConfigs = useMemo(() => {
     const q = query.trim().toLowerCase()
+    // Resolve the effective backend filter: "default" expands to the
+    // workbench setting (or "all" if settings haven't loaded yet);
+    // "all" disables the filter; everything else is a direct match.
+    const effectiveBackendFilter: BackendFilter | "all" =
+      backendFilter === "default"
+        ? defaultBackend ?? "all"
+        : backendFilter
     const filtered = configs.filter((r) => {
       if (archFilter !== "all" && r.arch !== archFilter) return false
+      if (
+        effectiveBackendFilter !== "all" &&
+        r.backend !== effectiveBackendFilter
+      ) {
+        return false
+      }
       if (q && !r.name.toLowerCase().includes(q)) return false
       return true
     })
@@ -105,7 +129,7 @@ export function ConfigsPage() {
       }
     })
     return sorted
-  }, [configs, query, archFilter, sort])
+  }, [configs, query, archFilter, backendFilter, defaultBackend, sort])
 
   // Closing a row dialog returns null; keep the previous config reference for
   // animation but reset action so the dialog actually closes.
@@ -175,6 +199,8 @@ export function ConfigsPage() {
           onQueryChange={setQuery}
           arch={archFilter}
           onArchChange={setArchFilter}
+          backend={backendFilter}
+          onBackendChange={setBackendFilter}
           sort={sort}
           onSortChange={setSort}
           onCreate={() => setTemplateOpen(true)}

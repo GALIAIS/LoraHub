@@ -45,6 +45,7 @@ import { OptimizationFields } from "./sections/optimization"
 import { SamplingFields } from "./sections/sampling"
 import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
+import { BackendAnimaLoraFields } from "./sections/backend-anima-lora"
 import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
 import { ValidationFields } from "./sections/validation"
 import { ResumeFields } from "./sections/resume"
@@ -80,6 +81,11 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
     [value, onChange],
   )
 
+  const backendType = (value.backend?.type ?? undefined) as
+    | "kohya"
+    | "diffusion-pipe"
+    | "anima_lora"
+    | undefined
   const arch = value.baseModel?.arch ?? ""
   // ArchPaths section is collapsed by default but auto-expands for arches
   // that almost always need a per-component path filled in.
@@ -99,7 +105,12 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         subtitle="选择架构与待微调的 .safetensors 检查点"
         defaultOpen
       >
-        <BaseModelFields value={value.baseModel} set={set} errorMap={errorMap} />
+        <BaseModelFields
+          value={value.baseModel}
+          set={set}
+          errorMap={errorMap}
+          backendType={backendType}
+        />
       </Section>
 
       <Section
@@ -283,6 +294,21 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         >
           <BackendDiffusionPipeFields
             value={value.backend?.diffusionPipe}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
+
+      {value.backend?.type === "anima_lora" && (
+        <Section
+          icon={<Sparkles className="size-3.5" />}
+          title="anima_lora 选项"
+          subtitle="method / preset 与上游 lora.toml 对齐;turbo 字段切到 distill 路径"
+          defaultOpen
+        >
+          <BackendAnimaLoraFields
+            value={value.backend?.animaLora}
             set={set}
             errorMap={errorMap}
           />
