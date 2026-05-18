@@ -14,9 +14,10 @@ live in submodules that mirror the kohya / dp backend layouts:
 
 from __future__ import annotations
 
+from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.anima_lora.compiler import (
     CompilationError,
     compile_config,
 )
 
-__all__ = ["CompilationError", "compile_config"]
+__all__ = ["AnimaLoraBackend", "CompilationError", "compile_config"]

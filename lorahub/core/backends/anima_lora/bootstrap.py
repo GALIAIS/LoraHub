@@ -1,0 +1,101 @@
+"""Resolve the vendored anima_lora copy + the Python that runs it.
+
+Distinguishing twist vs kohya / diffusion-pipe: the repo is **vendored**
+under ``external/anima_lora/`` in the LoraHub source tree. We do not
+expect the user to clone anything — the source ships in the box. The
+env var ``LORAHUB_ANIMA_LORA_REPO`` exists only so a developer can
+point at a different checkout for ad-hoc debugging.
+
+Python interpreter resolution still cascades recipe → env →
+``<repo>/venv`` → ``<repo>/.venv`` → host. anima_lora needs torch 2.11
+nightly + CUDA 13.x which the LoraHub main venv typically does not
+satisfy, so the user is expected to maintain a dedicated venv and
+point ``LORAHUB_ANIMA_LORA_PYTHON`` at it. As a convenience, when no
+override is set we look for ``external/anima_lora/.venv`` first.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from lorahub.core.backends._common import bootstrap as _common
+from lorahub.core.backends.errors import BootstrapError
+
+_ENV_REPO = "LORAHUB_ANIMA_LORA_REPO"
+_ENV_PYTHON = "LORAHUB_ANIMA_LORA_PYTHON"
+# anima_lora ships its trainer + inference at the repo root, plus the
+# library/anima/ subpackage that train.py imports. If any of these
+# vanish the vendored copy is corrupted and there's no point trying.
+_REQUIRED_FILES = ("train.py", "inference.py", "library/anima/__init__.py")
+_LABEL = "sorryhyun/anima_lora (vendored)"
+
+
+# Re-export the shared venv-python lookup so the api.settings probe can
+# keep using the historical private name.
+_venv_python = _common.venv_python
+
+
+@dataclass(frozen=True, slots=True)
+class AnimaLoraEnv:
+    """A resolved anima_lora runtime."""
+
+    repo_path: Path
+    python_executable: Path
+
+    def script(self, name: str) -> Path:
+        return self.repo_path / name
+
+
+def default_repo_path() -> Path:
+    """Where lorahub looks for the vendored anima_lora copy.
+
+    Walks up from this file to the LoraHub project root, then descends
+    into ``external/anima_lora``. Robust against ``cwd`` drift (tests
+    chdir into ``tmp_path`` constantly) since the resolution is
+    relative to the source tree, not the process cwd.
+    """
+    here = Path(__file__).resolve()
+    # lorahub/core/backends/anima_lora/bootstrap.py → up 5 = project root
+    project_root = here.parents[4]
+    return project_root / "external" / "anima_lora"
+
+
+def resolve(
+    config_path: Path | None = None,
+    config_python: Path | None = None,
+) -> AnimaLoraEnv:
+    """Resolve the anima_lora environment using recipe -> env var -> default."""
+    repo = (
+        config_path
+        or _common.path_from_env(_ENV_REPO)
+        or default_repo_path()
+    )
+    python = _common.resolve_python(
+        repo, config_python=config_python, env_var=_ENV_PYTHON
+    )
+
+    _common.check_repo(
+        repo,
+        label=_LABEL,
+        required_files=_REQUIRED_FILES,
+        env_var=_ENV_REPO,
+        default_path=default_repo_path(),
+        config_field="python_executable",
+    )
+    _common.check_python(python)
+
+    return AnimaLoraEnv(
+        repo_path=repo.resolve(),
+        # NB: `absolute()` not `resolve()` — see diffusion_pipe.bootstrap
+        # for the rationale (resolving a venv symlink bypasses site-packages).
+        python_executable=python.absolute(),
+    )
+
+
+__all__ = [
+    "BootstrapError",
+    "AnimaLoraEnv",
+    "default_repo_path",
+    "resolve",
+]

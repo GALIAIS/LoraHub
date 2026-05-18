@@ -133,24 +133,25 @@ def test_backend_config_anima_lora_is_optional() -> None:
     assert bc.anima_lora is None
 
 
-def test_select_backend_raises_not_implemented_for_anima_lora(
+def test_select_backend_returns_anima_lora_backend(
     tmp_path: Path,
 ) -> None:
-    """Cut0 dispatch: explicit, actionable error before cut1/2 land.
+    """Cut2 dispatch is live: type='anima_lora' yields the real backend.
 
-    Without this, a user who flips backend.type to anima_lora before the
-    runner is in place would just get a generic "unsupported backend".
+    The earlier cut0 incarnation of this test asserted NotImplementedError
+    while compiler + runner were still being built; cut2 ships them, so
+    the dispatch returns an `AnimaLoraBackend` instance that's ready to
+    `.validate()` / `.launch()`.
     """
+    from lorahub.core.backends.anima_lora import AnimaLoraBackend
+
     cfg = TrainingConfig.model_validate(
         _minimal_recipe(tmp_path)
         | {"backend": {"type": "anima_lora", "animaLora": {}}}
     )
-    with pytest.raises(NotImplementedError) as exc_info:
-        _select_backend(cfg)
-    detail = str(exc_info.value)
-    assert "anima_lora" in detail
-    # Tell the user where they are in the cut sequence.
-    assert "cut" in detail.lower()
+    backend = _select_backend(cfg)
+    assert isinstance(backend, AnimaLoraBackend)
+    assert backend.name == "anima_lora"
 
 
 def test_select_backend_unchanged_for_kohya_and_dp(tmp_path: Path) -> None:

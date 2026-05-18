@@ -14,6 +14,7 @@ from typing import Any
 from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.state import JobRecord, JobState
+from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.config.loader import dump_config
@@ -474,16 +475,7 @@ def _select_backend(cfg: TrainingConfig):  # type: ignore[no-untyped-def]
     if backend_type == "diffusion-pipe":
         return DiffusionPipeBackend()
     if backend_type == "anima_lora":
-        # Cut0: schema + dispatch in place; runner / compiler land in cut1+2.
-        # Surface a clear error so a user who flipped the type to anima_lora
-        # before the implementation lands gets a useful message instead of
-        # an opaque "unsupported backend".
-        msg = (
-            "anima_lora backend is registered but not yet implemented "
-            "(B5 anima_lora cut0 — compiler + runner ship in cut1/cut2). "
-            "Use backend.type='kohya' or 'diffusion-pipe' for now."
-        )
-        raise NotImplementedError(msg)
+        return AnimaLoraBackend()
     msg = f"unsupported backend type: {backend_type!r}"
     raise ValueError(msg)
 
