@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import type { TrainingEvent } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -229,10 +230,15 @@ export function TerminalLog({
     if (typeof window === "undefined") return
     window.localStorage.setItem(STYLE_KEY, darkMode ? "1" : "0")
   }, [darkMode])
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  // True while the user has actively scrolled away from the tail. Auto-follow
-  // pauses while this is set; the Switch state above tracks the user's intent.
-  const [tailing, setTailing] = useState(true)
+  // Virtuoso handle for programmatic scrollToIndex (clear screen,
+  // tail-follow). The list automatically virtualises so a 5k-line
+  // tail no longer pegs the main thread on each new step event.
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
+  // True while the user is parked at the bottom; auto-follow only
+  // engages while this is set. We *don't* mirror the autoScroll
+  // toggle here — that's the user's stated intent; this is the
+  // runtime guard against fighting them mid-scroll.
+  const [atBottom, setAtBottom] = useState(true)
 
   const visibleEvents = useMemo(() => {
     if (clearAfter <= 0) return events
@@ -253,28 +259,28 @@ export function TerminalLog({
     return lines.filter((l) => stripAnsi(l.message).toLowerCase().includes(q))
   }, [lines, query])
 
-  // Track the user's scroll position so we know whether to keep snapping the
-  // viewport to the bottom on new lines. Switch state is the user's hard
-  // preference; tailing is the runtime guard.
-  function onScroll() {
-    const node = scrollRef.current
-    if (!node) return
-    const distanceFromBottom =
-      node.scrollHeight - node.scrollTop - node.clientHeight
-    const atBottom = distanceFromBottom <= STICK_TO_BOTTOM_PX
-    setTailing(atBottom)
+  // Track the user's scroll position so we know whether to keep snapping
+  // the viewport to the bottom on new lines. Virtuoso fires this whenever
+  // the list reaches / leaves its bottom edge.
+  // (Switch state is the user's hard preference; `atBottom` is the
+  // runtime guard against fighting their scroll.)
+  function onAtBottomChange(next: boolean) {
+    setAtBottom(next)
   }
 
   useEffect(() => {
-    if (!autoScroll || !tailing) return
-    const node = scrollRef.current
-    if (!node) return
-    node.scrollTop = node.scrollHeight
-  }, [filteredLines, autoScroll, tailing])
+    if (!autoScroll || !atBottom) return
+    if (filteredLines.length === 0) return
+    virtuosoRef.current?.scrollToIndex({
+      index: filteredLines.length - 1,
+      align: "end",
+      behavior: "auto",
+    })
+  }, [filteredLines, autoScroll, atBottom])
 
   function clearScreen() {
     setClearAfter(events.length)
-    setTailing(true)
+    setAtBottom(true)
   }
 
   // Theme palette switch — `darkMode` pins a zinc-950 surface, otherwise
@@ -339,7 +345,7 @@ export function TerminalLog({
             checked={autoScroll}
             onCheckedChange={(v) => {
               setAutoScroll(v)
-              if (v) setTailing(true)
+              if (v) setAtBottom(true)
             }}
           />
           自动滚到底
@@ -380,9 +386,10 @@ export function TerminalLog({
         </span>
       </div>
       <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className={cn("flex-1 min-h-0 overflow-y-auto", bodyTextDefault)}
+        className={cn(
+          "flex-1 min-h-0 relative",
+          bodyTextDefault,
+        )}
       >
         {filteredLines.length === 0 ? (
           <div className={placeholderClass}>
@@ -393,13 +400,26 @@ export function TerminalLog({
                 : "屏幕已清空，等待新日志……"}
           </div>
         ) : (
-          <ul>
-            {filteredLines.map((line) => {
+          <Virtuoso
+            ref={virtuosoRef}
+            // Re-mount the inner scroller when the filter / clear cursor
+            // changes so the virtual list resets to the new dataset.
+            // Without this it tries to preserve scroll offset against
+            // an unrelated row at the same index.
+            key={`${query}|${clearAfter}`}
+            className="absolute inset-0 size-full"
+            data={filteredLines}
+            atBottomStateChange={onAtBottomChange}
+            atBottomThreshold={STICK_TO_BOTTOM_PX}
+            // Snap to the bottom when the user is already there and
+            // new lines arrive — Virtuoso handles this internally far
+            // better than our ref-based scrollTop math could.
+            followOutput={(isAtBottom) => (isAtBottom ? "auto" : false)}
+            itemContent={(_index, line) => {
               const chunks = parseAnsi(line.message)
               const toneClass = tonePalette[line.tone]
               return (
-                <li
-                  key={line.key}
+                <div
                   className={cn(
                     "px-3 py-[2px] flex gap-2 items-baseline border-l-2",
                     line.borderClass,
@@ -430,10 +450,11 @@ export function TerminalLog({
                           ),
                         )}
                   </span>
-                </li>
+                </div>
               )
-            })}
-          </ul>
+            }}
+            computeItemKey={(_i, line) => line.key}
+          />
         )}
       </div>
     </div>
