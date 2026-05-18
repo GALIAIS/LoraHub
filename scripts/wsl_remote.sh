@@ -152,7 +152,12 @@ cmd_status() {
 }
 
 cmd_pull() {
-  run_remote "cd ${REMOTE_DIR} && git fetch origin main && git reset --hard origin/main && git log --oneline -3"
+  # `--tags --force` makes sure newly pushed release tags (e.g. v0.3.0)
+  # land on the VPS too — without this the default refspec only fetches
+  # branch heads, hatch-vcs sees no `v*` tags, and `pip install` falls
+  # back to a `0.0.1.devN+gHASH` string. `--prune-tags` drops tags that
+  # have been deleted upstream so renames don't leave stale aliases.
+  run_remote "cd ${REMOTE_DIR} && git fetch origin main --tags --force --prune-tags && git reset --hard origin/main && git log --oneline -3 && git describe --tags --always"
 }
 
 cmd_health() {

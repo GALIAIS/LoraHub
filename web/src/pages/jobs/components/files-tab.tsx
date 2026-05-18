@@ -2,14 +2,6 @@ import { useQuery } from "@tanstack/react-query"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { Download, ExternalLink } from "lucide-react"
 import { fmtBytes, fmtUnixSeconds, TERMINAL_STATES } from "../utils"
 
@@ -33,32 +25,39 @@ function FileTable({
       </div>
     )
   }
+  // Plain native table — the workbench-wide `<Table>` component carries
+  // its own border + box-shadow (shiro-table-shell) which double-frames
+  // a card it's nested inside. Inside files-tab the wrapper card is the
+  // chrome owner; a borderless native table tucks neatly under it.
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>路径</TableHead>
-          <TableHead className="w-24">大小</TableHead>
-          <TableHead className="w-44">修改时间</TableHead>
-          <TableHead className="w-24 text-right">操作</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
+    <table className="w-full text-[12px] border-collapse">
+      <thead className="sticky top-0 z-10 bg-muted/40 backdrop-blur-sm">
+        <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          <th className="px-3 py-2 font-medium">路径</th>
+          <th className="px-3 py-2 font-medium w-20">大小</th>
+          <th className="px-3 py-2 font-medium w-40">修改时间</th>
+          <th className="px-3 py-2 font-medium w-20 text-right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
         {files.map((f) => (
-          <TableRow key={f.path}>
-            <TableCell
-              className="font-mono text-[12px] max-w-[420px] truncate"
+          <tr
+            key={f.path}
+            className="border-t border-border/40 hover:bg-muted/30"
+          >
+            <td
+              className="px-3 py-1.5 font-mono max-w-[420px] truncate"
               title={f.path}
             >
               {f.path}
-            </TableCell>
-            <TableCell className="tabular-nums text-[12px]">
+            </td>
+            <td className="px-3 py-1.5 tabular-nums">
               {fmtBytes(f.size_bytes)}
-            </TableCell>
-            <TableCell className="text-[12px] text-muted-foreground">
+            </td>
+            <td className="px-3 py-1.5 text-muted-foreground">
               {fmtUnixSeconds(f.modified_at)}
-            </TableCell>
-            <TableCell className="text-right">
+            </td>
+            <td className="px-3 py-1.5 text-right">
               <Button
                 size="sm"
                 variant="outline"
@@ -72,11 +71,11 @@ function FileTable({
                 )}
                 {actionLabel}
               </Button>
-            </TableCell>
-          </TableRow>
+            </td>
+          </tr>
         ))}
-      </TableBody>
-    </Table>
+      </tbody>
+    </table>
   )
 }
 
