@@ -101,7 +101,23 @@ install_python_deps() {
 
 build_frontend() {
   cd "${LORAHUB_DIR}/web"
+  # Decide whether to npm install: not just "is node_modules there?" but
+  # "is node_modules in sync with package.json?". Without the mtime
+  # check we'd silently keep running against stale deps after every
+  # `git pull` that bumped package.json — which already burned us once
+  # when a fresh dep (`react-markdown`) made vite build fail and the
+  # old web/dist kept getting served.
+  local needs_install=0
   if [[ ! -d node_modules ]]; then
+    needs_install=1
+  elif [[ -f package-lock.json ]] && [[ ! -f node_modules/.package-lock.json ]]; then
+    needs_install=1
+  elif [[ -f package-lock.json ]] && [[ package-lock.json -nt node_modules/.package-lock.json ]]; then
+    needs_install=1
+  elif [[ package.json -nt node_modules/.package-lock.json ]]; then
+    needs_install=1
+  fi
+  if (( needs_install )); then
     log "npm install (registry: ${NPM_REGISTRY})"
     "${NODE_DIR}/bin/npm" install --registry="${NPM_REGISTRY}" \
       > /root/_npm_install.log 2>&1 || {
@@ -110,9 +126,25 @@ build_frontend() {
       return 1
     }
   else
-    log "npm modules already installed (skip; rm -rf web/node_modules to force)"
+    log "npm modules up to date (skip; rm -rf web/node_modules to force)"
   fi
-  if [[ ! -f dist/index.html ]] || [[ -n "$(find ../web/src -newer dist/index.html -type f -print -quit 2>/dev/null)" ]]; then
+  # If the previous vite build failed (no dist/index.html on disk) but
+  # node_modules looked fine, the old "skip if dist exists" branch
+  # would never retry. Force a rebuild whenever dist is missing or
+  # any source/manifest file is newer than dist/index.html.
+  local needs_build=0
+  if [[ ! -f dist/index.html ]]; then
+    needs_build=1
+  elif [[ -n "$(find ./src -newer dist/index.html -type f -print -quit 2>/dev/null)" ]]; then
+    needs_build=1
+  elif [[ package.json -nt dist/index.html ]]; then
+    needs_build=1
+  elif [[ -f vite.config.ts ]] && [[ vite.config.ts -nt dist/index.html ]]; then
+    needs_build=1
+  elif [[ -f index.html ]] && [[ index.html -nt dist/index.html ]]; then
+    needs_build=1
+  fi
+  if (( needs_build )); then
     log "vite build"
     "${NODE_DIR}/bin/npx" vite build > /root/_vite_build.log 2>&1 || {
       err "vite build failed; tail of log:"
