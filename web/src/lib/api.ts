@@ -230,6 +230,13 @@ export interface JobMetricPoint {
   step: number
   epoch?: number | null
   loss?: number | null
+  // Optional per-step metrics forwarded by the diffusion-pipe parser:
+  // learning rate from the deepspeed engine line, plus iteration time
+  // and samples-per-second from dp's own per-step summary. Absent when
+  // the upstream backend doesn't emit them (older kohya releases).
+  lr?: number | null
+  iter_time_s?: number | null
+  samples_per_sec?: number | null
   ts: number
 }
 

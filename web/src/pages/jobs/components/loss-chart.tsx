@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { CSSProperties } from "react"
 import { AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -9,7 +9,19 @@ export interface LossSeries {
   id: string
   label: string
   color: string
+  // `dashed` is reserved for derived overlays (EMA smoothing, baselines)
+  // so users can tell them apart from primary measurements at a glance.
+  dashed?: boolean
   points: { step: number; loss: number }[]
+}
+
+// Optional vertical guides — used by the metrics tab to mark every
+// checkpoint save on the loss chart so the user can correlate
+// loss inflections with what artefact was written at that step.
+export interface ChartMarker {
+  step: number
+  label?: string
+  color?: string
 }
 
 const VIEW_W = 800
@@ -48,12 +60,30 @@ export function LossChart({
   className,
   emptyHint = "暂无损失数据。",
   overfitSignal,
+  markers = [],
 }: {
   series: LossSeries[]
   className?: string
   emptyHint?: string
   overfitSignal?: OverfitSignal | null
+  markers?: ChartMarker[]
 }) {
+  // Per-series visibility — driven by the legend; defaults to all on.
+  // Persisting visibility across re-renders keeps the user's choice
+  // sticky as new points stream in.
+  const [hidden, setHidden] = useState<Record<string, boolean>>({})
+  // Reset hidden ids that no longer exist in the series list — otherwise
+  // the table would carry stale entries if the user switches to a
+  // different job whose curve set differs.
+  useEffect(() => {
+    setHidden((prev) => {
+      const valid = new Set(series.map((s) => s.id))
+      const next: Record<string, boolean> = {}
+      for (const k of Object.keys(prev)) if (valid.has(k)) next[k] = prev[k]
+      return next
+    })
+  }, [series])
+
   // Resample each series independently so multi-series compare doesn't blow up
   // for jobs with very long histories.
   const prepared = useMemo(() => {
@@ -72,7 +102,15 @@ export function LossChart({
     if (prepared.length < 2) return null
     const train = prepared[0]
     const val = prepared[1]
-    if (!train.points.length || !val.points.length) return null
+    if (
+      train.dashed ||
+      val.dashed ||
+      hidden[train.id] ||
+      hidden[val.id] ||
+      !train.points.length ||
+      !val.points.length
+    )
+      return null
     return val.points.map((vp) => {
       // Closest train point by x — train series is much denser than val so a
       // simple linear scan stays cheap and avoids extrapolation surprises.
@@ -89,9 +127,13 @@ export function LossChart({
       }
       return { step: vp.step, train: bestLoss, val: vp.loss, _trainStep: bestStep }
     })
-  }, [prepared])
+  }, [prepared, hidden])
 
-  const allPoints = prepared.flatMap((s) => s.points)
+  const visibleSeries = useMemo(
+    () => prepared.filter((s) => !hidden[s.id]),
+    [prepared, hidden],
+  )
+  const allPoints = visibleSeries.flatMap((s) => s.points)
   const hasData = allPoints.length > 0
 
   const [stepMin, stepMax, lossMin, lossMax] = useMemo(() => {
@@ -179,7 +221,7 @@ export function LossChart({
           cy: number
           d: number
         } = null
-    for (const s of prepared) {
+    for (const s of visibleSeries) {
       let cand: { step: number; loss: number } | null = null
       let candDist = Infinity
       for (const p of s.points) {
@@ -210,6 +252,10 @@ export function LossChart({
   }
 
   const trend = overfitSignal ? trendCopy(overfitSignal.trend) : null
+
+  function toggleSeries(id: string) {
+    setHidden((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
 
   return (
     <div className={cn("w-full overflow-x-auto", className)}>
@@ -324,13 +370,15 @@ export function LossChart({
           />
         ) : null}
         {hasData ? (
-          prepared.map((s) =>
+          visibleSeries.map((s) =>
             s.points.length === 0 ? null : (
               <polyline
                 key={s.id}
                 fill="none"
                 stroke={s.color}
-                strokeWidth={1.5}
+                strokeWidth={s.dashed ? 1.25 : 1.5}
+                strokeDasharray={s.dashed ? "4 3" : undefined}
+                strokeOpacity={s.dashed ? 0.85 : 1}
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 points={s.points
@@ -352,6 +400,29 @@ export function LossChart({
             {emptyHint}
           </text>
         )}
+        {hasData && markers.length > 0
+          ? markers
+              .filter((m) => m.step >= stepMin && m.step <= stepMax)
+              .map((m, i) => {
+                const x = xScale(m.step)
+                const stroke = m.color ?? "var(--chart-3)"
+                return (
+                  <g key={`mk-${i}`} pointerEvents="none">
+                    <line
+                      x1={x}
+                      x2={x}
+                      y1={PAD_TOP}
+                      y2={VIEW_H - PAD_BOTTOM}
+                      stroke={stroke}
+                      strokeOpacity={0.55}
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                    />
+                    <circle cx={x} cy={PAD_TOP + 3} r={2.5} fill={stroke} />
+                  </g>
+                )
+              })
+          : null}
         {hover && (
           <g pointerEvents="none">
             <line
@@ -378,6 +449,41 @@ export function LossChart({
           </span>
           <span>步 {hover.step}</span>
           <span>损失 {formatLoss(hover.loss)}</span>
+        </div>
+      )}
+      {prepared.length > 1 && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1 text-[11px]">
+          {prepared.map((s) => {
+            const off = !!hidden[s.id]
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => toggleSeries(s.id)}
+                className={cn(
+                  "group inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-0.5 transition-colors",
+                  off
+                    ? "border-border/40 bg-transparent text-muted-foreground/70"
+                    : "border-border/60 bg-muted/40 text-foreground/85",
+                )}
+              >
+                <span
+                  className="inline-block h-[2px] w-3 rounded-sm align-middle"
+                  style={{
+                    background: off ? "currentColor" : s.color,
+                    opacity: off ? 0.5 : 1,
+                  }}
+                  aria-hidden
+                />
+                <span className={cn(off && "line-through")}>{s.label}</span>
+              </button>
+            )
+          })}
+          {markers.length > 0 && (
+            <span className="ml-1 text-[10px] text-muted-foreground/70">
+              · {markers.length} 个检查点标记
+            </span>
+          )}
         </div>
       )}
     </div>
