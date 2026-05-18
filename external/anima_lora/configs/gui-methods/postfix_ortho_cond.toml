@@ -1,0 +1,47 @@
+# gui-methods/postfix_ortho_cond.toml — caption-conditional postfix with
+# structural orthogonality (the sole cond variant in networks/methods/postfix.py).
+#
+# cond_mlp predicts (S(c), λ(c)) per caption — K(K-1)/2 + 1 scalars per
+# pooled-caption forward instead of a direct K·D postfix tensor. Each
+# caption's postfix is `Cayley(S(c) − S(c)ᵀ) @ basis · λ(c)`, so
+# `postfix(c) @ postfix(c).T = λ(c)² · I_K` structurally — uniform per-slot
+# magnitude WITHIN a caption, magnitude varies ACROSS captions.
+# Basis = top-K right singular vectors of cached `_anima_te.safetensors`,
+# row-shuffled deterministically by `ortho_basis_seed`.
+#
+# Rationale: docs/proposal/orthogonal_postfix.md §C.
+
+network_module = "networks.methods.postfix"
+network_dim = 32
+network_args = [
+    "mode=cond",
+    "splice_position=end_of_sequence",
+    "cond_hidden_dim=256",
+    "ortho_basis=svd_te",
+    "te_cache_dir=post_image_dataset/lora",
+    "svd_num_files=256",
+    "ortho_basis_seed=0",
+]
+output_name = "anima_postfix_ortho_cond_v2"
+
+# Trainable surface ~390k params at K=32, hidden=256, D=1024 (vs ~8.65M for
+# legacy cond at K=64). Use moderate LR — most params are in cond_mlp.0
+# (262k of the 390k); the rotation/scale head is small but matters most.
+learning_rate = 1e-3
+max_train_epochs = 2
+save_every_n_epochs = 1
+checkpointing_epochs = 1
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+
+blocks_to_swap = 0
+gradient_accumulation_steps = 4
+
+use_cmmd = false
+
+[variant]
+family = "postfix"
+label = "Postfix (cond + ortho)"
+description = "Caption-conditional postfix with structural orthogonality (Cayley-rotated SVD)."
+order = 10

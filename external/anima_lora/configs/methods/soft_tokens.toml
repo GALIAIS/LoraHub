@@ -1,0 +1,78 @@
+# Soft Tokens — per-layer time-indexed soft text tokens (SoftREPA-style
+# parameterization, plain FM loss).
+#
+# Reference: Lee et al., "Aligning Text to Image in Diffusion Models is Easier
+# Than You Think" (NeurIPS 2025) — arXiv:2503.08250. We adopt only the
+# parameterization (per-layer × per-t soft tokens) and skip the contrastive
+# InfoNCE objective; trained under standard flow-matching loss.
+#
+# DiT is FROZEN. Trains ~1M params total (n_layers × num_tokens × D + n_t_buckets
+# × n_layers × D). Each of the first n_layers DiT blocks gets its own learned
+# (K, D) token bank plus a per-t-bucket D-vector offset, spliced into the tail
+# of crossattn_emb (overwriting zero-padding) at that block only.
+#
+# v1 is TRAINING-ONLY — inference path needs per-step block hooks inside the
+# denoising loop, not yet wired up.
+#
+# USAGE:
+#   make exp-soft-tokens                  # default preset
+#   python tasks.py exp-soft-tokens       # cross-platform
+
+network_module = "networks.methods.soft_tokens"
+
+# network_dim → num_tokens (K) per layer per timestep bucket.
+network_dim = 4
+
+# n_layers           — number of leading DiT blocks to attach soft tokens to
+#                      (Anima has 28; SoftREPA used 5/24 on SD3, scale
+#                      proportionally).
+# n_t_buckets        — number of t-buckets (sigma ∈ [0,1] split uniformly).
+#                      Paper used 100; on Anima training scale ≪ COCO,
+#                      under-sampled buckets stay near zero (not catastrophic
+#                      since base tokens still train normally). Drop to ~20 if
+#                      that becomes the bottleneck.
+# init_std           — base-tokens init std. t_offsets is zero-init.
+# splice_position    — "end_of_sequence" (default) overwrites the K tail
+#                      zero-padding slots; preserves the strongest sinks.
+#                      "front_of_padding" scatters at [seqlens[i], +K) per
+#                      sample (caption-position-aware). Contrastive loss
+#                      currently requires "end_of_sequence" (FOP scatter is
+#                      not trivially invertible for the rolled-text trick).
+# contrastive_weight — λ on the InfoNCE term added to plain FM (paper §3.1).
+#                      Paper used pure contrastive; here it's a regularizer
+#                      on top of FM. Range 0–0.1; SD3 hit FID regression at
+#                      paper-strength so we start small.
+# contrastive_k      — number of in-batch negatives per anchor. Each negative
+#                      = one extra DiT forward, so total step cost ≈ (1+k)×
+#                      plain-FM. Paper had k=N-1 (full batch); we default to
+#                      1 for tractability. Capped at batch_size-1 at runtime.
+# contrastive_tau    — temperature in exp(-MSE/τ); paper §3.1 introduces it
+#                      to constrain the unbounded MSE-as-similarity. Larger
+#                      τ → softer logits, weaker contrastive pressure.
+network_args = [
+    "n_layers=10",
+    "n_t_buckets=14",
+    "init_std=0.02",
+    "splice_position=end_of_sequence",
+    "contrastive_weight=0.05",
+    "contrastive_k=1",
+    "contrastive_tau=1.0",
+]
+output_name = "anima_soft_tokens"
+
+# Soft tokens are independent of the cached crossattn (they overwrite zero-
+# padding tail), so cache_llm_adapter_outputs is the right default.
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+
+# Soft tokens are tiny — higher LR is fine.
+learning_rate = 1e-3
+max_train_epochs = 4
+save_every_n_epochs = 4
+checkpointing_epochs = 4
+
+# Per-block monkey-patch on Block.forward; gradient checkpoint() inside the
+# original forward is preserved (our hook is the outermost wrapper). Block
+# swapping is incompatible — the hook captures the block by reference at
+# apply_to() time and a swapped block is a different object instance.
+blocks_to_swap = 0

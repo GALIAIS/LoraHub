@@ -1,0 +1,3 @@
+<h2 style='margin:0 0 10px 0; font-size:17px;'>Postfix (cond + ortho)</h2>
+<p><b>postfix_ortho_cond</b> &mdash; 구조적 직교성을 갖춘 캡션 조건부 postfix. 작은 <code>cond_mlp</code>이 풀링된 캡션 임베딩을 읽어 캡션별로 <code>(S(c), λ(c))</code>를 내놓습니다 — 직접적인 <code>K·D</code> postfix 텐서 대신 캡션당 <code>K(K-1)/2 + 1</code>개의 스칼라만 출력. 각 캡션의 postfix는 <code>Cayley(S(c) − S(c)ᵀ) @ basis · λ(c)</code>이며, 따라서 구조적으로 <code>postfix(c) @ postfix(c).T = λ(c)² · I_K</code>: 캡션 내 슬롯별 크기는 균일하고, 캡션 간에는 크기가 변동합니다.</p>
+<p>basis는 캐시된 <code>_anima_te.safetensors</code>의 top-K 우특이벡터로, <code>ortho_basis_seed</code>에 따라 결정론적으로 행-셔플됩니다. 학습 가능한 파라미터는 K=32 / hidden=256 / D=1024 기준 약 390k개 (K=64에서 제약 없는 레거시 cond postfix의 ~8.65M 대비). <code>docs/proposal/orthogonal_postfix.md §C</code> 참조.</p>

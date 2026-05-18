@@ -1,0 +1,9 @@
+<h2 style='margin:0 0 10px 0; font-size:17px;'>T-LoRA</h2>
+<p>타임스텝 의존 랭크 마스킹. 디노이징 타임스텝에 따라 유효 LoRA 랭크가 거듭제곱 스케줄로 변동:<br>
+&bull; 높은 노이즈 (초기 스텝) &rarr; 전체 랭크 (최대 표현력)<br>
+&bull; 낮은 노이즈 (후기 스텝) &rarr; 축소된 랭크 (<code>min_rank</code>까지)<br>
+구조가 결정되는 시점에 표현력을 집중시킵니다. 마스크는 학습 시에만 적용되며 추론은 모든 t에서 전체 랭크를 사용하므로, 저장된 <code>.safetensors</code>는 베이킹 가능한 일반 LoRA입니다. <code>docs/methods/timestep_mask.md</code> 참조.</p>
+<p>토글: <code>use_timestep_mask = true</code>.</p>
+<p><b>변형</b><br>
+&bull; <b>tlora</b> &mdash; T-LoRA + OrthoLoRA 스택 (<code>use_ortho = true</code> + <code>use_timestep_mask = true</code>). 기본 베이킹 가능 조합 &mdash; σ별 랭크 스케줄링과 직교성 정규화를 함께 적용합니다. 완전히 베이킹 가능합니다.<br>
+&bull; <b>tlora-8gb</b> &mdash; 동일한 아키텍처, 저VRAM 프로필 (그래디언트 체크포인팅 + 오프로드). 기본 변형에서 OOM이 발생하면 선택하세요.</p>

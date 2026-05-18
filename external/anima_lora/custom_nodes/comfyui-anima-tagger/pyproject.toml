@@ -1,0 +1,28 @@
+[project]
+name = "comfyui-anima-tagger"
+description = "Anima Tagger for ComfyUI: a multi-label image tagger trained on the Anima caption distribution. Provides a loader (image -> tagger socket) and a captioner (image -> caption string), reusable in DirectEdit, prompt pre-fill, and any workflow that needs Anima-formatted tags."
+version = "0.2.0"
+license = { file = "LICENSE" }
+# torch / numpy / pillow / torchvision / safetensors / huggingface_hub / tqdm
+# are already shipped with any ComfyUI install, but we list them anyway so a
+# bare `pip install .` outside ComfyUI still works.
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "pillow",
+    "safetensors",
+    "huggingface_hub",
+    "pyyaml",
+    "einops",
+    "timm",
+    "tqdm",
+]
+
+[project.urls]
+Repository = "https://github.com/sorryhyun/anima_lora/tree/main/custom_nodes/comfyui-anima-tagger"
+
+[tool.comfy]
+PublisherId = "sorryhyun"
+DisplayName = "Anima Tagger"
+Icon = ""

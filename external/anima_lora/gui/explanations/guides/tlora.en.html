@@ -1,0 +1,9 @@
+<h2 style='margin:0 0 10px 0; font-size:17px;'>T-LoRA</h2>
+<p>Timestep-dependent rank masking. The effective LoRA rank varies with the denoising timestep via a power-law schedule:<br>
+&bull; High noise (early steps) &rarr; full rank (maximum expressiveness)<br>
+&bull; Low noise (late steps) &rarr; reduced rank (down to <code>min_rank</code>)<br>
+Concentrates capacity where structure is being decided. The mask is training-only — inference uses full rank at every t by design — so the saved <code>.safetensors</code> is a regular bakeable LoRA. See <code>docs/methods/timestep_mask.md</code>.</p>
+<p>Toggle: <code>use_timestep_mask = true</code>.</p>
+<p><b>Variants</b><br>
+&bull; <b>tlora</b> &mdash; T-LoRA stacked on OrthoLoRA (<code>use_ortho = true</code> + <code>use_timestep_mask = true</code>). Default mergeable combo &mdash; rank-by-σ scheduling with orthogonal regularization. Fully bakeable.<br>
+&bull; <b>tlora-8gb</b> &mdash; same architecture, low-VRAM profile (gradient checkpointing + offload); pick this if you OOM on the default.</p>

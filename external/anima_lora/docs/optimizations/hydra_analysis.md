@@ -1,0 +1,222 @@
+# HydraLoRA + ReFT — nsys-driven optimization, 2026-05-03
+
+Source artifacts: `output/nsys/`
+- `profile.nsys-rep` — open with Nsight Systems GUI for the full timeline
+- `profile.sqlite` — queryable kernel/API tables
+- `profile_cuda_gpu_kern_sum.txt` — per-kernel rollup (most numbers below)
+- `profile_cuda_api_sum.txt`, `profile_cuda_kern_exec_sum.txt`, `profile_nvtx_kern_sum.txt`,
+  `profile_cuda_gpu_mem_size_sum.txt`, `profile_cuda_gpu_mem_time_sum.txt`
+
+## What was profiled
+
+`make lora` default stack (HydraLoRA + OrthoLoRA + T-LoRA + ReFT) under
+`PROFILE_STEPS=...`, captured 31 training steps. Config in effect:
+`network_dim=48`, `num_experts=12`, `reft_dim=48`, `reft_layers=last_8`.
+
+Total GPU kernel time across the capture: **33.7 s** (~1.09 s/step).
+
+## Where the time goes (baseline)
+
+| Bucket | GPU time | % | Source |
+|---|---|---|---|
+| Small bf16 GEMMs (`64×64×32` cutlass `_relu_bf16`, nn/tn/nt) | 16.5 s | **49 %** | LoRA / Ortho / Hydra / ReFT projections |
+| Flash-attn fwd+bwd (incl. `dot_do_o`, `convert_dq`) | 10.0 s | 30 % | base DiT — expected |
+| Triton fused layer-norm + GELU | 2.7 s | 8 % | base DiT epilogues |
+| LU + TRSM (Cayley `solve`) | 1.0 s | 3 % | also breaks the bf16 path |
+| Other (router, einsum, copies) | 3.5 s | 10 % | |
+
+API-side: `cudaStreamSynchronize` accounts for 17 s in 489 calls — median
+3.4 µs (incidental), but **max 632 ms / stddev 136 ms**, so a small number
+of huge syncs dominate. Likely the warm-up `torch.cuda.synchronize()` in
+`_profiler_step_begin` plus a dataloader stall; confirm in the GUI by
+looking for GPU-idle gaps inside `:step=N` ranges.
+
+## Implemented
+
+### 0. Inter-step orchestration — `networks/lora_anima/network.py`
+
+Earlier audits (above bucket table, §1–3 below) focused on per-block forward
+kernels. A second look at thin Nsight slices between training steps surfaced
+a different category: **per-Hydra-module Python loops emitting tiny CUDA
+kernels at the step boundary**. With ~56 Hydra modules in the default stack,
+each loop fans out to hundreds of launches per step.
+
+Two offenders matched the trace pattern (clusters of
+`vectorized_elementwise_kernel` / `_scatter_gather_elementwise_kernel` /
+`reduce_kernel`, with `gatherTopK + bitonicSortKVInPlace` pairs on log
+steps):
+
+#### a. `get_router_stats` — log-step diagnostic, ~9 kernels per module
+
+`networks/lora_anima/network.py::get_router_stats` walked
+`_last_gate` per module and emitted `clamp / log / sum / topk(2) /
+argmax / scatter_add_ / ones_like / div` against each one. At the
+56-module default stack that was ~500 launches per log step — pure
+overhead between backward and the next forward.
+
+Vectorized: matching gates are stacked once into `(M, B, E)` and every
+metric (entropy, top-2 margin, argmax usage, per-bucket usage) is
+reduced in a single pass. One batched `torch.topk(2, dim=-1)` replaces
+the per-module loop's topk; one `F.one_hot(...).sum(dim=1)` replaces
+the per-module `scatter_add_` for argmax-usage. Drops ~500 launches per
+log step to ~10. Numerical parity verified across 5 cases (no σ; σ +
+buckets; σ + buckets + band partition; M=1; mismatched-E filter) — max
+diff `0.0` against the reference for every output field.
+
+Mirrors the cat-then-reduce pattern that landed in
+`capture_up_grad_stats` (commit 99b50be).
+
+#### b. `set_sigma` propagation — every-step, 56×2 elementwise copies
+
+`LoRANetwork.set_sigma` previously called each Hydra module's
+`set_sigma`, which `copy_`'d into that module's own `_sigma` and
+`_sigma_features` buffers. With 56 sigma-aware modules, that's 112
+elementwise kernels per training step — every step, default config.
+
+Fix: register a single network-level shared tensor for `_sigma` (and
+one per unique `sigma_feature_dim` for `_sigma_features`), then alias
+each module's `_buffers["_sigma"]` / `_buffers["_sigma_features"]` to
+the same tensor object. Wiring runs once at the end of
+`LoRANetwork.__init__` (`_wire_shared_sigma_buffers`), before any
+forward fires, so Inductor / cudagraphs capture the shared data
+pointer on first compile and never see a per-module pointer-mismatch
+event. `set_sigma` now does one `copy_` per shared tensor (1 for σ +
+1 per feature dim — typically 1 in practice = 2 total) and modules
+read the new value through their aliased buffer attribute.
+
+Pointer stability: the very first `set_sigma` resizes from the
+`(1,)` / `(1, dim)` placeholder to `(B,)` / `(B, dim)`; the wiring
+re-aliases all modules at the same time. Subsequent same-shape calls
+are pure in-place copies. Same fall-through path handles a rare
+batch-shape change later.
+
+`clear_sigma` is updated to operate on the shared buffers directly
+for the same reason — one zero per shared tensor instead of 56 × 2.
+
+### 1. `_eye_r` buffer — `networks/lora_modules/ortho.py`
+
+`OrthoLoRAModule.__init__` and `OrthoHydraLoRAModule.__init__`
+register a non-persistent `_eye_r` buffer (`lora_dim × lora_dim`, fp32).
+The forward path reads it directly; broadcasting handles the
+`(r,r) + (E,r,r)` addition, so the prior `eye.unsqueeze(0).expand_as(A)`
+materialisation step is also gone.
+
+Replaces ~336 `torch.eye` allocations per training step (one per Cayley
+call) with zero, and removes the Inductor-fused
+`triton_poi_fused_add_eye_permute_sub_2` kernel (10,416 instances in the
+capture).
+
+### 2. `_FREQS_CACHE` for sinusoidal σ features — `networks/lora_modules/hydra.py`
+
+Module-global `dict[(half_dim, device), Tensor]` caches the frequency
+vector that `_sigma_sinusoidal_features` previously rebuilt on every
+call. Exercised per training step from `set_sigma` /
+`_set_sigma_feature_cache`. The function runs outside the compiled
+forward, so a Python-level dict cache is safe under `compile_mode=full`.
+
+Bit-equivalent to a fresh recompute (verified `0.0` max diff).
+
+### 3. Batched Cayley within OrthoLoRA / OrthoHydra — `ortho.py`
+
+Both forwards now do a single `torch.linalg.solve` per call by
+concatenating the skew matrices:
+
+- `OrthoLoRAModule.forward`: `stack([S_q, S_p])` → `(2, r, r)` →
+  one solve → split into `R_q`, `R_p`.
+- `OrthoHydraLoRAModule.forward`:
+  `cat([S_q.unsqueeze(0), S_p])` → `(E+1, r, r)` → one solve →
+  `R_q = R[0]`, `R_p = R[1:]`.
+
+Halves the LU / TRSM launch count per OrthoHydra module per fwd: one
+batched `getrf_pivot` + `batch_trsm_left` per module instead of two
+(per-module + per-expert). Per-step `getrf_pivot` calls drop from ~336
+to ~168 (capture-wide: 10,416 → ~5,200).
+
+Verified parity vs. the previous separate `_cayley(S_q)` /
+`_cayley(S_p)` path to ~1e-7 (bf16-clean); gradients still reach `S_q`
+and `S_p`.
+
+`OrthoLoRAModule._cayley` and `OrthoHydraLoRAModule._cayley` are
+kept as static methods because `networks/lora_save.py` calls them at
+save-time SVD distillation.
+
+## Deferred
+
+### A. Cayley → `matrix_exp(-2A)`
+
+Cayley is the [1, 1] Padé approximant of `exp(-2A)` for skew-symmetric
+A; expansions agree to second order and diverge at A³. Both are valid
+skew → orthogonal maps but **`S_p` / `S_q` parameterise a different
+rotation under each**. Replacing the solve with `matrix_exp` is a
+parameterisation change, not a numerical equivalence — existing
+checkpoints would need re-mapping or re-training.
+`torch.linalg.matrix_exp` does run in bf16 (verified empirically), and
+the ~1.0 s LU/TRSM bucket would collapse into a couple of GEMMs. Worth
+revisiting if a parameterisation switch is otherwise acceptable.
+
+### B. Cross-module Cayley orchestration
+
+The original audit suggestion was "concat A across modules" into a
+single network-wide solve. Conflicts with the per-module compile
+boundary: caching R as a buffer kills autograd; passing fresh R tensors
+through Python attrs forces cudagraph re-record on every step (same
+failure mode that `set_sigma` works around with in-place buffer copies,
+which is no help here because we need autograd through R).
+Within-module batching captures most of the launch-count win;
+cross-module would require either an in-graph pre-step (orchestrated
+network walk inside the compiled DiT forward) or moving Cayley
+computation off the autograd graph. Re-evaluate after the within-module
+fix is benched.
+
+### C. ReFT output-projection layout — `networks/lora_modules/reft.py:120`
+
+```python
+edit = torch.nn.functional.linear(delta, self.rotate_layer.weight.T)
+```
+
+`weight.T` is a non-contiguous view; cublas picks a transposed-input
+variant. Replacing with `delta @ self.rotate_layer.weight` is
+bit-equivalent (`F.linear(x, w) = x @ w.T`, so
+`F.linear(δ, R.T) = δ @ R`). × 8 ReFT blocks × every step. Drop-in;
+not yet applied.
+
+### D. Small-tile cutlass dominance — structural
+
+49 % of GPU time is `64×64×32` bf16 tiles. Each `K=48` GEMM has low
+arithmetic intensity. Two avenues:
+
+- For HydraLoRA's per-expert P (`ortho.py:408-413`), `P_bases @ R_p`
+  is `E=12` separate `(out, r) × (r, r)` GEMMs per fwd. Folding into
+  a precomputed `P_eff` is straightforward at inference; **not free
+  under autograd during training** because `R_p` depends on `S_p`, and
+  a cached `R_p` across microbatches breaks the backward graph. A
+  correct training variant would need a manual gradient path through
+  cached `R_p`.
+- Stop stacking everything by default — bench each adapter family's
+  marginal win and drop the ones that don't pull weight. The current
+  default composes LoRA + OrthoLoRA + T-LoRA + ReFT on every block.
+
+### E. cudaStreamSynchronize — 17 s in 489 calls
+
+Median 3.4 µs, max 632 ms, stddev 136 ms — a few huge syncs dominate.
+Likely the warm-up `torch.cuda.synchronize()` in `_profiler_step_begin`
+plus a dataloader stall. Confirm in the GUI: look for "GPU idle" gaps
+inside `:step=N` ranges and correlate with the Python-sampling track
+(`--python-sampling=true` was on). Not yet re-profiled.
+
+## Status
+
+| Item | State |
+|---|---|
+| Vectorize `get_router_stats` (§Impl 0a) | done |
+| Shared `_sigma` / `_sigma_features` buffers (§Impl 0b) | done |
+| `_eye_r` buffer (§Impl 1) | done |
+| `_FREQS_CACHE` (§Impl 2) | done |
+| Within-module batched Cayley (§Impl 3) | done |
+| `matrix_exp(-2A)` swap (§A) | deferred — parameterisation change |
+| Cross-module Cayley (§B) | deferred — autograd vs. cudagraph |
+| ReFT `weight.T` (§C) | deferred — drop-in, not yet applied |
+| Adapter stack pruning (§D) | deferred — bench-driven |
+| cudaStreamSynchronize hunt (§E) | deferred — needs GUI dive |
+
+Re-profile after the implemented fixes to refresh the bucket table.

@@ -1,0 +1,39 @@
+# Soft Tokens — per-layer × per-t learnable soft tokens (SoftREPA
+# parameterization, plain FM loss). DiT frozen; ~1M params.
+#
+# v1 is TRAINING-ONLY — inference plumbing is not yet wired up.
+#
+# USAGE: make lora-gui GUI_PRESETS=soft_tokens
+
+network_module = "networks.methods.soft_tokens"
+
+network_dim = 4
+network_args = [
+    "n_layers=10",
+    "n_t_buckets=100",
+    "init_std=0.02",
+    "splice_position=end_of_sequence",  # contrastive requires EOS
+    "contrastive_weight=0.05",          # paper InfoNCE on top of plain FM
+    "contrastive_k=1",                  # in-batch negatives per anchor
+    "contrastive_tau=1.0",
+]
+output_name = "anima_soft_tokens"
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+
+learning_rate = 1e-3
+max_train_epochs = 4
+save_every_n_epochs = 4
+checkpointing_epochs = 4
+
+blocks_to_swap = 0
+
+use_cmmd = false
+
+[variant]
+family = "soft_tokens"
+label = "Soft Tokens"
+description = "SoftREPA-style per-layer x per-t soft tokens (training-only v1)."
+order = 10
+experimental = true

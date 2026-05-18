@@ -1,0 +1,149 @@
+[project]
+name = "anima-lora"
+version = "0.1.0"
+description = "Standalone Anima LoRA training pipeline"
+requires-python = "==3.13.*"
+dependencies = [
+    # Core ML.
+    # Default: torch 2.12 nightly + CUDA 13.2 on Linux, torch 2.11 stable +
+    # CUDA 13.0 on Windows (a prebuilt FA2 wheel for that torch ABI exists).
+    #
+    # To switch Windows to CUDA 13.2 + torch 2.12 nightly (~10% throughput
+    # win, see docs/optimizations/cuda132.md):
+    #   1. Install CUDA 13.2 toolkit + MSVC 2019 Build Tools.
+    #   2. Build the trimmed FA2 wheel per docs/optimizations/cuda132.md
+    #      (or use the prebuilt one if you have access).
+    #   3. Comment out the three "Windows: stable" lines below and uncomment
+    #      the three "Windows: cuda132" lines.
+    #   4. uv sync
+    #
+    # Linux (always cu132 nightly):
+    "torch>=2.12.0,<2.13 ; sys_platform == 'linux'",
+    "torchvision>=0.27.0,<0.28 ; sys_platform == 'linux'",
+    # Windows: stable (default).
+    "torch>=2.11.0,<2.12 ; sys_platform == 'win32'",
+    "torchvision>=0.26.0,<0.27 ; sys_platform == 'win32'",
+    # Windows: cuda132 opt-in. Uncomment to switch (and comment out the two
+    # "Windows: stable" lines above).
+    # "torch>=2.12.0,<2.13 ; sys_platform == 'win32'",
+    # "torchvision>=0.27.0,<0.28 ; sys_platform == 'win32'",
+    "accelerate>=1.13.0",
+    "transformers>=5.3.0",
+    "diffusers>=0.37.0",
+    "einops>=0.7.0",
+    # Optimizers
+    "lion-pytorch>=0.2.3",
+    "schedulefree>=1.4",
+    "pytorch-optimizer>=3.9.0",
+    "prodigyopt>=1.1.2",
+    # Data & Config
+    "toml>=0.10.2",
+    "voluptuous>=0.15.2",
+    "safetensors>=0.7.0",
+    "imagesize>=1.4.1",
+    # Text processing
+    "sentencepiece>=0.2.1",
+    "huggingface-hub>=1.9.0",
+    # Monitoring & Utilities
+    "tensorboard",
+    "rich>=14.0.0",
+    "tqdm",
+    "numpy>=2.0.0",
+    "Pillow",
+    "psutil",
+    "opencv-python>=4.11.0.86",
+    # Masking
+    "pyyaml",
+    "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    "segmentation-models-pytorch>=0.3.4",
+    "albumentations>=1.4.0",
+    "packaging",
+    "pycocotools>=2.0.11",
+    # FA2 wheels — paired with the torch lines above. Switch the Windows
+    # FA2 wheel together with torch when toggling between stable and cuda132.
+    # flash-attn-4 (flash-attention-sm120) is disabled — kernel is unstable
+    # on our targets, see docs/methods/fa4.md.
+    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.17/flash_attn-2.8.3+cu132torch2.12-cp313-cp313-linux_x86_64.whl ; sys_platform == 'linux'",
+    # Windows: stable (default) — built against torch 2.11 + CUDA 13.0.
+    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.6/flash_attn-2.8.3+cu130torch2.11-cp313-cp313-win_amd64.whl ; sys_platform == 'win32'",
+    # Windows: cuda132 opt-in — trimmed FA2 (bf16 + head_dim=128 + non-causal)
+    # built against torch 2.12 + CUDA 13.2. See flash-attention/repack_wheel.py.
+    # "flash-attn @ https://github.com/sorryhyun/flash-attention-sm120-fix/releases/download/fa2cuda132/flash_attn-2.8.4-cp313-cp313-win_amd64.whl ; sys_platform == 'win32'",
+    "triton-windows>=3.6.0 ; sys_platform == 'win32'",
+    "pyside6>=6.11.0",
+    "ruff>=0.15.9",
+    "matplotlib",
+    "torchsde>=0.2.6",
+    "uv>=0.11.7",
+    "yarl>=1.23.0",
+    "spandrel>=0.4.2",
+    "sqlalchemy>=2.1.0b2",
+    "aiohttp>=3.13.5",
+    "comfy-cli>=1.7.3",
+    "comfy-aimdo>=0.2.14",
+    "av>=17.0.1",
+    "alembic>=1.18.4",
+    "pydantic-settings>=2.14.0",
+    "kornia>=0.8.2",
+    "comfy-kitchen>=0.2.8",
+    "simpleeval>=1.0.7",
+    "pytest>=9.0.3",
+    "blake3>=1.0.8",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.7"]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",
+    "pytest-timeout>=2.3",
+]
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+# Both wheels are looked up from these indexes — the version pin in
+# `dependencies` (active vs. commented) decides which one resolves.
+extra-index-url = [
+    "https://download.pytorch.org/whl/cu132",
+    "https://download.pytorch.org/whl/cu130",
+]
+prerelease = "allow"
+override-dependencies = ["numpy>=2.0.0"]
+
+[tool.pyright]
+extraPaths = ["."]
+exclude = ["archive", "**/__pycache__"]
+reportMissingImports = "none"
+reportPrivateImportUsage = "none"
+reportAttributeAccessIssue = "none"
+reportArgumentType = "none"
+reportOptionalOperand = "none"
+reportCallIssue = "none"
+reportOperatorIssue = "none"
+reportPossiblyUnboundVariable = "none"
+reportGeneralTypeIssues = "none"
+reportIncompatibleMethodOverride = "none"
+reportOptionalMemberAccess = "none"
+reportOptionalSubscript = "none"
+reportOptionalIterable = "none"
+reportOptionalCall = "none"
+reportReturnType = "none"
+reportAssignmentType = "none"
+reportIndexIssue = "none"
+reportRedeclaration = "none"
+reportFunctionMemberAccess = "none"
+reportIncompatibleVariableOverride = "none"
+reportInvalidStringEscapeSequence = "none"
+reportUnsupportedDunderAll = "none"
+
+[tool.setuptools]
+packages = []
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "markdownify",
+]

@@ -1,0 +1,61 @@
+# Turbo Anima — Decoupled DMD distillation (proposal: docs/proposal/turbo_anima_dmd_lora.md).
+#
+# Read by scripts/distill_turbo.py — NOT by train.py. Schema is bespoke
+# (sections instead of flat kwargs). Don't `python tasks.py print-config METHOD=turbo`.
+#
+# Trains two LoRA stacks on one frozen Anima DiT via Liu et al. (arXiv:2511.22677)
+# Decoupled-Hybrid DMD2. Output `output/ckpt/anima_turbo.safetensors` is a normal
+# LoRA — load it through the standard inference path with --infer_steps 4 --cfg 1.0
+# (CFG is baked into the student during distillation).
+
+output_name = "anima_turbo"
+dit_path = "models/diffusion_models/anima-base-v1.0.safetensors"
+data_dir = "post_image_dataset/lora"
+output_dir = "output/ckpt"
+
+iterations = 1000
+batch_size = 1
+seed = 42
+use_custom_down_autograd = true
+
+[network]
+# Student capacity. rank=48 deliberately smaller than the proposal's 128 to
+# match deployable-LoRA scale; expect to revisit if Phase 1 hits R3/R4.
+# alpha = rank (scale = 1.0) matches the project's LoRA-family default —
+# the student needs to absorb a large functional change (28→4 step trajectory
+# remap), so we don't pre-halve its contribution. LR + α-warmup + grad-clip
+# are the stability knobs, not alpha.
+student_rank = 48
+student_alpha = 48
+fake_rank = 64
+fake_alpha = 64
+attn_mode = "flash"
+
+# DMD2 schedule (proposal §Schedule, paper Table 1 row 4: Decoupled-Hybrid).
+[dmd]
+student_steps = 4               # production target — sampler runs 4 Euler steps at inference
+teacher_cfg = 4               # α — matches Anima's production CFG=4 (baked into student)
+tau_ca_strategy = "above_t"     # τ_CA > t  (CA focuses on still-unresolved content)
+tau_dm_strategy = "uniform"     # τ_DM ∈ [0, 1]  (DM corrects global artifacts)
+tau_ca_min_gap = 0.05           # clamp τ_CA ≥ t + this gap (proposal R5: late-step stability)
+tau_ca_skip_above_t = 0.95      # if generator t > this, skip CA branch (DM-only that step)
+
+# Optimization.
+[optim]
+student_lr = 5e-6
+fake_lr = 5e-5
+fake_steps_per_student_step = 2
+alpha_warmup_steps = 100       # linear ramp α_eff: 1.0 → teacher_cfg over these steps
+weight_decay = 0.0
+grad_clip = 1.0                 # student grad-norm cap
+
+# Generator-t sampling distribution.
+[sampling]
+t_distribution = "uniform"      # "uniform" or "sigmoid"
+sigmoid_scale = 1.0
+
+# Logging / checkpoints.
+[io]
+save_every = 250
+log_interval = 5
+log_dir = "output/logs/turbo"

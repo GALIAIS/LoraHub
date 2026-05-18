@@ -1,0 +1,23 @@
+[project]
+name = "comfyui-anima-directedit"
+description = "Anima DirectEdit for ComfyUI: image + source/target caption STRINGs -> edited image. Performs flow inversion + delta_z-anchored resampling on stock MODEL/CLIP/VAE sockets. Caption inputs are plain STRINGs — any node that emits STRING can drive them."
+version = "0.2.0"
+license = { file = "LICENSE" }
+# torch / numpy / pillow / tqdm are already shipped with any ComfyUI install.
+# We list them anyway so a bare `pip install .` outside ComfyUI still works.
+# (0.2.0 dropped the internal captioner / vision path, so pyyaml / einops /
+# timm / torchvision / safetensors / huggingface_hub are no longer required.)
+dependencies = [
+    "torch",
+    "numpy",
+    "pillow",
+    "tqdm",
+]
+
+[project.urls]
+Repository = "https://github.com/sorryhyun/anima_lora/tree/main/custom_nodes/comfyui-anima-directedit"
+
+[tool.comfy]
+PublisherId = "sorryhyun"
+DisplayName = "Anima DirectEdit"
+Icon = ""

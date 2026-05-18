@@ -1,0 +1,7 @@
+<h2 style='margin:0 0 10px 0; font-size:17px;'>LoRA</h2>
+<p>클래식 저랭크 적응. 기존 가중치 레이어에 작은 학습 가능한 행렬(down &times; up)을 추가.<br>
+<code>y = x + (x @ down @ up) &times; scale &times; multiplier</code><br>
+간단하고 효과적이며, 대부분의 파인튜닝에 기본 선택. 베이스 DiT에 완전히 베이킹 가능.</p>
+<p><b>변형</b><br>
+&bull; <b>lora</b> &mdash; 기본 16GB+ 프로필.<br>
+&bull; <b>lora-8gb</b> &mdash; 저VRAM 프로필 (블록 스왑 + 오프로드 체크포인팅); 기본 프로필에서 OOM이 나면 이 변형을 사용.</p>

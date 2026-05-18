@@ -1,0 +1,37 @@
+# gui-methods/tlora-8gb.toml — T-LoRA + OrthoLoRA tuned for 8GB cards.
+#
+# Same architecture as `tlora` (T-LoRA stacked on OrthoLoRA) with the
+# low-VRAM knobs flipped on — gradient checkpointing + Unsloth offload
+# checkpointing. Pick this if you OOM on the default tlora variant.
+
+network_dim = 32
+network_alpha = 32
+
+learning_rate = 2e-5
+max_train_epochs = 4
+save_every_n_epochs = 2
+checkpointing_epochs = 2
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+caption_dropout_rate = 0.1
+
+use_ortho = true
+
+use_timestep_mask = true
+min_rank = 8
+alpha_rank_scale = 1.0
+
+output_name = "anima_tlora_ortho"
+
+blocks_to_swap = 0
+gradient_checkpointing = true
+unsloth_offload_checkpointing = true
+
+use_cmmd = false
+
+[variant]
+family = "tlora"
+label = "T-LoRA + OrthoLoRA (8GB hardware)"
+description = "T-LoRA + OrthoLoRA tuned for low-VRAM cards (gradient checkpointing + offload)."
+order = 20

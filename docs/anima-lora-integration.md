@@ -20,7 +20,8 @@ LoraHub 当前的 kohya / dp 后端跑 anima 是能训的,但只覆盖通用 LoR
 | ------ | ---- |
 | 接入形态 | 第三 backend(`type: anima_lora`),与 kohya/dp 完全并列 |
 | schema 隔离 | `AnimaLoraOptions` 独立成型,不动 kohya/dp 现有字段 |
-| 仓库引用 | `LORAHUB_ANIMA_LORA_REPO` + `LORAHUB_ANIMA_LORA_PYTHON` env vars |
+| 仓库引用 | **vendored**:源码住 `external/anima_lora/`,LoraHub 自带,不再让用户去 clone。LoraHub 项目自身的 fork 副本,可针对 lock/patch 单独改造 |
+| Python 解释器 | `LORAHUB_ANIMA_LORA_PYTHON` env 或 `BackendConfig.python_executable` 字段。anima_lora 要求 torch 2.11/2.12 nightly + CUDA 13.x,用户自己起一个 venv 装依赖,LoraHub 主 venv 隔离 |
 | 执行模式 | 完全子进程,LoraHub 不 import anima_lora 任何代码 |
 | anima arch 兼容 | 保留 kohya/dp 跑 anima 能力,UI/scaffold 默认切到 anima_lora |
 | method 表达 | `method: Literal["lora","postfix","chimera","easycontrol","ip_adapter"]`,默认 lora 自动堆叠 OrthoLoRA + T-LoRA |
@@ -226,9 +227,20 @@ DMD turbo 走独立路径(`scripts/distill_turbo.py`),schema 与训练分开。
 
 `AnimaLoraBackend.validate()` 调 bootstrap:
 
-- 解析 `LORAHUB_ANIMA_LORA_REPO` env(可被 settings.json 覆盖)。
-- 检查 `<repo>/train.py`、`<repo>/inference.py`、`<repo>/library/anima/__init__.py` 存在。
-- 检查 `<python>` 可执行,`<python> -c "import library.anima"` 不抛错(与 kohya bootstrap 同模式)。
+- 仓库路径默认指向 `<lorahub_repo_root>/external/anima_lora/`(vendored)。
+  环境变量 `LORAHUB_ANIMA_LORA_REPO` 仅在用户主动覆盖时生效(开发场景:
+  外挂另一份 anima_lora,临时调试用)。
+- 探测 `<repo>/train.py`、`<repo>/inference.py`、
+  `<repo>/library/anima/__init__.py` 是否存在。**不再做"拉取 / uv sync"
+  这一步** — vendored 副本随 LoraHub 仓库一起来,不需要二次 fetch。
+- 解析 Python 解释器路径(`LORAHUB_ANIMA_LORA_PYTHON` env 或
+  `BackendConfig.python_executable`)。**没有自动安装依赖逻辑** — 用户
+  应该自己针对那个 venv 跑过 `uv sync`。
+- 检查 `<python>` 可执行,但**不**强制 `import library.anima` 成功
+  (kohya bootstrap 是这样做的);因为 LoraHub 主进程 venv 一般装不了
+  anima_lora 的 nightly torch,这种 import-side check 在主 venv 里必失败。
+  改成"语法 sanity":`<python> -c "import sys; print(sys.version)"`,
+  以及"vendored 副本完整性":必要文件存在 + Python 版本不低于 3.13。
 - 失败返回 ValidationIssue(severity=error)。
 
 ## VRAM 估算

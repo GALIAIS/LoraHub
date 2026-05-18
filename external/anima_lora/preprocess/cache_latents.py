@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Cache VAE latents for all images in a dataset directory.
+
+Encodes images through the Qwen Image VAE and saves latent caches (.npz)
+alongside the images.  Skips already-cached entries (idempotent).
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+from PIL import Image
+from tqdm import tqdm
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from library.io.cache import LATENT_CACHE_SUFFIX, resolve_cache_path
+from library.datasets.image_utils import IMAGE_EXTENSIONS, IMAGE_TRANSFORMS
+
+
+def get_latents_npz_path(
+    image_path: Path,
+    image_size: tuple[int, int],
+    cache_dir: Path | None = None,
+    image_dir: Path | None = None,
+) -> Path:
+    """Match the naming convention used by AnimaLatentsCachingStrategy.
+
+    When ``cache_dir`` is provided, the cache lives under that directory.
+    With ``image_dir`` also set, the relative subpath of ``image_path``
+    under ``image_dir`` is mirrored into the cache tree so nested source
+    layouts produce nested caches; otherwise the cache lives flat in
+    ``cache_dir`` (legacy layout).
+    """
+    suffix = f"_{image_size[0]:04d}x{image_size[1]:04d}{LATENT_CACHE_SUFFIX}"
+    if cache_dir is None:
+        return image_path.with_name(image_path.stem + suffix)
+    return Path(
+        resolve_cache_path(
+            str(image_path),
+            suffix,
+            cache_dir=str(cache_dir),
+            image_dir=str(image_dir) if image_dir is not None else None,
+        )
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dir", type=str, required=True, help="Dataset directory")
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional directory to write latent caches into (created if needed). "
+            "Defaults to writing alongside each source image."
+        ),
+    )
+    parser.add_argument("--vae", type=str, required=True, help="Path to VAE weights")
+    parser.add_argument(
+        "--batch_size", type=int, default=4, help="VAE encoding batch size (default: 4)"
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=64,
+        help="VAE spatial chunk size (default: 64)",
+    )
+    parser.add_argument(
+        "--disable_cache",
+        action="store_true",
+        default=True,
+        help="Disable VAE internal cache (default: True)",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help=(
+            "Walk subfolders under --dir. Caches mirror the source subdir "
+            "structure under --cache_dir; stems must be unique within each "
+            "subfolder but the same stem can repeat across folders."
+        ),
+    )
+    args = parser.parse_args()
+
+    from library.models import qwen_vae as qwen_image_autoencoder_kl
+
+    data_dir = Path(args.dir)
+    cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.bfloat16
+
+    print(f"Loading VAE from {args.vae} ...")
+    vae = qwen_image_autoencoder_kl.load_vae(
+        args.vae,
+        device="cpu",
+        disable_mmap=True,
+        spatial_chunk_size=args.chunk_size,
+        disable_cache=args.disable_cache,
+    )
+    vae.to(device, dtype=dtype)
+    vae.requires_grad_(False)
+    vae.eval()
+
+    # Collect images grouped by resolution for efficient batching
+    if args.recursive:
+        image_files = sorted(
+            p
+            for p in data_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        # Per-subdir uniqueness: two files in the same folder with the same
+        # stem (e.g. cover.png + cover.jpg) would still overwrite each
+        # other's cache. Same stem in different subfolders is fine — the
+        # nested cache layout disambiguates by folder.
+        seen: dict[tuple[Path, str], Path] = {}
+        collisions: list[tuple[str, Path, Path]] = []
+        for p in image_files:
+            key = (p.parent, p.stem)
+            if key in seen:
+                collisions.append((p.stem, seen[key], p))
+            else:
+                seen[key] = p
+        if collisions:
+            print(
+                "Duplicate image stems within a single folder of --dir "
+                "(caches collide on identical stems in the same subdir):"
+            )
+            for stem, a, b in collisions:
+                print(f"  '{stem}': {a} <-> {b}")
+            sys.exit(1)
+    else:
+        image_files = sorted(
+            p for p in data_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS
+        )
+
+    reso_groups: dict[tuple[int, int], list[Path]] = {}
+    for p in image_files:
+        img = Image.open(p)
+        size = img.size  # (W, H)
+        img.close()
+        reso_groups.setdefault(size, []).append(p)
+
+    total = len(image_files)
+    cached = 0
+    skipped = 0
+
+    pbar = tqdm(total=total, desc="Caching latents")
+    for (w, h), paths in reso_groups.items():
+        for batch_start in range(0, len(paths), args.batch_size):
+            batch_paths = paths[batch_start : batch_start + args.batch_size]
+            tensors = []
+
+            for p in batch_paths:
+                npz_path = get_latents_npz_path(
+                    p, (w, h), cache_dir=cache_dir, image_dir=data_dir
+                )
+                if npz_path.exists():
+                    latents_size = (h // 8, w // 8)
+                    key = f"latents_{latents_size[0]}x{latents_size[1]}"
+                    try:
+                        npz = np.load(npz_path)
+                        if key in npz:
+                            skipped += 1
+                            pbar.update(1)
+                            pbar.set_postfix_str(f"skip {p.name}")
+                            continue
+                    except Exception:
+                        pass
+
+                img = Image.open(p).convert("RGB")
+                img_np = np.array(img)
+                img_tensor = IMAGE_TRANSFORMS(img_np)
+                tensors.append((p, img_tensor, (w, h)))
+
+            if not tensors:
+                continue
+
+            img_batch = torch.stack([t[1] for t in tensors], dim=0)
+            img_batch = img_batch.to(device=device, dtype=dtype)
+
+            with torch.no_grad():
+                latents = vae.encode_pixels_to_latents(img_batch).cpu()
+
+            for i, (p, _, size) in enumerate(tensors):
+                lat = latents[i]  # (16, H/8, W/8)
+                latents_size = lat.shape[-2:]  # H/8, W/8
+                key_reso_suffix = f"_{latents_size[0]}x{latents_size[1]}"
+
+                npz_path = get_latents_npz_path(
+                    p, size, cache_dir=cache_dir, image_dir=data_dir
+                )
+                kwargs = {}
+                if npz_path.exists():
+                    npz = np.load(npz_path)
+                    for key in npz.files:
+                        kwargs[key] = npz[key]
+
+                kwargs[f"latents{key_reso_suffix}"] = lat.float().numpy()
+                kwargs[f"original_size{key_reso_suffix}"] = np.array(list(size))
+                kwargs[f"crop_ltrb{key_reso_suffix}"] = np.array(
+                    [0, 0, size[0], size[1]]
+                )
+
+                np.savez(npz_path, **kwargs)
+
+                cached += 1
+                pbar.update(1)
+                pbar.set_postfix_str(f"{p.name} → {size[0]}x{size[1]}")
+
+    pbar.close()
+    print(
+        f"\nLatent caching complete: {cached} cached, {skipped} skipped (already existed)"
+    )
+
+    vae.to("cpu")
+    del vae
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    main()

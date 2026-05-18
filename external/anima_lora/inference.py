@@ -1,0 +1,1004 @@
+"""Anima inference CLI -- argument parsing, batch/interactive modes, and main entry point."""
+
+import argparse
+import copy
+import gc
+import os
+import random
+from typing import List, Dict, Any
+
+import torch
+from safetensors.torch import load_file
+from safetensors import safe_open
+from diffusers.utils.torch_utils import randn_tensor
+
+from library.anima import (
+    models as anima_models,
+    strategy as strategy_anima,
+    text_strategies,
+)
+from library.models import qwen_vae as qwen_image_autoencoder_kl
+from library.runtime.device import clean_memory_on_device
+from library.inference import (
+    get_generation_settings,
+    check_inputs,
+    load_dit_model,
+    load_text_encoder,
+    load_shared_models,
+    prepare_text_inputs,
+    generate,
+    generate_body,
+    save_latent,
+    save_output,
+)
+from library.inference.text import MAX_CROSSATTN_TOKENS
+
+# Side-effect import: registers spectrum_denoise with library.inference.generation
+# so --spectrum dispatches without library.inference holding a hard edge into networks/.
+import networks.spectrum  # noqa: F401, E402
+
+from library.log import setup_logging  # noqa: E402
+
+setup_logging()
+import logging  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+# region Argument parsing
+
+
+def parse_args() -> argparse.Namespace:
+    """parse command line arguments"""
+    parser = argparse.ArgumentParser(description="HunyuanImage inference script")
+
+    parser.add_argument("--dit", type=str, default=None, help="DiT directory or path")
+    parser.add_argument("--vae", type=str, default=None, help="VAE directory or path")
+    parser.add_argument(
+        "--vae_chunk_size",
+        type=int,
+        default=None,
+        help="Spatial chunk size for VAE encoding/decoding to reduce memory usage. Must be even number. If not specified, chunking is disabled (official behavior)."
+        + "",
+    )
+    parser.add_argument(
+        "--vae_disable_cache",
+        action="store_true",
+        help="Disable internal VAE caching mechanism to reduce memory usage. Encoding / decoding will also be faster, but this differs from official behavior."
+        + "",
+    )
+    parser.add_argument(
+        "--text_encoder",
+        type=str,
+        required=True,
+        help="Text Encoder 1 (Qwen2.5-VL) directory or path",
+    )
+
+    # LoRA
+    parser.add_argument(
+        "--lora_weight",
+        type=str,
+        nargs="*",
+        required=False,
+        default=None,
+        help="LoRA weight path",
+    )
+    parser.add_argument(
+        "--lora_multiplier", type=float, nargs="*", default=1.0, help="LoRA multiplier"
+    )
+    parser.add_argument(
+        "--postfix_weight",
+        type=str,
+        default=None,
+        help="Postfix tuning weight path (networks.methods.postfix .safetensors). "
+        "Supports postfix (free param) and cond+ortho modes.",
+    )
+    parser.add_argument(
+        "--ip_adapter_weight",
+        type=str,
+        default=None,
+        help="IP-Adapter weight path (networks.methods.ip_adapter .safetensors). "
+        "Requires --ip_image. Modifies DiT cross-attention via parallel image KV.",
+    )
+    parser.add_argument(
+        "--ip_image",
+        type=str,
+        default=None,
+        help="Reference image path for IP-Adapter conditioning. "
+        "Encoded by the encoder named in the IP-Adapter checkpoint metadata (PE-Core by default).",
+    )
+    parser.add_argument(
+        "--ip_scale",
+        type=float,
+        default=None,
+        help="Override IP-Adapter scale (default: use ss_ip_scale from the checkpoint, typically 1.0).",
+    )
+    parser.add_argument(
+        "--ip_image_match_size",
+        action="store_true",
+        help="Auto-pick --image_size from the closest CONSTANT_TOKEN_BUCKETS entry to the "
+        "reference image's aspect ratio (overrides --image_size). Only effective with --ip_image.",
+    )
+    parser.add_argument(
+        "--easycontrol_weight",
+        type=str,
+        default=None,
+        help="EasyControl weight path (networks.methods.easycontrol .safetensors). "
+        "Requires --easycontrol_image. Extends DiT self-attention with VAE-encoded reference "
+        "K/V plus a per-block additive logit bias.",
+    )
+    parser.add_argument(
+        "--easycontrol_image",
+        type=str,
+        default=None,
+        help="Reference image path for EasyControl conditioning. Encoded by the Anima VAE "
+        "and patch-embedded into condition tokens.",
+    )
+    parser.add_argument(
+        "--easycontrol_scale",
+        type=float,
+        default=None,
+        help="Override EasyControl scale (default: ss_cond_scale from the checkpoint, typically 1.0).",
+    )
+    parser.add_argument(
+        "--easycontrol_image_match_size",
+        action="store_true",
+        help="Auto-pick --image_size from the closest CONSTANT_TOKEN_BUCKETS entry to the "
+        "reference image's aspect ratio (overrides --image_size). Only effective with --easycontrol_image.",
+    )
+    parser.add_argument(
+        "--include_patterns",
+        type=str,
+        nargs="*",
+        default=None,
+        help="LoRA module include patterns",
+    )
+    parser.add_argument(
+        "--exclude_patterns",
+        type=str,
+        nargs="*",
+        default=None,
+        help="LoRA module exclude patterns",
+    )
+
+    # inference
+    parser.add_argument(
+        "--guidance_scale",
+        type=float,
+        default=3.5,
+        help="Guidance scale for classifier free guidance. Default is 3.5.",
+    )
+    parser.add_argument(
+        "--prompt", type=str, default=None, help="prompt for generation"
+    )
+    parser.add_argument(
+        "--negative_prompt",
+        type=str,
+        default="",
+        help="negative prompt for generation, default is empty string",
+    )
+    parser.add_argument(
+        "--image_size",
+        type=int,
+        nargs=2,
+        default=[1024, 1024],
+        help="image size, height and width",
+    )
+    parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=50,
+        help="number of inference steps, default is 50",
+    )
+    parser.add_argument(
+        "--save_path", type=str, required=True, help="path to save generated video"
+    )
+    parser.add_argument("--seed", type=int, default=None, help="Seed for evaluation.")
+
+    # Flow Matching
+    parser.add_argument(
+        "--flow_shift",
+        type=float,
+        default=5.0,
+        help="Shift factor for flow matching schedulers. Default is 5.0.",
+    )
+    parser.add_argument(
+        "--sampler",
+        type=str,
+        default="euler",
+        choices=["euler", "er_sde", "lcm"],
+        help="Sampler to use: 'euler' (deterministic ODE), 'er_sde' (Extended Reverse-Time SDE), or 'lcm' (x0 re-noise — for distilled few-step models). Default is euler.",
+    )
+
+    parser.add_argument(
+        "--text_encoder_cpu",
+        action="store_true",
+        help="Inference on CPU for Text Encoders",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="device to use for inference. If None, use CUDA if available, otherwise use CPU",
+    )
+    parser.add_argument(
+        "--attn_mode",
+        type=str,
+        default="torch",
+        choices=[
+            "flash",
+            # "flash4",  # not supported yet (flash-attention-sm120 disabled)
+            "torch",
+            "sageattn",
+            "flex",
+            "xformers",
+            "sdpa",
+        ],  #  "sdpa" for backward compatibility
+        help="attention mode",
+    )
+    parser.add_argument(
+        "--output_type",
+        type=str,
+        default="images",
+        choices=["images", "latent", "latent_images"],
+        help="output type",
+    )
+    parser.add_argument(
+        "--no_metadata", action="store_true", help="do not save metadata"
+    )
+    parser.add_argument(
+        "--latent_path",
+        type=str,
+        nargs="*",
+        default=None,
+        help="path to latent for decode. no inference",
+    )
+    # Modulation guidance
+    parser.add_argument(
+        "--pooled_text_proj",
+        type=str,
+        default=None,
+        help="Path to trained pooled_text_proj weights (.safetensors) for modulation guidance",
+    )
+    parser.add_argument(
+        "--mod_w",
+        type=float,
+        default=3.0,
+        help="Modulation guidance strength (default 3.0). "
+        "Controls w in: emb = t_emb + proj(main) + w * (proj(pos) - proj(neg))",
+    )
+    parser.add_argument(
+        "--mod_pos_prompt",
+        type=str,
+        default="absurdres, score_9, score_8",
+        help="Positive quality prompt for modulation guidance direction",
+    )
+    parser.add_argument(
+        "--mod_neg_prompt",
+        type=str,
+        default="worst quality, low quality, score_1, score_2, score_3",
+        help="Negative quality prompt for modulation guidance direction",
+    )
+    parser.add_argument(
+        "--mod_start_layer",
+        type=int,
+        default=8,
+        help="First block (inclusive) that receives the steering delta. "
+        "Default 8 protects tonal-DC blocks 0–7 (matches ComfyUI 'step_i8_skip27'). "
+        "Use 14 for the safer preset that avoids drift on anatomy-heavy prompts. "
+        "Set 0 to recover pre-0413 uniform behavior.",
+    )
+    parser.add_argument(
+        "--mod_end_layer",
+        type=int,
+        default=27,
+        help="Last block + 1 (exclusive) that receives the steering delta. "
+        "Default 27 skips the final compensation block on Anima's 28-block DiT. "
+        "Use -1 to apply through the final block.",
+    )
+    parser.add_argument(
+        "--mod_taper",
+        type=int,
+        default=0,
+        help="Number of late slots inside [start, end) to scale by --mod_taper_scale. "
+        "0 disables taper (default).",
+    )
+    parser.add_argument(
+        "--mod_taper_scale",
+        type=float,
+        default=0.25,
+        help="Multiplier applied to tapered slots (default 0.25).",
+    )
+    parser.add_argument(
+        "--mod_final_w",
+        type=float,
+        default=0.0,
+        help="w applied at final_layer. 0.0 = don't disturb the output head (default).",
+    )
+
+    # P-GRAFT
+    parser.add_argument(
+        "--pgraft",
+        action="store_true",
+        help="Enable P-GRAFT: load LoRA as dynamic hooks instead of static merge, allowing mid-denoising cutoff",
+    )
+    parser.add_argument(
+        "--lora_cutoff_step",
+        type=int,
+        default=None,
+        help="Step at which to disable LoRA during inference (for P-GRAFT). "
+        "LoRA is active for steps 0..cutoff_step-1, disabled for cutoff_step..end.",
+    )
+
+    # Tiled diffusion
+    parser.add_argument(
+        "--tiled_diffusion",
+        action="store_true",
+        help="Enable MultiDiffusion-style tiled generation for VRAM reduction at high resolutions",
+    )
+    parser.add_argument(
+        "--tile_size",
+        type=int,
+        default=128,
+        help="Tile size in latent space (default 128 = 1024px). Must be even.",
+    )
+    parser.add_argument(
+        "--tile_overlap",
+        type=int,
+        default=16,
+        help="Overlap between tiles in latent space (default 16 = 128px). Must be even and < tile_size.",
+    )
+
+    # Spectrum acceleration
+    parser.add_argument(
+        "--spectrum",
+        action="store_true",
+        help="Enable Spectrum inference acceleration (Chebyshev polynomial feature forecasting). "
+        "Skips transformer blocks on predicted steps, running only final_layer + unpatchify.",
+    )
+    parser.add_argument(
+        "--spectrum_window_size",
+        type=float,
+        default=2.0,
+        help="Spectrum initial window size N (default 2.0)",
+    )
+    parser.add_argument(
+        "--spectrum_flex_window",
+        type=float,
+        default=0.25,
+        help="Spectrum flex parameter alpha -- N grows by this after each actual forward (default 0.25)",
+    )
+    parser.add_argument(
+        "--spectrum_warmup",
+        type=int,
+        default=6,
+        help="Spectrum warmup steps (always run full forward) (default 6)",
+    )
+    parser.add_argument(
+        "--spectrum_w",
+        type=float,
+        default=0.3,
+        help="Spectrum Chebyshev/Taylor blend weight (1.0=pure Chebyshev, default 0.3)",
+    )
+    parser.add_argument(
+        "--spectrum_m",
+        type=int,
+        default=3,
+        help="Spectrum number of Chebyshev basis functions (default 3)",
+    )
+    parser.add_argument(
+        "--spectrum_lam",
+        type=float,
+        default=0.1,
+        help="Spectrum ridge regression regularization (default 0.1)",
+    )
+    parser.add_argument(
+        "--spectrum_stop_caching_step",
+        type=int,
+        default=-1,
+        help="Force actual forwards from this step onward (-1 = auto: total_steps - 3)",
+    )
+    parser.add_argument(
+        "--spectrum_calibration",
+        type=float,
+        default=0.0,
+        help="Spectrum residual calibration strength (0.0=disabled, default 0.0). "
+        "Adds residual bias correction from last actual forward to cached predictions.",
+    )
+
+    # DCW: SNR-t bias correction (arXiv:2604.16044). Opposite-sign on Anima -- see
+    # bench/dcw/findings.md.
+    parser.add_argument(
+        "--dcw",
+        action="store_true",
+        help="Enable post-step DCW correction (pixel mode). Composes with --spectrum, "
+        "--sampler, --tiled_diffusion. Negligible overhead.",
+    )
+    parser.add_argument(
+        "--dcw_lambda",
+        type=float,
+        default=-0.015,
+        help="DCW scaler λ. Default -0.015 (negative -- see docs/methods/dcw.md). "
+        "Paper-positive values widen |gap| on Anima. Use λ ≈ -0.010 if you "
+        "switch --dcw_band_mask to 'all'.",
+    )
+    parser.add_argument(
+        "--dcw_schedule",
+        type=str,
+        default="one_minus_sigma",
+        choices=["one_minus_sigma", "sigma_i", "const", "none"],
+        help="Per-step schedule: scaler(i) = λ · sched(σ_i). Default "
+        "one_minus_sigma -- matches Anima's late-σ bias envelope.",
+    )
+    parser.add_argument(
+        "--dcw_band_mask",
+        type=str,
+        default="LL",
+        help="Restrict DCW correction to a subset of Haar subbands. Default 'LL' "
+        "(LL-only is strictly better than broadband on Anima -- see "
+        "docs/methods/dcw.md §LL-only correction). Format: 'LL', 'HH', "
+        "'LH+HL+HH', or 'all'.",
+    )
+
+    # DCW learnable calibrator (online observation + prompt fusion).
+    # See docs/proposal/dcw-learnable-calibrator-v4.md.
+    parser.add_argument(
+        "--dcw_calibrator",
+        "--dcw_v4",  # legacy alias -- drop after one release
+        type=str,
+        default=None,
+        dest="dcw_calibrator",
+        help="Path to a fusion_head.safetensors artifact (or a directory "
+        "containing one). When set, overrides --dcw_lambda with a per-step λ "
+        "from the calibrator. LL-only by default.",
+    )
+    parser.add_argument(
+        "--dcw_calibrator_gain",
+        "--dcw_v4_alpha_gain",  # legacy alias -- drop after one release
+        type=float,
+        default=1.0,
+        dest="dcw_calibrator_gain",
+        help="Multiplier on top of the head's α̂. α̂ is in λ-units "
+        "(median |α̂| ≈ lambda_anchor from training, default 0.015) so 1.0 is "
+        "identity -- use 2.0 to double the per-prompt magnitude, or a negative "
+        "value to flip sign. The per-step λ is clamped to ±0.05.",
+    )
+
+    # SMC-CFG: Sliding-Mode Control CFG (α-adaptive variant; arXiv:2603.03281).
+    # Drop-in CFG modification: replaces w·e with w·(e + Δe) where
+    # Δe = -k_t·sign(s), s = (e - e_prev) + λ·e_prev, k_t = α·mean(|e_t|).
+    # No extra DiT forwards; one prev-step velocity-residual buffer. Composes
+    # with --dcw / --spectrum / --mod_guidance (operates strictly on the
+    # velocity-space CFG combine). See docs/methods/smc_cfg.md.
+    parser.add_argument(
+        "--smc_cfg",
+        action="store_true",
+        help="Enable Sliding-Mode Control CFG (defaults λ=5, α=0.2). "
+        "Modifies the cond/uncond combine; no extra forwards.",
+    )
+    parser.add_argument(
+        "--smc_cfg_lambda",
+        type=float,
+        default=5.0,
+        help="SMC-CFG sliding-manifold slope λ. Paper sweeps {3,4,5,6}; 5 was best.",
+    )
+    parser.add_argument(
+        "--smc_cfg_alpha",
+        type=float,
+        default=0.2,
+        help="SMC-CFG adaptive gain α ∈ (0, 1]. k_t := α·|e_t|.mean() per "
+        "step — self-scales across model / CFG / σ / sample. Paper's fixed "
+        "k=0.1 was off by ~14× on Anima (bench/smc_cfg/analysis_and_proposal.md), "
+        "so the α path is the only mode now. α=0.2 is the production default.",
+    )
+
+    # arguments for batch and interactive modes
+    parser.add_argument(
+        "--from_file", type=str, default=None, help="Read prompts from a file"
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactive mode: read prompts from console",
+    )
+    parser.add_argument(
+        "--infer_batch_size",
+        type=int,
+        default=1,
+        help="Batch size for denoising. Prompts sharing the same text are batched together. Higher values use more VRAM.",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Compile the DiT model with torch.compile for faster inference. First run incurs compilation overhead.",
+    )
+    parser.add_argument(
+        "--compile_blocks",
+        action="store_true",
+        help="Compile each DiT block's _forward individually (battle-tested in "
+        "training). Sidesteps the checkpointing-wrapper trap that bites "
+        "whole-model --compile. Inductor cache persists across runs.",
+    )
+    parser.add_argument(
+        "--compile_inductor_mode",
+        type=str,
+        default=None,
+        help="Inductor preset for --compile_blocks (e.g. 'default', "
+        "'reduce-overhead'). None = inductor default.",
+    )
+
+    args = parser.parse_args()
+
+    # Validate arguments
+    if args.from_file and args.interactive:
+        raise ValueError(
+            "Cannot use both --from_file and --interactive at the same time"
+        )
+
+    if args.latent_path is None or len(args.latent_path) == 0:
+        if args.prompt is None and not args.from_file and not args.interactive:
+            raise ValueError(
+                "Either --prompt, --from_file or --interactive must be specified"
+            )
+
+    if args.attn_mode == "sdpa":
+        args.attn_mode = "torch"  # backward compatibility
+
+    if args.tiled_diffusion:
+        if args.tile_size % 2 != 0:
+            raise ValueError(
+                f"--tile_size must be even (patch_spatial=2 requires it), got {args.tile_size}"
+            )
+        if args.tile_overlap % 2 != 0:
+            raise ValueError(
+                f"--tile_overlap must be even (patch_spatial=2 requires it), got {args.tile_overlap}"
+            )
+        if args.tile_overlap >= args.tile_size:
+            raise ValueError(
+                f"--tile_overlap ({args.tile_overlap}) must be less than --tile_size ({args.tile_size})"
+            )
+
+    return args
+
+
+# endregion
+
+
+# region Prompt parsing
+
+
+def parse_prompt_line(line: str) -> Dict[str, Any]:
+    """Parse a prompt line into a dictionary of argument overrides."""
+    parts = line.split(" --")
+    prompt = parts[0].strip()
+
+    overrides = {"prompt": prompt}
+
+    for part in parts[1:]:
+        if not part.strip():
+            continue
+        option_parts = part.split(" ", 1)
+        option = option_parts[0].strip()
+        value = option_parts[1].strip() if len(option_parts) > 1 else ""
+
+        if option == "w":
+            overrides["image_size_width"] = int(value)
+        elif option == "h":
+            overrides["image_size_height"] = int(value)
+        elif option == "d":
+            overrides["seed"] = int(value)
+        elif option == "s":
+            overrides["infer_steps"] = int(value)
+        elif option == "g" or option == "l":
+            overrides["guidance_scale"] = float(value)
+        elif option == "fs":
+            overrides["flow_shift"] = float(value)
+        elif option == "n":
+            overrides["negative_prompt"] = value
+
+    return overrides
+
+
+def apply_overrides(
+    args: argparse.Namespace, overrides: Dict[str, Any]
+) -> argparse.Namespace:
+    """Apply overrides to args, returning a new copy."""
+    args_copy = copy.deepcopy(args)
+
+    for key, value in overrides.items():
+        if key == "image_size_width":
+            args_copy.image_size[1] = value
+        elif key == "image_size_height":
+            args_copy.image_size[0] = value
+        else:
+            setattr(args_copy, key, value)
+
+    return args_copy
+
+
+def preprocess_prompts_for_batch(
+    prompt_lines: List[str], base_args: argparse.Namespace
+) -> List[Dict]:
+    """Process multiple prompt lines for batch mode."""
+    prompts_data = []
+
+    for line in prompt_lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        prompt_data = parse_prompt_line(line)
+        logger.info(f"Parsed prompt data: {prompt_data}")
+        prompts_data.append(prompt_data)
+
+    return prompts_data
+
+
+# endregion
+
+
+# region Batch / interactive modes
+
+
+def process_batch_prompts(prompts_data: List[Dict], args: argparse.Namespace) -> None:
+    """Process multiple prompts with model reuse and batched precomputation."""
+    if not prompts_data:
+        logger.warning("No valid prompts found")
+        return
+
+    gen_settings = get_generation_settings(args)
+    dit_weight_dtype = gen_settings.dit_weight_dtype
+    device = gen_settings.device
+
+    # 1. Prepare VAE
+    logger.info("Loading VAE for batch generation...")
+    vae_for_batch = qwen_image_autoencoder_kl.load_vae(
+        args.vae,
+        device="cpu",
+        disable_mmap=True,
+        spatial_chunk_size=args.vae_chunk_size,
+        disable_cache=args.vae_disable_cache,
+    )
+    vae_for_batch.to(device, dtype=torch.bfloat16)
+    vae_for_batch.eval()
+
+    all_prompt_args_list = [apply_overrides(args, pd) for pd in prompts_data]
+    for prompt_args in all_prompt_args_list:
+        check_inputs(prompt_args)
+
+    # 2. Load DiT Model once
+    logger.info("Loading DiT model for batch generation...")
+    first_prompt_args = all_prompt_args_list[0]
+    anima = load_dit_model(first_prompt_args, device, dit_weight_dtype)
+
+    # 3. Precompute Text Data (Text Encoder)
+    logger.info("Loading Text Encoder for batch text preprocessing...")
+
+    text_encoder_dtype = torch.bfloat16
+    text_encoder_batch = load_text_encoder(
+        args, dtype=text_encoder_dtype, device=torch.device("cpu")
+    )
+
+    text_encoder_device = torch.device("cpu") if args.text_encoder_cpu else device
+    text_encoder_batch.to(text_encoder_device)
+
+    all_precomputed_text_data = []
+    conds_cache_batch = {}
+
+    logger.info("Preprocessing text and LLM/TextEncoder encoding for all prompts...")
+    temp_shared_models_txt = {
+        "text_encoder": text_encoder_batch,
+        "conds_cache": conds_cache_batch,
+    }
+
+    for i, prompt_args_item in enumerate(all_prompt_args_list):
+        logger.info(
+            f"Text preprocessing for prompt {i + 1}/{len(all_prompt_args_list)}: {prompt_args_item.prompt}"
+        )
+
+        context, context_null = prepare_text_inputs(
+            prompt_args_item, device, anima, temp_shared_models_txt
+        )
+        text_data = {"context": context, "context_null": context_null}
+        all_precomputed_text_data.append(text_data)
+
+    del text_encoder_batch, temp_shared_models_txt, conds_cache_batch
+    gc.collect()
+    clean_memory_on_device(device)
+
+    # 4. Setup modulation guidance once (shared across all prompts)
+    if (
+        getattr(args, "pooled_text_proj", None) is not None
+        and getattr(args, "mod_w", 0.0) != 0.0
+    ):
+        from library.inference.mod_guidance import setup_mod_guidance
+
+        setup_mod_guidance(args, anima, device)
+    else:
+        anima.reset_mod_guidance()
+
+    # 5. Group prompts by text content for batched denoising
+    infer_batch_size = getattr(args, "infer_batch_size", 1)
+
+    groups = []
+    for i, prompt_args_item in enumerate(all_prompt_args_list):
+        key = (prompt_args_item.prompt, tuple(prompt_args_item.image_size))
+        if groups and groups[-1][0] == key and len(groups[-1][1]) < infer_batch_size:
+            groups[-1][1].append(i)
+        else:
+            groups.append((key, [i]))
+
+    logger.info(
+        f"Generating latents: {len(all_prompt_args_list)} prompts in {len(groups)} group(s) (batch_size={infer_batch_size})"
+    )
+
+    with torch.no_grad():
+        for (_prompt_text, _img_size), indices in groups:
+            batch_size = len(indices)
+            first_args = all_prompt_args_list[indices[0]]
+            first_text_data = all_precomputed_text_data[indices[0]]
+            height, width = check_inputs(first_args)
+
+            logger.info(
+                f"Batched generation ({batch_size}x) for: {first_args.prompt[:80]}... "
+                f"size={height}x{width}, steps={first_args.infer_steps}"
+            )
+
+            try:
+                # Collect seeds and create batched latent noise
+                seeds = []
+                num_channels_latents = anima_models.Anima.LATENT_CHANNELS
+                single_shape = (1, num_channels_latents, 1, height // 8, width // 8)
+                latent_list = []
+
+                for idx in indices:
+                    pa = all_prompt_args_list[idx]
+                    s = pa.seed if pa.seed is not None else random.randint(0, 2**32 - 1)
+                    seeds.append(s)
+                    g = torch.Generator(device=device)
+                    g.manual_seed(s)
+                    latent_list.append(
+                        randn_tensor(
+                            single_shape,
+                            generator=g,
+                            device=device,
+                            dtype=torch.bfloat16,
+                        )
+                    )
+
+                batched_latents = torch.cat(latent_list, dim=0)  # (B, C, T, H, W)
+
+                # Store first seed on args for ER-SDE sampler
+                first_args.seed = seeds[0]
+
+                # Run unified denoising loop
+                latents = generate_body(
+                    first_args,
+                    anima,
+                    first_text_data["context"],
+                    first_text_data["context_null"],
+                    device,
+                    seeds,
+                    latents=batched_latents,
+                )
+
+                # Split batch and save
+                for j, idx in enumerate(indices):
+                    single_latent = latents[j : j + 1]
+                    all_prompt_args_list[idx].seed = seeds[j]
+                    if all_prompt_args_list[idx].output_type in [
+                        "latent",
+                        "latent_images",
+                    ]:
+                        save_latent(
+                            single_latent, all_prompt_args_list[idx], height, width
+                        )
+
+                    if args.output_type != "latent":
+                        current_args = all_prompt_args_list[idx]
+                        if current_args.output_type == "latent_images":
+                            current_args.output_type = "images"
+                        save_output(current_args, vae_for_batch, single_latent, device)
+
+                logger.info(f"Saved {batch_size} image(s) to disk")
+
+            except Exception as e:
+                logger.error(
+                    f"Error generating batch for prompt: {first_args.prompt}. Error: {e}",
+                    exc_info=True,
+                )
+                continue
+
+    # Free models
+    logger.info("Releasing models from memory...")
+    del anima, vae_for_batch
+    clean_memory_on_device(device)
+
+
+def process_interactive(args: argparse.Namespace) -> None:
+    """Process prompts in interactive mode."""
+    gen_settings = get_generation_settings(args)
+    device = gen_settings.device
+    shared_models = load_shared_models(args)
+    shared_models["conds_cache"] = {}
+
+    vae = qwen_image_autoencoder_kl.load_vae(
+        args.vae,
+        device="cpu",
+        disable_mmap=True,
+        spatial_chunk_size=args.vae_chunk_size,
+        disable_cache=args.vae_disable_cache,
+    )
+    vae.to(torch.bfloat16)
+    vae.eval()
+
+    print("Interactive mode. Enter prompts (Ctrl+D or Ctrl+Z (Windows) to exit):")
+
+    try:
+        import prompt_toolkit
+    except ImportError:
+        logger.warning("prompt_toolkit not found. Using basic input instead.")
+        prompt_toolkit = None
+
+    if prompt_toolkit:
+        session = prompt_toolkit.PromptSession()
+
+        def input_line(prompt: str) -> str:
+            return session.prompt(prompt)
+
+    else:
+
+        def input_line(prompt: str) -> str:
+            return input(prompt)
+
+    try:
+        while True:
+            try:
+                line = input_line("> ")
+                if not line.strip():
+                    continue
+                if len(line.strip()) == 1 and line.strip() in [
+                    "\x04",
+                    "\x1a",
+                ]:  # Ctrl+D or Ctrl+Z with prompt_toolkit
+                    raise EOFError
+
+                prompt_data = parse_prompt_line(line)
+                prompt_args = apply_overrides(args, prompt_data)
+
+                latent = generate(prompt_args, gen_settings, shared_models)
+
+                save_output(prompt_args, vae, latent, device)
+
+            except KeyboardInterrupt:
+                print("\nInterrupted. Continue (Ctrl+D or Ctrl+Z (Windows) to exit)")
+                continue
+
+    except EOFError:
+        print("\nExiting interactive mode")
+
+
+# endregion
+
+
+# region Main
+
+
+def main():
+    args = parse_args()
+
+    # Check if latents are provided
+    latents_mode = args.latent_path is not None and len(args.latent_path) > 0
+
+    # Set device
+    device = (
+        args.device
+        if args.device is not None
+        else "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+    device = torch.device(device)
+    logger.info(f"Using device: {device}")
+    args.device = device
+
+    if latents_mode:
+        # Original latent decode mode
+        original_base_names = []
+        latents_list = []
+        seeds = []
+
+        for latent_path in args.latent_path:
+            original_base_names.append(
+                os.path.splitext(os.path.basename(latent_path))[0]
+            )
+            seed = 0
+
+            if os.path.splitext(latent_path)[1] != ".safetensors":
+                latents = torch.load(latent_path, map_location="cpu")
+            else:
+                latents = load_file(latent_path)["latent"]
+                with safe_open(latent_path, framework="pt") as f:
+                    metadata = f.metadata()
+                if metadata is None:
+                    metadata = {}
+                logger.info(f"Loaded metadata: {metadata}")
+
+                if "seeds" in metadata:
+                    seed = int(metadata["seeds"])
+                if "height" in metadata and "width" in metadata:
+                    height = int(metadata["height"])
+                    width = int(metadata["width"])
+                    args.image_size = [height, width]
+
+            seeds.append(seed)
+            logger.info(f"Loaded latent from {latent_path}. Shape: {latents.shape}")
+
+            if latents.ndim == 5:  # [BCTHW]
+                latents = latents.squeeze(0)  # [CTHW]
+
+            latents_list.append(latents)
+
+        vae = qwen_image_autoencoder_kl.load_vae(
+            args.vae,
+            device=device,
+            disable_mmap=True,
+            spatial_chunk_size=args.vae_chunk_size,
+            disable_cache=args.vae_disable_cache,
+        )
+        vae.to(torch.bfloat16)
+        vae.eval()
+
+        for i, latent in enumerate(latents_list):
+            args.seed = seeds[i]
+            save_output(args, vae, latent, device, original_base_names[i])
+
+    else:
+        tokenize_strategy = strategy_anima.AnimaTokenizeStrategy(
+            qwen3_path=args.text_encoder,
+            t5_tokenizer_path=None,
+            qwen3_max_length=MAX_CROSSATTN_TOKENS,
+            t5_max_length=MAX_CROSSATTN_TOKENS,
+        )
+        text_strategies.TokenizeStrategy.set_strategy(tokenize_strategy)
+
+        encoding_strategy = strategy_anima.AnimaTextEncodingStrategy()
+        text_strategies.TextEncodingStrategy.set_strategy(encoding_strategy)
+
+        if args.from_file:
+            # Batch mode from file
+            with open(args.from_file, "r", encoding="utf-8") as f:
+                prompt_lines = f.readlines()
+
+            prompts_data = preprocess_prompts_for_batch(prompt_lines, args)
+            process_batch_prompts(prompts_data, args)
+
+        elif args.interactive:
+            process_interactive(args)
+
+        else:
+            # Single prompt mode
+            gen_settings = get_generation_settings(args)
+            latent = generate(args, gen_settings)
+
+            clean_memory_on_device(device)
+
+            vae = qwen_image_autoencoder_kl.load_vae(
+                args.vae,
+                device="cpu",
+                disable_mmap=True,
+                spatial_chunk_size=args.vae_chunk_size,
+                disable_cache=args.vae_disable_cache,
+            )
+            vae.to(torch.bfloat16)
+            vae.eval()
+            save_output(args, vae, latent, device)
+
+    logger.info("Done!")
+
+
+# endregion
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,5 @@
+<h2 style='margin:0 0 10px 0; font-size:18px;'>전처리</h2>
+<p>학습은 두 가지 산출물 레인을 사용합니다:</p>
+<p><b>1. 캐싱</b> &mdash; 이미지를 constant-token 버킷으로 리사이즈하고 Qwen3 + T5로 캡션을 토큰화하여 <code>{stem}_anima.npz</code> latent와 <code>{stem}_anima_te.safetensors</code> 사이드카로 저장합니다. <i>셔플 변형 수</i>가 0보다 크면 각 TE 캐시에 N개의 캡션이 들어가며 데이터로더는 학습 스텝마다 하나를 샘플링합니다 (메소드 설정에서 <code>use_shuffled_caption_variants</code>를 켜야 사용됩니다).</p>
+<p><b>2. 마스킹</b> &mdash; SAM3 (자연어 말풍선 프롬프트)와 MIT (만화 글리프 분할기)를 임시 디렉토리를 통해 실행한 뒤 <code>post_image_dataset/masks/&lt;rel&gt;/{stem}_mask.png</code>로 병합합니다. 각 도구의 중간 결과는 디스크에 남기지 않으며 병합 후 임시 디렉토리가 정리됩니다. 마스크 디렉토리가 있으면 학습 서브셋이 자동으로 사용합니다 (메소드 설정의 <code>masked_loss</code> 참조).</p>
+<p style='color:#888; font-style:italic; margin-top:12px;'>왼쪽 필드 라벨을 클릭하면 여기에 설명이 표시됩니다.</p>

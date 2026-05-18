@@ -1,0 +1,7 @@
+<h2 style='margin:0 0 10px 0; font-size:17px;'>HydraLoRA</h2>
+<p>LoRA 위에 MoE 스타일 라우팅을 얹은 방식: 공유 <code>lora_down</code> + <code>num_experts</code>개의 전문가별 <code>lora_up</code> 헤드를, 적응된 Linear의 입력으로부터 레이어 로컬하게 라우팅합니다. 부하 균형 손실(<code>balance_loss_weight</code>)이 단일 전문가 붕괴를 방지합니다.</p>
+<p>sinusoidal(σ)→E 라우터 바이어스와 σ-밴드 하드 특화를 함께 적용: <code>specialize_experts_by_sigma_buckets = true</code>로 전문가 풀을 타임스텝 버킷별로 분할하여 각 σ-밴드가 할당된 전문가만 사용합니다 (예: <code>num_experts = 6</code>, 버킷 3개일 때 밴드당 전문가 2개). <code>sigma_bucket_boundaries = [0.0, 0.5, 0.8, 1.0]</code>로 분할 지점을 비균등하게 배치 &mdash; 후반 저노이즈 디테일 단계에 더 많은 용량을 할당합니다.</p>
+<p><b>변형</b><br>
+&bull; <b>hydralora</b> &mdash; 기본 16GB+ 프로필.<br>
+&bull; <b>hydralora-8gb</b> &mdash; 동일한 아키텍처, 저VRAM 프로필 (그래디언트 체크포인팅 + 오프로드). 기본 변형에서 OOM이 발생하면 선택하세요.</p>
+<p>학습 시 어댑터 옆에 <code>*_moe.safetensors</code> 동반 파일이 생성되며, 라우터-라이브 추론에는 두 파일 모두 필요합니다 (<code>make test-hydra</code> / ComfyUI <i>Anima Adapter Loader</i>). <code>cache_llm_adapter_outputs = true</code> 필요.</p>

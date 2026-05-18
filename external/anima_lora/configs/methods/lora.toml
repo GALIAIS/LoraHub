@@ -1,0 +1,134 @@
+# LoRA family — method selection via toggle blocks.
+#
+# Default (uncommented) = LoRA + OrthoLoRA + T-LoRA + Hydra (σ-routed) + ReFT.
+# Routing config is on the three-axis surface (plan2.md §three-axis-config):
+#
+#     use_moe_style    = False | "shared_A" | "independent_A"
+#     route_per_layer  = true | false
+#     router_source    = "none" | "input" | "sigma" | "fei"
+#
+# To switch routing modes:
+#   - Plain LoRA stack (no MoE): set `use_moe_style = false` and drop every
+#     `*router*` / `num_experts` / `balance_*` / `sigma_*` / `fei_*` key.
+#   - FEI-on-Hydra (Phase 1, FeRA-style content-aware on the shared-A stack):
+#     comment out the σ-router block and uncomment the FEI block near the
+#     bottom of this file.
+#   - Author-faithful FeRA (independent-A + global FEI router): use
+#     `configs/gui-methods/fera.toml` instead — that variant lives on the
+#     `lora-gui` Make target.
+#
+# Per-variant dim/alpha/lr/epochs are experiment drift, not calibrated
+# defaults — tune freely.
+
+network_alpha = 16
+network_dim = 16
+
+learning_rate = 5e-5
+max_train_epochs = 8
+save_every_n_epochs = 2
+checkpointing_epochs = 2
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+caption_dropout_rate = 0.1
+
+logging_dir = "output/logs"
+log_with = "tensorboard"
+
+# output_name = "anima_vr"
+# vr_loss_weight = 1.0
+# vr_fei_sigma_low_div = 4.0
+
+# compile_mode = "full"
+compile_inductor_mode = "reduce-overhead"
+
+# -------------
+# Ortho-lora
+
+use_ortho = true
+
+# -------------
+# Timestep mask
+
+use_timestep_mask = true
+min_rank = 8
+alpha_rank_scale = 1.0
+
+
+# -------------
+# "independent_A" and route_per_layer=true -> hydralora
+
+# use_moe_style = "shared_A"
+# route_per_layer = true
+# router_source = "sigma"
+
+# sigma_feature_dim = 16
+# per_bucket_balance_weight = 0.3   # × balance_loss_weight, per-bucket term
+# num_sigma_buckets = 3
+# specialize_experts_by_sigma_buckets = true
+# sigma_bucket_boundaries = [0.0, 0.5, 0.8, 1.0]
+# router_targets = ".*(mlp\\.layer[12])$" 
+
+# -------------
+# "shared_A" and route_per_layer=false -> fera
+
+# use_moe_style = "independent_A"
+# route_per_layer = false 
+# router_source = "fei"
+# ortho_init_std = 0.05
+
+# fei_feature_dim = 2          # raw simplex (e_low, e_high)
+# fei_sigma_low_div = 4.0      # σ_low = min(H_lat, W_lat) / 4 — 2026-05-13 dataset sweep
+# fera_num_bands = 2
+# fera_fecl_weight = 0.0
+
+# output_name = "anima_fera"
+
+# num_experts = 6
+# balance_loss_weight = 2e-7 # seems lr * 1/100 is proper
+
+# balance_loss_warmup_ratio = 0.4
+# router_targets = ".*\\.(qkv_proj|q_proj|kv_proj|output_proj|layer[12])$"
+
+# -------------
+# reft
+
+# add_reft = true
+# reft_dim = 64
+# reft_alpha = 64
+# reft_layers = "last_8"
+
+
+# ── Per-channel input pre-scaling (SmoothQuant-style, optional) ─────────
+# Balances ∂L/∂lora_down column gradients when activations have DC-bias
+# outlier channels (see archive/bench/channel_dominance_analysis.md). Calibration-
+# only — no runtime overhead. Generate the stats file once:
+#   python archive/bench/analyze_lora_input_channels.py \
+#       --dump_channel_stats archive/bench/results/channel_stats.safetensors
+# Then flip `per_channel_scaling` on. α=0.5 = SmoothQuant default (sqrt
+# balance); α=1.0 fully flattens per-channel scale; α=0 disables.
+# per_channel_scaling = true
+# channel_stats_path = "archive/bench/results/channel_stats.safetensors"
+# channel_scaling_alpha = 0.5
+
+# -------------
+# Variance-reduced FM loss (AsymFlow §5.2, arXiv:2605.12964). One extra
+# no-grad forward per step on the FEI-low-passed latent, with an online
+# control-variate λ. The control-variate forward reuses the trainable DiT
+# with adapter multiplier=0 (equivalent to a frozen base DiT for LoRA-family
+# runs), so there is no extra model copy in VRAM — only ~+40% step compute.
+# See bench/fm_vr_headroom/proposal.md.
+# vr_loss_weight = 1.0
+# vr_fei_sigma_low_div = 4.0
+
+# -------------
+# REPA (Yu et al., arxiv:2410.06940) — auxiliary alignment loss between a
+# mid-block DiT hidden state and a cached PE-Core feature. Composes on top
+# of any LoRA variant. Requires {stem}_anima_pe.safetensors sidecars from
+# `make preprocess-pe` for every image (auto-enables ip_features_cache_to_disk).
+# Hooks one DiT block; default 8 of 28 mirrors the paper's SiT-XL choice.
+
+# use_repa = true
+# repa_weight = 0.5
+# repa_layer = 8
+# repa_lr_scale = 1.0       # head LR = repa_lr_scale * unet_lr

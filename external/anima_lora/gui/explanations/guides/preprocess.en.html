@@ -1,0 +1,5 @@
+<h2 style='margin:0 0 10px 0; font-size:18px;'>Preprocessing</h2>
+<p>Two artifact lanes feed training:</p>
+<p><b>1. Caching</b> &mdash; resizes images to constant-token buckets and tokenizes captions through Qwen3 + T5, writing <code>{stem}_anima.npz</code> latents and <code>{stem}_anima_te.safetensors</code> sidecars. When <i>shuffle variants</i> &gt; 0, each TE cache holds N captions and the dataloader samples one per training step (turn on <code>use_shuffled_caption_variants</code> in your method config to use them).</p>
+<p><b>2. Masking</b> &mdash; runs SAM3 (natural-language text-bubble prompts) and MIT (manga-specific glyph segmenter) in parallel through a tempdir, then merges them into <code>post_image_dataset/masks/&lt;rel&gt;/{stem}_mask.png</code>. Per-tool intermediates are not persisted &mdash; the tempdir is cleaned up after merge. When the mask dir exists, training subsets pick it up automatically (see <code>masked_loss</code> in the method config).</p>
+<p style='color:#888; font-style:italic; margin-top:12px;'>Click any field label on the left to see its explanation here.</p>

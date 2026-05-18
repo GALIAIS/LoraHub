@@ -1,0 +1,88 @@
+# gui-methods/chimera_hydra.toml — ChimeraHydra (dual-pool additive routing).
+#
+# Proposal: docs/proposal/chimera_hydra.md
+#
+# Two pools of B-heads share one A per adapted Linear:
+#   • content pool (K_c=3) routed by the per-layer rank-R router on pooled lx
+#   • freq    pool (K_f=3) routed by the network-level FreqRouter on
+#                          concat(FEI(z_t), sinusoidal-σ-features)
+#
+# Pool outputs are added (no multiplicative gate, no σ-band overlap mask).
+# Specialization is enforced by router-input separation — the content router
+# can't see σ; the freq router can't see pooled text features.
+#
+# T-LoRA mask is applied to the content branch only (the freq branch keeps
+# full rank at every t — that's exactly the regime where the freq pool
+# wants coarse-stage capacity, while content is the layout/identity
+# memorization risk surface).
+#
+# Per-pool balance loss: w_c and w_f are independent. A single combined
+# term would let one pool flatten while the other concentrates — see
+# proposal §"Balance loss". Both default to balance_loss_weight; set
+# balance_w_content / balance_w_freq to tune independently.
+
+network_dim = 32
+network_alpha = 32
+
+learning_rate = 2e-5
+max_train_epochs = 4
+save_every_n_epochs = 2
+checkpointing_epochs = 2
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+caption_dropout_rate = 0.1
+
+use_ortho = true
+
+use_timestep_mask = true
+min_rank = 8
+alpha_rank_scale = 1.0
+
+# ChimeraHydra activates here. The three-axis fields (use_moe_style /
+# route_per_layer / router_source) are auto-set by from_kwargs to
+# ('shared_A', true, 'input') — pinned so the save metadata is honest.
+use_chimera_hydra = true
+num_experts_content = 4
+num_experts_freq = 2
+
+# Outer balance multiplier is 1.0 so the per-pool weights below are the
+# only knobs. Default per-pool weights match the OrthoHydra production
+# value (~2e-5 from project_hydra_balance_weight_ceiling).
+balance_loss_weight = 1.0
+balance_w_content = 2e-7
+balance_w_freq = 5e-7
+network_content_router_lr_scale = 10
+network_freq_router_lr_scale = 2.0
+balance_loss_warmup_ratio = 0.2
+
+# FreqRouter input. FEI = 2-band simplex; σ-features disabled by default
+# (sigma_feature_dim = 0). Total input dim = 2 — flip sigma_feature_dim > 0
+# to add sinusoidal σ features (the proposal targets "F ≈ 32" total).
+fei_feature_dim = 2
+fei_sigma_low_div = 4.0
+sigma_feature_dim = 16
+freq_router_init_std = 0.02
+# Per-modality LayerNorm on the FreqRouter input. Only active when both
+# FEI and σ feature blocks are enabled — fires automatically once
+# sigma_feature_dim > 0 to prevent the higher-dim σ block from
+# fan-in-overpowering the 2-D FEI simplex. No-op while σ is off.
+freq_router_layer_norm = true
+
+# Routing scope: same default as the other hydra variants — every Linear
+# matched by the regex becomes a chimera leaf; non-matching layers fall
+# back to OrthoLoRA (single-pool Cayley, no router).
+router_targets = ".*(mlp\\.layer[12])$"
+
+output_name = "anima_chimera"
+
+blocks_to_swap = 0
+
+use_cmmd = false
+
+[variant]
+family = "chimera"
+label = "ChimeraHydra (dual-pool)"
+description = "OrthoHydra with content + freq pools, additive composition."
+order = 10
+experimental = true

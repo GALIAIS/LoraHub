@@ -1,0 +1,71 @@
+# EasyControl — extended self-attention image conditioning (Phase 1).
+#
+# Adapter-only: DiT is frozen, training updates only per-block cond LoRA on
+# self-attn (q/k/v/o) + FFN (layer1/layer2) + a per-block scalar logit bias
+# `b_cond` (init -10) that gates cond-position softmax mass.
+#
+# Source data: easycontrol-dataset/  (user puts {stem}.png/.jpg/.webp + {stem}.txt here)
+# Caches:      post_image_dataset/easycontrol/  ({stem}_anima_te.safetensors,
+#              {stem}_{WxH}_anima.npz)
+# The cache_dir redirect comes from configs/datasets/easycontrol.toml referenced below.
+#
+# Reference image and VAE target come from the SAME image, matching IP-Adapter
+# v1's setup. The cond pre-pass is run every step (no KV cache yet — that's
+# Phase 2). CFG dropout zeros image conditioning with probability
+# `easycontrol_drop_p` so inference can do image-CFG independently of text-CFG.
+#
+# Feature source: cached VAE latents on disk. EasyControl's cond input is the
+# clean VAE latent of the reference, which is identical to the existing
+# {stem}_anima_latent.safetensors when ref==target. No new sidecar needed for
+# Phase 1; reuses cache_latents output directly.
+
+dataset_config = "configs/datasets/easycontrol.toml"
+
+network_module = "networks.methods.easycontrol"
+
+# r = condition LoRA rank (per-projection rank). 16 is a reasonable default.
+network_dim = 32
+network_alpha = 32
+
+network_args = [
+    "b_cond_init=-10.0",     # logit bias init: exp(-10) ≈ 4.5e-5 → α ≈ 1 → step 0 = baseline DiT
+    "cond_scale=1.0",
+    "apply_ffn_lora=1",      # set to 0 to skip FFN LoRA (~halves trainable params)
+    "cond_token_count=4096", # static-pad cond to this length; matches target's static_token_count for ref==target setups (no downsample needed). Lower it (e.g. 1024) for the official's 32×32 reference if memory is tight.
+]
+
+output_name = "anima_easycontrol"
+
+logging_dir = "output/logs"
+log_with = "tensorboard"
+
+learning_rate = 5e-5
+max_train_epochs = 6
+save_every_n_epochs = 3
+checkpointing_epochs = 3
+
+# Cached-feature path: VAE latents and text encoder outputs live on disk as
+# sibling sidecars. EasyControl reuses the existing cache_latents output as
+# the cond source — no separate sidecar.
+# (cache_latents{_to_disk} and cache_text_encoder_outputs{_to_disk} default to
+# true in configs/base.toml.)
+
+# CFG dropout for image conditioning (independent of text dropout).
+# Read by train.py when use_easycontrol is on.
+use_easycontrol = true
+easycontrol_drop_p = 0.1
+caption_dropout_rate = 0.1
+
+# Per-step training-only Gaussian noise on cond latent before set_cond.
+# Sampled per-sample as sigma ~ U(0, easycontrol_cond_noise_max) and applied as
+# cond + sigma * eps. 0.0 = ref==target identity (current behavior). A positive
+# value (e.g. 0.5) degrades cond from "perfect blueprint" to "lossy hint",
+# forcing text to carry the residual high-frequency detail. sigma=0 stays in
+# the training distribution, so clean-cond inference still works unchanged.
+easycontrol_cond_noise_max = 0.3
+
+blocks_to_swap = 0
+gradient_checkpointing = true
+unsloth_offload_checkpointing = true
+
+# compile_mode = "full"

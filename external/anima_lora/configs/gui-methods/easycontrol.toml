@@ -1,0 +1,50 @@
+# EasyControl — extended self-attention image conditioning (Phase 1).
+# GUI-friendly self-contained variant — no toggle blocks.
+#
+# Adapter-only: DiT is frozen, training updates only per-block cond LoRA on
+# self-attn (q/k/v/o) + FFN (layer1/layer2) + per-block scalar logit bias
+# `b_cond` (init -10) that gates cond-position softmax mass at step 0.
+#
+# Source data: easycontrol-dataset/  (user puts images + .txt captions here)
+# Caches:      post_image_dataset/easycontrol/  (latents + text-encoder outputs)
+# The cond pre-pass is run every step — Phase 1 has no KV cache yet.
+
+dataset_config = "configs/datasets/easycontrol.toml"
+
+network_module = "networks.methods.easycontrol"
+
+network_dim = 16
+network_alpha = 16
+
+network_args = [
+    "b_cond_init=-10.0",
+    "cond_scale=1.0",
+    "apply_ffn_lora=1",
+    "cond_token_count=4096",
+]
+
+output_name = "anima_easycontrol"
+
+logging_dir = "output/logs"
+log_with = "tensorboard"
+
+learning_rate = 1e-4
+max_train_epochs = 12
+save_every_n_epochs = 12
+checkpointing_epochs = 12
+
+use_easycontrol = true
+easycontrol_drop_p = 0.1
+caption_dropout_rate = 0.2
+easycontrol_cond_noise_max = 0.0  # >0 (e.g. 0.5) degrades cond to a lossy hint
+
+blocks_to_swap = 0
+compile_mode = "full"
+
+use_cmmd = false
+
+[variant]
+family = "easycontrol"
+label = "EasyControl"
+description = "Extended self-attention image conditioning."
+order = 10

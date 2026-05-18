@@ -113,6 +113,10 @@ packages = ["lorahub"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Vendored anima_lora (third backend's source tree). Owned upstream;
+# linting it would drown signal from our own code in noise. Mypy
+# already ignores it via `ignore_missing_imports`.
+extend-exclude = ["external/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RET", "PTH"]

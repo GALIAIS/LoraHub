@@ -1,0 +1,44 @@
+# Postfix tuning — adapter cross-attention token learning.
+#
+# Two modes supported by networks/methods/postfix.py:
+#   - mode=postfix : free-parameter postfix (a single K×D tensor shared across
+#                    the batch, appended to the cached adapter output).
+#   - mode=cond    : caption-conditional postfix with structural orthogonality
+#                    (always uses an orthonormal basis + Cayley rotation; one
+#                    `(S(c), λ(c))` per caption out of a tiny cond_mlp).
+#
+# Default (below) = cond + svd_te basis. The plain `mode=postfix` path is
+# wired through `make exp-test-postfix` against checkpoints that set it.
+
+network_module = "networks.methods.postfix"
+
+network_dim = 48
+network_args = [
+    "mode=cond",
+    "cond_hidden_dim=1024",  # v3: match D so cond_mlp isn't bottlenecked at 256 hidden → 1129 outputs
+    "splice_position=front_of_padding",
+    "ortho_basis=svd_te",
+    "te_cache_dir=post_image_dataset/lora",
+    "svd_num_files=1024",
+    "ortho_basis_seed=0",
+    # lambda_init biases the cond_mlp λ(c) output channel so postfix(c) starts
+    # at non-trivial magnitude (~0.3 per slot) instead of growing from zero.
+    # Rationale: bench 20260511-1622-cond-v2-ln-final showed λ(c) mean drift
+    # from 0.50 (epoch 1) to 0.034 (epoch 2 final) without it.
+    "lambda_init=0.3",
+]
+
+output_name = "anima_postfix_ortho_v4"
+learning_rate = 5e-4
+
+max_train_epochs = 2
+save_every_n_epochs = 2
+checkpointing_epochs = 2
+
+use_shuffled_caption_variants = true
+cache_llm_adapter_outputs = true
+blocks_to_swap = 0
+
+compile_mode="full"
+compile_inductor_mode = "reduce-overhead"
+
