@@ -128,6 +128,14 @@ backend:
     maxAr: 2.5
     numArBuckets: 9
     skipEmptyCaption: true
+    # Persist the FULL DeepSpeed state (optimizer momentum + LR scheduler
+    # step + dataloader epoch + a `latest` pointer) every N minutes so
+    # the run can be resumed via `POST /api/jobs/{id}/resume` after an
+    # interrupt. dp's `save_every_n_steps` only writes the LoRA weights;
+    # without this knob there's no `global_step*/` folder for DeepSpeed
+    # to load back. 30 min strikes a balance between losing optimiser
+    # progress on Ctrl-C and disk overhead for the optimiser state.
+    checkpointEveryNMinutes: 30
     # NOTE: keys inside `modelPaths` are written verbatim to the diffusion-pipe
     # TOML, so they keep upstream's literal snake_case names. Don't camelCase
     # these or dp won't recognise them.
