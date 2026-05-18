@@ -96,3 +96,7 @@ diffusion-pipe/
 .cloud-*.sh
 .remote-*.sh
 .wsl-*.sh
+
+# hatch-vcs writes the resolved version here at build/install time;
+# committing it would drift behind whatever tag is current.
+lorahub/_version.py

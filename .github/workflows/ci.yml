@@ -22,6 +22,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # hatch-vcs walks git history to derive the version; without
+          # the full clone it can't see the most recent tag and falls
+          # back to `0.0.0`, which fails any test that asserts on the
+          # version shape.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -50,6 +56,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The vite config runs `git describe` to embed the user-facing
+          # version; a shallow clone leaves it at `dev` for every CI
+          # build, which is fine but masks a real failure mode.
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4

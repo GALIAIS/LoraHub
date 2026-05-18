@@ -1,6 +1,11 @@
 [project]
 name = "lorahub"
-version = "0.2.0"
+# Version is dynamic — derived from git tags by hatch-vcs at build time.
+# Tagging `vX.Y.Z` and `pip install -e .` (or building a wheel) writes the
+# resolved string into `lorahub/_version.py`. Between tags hatch-vcs emits
+# a PEP 440 dev version like `0.3.0.post12+g1a2b3c4` so untagged commits
+# never collide with a release.
+dynamic = ["version"]
 description = "Open-source LoRA training workbench for diffusion models"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -74,8 +79,28 @@ Issues = "https://github.com/GALIAIS/LoraHub/issues"
 Changelog = "https://github.com/GALIAIS/LoraHub/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.24", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# Read the version from git: the most recent `vX.Y.Z` tag wins. Local
+# fallback (no tags yet) is `0.0.0`, so editable installs in a fresh
+# clone still succeed.
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.version.raw-options]
+# Tags use the `v` prefix (semantic-release convention). The pattern
+# is forwarded to setuptools-scm under the hood; restricting it stops
+# stray annotated tags (`docs-v1`, `release-2026-05`) from being
+# picked up as a project version.
+tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:[a-zA-Z0-9.+-]*)?)$"
+
+[tool.hatch.build.hooks.vcs]
+# Materialise the resolved version into `lorahub/_version.py` whenever
+# the package is built or installed editable, so `from lorahub import
+# __version__` works at runtime without a hatch-vcs runtime dependency.
+version-file = "lorahub/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lorahub"]

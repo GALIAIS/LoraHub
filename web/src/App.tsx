@@ -182,8 +182,11 @@ export default function App() {
             </div>
           </div>
 
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-            v0.2
+          <div
+            className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70 font-mono"
+            title="Resolved at build time from git describe; see vite.config.ts"
+          >
+            v{__APP_VERSION__}
           </div>
         </div>
       </aside>
