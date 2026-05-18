@@ -1,0 +1,113 @@
+# Anima Turbo — DMD 蒸馏（4-step LoRA）
+#
+# 与标准训练完全不同的路径：训练好的 LoRA 在推理时只需 4 步 + cfg=1.0
+# 即可达到 28-step + cfg=4.0 教师的输出质量。LoraHub 检测到
+# backend.animaLora.turbo 被填充时,会切换到 scripts/distill_turbo.py
+# 路径而非 train.py。
+#
+# 注意：turbo 与 method/preset 完全正交,即使你填了 method,turbo 路径也
+# 会忽略它。
+
+schemaVersion: "1.0"
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
+    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+
+# turbo 用 LoRA 蒸馏路径,数据集仍用 LoRA pipeline 的 cache。这里 source
+# 应该指向已经 preprocessed 的 cache 目录,而不是原始 image_dataset。
+dataset:
+  source: ./datasets/your_dataset
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    min: 512
+    max: 1536
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+  numRepeats: 1
+
+network:
+  type: lora
+  rank: 48
+  alpha: 48
+
+optimizer:
+  type: AdamW
+  lr:
+    unet: 5.0e-6
+    textEncoder: 5.0e-6
+  scheduler:
+    type: constant
+
+schedule:
+  epochs: 1
+  batchSize: 1
+  seed: 42
+
+output:
+  name: anima_turbo
+
+backend:
+  type: anima_lora
+
+  animaLora:
+    # method/preset 在 turbo 路径下不生效,但 schema 必填 — 留默认就好。
+    method: lora
+    preset: default
+    outputName: anima_turbo
+
+    # === Turbo 蒸馏配置 ===
+    turbo:
+      # 总迭代步数（DMD2 paper 推荐 1000+，1000 已足够看出效果）
+      iterations: 1000
+      batchSize: 1
+      seed: 42
+
+      # 学生 LoRA 容量。rank=48 是上游推荐的"可部署 LoRA"规模
+      studentRank: 48
+      studentAlpha: 48
+
+      # Fake LoRA 容量（DMD regularizer），稍大一点
+      fakeRank: 64
+      fakeAlpha: 64
+
+      # DMD2 schedule (paper Table 1 row 4 - Decoupled-Hybrid)
+      studentSteps: 4              # 学生推理步数（推理时 --infer_steps 4）
+      teacherCfg: 4.0              # 教师 CFG，会被烤进学生（推理时 --cfg 1.0）
+      tauCaStrategy: above_t
+      tauDmStrategy: uniform
+      tauCaMinGap: 0.05
+      tauCaSkipAboveT: 0.95
+
+      # Optim
+      studentLr: 5.0e-6
+      fakeLr: 5.0e-5
+      fakeStepsPerStudentStep: 2
+      alphaWarmupSteps: 100
+      weightDecay: 0.0
+      gradClip: 1.0
+
+      # Generator-t 采样
+      tDistribution: uniform
+      sigmoidScale: 1.0
+
+      # I/O 节奏
+      saveEvery: 250
+      logInterval: 5
+
+      # 内存
+      attnMode: flash
+      useCustomDownAutograd: true
+
+# 训练完成后,output/ckpt/anima_turbo.safetensors 是一个标准 LoRA。推理：
+#   anima_lora/inference.py \
+#     --lora_weight anima_turbo.safetensors \
+#     --infer_steps 4 \
+#     --guidance_scale 1.0 \
+#     --prompt "..."
