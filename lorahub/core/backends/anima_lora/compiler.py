@@ -1,0 +1,373 @@
+"""Compile a TrainingConfig into anima_lora CLI argv.
+
+anima_lora is config-driven via a four-layer chain:
+
+    base.toml -> presets.toml[<preset>] -> methods/<method>.toml -> CLI
+
+Upstream owns the first three layers (vendored under `external/anima_lora/`).
+LoraHub contributes only the CLI override layer — translating
+:class:`AnimaLoraOptions` into ``--key value`` pairs that ``train.py``
+re-parses on top of the merged TOML chain.
+
+This module is a pure function: callers pass in the recipe and a
+workspace, and get back ``(argv, files_to_write)``. We do not emit a
+TOML file — keeping the upstream merge chain intact is the whole
+point of the vendored layout. The `files_to_write` dict is always
+empty; the contract matches kohya / dp compiler return shape so the
+launcher dispatch is uniform.
+
+Method routing: the value of ``opts.method`` becomes ``--method <X>``
+plus the matching sub-config's fields are mapped to upstream's CLI
+flag names. Sub-configs whose method isn't selected are silently
+ignored (callers might keep them around for fast switching).
+
+Compile-mode constraint: ``compile_mode = "full"`` is incompatible
+with ``gradient_checkpointing`` and ``blocks_to_swap > 0`` per
+upstream `CLAUDE.md` ("compile_mode = 'full' is incompatible with
+gradient_checkpointing / blocks_to_swap"). We catch this at compile
+time so the user gets a clear error before launch instead of an
+opaque torch.compile traceback.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from lorahub.core.config.schema import (
+    AnimaLoraOptions,
+    TrainingConfig,
+)
+
+__all__ = ["CompilationError", "compile_config"]
+
+_log = logging.getLogger(__name__)
+
+
+class CompilationError(ValueError):
+    """Raised when an AnimaLoraOptions config can't be compiled."""
+
+
+def compile_config(
+    cfg: TrainingConfig,
+    workspace: Path,
+) -> tuple[list[str], dict[Path, str]]:
+    """Translate a recipe into ``(argv, files_to_write)`` for anima_lora.
+
+    ``argv`` is what to append after ``python <repo>/train.py`` (or after
+    ``accelerate launch`` if cut2 wraps it). ``files_to_write`` is always
+    empty — upstream owns its own config layout under
+    ``external/anima_lora/configs/`` and we don't emit anything.
+    """
+    if cfg.backend.type != "anima_lora":
+        msg = (
+            f"anima_lora compiler invoked on backend.type={cfg.backend.type!r}; "
+            "this is a programming error in the dispatch path"
+        )
+        raise CompilationError(msg)
+    if cfg.backend.anima_lora is None:
+        msg = (
+            "backend.type='anima_lora' requires backend.animaLora to be set "
+            "with at least default options; populate it in the recipe"
+        )
+        raise CompilationError(msg)
+
+    opts = cfg.backend.anima_lora
+    _enforce_compile_constraints(opts)
+
+    workspace = workspace.resolve()
+    output_dir = workspace / "ckpt"
+
+    argv: list[str] = []
+    # Layer 1: method + preset selection. anima_lora reads these first
+    # to drive its TOML merge chain before any CLI override applies.
+    argv += ["--method", opts.method, "--preset", opts.preset]
+
+    # Layer 2: shared overrides (apply to every method).
+    argv += _shared_overrides(cfg, opts, output_dir)
+
+    # Layer 3: method-specific sub-config overrides.
+    argv += _method_overrides(opts)
+
+    # Files: nothing. Upstream's config chain is untouched.
+    files: dict[Path, str] = {}
+    return argv, files
+
+
+def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
+    """``compile_mode = 'full'`` is incompatible with checkpointing / swap.
+
+    Documented in upstream's `CLAUDE.md`. Raise at compile time so the
+    user sees the conflict instead of an opaque torch.compile error.
+    """
+    if opts.compile_mode != "full":
+        return
+    bad: list[str] = []
+    if opts.gradient_checkpointing:
+        bad.append("gradient_checkpointing=true")
+    if opts.unsloth_offload_checkpointing:
+        bad.append("unsloth_offload_checkpointing=true")
+    if opts.blocks_to_swap > 0:
+        bad.append(f"blocks_to_swap={opts.blocks_to_swap}")
+    if bad:
+        msg = (
+            f"compile_mode='full' is incompatible with: {', '.join(bad)}. "
+            "Either drop compile_mode (set to None or 'blocks') or disable "
+            "the conflicting offload knobs."
+        )
+        raise CompilationError(msg)
+
+
+def _shared_overrides(
+    cfg: TrainingConfig,
+    opts: AnimaLoraOptions,
+    output_dir: Path,
+) -> list[str]:
+    """Method-agnostic CLI overrides — applied for every method.
+
+    Upstream's flag names are snake_case (matches the TOML keys); the
+    AnimaLoraOptions schema is also snake_case at the python level so
+    most fields map 1:1.
+    """
+    out: list[str] = []
+    # ---- Output ----
+    out += ["--output_dir", str(output_dir)]
+    out += ["--output_name", opts.output_name]
+
+    # ---- Model paths (from BaseModelConfig — anima_lora reads its own
+    # base.toml model paths but we may override per-recipe) ----
+    bm = cfg.base_model
+    if bm.checkpoint:
+        out += ["--pretrained_model_name_or_path", str(bm.checkpoint)]
+    paths = bm.arch_paths
+    if paths.qwen3 is not None:
+        out += ["--qwen3", str(paths.qwen3)]
+    if paths.ae is not None:
+        # anima_lora calls the VAE flag --vae upstream
+        out += ["--vae", str(paths.ae)]
+
+    # ---- Network ----
+    out += ["--network_module", opts.network_module]
+    out += ["--network_dim", str(opts.network_dim)]
+    out += ["--network_alpha", str(opts.network_alpha)]
+    if opts.network_train_unet_only:
+        out += ["--network_train_unet_only"]
+
+    # ---- Optim / schedule ----
+    out += ["--optimizer_type", opts.optimizer_type]
+    out += ["--lr_scheduler", opts.lr_scheduler]
+    out += ["--learning_rate", _fmt_float(opts.learning_rate)]
+    out += ["--max_train_epochs", str(opts.max_train_epochs)]
+    out += ["--save_every_n_epochs", str(opts.save_every_n_epochs)]
+    out += ["--checkpointing_epochs", str(opts.checkpointing_epochs)]
+    if opts.caption_dropout_rate > 0:
+        out += ["--caption_dropout_rate", _fmt_float(opts.caption_dropout_rate)]
+
+    # ---- Sampling / loss (flow-matching) ----
+    out += ["--timestep_sampling", opts.timestep_sampling]
+    out += ["--sigmoid_scale", _fmt_float(opts.sigmoid_scale)]
+    out += ["--discrete_flow_shift", _fmt_float(opts.discrete_flow_shift)]
+    if opts.weighting_scheme is not None:
+        out += ["--weighting_scheme", opts.weighting_scheme]
+    if opts.logit_mean is not None:
+        out += ["--logit_mean", _fmt_float(opts.logit_mean)]
+    if opts.logit_std is not None:
+        out += ["--logit_std", _fmt_float(opts.logit_std)]
+    if opts.mode_scale is not None:
+        out += ["--mode_scale", _fmt_float(opts.mode_scale)]
+    if opts.vr_loss_weight is not None:
+        out += ["--vr_loss_weight", _fmt_float(opts.vr_loss_weight)]
+
+    # ---- Caching / data ----
+    if opts.cache_latents:
+        out += ["--cache_latents"]
+    if opts.cache_latents_to_disk:
+        out += ["--cache_latents_to_disk"]
+    if opts.cache_text_encoder_outputs:
+        out += ["--cache_text_encoder_outputs"]
+    if opts.cache_text_encoder_outputs_to_disk:
+        out += ["--cache_text_encoder_outputs_to_disk"]
+    if opts.cache_llm_adapter_outputs:
+        out += ["--cache_llm_adapter_outputs"]
+    if opts.use_shuffled_caption_variants:
+        out += ["--use_shuffled_caption_variants"]
+    if opts.sample_ratio is not None:
+        out += ["--sample_ratio", _fmt_float(opts.sample_ratio)]
+    out += ["--static_token_count", str(opts.static_token_count)]
+    out += ["--vae_chunk_size", str(opts.vae_chunk_size)]
+    if opts.vae_disable_cache:
+        out += ["--vae_disable_cache"]
+    if opts.no_half_vae:
+        out += ["--no_half_vae"]
+
+    # ---- Attention / compile ----
+    out += ["--attn_mode", opts.attn_mode]
+    if opts.xformers:
+        out += ["--xformers"]
+    if opts.split_attn:
+        out += ["--split_attn"]
+    if opts.compile_mode is not None:
+        out += ["--compile_mode", opts.compile_mode]
+    if opts.compile_inductor_mode is not None:
+        out += ["--compile_inductor_mode", opts.compile_inductor_mode]
+    if opts.use_custom_down_autograd:
+        out += ["--use_custom_down_autograd"]
+
+    # ---- Memory / offload ----
+    if opts.blocks_to_swap > 0:
+        out += ["--blocks_to_swap", str(opts.blocks_to_swap)]
+    if opts.gradient_checkpointing:
+        out += ["--gradient_checkpointing"]
+    if opts.unsloth_offload_checkpointing:
+        out += ["--unsloth_offload_checkpointing"]
+    if opts.cpu_offload_checkpointing:
+        out += ["--cpu_offload_checkpointing"]
+    out += ["--mixed_precision", opts.mixed_precision]
+
+    # ---- Validation ----
+    if opts.use_cmmd:
+        out += ["--use_cmmd"]
+    if opts.validation_seed is not None:
+        out += ["--validation_seed", str(opts.validation_seed)]
+    if opts.validation_sample_steps is not None:
+        out += ["--validation_sample_steps", str(opts.validation_sample_steps)]
+    if opts.validation_cfg_scale is not None:
+        out += ["--validation_cfg_scale", _fmt_float(opts.validation_cfg_scale)]
+
+    # ---- Seed ----
+    seed = cfg.schedule.seed if cfg.schedule.seed is not None else 42
+    out += ["--seed", str(seed)]
+
+    return out
+
+
+def _method_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """Method-specific CLI overrides — only the selected method's sub-config.
+
+    The other sub-configs are intentionally ignored (we keep them in the
+    schema so the user can flip ``opts.method`` between switches without
+    losing per-method tuning).
+
+    Most flag names match upstream's TOML keys 1:1 — see
+    ``library/training/cli_args.py`` in the vendored copy.
+    """
+    if opts.method == "lora":
+        return _lora_overrides(opts)
+    if opts.method == "postfix":
+        return _postfix_overrides(opts)
+    if opts.method == "chimera":
+        return _chimera_overrides(opts)
+    if opts.method == "easycontrol":
+        return _easycontrol_overrides(opts)
+    if opts.method == "ip_adapter":
+        return _ip_adapter_overrides(opts)
+    msg = f"unhandled method {opts.method!r} (schema enum drift?)"
+    raise CompilationError(msg)
+
+
+def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """LoRA / OrthoLoRA / T-LoRA stack — the default anima_lora behaviour."""
+    out: list[str] = []
+    sub = opts.lora
+    if sub.use_ortho:
+        out += ["--use_ortho"]
+    if sub.use_timestep_mask:
+        out += ["--use_timestep_mask"]
+    out += ["--min_rank", str(sub.min_rank)]
+    out += ["--alpha_rank_scale", _fmt_float(sub.alpha_rank_scale)]
+    return out
+
+
+def _postfix_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """Postfix tuning — see ``networks/methods/postfix.py``."""
+    sub = opts.postfix
+    if sub is None:  # validated upstream by AnimaLoraOptions model_validator
+        msg = "method='postfix' missing sub-config (validator should have caught this)"
+        raise CompilationError(msg)
+    # Postfix uses `network_args` upstream — pass each k=v through the
+    # same flag the trainer already supports for adapter knobs.
+    pieces = [
+        f"mode={sub.mode}",
+        f"cond_hidden_dim={sub.cond_hidden_dim}",
+        f"splice_position={sub.splice_position}",
+        f"ortho_basis={sub.ortho_basis}",
+        f"svd_num_files={sub.svd_num_files}",
+        f"ortho_basis_seed={sub.ortho_basis_seed}",
+        f"lambda_init={sub.lambda_init}",
+    ]
+    if sub.te_cache_dir is not None:
+        pieces.append(f"te_cache_dir={sub.te_cache_dir}")
+    out: list[str] = []
+    for p in pieces:
+        out += ["--network_args", p]
+    return out
+
+
+def _chimera_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """ChimeraHydra dual-pool MoE — pinned router knobs.
+
+    `use_chimera_hydra=True` flips three router fields simultaneously
+    upstream (`use_moe_style="shared_A"` + `route_per_layer=True` +
+    `router_source="input"`); we pass the high-level flag and let
+    upstream handle the pinning to keep behaviour aligned with the
+    vendored `methods/chimera.toml` contract.
+    """
+    sub = opts.chimera
+    if sub is None:
+        msg = "method='chimera' missing sub-config"
+        raise CompilationError(msg)
+    out: list[str] = ["--use_chimera_hydra"]
+    out += ["--balance_w_content", _fmt_float(sub.balance_w_content)]
+    out += ["--balance_w_freq", _fmt_float(sub.balance_w_freq)]
+    out += ["--balance_loss_warmup_ratio", _fmt_float(sub.balance_loss_warmup_ratio)]
+    out += ["--fei_feature_dim", str(sub.fei_feature_dim)]
+    out += ["--sigma_feature_dim", str(sub.sigma_feature_dim)]
+    return out
+
+
+def _easycontrol_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """EasyControl per-block conditioning LoRA + softmax gate."""
+    sub = opts.easycontrol
+    if sub is None:
+        msg = "method='easycontrol' missing sub-config"
+        raise CompilationError(msg)
+    out: list[str] = ["--use_easycontrol"]
+    out += ["--b_cond_init", _fmt_float(sub.b_cond_init)]
+    out += ["--cond_scale", _fmt_float(sub.cond_scale)]
+    if sub.apply_ffn_lora:
+        out += ["--apply_ffn_lora"]
+    out += ["--cond_token_count", str(sub.cond_token_count)]
+    out += ["--easycontrol_drop_p", _fmt_float(sub.drop_p)]
+    out += ["--easycontrol_cond_noise_max", _fmt_float(sub.cond_noise_max)]
+    return out
+
+
+def _ip_adapter_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """IP-Adapter — PE-Core encoder + resampler + per-block KV."""
+    sub = opts.ip_adapter
+    if sub is None:
+        msg = "method='ip_adapter' missing sub-config"
+        raise CompilationError(msg)
+    out: list[str] = ["--use_ip_adapter"]
+    out += ["--ip_encoder", sub.encoder]
+    out += ["--ip_resampler_layers", str(sub.resampler_layers)]
+    out += ["--ip_resampler_heads", str(sub.resampler_heads)]
+    out += ["--ip_scale", _fmt_float(sub.ip_scale)]
+    out += ["--ip_image_drop_p", _fmt_float(sub.image_drop_p)]
+    out += ["--gate_lr", _fmt_float(sub.gate_lr)]
+    if sub.features_cache_to_disk:
+        out += ["--ip_features_cache_to_disk"]
+    return out
+
+
+def _fmt_float(v: float) -> str:
+    """Format a float for argparse without scientific notation surprises.
+
+    argparse handles ``5e-05`` fine, but readability of ``--learning_rate
+    5e-05`` in logs is worse than ``--learning_rate 5e-05`` vs
+    ``--learning_rate 0.00005``. We pick ``repr()``-style which keeps
+    short-form for round numbers and falls back to e-notation for very
+    small values — same shape upstream uses in their own argparse
+    examples.
+    """
+    return repr(v)
