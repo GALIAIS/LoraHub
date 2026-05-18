@@ -84,8 +84,12 @@ export function JobDetail({
     return typeof src === "string" ? src : null
   }, [job.data])
   const datasetScan = useQuery({
-    queryKey: ["dataset-scan", datasetSource, false],
-    queryFn: () => api.scanDataset(datasetSource!, false, 0),
+    // Recursive walk: anima / dp datasets often nest images under
+    // sub-folders (chapters, scene groups). Without it the count
+    // collapses to whatever sits in the top dir, which is usually
+    // empty, and the progress bar never gets a denominator.
+    queryKey: ["dataset-scan", datasetSource, true],
+    queryFn: () => api.scanDataset(datasetSource!, true, 0),
     enabled: !!datasetSource,
     refetchOnWindowFocus: false,
     staleTime: 5 * 60_000,

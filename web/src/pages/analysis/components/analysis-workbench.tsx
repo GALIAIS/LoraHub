@@ -23,7 +23,7 @@ import {
 } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
-import { SecondaryCharts } from "./secondary-charts"
+import { MetricGrid } from "./metric-grid"
 import { AICard } from "../panels/ai-card"
 import { MetricsTable } from "../panels/metrics-table"
 import { SamplesGallery } from "../panels/samples-gallery"
@@ -144,11 +144,11 @@ export function AnalysisWorkbench({
       <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
       <div className="px-7 py-4 space-y-3">
-        {/* Loss panel — visual focus of the page. */}
+        {/* Loss panel — visual focus of the page (train + val + EMA). */}
         <Card className="rounded-[6px] border-border/60">
           <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
             <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-              损失曲线
+              损失曲线 · 综合视图
             </CardTitle>
             <span className="text-[10px] text-muted-foreground/70">
               {metrics.isLoading
@@ -174,12 +174,16 @@ export function AnalysisWorkbench({
           </CardContent>
         </Card>
 
-        {/* Secondary charts — two columns. */}
-        <SecondaryCharts
-          metrics={metrics.data ?? null}
-          loading={metrics.isLoading}
-          jobId={job.id}
-        />
+        {/* Detailed metrics — TensorBoard-style breakdown. One small
+            card per scalar (loss/raw, loss/ema, loss/epoch_avg,
+            schedule/learning_rate, throughput.*, gpu.*) so the user
+            can isolate any signal without scanning a dense legend. */}
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2 px-0.5">
+            指标细分
+          </div>
+          <MetricGrid metrics={metrics.data ?? null} jobId={job.id} />
+        </div>
 
         {/* Bottom tabs — stats / table / samples / AI. */}
         <Tabs

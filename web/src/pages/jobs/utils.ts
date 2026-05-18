@@ -106,11 +106,16 @@ export function downsamplePoints<T>(points: T[], maxPoints: number): T[] {
  * Derive an expected `total_steps` from a job's config_snapshot.
  *
  * Priority:
- *   1. `schedule.max_steps` if explicitly set in the recipe.
- *   2. `epochs * dataset.num_repeats * image_files / (batch_size * grad_accum)`
+ *   1. `schedule.maxSteps` (or `max_steps`) if explicitly set in the recipe.
+ *   2. `epochs * dataset.numRepeats * image_files / (batchSize * gradAccum)`
  *      if we have an image count from the latest preflight.
  *   3. `null` (fall back to `?`) — backend events with `total_steps` will
  *      override this anyway as soon as the trainer reports them.
+ *
+ * Reads camelCase **and** snake_case keys: the snapshot gets dumped from
+ * pydantic with `mode="json"` (no `by_alias`), so we'd see snake_case in
+ * practice today, but the schema is alias-aware, so newer dumps may flip
+ * to camelCase. Reading both keeps us future-proof.
  *
  * The result is intentionally an over-estimate when bucketing is on, but the
  * UI just needs *a* denominator so progress bars and "第 X/N 步" tags don't
@@ -123,31 +128,38 @@ export function expectedTotalSteps(
   if (!configSnapshot || typeof configSnapshot !== "object") return null
   const schedule = (configSnapshot as Record<string, unknown>)["schedule"]
   const dataset = (configSnapshot as Record<string, unknown>)["dataset"]
-  if (
-    schedule &&
-    typeof schedule === "object" &&
-    typeof (schedule as Record<string, unknown>)["max_steps"] === "number"
-  ) {
-    const m = (schedule as Record<string, number>)["max_steps"]
-    if (m > 0) return m
+
+  function pickNum(
+    obj: Record<string, unknown> | null | undefined,
+    ...keys: string[]
+  ): number | null {
+    if (!obj) return null
+    for (const k of keys) {
+      const v = obj[k]
+      if (typeof v === "number" && Number.isFinite(v)) return v
+    }
+    return null
   }
-  if (
-    schedule &&
-    typeof schedule === "object" &&
-    dataset &&
-    typeof dataset === "object" &&
-    typeof imageFiles === "number" &&
-    imageFiles > 0
-  ) {
-    const s = schedule as Record<string, unknown>
-    const d = dataset as Record<string, unknown>
-    const epochs = typeof s["epochs"] === "number" ? (s["epochs"] as number) : 1
-    const batch =
-      typeof s["batch_size"] === "number" ? (s["batch_size"] as number) : 1
-    const accum =
-      typeof s["grad_accum"] === "number" ? (s["grad_accum"] as number) : 1
-    const repeats =
-      typeof d["num_repeats"] === "number" ? (d["num_repeats"] as number) : 1
+
+  const sched =
+    schedule && typeof schedule === "object"
+      ? (schedule as Record<string, unknown>)
+      : null
+  const ds =
+    dataset && typeof dataset === "object"
+      ? (dataset as Record<string, unknown>)
+      : null
+
+  // 1) explicit cap wins
+  const maxSteps = pickNum(sched, "maxSteps", "max_steps")
+  if (maxSteps != null && maxSteps > 0) return maxSteps
+
+  // 2) derived from dataset size
+  if (sched && ds && typeof imageFiles === "number" && imageFiles > 0) {
+    const epochs = pickNum(sched, "epochs") ?? 1
+    const batch = pickNum(sched, "batchSize", "batch_size") ?? 1
+    const accum = pickNum(sched, "gradAccum", "grad_accum") ?? 1
+    const repeats = pickNum(ds, "numRepeats", "num_repeats") ?? 1
     const denom = Math.max(1, batch * accum)
     return Math.max(1, Math.ceil((epochs * repeats * imageFiles) / denom))
   }
