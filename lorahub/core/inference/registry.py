@@ -80,17 +80,30 @@ BackendFactory = Callable[..., "InferenceBackend | None"]
 _REGISTRY: list[tuple[str, BackendFactory]] = []
 
 
-def register_backend(name: str, factory: BackendFactory) -> None:
-    """Append ``factory`` to the resolution chain.
+def register_backend(
+    name: str,
+    factory: BackendFactory,
+    *,
+    prepend: bool = False,
+) -> None:
+    """Add ``factory`` to the resolution chain.
 
     Re-registering the same name replaces the existing entry in place
     (handy for tests that swap backends). Order is preserved otherwise.
+
+    ``prepend=True`` puts the factory at the head of the chain so it
+    wins ahead of previously-registered backends. Used by anima_lora's
+    subprocess preview backend to take priority over the in-process
+    Anima backend when both are usable.
     """
     for idx, (existing, _) in enumerate(_REGISTRY):
         if existing == name:
             _REGISTRY[idx] = (name, factory)
             return
-    _REGISTRY.append((name, factory))
+    if prepend:
+        _REGISTRY.insert(0, (name, factory))
+    else:
+        _REGISTRY.append((name, factory))
 
 
 def unregister_backend(name: str) -> None:

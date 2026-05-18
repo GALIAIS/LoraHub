@@ -787,6 +787,9 @@ def _maybe_start_preview_worker(
             anima as _anima_mod,
         )
         from lorahub.core.inference import (  # noqa: F401, PLC0415
+            anima_lora_backend as _anima_lora_mod,
+        )
+        from lorahub.core.inference import (  # noqa: F401, PLC0415
             diffusers_backend as _diffusers_mod,
         )
         from lorahub.core.inference.registry import (  # noqa: PLC0415
