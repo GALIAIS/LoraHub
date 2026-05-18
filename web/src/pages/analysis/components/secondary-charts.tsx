@@ -13,14 +13,16 @@ import { MultiLineChart, type MultiLineSeries } from "./multi-line-chart"
 export function SecondaryCharts({
   metrics,
   loading,
+  jobId,
 }: {
   metrics: JobMetricsResponse | null
   loading: boolean
+  jobId?: string | null
 }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      <ThroughputCard metrics={metrics} loading={loading} />
-      <ResourcesCard metrics={metrics} loading={loading} />
+      <ThroughputCard metrics={metrics} loading={loading} jobId={jobId} />
+      <ResourcesCard metrics={metrics} loading={loading} jobId={jobId} />
     </div>
   )
 }
@@ -28,9 +30,11 @@ export function SecondaryCharts({
 function ThroughputCard({
   metrics,
   loading,
+  jobId,
 }: {
   metrics: JobMetricsResponse | null
   loading: boolean
+  jobId?: string | null
 }) {
   const series: MultiLineSeries[] = useMemo(() => {
     const points = metrics?.loss ?? []
@@ -100,7 +104,12 @@ function ThroughputCard({
             diffusion-pipe 在产出第一行 <code className="font-mono">steps: N loss: …</code> 后会自动出现这些曲线。
           </div>
         ) : (
-          <MultiLineChart series={series} xLabel="step" />
+          <MultiLineChart
+            series={series}
+            xLabel="step"
+            persistKey={jobId ? `${jobId}.throughput` : null}
+            title="学习率与吞吐"
+          />
         )}
       </CardContent>
     </Card>
@@ -110,9 +119,11 @@ function ThroughputCard({
 function ResourcesCard({
   metrics,
   loading,
+  jobId,
 }: {
   metrics: JobMetricsResponse | null
   loading: boolean
+  jobId?: string | null
 }) {
   const samples = metrics?.gpu_samples ?? []
 
@@ -190,7 +201,12 @@ function ResourcesCard({
             训练运行期间每 5 秒采集一次 GPU 利用率 / 显存占用 / 温度。当前没有采样数据。
           </div>
         ) : (
-          <MultiLineChart series={series} xLabel="分钟" />
+          <MultiLineChart
+            series={series}
+            xLabel="分钟"
+            persistKey={jobId ? `${jobId}.resources` : null}
+            title="GPU 资源"
+          />
         )}
       </CardContent>
     </Card>

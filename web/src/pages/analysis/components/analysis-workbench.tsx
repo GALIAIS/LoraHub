@@ -22,14 +22,12 @@ import {
   type LossSeries,
 } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
-import {
-  MetricsTable,
-  SamplesGallery,
-  AICard,
-} from "../../jobs/components/analysis-tab"
-import { SeriesStatsCard } from "../../jobs/components/metrics-tab"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
 import { SecondaryCharts } from "./secondary-charts"
+import { AICard } from "../panels/ai-card"
+import { MetricsTable } from "../panels/metrics-table"
+import { SamplesGallery } from "../panels/samples-gallery"
+import { SeriesStatsCard } from "../panels/series-stats"
 
 type BottomTabKey = "stats" | "table" | "samples" | "ai"
 
@@ -177,7 +175,11 @@ export function AnalysisWorkbench({
         </Card>
 
         {/* Secondary charts — two columns. */}
-        <SecondaryCharts metrics={metrics.data ?? null} loading={metrics.isLoading} />
+        <SecondaryCharts
+          metrics={metrics.data ?? null}
+          loading={metrics.isLoading}
+          jobId={job.id}
+        />
 
         {/* Bottom tabs — stats / table / samples / AI. */}
         <Tabs
