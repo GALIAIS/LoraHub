@@ -65,7 +65,17 @@ def resolve(
     config_path: Path | None = None,
     config_python: Path | None = None,
 ) -> AnimaLoraEnv:
-    """Resolve the anima_lora environment using recipe -> env var -> default."""
+    """Resolve the anima_lora environment using recipe -> env var -> .venv.
+
+    The Python cascade prefers the dedicated ``<repo>/.venv`` (CPython
+    3.13 + torch 2.11/2.12 nightly) installed by ``uv sync``. When that
+    venv hasn't been built yet, we fall back to the host
+    ``sys.executable`` so :func:`AnimaLoraBackend.validate` can still
+    materialise an env (the probe layer surfaces ``ready=False`` so the
+    UI prompts the user to run the install). Actual ``launch`` will
+    fail loudly if the wrong interpreter is used — anima_lora's
+    ``import library.anima`` requires Python 3.13 and torch nightly.
+    """
     repo = (
         config_path
         or _common.path_from_env(_ENV_REPO)

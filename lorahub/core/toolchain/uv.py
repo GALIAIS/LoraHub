@@ -243,11 +243,29 @@ def _has_index_override(args: list[str]) -> bool:
     return any(a in flag_indices or a.startswith("--index-url=") for a in args)
 
 
+def run_uv(
+    args: list[str],
+    *,
+    step: str,
+    progress: ProgressCallback | None = None,
+) -> None:
+    """Run an arbitrary ``uv <args>`` invocation through the bootstrap binary.
+
+    Public adapter around the private ``_capture`` helper for callers
+    that need ``uv sync`` / ``uv lock`` etc. and don't fit the
+    pip_install / create_venv shapes. Surfaces failures as RuntimeError
+    so callers can wrap into their own backend-specific error type.
+    """
+    uv = ensure_uv(progress)
+    _capture([uv, *args], step, progress)
+
+
 __all__ = [
     "ProgressCallback",
     "create_venv",
     "ensure_uv",
     "find_uv",
     "pip_install",
+    "run_uv",
     "venv_python",
 ]

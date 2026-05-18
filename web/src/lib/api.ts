@@ -74,12 +74,34 @@ export interface DiffusionPipeBackendStatus {
   source: "env" | "settings" | "default"
 }
 
-export type AnyBackendStatus = KohyaBackendStatus | DiffusionPipeBackendStatus
+export interface AnimaLoraBackendStatus {
+  id: "anima_lora"
+  repo_path: string
+  repo_ok: boolean
+  missing_files: string[]
+  python: string | null
+  python_ok: boolean
+  venv_detected: boolean
+  // Vendored — no LoraHub-managed requirements, always true. Kept on
+  // the type for shape parity with the other two probes.
+  requirements_ok: boolean
+  missing_requirements: string[]
+  ready: boolean
+  // anima_lora's source dimension picks "vendored" instead of
+  // "default" because the source ships with LoraHub itself, not as a
+  // sibling clone.
+  source: "env" | "settings" | "vendored"
+}
+
+export type AnyBackendStatus =
+  | KohyaBackendStatus
+  | DiffusionPipeBackendStatus
+  | AnimaLoraBackendStatus
 
 // Legacy alias still used in older components — points at kohya for now.
 export type BackendStatus = KohyaBackendStatus
 
-export type BackendId = "kohya" | "diffusion-pipe"
+export type BackendId = "kohya" | "diffusion-pipe" | "anima_lora"
 
 export interface BackendDescriptor {
   id: BackendId
@@ -101,6 +123,10 @@ export interface SettingsState {
   python_executable: string | null
   diffusion_pipe_repo_path: string | null
   diffusion_pipe_python: string | null
+  // anima_lora — vendored, repo path is auto-resolved by default; both
+  // fields exist for env / dev override. Most users only set the python.
+  anima_lora_repo_path: string | null
+  anima_lora_python: string | null
   default_backend: BackendId
   tagger_device: "auto" | "cpu" | "cuda"
   github_proxy: string | null

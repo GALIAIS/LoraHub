@@ -32,6 +32,12 @@ class Settings:
     diffusion_pipe_repo_path: str | None = None
     diffusion_pipe_python: str | None = None
 
+    # anima_lora backend (vendored under external/anima_lora — no clone
+    # step, only the python interpreter is user-configurable. The repo
+    # path field exists for parity / dev override only).
+    anima_lora_repo_path: str | None = None
+    anima_lora_python: str | None = None
+
     # Which backend the UI defaults to when starting a fresh recipe.
     default_backend: str = "kohya"
 
@@ -268,11 +274,91 @@ def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
     }
 
 
+def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
+    """Inspect whether the vendored anima_lora copy is usable.
+
+    Differences from the kohya / dp probe:
+      * No clone step — the source ships under ``external/anima_lora``,
+        so the repo path is auto-resolved from the LoraHub source tree
+        and the user normally doesn't override it.
+      * No requirements.txt check — anima_lora needs torch 2.11 nightly
+        + CUDA 13 in its own venv, which we don't manage. The python
+        check just confirms the interpreter exists; package presence
+        is the user's responsibility.
+    """
+    from lorahub.core.backends.anima_lora.bootstrap import (  # noqa: PLC0415
+        _ENV_PYTHON,
+        _ENV_REPO,
+        _REQUIRED_FILES,
+        _venv_python,
+        default_repo_path,
+    )
+
+    repo_raw = (
+        os.environ.get(_ENV_REPO)
+        or settings.anima_lora_repo_path
+        or str(default_repo_path())
+    )
+    repo_path = Path(repo_raw).expanduser()
+
+    repo_ok = repo_path.is_dir()
+    missing = (
+        [f for f in _REQUIRED_FILES if not (repo_path / f).is_file()]
+        if repo_ok
+        else list(_REQUIRED_FILES)
+    )
+
+    py_raw = (
+        os.environ.get(_ENV_PYTHON)
+        or settings.anima_lora_python
+        or (str(_venv_python(repo_path)) if _venv_python(repo_path) else None)
+    )
+    py_path = Path(py_raw).expanduser() if py_raw else None
+    # Only count as "python ok" when the resolved interpreter lives
+    # inside the dedicated .venv (or the user explicitly pointed at
+    # one via env / settings). If both fall back to None we deliberately
+    # don't try sys.executable here — a misleading "ready=true" would
+    # let the UI hide the install prompt even though anima_lora cannot
+    # actually run on the LoraHub main interpreter.
+    py_ok = bool(py_path and py_path.is_file())
+
+    if os.environ.get(_ENV_REPO):
+        source = "env"
+    elif settings.anima_lora_repo_path:
+        source = "settings"
+    else:
+        source = "vendored"
+
+    return {
+        "id": "anima_lora",
+        "repo_path": str(repo_path),
+        "repo_ok": repo_ok and not missing,
+        "missing_files": missing,
+        "python": str(py_path) if py_path else None,
+        "python_ok": py_ok,
+        "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
+        # Vendored: no LoraHub-managed requirements.txt to diff against.
+        # `uv sync` in the install pipeline materialises every dep from
+        # the vendored uv.lock; presence of `.venv/<python>` is taken as
+        # "sync completed". A half-finished sync (rare) would leave the
+        # python binary missing and python_ok would already be False.
+        "requirements_ok": True,
+        "missing_requirements": [],
+        # `ready` here means "we can dispatch to the backend" — repo
+        # files present + python interpreter resolvable. Whether the
+        # interpreter actually has torch nightly is not knowable
+        # cheaply; the runner surfaces that as a launch error.
+        "ready": (repo_ok and not missing) and py_ok,
+        "source": source,
+    }
+
+
 def probe_all_backends(settings: Settings) -> dict[str, dict[str, Any]]:
     """Return a probe payload for every backend in the registry."""
     return {
         "kohya": probe_kohya_backend(settings),
         "diffusion-pipe": probe_diffusion_pipe_backend(settings),
+        "anima_lora": probe_anima_lora_backend(settings),
     }
 
 

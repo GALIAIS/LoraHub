@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Save, RotateCcw, Wand2 } from "lucide-react"
 import {
   api,
+  type AnimaLoraBackendStatus,
   type BackendId,
   type DiffusionPipeBackendStatus,
   type KohyaBackendStatus,
@@ -29,6 +30,7 @@ import {
 const DEFAULT_BACKEND_OPTIONS: { value: BackendId; label: string }[] = [
   { value: "kohya", label: "kohya-ss/sd-scripts" },
   { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe" },
+  { value: "anima_lora", label: "sorryhyun/anima_lora (vendored)" },
 ]
 
 interface FieldProps {
@@ -130,6 +132,8 @@ export function BackendsTab() {
     draft.python_executable !== saved.python_executable ||
     draft.diffusion_pipe_repo_path !== saved.diffusion_pipe_repo_path ||
     draft.diffusion_pipe_python !== saved.diffusion_pipe_python ||
+    draft.anima_lora_repo_path !== saved.anima_lora_repo_path ||
+    draft.anima_lora_python !== saved.anima_lora_python ||
     draft.default_backend !== saved.default_backend
 
   // The /api/backends probe knows what each backend would resolve to with no
@@ -142,6 +146,9 @@ export function BackendsTab() {
   const dpStatus = backendList.find((b) => b.id === "diffusion-pipe")?.status as
     | DiffusionPipeBackendStatus
     | undefined
+  const animaLoraStatus = backendList.find((b) => b.id === "anima_lora")?.status as
+    | AnimaLoraBackendStatus
+    | undefined
 
   const detectedKohyaPath = kohyaStatus?.sd_scripts_ok
     ? kohyaStatus.sd_scripts_path
@@ -149,6 +156,14 @@ export function BackendsTab() {
   const detectedKohyaPython = kohyaStatus?.python_ok ? kohyaStatus.python : null
   const detectedDpPath = dpStatus?.repo_ok ? dpStatus.repo_path : null
   const detectedDpPython = dpStatus?.python_ok ? dpStatus.python : null
+  // anima_lora's repo_path always resolves (vendored) — surface it so users
+  // see where the source is even when they haven't pinned a python yet.
+  const detectedAnimaLoraPath = animaLoraStatus?.repo_ok
+    ? animaLoraStatus.repo_path
+    : null
+  const detectedAnimaLoraPython = animaLoraStatus?.python_ok
+    ? animaLoraStatus.python
+    : null
 
   const autofillAll = () => {
     if (!draft) return
@@ -158,11 +173,18 @@ export function BackendsTab() {
       python_executable: detectedKohyaPython ?? draft.python_executable,
       diffusion_pipe_repo_path: detectedDpPath ?? draft.diffusion_pipe_repo_path,
       diffusion_pipe_python: detectedDpPython ?? draft.diffusion_pipe_python,
+      anima_lora_repo_path: detectedAnimaLoraPath ?? draft.anima_lora_repo_path,
+      anima_lora_python: detectedAnimaLoraPython ?? draft.anima_lora_python,
     })
   }
 
   const anyDetected =
-    detectedKohyaPath || detectedKohyaPython || detectedDpPath || detectedDpPython
+    detectedKohyaPath ||
+    detectedKohyaPython ||
+    detectedDpPath ||
+    detectedDpPython ||
+    detectedAnimaLoraPath ||
+    detectedAnimaLoraPython
 
   return (
     <div className="space-y-5">
@@ -190,6 +212,9 @@ export function BackendsTab() {
                 <SelectItem value="kohya">kohya-ss/sd-scripts</SelectItem>
                 <SelectItem value="diffusion-pipe">
                   tdrussell/diffusion-pipe
+                </SelectItem>
+                <SelectItem value="anima_lora">
+                  sorryhyun/anima_lora (vendored)
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -272,6 +297,42 @@ export function BackendsTab() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Anima_lora 后端 (vendored)</CardTitle>
+          <CardDescription>
+            sorryhyun/anima_lora 已随 LoraHub 一起分发(<code>external/anima_lora/</code>),
+            无需克隆。点击下方
+            <strong className="text-foreground"> 后端安装 </strong>
+            标签页里的「安装」会用 <code>uv sync</code> 创建独立的 CPython 3.13 +
+            torch 2.11/2.12 nightly venv,与 LoraHub 主 venv 完全隔离。
+            下方两个字段一般留空,只在你想覆盖默认路径时才填入。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field
+            label="repo 路径"
+            description="一般留空,自动定位到 external/anima_lora/。仅在做 anima_lora 上游开发(切到外挂检出)时才需要覆盖。"
+            value={draft.anima_lora_repo_path ?? ""}
+            placeholder={detectedAnimaLoraPath ?? "<lorahub>/external/anima_lora"}
+            onChange={(v) =>
+              setDraft({ ...draft, anima_lora_repo_path: v || null })
+            }
+            detected={detectedAnimaLoraPath}
+          />
+          <Field
+            label="Python 解释器"
+            description="一般留空,自动指向 external/anima_lora/.venv 里 uv sync 创建的 python。仅在你手动维护另一个 venv 时才需要覆盖。"
+            value={draft.anima_lora_python ?? ""}
+            placeholder={detectedAnimaLoraPython ?? "<anima_lora>/.venv/Scripts/python.exe"}
+            onChange={(v) =>
+              setDraft({ ...draft, anima_lora_python: v || null })
+            }
+            detected={detectedAnimaLoraPython}
+          />
+        </CardContent>
+      </Card>
+
       <div className="flex items-center gap-3 sticky bottom-4 bg-background/80 backdrop-blur rounded-[4px] border border-border/60 px-4 py-3 shadow-[var(--panel-shadow)]">
         <Button
           size="sm"
@@ -282,6 +343,8 @@ export function BackendsTab() {
               python_executable: draft.python_executable,
               diffusion_pipe_repo_path: draft.diffusion_pipe_repo_path,
               diffusion_pipe_python: draft.diffusion_pipe_python,
+              anima_lora_repo_path: draft.anima_lora_repo_path,
+              anima_lora_python: draft.anima_lora_python,
               default_backend: draft.default_backend,
             })
           }

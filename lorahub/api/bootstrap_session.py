@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 
 class BootstrapRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe"] = "kohya"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
     target: str | None = None
     cuda: str = "cu124"
     torch_version: str = "2.6.0"
@@ -152,6 +152,8 @@ def default_build_bootstrap_runner(
     """
     if req.backend == "diffusion-pipe":
         return _build_diffusion_pipe_runner(req)
+    if req.backend == "anima_lora":
+        return _build_anima_lora_runner(req)
     return _build_kohya_runner(req)
 
 
@@ -261,6 +263,68 @@ def _build_diffusion_pipe_runner(
                     f"failed to clear {plan.target}; some files may be locked. "
                     "Close any tools using the directory and retry, or delete "
                     "it manually."
+                ),
+            )
+
+    def runner(progress: Callable[[str], None]) -> None:
+        installer.bootstrap(plan, progress=progress)
+
+    return runner
+
+
+def _build_anima_lora_runner(
+    req: BootstrapRequest,
+) -> Callable[[Callable[[str], None]], None]:
+    """anima_lora install: ``uv sync`` against the vendored copy.
+
+    The target directory is **always** ``external/anima_lora`` (vendored).
+    ``req.target`` is honoured only as a dev override — pointing at an
+    alternate checkout for upstream development. ``req.cuda`` /
+    ``req.torch_version`` are ignored because anima_lora's torch pin
+    lives in its own ``pyproject.toml`` + ``uv.lock``.
+    """
+    from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap  # noqa: PLC0415
+    from lorahub.core.backends.anima_lora import installer  # noqa: PLC0415
+
+    target_path = (
+        Path(req.target).expanduser().resolve()
+        if req.target
+        else al_bootstrap.default_repo_path()
+    )
+    settings = app_module._settings_store.load()
+    plan = installer.BootstrapPlan(
+        target=target_path,
+        # uv reads requires-python from anima_lora's pyproject.toml
+        # ("==3.13.*") and fetches CPython 3.13 itself, so we don't
+        # need to point base_python at the LoraHub-managed runtime.
+        base_python=None,
+        pypi_index=settings.pypi_index_url,
+    )
+    if not (plan.target / "pyproject.toml").is_file():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"vendored anima_lora copy at {plan.target} is missing "
+                "pyproject.toml — the source tree may be corrupted."
+            ),
+        )
+    if plan.venv_dir.exists() and any(plan.venv_dir.iterdir()):
+        if not req.force:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"venv {plan.venv_dir} already exists; "
+                    "pass force=true to wipe and rebuild it."
+                ),
+            )
+        installer.cleanup_partial(plan)
+        if plan.venv_dir.exists() and any(plan.venv_dir.iterdir()):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"failed to clear {plan.venv_dir}; some files may be "
+                    "locked. Close any tools using the venv and retry."
                 ),
             )
 

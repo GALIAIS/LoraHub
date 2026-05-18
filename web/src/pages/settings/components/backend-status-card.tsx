@@ -1,5 +1,6 @@
 import { CheckCircle2, XCircle, AlertTriangle, ExternalLink } from "lucide-react"
 import type {
+  AnimaLoraBackendStatus,
   AnyBackendStatus,
   BackendDescriptor,
   KohyaBackendStatus,
@@ -26,6 +27,10 @@ function isDiffusionPipe(s: AnyBackendStatus): s is DiffusionPipeBackendStatus {
   return s.id === "diffusion-pipe"
 }
 
+function isAnimaLora(s: AnyBackendStatus): s is AnimaLoraBackendStatus {
+  return s.id === "anima_lora"
+}
+
 function statusTone(s: AnyBackendStatus) {
   if (s.ready) return { tone: "ready" as const, label: "已就绪" }
   if (isKohya(s) && s.sd_scripts_ok && s.python_ok && !s.requirements_ok) {
@@ -38,6 +43,12 @@ function statusTone(s: AnyBackendStatus) {
     return { tone: "warn" as const, label: "缺少 Python" }
   }
   if (isDiffusionPipe(s) && s.repo_ok && !s.python_ok) {
+    return { tone: "warn" as const, label: "缺少 Python" }
+  }
+  if (isAnimaLora(s) && s.repo_ok && !s.python_ok) {
+    // Vendored: source is always present on disk. The only blocker
+    // for ready=false is normally the python interpreter, so guide
+    // the user there with a tone less alarming than "broken".
     return { tone: "warn" as const, label: "缺少 Python" }
   }
   return { tone: "broken" as const, label: "未配置" }

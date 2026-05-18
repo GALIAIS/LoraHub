@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from lorahub.core.backends.anima_lora import bootstrap as anima_lora_bootstrap
+from lorahub.core.backends.anima_lora import installer as anima_lora_installer
+from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.diffusion_pipe import bootstrap as dp_bootstrap
 from lorahub.core.backends.diffusion_pipe import installer as dp_installer
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
@@ -72,6 +75,21 @@ _BACKENDS: dict[str, BackendDescriptor] = {
         default_path_func=dp_bootstrap.default_repo_path,
         bootstrap_func=dp_installer.bootstrap,
         backend_class=DiffusionPipeBackend,
+    ),
+    "anima_lora": BackendDescriptor(
+        id="anima_lora",
+        name="sorryhyun/anima_lora (vendored)",
+        description=(
+            "Anima DiT specialist trainer with OrthoLoRA / T-LoRA / "
+            "Hydra / postfix / EasyControl / IP-Adapter / DMD turbo. "
+            "Source ships vendored under external/anima_lora — no clone "
+            "needed. LoraHub manages the dedicated .venv via uv sync."
+        ),
+        repo_url=anima_lora_installer.ANIMA_LORA_REPO_URL,
+        default_path_func=anima_lora_bootstrap.default_repo_path,
+        bootstrap_func=anima_lora_installer.bootstrap,
+        backend_class=AnimaLoraBackend,
+        extras={"vendored": True},
     ),
 }
 

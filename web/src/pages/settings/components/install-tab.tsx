@@ -70,6 +70,14 @@ const STEP_PLANS: Record<BackendId, StepDef[]> = {
     },
     { id: "deepspeed", label: "安装 DeepSpeed", match: /^install\s+deepspeed/i },
   ],
+  // anima_lora ships vendored under external/anima_lora — no clone
+  // needed. The single install step is `uv sync` against the bundled
+  // pyproject.toml + uv.lock, which materialises a dedicated `.venv`
+  // (CPython 3.13 + torch nightly + accelerate + diffusers). Surface
+  // it as one step so the progress UI lines up with kohya / dp.
+  anima_lora: [
+    { id: "sync", label: "uv sync (创建 .venv + 装依赖)", match: /^uv\s+sync/i },
+  ],
 }
 
 type StepState = "pending" | "running" | "succeeded" | "failed"
@@ -443,6 +451,19 @@ export function InstallTab() {
               </span>
             )}
           </div>
+
+          {effective === "anima_lora" && !isRunning && (
+            <div className="rounded-[4px] border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300 leading-relaxed">
+              <strong className="text-foreground">anima_lora 已随 LoraHub 一起分发</strong>
+              （<code className="text-foreground">external/anima_lora/</code>），
+              无需克隆。点击「安装」会用
+              <code className="text-foreground"> uv sync </code>
+              在 <code className="text-foreground">external/anima_lora/.venv</code> 内
+              创建一个**独立的** CPython 3.13 venv,装好 torch 2.11/2.12 nightly +
+              accelerate + diffusers 等依赖,与 LoraHub 主 venv 完全隔离。
+              首次安装大约下载 6-8 GB（torch + CUDA wheels）。
+            </div>
+          )}
 
           {descriptor && !descriptor.status.requirements_ok && descriptor.status.python_ok && !isRunning && (
             <div className="flex items-center gap-3 rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2">
