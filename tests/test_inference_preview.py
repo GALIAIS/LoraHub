@@ -186,6 +186,43 @@ def test_worker_renders_each_new_checkpoint_once(tmp_path: Path) -> None:
         t.join(timeout=2)
 
 
+def test_worker_finds_dp_nested_run_dir_layout(tmp_path: Path) -> None:
+    """diffusion-pipe writes ckpts under `<output>/<UTC>/step{N}/`.
+
+    The worker has to peek through that timestamp dir; a flat scan of
+    `output_dir` would miss every checkpoint. We assert the worker also
+    picks the alphabetically-last subdir (matching dp's own
+    `get_most_recent_run_dir` selection).
+    """
+    worker, stop, events = _make_worker(tmp_path)
+    # Stale older run that should NOT be picked up.
+    older = worker.config.output_dir / "20250101_00-00-00"
+    older.mkdir()
+    _drop_checkpoint(older, "step50")
+    # Active run — alphabetically later, so this is the one dp would
+    # also resolve to via its `sorted([...])[-1]` rule.
+    active = worker.config.output_dir / "20260518_05-37-00"
+    active.mkdir()
+    _drop_checkpoint(active, "step100")
+
+    t = threading.Thread(target=worker.run, daemon=True)
+    t.start()
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if (
+                len([e for e in events if e.type is EventType.sample_ready]) >= 2
+            ):
+                break
+            time.sleep(0.1)
+        sample_evs = [e for e in events if e.type is EventType.sample_ready]
+        assert len(sample_evs) == 2, f"got {len(sample_evs)} sample events"
+        assert {e.payload["checkpoint"] for e in sample_evs} == {"step100"}
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
 def test_worker_picks_up_new_checkpoint_added_after_start(tmp_path: Path) -> None:
     worker, stop, events = _make_worker(tmp_path)
     t = threading.Thread(target=worker.run, daemon=True)

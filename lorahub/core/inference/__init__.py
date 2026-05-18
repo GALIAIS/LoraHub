@@ -491,8 +491,35 @@ def _drain_queue(q: "queue.Queue[str]"):
 
 
 def _iter_ckpt_dirs(output_dir: Path) -> Iterable[Path]:
-    """Yield dp checkpoint dirs (`step{N}` / `epoch{N}` under output_dir)."""
-    for child in output_dir.iterdir():
+    """Yield dp checkpoint dirs (`step{N}` / `epoch{N}`).
+
+    diffusion-pipe's ``train.py`` always prepends a UTC timestamp run-dir
+    under the configured ``output_dir`` (see ``get_most_recent_run_dir``
+    upstream), so the real layout is ``<output_dir>/<YYYYMMDD_HH-MM-SS>/
+    step{N}/`` rather than ``<output_dir>/step{N}/``. We mirror dp's
+    selection logic — pick the alphabetically-last subdirectory as the
+    active run — and fall back to scanning ``output_dir`` directly so
+    older / hand-laid layouts still work.
+    """
+    if not output_dir.is_dir():
+        return
+    # Direct layout: output_dir/step* | epoch*
+    direct = [
+        p
+        for p in output_dir.iterdir()
+        if p.is_dir() and (p.name.startswith("step") or p.name.startswith("epoch"))
+    ]
+    if direct:
+        yield from direct
+        return
+    # Nested layout: output_dir/<run>/step* | epoch*. dp picks the
+    # alphabetically-last child via `sorted(...)[-1]`; we replicate that
+    # so a fresh run picks up its own ckpts (timestamps sort lexicographically).
+    candidates = sorted(p for p in output_dir.iterdir() if p.is_dir())
+    if not candidates:
+        return
+    run_dir = candidates[-1]
+    for child in run_dir.iterdir():
         if not child.is_dir():
             continue
         if child.name.startswith("step") or child.name.startswith("epoch"):
