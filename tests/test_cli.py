@@ -137,3 +137,49 @@ def test_sweep_dry_run_lists_variants(tmp_path: Path) -> None:
     assert "lora_output-004" in result.stdout
     # Dry-run must not write any files.
     assert not output_root.exists()
+
+
+# --------------------------------------------------------------------------- #
+# B9 — sub-app surface (jobs / sweeps / system)
+# --------------------------------------------------------------------------- #
+
+
+def test_jobs_help_lists_subcommands() -> None:
+    """`lorahub jobs --help` must surface ls/cancel/kill/resume/rerun/show."""
+    result = runner.invoke(app, ["jobs", "--help"])
+    assert result.exit_code == 0, result.stdout
+    for cmd in ("ls", "cancel", "kill", "resume", "rerun", "show"):
+        assert cmd in result.stdout, f"missing subcommand {cmd!r}"
+
+
+def test_jobs_ls_empty_store(tmp_path: Path, monkeypatch) -> None:
+    """`jobs ls` against an empty store prints `no jobs` and exits 0."""
+    # Point the store at a fresh dir so the test doesn't touch the user's
+    # actual jobs.sqlite (LORAHUB_DATA_DIR is the historical override).
+    monkeypatch.setenv("LORAHUB_DATA_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["jobs", "ls"])
+    assert result.exit_code == 0, result.stdout
+    assert "no jobs" in result.stdout
+
+
+def test_sweeps_help_mentions_submit() -> None:
+    result = runner.invoke(app, ["sweeps", "--help"])
+    assert result.exit_code == 0
+    assert "submit" in result.stdout
+    assert "ls" in result.stdout
+
+
+def test_system_help_mentions_gpu() -> None:
+    result = runner.invoke(app, ["system", "--help"])
+    assert result.exit_code == 0
+    assert "gpu" in result.stdout
+    assert "info" in result.stdout
+
+
+def test_system_info_runs() -> None:
+    """`system info` should print without needing GPUs or external state."""
+    result = runner.invoke(app, ["system", "info"])
+    assert result.exit_code == 0, result.stdout
+    assert "host:" in result.stdout
+    assert "CPU:" in result.stdout

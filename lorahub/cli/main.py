@@ -38,6 +38,22 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+# Sub-command groups (B9). Each registers as a Typer of its own so the
+# CLI surface mirrors the API: `lorahub jobs ls`, `lorahub sweep submit`,
+# `lorahub system gpu`. Imported lazily to avoid the import chain pulling
+# in the API store at module load when the user just runs `--help`.
+from lorahub.cli.jobs import jobs_app  # noqa: E402
+from lorahub.cli.sweep import sweep_app  # noqa: E402
+from lorahub.cli.system import system_app  # noqa: E402
+
+app.add_typer(jobs_app, name="jobs")
+# Plural: the existing `lorahub sweep <args>` top-level command stays as
+# the in-process one-shot grid sweep tool. The new sub-app drives the
+# server's /api/sweeps endpoint (mode/n_trials/seed-aware) so power
+# users can submit + list adaptive sweeps without the web UI.
+app.add_typer(sweep_app, name="sweeps")
+app.add_typer(system_app, name="system")
 err_console = Console(stderr=True)
 
 
