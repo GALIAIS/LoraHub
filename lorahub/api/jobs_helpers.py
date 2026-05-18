@@ -621,6 +621,15 @@ def _enqueue_launch(
                     j.state = JobState.succeeded if rc == 0 else JobState.failed
                 j.finished_at = datetime.now(UTC)
                 state.registry.update(j)
+                # Sweep feedback: pull the final loss/val_loss out of the
+                # workspace and push it into the parent sweep's sampler.
+                # No-op for non-sweep jobs and for sweeps that aren't
+                # registered as active (restart, already exhausted).
+                from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+                    report_terminal_job,
+                )
+                with contextlib.suppress(Exception):
+                    report_terminal_job(j)
             sink.__exit__(None, None, None)
 
     def task(slot: int) -> None:
@@ -651,6 +660,14 @@ def _enqueue_launch(
                 j.error = repr(exc)
                 j.finished_at = datetime.now(UTC)
                 state.registry.update(j)
+                # Mirror the sweep-feedback hook so launch failures
+                # (no checkpoints written, no events.jsonl) still tell
+                # TPE "this region is bad" via float('inf').
+                from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+                    report_terminal_job,
+                )
+                with contextlib.suppress(Exception):
+                    report_terminal_job(j)
             with contextlib.suppress(Exception):
                 sink.__exit__(None, None, None)
             return

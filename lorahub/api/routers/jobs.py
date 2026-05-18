@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -514,6 +515,15 @@ def kill_job(job_id: str) -> dict[str, Any]:
     if job.error is None:
         job.error = "force-killed via /api/jobs/{id}/kill"
     state.registry.update(job)
+    # Sweep feedback: a forcibly-killed sweep child still owes its
+    # parent a (probably bad) score so TPE doesn't keep proposing
+    # this region. ``report_terminal_job`` reads whatever metrics
+    # made it to disk before the kill landed.
+    from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+        report_terminal_job,
+    )
+    with contextlib.suppress(Exception):
+        report_terminal_job(job)
 
     return {
         "job_id": job_id,
@@ -596,6 +606,13 @@ def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
         job.state = JobState.canceled
         job.finished_at = datetime.now(UTC)
         state.registry.update(job)
+        # Sweep feedback: cancelled-before-start still has to feed
+        # the sampler so it doesn't think this region is unexplored.
+        from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+            report_terminal_job,
+        )
+        with contextlib.suppress(Exception):
+            report_terminal_job(job)
         return job.to_summary()
     job.state = JobState.canceling
     state.registry.update(job)

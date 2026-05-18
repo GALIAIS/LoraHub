@@ -455,13 +455,38 @@ class MaterialisedSweep:
     The router uses this when running TPE: it calls ``next_variant``
     once per launch, then ``report_trial`` once each child job
     finishes so the sampler can ask better questions next time. For
-    grid / random, ``report_trial`` is a no-op.
+    grid / random, ``report_trial`` still appends into
+    ``reported_scores`` for introspection, but the sampler itself
+    ignores the feedback (non-adaptive).
+
+    Note on adaptive pruning (ASHA / Hyperband): each trial in the
+    LoRA sweep is a *full* training subprocess, not an in-process
+    iterator. We currently feed back the final score only; adopting
+    Optuna's :class:`SuccessiveHalvingPruner` would require:
+
+      1. Exposing the underlying ``optuna.trial.Trial`` through the
+         Sampler protocol so the API layer can call
+         ``trial.report(value, step)`` on every step / validation event.
+      2. Plumbing ``trial.should_prune()`` checks into the sweep
+         router and cancelling the corresponding child job mid-run.
+      3. Deciding what to feed back when a trial is pruned —
+         Optuna handles ``TrialState.PRUNED`` natively, but the
+         current Sampler protocol only knows ``report(score)``.
+
+    None of this is wired today; the architecture accepts only
+    end-of-trial feedback. Step-level pruning is a TODO for a future
+    cut once the subprocess-cancel pipeline is faster than launch
+    overhead.
     """
 
     plan: SweepPlan
     n_trials: int
     _sampler: Sampler | None = None
     _emitted: int = 0
+    # History of reported (axis_values, score) tuples — useful for
+    # introspection from tests + the pareto endpoint, and for any
+    # future restart-recovery hook that wants to replay the study.
+    reported_scores: list[tuple[dict[str, Any], float]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Validate paths once up front; running into a typo on trial 4
@@ -512,8 +537,12 @@ class MaterialisedSweep:
 
         Score semantics: lower is better (we minimise). Convert
         accuracy / IoU / etc. to a loss-shaped scalar before calling
-        — the sampler doesn't know about your domain.
+        — the sampler doesn't know about your domain. ``float('inf')``
+        is acceptable and signals a failed / metric-less trial; TPE
+        treats it as a maximally bad sample and steers away from
+        nearby regions.
         """
+        self.reported_scores.append((dict(axis_values), float(score)))
         self.sampler.report(axis_values, score)
 
 

@@ -15,11 +15,19 @@ Three modes are accepted:
   optional ``[sweep]`` extra. A missing optuna install surfaces as
   HTTP 503.
 
-Adaptive modes (random / tpe) currently materialise their full
-``n_trials`` batch up front. TPE without per-trial feedback still
-runs — it falls back to its prior — but to actually benefit from
-TPE's adaptive behaviour we need the metric-stream → ``report_trial``
-loop, which is cut3.
+TPE feedback loop (cut3): the materialised sweep is registered in
+:mod:`lorahub.api.sweep_runtime`; whenever a child job hits a terminal
+state, ``report_terminal_job`` is invoked from the jobs layer and pushes
+the final ``loss`` / ``val_loss`` back into the sampler. Failed or
+metric-less trials report ``float('inf')`` so the study still steers
+away from the offending region instead of silently skipping it.
+
+The active-sweep registry is in-memory only — server restart loses the
+live Optuna study. Already-enqueued trials still run, but no further
+adaptive guidance is possible until their parent sweep is rebuilt
+(cut4). The ``/sweeps/{id}/pareto`` endpoint reads JobRecord history
+directly, so historical Pareto / best-trial reporting always survives
+a restart.
 
 Each spawned :class:`JobRecord` is stamped with
 ``metadata = {"sweep_id": ..., "axis_values": {...}}`` so a later
@@ -39,7 +47,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from lorahub.api import state
-from lorahub.api.jobs_helpers import _launch_job
+from lorahub.api.jobs_helpers import _TERMINAL_STATES, _launch_job
 from lorahub.api.state import JobRecord, JobState
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
@@ -191,9 +199,14 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
     # Drive the sweep through MaterialisedSweep so all three modes go
     # through the same code path. For grid this is equivalent to the
     # legacy `expand()`; for random/tpe it lazily yields one variant
-    # at a time. We currently still drain the iterator up front so the
-    # API response shape (variants[]) stays the same — making this
-    # truly streaming is part of cut3 (metric feedback loop).
+    # at a time. We still drain the iterator up front so the API
+    # response shape (variants[]) stays the same — but for TPE we
+    # *also* register the materialised sweep into the live registry
+    # below so per-job terminal callbacks can feed scores back into
+    # the sampler. The current draining is suboptimal for TPE (the
+    # full batch is asked-but-not-told before any job finishes); a
+    # truly streaming variant where each launch waits for the prior
+    # job's score is a future cut.
     try:
         materialised = plan.materialize()
     except SamplerUnavailableError as exc:
@@ -210,6 +223,12 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         if req.workspace_root
         else (Path.cwd() / "runs").resolve()
     )
+
+    # Register the sweep BEFORE launching any child job — the launch
+    # closure runs in a worker thread and may transition the job to a
+    # terminal state before we'd otherwise reach the registration call.
+    from lorahub.api.sweep_runtime import register_sweep  # noqa: PLC0415
+    register_sweep(sweep_id, materialised)
 
     summary_variants: list[dict[str, Any]] = []
     job_ids: list[str] = []
@@ -443,6 +462,94 @@ def list_sweeps() -> dict[str, Any]:
 
     summaries.sort(key=lambda s: s["latest_modified_at"], reverse=True)
     return {"sweeps": summaries}
+
+
+@router.get("/sweeps/{sweep_id}/pareto")
+def get_sweep_pareto(sweep_id: str) -> dict[str, Any]:
+    """Return finished trials, the best score, and a count of pending jobs.
+
+    Single-objective minimisation: ``best`` is the trial with the lowest
+    finite score among completed jobs. Trials with no usable metric report
+    as ``float('inf')`` and never beat a finite score, but they are still
+    listed under ``completed_trials`` so the operator can see them.
+
+    Read-side endpoint — depends only on JobRecord history (workspace
+    ``events.jsonl`` + ``metadata.axis_values``), never on the in-memory
+    ``_active_sweeps`` dict. That means a server restart loses the live
+    Optuna study but pareto data still surfaces correctly for any
+    JobRecord that survives the restart in SQLite.
+
+    Returns 404 only when neither the registry nor the SweepStore knows
+    the sweep_id. A sweep that's still spawning trials returns its
+    partial completed set with ``pending`` reflecting the in-flight
+    count.
+    """
+    matched = [
+        j
+        for j in state.registry.list()
+        if j.metadata is not None and j.metadata.get("sweep_id") == sweep_id
+    ]
+    record = _load_sweep_record(sweep_id)
+
+    if not matched and record is None:
+        raise HTTPException(status_code=404, detail="sweep not found")
+
+    completed_trials: list[dict[str, Any]] = []
+    pending = 0
+    for job in matched:
+        meta = job.metadata or {}
+        axis_values = meta.get("axis_values")
+        if not isinstance(axis_values, dict):
+            # Legacy / non-axis jobs can't surface in the pareto view.
+            continue
+        if job.state in _TERMINAL_STATES:
+            score = _read_final_score(job.workspace)
+            completed_trials.append(
+                {
+                    "axis_values": axis_values,
+                    "score": score,
+                    "job_id": job.id,
+                    "state": job.state.value,
+                }
+            )
+        else:
+            pending += 1
+
+    # Single-objective: pick the lowest *finite* score; tie-break by
+    # earliest completion. Pure infinities (failed / metric-less) leave
+    # ``best=None`` so the UI can render "no successful trial yet".
+    best: dict[str, Any] | None = None
+    for trial in completed_trials:
+        score = trial["score"]
+        if not isinstance(score, (int, float)) or score == float("inf"):
+            continue
+        if best is None or score < best["score"]:
+            best = {
+                "axis_values": trial["axis_values"],
+                "score": score,
+                "job_id": trial["job_id"],
+            }
+
+    return {
+        "sweep_id": sweep_id,
+        "completed_trials": completed_trials,
+        "best": best,
+        "pending": pending,
+    }
+
+
+def _read_final_score(workspace: Path) -> float:
+    """Module-level shim into the runtime's score reader.
+
+    Kept here as a thin re-export so the pareto endpoint and the
+    feedback hook share a single definition of "final score". The
+    feedback path (jobs_helpers / runtime) is the canonical owner —
+    importing it lazily keeps the sweeps router free of a hard
+    dependency on the runtime module.
+    """
+    from lorahub.api.sweep_runtime import _read_final_score as _impl  # noqa: PLC0415
+
+    return _impl(workspace)
 
 
 def _load_sweep_record(sweep_id: str):  # type: ignore[no-untyped-def]

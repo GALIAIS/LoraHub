@@ -44,16 +44,21 @@ def _make_stub_sd_scripts(root: Path) -> Path:
 def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistry]:
     """Isolate registry + scheduler per-test so threads don't bleed across cases."""
     from lorahub.api import scheduler as sched_module
+    from lorahub.api import sweep_runtime
 
     fresh = state.JobRegistry()
     monkeypatch.setattr(state, "registry", fresh)
     fresh_sched = sched_module.JobScheduler(concurrency=1)
     monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
     fresh_sched.start()
+    # Reset the active-sweeps dict so a TPE feedback hook from one
+    # test never reaches into another test's MaterialisedSweep.
+    sweep_runtime.reset_for_tests()
     try:
         yield fresh
     finally:
         fresh_sched.stop(timeout=2.0)
+        sweep_runtime.reset_for_tests()
 
 
 @pytest.fixture
@@ -2958,6 +2963,246 @@ def test_list_sweeps_aggregates(client: TestClient, tmp_path: Path) -> None:
     assert b["total"] == 2
     assert b["failed"] == 2
     assert b["name_prefix"] == "bravo"
+
+
+# --------------------------------------------------------------------------- #
+# /api/sweeps/{id}/pareto + TPE feedback loop (B4 cut3)
+# --------------------------------------------------------------------------- #
+
+
+def _write_events_jsonl(workspace: Path, *, loss: float, val_loss: float | None = None) -> None:
+    """Drop a minimal events.jsonl that pareto / sweep_runtime can parse."""
+    workspace.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    import json as _json
+
+    if val_loss is not None:
+        lines.append(
+            _json.dumps({"type": "validation", "payload": {"val_loss": val_loss, "epoch": 1}})
+        )
+    lines.append(_json.dumps({"type": "step", "payload": {"loss": loss, "step": 100}}))
+    (workspace / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_pareto_endpoint_404_when_unknown(client: TestClient) -> None:
+    """An unknown sweep id is a clean 404 from /pareto, not a 500."""
+    r = client.get("/api/sweeps/01NOSUCHSWEEP00000000000000/pareto")
+    assert r.status_code == 404
+
+
+def test_pareto_endpoint_returns_partial_when_no_completed(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A sweep with only running / queued children returns ``best=None`` + pending count."""
+    sweep_id = "01PARETOPENDING000000000000"
+    for i in range(2):
+        ws = tmp_path / f"pending-{i}"
+        ws.mkdir()
+        rec = state.registry.create(workspace=ws, config_snapshot={})
+        rec.state = state.JobState.running if i == 0 else state.JobState.queued
+        rec.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 8 * (i + 1)}}
+        state.registry.update(rec)
+
+    r = client.get(f"/api/sweeps/{sweep_id}/pareto")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sweep_id"] == sweep_id
+    assert body["best"] is None
+    assert body["completed_trials"] == []
+    assert body["pending"] == 2
+
+
+def test_pareto_endpoint_picks_lowest_score(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Three completed jobs with distinct losses must surface the lowest as ``best``."""
+    sweep_id = "01PARETOBEST00000000000000"
+    losses = [0.42, 0.18, 0.30]
+    for i, loss in enumerate(losses):
+        ws = tmp_path / f"trial-{i}"
+        _write_events_jsonl(ws, loss=loss)
+        rec = state.registry.create(workspace=ws, config_snapshot={})
+        rec.state = state.JobState.succeeded
+        rec.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 16 + i * 16}}
+        state.registry.update(rec)
+
+    r = client.get(f"/api/sweeps/{sweep_id}/pareto")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["pending"] == 0
+    assert len(body["completed_trials"]) == 3
+    # Trial index 1 has the lowest loss.
+    assert body["best"] is not None
+    assert body["best"]["score"] == pytest.approx(0.18)
+    assert body["best"]["axis_values"]["network.rank"] == 32
+
+
+def test_pareto_endpoint_prefers_val_loss_over_train_loss(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """When both metrics exist, ``val_loss`` (better generalisation signal) wins."""
+    sweep_id = "01PARETOVAL000000000000000"
+    ws = tmp_path / "trial-val"
+    # Train loss is low but val_loss is high — score should reflect val_loss.
+    _write_events_jsonl(ws, loss=0.05, val_loss=0.71)
+    rec = state.registry.create(workspace=ws, config_snapshot={})
+    rec.state = state.JobState.succeeded
+    rec.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 24}}
+    state.registry.update(rec)
+
+    r = client.get(f"/api/sweeps/{sweep_id}/pareto")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["completed_trials"][0]["score"] == pytest.approx(0.71)
+
+
+def test_pareto_endpoint_skips_failed_trials_for_best(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A failed trial with no events.jsonl reports as inf and never beats a finite score."""
+    sweep_id = "01PARETOFAIL00000000000000"
+
+    ws_ok = tmp_path / "trial-ok"
+    _write_events_jsonl(ws_ok, loss=0.25)
+    rec_ok = state.registry.create(workspace=ws_ok, config_snapshot={})
+    rec_ok.state = state.JobState.succeeded
+    rec_ok.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 16}}
+    state.registry.update(rec_ok)
+
+    ws_bad = tmp_path / "trial-bad"
+    ws_bad.mkdir()  # no events.jsonl
+    rec_bad = state.registry.create(workspace=ws_bad, config_snapshot={})
+    rec_bad.state = state.JobState.failed
+    rec_bad.metadata = {"sweep_id": sweep_id, "axis_values": {"network.rank": 64}}
+    state.registry.update(rec_bad)
+
+    r = client.get(f"/api/sweeps/{sweep_id}/pareto")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["completed_trials"]) == 2
+    assert body["best"] is not None
+    assert body["best"]["axis_values"]["network.rank"] == 16
+    # Failed trial's score is +inf → JSON serialises as null/Infinity depending
+    # on FastAPI; just confirm the finite trial wins regardless.
+
+
+def test_tpe_feedback_loop_drives_sampler(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TPE sweep must call ``MaterialisedSweep.report_trial`` once per finished job.
+
+    We bypass the real launcher (no kohya subprocess) and simulate the
+    terminal-state hook that ``jobs_helpers`` would normally fire when a
+    job's ``done`` event arrives. The active sweep registry should still
+    receive scores for every metadata-tagged variant.
+    """
+    pytest.importorskip("optuna", reason="optuna is optional")
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    # Patch the launcher so the spawning path is a no-op apart from the
+    # JobRecord registration the sweep_id metadata is stamped onto.
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 3,
+        "seed": 5,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202, r.text
+    body = r.json()
+    sweep_id = body["sweep_id"]
+
+    # The router should have registered a live MaterialisedSweep.
+    active = sweep_runtime.get_active(sweep_id)
+    assert active is not None, "sweep_runtime should track active TPE sweep"
+    assert len(captured) == 3
+
+    # Simulate per-job completion: write a fake events.jsonl with a
+    # decreasing loss curve, then fire the terminal hook.
+    losses = [0.6, 0.4, 0.25]
+    for record, loss in zip(captured, losses, strict=True):
+        _write_events_jsonl(record.workspace, loss=loss)
+        record.state = state.JobState.succeeded
+        state_mod.registry.update(record)
+        sweep_runtime.report_terminal_job(record)
+
+    # Active sweep auto-evicts once every trial has reported.
+    assert sweep_runtime.get_active(sweep_id) is None
+    # ``reported_scores`` mirrors the feedback we pushed in.
+    assert len(active.reported_scores) == 3
+    reported_losses = [s for _, s in active.reported_scores]
+    assert reported_losses == pytest.approx(losses)
+
+
+def test_tpe_feedback_failed_job_reports_inf(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed trial without events.jsonl must report as ``float('inf')`` so TPE keeps moving."""
+    import math
+
+    pytest.importorskip("optuna", reason="optuna is optional")
+    from lorahub.api import state as state_mod
+    from lorahub.api import sweep_runtime
+    from lorahub.api.routers import sweeps as sweeps_router
+
+    captured: list[state.JobRecord] = []
+
+    def fake_launch(cfg: TrainingConfig, workspace: Path, *, metadata: dict[str, Any]) -> dict[str, Any]:
+        record = state_mod.registry.create(
+            workspace=workspace, config_snapshot=cfg.model_dump(mode="json")
+        )
+        record.metadata = metadata
+        state_mod.registry.update(record)
+        captured.append(record)
+        return record.to_summary()
+
+    monkeypatch.setattr(sweeps_router, "_launch_job", fake_launch)
+
+    payload = {
+        "base_config": _config_payload(tmp_path) | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "kind": "int_uniform", "low": 8, "high": 64}],
+        "mode": "tpe",
+        "n_trials": 2,
+        "seed": 9,
+        "workspace_root": str(tmp_path / "runs"),
+    }
+    r = client.post("/api/sweeps", json=payload)
+    assert r.status_code == 202
+    sweep_id = r.json()["sweep_id"]
+    active = sweep_runtime.get_active(sweep_id)
+    assert active is not None
+
+    # First trial: success with finite loss.
+    _write_events_jsonl(captured[0].workspace, loss=0.3)
+    captured[0].state = state.JobState.succeeded
+    state_mod.registry.update(captured[0])
+    sweep_runtime.report_terminal_job(captured[0])
+
+    # Second trial: failed before producing any events — must report inf.
+    captured[1].state = state.JobState.failed
+    state_mod.registry.update(captured[1])
+    sweep_runtime.report_terminal_job(captured[1])
+
+    scores = [s for _, s in active.reported_scores]
+    assert scores[0] == pytest.approx(0.3)
+    assert math.isinf(scores[1])
 
 
 # --------------------------------------------------------------------------- #
