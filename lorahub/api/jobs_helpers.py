@@ -780,8 +780,15 @@ def _maybe_start_preview_worker(
             PreviewWorker,
             StubInference,
         )
-        from lorahub.core.inference.anima import (  # noqa: PLC0415
-            build_backend_from_config,
+        from lorahub.core.inference import (  # noqa: F401, PLC0415
+            anima as _anima_mod,
+        )
+        from lorahub.core.inference import (  # noqa: F401, PLC0415
+            diffusers_backend as _diffusers_mod,
+        )
+        from lorahub.core.inference.registry import (  # noqa: PLC0415
+            registered_backend_names,
+            resolve_backend,
         )
     except Exception:  # noqa: BLE001
         log.exception("preview worker [%s]: failed to import module", job_id)
@@ -795,22 +802,57 @@ def _maybe_start_preview_worker(
     samples_dir = (workspace / "samples").resolve()
     samples_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prefer the real Anima inference backend; fall back to the
-    # placeholder stub if any prerequisite path is missing (sd-scripts
-    # repo, base model files...). The stub keeps the event flow live
-    # so the UI still gets sample_ready pings even while we're waiting
-    # on user setup of sd-scripts.
+    # Route to the first backend whose ``is_available(arch=...)`` passes.
+    # When no backend claims the arch we still spin the worker up with
+    # ``StubInference`` so the rest of the event flow keeps working —
+    # but we now emit a ``preview_unavailable`` event so the UI knows
+    # the placeholder PNGs aren't real previews.
+    arch = cfg.base_model.arch
     inference_backend: Any
-    real_backend = build_backend_from_config(recipe=cfg, workspace=workspace)
+    real_backend = resolve_backend(arch=arch, recipe=cfg, workspace=workspace)
     if real_backend is not None:
         inference_backend = real_backend
-        log.info("preview worker [%s]: using AnimaInferenceBackend", job_id)
+        log.info(
+            "preview worker [%s]: using %s backend for arch=%s",
+            job_id,
+            getattr(real_backend, "name", type(real_backend).__name__),
+            arch,
+        )
     else:
         inference_backend = StubInference()
-        log.info(
-            "preview worker [%s]: anima prerequisites missing — using StubInference",
-            job_id,
+        reason = (
+            f"no inference backend in {registered_backend_names()} "
+            f"supports arch={arch!r}"
         )
+        log.warning("preview worker [%s]: %s — using StubInference", job_id, reason)
+        try:
+            on_event(
+                TrainingEvent(
+                    type=EventType.preview_unavailable,
+                    job_id=job_id,
+                    payload={
+                        "arch": arch,
+                        "available_backends": registered_backend_names(),
+                        "reason": reason,
+                    },
+                )
+            )
+            on_event(
+                TrainingEvent(
+                    type=EventType.log,
+                    job_id=job_id,
+                    payload={
+                        "level": "warning",
+                        "source": "preview",
+                        "message": (
+                            f"preview placeholder used because no backend "
+                            f"supports {arch}"
+                        ),
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("preview worker [%s]: failed to emit unavailable event", job_id)
 
     pcfg = PreviewConfig(
         enabled=True,

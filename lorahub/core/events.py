@@ -45,6 +45,14 @@ class EventType(StrEnum):
     log = "log"
     error = "error"
     done = "done"
+    # Emitted by the preview worker setup path when no inference backend
+    # in the registry can serve ``cfg.base_model.arch`` (or all of them
+    # bow out — diffusers wheel missing, anima sd-scripts paths absent,
+    # ...). Lets the UI surface "previews disabled because no backend
+    # supports {arch}" instead of silently falling back to the placeholder
+    # PNG. Payload keys: ``arch`` (str), ``available_backends`` (list[str]),
+    # ``reason`` (str, human-readable).
+    preview_unavailable = "preview_unavailable"
 
 
 @dataclass(frozen=True, slots=True)

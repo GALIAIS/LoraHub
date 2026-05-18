@@ -174,9 +174,32 @@ class AnimaInferenceBackend:
     preview worker. One instance per job; safe to call `render`
     sequentially from a single thread (the worker guarantees this)."""
 
+    name = "anima"
+
     def __init__(self, config: AnimaInferenceConfig) -> None:
         self.config = config
         self._sanity_checked = False
+
+    def is_available(self, *, arch: str) -> bool:
+        """Anima only runs against ``arch == "anima"``; all paths must exist.
+
+        Mirrors the ``_sanity_check`` body but returns a bool instead of
+        raising — the registry uses this gate to fall through to the
+        next backend when prerequisites are absent.
+        """
+        if arch != "anima":
+            return False
+        cfg = self.config
+        for path in (
+            cfg.sd_scripts_python,
+            cfg.sd_scripts_repo / "anima_minimal_inference.py",
+            cfg.transformer_path,
+            cfg.vae_path,
+            cfg.text_encoder_path,
+        ):
+            if not Path(path).exists():
+                return False
+        return True
 
     # PreviewWorker calls this for each (lora, prompt) pair.
     def render(
@@ -402,3 +425,38 @@ def build_backend_from_config(
         min_free_vram_mib=6500,
     )
     return AnimaInferenceBackend(cfg)
+
+
+# --------------------------------------------------------------------------- #
+# Registry hook — picked up by lorahub.core.inference at import time.
+# --------------------------------------------------------------------------- #
+
+
+def _anima_factory(
+    *, arch: str, recipe: Any, workspace: Any
+) -> AnimaInferenceBackend | None:
+    """Registry factory for the Anima backend.
+
+    Only returns a backend for ``arch == "anima"`` — the registry skips
+    the rest and falls through to the next entry (typically diffusers).
+    Same prerequisite gate as ``build_backend_from_config`` so missing
+    sd-scripts paths don't surface a half-built backend.
+    """
+    if arch != "anima":
+        return None
+    if recipe is None or workspace is None:
+        return None
+    backend = build_backend_from_config(recipe=recipe, workspace=Path(workspace))
+    if backend is None:
+        return None
+    if not backend.is_available(arch=arch):
+        return None
+    return backend
+
+
+# Late import to dodge the cycle: registry imports PromptSpec from
+# ``lorahub.core.inference``, which is what this module imports as well.
+# By the time this module reaches its bottom, both are defined.
+from lorahub.core.inference.registry import register_backend  # noqa: E402
+
+register_backend("anima", _anima_factory)
