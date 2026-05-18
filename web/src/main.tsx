@@ -1,20 +1,50 @@
-import { StrictMode } from "react"
+import { lazy, StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom"
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import App from "./App"
-import { JobsPage } from "./pages/jobs"
-import { AnalysisPage } from "./pages/analysis"
-import { DashboardPage } from "./pages/dashboard"
-import { ConfigsPage } from "./pages/configs"
-import { DatasetsPage } from "./pages/datasets"
-import { GalleryPage } from "./pages/gallery"
-import { ImageStudioPage } from "./pages/image-studio"
-import { SettingsPage } from "./pages/settings"
-import { SweepsPage } from "./pages/sweeps"
-import { AboutPage } from "./pages/about"
 import "./index.css"
+
+// Code-split every page route. Suspense lives inside <App> so the
+// shell stays mounted while a chunk downloads (see App.tsx). The big
+// wins are image-studio (virtualised grid + smart-caption modals),
+// configs (the schema-driven form), and analysis (the chart stack)
+// — without splitting they all rode the initial 1.2 MB bundle.
+//
+// Each `lazy()` call rewrites the named export into the default export
+// `React.lazy` requires. If we ever flip the page modules to default
+// exports this collapses to a one-liner per page.
+const DashboardPage = lazy(() =>
+  import("./pages/dashboard").then((m) => ({ default: m.DashboardPage })),
+)
+const JobsPage = lazy(() =>
+  import("./pages/jobs").then((m) => ({ default: m.JobsPage })),
+)
+const AnalysisPage = lazy(() =>
+  import("./pages/analysis").then((m) => ({ default: m.AnalysisPage })),
+)
+const SweepsPage = lazy(() =>
+  import("./pages/sweeps").then((m) => ({ default: m.SweepsPage })),
+)
+const ConfigsPage = lazy(() =>
+  import("./pages/configs").then((m) => ({ default: m.ConfigsPage })),
+)
+const DatasetsPage = lazy(() =>
+  import("./pages/datasets").then((m) => ({ default: m.DatasetsPage })),
+)
+const ImageStudioPage = lazy(() =>
+  import("./pages/image-studio").then((m) => ({ default: m.ImageStudioPage })),
+)
+const GalleryPage = lazy(() =>
+  import("./pages/gallery").then((m) => ({ default: m.GalleryPage })),
+)
+const SettingsPage = lazy(() =>
+  import("./pages/settings").then((m) => ({ default: m.SettingsPage })),
+)
+const AboutPage = lazy(() =>
+  import("./pages/about").then((m) => ({ default: m.AboutPage })),
+)
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { toast } from "sonner"
 import {
   BarChart3,
   Square,
@@ -139,8 +140,13 @@ export function JobDetail({
       const fresh = await api.rerunJob(data.id)
       await queryClient.invalidateQueries({ queryKey: ["jobs"] })
       onSelectJob(fresh.id)
+      toast.success("任务已再次启动", {
+        description: `新任务 ID ${fresh.id.slice(-8)}`,
+      })
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setActionError(msg)
+      toast.error("再次启动失败", { description: msg })
     } finally {
       setBusy(null)
     }
@@ -152,11 +158,12 @@ export function JobDetail({
     setActionError(null)
     try {
       await api.revealJob(data.id)
+      toast.success("已在文件管理器中打开工作区")
     } catch (e) {
       // Headless / remote API: server can't open a file manager. Surface
       // the resolved workspace path instead so the user can copy it
-      // straight from the error chip. The detail payload is a JSON
-      // object with `code`, `message`, and `workspace`; older fastapi
+      // straight from the toast. The detail payload is a JSON object
+      // with `code`, `message`, and `workspace`; older fastapi
       // serialisations stringify it, so handle both shapes.
       const raw = e instanceof Error ? e.message : String(e)
       let parsed: { workspace?: string; message?: string } | null = null
@@ -169,16 +176,21 @@ export function JobDetail({
         }
       }
       if (parsed?.workspace) {
+        const ws = parsed.workspace
         try {
-          await navigator.clipboard.writeText(parsed.workspace)
-          setActionError(
-            `服务器无桌面环境,工作区路径已复制到剪贴板: ${parsed.workspace}`,
-          )
+          await navigator.clipboard.writeText(ws)
+          toast.info("服务器无桌面环境", {
+            description: `工作区路径已复制到剪贴板: ${ws}`,
+            duration: 8000,
+          })
         } catch {
-          setActionError(`服务器无桌面环境,工作区路径: ${parsed.workspace}`)
+          toast.warning("服务器无桌面环境", {
+            description: `工作区路径: ${ws}`,
+            duration: 8000,
+          })
         }
       } else {
-        setActionError(raw)
+        toast.error("打开工作区失败", { description: raw })
       }
     } finally {
       setBusy(null)
@@ -193,12 +205,19 @@ export function JobDetail({
     try {
       const result = await api.archiveJob(data.id)
       if (result.warnings.length > 0) {
-        setActionError(`归档完成，有警告：${result.warnings.join("；")}`)
+        toast.warning("归档完成,有警告", {
+          description: result.warnings.join("；"),
+          duration: 8000,
+        })
+      } else {
+        toast.success("已归档到 _archive/")
       }
       await queryClient.invalidateQueries({ queryKey: ["jobs"] })
       onSelectJob(null)
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      setActionError(msg)
+      toast.error("归档失败", { description: msg })
     } finally {
       setBusy(null)
     }

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
-import { NavLink, Outlet } from "react-router-dom"
+import { Suspense, useEffect, useState } from "react"
+import { NavLink, Outlet, useLocation } from "react-router-dom"
+import { Toaster } from "sonner"
 import {
   Activity,
   BarChart3,
@@ -15,6 +16,7 @@ import {
   SlidersHorizontal,
   Sun,
 } from "lucide-react"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalStatusBar } from "@/components/global-status-bar"
 import { cn } from "@/lib/utils"
 
@@ -44,6 +46,9 @@ const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
 ]
 
 export default function App() {
+  // Route key — used both as React Suspense / ErrorBoundary reset key
+  // so both unwedge themselves on navigation.
+  const location = useLocation()
   const [mode, setMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system"
     const stored = window.localStorage.getItem(THEME_MODE_KEY)
@@ -97,6 +102,24 @@ export default function App() {
 
   return (
     <div className="h-screen flex bg-background text-foreground overflow-hidden">
+      {/* Global toast surface. `richColors` picks up our destructive /
+          success tokens automatically; we pin position to bottom-right
+          so the running tail of events at the top of jobs / dashboard
+          isn't covered. `theme="system"` follows the user's `data-
+          themeMode` toggle on <html>. */}
+      <Toaster
+        position="bottom-right"
+        richColors
+        closeButton
+        theme="system"
+        toastOptions={{
+          classNames: {
+            toast:
+              "border-border/60 bg-background text-foreground shadow-[var(--panel-shadow)]",
+            description: "text-muted-foreground",
+          },
+        }}
+      />
       <aside className="w-56 shrink-0 border-r border-sidebar-border bg-sidebar/95 backdrop-blur px-3 py-5 flex flex-col gap-1 overflow-y-auto">
         <div className="px-2 mb-5 flex items-center gap-2">
           <div className="size-8 rounded-[6px] bg-primary text-primary-foreground grid place-items-center font-semibold tracking-tight text-sm">
@@ -194,7 +217,24 @@ export default function App() {
       <main className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
         <GlobalStatusBar />
         <div className="flex-1 min-h-0 overflow-hidden">
-          <Outlet />
+          {/* Suspense lives between the shell chrome and the page body
+              so route chunk loads don't briefly unmount the sidebar /
+              status bar. The fallback is intentionally a blank surface
+              — chunks resolve in <300 ms over a warm cache, faster
+              than a spinner is helpful. */}
+          <Suspense
+            fallback={
+              <div
+                role="status"
+                aria-live="polite"
+                className="h-full w-full bg-background/40"
+              />
+            }
+          >
+            <ErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
+          </Suspense>
         </div>
       </main>
     </div>
