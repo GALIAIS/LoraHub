@@ -53,7 +53,7 @@ export function SamplesGallery({
   }, [samples])
 
   return (
-    <Card className="rounded-[6px] border-border/60">
+    <Card>
       <CardHeader className="py-2.5 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
         <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
           样本预览画廊

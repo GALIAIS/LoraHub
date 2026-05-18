@@ -20,7 +20,7 @@ export function EventsTab({
 }) {
   const [sub, setSub] = useState<SubView>("timeline")
   return (
-    <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden flex flex-col h-full min-h-0">
+    <Card className="overflow-hidden flex flex-col h-full min-h-0">
       <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground shrink-0">

@@ -159,7 +159,7 @@ export function FilesTab({
         工作区 {data.workspace}
       </div>
 
-      <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden">
+      <Card className="overflow-hidden">
         <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
             检查点
@@ -181,7 +181,7 @@ export function FilesTab({
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden">
+      <Card className="overflow-hidden">
         <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
             样本预览
@@ -197,7 +197,7 @@ export function FilesTab({
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden">
+      <Card className="overflow-hidden">
         <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
             日志
@@ -219,7 +219,7 @@ export function FilesTab({
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)] overflow-hidden">
+      <Card className="overflow-hidden">
         <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between">
           <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
             其他

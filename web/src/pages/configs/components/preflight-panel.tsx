@@ -12,7 +12,7 @@ export function PreflightPanel({
   const missingCaptions = preflight.paths.missing_caption_files
 
   return (
-    <Card className="mx-4 mt-3 rounded-[6px] border-border/60 bg-card/80 shadow-[var(--panel-shadow)]">
+    <Card className="mx-4 mt-3 bg-card/80">
       <CardContent className="p-4">
         <div className="flex items-center justify-between gap-4">
           <div>

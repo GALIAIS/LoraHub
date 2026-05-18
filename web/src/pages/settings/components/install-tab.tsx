@@ -366,7 +366,7 @@ export function InstallTab() {
 
   return (
     <div className="space-y-5">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">安装训练后端</CardTitle>
           <CardDescription>

@@ -145,7 +145,7 @@ export function AnalysisWorkbench({
 
       <div className="px-7 py-4 space-y-3">
         {/* Loss panel — visual focus of the page (train + val + EMA). */}
-        <Card className="rounded-[6px] border-border/60">
+        <Card>
           <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
             <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
               损失曲线 · 综合视图

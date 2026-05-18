@@ -64,7 +64,7 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
   if (!summary) return null
 
   return (
-    <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
+    <Card>
       <div
         className={cn(
           "w-full flex items-center justify-between gap-3",

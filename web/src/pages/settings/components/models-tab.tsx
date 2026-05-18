@@ -107,7 +107,7 @@ export function ModelsTab() {
 
   return (
     <div className="space-y-5 w-full">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Download className="size-4 text-muted-foreground" />
@@ -211,7 +211,7 @@ export function ModelsTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Rows3 className="size-4 text-muted-foreground" />

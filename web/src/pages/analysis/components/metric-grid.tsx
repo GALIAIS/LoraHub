@@ -325,7 +325,7 @@ export function MetricGrid({
 
   if (cards.length === 0) {
     return (
-      <Card className="rounded-[6px] border-border/60">
+      <Card>
         <CardContent className="p-6 text-center text-xs text-muted-foreground">
           暂无可绘制的指标。训练后端产出第一行
           <code className="font-mono mx-1">steps: N loss: …</code>
@@ -338,7 +338,7 @@ export function MetricGrid({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
       {cards.map((c) => (
-        <Card key={c.id} className="rounded-[6px] border-border/60">
+        <Card key={c.id}>
           <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
             <CardTitle className="text-[10.5px] tracking-[0.16em] text-foreground/85 font-mono">
               {c.title}

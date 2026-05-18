@@ -493,6 +493,12 @@ code {
     position: relative;
     isolation: isolate;
     overflow: hidden;
+    /* Default chrome radius matches the historical per-Card override
+       (`rounded-[6px]`); pulling it here means individual cards no
+       longer need to repeat the value (and the matching border /
+       box-shadow utilities) on every `<Card>`. Tighter / looser radii
+       still work via Tailwind class overrides on the Card itself. */
+    border-radius: 6px;
     border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
     background:
       linear-gradient(to bottom, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 90%, transparent)),

@@ -157,7 +157,7 @@ export function DashboardPage() {
             )}
           </>
         ) : (
-          <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+          <Card>
             <CardContent className="px-4 py-8 text-center text-sm text-muted-foreground">
               <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
               正在采集系统快照…
@@ -224,7 +224,7 @@ function StatCard({
     warning: "text-amber-700 dark:text-amber-400",
   }[tone]
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardContent className="px-4 py-3">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
           {icon}
@@ -248,7 +248,7 @@ function HostInfoCard({ snapshot }: { snapshot: SystemSnapshot }) {
     { label: "CPU 架构", value: snapshot.cpu.arch || "—" },
   ]
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <Server className="size-4 text-muted-foreground" />
@@ -321,7 +321,7 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Cpu className="size-4 text-muted-foreground" />
@@ -367,7 +367,7 @@ function CpuMemoryCard({ snapshot }: { snapshot: SystemSnapshot }) {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <MemoryStick className="size-4 text-muted-foreground" />
@@ -492,7 +492,7 @@ function GpuSection({
   // 没有任何 GPU 数据 - 给个友好提示。
   if (!hasNvidiaSmi) {
     return (
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Zap className="size-4 text-muted-foreground" />
@@ -523,7 +523,7 @@ function GpuCard({ gpu }: { gpu: SystemGpu }) {
   const vendor = vendorBadge(gpu)
   const isAppleSilicon = gpu.vendor === "apple"
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -701,7 +701,7 @@ function BatteryCard({ battery }: { battery: SystemBattery }) {
     return "未连接电源"
   })()
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -752,7 +752,7 @@ function batteryToneForPercent(percent: number): { text: string; bar: string } {
 
 function DiskSection({ disks }: { disks: SystemDisk[] }) {
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <HardDrive className="size-4 text-muted-foreground" />
@@ -818,7 +818,7 @@ function TopProcessesCard({ processes }: { processes: ProcessInfo[] }) {
   // so a runaway list can't blow the layout.
   const rows = processes.slice(0, 10)
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <ListChecks className="size-4 text-muted-foreground" />
@@ -876,7 +876,7 @@ function TopProcessesCard({ processes }: { processes: ProcessInfo[] }) {
 
 function GpuProcessesCard({ processes }: { processes: GpuProcessInfo[] }) {
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <Zap className="size-4 text-muted-foreground" />
@@ -936,7 +936,7 @@ function GpuProcessesCard({ processes }: { processes: GpuProcessInfo[] }) {
 
 function DiskIoCard({ io }: { io: DiskIoStats | null }) {
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -1021,7 +1021,7 @@ function NetworkInterfacesCard({ interfaces }: { interfaces: NetworkInterfaceSta
   }, [interfaces, showAll])
   const hiddenCount = interfaces.length - filtered.length
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -1146,7 +1146,7 @@ function NetworkSummaryCard({
   publicIp: PublicIpInfo | null
 }) {
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <Globe className="size-4 text-muted-foreground" />
@@ -1249,7 +1249,7 @@ function PublicIpSourceBadge({ source }: { source: PublicIpInfo["source"] }) {
 
 function RecentJobsCard({ jobs }: { jobs: JobSummary[] }) {
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <Activity className="size-4 text-muted-foreground" />

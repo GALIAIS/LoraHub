@@ -56,7 +56,7 @@ export function TaggingTab() {
 
   return (
     <div className="space-y-5">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">自动标注</CardTitle>
           <CardDescription>

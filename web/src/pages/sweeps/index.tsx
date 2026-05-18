@@ -543,7 +543,7 @@ function VariantTable({ jobs }: { jobs: SweepJobSummary[] }) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    title="打开任务详情"
+                    title="打开任务详情" aria-label="打开任务详情"
                     onClick={() =>
                       navigate(`/jobs?id=${encodeURIComponent(job.id)}`)
                     }

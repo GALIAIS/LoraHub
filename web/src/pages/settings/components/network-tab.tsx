@@ -248,7 +248,7 @@ export function NetworkTab() {
 
   return (
     <div className="space-y-5">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Github className="size-4 text-muted-foreground" />
@@ -279,7 +279,7 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Globe2 className="size-4 text-muted-foreground" />
@@ -330,7 +330,7 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Cloud className="size-4 text-muted-foreground" />
@@ -373,7 +373,7 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Cloud className="size-4 text-muted-foreground" />
@@ -406,7 +406,7 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Globe2 className="size-4 text-muted-foreground" />
@@ -441,7 +441,7 @@ export function NetworkTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Sparkles className="size-4 text-muted-foreground" />

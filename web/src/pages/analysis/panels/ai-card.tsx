@@ -64,7 +64,7 @@ export function AICard({
   const lead = extractLead(cached?.markdown)
 
   return (
-    <Card className="rounded-[6px] border-border/60">
+    <Card>
       <CardHeader className="py-2.5 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Sparkles className="size-3.5 text-primary shrink-0" />
@@ -85,7 +85,7 @@ export function AICard({
                 size="sm"
                 className="h-7 text-[11px]"
                 onClick={copyMd}
-                title="复制 Markdown 原文"
+                title="复制 Markdown 原文" aria-label="复制 Markdown 原文"
               >
                 {copied ? (
                   <Check className="size-3 text-emerald-500" />
@@ -99,7 +99,7 @@ export function AICard({
                 size="sm"
                 className="h-7 text-[11px]"
                 onClick={downloadMd}
-                title="下载 .md 文件"
+                title="下载 .md 文件" aria-label="下载 .md 文件"
               >
                 <Download className="size-3" /> 下载
               </Button>

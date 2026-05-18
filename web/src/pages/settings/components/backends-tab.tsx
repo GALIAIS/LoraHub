@@ -166,7 +166,7 @@ export function BackendsTab() {
 
   return (
     <div className="space-y-5">
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">默认后端</CardTitle>
           <CardDescription>
@@ -197,7 +197,7 @@ export function BackendsTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -211,7 +211,7 @@ export function BackendsTab() {
                 size="sm"
                 variant="outline"
                 onClick={autofillAll}
-                title="把后端探测到的路径一次性填入两个后端的所有字段"
+                title="把后端探测到的路径一次性填入两个后端的所有字段" aria-label="把后端探测到的路径一次性填入两个后端的所有字段"
               >
                 <Wand2 className="size-3" />
                 全部自动填入
@@ -241,7 +241,7 @@ export function BackendsTab() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Diffusion-pipe 后端</CardTitle>
           <CardDescription>

@@ -276,7 +276,7 @@ export function JobDetail({
             size="sm"
             onClick={onReveal}
             disabled={!data || busy !== null}
-            title="在文件管理器中打开工作区"
+            title="在文件管理器中打开工作区" aria-label="在文件管理器中打开工作区"
           >
             <FolderOpen className="size-3" />
           </Button>

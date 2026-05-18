@@ -75,7 +75,7 @@ export function DatasetsPage() {
           </p>
         </header>
 
-        <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+        <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">扫描目录</CardTitle>
             <CardDescription>
@@ -142,7 +142,7 @@ export function DatasetsPage() {
               />
             </div>
 
-            <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+            <Card>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div>
@@ -200,7 +200,7 @@ export function DatasetsPage() {
               </CardContent>
             </Card>
 
-            <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+            <Card>
               <CardContent className="px-4 py-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-sm font-medium">用此数据集训练</div>
@@ -257,7 +257,7 @@ function DatasetStat({
 }) {
   const toneStyle = tone === "warning" ? "text-amber-700 dark:text-amber-400" : "text-foreground"
   return (
-    <Card className="rounded-[6px] border-border/70 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardContent className="px-4 py-3">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
           {icon}

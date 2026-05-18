@@ -36,7 +36,7 @@ export function CompareTab({ compareIds }: { compareIds: string[] }) {
 
   if (compareIds.length < 2) {
     return (
-      <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
+      <Card>
         <CardContent className="p-6 text-sm text-muted-foreground text-center">
           请在左侧列表勾选至少 2 个任务以进行对比。
         </CardContent>
@@ -45,7 +45,7 @@ export function CompareTab({ compareIds }: { compareIds: string[] }) {
   }
 
   return (
-    <Card className="rounded-[6px] border-border/60 shadow-[var(--panel-shadow)]">
+    <Card>
       <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
         <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
           损失对比 · {compareIds.length} 个任务
