@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Table,
   TableBody,
@@ -171,7 +170,7 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <ScrollArea className="max-h-[360px]">
+          <div className="max-h-[360px] overflow-auto">
             <FileTable
               jobId={jobId}
               files={data.checkpoints}
@@ -179,7 +178,7 @@ export function FilesTab({
               actionIcon="download"
               emptyHint="还没有保存的检查点。"
             />
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
 
@@ -193,9 +192,9 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <ScrollArea className="max-h-[480px]">
+          <div className="max-h-[480px] overflow-auto">
             <SampleGrid jobId={jobId} files={data.samples} />
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
 
@@ -209,7 +208,7 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <ScrollArea className="max-h-[300px]">
+          <div className="max-h-[300px] overflow-auto">
             <FileTable
               jobId={jobId}
               files={data.logs}
@@ -217,7 +216,7 @@ export function FilesTab({
               actionIcon="open"
               emptyHint="没有日志文件。"
             />
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
 
@@ -231,7 +230,7 @@ export function FilesTab({
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <ScrollArea className="max-h-[300px]">
+          <div className="max-h-[300px] overflow-auto">
             <FileTable
               jobId={jobId}
               files={data.other}
@@ -239,7 +238,7 @@ export function FilesTab({
               actionIcon="download"
               emptyHint="没有其他文件。"
             />
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
     </div>
