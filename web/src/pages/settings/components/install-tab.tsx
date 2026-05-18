@@ -459,7 +459,7 @@ export function InstallTab() {
               无需克隆。点击「安装」会用
               <code className="text-foreground"> uv sync </code>
               在 <code className="text-foreground">external/anima_lora/.venv</code> 内
-              创建一个**独立的** CPython 3.13 venv,装好 torch 2.11/2.12 nightly +
+              创建一个<strong className="text-foreground">独立的</strong> CPython 3.13 venv,装好 torch 2.11/2.12 nightly +
               accelerate + diffusers 等依赖,与 LoraHub 主 venv 完全隔离。
               首次安装大约下载 6-8 GB（torch + CUDA wheels）。
             </div>
