@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-18
+
 ### Added
 
 - **SSE event streams** at `/api/jobs/{id}/sse`, `/api/backend/bootstrap/sse`, and `/api/system/sse` with `Last-Event-ID` resume and monotone sequence IDs. WebSocket endpoints kept as fallback.
@@ -160,6 +162,7 @@ Initial pre-alpha release. CLI tracer bullet: from a YAML recipe to a trained Lo
 - VRAM estimator is a coarse first-pass approximation.
 - End-to-end smoke test against a real SDXL model is not yet automated.
 
-[Unreleased]: https://github.com/GALIAIS/LoraHub/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/GALIAIS/LoraHub/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/GALIAIS/LoraHub/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GALIAIS/LoraHub/compare/v0.1.0-dev...v0.2.0
 [0.1.0-dev]: https://github.com/GALIAIS/LoraHub/releases/tag/v0.1.0-dev
