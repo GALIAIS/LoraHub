@@ -167,13 +167,20 @@ def resume_job(job_id: str) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/reveal")
 def reveal_job(job_id: str) -> dict[str, Any]:
-    """Open the job's workspace directory in the host file browser.
+    """Open the job's workspace directory in the *host's* file browser.
 
     Local-first tool: the API process is on the user's machine, so we shell out
     to the platform's native file manager (`explorer`, `open`, `xdg-open`).
     Always uses an argv list — never `shell=True` — to avoid command injection
     via the workspace path.
+
+    On a headless server (no DISPLAY / WAYLAND_DISPLAY on Linux, e.g. AutoDL,
+    SSH-only VPS) opening a desktop app would either error out or pop a
+    file manager on the *server* the user can't see. We detect this up
+    front and return 409 with the resolved path so the frontend can offer
+    a useful fallback (copy path / download zip) instead of crashing 500.
     """
+    import os  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
@@ -187,23 +194,55 @@ def reveal_job(job_id: str) -> dict[str, Any]:
             status_code=409, detail=f"workspace no longer exists: {workspace}"
         )
 
+    workspace_str = str(workspace.resolve())
+
+    # Headless Linux short-circuit. macOS / Windows always have a desktop;
+    # only Linux can be in this state.
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "headless_host",
+                "message": (
+                    "API server is running headless (no DISPLAY); "
+                    "cannot open a file manager on a remote host."
+                ),
+                "workspace": workspace_str,
+            },
+        )
+
     if sys.platform == "win32":
-        argv = ["explorer", str(workspace)]
+        argv = ["explorer", workspace_str]
     elif sys.platform == "darwin":
-        argv = ["open", str(workspace)]
+        argv = ["open", workspace_str]
     else:
-        argv = ["xdg-open", str(workspace)]
+        argv = ["xdg-open", workspace_str]
 
     try:
         subprocess.Popen(argv, close_fds=True)  # noqa: S603
     except FileNotFoundError as exc:
+        # `xdg-open` / `explorer` not installed — same UX as headless.
         raise HTTPException(
-            status_code=500, detail=f"file manager not available: {exc}"
+            status_code=409,
+            detail={
+                "code": "file_manager_missing",
+                "message": f"file manager not available: {exc}",
+                "workspace": workspace_str,
+            },
         ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "open_failed",
+                "message": str(exc),
+                "workspace": workspace_str,
+            },
+        ) from exc
 
-    return {"opened": str(workspace)}
+    return {"opened": workspace_str}
 
 
 @router.get("/jobs/{job_id}/files")

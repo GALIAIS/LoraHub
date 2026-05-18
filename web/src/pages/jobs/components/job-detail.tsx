@@ -153,7 +153,33 @@ export function JobDetail({
     try {
       await api.revealJob(data.id)
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e))
+      // Headless / remote API: server can't open a file manager. Surface
+      // the resolved workspace path instead so the user can copy it
+      // straight from the error chip. The detail payload is a JSON
+      // object with `code`, `message`, and `workspace`; older fastapi
+      // serialisations stringify it, so handle both shapes.
+      const raw = e instanceof Error ? e.message : String(e)
+      let parsed: { workspace?: string; message?: string } | null = null
+      const match = raw.match(/\{.*\}$/)
+      if (match) {
+        try {
+          parsed = JSON.parse(match[0].replace(/'/g, '"'))
+        } catch {
+          /* ignore */
+        }
+      }
+      if (parsed?.workspace) {
+        try {
+          await navigator.clipboard.writeText(parsed.workspace)
+          setActionError(
+            `服务器无桌面环境,工作区路径已复制到剪贴板: ${parsed.workspace}`,
+          )
+        } catch {
+          setActionError(`服务器无桌面环境,工作区路径: ${parsed.workspace}`)
+        }
+      } else {
+        setActionError(raw)
+      }
     } finally {
       setBusy(null)
     }
