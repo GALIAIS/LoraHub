@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEventStream } from "./use-event-stream"
 
 const API_BASE = "/api"
 
@@ -814,93 +814,27 @@ export const api = {
  * a proxy-induced drop never loses events from the user's POV.
  */
 export function useJobStream(jobId: string | null) {
-  const [events, setEvents] = useState<TrainingEvent[]>([])
-  const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const sourceRef = useRef<EventSource | WebSocket | null>(null)
-
-  useEffect(() => {
-    if (!jobId) return
-    setEvents([])
-
-    let cancelled = false
-    const useSse = typeof EventSource !== "undefined"
-
-    function connectSse() {
-      const url = `/api/jobs/${encodeURIComponent(jobId!)}/sse`
-      const es = new EventSource(url)
-      sourceRef.current = es
-      es.onopen = () => setStatus("open")
-      es.onerror = () => {
-        // EventSource auto-reconnects after `retry: <ms>`, so we just
-        // mark closed and let the browser bring it back. Surface to UI.
-        setStatus("closed")
-      }
-      es.onmessage = (msg) => {
-        try {
-          const event = JSON.parse(msg.data) as TrainingEvent
-          setEvents((prev) => [...prev, event].slice(-500))
-        } catch {
-          // ignore malformed frames
-        }
-      }
-    }
-
-    function connectWs() {
-      let backoff = 0
-      let retryTimer: ReturnType<typeof setTimeout> | null = null
-      function open() {
-        if (cancelled) return
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-        const host = window.location.host || "127.0.0.1:18765"
-        const ws = new WebSocket(`${protocol}//${host}/api/jobs/${jobId!}/stream`)
-        sourceRef.current = ws
-        ws.onopen = () => {
-          backoff = 0
-          setStatus("open")
-        }
-        ws.onclose = () => {
-          setStatus("closed")
-          if (cancelled) return
-          retryTimer = setTimeout(open, backoff)
-          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
-        }
-        ws.onerror = () => {}
-        ws.onmessage = (msg) => {
-          try {
-            const event = JSON.parse(msg.data) as TrainingEvent | { type: "ping" }
-            if ((event as { type?: string }).type === "ping") return
-            setEvents((prev) => [...prev, event as TrainingEvent].slice(-500))
-          } catch {
-            // ignore
-          }
-        }
-      }
-      open()
-      return () => {
-        if (retryTimer) clearTimeout(retryTimer)
-      }
-    }
-
-    let cleanupWs: (() => void) | undefined
-    if (useSse) {
-      connectSse()
-    } else {
-      cleanupWs = connectWs()
-    }
-
-    return () => {
-      cancelled = true
-      cleanupWs?.()
-      const s = sourceRef.current
-      if (s) {
-        if (s instanceof WebSocket) s.close()
-        else s.close()
-        sourceRef.current = null
-      }
-    }
-  }, [jobId])
-
-  return { events, status }
+  const ssePath = jobId
+    ? `/api/jobs/${encodeURIComponent(jobId)}/sse`
+    : null
+  const wsPath = jobId ? `/api/jobs/${jobId}/stream` : null
+  const { state, status } = useEventStream<
+    TrainingEvent[],
+    TrainingEvent | { type: "ping" }
+  >({
+    ssePath,
+    wsPath,
+    initialState: [],
+    // Cap the in-memory tail so a long-running job can't blow out
+    // browser memory. 500 entries comfortably covers the recent
+    // window the events tab paints; older context lives in the
+    // events.jsonl file on disk.
+    reduce: (prev, parsed) =>
+      [...prev, parsed as TrainingEvent].slice(-500),
+    shouldDrop: (parsed) =>
+      (parsed as { type?: string }).type === "ping",
+  })
+  return { events: state, status }
 }
 
 /**
@@ -908,85 +842,19 @@ export function useJobStream(jobId: string | null) {
  * semantics as useJobStream.
  */
 export function useBootstrapStream(enabled: boolean) {
-  const [events, setEvents] = useState<BootstrapEvent[]>([])
-  const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const sourceRef = useRef<EventSource | WebSocket | null>(null)
-
-  useEffect(() => {
-    if (!enabled) return
-    setEvents([])
-
-    let cancelled = false
-    const useSse = typeof EventSource !== "undefined"
-
-    function connectSse() {
-      const es = new EventSource(`/api/backend/bootstrap/sse`)
-      sourceRef.current = es
-      es.onopen = () => setStatus("open")
-      es.onerror = () => setStatus("closed")
-      es.onmessage = (msg) => {
-        try {
-          const event = JSON.parse(msg.data) as BootstrapEvent
-          setEvents((prev) => [...prev, event].slice(-200))
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    function connectWs() {
-      let backoff = 0
-      let retryTimer: ReturnType<typeof setTimeout> | null = null
-      function open() {
-        if (cancelled) return
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-        const host = window.location.host || "127.0.0.1:18765"
-        const ws = new WebSocket(`${protocol}//${host}/api/backend/bootstrap/stream`)
-        sourceRef.current = ws
-        ws.onopen = () => {
-          backoff = 0
-          setStatus("open")
-        }
-        ws.onclose = () => {
-          setStatus("closed")
-          if (cancelled) return
-          retryTimer = setTimeout(open, backoff)
-          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
-        }
-        ws.onerror = () => {}
-        ws.onmessage = (msg) => {
-          try {
-            const event = JSON.parse(msg.data) as BootstrapEvent | { type: "ping" }
-            if ((event as { type?: string }).type === "ping") return
-            setEvents((prev) => [...prev, event as BootstrapEvent].slice(-200))
-          } catch {
-            // ignore
-          }
-        }
-      }
-      open()
-      return () => {
-        if (retryTimer) clearTimeout(retryTimer)
-      }
-    }
-
-    let cleanupWs: (() => void) | undefined
-    if (useSse) connectSse()
-    else cleanupWs = connectWs()
-
-    return () => {
-      cancelled = true
-      cleanupWs?.()
-      const s = sourceRef.current
-      if (s) {
-        if (s instanceof WebSocket) s.close()
-        else s.close()
-        sourceRef.current = null
-      }
-    }
-  }, [enabled])
-
-  return { events, status }
+  const { state, status } = useEventStream<
+    BootstrapEvent[],
+    BootstrapEvent | { type: "ping" }
+  >({
+    ssePath: enabled ? "/api/backend/bootstrap/sse" : null,
+    wsPath: enabled ? "/api/backend/bootstrap/stream" : null,
+    initialState: [],
+    reduce: (prev, parsed) =>
+      [...prev, parsed as BootstrapEvent].slice(-200),
+    shouldDrop: (parsed) =>
+      (parsed as { type?: string }).type === "ping",
+  })
+  return { events: state, status }
 }
 
 // ============================================ system telemetry =============
@@ -1399,102 +1267,20 @@ export interface AIConnectionTestResult {
  * emits on connect.
  */
 export function useSystemStream(enabled = true) {
-  const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null)
-  const [status, setStatus] = useState<"idle" | "open" | "closed">("idle")
-  const sourceRef = useRef<EventSource | WebSocket | null>(null)
-
-  useEffect(() => {
-    if (!enabled) return
-    let cancelled = false
-    const useSse = typeof EventSource !== "undefined"
-
-    function connectSse() {
-      const es = new EventSource(`/api/system/sse`)
-      sourceRef.current = es
-      es.onopen = () => setStatus("open")
-      es.onerror = () => setStatus("closed")
-      es.onmessage = (msg) => {
-        try {
-          setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    function connectWs() {
-      let ws: WebSocket | null = null
-      let retryTimer: ReturnType<typeof setTimeout> | null = null
-      let backoff = 0
-      function open() {
-        if (cancelled) return
-        if (!navigator.onLine) return
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-        const host = window.location.host || "127.0.0.1:18765"
-        ws = new WebSocket(`${protocol}//${host}/api/system/stream`)
-        sourceRef.current = ws
-        ws.onopen = () => {
-          backoff = 0
-          setStatus("open")
-        }
-        ws.onclose = () => {
-          setStatus("closed")
-          if (cancelled) return
-          retryTimer = setTimeout(open, backoff)
-          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 3000)
-        }
-        ws.onerror = () => {}
-        ws.onmessage = (msg) => {
-          try {
-            setSnapshot(JSON.parse(msg.data) as SystemSnapshot)
-          } catch {
-            // ignore
-          }
-        }
-      }
-      function reconnectNow() {
-        if (cancelled) return
-        if (ws && ws.readyState === WebSocket.OPEN) return
-        if (retryTimer !== null) clearTimeout(retryTimer)
-        retryTimer = null
-        backoff = 0
-        open()
-      }
-      function onVis() {
-        if (document.visibilityState === "visible") reconnectNow()
-      }
-      document.addEventListener("visibilitychange", onVis)
-      window.addEventListener("online", reconnectNow)
-      retryTimer = setTimeout(open, 30)
-      return () => {
-        document.removeEventListener("visibilitychange", onVis)
-        window.removeEventListener("online", reconnectNow)
-        if (retryTimer !== null) clearTimeout(retryTimer)
-      }
-    }
-
-    let cleanupWs: (() => void) | undefined
-    if (useSse) connectSse()
-    else cleanupWs = connectWs()
-
-    return () => {
-      cancelled = true
-      cleanupWs?.()
-      const s = sourceRef.current
-      if (s) {
-        if (s instanceof WebSocket) {
-          s.onclose = null
-          s.onerror = null
-          if (s.readyState === WebSocket.OPEN) s.close()
-        } else {
-          s.close()
-        }
-        sourceRef.current = null
-      }
-    }
-  }, [enabled])
-
-  return { snapshot, status }
+  const { state, status } = useEventStream<
+    SystemSnapshot | null,
+    SystemSnapshot
+  >({
+    ssePath: enabled ? "/api/system/sse" : null,
+    wsPath: enabled ? "/api/system/stream" : null,
+    initialState: null,
+    // Snapshot semantics: every frame replaces the previous state.
+    // The history view is built from polled REST plus the live tail,
+    // not a buffer here.
+    reduce: (_prev, parsed) => parsed,
+    reconnectOnVisibility: true,
+  })
+  return { snapshot: state, status }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1558,19 +1344,15 @@ export async function imageStudioList(params: {
   if (params.page) qs.set("page", String(params.page))
   if (params.limit) qs.set("limit", String(params.limit))
   if (params.sort) qs.set("sort", params.sort)
-  const r = await fetch(`${API_BASE}/image-studio/list?${qs}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<ImageStudioListResponse>(`/image-studio/list?${qs}`)
 }
 
 export async function imageStudioGetImage(
   path: string,
 ): Promise<ImageStudioDetailItem> {
-  const r = await fetch(
-    `${API_BASE}/image-studio/image?path=${encodeURIComponent(path)}`,
+  return http<ImageStudioDetailItem>(
+    `/image-studio/image?path=${encodeURIComponent(path)}`,
   )
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function imageStudioSaveAnnotation(body: {
@@ -1580,24 +1362,22 @@ export async function imageStudioSaveAnnotation(body: {
   favorite?: boolean
   softDeleted?: boolean
 }): Promise<{ ok: boolean; annotation: ImageStudioAnnotation }> {
-  const r = await fetch(`${API_BASE}/image-studio/annotations`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ ok: boolean; annotation: ImageStudioAnnotation }>(
+    "/image-studio/annotations",
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export async function imageStudioDeleteAnnotation(
   path: string,
 ): Promise<{ ok: boolean }> {
-  const r = await fetch(
-    `${API_BASE}/image-studio/annotations?path=${encodeURIComponent(path)}`,
+  return http<{ ok: boolean }>(
+    `/image-studio/annotations?path=${encodeURIComponent(path)}`,
     { method: "DELETE" },
   )
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function imageStudioAddOp(body: {
@@ -1605,44 +1385,50 @@ export async function imageStudioAddOp(body: {
   op: string
   payload?: Record<string, unknown>
 }): Promise<{ id: string; op: string; payload: Record<string, unknown>; createdAt: string }> {
-  const r = await fetch(`${API_BASE}/image-studio/ops`, {
+  return http<{
+    id: string
+    op: string
+    payload: Record<string, unknown>
+    createdAt: string
+  }>("/image-studio/ops", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function imageStudioListOps(
   path?: string,
 ): Promise<{ ops: Array<{ id: string; imagePath: string; op: string; payload: Record<string, unknown>; createdAt: string }> }> {
   const qs = path ? `?path=${encodeURIComponent(path)}` : ""
-  const r = await fetch(`${API_BASE}/image-studio/ops${qs}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{
+    ops: Array<{
+      id: string
+      imagePath: string
+      op: string
+      payload: Record<string, unknown>
+      createdAt: string
+    }>
+  }>(`/image-studio/ops${qs}`)
 }
 
 export async function imageStudioDeleteOp(
   opId: string,
 ): Promise<{ ok: boolean }> {
-  const r = await fetch(`${API_BASE}/image-studio/ops/${opId}`, {
+  return http<{ ok: boolean }>(`/image-studio/ops/${opId}`, {
     method: "DELETE",
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function imageStudioApplyOps(
   path: string,
 ): Promise<{ applied: string[]; errors: Array<{ id: string; error: string }> }> {
-  const r = await fetch(`${API_BASE}/image-studio/ops/apply`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ applied: string[]; errors: Array<{ id: string; error: string }> }>(
+    "/image-studio/ops/apply",
+    {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    },
+  )
 }
 
 // --------------------------------------------------------------------------- //
@@ -1667,13 +1453,14 @@ export async function imageStudioDedupeScan(body: {
   algo?: string
   threshold?: number
 }): Promise<{ computed: number; total: number; errors: Array<{ path: string; error: string }> }> {
-  const r = await fetch(`${API_BASE}/image-studio/dedupe/scan`, {
+  return http<{
+    computed: number
+    total: number
+    errors: Array<{ path: string; error: string }>
+  }>("/image-studio/dedupe/scan", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function imageStudioDedupeClusters(params: {
@@ -1684,22 +1471,24 @@ export async function imageStudioDedupeClusters(params: {
   const qs = new URLSearchParams({ path: params.path })
   if (params.kind) qs.set("kind", params.kind)
   if (params.threshold != null) qs.set("threshold", String(params.threshold))
-  const r = await fetch(`${API_BASE}/image-studio/dedupe/clusters?${qs}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ clusters: DedupeCluster[] }>(
+    `/image-studio/dedupe/clusters?${qs}`,
+  )
 }
 
 export async function imageStudioBatchDelete(body: {
   paths: string[]
   forceFavorites?: boolean
 }): Promise<{ deletedCount: number; deleted: string[]; bytesFreed: number; errors: Array<{ path: string; error: string }> }> {
-  const r = await fetch(`${API_BASE}/image-studio/dedupe/batch-delete`, {
+  return http<{
+    deletedCount: number
+    deleted: string[]
+    bytesFreed: number
+    errors: Array<{ path: string; error: string }>
+  }>("/image-studio/dedupe/batch-delete", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 // --------------------------------------------------------------------------- //
@@ -1715,13 +1504,13 @@ export async function imageStudioSmartCaption(params: {
   triggerWord?: string
   stripStyleTags?: boolean
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
+    "/image-studio/ai/smart-caption",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
 }
 
 export async function imageStudioSmartCaptionSingle(params: {
@@ -1732,13 +1521,13 @@ export async function imageStudioSmartCaptionSingle(params: {
   stripStyleTags?: boolean
   mergeStrategy?: string
 }): Promise<{ caption: string; tags: string }> {
-  const r = await fetch(`${API_BASE}/image-studio/ai/smart-caption/single`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ caption: string; tags: string }>(
+    "/image-studio/ai/smart-caption/single",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
 }
 
 export async function startTaggingSession(params: {
@@ -1751,21 +1540,16 @@ export async function startTaggingSession(params: {
   overwrite?: boolean
   recursive?: boolean
 }): Promise<{ session_id: string }> {
-  const r = await fetch(`${API_BASE}/tagging/tag`, {
+  return http<{ session_id: string }>("/tagging/tag", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
 }
 
 export async function getTaggingSession(
   sessionId: string,
 ): Promise<TaggingSession> {
-  const r = await fetch(`${API_BASE}/tagging/tag/${sessionId}`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<TaggingSession>(`/tagging/tag/${sessionId}`)
 }
 
 export async function imageStudioBatchCaption(params: {
@@ -1774,13 +1558,13 @@ export async function imageStudioBatchCaption(params: {
   task?: string
   mergeStrategy?: string
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  const r = await fetch(`${API_BASE}/image-studio/ai/caption`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
+    "/image-studio/ai/caption",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
 }
 
 export async function imageStudioBatchQuality(params: {
@@ -1788,13 +1572,13 @@ export async function imageStudioBatchQuality(params: {
   recursive?: boolean
   task?: string
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  const r = await fetch(`${API_BASE}/image-studio/ai/quality`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
+    "/image-studio/ai/quality",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
 }
 
 // --------------------------------------------------------------------------- //
@@ -1821,9 +1605,7 @@ export interface DatasetListResponse {
 }
 
 export async function datasetList(): Promise<DatasetListResponse> {
-  const r = await fetch(`${API_BASE}/image-studio/datasets`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<DatasetListResponse>("/image-studio/datasets")
 }
 
 export async function datasetCreate(body: {
@@ -1832,40 +1614,39 @@ export async function datasetCreate(body: {
   targetResolution?: string
   triggerWord?: string
 }): Promise<{ ok: boolean; path: string; meta: Record<string, string> }> {
-  const r = await fetch(`${API_BASE}/image-studio/datasets`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ ok: boolean; path: string; meta: Record<string, string> }>(
+    "/image-studio/datasets",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export async function datasetGetMeta(name: string): Promise<Record<string, string>> {
-  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}/meta`)
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<Record<string, string>>(
+    `/image-studio/datasets/${encodeURIComponent(name)}/meta`,
+  )
 }
 
 export async function datasetUpdateMeta(
   name: string,
   body: { description?: string; targetResolution?: string; triggerWord?: string },
 ): Promise<{ ok: boolean; meta: Record<string, string> }> {
-  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}/meta`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ ok: boolean; meta: Record<string, string> }>(
+    `/image-studio/datasets/${encodeURIComponent(name)}/meta`,
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export async function datasetDelete(name: string): Promise<{ ok: boolean }> {
-  const r = await fetch(`${API_BASE}/image-studio/datasets/${encodeURIComponent(name)}`, {
-    method: "DELETE",
-  })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
-  return r.json()
+  return http<{ ok: boolean }>(
+    `/image-studio/datasets/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  )
 }
 
 export interface UploadProgressEvent {
