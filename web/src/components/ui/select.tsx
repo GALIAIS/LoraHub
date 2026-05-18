@@ -91,8 +91,13 @@ function SelectValue({
       }
       const label = registry?.lookup(key)
       if (label != null && label !== "") return label
-      // Last resort: don't print the raw value; show placeholder.
-      return placeholder ?? null
+      // Registry miss: this happens BEFORE the user opens the dropdown
+      // for the first time, because base-ui mounts <SelectItem> children
+      // lazily inside the popover. Fall back to the raw value so the
+      // trigger shows something meaningful (e.g. "anima_lora") instead
+      // of an empty placeholder. The proper label takes over the moment
+      // the user opens the popover once (mount → registry.register).
+      return key
     },
     [childrenProp, placeholder, registry],
   )

@@ -275,8 +275,8 @@ export function InstallTab() {
       query.state.data?.status === "running" ? 1500 : false,
   })
 
-  const status = statusQuery.data?.status ?? "idle"
-  const isRunning = status === "running"
+  const rawStatus = statusQuery.data?.status ?? "idle"
+  const isRunning = rawStatus === "running"
   const sessionBackend = statusQuery.data?.backend
 
   // The user's currently-selected backend — initialize it from the settings
@@ -309,8 +309,22 @@ export function InstallTab() {
   // otherwise fall back to the buffered events from the polling query.
   const { events: streamedEvents } = useBootstrapStream(isRunning)
   const polled = statusQuery.data?.events ?? []
-  const events: BootstrapEvent[] =
+  const rawEvents: BootstrapEvent[] =
     streamedEvents.length > 0 ? streamedEvents : polled
+
+  // Hide stale events from a different backend's session. The polled
+  // status endpoint always returns the most recent session regardless
+  // of which backend the user has currently selected; without this
+  // gate, switching from "diffusion-pipe (failed)" to "anima_lora"
+  // would still show the dp error in the event log + status badge.
+  // We only render events when (a) a session is actively running for
+  // the selected backend, OR (b) the most recent finished session
+  // matches the selected backend.
+  const sameSession = sessionBackend && sessionBackend === selected
+  const events: BootstrapEvent[] = sameSession ? rawEvents : []
+  // Same gating for the status badge so a "failed" tag from another
+  // backend doesn't bleed onto the freshly-selected one.
+  const status = sameSession ? rawStatus : "idle"
 
   const start = useMutation({
     mutationFn: (backend: BackendId) => {
