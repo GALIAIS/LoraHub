@@ -79,6 +79,33 @@ class SubprocessRunner:
 
             self._workspace.mkdir(parents=True, exist_ok=True)
             full_env = {**os.environ, **(self._env or {})}
+            # Force the Python child to write stdout/stderr as UTF-8.
+            #
+            # On Windows the default child interpreter encodes via the
+            # system ANSI codepage (cp936 in zh-CN, cp1252 in en-US,
+            # ...). We always read the pipe back as UTF-8, so a tqdm
+            # bar like ``Resizing: |█████| 1/1`` shows up as ``����``
+            # the moment the child emits a non-ASCII byte. PEP 540
+            # UTF-8 mode + PYTHONIOENCODING flips the child to plain
+            # UTF-8 unconditionally, matching what hatch / tox / uv /
+            # pdm all do for the same reason. ``setdefault`` lets
+            # callers still pin a specific encoding (e.g. for tests).
+            full_env.setdefault("PYTHONIOENCODING", "utf-8")
+            full_env.setdefault("PYTHONUTF8", "1")
+            # Silence the noisy ``SyntaxWarning: invalid escape sequence
+            # '\('`` that fires every time anima's vendored
+            # ``library/anima/text_strategies.py`` is imported. The
+            # warning is upstream's (string literal where a raw string
+            # was meant) — vendored code we don't patch. We use a
+            # message-targeted filter so users' own SyntaxWarnings
+            # still surface. Format:
+            # ``action:message:category:module:lineno``. Callers can
+            # prepend more rules via env if they need to.
+            existing_warn = full_env.get("PYTHONWARNINGS", "")
+            anima_filter = "ignore:invalid escape sequence:SyntaxWarning"
+            full_env["PYTHONWARNINGS"] = (
+                f"{anima_filter},{existing_warn}" if existing_warn else anima_filter
+            )
             creationflags = (
                 subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
             )
