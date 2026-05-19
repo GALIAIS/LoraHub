@@ -193,8 +193,10 @@ EOF
 }
 
 # `wait` — block until the named bg session exits, then print the tail
-# of its log. Polls every 5s; survives transient SSH drops via
-# ssh_retry.
+# of its log. Polls every 5s for the done-marker. ssh failures during
+# the poll are tolerated: a single dropped socket shouldn't make wait
+# return prematurely (otherwise callers think the job's finished and
+# check stale logs).
 cmd_wait() {
   if [[ $# -lt 1 ]]; then
     echo "usage: vps wait <session-name>" >&2
@@ -203,11 +205,42 @@ cmd_wait() {
   local session="$1"
   local logfile="/root/_${session}.log"
   local donefile="/root/_${session}.done"
+  local pidfile="/root/_${session}.pid"
   echo "vps: waiting for session ${session} ..." >&2
-  while ! ssh_retry "test -f ${donefile}" >/dev/null 2>&1; do
-    sleep 5
+  # Loop until the done-marker exists OR the pid is unequivocally gone.
+  # We treat *any* SSH failure here as transient: another loop iteration
+  # will retry. The poll body returns one of:
+  #   "DONE"     done-marker exists -> exit loop normally
+  #   "DEAD"     pidfile gone or pid not running and no done-marker
+  #              (caller likely crashed before writing the marker)
+  #   "ALIVE"    still running, keep polling
+  #   ""         ssh dropped, retry next tick
+  while :; do
+    local probe
+    probe=$(SSHPASS="${LORAHUB_REMOTE_PASS}" sshpass -e ssh "${SSH_OPTS[@]}" "${USER}@${HOST}" \
+      "if [[ -f ${donefile} ]]; then echo DONE; \
+       elif [[ -f ${pidfile} ]] && kill -0 \"\$(cat ${pidfile})\" 2>/dev/null; then echo ALIVE; \
+       elif [[ -f ${pidfile} ]]; then echo DEAD; \
+       else echo MISSING; fi" 2>/dev/null || echo "")
+    case "$probe" in
+      DONE) break ;;
+      DEAD)
+        echo "vps: WARNING session ${session} pid stopped without done-marker" >&2
+        break
+        ;;
+      MISSING)
+        echo "vps: ERROR session ${session} pidfile missing — was bg run?" >&2
+        return 1
+        ;;
+      ALIVE|"") sleep 5 ;;
+      *)
+        # Unknown probe output (e.g. bash -c warning). Treat as
+        # transient and keep polling rather than guessing.
+        sleep 5
+        ;;
+    esac
   done
-  ssh_retry "echo === ${session} done ===; cat ${donefile}; echo; echo === tail of log ===; tail -40 ${logfile}"
+  ssh_retry "echo === ${session} done ===; cat ${donefile} 2>/dev/null || echo no_done_marker; echo; echo === tail of log ===; tail -40 ${logfile}"
 }
 
 # `tail` — `tail -f` the session log. Quitting (Ctrl-C) doesn't kill
