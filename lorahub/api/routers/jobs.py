@@ -75,9 +75,24 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    workspace = Path(req.workspace).resolve() if req.workspace else (
-        Path.cwd() / "runs" / cfg.output.name
-    ).resolve()
+    if req.workspace:
+        workspace = Path(req.workspace).resolve()
+    else:
+        # Without an explicit workspace, derive one under runs/ keyed by
+        # output.name. We previously returned that path verbatim, which
+        # meant a second job with the same recipe re-used the same
+        # workspace — that left stale events.jsonl, a stale config.yaml,
+        # an existing checkpoint dir, and (for anima_lora) a populated
+        # post_image_dataset/ cache. Symptoms ranged from confusing
+        # event timelines to "stuck in queued" because the old run's
+        # state files made the new run look already-started.
+        #
+        # Append a short timestamp so re-runs land in sibling
+        # directories. Users who need cache reuse can still pass an
+        # explicit `workspace` and opt in.
+        from datetime import datetime, UTC  # noqa: PLC0415
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        workspace = (Path.cwd() / "runs" / f"{cfg.output.name}-{stamp}").resolve()
     return _launch_job(cfg, workspace)
 
 
