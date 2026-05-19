@@ -967,8 +967,14 @@ class AnimaLoraOptions(BaseModel):
     ] = "constant"
     learning_rate: float = Field(5.0e-5, gt=0)
     max_train_epochs: int = Field(8, ge=1)
-    save_every_n_epochs: int = Field(2, ge=1)
-    checkpointing_epochs: int = Field(2, ge=1)
+    save_every_n_epochs: int = Field(1, ge=1)
+    # Optional step-based checkpoint cadence. When set, the trainer
+    # also writes a ckpt every N steps (in addition to the epoch
+    # cadence above). Useful for short epochs / small datasets where
+    # a full epoch is the only thing that triggers a state dir, and
+    # the pause-resume workflow wants finer granularity.
+    save_every_n_steps: int | None = Field(default=None, ge=1)
+    checkpointing_epochs: int = Field(1, ge=1)
     caption_dropout_rate: float = Field(0.1, ge=0.0, le=1.0)
 
     # ---- Sampling / loss (flow-matching for Anima DiT) ----

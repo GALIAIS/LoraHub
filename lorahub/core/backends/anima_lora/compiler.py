@@ -331,7 +331,17 @@ def _shared_overrides(
     out += ["--lr_scheduler", opts.lr_scheduler]
     out += ["--learning_rate", _fmt_float(opts.learning_rate)]
     out += ["--max_train_epochs", str(opts.max_train_epochs)]
+    # ``cfg.schedule.max_steps`` is the user-facing "训练总步数" override
+    # — the form widgets all read from there. anima_lora's train.py
+    # honours ``--max_train_steps`` (sd-scripts inheritance), and when
+    # both flags are set the trainer stops at whichever comes first.
+    # We forward the schedule cap when present so the UI's number
+    # actually drives training.
+    if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
+        out += ["--max_train_steps", str(int(cfg.schedule.max_steps))]
     out += ["--save_every_n_epochs", str(opts.save_every_n_epochs)]
+    if opts.save_every_n_steps is not None and opts.save_every_n_steps > 0:
+        out += ["--save_every_n_steps", str(int(opts.save_every_n_steps))]
     out += ["--checkpointing_epochs", str(opts.checkpointing_epochs)]
     if opts.caption_dropout_rate > 0:
         out += ["--caption_dropout_rate", _fmt_float(opts.caption_dropout_rate)]
