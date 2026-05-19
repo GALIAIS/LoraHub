@@ -73,6 +73,37 @@ def _argv_pairs(argv: list[str]) -> dict[str, list[str]]:
 # --------------------------------------------------------------------------- #
 
 
+def test_max_steps_emits_zero_max_train_epochs(tmp_path: Path) -> None:
+    """schedule.max_steps must produce an explicit ``--max_train_epochs 0``.
+
+    Without the zero, configs/methods/lora.toml's ``max_train_epochs = 8``
+    sneaks into args via the TOML merge chain and train.py:1622 silently
+    rewrites max_train_steps to ``epochs × steps_per_epoch``. The zero
+    is consumed by our local train.py patch as the "ignore epochs"
+    sentinel; if either side drifts, runs revert to the 1984-step bug.
+    """
+    opts = AnimaLoraOptions()
+    cfg = _recipe(tmp_path, opts)
+    cfg.schedule.max_steps = 4000
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+
+    assert pairs["--max_train_steps"] == ["4000"]
+    assert pairs["--max_train_epochs"] == ["0"]
+
+
+def test_max_steps_unset_emits_method_max_train_epochs(tmp_path: Path) -> None:
+    """When the user leaves max_steps unset, send the method's epoch budget."""
+    opts = AnimaLoraOptions()
+    cfg = _recipe(tmp_path, opts)
+    cfg.schedule.max_steps = None
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+
+    assert "--max_train_steps" not in pairs
+    assert pairs["--max_train_epochs"] == [str(opts.max_train_epochs)]
+
+
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
 

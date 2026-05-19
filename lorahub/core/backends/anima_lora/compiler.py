@@ -340,9 +340,18 @@ def _shared_overrides(
     if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
         # cfg.schedule.max_steps is the user-facing "训练总步数"
         # override — the form widgets all read from there. Send only
-        # this; omit --max_train_epochs so train.py doesn't overwrite
-        # max_train_steps with the epoch-derived value.
+        # this; force --max_train_epochs=0 so train.py's ``if
+        # args.max_train_epochs is not None`` branch skips the
+        # epoch-derived recompute. Just omitting the flag isn't
+        # enough — lora.toml ships ``max_train_epochs = 8`` in its
+        # method config, and the TOML merge chain pre-populates args
+        # before CLI parsing, so without the explicit zero the user's
+        # explicit step cap silently becomes ``8 × steps_per_epoch``.
+        # The matching guard lives at external/anima_lora/train.py
+        # near the "Calculate training steps" comment — both must
+        # change together.
         out += ["--max_train_steps", str(int(cfg.schedule.max_steps))]
+        out += ["--max_train_epochs", "0"]
     else:
         out += ["--max_train_epochs", str(opts.max_train_epochs)]
     out += ["--save_every_n_epochs", str(opts.save_every_n_epochs)]

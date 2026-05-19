@@ -1619,7 +1619,14 @@ class AnimaTrainer:
         )
 
         # Calculate training steps
-        if args.max_train_epochs is not None:
+        # LoRaHub patch: ``args.max_train_epochs <= 0`` is treated as
+        # "use the user's --max_train_steps verbatim". The TOML config
+        # chain (configs/methods/lora.toml ships ``max_train_epochs=8``)
+        # injects an epoch budget into args even when the launcher
+        # passes only --max_train_steps, which used to silently rewrite
+        # the step cap to ``epochs × steps_per_epoch``. Honour 0 as the
+        # explicit "ignore epochs" sentinel from LoRaHub's compiler.
+        if args.max_train_epochs is not None and args.max_train_epochs > 0:
             args.max_train_steps = args.max_train_epochs * math.ceil(
                 len(train_dataloader)
                 / accelerator.num_processes
