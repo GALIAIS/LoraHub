@@ -402,7 +402,14 @@ export function JobDetail({
           )}
           {isLive && (
             <>
-              {data?.state === "running" || data?.state === "preparing" ? (
+              {/* Pause is only meaningful once the trainer subprocess
+                  is actually stepping — preparing means anima_lora is
+                  still in resize / cache_latents / cache_text_embeddings,
+                  with no checkpoint to resume from yet. SIGINT-ing
+                  during preprocess just kills the worker without leaving
+                  resumable state on disk; users should "取消" instead.
+                  Gate the button on state === "running" only. */}
+              {data?.state === "running" ? (
                 <Button
                   variant="outline"
                   size="sm"
