@@ -501,37 +501,60 @@ class SmartCaptionBatchInput(BaseModel):
     captionMode: str = "style"  # general | style | character
     triggerWord: str | None = None
     stripStyleTags: bool = True  # accepted for compat; cleanup is built-in
-    # Parallelism + reliability knobs. Defaults chosen to match the
-    # "feels responsive on a 200-image set without DoS-ing the upstream
-    # VLM" sweet spot — most providers handle 4-8 concurrent requests
-    # without rate-limit. Per-image timeout protects against a single
-    # hang from blocking the rest of the batch.
-    concurrency: int = 4
+    # Parallelism + reliability knobs.
+    #
+    # Pipeline shape:
+    #   images -> [WD14 pool, taggerConcurrency workers]
+    #          -> intermediate queue (tags + base64 image)
+    #          -> [VLM pool, concurrency workers]
+    #          -> caption written to disk
+    #
+    # ``concurrency`` controls the VLM stage (network-bound — we want
+    # this fairly high so the API rate is the only floor). The default
+    # of 8 covers most providers without 429s; cap is 64 because beyond
+    # that the upstream usually starts throttling anyway.
+    #
+    # ``taggerConcurrency`` controls the WD14 stage. WD14 is a
+    # single-GPU ONNX session — running >2-3 inferences in parallel on
+    # one GPU saturates the SM scheduler with no real wall-clock gain
+    # and risks OOM on smaller cards. Cap at 4.
+    #
+    # Per-image timeout protects the VLM stage; WD14 is fast enough we
+    # don't bother timing it (a hung WD14 means the GPU is wedged and
+    # the user needs to restart anyway).
+    concurrency: int = 8
+    taggerConcurrency: int = 2
     perImageTimeoutSec: float = 90.0
     maxRetries: int = 2
 
 
-def _smart_caption_single_image(
+@dataclass
+class _StageOneResult:
+    """Output of the WD14 / image-prep stage handed to the VLM stage."""
+
+    img_path: Path
+    rating_name: str | None
+    general_tags: list[str]
+    character_tags: list[str]
+    prompt_text: str
+    data_url: str
+
+
+def _smart_caption_stage_one(
     img_path: Path,
     tagger: WD14Tagger,
-    ai_store: Any,
-    route: Any,
-    merge_strategy: str,
-    store: ImageStudioStore,
-    caption_mode: str = "general",
-    trigger_word: str | None = None,
-    strip_style_tags: bool = True,
-) -> dict[str, Any]:
-    """Run WD14 tagging then vision LLM on a single image. Returns result dict."""
+    caption_mode: str,
+) -> _StageOneResult:
+    """Run WD14 tagging + image prep — everything that doesn't need the VLM.
+
+    Pulled out of ``_smart_caption_single_image`` so the batch worker
+    can run this on a small GPU-bound pool while the VLM stage runs on
+    a much wider network-bound pool. Side-effect free: returns a plain
+    dataclass, doesn't write files or touch the store.
+    """
     import base64  # noqa: PLC0415
     import mimetypes  # noqa: PLC0415
-    from datetime import UTC, datetime  # noqa: PLC0415
 
-    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
-
-    # Step 1: WD14 tagging — keep general/character/rating separately so we
-    # can place them in the Anima header / line2 / tail rather than dump them
-    # all into one comma list.
     tag_result = tagger.tag_image(img_path)
     general_tags_underscore = [t.name for t in tag_result.general]
     general_tags = [t.replace("_", " ").lower() for t in general_tags_underscore]
@@ -539,10 +562,8 @@ def _smart_caption_single_image(
         t.name.replace("_", " ").lower() for t in tag_result.character
     ]
     rating_name = tag_result.rating.name if tag_result.rating else None
-    # Tags shown to the VLM as content grounding (drop noise either way).
     tags_for_prompt = ", ".join(_drop_tags(general_tags, _QUALITY_NOISE_TAGS))
 
-    # Step 2: Prepare image for vision LLM
     mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
     data = img_path.read_bytes()
     b64 = base64.b64encode(data).decode("ascii")
@@ -556,18 +577,41 @@ def _smart_caption_single_image(
         prompt_template = _SMART_CAPTION_PROMPT_GENERAL
     prompt_text = prompt_template.format(tags=tags_for_prompt)
 
+    return _StageOneResult(
+        img_path=img_path,
+        rating_name=rating_name,
+        general_tags=general_tags,
+        character_tags=character_tags,
+        prompt_text=prompt_text,
+        data_url=data_url,
+    )
+
+
+def _smart_caption_stage_two(
+    s1: _StageOneResult,
+    ai_store: Any,
+    route: Any,
+    merge_strategy: str,
+    store: ImageStudioStore,
+    caption_mode: str,
+    trigger_word: str | None,
+) -> dict[str, Any]:
+    """Network-bound VLM call + caption assembly + disk + store write."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
     messages: list[dict[str, Any]] = []
     if route.system_prompt:
         messages.append({"role": "system", "content": route.system_prompt})
     messages.append({
         "role": "user",
         "content": [
-            {"type": "image_url", "image_url": {"url": data_url}},
-            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": {"url": s1.data_url}},
+            {"type": "text", "text": s1.prompt_text},
         ],
     })
 
-    # Step 3: Invoke vision LLM
     result = ai_client.invoke(
         ai_store,
         provider_id=route.provider_id,
@@ -576,18 +620,17 @@ def _smart_caption_single_image(
         route=route,
     )
 
-    # Step 4: Assemble the Anima-format caption (header + line2 + NL + tail).
     nl_text = result.content.strip()
     new_caption = _build_anima_caption(
-        rating_tag=rating_name,
-        general_tags=general_tags,
-        character_tags=character_tags,
+        rating_tag=s1.rating_name,
+        general_tags=s1.general_tags,
+        character_tags=s1.character_tags,
         nl_text=nl_text,
         caption_mode=caption_mode,
         trigger_word=trigger_word,
     )
 
-    caption_path = img_path.with_suffix(".txt")
+    caption_path = s1.img_path.with_suffix(".txt")
     existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
     if merge_strategy == "append":
         new_caption = (existing.strip() + "\n" + new_caption).strip()
@@ -597,12 +640,11 @@ def _smart_caption_single_image(
 
     caption_path.write_text(new_caption, encoding="utf-8")
 
-    # Step 5: Update annotation
-    ann = store.get_annotation(str(img_path))
+    ann = store.get_annotation(str(s1.img_path))
     if ann is None:
         ann = ImageAnnotation(
-            image_path=str(img_path),
-            sha256=_file_sha256(img_path),
+            image_path=str(s1.img_path),
+            sha256=_file_sha256(s1.img_path),
         )
     ann.ai_caption = result.content
     ann.ai_caption_provider = f"{result.provider_name}/{result.model_id}"
@@ -610,10 +652,35 @@ def _smart_caption_single_image(
     store.upsert_annotation(ann)
 
     return {
-        "path": str(img_path),
-        "wd14Tags": ", ".join(general_tags),
+        "path": str(s1.img_path),
+        "wd14Tags": ", ".join(s1.general_tags),
         "caption": new_caption,
     }
+
+
+def _smart_caption_single_image(
+    img_path: Path,
+    tagger: WD14Tagger,
+    ai_store: Any,
+    route: Any,
+    merge_strategy: str,
+    store: ImageStudioStore,
+    caption_mode: str = "general",
+    trigger_word: str | None = None,
+    strip_style_tags: bool = True,
+) -> dict[str, Any]:
+    """Single-image pipeline kept for the /single endpoint and tests.
+
+    Composes ``_smart_caption_stage_one`` and ``_smart_caption_stage_two``.
+    The batch path uses the two stages directly so it can keep them
+    on separate thread pools (WD14 on a small GPU pool, VLM on a wide
+    network pool).
+    """
+    del strip_style_tags  # kept for API compat; cleanup is built into stage1
+    s1 = _smart_caption_stage_one(img_path, tagger, caption_mode)
+    return _smart_caption_stage_two(
+        s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
+    )
 
 
 @router.post("/ai/smart-caption", status_code=202)
@@ -670,71 +737,154 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         _smart_caption_sessions[session.session_id] = session
 
     def run() -> None:
-        # Bounded thread pool — concurrent requests to the VLM provider,
-        # each protected by a per-image timeout so one hang doesn't block
-        # the entire batch. Failures get retried up to `maxRetries` times
-        # with a small backoff before being recorded as errors.
+        # Two-stage pipeline:
+        #   stage 1 (WD14 + image prep) on a small GPU-bound pool
+        #   intermediate queue (bounded so we don't blow RAM with
+        #     base64-encoded payloads when stage 2 falls behind)
+        #   stage 2 (VLM call + write) on a wide network-bound pool
+        #
+        # We deliberately do NOT use one ThreadPoolExecutor for both
+        # stages: that bottlenecks the VLM stage to the GPU pool's
+        # worker count and was the throughput floor we hit during
+        # smoke testing on the qing0ying0 dataset.
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout  # noqa: PLC0415
+        import queue as _queue  # noqa: PLC0415
 
-        max_workers = max(1, min(int(body.concurrency or 1), 16))
+        vlm_workers = max(1, min(int(body.concurrency or 1), 64))
+        wd14_workers = max(1, min(int(body.taggerConcurrency or 1), 4))
         timeout = float(body.perImageTimeoutSec or 90.0)
         max_retries = max(0, int(body.maxRetries or 0))
 
-        def process_one(img_path: Path) -> None:
+        # Bounded intermediate queue. Stage 2 is the slow stage (VLM
+        # network call); buffering more than ~2x the VLM pool keeps
+        # workers fed during transients without retaining hundreds of
+        # base64-encoded images in RAM (each ~1-3 MiB).
+        s1_queue: _queue.Queue[_StageOneResult | None] = _queue.Queue(
+            maxsize=max(vlm_workers * 2, 8)
+        )
+        # Stage-one errors get short-circuited to the session error
+        # list directly — no need to round-trip them through stage 2.
+        # Tracked by a counter so the stage-two consumer knows when
+        # producers are done.
+        s1_done = threading.Event()
+
+        def stage_one_worker(img_path: Path) -> None:
             if session.should_stop():
                 return
-            last_err: Exception | None = None
-            for attempt in range(max_retries + 1):
-                if session.should_stop():
-                    return
+            try:
+                s1 = _smart_caption_stage_one(img_path, tagger, body.captionMode)
+            except Exception as exc:  # noqa: BLE001
+                err_msg = f"WD14: {type(exc).__name__}: {exc}"
+                session.add_error(str(img_path), err_msg, img_path.name)
+                return
+            # block-put so we honour back-pressure when stage 2 is
+            # behind. Cancel checks are cheap so just retry every
+            # second instead of using a queue timeout exception path.
+            while not session.should_stop():
                 try:
-                    item = _smart_caption_single_image(
-                        img_path, tagger, ai_store, route, body.mergeStrategy, store,
-                        caption_mode=body.captionMode,
-                        trigger_word=body.triggerWord,
-                        strip_style_tags=body.stripStyleTags,
-                    )
-                    session.add_result(item, img_path.name)
+                    s1_queue.put(s1, timeout=1.0)
                     return
-                except Exception as exc:  # noqa: BLE001
-                    last_err = exc
-                    if attempt < max_retries:
-                        # Exponential-ish backoff capped at 4s — most VLM
-                        # transients clear in under 2s.
-                        _time.sleep(min(2.0 ** attempt, 4.0))
-                        continue
-            err_msg = f"{type(last_err).__name__}: {last_err}" if last_err else "unknown"
-            session.add_error(str(img_path), err_msg, img_path.name)
+                except _queue.Full:
+                    continue
+
+        def stage_two_worker() -> None:
+            while True:
+                try:
+                    s1 = s1_queue.get(timeout=1.0)
+                except _queue.Empty:
+                    if s1_done.is_set() and s1_queue.empty():
+                        return
+                    continue
+                if s1 is None:
+                    # Sentinel — push it back and exit so peer
+                    # workers also see it. Using None as the sentinel
+                    # avoids needing a separate "drained" event.
+                    s1_queue.put(None)
+                    return
+                if session.should_stop():
+                    s1_queue.task_done()
+                    continue
+                last_err: Exception | None = None
+                for attempt in range(max_retries + 1):
+                    if session.should_stop():
+                        break
+                    try:
+                        item = _smart_caption_stage_two(
+                            s1, ai_store, route, body.mergeStrategy, store,
+                            body.captionMode, body.triggerWord,
+                        )
+                        session.add_result(item, s1.img_path.name)
+                        last_err = None
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        last_err = exc
+                        if attempt < max_retries:
+                            _time.sleep(min(2.0 ** attempt, 4.0))
+                            continue
+                if last_err is not None:
+                    err_msg = f"VLM: {type(last_err).__name__}: {last_err}"
+                    session.add_error(str(s1.img_path), err_msg, s1.img_path.name)
+                s1_queue.task_done()
 
         try:
+            # Producer pool — small, GPU-bound. We use the executor as
+            # a futures collector so we can apply a per-image timeout
+            # against stage 1 (a hung WD14 forward shouldn't stall
+            # producers indefinitely).
             with ThreadPoolExecutor(
-                max_workers=max_workers,
-                thread_name_prefix=f"sc-{session.session_id[:8]}",
-            ) as pool:
-                futures = {pool.submit(process_one, p): p for p in images}
-                for fut in list(futures.keys()):
+                max_workers=wd14_workers,
+                thread_name_prefix=f"sc-wd14-{session.session_id[:8]}",
+            ) as wd14_pool, ThreadPoolExecutor(
+                max_workers=vlm_workers,
+                thread_name_prefix=f"sc-vlm-{session.session_id[:8]}",
+            ) as vlm_pool:
+                # Spin up consumers first so producers can start
+                # back-pressuring immediately.
+                vlm_futures = [
+                    vlm_pool.submit(stage_two_worker)
+                    for _ in range(vlm_workers)
+                ]
+                wd14_futures = {
+                    wd14_pool.submit(stage_one_worker, p): p for p in images
+                }
+
+                # Wait for stage-one producers, applying the per-image
+                # timeout against each as a stuck-WD14 safety net.
+                for fut in list(wd14_futures.keys()):
                     if session.should_stop():
                         break
                     try:
                         fut.result(timeout=timeout)
                     except _Timeout:
-                        p = futures[fut]
+                        p = wd14_futures[fut]
                         session.add_error(
-                            str(p),
-                            f"timeout after {timeout:.0f}s",
-                            p.name,
+                            str(p), f"WD14 timeout after {timeout:.0f}s", p.name,
                         )
-                        # Best-effort cancel; the worker may still finish
-                        # its in-flight request, but its result will be
-                        # discarded since add_error already advanced
-                        # `processed`.
                         fut.cancel()
                     except Exception as exc:  # noqa: BLE001
-                        # process_one swallows exceptions; if we still see
-                        # one here it's an executor-level failure, not a
-                        # per-image one. Record it under the path we know.
-                        p = futures[fut]
+                        # Stage-one worker swallows errors; reaching
+                        # here means the executor itself failed.
+                        p = wd14_futures[fut]
                         session.add_error(str(p), str(exc), p.name)
+
+                # Producers done — drop a sentinel so each consumer
+                # eventually exits. We push exactly one None and rely
+                # on the consumer chain (each one re-pushes it before
+                # exiting) to fan it out.
+                s1_done.set()
+                s1_queue.put(None)
+
+                # Wait for VLM consumers to drain. fut.result() with no
+                # timeout is fine here: any stuck VLM request has its
+                # own per-call timeout via stage_two_worker's retries.
+                for fut in vlm_futures:
+                    try:
+                        fut.result(timeout=timeout * (max_retries + 2))
+                    except Exception:  # noqa: BLE001
+                        # A worker dying is a bug, not a per-image
+                        # error; ignore so we still finish the batch.
+                        pass
+
             session.finish("succeeded" if not session.should_stop() else "canceled")
         except Exception as exc:  # noqa: BLE001
             # Catastrophic failure (e.g. AI route token revoked mid-run).
