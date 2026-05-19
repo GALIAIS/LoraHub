@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
+import { createPortal } from "react-dom"
 import { AlertTriangle, Eye, EyeOff, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { OverfitSignal } from "@/lib/api"
@@ -837,9 +838,14 @@ function FullscreenModal({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
 
-  return (
+  // Portal to <body> so the modal escapes any ancestor stacking context
+  // (parent Cards / Tabs panels often create one via transform / isolate
+  // / will-change). Without this a sibling chart Card rendered later in
+  // the DOM can paint on top of our "fullscreen" view.
+  if (typeof document === "undefined") return null
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-6"
       onClick={onClose}
     >
       <div
@@ -856,6 +862,7 @@ function FullscreenModal({
         </button>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

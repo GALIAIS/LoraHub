@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
+import { createPortal } from "react-dom"
 import { Eye, EyeOff, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ChartToolbar } from "../../jobs/components/chart-toolbar"
@@ -667,9 +668,15 @@ function FullscreenModal({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
 
-  return (
+  // Portal to <body> so the modal isn't trapped in any ancestor's
+  // stacking context. Without this, a parent Card with transform /
+  // filter / isolate creates a new stacking context, and z-50 only
+  // applies *inside* that context — sibling cards rendered later
+  // would visually cover the "fullscreen" view.
+  if (typeof document === "undefined") return null
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-6"
       onClick={onClose}
     >
       <div
@@ -691,6 +698,7 @@ function FullscreenModal({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
