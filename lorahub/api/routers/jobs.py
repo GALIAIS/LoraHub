@@ -266,6 +266,13 @@ def resume_job(
 
     cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
 
+    # Clear the LoRaHub pause flag so the resumed trainer doesn't
+    # immediately re-pause on the first step. Best-effort.
+    try:
+        (original.workspace / "_lorahub_pause").unlink(missing_ok=True)
+    except OSError:
+        pass
+
     return _relaunch_job_in_place(
         original,
         cfg,
@@ -663,6 +670,25 @@ def cancel_job(
         meta["paused"] = True
         meta["paused_at"] = datetime.now(UTC).isoformat()
         job.metadata = meta
+        # Drop the LoRaHub pause flag in the workspace — anima_lora's
+        # train.py loop polls for ``<workspace>/_lorahub_pause`` after
+        # every gradient sync and force-saves a step ckpt + state +
+        # exits cleanly when it sees the file. This guarantees a
+        # resumable checkpoint regardless of the
+        # ``save_every_n_epochs`` cadence. Best-effort: workspace not
+        # writable still falls back to the SIGINT path below so the
+        # cancel never silently no-ops. kohya / dp ignore the flag,
+        # so writing it is harmless when the backend can't honour
+        # the protocol — they fall through to SIGINT.
+        try:
+            pause_flag = job.workspace / "_lorahub_pause"
+            pause_flag.parent.mkdir(parents=True, exist_ok=True)
+            pause_flag.write_text(
+                f"requested at {meta['paused_at']}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     if archive:
         if job.state not in _TERMINAL_STATES:

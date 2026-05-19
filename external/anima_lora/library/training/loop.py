@@ -393,6 +393,58 @@ def _run_epoch_steps(trainer, state: LoopState, epoch: int) -> None:
         )
         _maybe_run_step_validation(trainer, state, epoch)
 
+        # LoRaHub pause hook — when an external process drops a
+        # ``_lorahub_pause`` file under the workspace (parent of
+        # ``args.output_dir``), force an immediate state + weights
+        # save and break out of the loop. Mirrors what
+        # ``--save_every_n_steps`` would do at this step but without
+        # waiting for the cadence boundary, so the user's "暂停"
+        # button always has a checkpoint to resume from. Only the
+        # main process touches the file system; other ranks block in
+        # ``wait_for_everyone()``.
+        if accelerator.sync_gradients and accelerator.is_main_process:
+            try:
+                ws_root = os.path.dirname(os.path.abspath(args.output_dir))
+                pause_flag = os.path.join(ws_root, "_lorahub_pause")
+                if os.path.exists(pause_flag):
+                    logger.info(
+                        "[lorahub] pause flag detected — saving state at step %d and exiting",
+                        state.global_step,
+                    )
+                    try:
+                        from library.training.checkpoints import (
+                            get_step_ckpt_name,
+                            save_and_remove_state_stepwise,
+                        )
+                        ckpt_name = get_step_ckpt_name(
+                            args, "." + args.save_model_as, state.global_step
+                        )
+                        state.saver.save(
+                            ckpt_name, state.network, state.global_step, epoch
+                        )
+                        if getattr(args, "save_state", False):
+                            save_and_remove_state_stepwise(
+                                args, accelerator, state.global_step
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "[lorahub] forced save failed: %s", exc
+                        )
+                    # Best-effort flag cleanup so a later /resume
+                    # doesn't immediately re-pause. The LoRaHub side
+                    # also clears this on its end.
+                    try:
+                        os.remove(pause_flag)
+                    except OSError:
+                        pass
+                    state._lorahub_pause = True  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[lorahub] pause-flag check failed: %s", exc)
+
+        if getattr(state, "_lorahub_pause", False):
+            accelerator.wait_for_everyone()
+            break
+
         if state.global_step >= args.max_train_steps:
             break
 
