@@ -404,10 +404,14 @@ function TimelineRail({
   )
 
   // Auto-scroll the rail when a new last item appears (live tailing).
+  // ``block: "end"`` (not ``"nearest"``) so the very first paint —
+  // when the rail mounts on a back-to-events tab switch and the tail
+  // is offscreen — actually lands at the bottom instead of relying on
+  // "nearest" deciding nothing needs to move.
   const tailRef = useRef<HTMLLIElement | null>(null)
   useEffect(() => {
     if (!tailRef.current) return
-    tailRef.current.scrollIntoView({ block: "nearest" })
+    tailRef.current.scrollIntoView({ block: "end" })
   }, [filtered.length])
 
   if (filtered.length === 0) {

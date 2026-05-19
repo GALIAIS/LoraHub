@@ -409,6 +409,14 @@ export function TerminalLog({
             key={`${query}|${clearAfter}`}
             className="absolute inset-0 size-full"
             data={filteredLines}
+            // Open at the bottom — without this prop Virtuoso anchors
+            // the first paint to index 0 (top), and a user navigating
+            // back to the events tab sees stale lines instead of the
+            // freshly-arrived tail. Indexing the last row makes the
+            // initial layout pin the viewport to the bottom; subsequent
+            // appends are handled by ``followOutput`` below. Guarded
+            // so empty data doesn't pass a negative index.
+            initialTopMostItemIndex={Math.max(0, filteredLines.length - 1)}
             atBottomStateChange={onAtBottomChange}
             atBottomThreshold={STICK_TO_BOTTOM_PX}
             // Snap to the bottom when the user is already there and
