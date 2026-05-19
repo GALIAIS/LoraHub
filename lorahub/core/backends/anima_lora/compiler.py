@@ -526,6 +526,11 @@ def _dataset_config_override(
     batch_size = max(1, int(cfg.schedule.batch_size or 1))
     keep_tokens = int(opts.keep_tokens)
     caption_ext = (opts.caption_extension or ".txt").strip() or ".txt"
+    # num_repeats: same field kohya / dp read from ``cfg.dataset.num_repeats``
+    # (each image is sampled this many times per epoch). Write it into the
+    # generated dataset blueprint so anima_lora respects the same knob the
+    # rest of LoRaHub exposes; defaults to 1 when the recipe doesn't set it.
+    num_repeats = max(1, int(getattr(cfg.dataset, "num_repeats", 1) or 1))
 
     body = (
         "# LoRaHub-generated dataset_config — pins anima_lora's three\n"
@@ -543,7 +548,7 @@ def _dataset_config_override(
         "  [[datasets.subsets]]\n"
         f"  image_dir = {_q(resized)}\n"
         f"  cache_dir = {_q(cache)}\n"
-        "  num_repeats = 1\n"
+        f"  num_repeats = {num_repeats}\n"
     )
 
     # Tag with a sub-folder so multiple parallel jobs writing to
