@@ -8,8 +8,16 @@ import {
   ExternalLink,
   GitCompareArrows,
   SlidersHorizontal,
+  Trophy,
 } from "lucide-react"
-import { api, type SweepDetail, type SweepJobSummary, type SweepSummary } from "@/lib/api"
+import {
+  api,
+  type SweepDetail,
+  type SweepJobSummary,
+  type SweepParetoResponse,
+  type SweepSummary,
+} from "@/lib/api"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -37,6 +45,39 @@ const STATE_COLORS: Record<string, string> = {
   canceled: "bg-amber-500/70",
   canceling: "bg-amber-500/70",
   interrupted: "bg-rose-500/60",
+}
+
+// Color tones for the search-strategy badge. TPE gets a brighter tone so
+// users immediately notice when an adaptive sweep is running — that's
+// where they care about pareto / convergence.
+const MODE_BADGE: Record<string, { label: string; toneClass: string }> = {
+  grid: {
+    label: "grid",
+    toneClass: "border-zinc-500/40 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
+  },
+  random: {
+    label: "random",
+    toneClass: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  },
+  tpe: {
+    label: "TPE",
+    toneClass: "border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
+  },
+}
+
+function ModeBadge({ mode }: { mode: string | undefined | null }) {
+  const meta = MODE_BADGE[mode ?? "grid"] ?? MODE_BADGE.grid
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "rounded-[2px] uppercase text-[10px] tracking-[0.1em]",
+        meta.toneClass,
+      )}
+    >
+      {meta.label}
+    </Badge>
+  )
 }
 
 function fmtRelativeTime(iso: string | null | undefined): string {
@@ -204,9 +245,7 @@ function SweepListRow({
           <span className="text-[13px] font-medium text-foreground truncate">
             {sweep.name_prefix || sweep.sweep_id.slice(-8)}
           </span>
-          <span className="font-mono text-[10px] text-muted-foreground/70">
-            #{sweep.sweep_id.slice(-8)}
-          </span>
+          <ModeBadge mode={sweep.mode} />
         </div>
         <DistributionBar sweep={sweep} />
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -298,6 +337,7 @@ function SweepDetailPanel({ sweepId }: { sweepId: string }) {
     <ScrollArea className="flex-1 min-h-0">
       <div className="p-6 space-y-5 max-w-5xl">
         <SweepSummaryHeader sweep={sweep} />
+        <ParetoCard sweepId={sweep.sweep_id} mode={sweep.plan?.mode} />
         <AxisMatrix jobs={sweep.jobs} />
         <VariantTable jobs={sweep.jobs} />
         <SweepActions sweep={sweep} />
@@ -353,6 +393,17 @@ function SweepSummaryHeader({ sweep }: { sweep: SweepDetail }) {
           <h1 className="text-base font-semibold tracking-tight">
             {namePrefix}
           </h1>
+          <ModeBadge mode={sweep.plan?.mode} />
+          {sweep.plan?.n_trials != null && (
+            <span className="text-[11px] text-muted-foreground">
+              n_trials={sweep.plan.n_trials}
+            </span>
+          )}
+          {sweep.plan?.seed != null && (
+            <span className="text-[11px] text-muted-foreground font-mono">
+              seed={sweep.plan.seed}
+            </span>
+          )}
           <span className="font-mono text-[11px] text-muted-foreground">
             #{sweep.sweep_id.slice(-8)}
           </span>
@@ -596,6 +647,146 @@ function SweepActions({ sweep }: { sweep: SweepDetail }) {
           <Activity className="size-3" />
           {activeCount} 个变体仍在进行中，详情会自动刷新
         </span>
+      )}
+    </section>
+  )
+}
+
+
+// --------------------------------------------------------------------------- //
+// Pareto card — best trial + completed-trial leaderboard.
+//
+// Visible for every mode, but the value really shines on TPE / random where
+// the user wants to see "which axis values landed the lowest loss". Grid
+// sweeps without a per-trial metric will show the same data, just less
+// interesting because every cell of the cartesian product runs anyway.
+// --------------------------------------------------------------------------- //
+
+function ParetoCard({
+  sweepId,
+  mode,
+}: {
+  sweepId: string
+  mode: string | undefined
+}) {
+  const pareto = useQuery({
+    queryKey: ["sweep-pareto", sweepId],
+    queryFn: () => api.getSweepPareto(sweepId),
+    refetchInterval: (query) => {
+      const data = query.state.data as SweepParetoResponse | undefined
+      // Keep polling while there are pending trials so the leaderboard
+      // updates as each one finishes; once everything's done, stop.
+      return data && data.pending > 0 ? 4000 : false
+    },
+  })
+
+  if (pareto.isLoading || !pareto.data) {
+    return (
+      <section className="space-y-2">
+        <h2 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/80 inline-flex items-center gap-1">
+          <Trophy className="size-3" />
+          Pareto / 最佳 trial
+        </h2>
+        <div className="rounded-[6px] border border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">
+          加载中…
+        </div>
+      </section>
+    )
+  }
+
+  const { best, completed_trials, pending } = pareto.data
+  const finiteTrials = completed_trials
+    .filter((t) => Number.isFinite(t.score))
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 10)
+  const noFinite = finiteTrials.length === 0
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/80 inline-flex items-center gap-1">
+          <Trophy className="size-3" />
+          Pareto / 最佳 trial
+        </h2>
+        <span className="text-[11px] text-muted-foreground">
+          {completed_trials.length} 个 trial 已完成
+          {pending > 0 && <> · {pending} 个进行中</>}
+        </span>
+      </div>
+
+      {best ? (
+        <div className="rounded-[6px] border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400 font-semibold">
+              最佳
+            </span>
+            <span className="text-sm font-mono">
+              loss = <span className="text-foreground">{best.score.toFixed(6)}</span>
+            </span>
+            <code className="text-[10px] text-muted-foreground/70">
+              job: {best.job_id.slice(-12)}
+            </code>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {Object.entries(best.axis_values).map(([k, v]) => (
+              <span key={k}>
+                <span className="text-muted-foreground/70">{k}=</span>
+                <span className="font-mono text-foreground/80">
+                  {formatAxisValue(v)}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-[6px] border border-border/60 px-4 py-3 text-xs text-muted-foreground">
+          {noFinite
+            ? "暂无成功完成的 trial。失败 / 缺指标的 trial 不计入 best。"
+            : "等待 trial 完成…"}
+        </div>
+      )}
+
+      {finiteTrials.length > 0 && (
+        <div className="rounded-[6px] border border-border/60 overflow-hidden">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12">#</TableHead>
+                <TableHead className="w-32">loss</TableHead>
+                <TableHead>axis 值</TableHead>
+                <TableHead className="w-32">job</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {finiteTrials.map((t, idx) => (
+                <TableRow
+                  key={t.job_id}
+                  className={cn(idx === 0 && "bg-emerald-500/5")}
+                >
+                  <TableCell className="font-mono text-muted-foreground">
+                    {idx + 1}
+                  </TableCell>
+                  <TableCell className="font-mono">
+                    {t.score.toFixed(6)}
+                  </TableCell>
+                  <TableCell className="font-mono text-[11px] truncate max-w-[26rem]">
+                    {Object.entries(t.axis_values)
+                      .map(([k, v]) => `${k}=${formatAxisValue(v)}`)
+                      .join("  ")}
+                  </TableCell>
+                  <TableCell className="font-mono text-muted-foreground">
+                    {t.job_id.slice(-12)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      {mode === "grid" && completed_trials.length === 0 && pending === 0 && (
+        <div className="text-[11px] text-muted-foreground">
+          网格 sweep 通常不上报 per-trial loss;若有需要可在配置里开 validation。
+        </div>
       )}
     </section>
   )

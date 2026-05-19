@@ -795,6 +795,7 @@ const EVENT_LEVEL: Record<string, string> = {
   cache_progress: "CACHE",
   oom: "OOM",
   gpu_sample: "GPU",
+  preview_unavailable: "PREVIEW",
   done: "DONE",
   log: "LOG",
   error: "ERROR",
@@ -812,6 +813,8 @@ function toneFor(e: TrainingEvent): string {
     return "text-fuchsia-700 dark:text-fuchsia-400"
   if (e.type === "epoch_end") return "text-violet-700 dark:text-violet-400"
   if (e.type === "validation") return "text-cyan-700 dark:text-cyan-400"
+  if (e.type === "preview_unavailable")
+    return "text-amber-700 dark:text-amber-300"
   if (e.type === "done") return "text-emerald-700 dark:text-emerald-400"
   return "text-foreground/80"
 }
@@ -847,6 +850,13 @@ function renderInlineSummary(
       return `保存检查点 → ${p.path ?? ""}`
     case "sample_ready":
       return `生成样本 → ${p.path ?? ""}`
+    case "preview_unavailable": {
+      // Cut-3 / B5 — payload: { arch, available_backends, reason }
+      const arch = String(p.arch ?? "?")
+      const reason = String(p.reason ?? "")
+      const tail = reason ? ` · ${reason}` : ""
+      return `预览暂不可用(arch=${arch})${tail} — 训练继续,但不会生成预览图。`
+    }
     case "oom":
       return String(p.message ?? "CUDA out of memory")
     case "error":
