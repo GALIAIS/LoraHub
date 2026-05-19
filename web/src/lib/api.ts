@@ -1584,14 +1584,71 @@ export async function imageStudioSmartCaption(params: {
   captionMode?: "general" | "style" | "character"
   triggerWord?: string
   stripStyleTags?: boolean
+  /** Optional progress callback. Fires after each poll with the latest snapshot. */
+  onProgress?: (snap: {
+    processed: number
+    total: number
+    percent: number
+    last_image: string
+    status: string
+  }) => void
 }): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
-    "/image-studio/ai/smart-caption",
-    {
-      method: "POST",
-      body: JSON.stringify(params),
-    },
-  )
+  // Background-task adapter (uvicorn hang fix): the server now returns
+  // 202 with a session_id; we poll status/<id> until it reaches a
+  // terminal state, then resolve with the legacy shape so existing
+  // callers keep working without code changes.
+  const { onProgress, ...body } = params
+  const submit = await http<{
+    session_id: string
+    total: number
+    status_url: string
+  }>("/image-studio/ai/smart-caption", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+  const id = submit.session_id
+  const poll = async (): Promise<{
+    processed: number
+    total: number
+    percent: number
+    last_image: string
+    status: string
+    results: unknown[]
+    errors: unknown[]
+    error: string | null
+  }> => {
+    return http(`/image-studio/ai/smart-caption/status/${encodeURIComponent(id)}`)
+  }
+  // Simple linear back-off — polls every 1s for first minute, then 3s.
+  // Total runtime is bounded by the user explicitly cancelling or by
+  // the page being closed (background thread finishes regardless).
+  let elapsed = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const snap = await poll()
+    if (onProgress) {
+      onProgress({
+        processed: snap.processed,
+        total: snap.total,
+        percent: snap.percent,
+        last_image: snap.last_image,
+        status: snap.status,
+      })
+    }
+    if (snap.status !== "running") {
+      if (snap.status === "failed") {
+        throw new Error(snap.error ?? "smart-caption batch failed")
+      }
+      return {
+        processed: snap.processed,
+        results: snap.results,
+        errors: snap.errors,
+      }
+    }
+    const interval = elapsed < 60 ? 1000 : 3000
+    await new Promise<void>((resolve) => setTimeout(resolve, interval))
+    elapsed += interval / 1000
+  }
 }
 
 export async function imageStudioSmartCaptionSingle(params: {

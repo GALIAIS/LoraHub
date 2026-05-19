@@ -7,6 +7,9 @@ Anima-format captions used for LoRA training.
 from __future__ import annotations
 
 import threading
+import time as _time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +25,98 @@ if TYPE_CHECKING:
     from lorahub.core.tagging.wd14 import WD14Tagger
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+
+
+def _ulid_safe() -> str:
+    """Stand-in for ulid that's safe to call without the package.
+
+    `ulid-py` is on the dependency list but the smart-caption sessions
+    don't really need lexicographic sortability — uuid4 is plenty.
+    """
+    return uuid.uuid4().hex
+
+
+@dataclass
+class _SmartCaptionSession:
+    """Live state for a background smart-caption batch.
+
+    Mirrors the shape of `_ISTaggingSession` so the frontend can reuse
+    the same polling pattern. ``stop_requested`` is honoured between
+    images, so cancel arrives at most one image-render late.
+    """
+
+    session_id: str
+    path: str
+    total: int
+    status: str = "running"  # running / succeeded / failed / canceled
+    processed: int = 0
+    results: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, str]] = field(default_factory=list)
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add_result(self, item: dict[str, Any], image_name: str) -> None:
+        with self._lock:
+            self.results.append(item)
+            self.processed += 1
+            self.last_image = image_name
+
+    def add_error(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.errors.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+
+    def set_error(self, msg: str) -> None:
+        with self._lock:
+            self.error = msg
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "path": self.path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 0.0
+                ),
+                "last_image": self.last_image,
+                "results": list(self.results),
+                "errors": list(self.errors),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+
+# Module-level session registry. Same shape as the tagging tab — the only
+# state we keep across requests is "what's running right now"; finished
+# sessions stick around so the frontend can pull final results once.
+# Memory bound: cleared whenever the process restarts, plus best-effort
+# eviction of sessions older than 1h after they finish (see snapshot).
+_smart_caption_sessions: dict[str, _SmartCaptionSession] = {}
+_smart_caption_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -513,9 +608,21 @@ def _smart_caption_single_image(
     }
 
 
-@router.post("/ai/smart-caption")
+@router.post("/ai/smart-caption", status_code=202)
 def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
-    """Run WD14 tagging + vision LLM captioning for all images in a directory."""
+    """Run WD14 tagging + vision LLM captioning for all images in a directory.
+
+    Background-task shape (unblocks uvicorn for big batches): the request
+    validates inputs, returns a session_id immediately with HTTP 202, and
+    runs the for-loop in a worker thread. Progress is polled via
+    ``GET /api/image-studio/ai/smart-caption/status/<id>``; cancel via
+    ``POST /api/image-studio/ai/smart-caption/cancel/<id>``.
+
+    Synchronous return shape (the legacy ``processed`` / ``results`` / ``errors``
+    fields) is preserved on the status endpoint when the session finishes,
+    so existing callers can poll-then-pull without code changes beyond
+    going through the session_id.
+    """
     from lorahub.api import app as app_mod  # noqa: PLC0415
 
     directory = _resolve_under_roots(body.path)
@@ -533,7 +640,10 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
 
     # Initialize WD14 tagger (cached per-process so we don't re-load 1.2GB
-    # of weights on every request)
+    # of weights on every request). This is the only call we keep in the
+    # request thread — it takes ~1s on a warm cache and the UI freezing for
+    # a second is fine; running it in the background means the user has no
+    # signal that the tagger failed to load.
     tagger = _get_tagger(
         body.taggerModel,
         body.generalThreshold,
@@ -542,23 +652,72 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     )
 
     images = _scan_images(directory, body.recursive)
-    results: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-
     store = _store()
-    for img_path in images:
-        try:
-            item = _smart_caption_single_image(
-                img_path, tagger, ai_store, route, body.mergeStrategy, store,
-                caption_mode=body.captionMode,
-                trigger_word=body.triggerWord,
-                strip_style_tags=body.stripStyleTags,
-            )
-            results.append(item)
-        except Exception as exc:  # noqa: BLE001
-            errors.append({"path": str(img_path), "error": str(exc)})
+    session = _SmartCaptionSession(
+        session_id=str(_ulid_safe()),
+        path=str(directory),
+        total=len(images),
+    )
+    with _smart_caption_lock:
+        _smart_caption_sessions[session.session_id] = session
 
-    return {"processed": len(results), "results": results, "errors": errors}
+    def run() -> None:
+        try:
+            for img_path in images:
+                if session.should_stop():
+                    break
+                try:
+                    item = _smart_caption_single_image(
+                        img_path, tagger, ai_store, route, body.mergeStrategy, store,
+                        caption_mode=body.captionMode,
+                        trigger_word=body.triggerWord,
+                        strip_style_tags=body.stripStyleTags,
+                    )
+                    session.add_result(item, img_path.name)
+                except Exception as exc:  # noqa: BLE001
+                    session.add_error(str(img_path), str(exc), img_path.name)
+            session.finish("succeeded" if not session.should_stop() else "canceled")
+        except Exception as exc:  # noqa: BLE001
+            # Catastrophic failure (e.g. AI route token revoked mid-run).
+            # Mark the session failed instead of leaking the traceback into
+            # the request thread (which has long since returned 202).
+            session.set_error(str(exc))
+            session.finish("failed")
+
+    threading.Thread(
+        target=run,
+        name=f"smart-caption-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
+
+    return {
+        "session_id": session.session_id,
+        "total": len(images),
+        "status_url": (
+            f"/api/image-studio/ai/smart-caption/status/{session.session_id}"
+        ),
+    }
+
+
+@router.get("/ai/smart-caption/status/{session_id}")
+def ai_smart_caption_status(session_id: str) -> dict[str, Any]:
+    """Poll a smart-caption batch session's progress and final results."""
+    with _smart_caption_lock:
+        session = _smart_caption_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+    return session.snapshot()
+
+
+@router.post("/ai/smart-caption/cancel/{session_id}")
+def ai_smart_caption_cancel(session_id: str) -> dict[str, Any]:
+    """Request a running smart-caption batch session to stop after the current image."""
+    with _smart_caption_lock:
+        session = _smart_caption_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+    session.request_stop()
+    return {"session_id": session_id, "stop_requested": True}
 
 
 class SmartCaptionSingleInput(BaseModel):
