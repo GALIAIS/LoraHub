@@ -103,7 +103,8 @@ backend:
       logInterval: 5
 
       # 内存
-      attnMode: flash
+      # torch (PyTorch SDPA): 默认安全选项;装了 flash-attn 改成 flash。
+      attnMode: torch
       useCustomDownAutograd: true
 
 # 训练完成后,output/ckpt/anima_turbo.safetensors 是一个标准 LoRA。推理：

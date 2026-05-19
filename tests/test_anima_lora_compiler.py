@@ -348,13 +348,20 @@ def test_caching_flags_emit_when_enabled(tmp_path: Path) -> None:
         assert flag in pairs, f"missing default cache flag {flag}"
 
 
-def test_attn_mode_default_is_flash(tmp_path: Path) -> None:
-    """Upstream default is flash; we must surface it on argv."""
+def test_attn_mode_default_is_torch(tmp_path: Path) -> None:
+    """Default attn_mode is ``torch`` (PyTorch SDPA) for portability.
+
+    Upstream's base.toml default is ``flash``, but flash-attn is an
+    optional, compute-capability-sensitive build many environments
+    don't have (and trips a RuntimeError at DiT load time when
+    missing). LoRaHub overrides the default to ``torch`` so a fresh
+    install runs out of the box; users with flash-attn flip it back.
+    """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     argv, _ = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv)
-    assert pairs["--attn_mode"] == ["flash"]
+    assert pairs["--attn_mode"] == ["torch"]
 
 
 # --------------------------------------------------------------------------- #

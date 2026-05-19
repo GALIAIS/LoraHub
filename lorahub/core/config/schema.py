@@ -886,7 +886,9 @@ class AnimaLoraTurboConfig(BaseModel):
     student_alpha: float = Field(48, gt=0)
     fake_rank: int = Field(64, ge=1)
     fake_alpha: float = Field(64, gt=0)
-    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
+    # See main attn_mode: default to PyTorch SDPA so users without
+    # flash-attn installed don't immediately bounce off a RuntimeError.
+    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "torch"
 
     # DMD2 schedule (proposal §Schedule, paper Table 1 row 4).
     student_steps: int = Field(4, ge=1)
@@ -986,7 +988,13 @@ class AnimaLoraOptions(BaseModel):
     no_half_vae: bool = False
 
     # ---- Attention / compile ----
-    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
+    # Default to ``torch`` (PyTorch SDPA) instead of upstream's ``flash``
+    # because flash-attn is an optional, compute-capability-sensitive
+    # build that many environments don't have. SDPA is always available
+    # and on Ampere+ runs at ~85-95% of flash-attn's throughput. Users
+    # with flash-attn installed flip this to ``flash`` for the last
+    # 5-15% perf gain.
+    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "torch"
     xformers: bool = False
     split_attn: bool = False
     # ``compile_mode = "full"`` enables CUDAGraph capture via

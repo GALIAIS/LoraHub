@@ -113,7 +113,7 @@ backend:
     staticTokenCount: 4096
 
     # 注意力 / 编译
-    attnMode: flash         # 装了 flash-attn 才有效，没装会报错；改成 torch 安全
+    attnMode: torch         # 默认 SDPA,始终可用;装了 flash-attn 改成 flash 拿额外 5-15%
     # compileMode: full     # 想开 torch.compile 全编译就解开（与 grad_ckpt 互斥）
     # compileInductorMode: reduce-overhead
 

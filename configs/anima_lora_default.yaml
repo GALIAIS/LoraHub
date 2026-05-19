@@ -119,7 +119,9 @@ backend:
     vaeDisableCache: true   # 上游 base.toml 默认 true
 
     # base.toml: 注意力 / 编译
-    attnMode: flash
+    # torch (PyTorch SDPA) 默认:始终可用,Ampere+ 跑到 flash-attn 的 85-95% 吞吐。
+    # 装了 flash-attn 的环境改成 flash 拿额外 5-15%。
+    attnMode: torch
     useCustomDownAutograd: true
     # 上游 lora.toml: compile_inductor_mode = "reduce-overhead"
     # compile_mode 在上游 lora.toml 里被注释掉(默认不开),与 LoraHub 一致
