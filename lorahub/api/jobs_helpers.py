@@ -1164,9 +1164,18 @@ def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
     anima_lora is a sd-scripts fork, so its state-dir layout matches kohya:
     ``<output_name>-state`` (end-of-run) and ``<output_name>-state-step<N>``
     (interval). The compiler writes them under ``<workspace>/ckpt/``.
-    Reuse the same finders kohya does and emit ``--resume=<state_dir>`` +
-    ``--network_weights=<latest.safetensors>`` so the trainer reattaches
-    weights AND optimizer/scheduler state.
+    Emit ``--resume=<state_dir>`` and let accelerate's ``load_state``
+    restore the LoRA state_dict from ``state_dir/model.safetensors``
+    along with optimizer/scheduler. We deliberately do *not* pass
+    ``--network_weights`` — train.py would call
+    ``network.load_weights(...)`` with whatever LoRA-shaped
+    ``.safetensors`` we picked from disk *before* accelerate's load,
+    and the load order makes the explicit weights either redundant
+    (if accelerate runs after) or wrong (if it picks up a stale
+    epoch-cadence file like ``-000006.safetensors`` that doesn't
+    match the resumable state). The state dir's bundled
+    ``model.safetensors`` is the only authoritative companion to
+    ``train_state.json``.
 
     Also read ``train_state.json`` from the picked state directory and
     inject ``--initial_step=<N>`` + ``--skip_until_initial_step``. Without
@@ -1183,15 +1192,8 @@ def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
             "resume requires ``cfg.resume.saveState=true`` (default) so "
             "the trainer wrote optimizer state at least once"
         )
-    weights = _find_latest_safetensors(workspace)
-    if weights is None:
-        raise ResumeNotReady(
-            f"no .safetensors weights found under {workspace}; "
-            "cannot seed --network_weights"
-        )
     extra_argv = [
         f"--resume={state_dir}",
-        f"--network_weights={weights}",
     ]
     # Pull current_step from train_state.json so the resumed run skips
     # the dataloader forward to where the previous run left off. The

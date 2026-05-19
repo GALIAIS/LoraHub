@@ -219,6 +219,11 @@ def test_anima_lora_resume_spec_injects_initial_step(tmp_path: Path) -> None:
     optimizer/scheduler state via ``--resume`` but the dataloader replays
     from step 0, so users see "resume started over from step 1" even
     though weights are correctly loaded.
+
+    The state_dir's bundled ``model.safetensors`` is loaded by
+    accelerate's ``load_state``, so we deliberately avoid emitting
+    ``--network_weights`` (it can pick up a stale epoch-cadence file
+    like ``-000006.safetensors`` that doesn't match the state dir).
     """
     import json as _json
     from lorahub.api.jobs_helpers import _anima_lora_resume_spec
@@ -232,13 +237,14 @@ def test_anima_lora_resume_spec_injects_initial_step(tmp_path: Path) -> None:
         _json.dumps({"current_epoch": 4, "current_step": 48}),
         encoding="utf-8",
     )
+    (state_dir / "model.safetensors").write_bytes(b"")
     (ckpt / "anima_lora-checkpoint.safetensors").write_bytes(b"")
 
     spec = _anima_lora_resume_spec(ws)
 
     argv = spec.extra_argv
     assert any(a.startswith("--resume=") for a in argv)
-    assert any(a.startswith("--network_weights=") for a in argv)
+    assert not any(a.startswith("--network_weights") for a in argv)
     assert "--initial_step=48" in argv
     assert "--skip_until_initial_step" in argv
 
@@ -255,12 +261,12 @@ def test_anima_lora_resume_spec_omits_initial_step_when_unknown(
     state_dir = ckpt / "anima_lora-checkpoint-state"
     state_dir.mkdir()
     # No train_state.json — older runs / partial state dirs.
-    (ckpt / "anima_lora-checkpoint.safetensors").write_bytes(b"")
+    (state_dir / "model.safetensors").write_bytes(b"")
 
     spec = _anima_lora_resume_spec(ws)
 
     argv = spec.extra_argv
     assert any(a.startswith("--resume=") for a in argv)
-    assert any(a.startswith("--network_weights=") for a in argv)
+    assert not any(a.startswith("--network_weights") for a in argv)
     assert not any(a.startswith("--initial_step") for a in argv)
     assert "--skip_until_initial_step" not in argv

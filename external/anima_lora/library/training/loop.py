@@ -222,10 +222,19 @@ def build_loop_state(
     clean_memory_on_device(accelerator.device)
 
     progress_bar = tqdm(
-        range(args.max_train_steps - global_step),
+        range(args.max_train_steps),
         smoothing=0,
         disable=not accelerator.is_local_main_process,
         desc="steps",
+        # LoRaHub patch: when resuming with --skip_until_initial_step,
+        # advance the bar to the global_step we recovered from
+        # train_state.json so the X/total readout matches the absolute
+        # step counter (e.g. ``90/4000`` after pause-at-89), not the
+        # relative ``0/3911`` the original ``range(remaining)`` produced.
+        # The dataloader skip prelude consumes the first ``initial_step``
+        # batches; the bar update inside the inner loop bumps the
+        # counter once per real optimizer step from there on.
+        initial=global_step,
     )
 
     validation_steps = (
@@ -316,6 +325,21 @@ def run_training_loop(trainer, state: LoopState) -> None:
         )
 
         _run_epoch_steps(trainer, state, epoch)
+
+        # LoRaHub pause break — when ``_run_epoch_steps`` exited via
+        # the pause flag, ``state._lorahub_pause`` is set. Skip the
+        # epoch-end saves (they would write a fresh
+        # ``<output_name>-NNNNNN`` file *after* the pause hook already
+        # wrote ``<output_name>-checkpoint-state`` — that's how a
+        # single pause used to drop 4 ckpts: the inner save +
+        # maybe_save_epoch + maybe_save_resumable + the next outer
+        # epoch's even-cadence save), and break the outer loop so
+        # train.py's epilogue (which our patch makes a no-op when
+        # ``args._lorahub_paused`` is set) doesn't get a chance to
+        # write the final checkpoint either.
+        if getattr(state, "_lorahub_pause", False):
+            break
+
         _run_epoch_validation(trainer, state, epoch)
         _log_epoch_average(trainer, state, epoch)
         _run_adapter_epoch_hooks(trainer, state)
