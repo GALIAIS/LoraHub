@@ -146,8 +146,15 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         _settings = _settings_store.load()
         from lorahub.api.jobs_helpers import (  # noqa: PLC0415
             _attempt_auto_resume,
+            _migrate_snapshots_to_camel,
             _requeue_pending_jobs,
         )
+
+        # Catch-up migration: ensure every JobRecord.config_snapshot is
+        # camelCase so the resume-with-edit form sees the same shape
+        # newer jobs use. No-op once a process has been through this
+        # pass; safe to run on every boot.
+        _migrate_snapshots_to_camel()
 
         resumed = _attempt_auto_resume(
             max_attempts=max(1, int(_settings.auto_resume_max_attempts)),

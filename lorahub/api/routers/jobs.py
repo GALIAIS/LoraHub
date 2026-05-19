@@ -251,7 +251,7 @@ def resume_job(
         # Persist the updated snapshot so subsequent /resume calls
         # honour the latest cfg, and so the events / metrics tab can
         # show the actual config the resumed run used.
-        original.config_snapshot = cfg.model_dump(mode="json")
+        original.config_snapshot = cfg.model_dump(mode="json", by_alias=True)
         state.registry.update(original)
     else:
         try:

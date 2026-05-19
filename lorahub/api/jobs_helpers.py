@@ -536,7 +536,7 @@ def _launch_job(
     # the cwd the backend launches it from (dp uses its own repo dir).
     _normalize_recipe_paths(cfg)
 
-    snapshot = cfg.model_dump(mode="json")
+    snapshot = cfg.model_dump(mode="json", by_alias=True)
     job = state.registry.create(workspace=workspace, config_snapshot=snapshot)
     if metadata is not None:
         job.metadata = metadata
@@ -585,7 +585,7 @@ def _relaunch_job_in_place(
         if event_log.is_file():
             event_log.unlink()
 
-    snapshot = cfg.model_dump(mode="json")
+    snapshot = cfg.model_dump(mode="json", by_alias=True)
     job.config_snapshot = snapshot
     job.state = JobState.queued
     job.started_at = None
@@ -1102,7 +1102,7 @@ def _dp_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
         # Pin the resumed run to the same output_dir so dp picks the
         # same run_dir back up. Stored as an absolute string so
         # subsequent re-validation through pydantic's Path field is happy.
-        cfg_overrides={"output.output_dir": str(out_dir)},
+        cfg_overrides={"output.outputDir": str(out_dir)},
     )
 
 
@@ -1160,7 +1160,7 @@ def _apply_cfg_overrides(cfg: TrainingConfig, overrides: dict[str, Any]) -> Trai
     """
     if not overrides:
         return cfg
-    data = cfg.model_dump(mode="json")
+    data = cfg.model_dump(mode="json", by_alias=True)
     for dotted, value in overrides.items():
         cur: Any = data
         parts = dotted.split(".")
@@ -1299,6 +1299,58 @@ def _requeue_pending_jobs() -> int:
         requeued += 1
         log.info("requeue: re-submitted queued job %s to scheduler", job.id)
     return requeued
+
+
+def _migrate_snapshots_to_camel() -> int:
+    """One-shot migration: re-dump every JobRecord's config_snapshot with
+    ``by_alias=True`` so the on-disk shape matches what the front-end form
+    expects (camelCase). Idempotent: snapshots that are already camelCase
+    round-trip unchanged through pydantic.
+
+    Older builds dumped the snapshot with field names (snake_case) while
+    the schema's alias_generator emits camelCase. The form widgets read
+    camelCase keys, so loading an old job into ResumeWithEditDialog
+    silently fell back to the default backend section because
+    ``value.backend.anima_lora`` doesn't match ``value.backend.animaLora``.
+
+    Schema-broken snapshots are left alone; the requeue / resume paths
+    will surface them as "stale config snapshot on restart" the next
+    time the operator interacts with that job.
+    """
+    from lorahub.api import state as _state  # noqa: PLC0415
+
+    migrated = 0
+    skipped = 0
+    failed = 0
+    for job in list(_state.registry.list()):
+        snap = job.config_snapshot
+        if not isinstance(snap, dict):
+            skipped += 1
+            continue
+        try:
+            cfg = TrainingConfig.model_validate(snap)
+        except Exception:  # noqa: BLE001
+            failed += 1
+            continue
+        # Round-trip with by_alias=True. Compare to the old shape so we
+        # only persist when something actually changed (avoids touching
+        # mtime on already-migrated rows).
+        new_snap = cfg.model_dump(mode="json", by_alias=True)
+        if new_snap == snap:
+            skipped += 1
+            continue
+        job.config_snapshot = new_snap
+        _state.registry.update(job)
+        migrated += 1
+    if migrated or failed:
+        log.info(
+            "snapshot migration: %d converted to camelCase, %d unchanged, "
+            "%d schema-broken (left as-is)",
+            migrated,
+            skipped,
+            failed,
+        )
+    return migrated
 
 
 def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[str]]:

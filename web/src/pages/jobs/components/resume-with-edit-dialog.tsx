@@ -33,6 +33,8 @@ export function ResumeWithEditDialog({
 
   useEffect(() => {
     if (job.config_snapshot) {
+      // Snapshot is camelCase: backend dumps with by_alias=True so the
+      // shape lines up 1:1 with the form widgets' field names.
       setDraft(job.config_snapshot as unknown as ConfigFormValue)
     }
   }, [job.config_snapshot])
