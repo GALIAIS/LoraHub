@@ -526,6 +526,10 @@ class SmartCaptionBatchInput(BaseModel):
     taggerConcurrency: int = 2
     perImageTimeoutSec: float = 90.0
     maxRetries: int = 2
+    # Skip images that already have a non-empty .txt sidecar. Useful
+    # for re-running a batch that hit upstream rate-limits — the
+    # second run only retries the images that failed the first time.
+    skipExisting: bool = False
 
 
 @dataclass
@@ -727,6 +731,20 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     )
 
     images = _scan_images(directory, body.recursive)
+    if body.skipExisting:
+        # Drop images that already have a non-empty .txt sidecar.
+        # Empty/zero-byte sidecars are NOT counted as completed —
+        # they're usually the half-written remnant of a crashed
+        # caption attempt and should be reprocessed.
+        before = len(images)
+        images = [
+            p for p in images
+            if not (p.with_suffix(".txt").is_file()
+                    and p.with_suffix(".txt").stat().st_size > 0)
+        ]
+        skipped = before - len(images)
+    else:
+        skipped = 0
     store = _store()
     session = _SmartCaptionSession(
         session_id=str(_ulid_safe()),
@@ -819,7 +837,24 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     except Exception as exc:  # noqa: BLE001
                         last_err = exc
                         if attempt < max_retries:
-                            _time.sleep(min(2.0 ** attempt, 4.0))
+                            # 429 / quota errors need much longer backoff —
+                            # the upstream's window is usually minute-scale,
+                            # so 2-4s isn't enough to clear the bucket. We
+                            # detect "429" / "rate" / "exhausted" / "quota"
+                            # in the message and step up to 30s+30s*attempt
+                            # (capped at 120s). Other errors keep the fast
+                            # 2-4s exponential backoff.
+                            msg_l = str(exc).lower()
+                            is_rate_limit = (
+                                "429" in msg_l
+                                or "rate" in msg_l
+                                or "exhausted" in msg_l
+                                or "quota" in msg_l
+                            )
+                            if is_rate_limit:
+                                _time.sleep(min(30.0 + 30.0 * attempt, 120.0))
+                            else:
+                                _time.sleep(min(2.0 ** attempt, 4.0))
                             continue
                 if last_err is not None:
                     err_msg = f"VLM: {type(last_err).__name__}: {last_err}"
@@ -902,6 +937,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     return {
         "session_id": session.session_id,
         "total": len(images),
+        "skipped": skipped,
         "status_url": (
             f"/api/image-studio/ai/smart-caption/status/{session.session_id}"
         ),
