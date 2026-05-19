@@ -10,6 +10,7 @@ guards against absolute paths to keep the blast radius local to
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,31 @@ router = APIRouter(prefix="/api")
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+def _rmtree(target: Path) -> None:
+    """``shutil.rmtree`` with a Windows-friendly only-readable retry hook.
+
+    Git pack files, virtualenv ``python.exe`` shims, and HuggingFace cache
+    blobs are written read-only on Windows. Plain ``shutil.rmtree`` raises
+    ``PermissionError`` on them and bails out half-deleted. This wrapper
+    flips the read-only bit on the offender and retries — same idiom the
+    backend installer's ``_remove_target`` uses.
+    """
+
+    def _onerror(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
+        import stat as _stat  # noqa: PLC0415
+
+        try:
+            Path(path).chmod(_stat.S_IWRITE | _stat.S_IREAD)
+            func(path)
+        except OSError:
+            pass
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=_onerror)
+    else:
+        shutil.rmtree(target, onerror=_onerror)
 
 
 @dataclass(slots=True)
@@ -191,7 +217,7 @@ def storage_delete_archive_entry(name: str) -> dict[str, Any]:
     target = _resolve_archive_entry(name)
     size = _du(target)
     try:
-        shutil.rmtree(target)
+        _rmtree(target)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"deleted": str(target), "bytes_freed": size.bytes, "files_removed": size.files}
@@ -212,7 +238,7 @@ def storage_clear_archive() -> dict[str, Any]:
             continue
         size = _du(child)
         try:
-            shutil.rmtree(child)
+            _rmtree(child)
             deleted.append(child.name)
             total_bytes += size.bytes
             total_files += size.files
@@ -238,11 +264,14 @@ def storage_clear_hf_cache() -> dict[str, Any]:
     cache = _hf_cache_root()
     if cache is None:
         raise HTTPException(status_code=404, detail="huggingface cache not found")
-    if cache == Path("/") or cache == Path.home():
+    if cache.parent == cache or cache == Path.home():
+        # ``parent == self`` is true exactly for filesystem roots
+        # (``/``, ``C:\\``, ``\\\\server\\share``...). Catches every
+        # platform's "you really shouldn't wipe this" sentinel.
         raise HTTPException(status_code=400, detail="refusing to wipe root or home")
     size = _du(cache)
     try:
-        shutil.rmtree(cache)
+        _rmtree(cache)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {

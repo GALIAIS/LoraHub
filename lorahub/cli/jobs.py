@@ -117,6 +117,13 @@ def jobs_ls(
     records.sort(key=lambda r: r.created_at, reverse=True)
     records = records[:limit]
 
+    if not records:
+        # Skip the empty table header so Windows cp936 consoles don't
+        # mojibake the box-drawing chars and so test runners can match
+        # the literal "no jobs" line cleanly.
+        console.print("[dim]no jobs[/dim]")
+        return
+
     table = Table(show_lines=False, padding=(0, 1))
     table.add_column("id", style="dim", no_wrap=True)
     table.add_column("state")
@@ -138,8 +145,6 @@ def jobs_ls(
             r.created_at.strftime("%Y-%m-%d %H:%M"),
         )
     console.print(table)
-    if not records:
-        console.print("[dim]no jobs[/dim]")
 
 
 @jobs_app.command("show")

@@ -16,9 +16,9 @@ encrypt your home directory.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import stat
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -323,7 +323,7 @@ class AIStore:
         return conn
 
     def _tighten_perms(self) -> None:
-        if os.name == "nt":
+        if sys.platform == "win32":
             return
         try:
             self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)

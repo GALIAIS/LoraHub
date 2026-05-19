@@ -576,6 +576,8 @@ def kill_job(job_id: str) -> dict[str, Any]:
     """
     import os  # noqa: PLC0415
     import signal  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
 
     job = state.registry.get(job_id)
     if job is None:
@@ -590,11 +592,36 @@ def kill_job(job_id: str) -> dict[str, Any]:
     killed_group = False
     killed_pid = False
     error: str | None = None
-    # Try the process group first (matches deepspeed's setsid layout); fall
-    # back to the bare PID if the OS doesn't support process groups (Windows
-    # via psutil) or if the group has already gone.
-    try:
-        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+    if sys.platform == "win32":
+        # Windows has no process groups; ``os.kill`` only terminates the
+        # immediate child, leaving deepspeed/accelerate grandchildren behind.
+        # ``taskkill /T /F`` walks the parent-child tree and force-terminates
+        # every descendant — same approach the runner's `_taskkill` uses.
+        try:
+            res = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            error = repr(exc)
+        else:
+            if res.returncode == 0:
+                killed_group = True
+            elif res.returncode == 128:
+                # 128 == "process not found" — treat as benign; the UI just
+                # needs the state flipped.
+                pass
+            else:
+                error = (res.stderr or res.stdout or b"").decode(
+                    "utf-8", errors="replace"
+                ).strip() or f"taskkill exited {res.returncode}"
+    else:
+        # POSIX: signal the whole process group first so detached deepspeed
+        # children come along; fall back to the bare PID if pgid lookup races
+        # the child's exit.
+        try:
             try:
                 pgid = os.getpgid(pid)
                 os.killpg(pgid, signal.SIGKILL)
@@ -603,16 +630,16 @@ def kill_job(job_id: str) -> dict[str, Any]:
                 pass
             except PermissionError as exc:
                 error = f"permission denied: {exc}"
-        if not killed_group:
-            try:
-                os.kill(pid, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
-                killed_pid = True
-            except ProcessLookupError:
-                pass
-            except PermissionError as exc:
-                error = f"permission denied: {exc}"
-    except Exception as exc:  # noqa: BLE001
-        error = repr(exc)
+            if not killed_group:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    killed_pid = True
+                except ProcessLookupError:
+                    pass
+                except PermissionError as exc:
+                    error = f"permission denied: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            error = repr(exc)
 
     if not killed_group and not killed_pid and error is None:
         # Process was already gone; that's fine, still flip the state so the

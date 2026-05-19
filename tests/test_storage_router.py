@@ -17,12 +17,22 @@ from lorahub.api import state as state_module
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Run with cwd pinned to tmp_path so storage endpoints look at a clean tree."""
     monkeypatch.chdir(tmp_path)
+    # ``runs_dir()`` resolves via ``lorahub.api.paths`` which honours
+    # ``LORAHUB_HOME`` first, then walks for ``pyproject.toml``, then
+    # falls back to cwd. Tests need the cwd-fallback path; pinning
+    # ``LORAHUB_HOME`` to ``tmp_path`` keeps the resolution local even
+    # when the test is invoked from inside the project tree.
+    monkeypatch.setenv("LORAHUB_HOME", str(tmp_path))
+    from lorahub.api import paths as paths_module  # noqa: PLC0415
+
+    paths_module._resolved = None  # type: ignore[attr-defined]
     registry = state_module.JobRegistry()
     monkeypatch.setattr(state_module, "registry", registry)
     fresh_sched = sched_module.JobScheduler(concurrency=1)
     monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
     with TestClient(app_module.app) as c:
         yield c
+    paths_module._resolved = None  # type: ignore[attr-defined]
 
 
 def test_storage_usage_returns_filesystem_and_dirs(client: TestClient) -> None:

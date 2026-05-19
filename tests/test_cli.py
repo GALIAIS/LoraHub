@@ -155,10 +155,18 @@ def test_jobs_help_lists_subcommands() -> None:
 def test_jobs_ls_empty_store(tmp_path: Path, monkeypatch) -> None:
     """`jobs ls` against an empty store prints `no jobs` and exits 0."""
     # Point the store at a fresh dir so the test doesn't touch the user's
-    # actual jobs.sqlite (LORAHUB_DATA_DIR is the historical override).
-    monkeypatch.setenv("LORAHUB_DATA_DIR", str(tmp_path))
+    # actual jobs.sqlite. ``paths.py`` honours LORAHUB_HOME first, so
+    # pinning that to ``tmp_path`` redirects ``runs_dir()`` to the
+    # tmp tree — the historical LORAHUB_DATA_DIR has no consumer.
+    monkeypatch.setenv("LORAHUB_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["jobs", "ls"])
+    from lorahub.api import paths as paths_module  # noqa: PLC0415
+
+    paths_module._resolved = None  # type: ignore[attr-defined]
+    try:
+        result = runner.invoke(app, ["jobs", "ls"])
+    finally:
+        paths_module._resolved = None  # type: ignore[attr-defined]
     assert result.exit_code == 0, result.stdout
     assert "no jobs" in result.stdout
 
