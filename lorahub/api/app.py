@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -215,9 +216,46 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# --- CORS ----------------------------------------------------------------
+# LoraHub is a single-user local tool: the API binds to 127.0.0.1 in dev
+# and to the AutoDL container interface in prod. Either way it has no
+# auth layer. ``allow_origins=["*"]`` would let any website the user
+# visits issue cross-origin requests against this API (DNS rebinding,
+# malicious browser extensions, etc.) — they could trigger trainings,
+# delete workspaces, or read secrets out of /api/settings. We restrict
+# the default to common local-dev origins and leave a single env hook
+# (``LORAHUB_ALLOWED_ORIGINS``, comma-separated) for users running the
+# UI from a different host (Tailscale, internal LAN, …).
+_DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
+    "http://localhost:6006",
+    "http://127.0.0.1:6006",
+    "http://localhost:5173",  # Vite default
+    "http://127.0.0.1:5173",
+    "http://localhost:1420",  # Tauri dev
+    "http://127.0.0.1:1420",
+)
+
+
+def _resolve_allowed_origins() -> list[str]:
+    raw = os.environ.get("LORAHUB_ALLOWED_ORIGINS", "").strip()
+    if raw == "*":
+        # Explicit opt-out only — kept so packaged demos / containerised
+        # deployments can fall back to the legacy permissive shape.
+        return ["*"]
+    extras: list[str] = []
+    if raw:
+        extras = [piece.strip() for piece in raw.split(",") if piece.strip()]
+    out = list(_DEFAULT_ALLOWED_ORIGINS)
+    for o in extras:
+        if o not in out:
+            out.append(o)
+    return out
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_resolve_allowed_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -304,11 +342,17 @@ async def stream_events_sse(job_id: str, request: Request) -> StreamingResponse:
         yield _sse_format(retry_ms=2000, comment="lorahub job stream")
 
         queue: asyncio.Queue[TrainingEvent] = asyncio.Queue(maxsize=512)
-        state.registry.attach_listener(job_id, queue)
+        # ``attach_listener`` returns the ring-buffer length at the moment
+        # of attach. We replay strictly up to that index, then drain the
+        # queue for live events. Anything queued mid-replay is guaranteed
+        # to have an index >= replay_until, so there's no overlap and no
+        # duplicate emission.
+        replay_until = state.registry.attach_listener(job_id, queue)
         sent = 0
         try:
             replayed_terminal = False
-            for ev in _job_events(job):
+            replay_events = _job_events(job)[:replay_until]
+            for ev in replay_events:
                 if sent >= resume_from:
                     yield _sse_format(
                         event_id=str(sent),
@@ -449,10 +493,10 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
     await ws.accept()
 
     queue: asyncio.Queue[TrainingEvent] = asyncio.Queue(maxsize=512)
-    state.registry.attach_listener(job_id, queue)
+    replay_until = state.registry.attach_listener(job_id, queue)
     try:
         replayed_terminal = False
-        for ev in _job_events(job):  # replay buffered or persisted events
+        for ev in _job_events(job)[:replay_until]:  # replay only up to attach time
             await ws.send_json(ev.to_dict())
             replayed_terminal = ev.type is EventType.done
         terminal_state = job.state in {

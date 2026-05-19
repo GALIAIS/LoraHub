@@ -22,6 +22,24 @@ from lorahub.api.settings import (
 
 router = APIRouter(prefix="/api")
 
+# Field names that hold credentials. They get masked in the GET response
+# and treated specially on PUT (None == keep prior value, "" == clear).
+# Keeping this list in one place so /api/settings audits stay grep-able.
+_SECRET_FIELDS: tuple[str, ...] = (
+    "huggingface_token",
+    "wandb_api_key",
+    "modelscope_token",
+)
+
+
+def _mask_secret(value: str | None) -> str | None:
+    """Return a UI-safe preview of a secret. Empty/None stays None."""
+    if not value:
+        return None
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
 
 class SettingsResponse(BaseModel):
     settings: dict[str, Any]
@@ -58,12 +76,44 @@ def _norm(v: str | None) -> str | None:
 
 
 def _to_response(s: Settings, path: str) -> SettingsResponse:
+    payload = s.to_dict()
+    # Replace each secret field's raw value with (a) a masked preview
+    # under the same key — so existing UI bindings still render — and
+    # (b) a `has_<field>` boolean for forms that drive a "set / clear"
+    # toggle. The PUT side treats None as "keep prior value" so the UI
+    # can echo the masked preview back without leaking it.
+    for name in _SECRET_FIELDS:
+        raw = payload.get(name)
+        payload[name] = _mask_secret(raw) if raw else None
+        payload[f"has_{name}"] = bool(raw)
     return SettingsResponse(
-        settings=s.to_dict(),
+        settings=payload,
         backend=probe_kohya_backend(s),
         backends=probe_all_backends(s),
         path=path,
     )
+
+
+def _resolve_secret(
+    incoming: str | None, current_value: str | None, masked_preview: str | None
+) -> str | None:
+    """Decide what to persist for a secret field given the PUT payload.
+
+    Cases:
+      * ``None`` (field absent / left unset by the client): keep prior.
+      * Empty string (``""`` after stripping): clear the secret.
+      * Echo of the masked preview (e.g. ``hf_X...abcd``): keep prior —
+        the client round-tripped the GET response without re-typing.
+      * Anything else: treat as a fresh secret and persist verbatim.
+    """
+    if incoming is None:
+        return current_value
+    stripped = incoming.strip()
+    if not stripped:
+        return None
+    if masked_preview and stripped == masked_preview:
+        return current_value
+    return stripped
 
 
 @router.get("/settings", response_model=SettingsResponse)
@@ -135,11 +185,23 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             if req.modelscope_enabled is not None
             else current.modelscope_enabled
         ),
-        modelscope_token=_norm(req.modelscope_token),
+        modelscope_token=_resolve_secret(
+            req.modelscope_token,
+            current.modelscope_token,
+            _mask_secret(current.modelscope_token),
+        ),
         pypi_index_url=_norm(req.pypi_index_url),
         download_proxy=_norm(req.download_proxy),
-        huggingface_token=_norm(req.huggingface_token),
-        wandb_api_key=_norm(req.wandb_api_key),
+        huggingface_token=_resolve_secret(
+            req.huggingface_token,
+            current.huggingface_token,
+            _mask_secret(current.huggingface_token),
+        ),
+        wandb_api_key=_resolve_secret(
+            req.wandb_api_key,
+            current.wandb_api_key,
+            _mask_secret(current.wandb_api_key),
+        ),
         extra=current.extra,
     )
     store.save(new)

@@ -146,7 +146,7 @@ class JobStore:
 
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, pid FROM jobs WHERE state IN ({})".format(  # noqa: S608, UP032
+                "SELECT id, pid, metadata FROM jobs WHERE state IN ({})".format(  # noqa: S608, UP032
                     ", ".join(f"'{s.value}'" for s in _LIVE_STATES)
                 ),
             ).fetchall()
@@ -155,14 +155,25 @@ class JobStore:
             reaped_pids: list[int] = []
             for row in rows:
                 pid = row["pid"]
-                if pid is None or not _pid_alive(pid):
+                expected_create_time: float | None = None
+                if row["metadata"] is not None:
+                    try:
+                        meta = json.loads(row["metadata"])
+                    except (TypeError, ValueError):
+                        meta = None
+                    if isinstance(meta, dict):
+                        candidate = meta.get("_pid_create_time")
+                        if isinstance(candidate, (int, float)):
+                            expected_create_time = float(candidate)
+                if pid is None or not _pid_is_ours(pid, expected_create_time):
                     stale_ids.append(row["id"])
                     continue
-                # PID alive — but a fresh uvicorn can never re-attach to a
-                # subprocess from the previous run (Popen handle is gone,
-                # the child was reparented to init). Reap the orphan so we
-                # don't leak GPU memory across restarts.
-                if _reap_orphan(pid):
+                # PID alive and matches our creation timestamp — but a
+                # fresh uvicorn can never re-attach to a subprocess from
+                # the previous run (Popen handle is gone, the child was
+                # reparented to init). Reap the orphan so we don't leak
+                # GPU memory across restarts.
+                if _reap_orphan(pid, expected_create_time):
                     reaped_pids.append(pid)
                     stale_ids.append(row["id"])
                 else:
@@ -211,7 +222,58 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _reap_orphan(pid: int) -> bool:
+def _pid_create_time(pid: int) -> float | None:
+    """Read the kernel's process-start timestamp for ``pid``.
+
+    Used to defend against PID reuse: matching the PID alone after a
+    server restart isn't enough on long-running hosts (Linux's PID
+    space wraps at 32k by default, AutoDL boxes routinely reuse
+    in-flight pids over a long uptime). We pin each spawned training
+    process to its create-time at launch and re-validate on every
+    cross-process check.
+
+    Returns None when psutil is missing (older deployments) or the
+    process can't be read — callers must treat that as "can't verify"
+    rather than "reuse confirmed".
+    """
+    try:
+        import psutil  # noqa: PLC0415
+    except ImportError:
+        return None
+    try:
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 — psutil-specific exceptions vary
+        return None
+
+
+def _pid_is_ours(pid: int, expected_create_time: float | None) -> bool:
+    """Verify ``pid`` still refers to the process we originally spawned.
+
+    Returns True only when:
+      * ``_pid_alive(pid)`` agrees the kernel knows about it, AND
+      * either we have no recorded create-time (legacy rows / psutil
+        unavailable — fall back to the historic alive-only check), OR
+        the recorded create-time matches what /proc reports within a
+        small tolerance (sub-second clock drift between kernel ticks).
+    """
+    if not _pid_alive(pid):
+        return False
+    if expected_create_time is None:
+        return True
+    actual = _pid_create_time(pid)
+    if actual is None:
+        # Can't read /proc but PID is alive. Better safe than sorry —
+        # treat as "ours" so we don't accidentally kill an unrelated
+        # process. The orphan reaper will surface this as a survivor
+        # rather than a reaped pid.
+        return True
+    # Allow up to 1s of drift. boot-time timestamps from /proc/<pid>/stat
+    # are jiffy-quantised and can disagree with psutil's Linux
+    # implementation by less than a tick.
+    return abs(actual - expected_create_time) < 1.0
+
+
+def _reap_orphan(pid: int, expected_create_time: float | None = None) -> bool:
     """SIGKILL ``pid`` and its process group. Returns True on success.
 
     Used by :meth:`JobStore.mark_orphans_interrupted` at uvicorn startup
@@ -219,7 +281,18 @@ def _reap_orphan(pid: int) -> bool:
     previous API process. We send SIGTERM first for a brief grace window
     (~3s) so PyTorch / CUDA contexts can flush, then SIGKILL the entire
     process group.
+
+    ``expected_create_time`` lets us refuse to kill a PID that's
+    almost-certainly been reused — without that guard, a long-uptime
+    box where the kernel cycled through PIDs would risk the orphan
+    reaper murdering an unrelated user process. Passing None disables
+    the check (used by tests / callers that don't have the stamp).
     """
+    if expected_create_time is not None and not _pid_is_ours(
+        pid, expected_create_time
+    ):
+        # PID belongs to a different process now; do not kill.
+        return False
     import os  # noqa: PLC0415
     import signal  # noqa: PLC0415
     import sys  # noqa: PLC0415
@@ -276,6 +349,15 @@ _LIVE_STATES: tuple[JobState, ...] = (
 
 
 def _record_to_row(r: JobRecord) -> dict[str, Any]:
+    # `pid_create_time` rides along inside the metadata blob so we don't
+    # have to add (and migrate) a new column. Round-trips back via
+    # ``_row_to_record``. Stored under a reserved key with a leading
+    # underscore to mark it as system-owned (callers get to use the rest
+    # of metadata freely; sweep_id, axis_values, etc.).
+    metadata = dict(r.metadata) if r.metadata is not None else None
+    if r.pid_create_time is not None:
+        metadata = metadata or {}
+        metadata["_pid_create_time"] = r.pid_create_time
     return {
         "id": r.id,
         "state": r.state.value,
@@ -288,7 +370,7 @@ def _record_to_row(r: JobRecord) -> dict[str, Any]:
         "error": r.error,
         "pid": r.pid,
         "metadata": (
-            json.dumps(r.metadata, ensure_ascii=False) if r.metadata is not None else None
+            json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
         ),
     }
 
@@ -297,8 +379,13 @@ def _row_to_record(row: sqlite3.Row) -> JobRecord:
     # Legacy rows (pre-metadata migration) won't have the column even after
     # the ALTER; sqlite3.Row.keys() reflects the SELECT *, so guard the lookup.
     metadata: dict[str, Any] | None = None
+    pid_create_time: float | None = None
     if "metadata" in row.keys() and row["metadata"] is not None:
-        metadata = json.loads(row["metadata"])
+        raw_meta = json.loads(row["metadata"])
+        if isinstance(raw_meta, dict):
+            # Strip the system key out of user-visible metadata.
+            pid_create_time = raw_meta.pop("_pid_create_time", None)
+            metadata = raw_meta or None
     return JobRecord(
         id=row["id"],
         state=JobState(row["state"]),
@@ -310,6 +397,9 @@ def _row_to_record(row: sqlite3.Row) -> JobRecord:
         returncode=row["returncode"],
         error=row["error"],
         pid=row["pid"],
+        pid_create_time=(
+            float(pid_create_time) if isinstance(pid_create_time, (int, float)) else None
+        ),
         metadata=metadata,
     )
 

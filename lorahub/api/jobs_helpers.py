@@ -714,6 +714,13 @@ def _enqueue_launch(
         if j is not None:
             j.handle = handle
             j.pid = handle.pid
+            # Capture the kernel-side process start timestamp so we can
+            # tell the difference between "our pid" and "this pid was
+            # reused by an unrelated process after we restarted" in the
+            # orphan reaper. See store._pid_is_ours.
+            from lorahub.api.store import _pid_create_time  # noqa: PLC0415
+
+            j.pid_create_time = _pid_create_time(handle.pid) if handle.pid else None
             j.state = JobState.running
             j.started_at = datetime.now(UTC)
             state.registry.update(j)
