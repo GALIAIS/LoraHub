@@ -13,6 +13,8 @@ non-anima archs land in the kohya / dp backends instead.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,6 +23,7 @@ import ulid
 from lorahub.core.backends._common.vram import estimate_vram as _shared_estimate_vram
 from lorahub.core.backends.anima_lora import bootstrap as _bootstrap
 from lorahub.core.backends.anima_lora.compiler import (
+    DEFAULT_SAMPLE_PROMPTS_FILENAME,
     CompilationError,
     compile_config,
     compile_turbo_config,
@@ -208,6 +211,12 @@ class AnimaLoraBackend:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
+        # Sampling fallback: if cfg.sampling.enabled but no prompts_file
+        # was supplied by the user, materialise a per-job prompts file
+        # under the workspace seeded from the dataset captions. The
+        # compiler already pointed train.py at this exact path.
+        _ensure_sample_prompts_file(cfg, workspace)
+
         job_id = str(ulid.new())
         runner: AnimaLoraRunner | AnimaLoraTurboRunner
         if is_turbo:
@@ -232,6 +241,22 @@ class AnimaLoraBackend:
             )
         runner.start()
 
+        # Anima writes sample PNGs to ``<output_dir>/sample/`` directly
+        # via PIL.image.save() — no stdout chatter, so the parser can't
+        # detect them. Start a tiny watcher thread that polls the
+        # directory and emits a ``sample_ready`` event for every new
+        # file. It exits automatically once the trainer subprocess
+        # terminates.
+        if cfg.sampling.enabled:
+            sample_dir = workspace / "ckpt" / "sample"
+            _start_sample_watcher(
+                sample_dir=sample_dir,
+                workspace=workspace,
+                on_event=on_event,
+                runner=runner,
+                job_id=job_id,
+            )
+
         return TrainingHandle(
             job_id=job_id,
             pid=runner.pid,
@@ -241,3 +266,175 @@ class AnimaLoraBackend:
 
 
 __all__ = ["AnimaLoraBackend"]
+
+
+# --- Sample directory watcher ---------------------------------------------
+# anima emits PNGs straight to disk via PIL without any stdout marker, so
+# the SubprocessRunner's stdout-pumping parser can't see them go by. A
+# polling watcher closes the gap: scandir the sample directory every few
+# seconds, diff against the previous snapshot, and emit ``sample_ready``
+# for each fresh file. The thread terminates when the trainer process
+# exits, so there's no separate stop signal to plumb through.
+
+# Polling cadence. anima's sampler is bursty (one image per prompt every
+# ``sample_every_n_epochs``), so a slow tick is fine — we just want to
+# beat the user's "is it done yet" attention span.
+_SAMPLE_POLL_INTERVAL = 3.0
+# Stop watching ``_SAMPLE_GRACE_AFTER_EXIT`` seconds after the trainer
+# subprocess has exited. anima sometimes writes a final batch right at
+# the end-of-training save_state hook; without a small grace window we
+# would miss those PNGs.
+_SAMPLE_GRACE_AFTER_EXIT = 8.0
+_SAMPLE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _start_sample_watcher(
+    *,
+    sample_dir: Path,
+    workspace: Path,
+    on_event: Callable[[TrainingEvent], None],
+    runner: AnimaLoraRunner | AnimaLoraTurboRunner,
+    job_id: str,
+) -> None:
+    seen: set[str] = set()
+
+    def watch() -> None:
+        # Don't probe ``runner._proc`` — the SubprocessRunner private API
+        # may evolve. Instead poll until the subprocess has been gone for
+        # a grace window. ``runner.pid`` is None until ``start()`` has
+        # taken hold; ``_pid_alive`` is the same probe the orphan reaper
+        # uses, so behaviour stays consistent across the codebase.
+        from lorahub.api.store import _pid_alive  # noqa: PLC0415
+
+        exit_seen_at: float | None = None
+        while True:
+            try:
+                if sample_dir.is_dir():
+                    for path in sample_dir.iterdir():
+                        if path.suffix.lower() not in _SAMPLE_SUFFIXES:
+                            continue
+                        if not path.is_file():
+                            continue
+                        rel = path.relative_to(workspace).as_posix()
+                        if rel in seen:
+                            continue
+                        seen.add(rel)
+                        try:
+                            mtime = path.stat().st_mtime
+                            size = path.stat().st_size
+                        except OSError:
+                            continue
+                        on_event(
+                            TrainingEvent(
+                                type=EventType.sample_ready,
+                                payload={
+                                    "path": rel,
+                                    "size_bytes": size,
+                                    "modified_at": mtime,
+                                    "filename": path.name,
+                                },
+                                job_id=job_id,
+                            )
+                        )
+            except Exception:  # noqa: BLE001 — never let the watcher kill the job
+                pass
+
+            pid = runner.pid
+            alive = pid is not None and _pid_alive(pid)
+            if not alive:
+                if exit_seen_at is None:
+                    exit_seen_at = time.time()
+                elif time.time() - exit_seen_at > _SAMPLE_GRACE_AFTER_EXIT:
+                    return
+            else:
+                exit_seen_at = None
+            time.sleep(_SAMPLE_POLL_INTERVAL)
+
+    thread = threading.Thread(
+        target=watch,
+        name=f"anima-samples-{job_id[-6:]}",
+        daemon=True,
+    )
+    thread.start()
+
+
+# --- Sample prompts fallback -----------------------------------------------
+# anima train.py refuses to do mid-run sampling without ``--sample_prompts
+# <file>``. When the user enables sampling in the recipe but doesn't point
+# at a custom prompts file, we synthesise one from the training dataset's
+# own captions. The result is intentionally simple — a plain `.txt` with
+# one prompt per line — because anima parses that format directly. PNGs
+# land under ``<output_dir>/sample/`` and LoraHub's sample router picks
+# them up via rglob automatically.
+_FALLBACK_PROMPT = "a high quality detailed illustration"
+# Cap so we don't spend a chunk of every epoch on samples — anima
+# generates one image per prompt per cadence tick.
+_MAX_FALLBACK_PROMPTS = 3
+
+
+def _gather_dataset_captions(source: Path, limit: int) -> list[str]:
+    """Pick up to ``limit`` non-empty caption strings from ``source``.
+
+    Reads the first ``.txt`` sidecars sorted lexicographically so the
+    result is deterministic across re-launches (matters for reproducible
+    sample image diffs between epochs). Empty / missing files are
+    silently skipped; if nothing usable is found the caller falls back
+    to a generic prompt.
+    """
+    if not source.is_dir():
+        return []
+    out: list[str] = []
+    for path in sorted(source.rglob("*.txt")):
+        if len(out) >= limit:
+            break
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        # Anima treats one line == one prompt. Fold multi-line caption
+        # files (rare but possible from tagger pipelines) onto a single
+        # line so we don't accidentally split one image's caption into
+        # two prompts.
+        text = " ".join(text.split())
+        out.append(text)
+    return out
+
+
+def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
+    """Write a fallback prompts file under the workspace if needed.
+
+    No-op when sampling is disabled, when the user provided a custom
+    prompts file (compiler already points at it), or when the file
+    already exists from a prior launch (resume / restart). The fallback
+    appends ``--w / --h / --d / --s / --l`` per-line overrides so anima
+    honours the recipe's resolution / seed / step count / CFG without
+    a global default change.
+    """
+    sampling = cfg.sampling
+    if not sampling.enabled or sampling.prompts_file is not None:
+        return
+    target = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
+    if target.is_file():
+        # Idempotent — keep whatever the previous run wrote so a resume
+        # generates samples that line up visually.
+        return
+
+    captions = _gather_dataset_captions(
+        Path(str(cfg.dataset.source)), _MAX_FALLBACK_PROMPTS
+    )
+    if not captions:
+        captions = [_FALLBACK_PROMPT]
+
+    width = sampling.resolution[0] if sampling.resolution else 1024
+    height = sampling.resolution[1] if len(sampling.resolution) > 1 else width
+    suffix = (
+        f" --w {int(width)} --h {int(height)}"
+        f" --d {int(sampling.seed)}"
+        f" --s {int(sampling.inference_steps)}"
+        f" --l {sampling.inference_cfg}"
+    )
+    body = "\n".join(prompt + suffix for prompt in captions) + "\n"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body, encoding="utf-8")

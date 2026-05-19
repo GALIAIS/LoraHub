@@ -212,6 +212,12 @@ def compile_config(
     # Layer 4: method-specific sub-config overrides.
     argv += _method_overrides(opts)
 
+    # Layer 5: sampling — translate cfg.sampling into anima train.py's
+    # ``--sample_*`` argv. anima writes generated PNGs to
+    # ``<output_dir>/sample/`` natively; LoraHub's sample router picks
+    # them up via rglob without any extra plumbing.
+    argv += _sampling_overrides(cfg, workspace)
+
     # Files: a single dataset_config TOML that pins the three data
     # paths. Written under the workspace by ``backend.launch`` before
     # spawning train.py.
@@ -742,6 +748,55 @@ def _ip_adapter_overrides(opts: AnimaLoraOptions) -> list[str]:
         f"gate_lr={_fmt_float(sub.gate_lr)}",
     ]
     out += _network_args(*pieces)
+    return out
+
+
+# Filename used when LoraHub auto-generates a fallback prompts file
+# under the job workspace because the user enabled sampling but didn't
+# point at one. backend.launch materialises the file before spawning
+# train.py — see ``_ensure_sample_prompts_file`` in backend.py.
+DEFAULT_SAMPLE_PROMPTS_FILENAME = "_lorahub_sample_prompts.txt"
+
+
+def _sampling_overrides(cfg: TrainingConfig, workspace: Path) -> list[str]:
+    """Translate ``cfg.sampling`` into anima train.py ``--sample_*`` argv.
+
+    anima's upstream sampler accepts:
+      ``--sample_at_first`` / ``--sample_every_n_epochs N`` /
+      ``--sample_every_n_steps N`` / ``--sample_prompts <path>``
+
+    Behaviour:
+      * sampling.enabled=False: emit nothing — train.py defaults skip
+        sample generation entirely.
+      * sampling.enabled=True with ``prompts_file`` set: forward as-is.
+      * sampling.enabled=True without ``prompts_file``: point train.py
+        at the per-job fallback path under the workspace. backend.launch
+        materialises that file just before spawn.
+
+    The cadence flags fall through verbatim. anima's sampling loop
+    picks the first non-None of (every_n_steps, every_n_epochs) so it's
+    safe to emit both when the user set both.
+    """
+    sampling = cfg.sampling
+    if not sampling.enabled:
+        return []
+
+    out: list[str] = []
+    if sampling.at_first:
+        out += ["--sample_at_first"]
+    if sampling.every_n_epochs and sampling.every_n_epochs > 0:
+        out += ["--sample_every_n_epochs", str(int(sampling.every_n_epochs))]
+    if sampling.every_n_steps and sampling.every_n_steps > 0:
+        out += ["--sample_every_n_steps", str(int(sampling.every_n_steps))]
+
+    prompts_path: Path
+    if sampling.prompts_file is not None:
+        # Already resolved against the recipe base_dir by jobs_helpers'
+        # ``_absolutise_recipe_paths``. Forward as-is.
+        prompts_path = Path(str(sampling.prompts_file))
+    else:
+        prompts_path = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
+    out += ["--sample_prompts", str(prompts_path)]
     return out
 
 
