@@ -138,16 +138,14 @@ flag 会被丢掉,避免对齐边界上的双写。
 
 ## `sweep`
 
-规划或跑一次超参 sweep。当前 expander 是网格 + 随机 + TPE(三种 mode);
-ASHA 已评估为不可接,见 audit。
+规划或跑一次超参 sweep。当前 expander 支持 grid / random / TPE 三种模式。
 
 ```powershell
 lorahub sweep configs/my_character.yaml --axis lr=1e-4,5e-5 --axis rank=16,32 --dry-run
 lorahub sweep configs/my_character.yaml --axis lr=1e-4,5e-5
 ```
 
-`--dry-run` 枚举 variant 不启动 job。否则每个 variant 写成独立 config 提交到
-`POST /api/sweeps`。
+`--dry-run` 枚举 variant 不启动 job。否则每个 variant 写成独立 config 提交到 `POST /api/sweeps`。
 
 ## `serve`
 

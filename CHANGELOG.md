@@ -1,23 +1,16 @@
-# Changelog / 更新日志
-
-All notable changes to this project are recorded here.
+# 更新日志
 
 本文件记录项目所有值得关注的变更。
 
-## Format / 格式
-
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release has the same five subsections: Added, Changed, Fixed, Removed, Tests.
+## 格式
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。每个版本固定使用五个小节：Added、Changed、Fixed、Removed、Tests。
 
-Invariants / 不变规则:
+不变规则：
 
 - 已发布的 entry 不修改、不删除；笔误只在 Unreleased 段补充说明。
-- Released entries are never edited or removed; corrections go into Unreleased instead.
 - 一条 entry 描述一项独立变更，并列出受影响的模块或文件。
-- One entry describes one self-contained change and names the affected modules or files.
-- Commit message 使用英文 Conventional Commits；本文件中文段在前、英文段在后。
-- Commit messages stay in English Conventional Commits; bilingual notes inside this file put Chinese first, then English.
+- 已发布版本的 entry 用英文记录（保持与 commit message 一致）；本节顶部说明使用中文。
 
 ## [Unreleased]
 

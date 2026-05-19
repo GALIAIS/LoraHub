@@ -1,14 +1,14 @@
 site_name: LoraHub
-site_description: Open-source LoRA training workbench for diffusion models.
+site_description: 自托管的 LoRA 训练工作台。
 site_url: https://galiais.github.io/LoraHub/
 repo_url: https://github.com/GALIAIS/LoraHub
 repo_name: GALIAIS/LoraHub
 edit_uri: edit/main/docs/
-copyright: Copyright &copy; 2026 GALIAIS &mdash; Apache 2.0
+copyright: Copyright &copy; 2026 GALIAIS &mdash; AGPL-3.0-or-later
 
 theme:
   name: material
-  language: en
+  language: zh
   features:
     - navigation.tabs
     - navigation.sections
@@ -28,14 +28,14 @@ theme:
       accent: indigo
       toggle:
         icon: material/weather-night
-        name: Switch to dark mode
+        name: 切换到深色
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: indigo
       accent: indigo
       toggle:
         icon: material/weather-sunny
-        name: Switch to light mode
+        name: 切换到浅色
   icon:
     repo: fontawesome/brands/github
 
@@ -69,19 +69,19 @@ markdown_extensions:
       custom_checkbox: true
 
 nav:
-  - Home: index.md
-  - Getting started:
-      - Install: getting-started/install.md
-      - Quick start: getting-started/quickstart.md
-      - Smoke test: getting-started/smoke-test.md
-  - Recipes:
-      - Overview: recipes/index.md
-      - Templates: recipes/templates.md
-      - Field reference: recipes/fields.md
+  - 首页: index.md
+  - 上手:
+      - 安装: getting-started/install.md
+      - 快速开始: getting-started/quickstart.md
+      - 端到端教程: getting-started/smoke-test.md
+  - 配置:
+      - 概览: recipes/index.md
+      - 模板: recipes/templates.md
+      - 字段参考: recipes/fields.md
   - CLI:
-      - Overview: cli/index.md
-      - Commands: cli/commands.md
+      - 概览: cli/index.md
+      - 命令参考: cli/commands.md
   - API:
-      - Overview: api/index.md
-      - Endpoints: api/endpoints.md
-  - Roadmap: roadmap.md
+      - 概览: api/index.md
+      - 端点: api/endpoints.md
+

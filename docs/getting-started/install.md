@@ -1,134 +1,104 @@
 ---
 title: 安装
-description: 安装 LoraHub 并 bootstrap 一个训练后端。Install LoraHub and bootstrap a training backend.
+description: 安装 LoraHub 并准备至少一个训练后端。
 ---
 
 # 安装
 
-需要 Python 3.11 或 3.12,以及一张显存 ≥ 8 GB 的 NVIDIA GPU。至少要装一个
-训练后端:
+LoraHub 需要 Python 3.11 或 3.12，配合一块显存 ≥ 8 GB 的 NVIDIA GPU。Windows、Linux、macOS 三个平台都支持。至少要装一个训练后端：
 
 - `kohya-ss/sd-scripts` — 覆盖 SD / SDXL / Flux / Lumina / HunyuanImage / Anima。
-- `tdrussell/diffusion-pipe` — 覆盖现代 DiT 阵列(Flux2 / Chroma / Wan /
-  Cosmos / Anima 等)。
-- `sorryhyun/anima_lora` — Anima 专用栈,LoraHub 已 vendored 在
-  `external/anima_lora/`,无需 clone。
+- `tdrussell/diffusion-pipe` — 覆盖现代 DiT 阵列（Flux2 / Chroma / Wan / Cosmos / Anima 等）。
+- `sorryhyun/anima_lora` — Anima 专用栈，已 vendored 在 `external/anima_lora/`，无需 clone。
 
-三者可共存,通过每份配置的 `backend.type` 字段切换。
+三个后端可共存，每份配置通过 `backend.type` 字段切换。
 
-## 取源码
+## 一键脚本（推荐）
+
+仓库根目录的 `scripts/install.{bat,sh}` 会从零搭好运行环境：通过 uv 安装 Python 3.12、创建 `.venv`、装 Python 依赖、装便携 Node.js、装前端依赖。所有产物都落在项目根目录的 `.tools/`、`.venv/`、`.node/` 下，整个项目目录可以打包搬到另一台同架构的机器直接运行。
+
+=== "Windows"
+
+    ```powershell
+    git clone https://github.com/GALIAIS/LoraHub
+    cd LoraHub
+    scripts\install.bat
+    ```
+
+=== "Linux / macOS"
+
+    ```bash
+    git clone https://github.com/GALIAIS/LoraHub
+    cd LoraHub
+    bash scripts/install.sh
+    ```
+
+装好后用 `scripts\run.bat` / `scripts/run.sh` 启动：
+
+```text
+scripts\run.bat              # 开发模式：API + Vite 热更新
+scripts\run.bat prod         # 生产模式：API + 已构建的 SPA
+scripts\run.bat api          # 仅启动 API
+```
+
+## 手动安装
+
+如果机器已有 Python 3.11/3.12 与 Node.js 20+，可以直接走 pip：
 
 ```powershell
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
 pip install -e ".[api,dev]"
+cd web && npm install && cd ..
 ```
 
-## Bootstrap 一个后端
+## 后端 bootstrap
 
-=== "Option A: 在工作树内 bootstrap"
+=== "在工作树内 bootstrap"
 
     ```powershell
-    # kohya — SD / SDXL / Flux / Lumina / HunyuanImage / Anima
-    lorahub bootstrap-kohya              # 约 10 分钟: clone + venv + PyTorch + 依赖
-    # diffusion-pipe — DiT 阵列
+    lorahub bootstrap-kohya              # 约 10 分钟：clone + venv + PyTorch + 依赖
     lorahub bootstrap-diffusion-pipe
     ```
 
-    `bootstrap-kohya` 默认 PyTorch 2.6.0 + CUDA 12.4。可用 `--cuda cu121`
-    (或 `cu118` / `cu128`)、`--torch 2.6.0` 切版本,`--no-xformers` 跳过
-    可选 xformers,`--force` 抹掉半装好的目录重来。
+    `bootstrap-kohya` 默认 PyTorch 2.6.0 + CUDA 12.4。可用 `--cuda cu121` / `cu118` / `cu128`、`--torch X.Y.Z` 切版本，`--no-xformers` 跳过可选 xformers，`--force` 抹掉半装的目录重来。
 
-=== "Option B: 指向已有 checkout"
+=== "指向已有 checkout"
 
     ```powershell
-    $env:LORAHUB_KOHYA_SD_SCRIPTS = "C:\path\to\sd-scripts"
-    $env:LORAHUB_DIFFUSION_PIPE   = "C:\path\to\diffusion-pipe"
-    # 或者把 .env.example 复制成 .env 后编辑
+    set LORAHUB_KOHYA_SD_SCRIPTS=C:\path\to\sd-scripts
+    set LORAHUB_DIFFUSION_PIPE=C:\path\to\diffusion-pipe
     ```
 
-!!! tip ".env 自动加载"
-    LoraHub 启动时会从项目根读取 `.env`,所以一旦 `.env` 里写了
-    `LORAHUB_KOHYA_SD_SCRIPTS=./sd-scripts`,就不必每次 shell 都 export。
+    Linux/macOS 用 `export`。也可把 `.env.example` 复制为 `.env` 后编辑——LoraHub 启动时会从项目根读取。
+
+### `anima_lora` 的特殊之处
+
+`external/anima_lora/` 已随 LoraHub 一起分发。它需要独立的 venv（CPython 3.13 + torch 2.11/2.12 nightly + CUDA 13.x），与 LoraHub 主 venv 隔离。在 Web UI 的「设置 → 安装」面板点击「安装 anima_lora」会自动跑 `uv sync` 在 `external/anima_lora/.venv` 内创建这个 venv，首次安装大约下载 6–8 GB（torch + CUDA wheels）。
+
+venv 装好后，安装面板会出现「下载模型」按钮，从 HuggingFace `circlestone-labs/Anima` 仓库拉取约 14 GB 的 Anima 基础模型（DiT、Qwen3 文本编码器、Qwen-Image VAE）到项目根目录的 `models/` 下。下载完成后即可启动 anima 训练。
+
+如需指向已有的 anima venv：
+
+```powershell
+set LORAHUB_ANIMA_LORA_PYTHON=C:\path\to\anima_lora\.venv\Scripts\python.exe
+```
+
+LoraHub 自身不会 import anima_lora 的代码，只把它作为子进程拉起。
 
 ## 可选 extras
 
-| Extra     | 何时安装                                       | 命令                                  |
-| --------- | ---------------------------------------------- | ------------------------------------- |
-| `api`     | FastAPI 服务器(`lorahub serve`)              | `pip install -e ".[api]"`             |
-| `gpu`     | WD14 tagger 走 CUDA(`onnxruntime-gpu`)       | `pip install -e ".[gpu]"`             |
-| `tagging` | JoyTag(PyTorch)tagger backend                | `pip install -e ".[tagging]"`         |
-| `dev`     | 测试、lint、mypy、httpx                        | `pip install -e ".[dev]"`             |
-| `docs`    | 构建本站文档                                   | `pip install -e ".[docs]"`            |
-
-## anima_lora venv
-
-anima_lora 后端要 PyTorch 2.11/2.12 nightly + CUDA 13.x,LoraHub 主 venv
-通常装不进去。建议在 `external/anima_lora/` 旁边单建一份 venv 并 `uv sync`,
-然后用 `LORAHUB_ANIMA_LORA_PYTHON` 指过去:
-
-```powershell
-$env:LORAHUB_ANIMA_LORA_PYTHON = "C:\path\to\anima_lora\.venv\Scripts\python.exe"
-```
-
-LoraHub 自身不会 import anima_lora 的代码,只把它作为子进程拉起。
-
-## Anima Base 下载器
-
-LoraHub 自带一个 Anima 全栈下载脚本(约 5.5 GB,transformer + Qwen-Image
-VAE + Qwen3-0.6B 文本编码器):
-
-```powershell
-bash scripts/_download_anima.sh        # 默认走 hf-mirror.com,国内可用
-```
-
-文件落到 `models/circlestone-labs__Anima/split_files/`。`configs/anima_style_24gb.yaml`
-和 `configs/anima_character_24gb.yaml` 直接指向这套布局。
+| Extra     | 何时安装                                       | 命令                            |
+| --------- | ---------------------------------------------- | ------------------------------- |
+| `api`     | FastAPI 服务（`lorahub serve`）                | `pip install -e ".[api]"`       |
+| `gpu`     | WD14 标注通过 `onnxruntime-gpu` 走 CUDA        | `pip install -e ".[gpu]"`       |
+| `tagging` | JoyTag（PyTorch）标注后端                      | `pip install -e ".[tagging]"`   |
+| `dev`     | 测试、lint、mypy、httpx                        | `pip install -e ".[dev]"`       |
+| `docs`    | 构建本站文档                                   | `pip install -e ".[docs]"`      |
 
 ## 下一步
 
-- [快速开始](quickstart.md) — 四条命令出第一份 config。
-- [冒烟测试](smoke-test.md) — 用真实图片跑通完整流水线。
-
----
-
-## English
-
-LoraHub needs Python 3.11 or 3.12 and an NVIDIA GPU with at least 8 GB
-of VRAM. Pick at least one training backend:
-
-- `kohya-ss/sd-scripts` — SD / SDXL / Flux / Lumina / HunyuanImage / Anima.
-- `tdrussell/diffusion-pipe` — the modern DiT roster (Flux2, Chroma,
-  Wan, Cosmos, Anima, ...).
-- `sorryhyun/anima_lora` — Anima-specific stack, vendored at
-  `external/anima_lora/` so no extra clone is needed.
-
-All three may coexist; switch per-config via `backend.type`.
-
-### Get the source
-
-```powershell
-git clone https://github.com/GALIAIS/LoraHub
-cd LoraHub
-pip install -e ".[api,dev]"
-```
-
-### Bootstrap
-
-`lorahub bootstrap-kohya` and `lorahub bootstrap-diffusion-pipe` clone
-the upstream, build a venv, and install PyTorch + deps. Defaults are
-PyTorch 2.6.0 + CUDA 12.4; pass `--cuda cu121|cu118|cu128`,
-`--torch X.Y.Z`, `--no-xformers`, or `--force` to override. To use an
-existing checkout, set `LORAHUB_KOHYA_SD_SCRIPTS` and
-`LORAHUB_DIFFUSION_PIPE` (or copy `.env.example` to `.env`). LoraHub
-auto-loads `.env` from the project root.
-
-The `anima_lora` backend is vendored — point
-`LORAHUB_ANIMA_LORA_PYTHON` at a venv that has the required
-nightly PyTorch + CUDA 13.x, and LoraHub will spawn it as a
-subprocess (it never imports anima_lora code in-process).
-
-### Optional extras
-
-`api`, `gpu`, `tagging`, `dev`, `docs` — same matrix as the table
-above. License: AGPL-3.0-or-later.
+- [快速开始](quickstart.md)：四条命令出第一份配置。
+- [端到端教程](smoke-test.md)：从原始图片到训练好的 LoRA 全流程。
