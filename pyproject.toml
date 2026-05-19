@@ -9,13 +9,13 @@ dynamic = ["version"]
 description = "Open-source LoRA training workbench for diffusion models"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0-or-later" }
 authors = [{ name = "GALIAIS", email = "GALIAIS@users.noreply.github.com" }]
 keywords = ["lora", "stable-diffusion", "sdxl", "kohya", "training", "ai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.11",

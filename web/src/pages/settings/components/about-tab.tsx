@@ -71,7 +71,7 @@ export function AboutTab() {
             单进程 FastAPI 服务后,前端通过纯本地 HTTP 调用,无需登录、无云端依赖。
           </p>
           <p className="text-muted-foreground">
-            开源 Apache-2.0 协议; 训练数据、配方、运行结果全部存放在用户的本地工作目录,
+            开源 AGPL-3.0 协议; 训练数据、配方、运行结果全部存放在用户的本地工作目录,
             可随时 git 跟踪、备份或迁移。
           </p>
         </CardContent>
@@ -118,7 +118,7 @@ export function AboutTab() {
                 协议
               </dt>
               <dd>
-                <ExternalAnchor href={LICENSE_URL}>Apache-2.0</ExternalAnchor>
+                <ExternalAnchor href={LICENSE_URL}>AGPL-3.0</ExternalAnchor>
               </dd>
             </div>
           </dl>
