@@ -13,7 +13,7 @@ import { COMPARE_LIMIT, type StatusFilter } from "./utils"
 
 const STATUS_GROUPS: Record<StatusFilter, (state: string) => boolean> = {
   all: () => true,
-  running: (s) => s === "running",
+  running: (s) => s === "running" || s === "preparing",
   succeeded: (s) => s === "succeeded",
   failed: (s) => s === "failed",
   canceled: (s) => s === "canceled" || s === "canceling" || s === "interrupted",

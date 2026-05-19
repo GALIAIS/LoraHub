@@ -13,7 +13,7 @@ import {
   LossTrendTile,
   ThroughputTile,
 } from "./realtime-tile"
-import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES } from "../utils"
+import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
 
 const THROUGHPUT_WINDOW = 60
 const LOSS_WINDOW = 100
@@ -61,7 +61,11 @@ export function OverviewTab({
   fallbackTotalSteps?: number | null
 }) {
   const isTerminal = job ? TERMINAL_STATES.has(job.state) : false
-  const isRunning = job?.state === "running"
+  // "Active" = worker slot is held (preparing or running). The realtime
+  // tiles need to show during anima_lora's preprocess phase too — that
+  // can take 1-2 minutes and currently leaves the user staring at "排队
+  // 中" while the GPU is actually busy resizing / caching latents.
+  const isActive = job ? ACTIVE_STATES.has(job.state) : false
 
   // Telemetry stream stays open whenever the user is on this tab so the cards
   // refresh without waiting for a poll. Only opening it for live jobs would
@@ -126,13 +130,13 @@ export function OverviewTab({
     stepSamples.length > 0 ? stepSamples[stepSamples.length - 1].step : null
 
   const etaSeconds = useMemo(() => {
-    if (!isRunning) return null
+    if (!isActive) return null
     if (itPerSecRecent === null || itPerSecRecent <= 0) return null
     if (currentStep === null || totalSteps === null) return null
     const remaining = totalSteps - currentStep
     if (remaining <= 0) return 0
     return remaining / itPerSecRecent
-  }, [isRunning, itPerSecRecent, currentStep, totalSteps])
+  }, [isActive, itPerSecRecent, currentStep, totalSteps])
 
   const lossHistory = useMemo(() => {
     const all = stepSamples
@@ -198,13 +202,13 @@ export function OverviewTab({
         />
       </div>
 
-      {isRunning ? (
+      {isActive ? (
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
             实时
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            <GpuLiveTile gpu={liveGpu} active={isRunning} />
+            <GpuLiveTile gpu={liveGpu} active={isActive} />
             <ThroughputTile
               itPerSecRecent={itPerSecRecent}
               itPerSecAvg={itPerSecAvg}

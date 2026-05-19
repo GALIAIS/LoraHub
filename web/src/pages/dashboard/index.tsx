@@ -47,7 +47,9 @@ export function DashboardPage() {
   const allJobs = jobs.data?.jobs ?? []
 
   const stats = useMemo(() => {
-    const running = allJobs.filter((j) => j.state === "running").length
+    const running = allJobs.filter(
+      (j) => j.state === "running" || j.state === "preparing",
+    ).length
     const queued = allJobs.filter((j) => j.state === "queued").length
     const succeeded = allJobs.filter((j) => j.state === "succeeded").length
     const failed = allJobs.filter(

@@ -25,6 +25,7 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
 
 export const STATE_LABELS: Record<string, string> = {
   running: "运行中",
+  preparing: "准备中",
   succeeded: "已完成",
   failed: "失败",
   canceled: "已取消",
@@ -32,6 +33,11 @@ export const STATE_LABELS: Record<string, string> = {
   queued: "排队中",
   interrupted: "已中断",
 }
+
+// States during which the worker slot is held but the trainer
+// subprocess hasn't necessarily started yet. Used by the UI to
+// pick "live realtime tiles" vs "queued placeholder".
+export const ACTIVE_STATES = new Set(["preparing", "running"])
 
 export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state
