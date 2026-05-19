@@ -191,6 +191,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 _LIVE_STATES: tuple[JobState, ...] = (
+    JobState.preparing,
     JobState.running,
     JobState.canceling,
 )

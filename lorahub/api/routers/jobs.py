@@ -615,10 +615,14 @@ def kill_job(job_id: str) -> dict[str, Any]:
 
     if not killed_group and not killed_pid and error is None:
         # Process was already gone; that's fine, still flip the state so the
-        # UI doesn't keep showing a phantom running row.
-        error = f"pid {pid} no longer alive"
+        # UI doesn't keep showing a phantom running row. NOT an error —
+        # kill is idempotent: "the process you asked us to kill is no
+        # longer alive" should be a 200, not a 500.
+        already_gone = True
+    else:
+        already_gone = False
 
-    if error and not (killed_group or killed_pid):
+    if error and not (killed_group or killed_pid) and not already_gone:
         raise HTTPException(status_code=500, detail=error)
 
     # Reset the live record. We pick `interrupted` rather than `canceled`
