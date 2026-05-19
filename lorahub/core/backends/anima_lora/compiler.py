@@ -41,9 +41,106 @@ from lorahub.core.config.schema import (
 
 __all__ = [
     "CompilationError",
+    "LOCKED_FIELDS",
     "compile_config",
     "compile_turbo_config",
 ]
+
+
+# Fields LoraHub exposes for completeness but anima_lora's upstream
+# argparse can't really change. Each entry: ``field name → (kind, why)``.
+# The compiler logs a warning when the user overrides one of these to a
+# value the trainer would silently ignore. The frontend uses the same
+# table to render the 🔒 / ⚠️ badges.
+LOCKED_FIELDS: dict[str, dict[str, str]] = {
+    # — pipeline-locked booleans (base.toml ``= true``, no reverse flag) —
+    "masked_loss": {
+        "kind": "locked_true",
+        "reason": "Anima 训练管线硬依赖 masked loss;关掉是无效操作。",
+    },
+    "torch_compile": {
+        "kind": "locked_true",
+        "reason": "torch.compile 是 static_token_count 性能收益的前提;upstream 训练循环假定开启。",
+    },
+    "skip_cache_check": {
+        "kind": "locked_true",
+        "reason": "缓存校验跳过对训练正确性无影响,只影响启动速度;关掉无意义。",
+    },
+    "dataloader_pin_memory": {
+        "kind": "locked_true",
+        "reason": "DataLoader pin_memory 一直开;upstream 没提供反向 flag。",
+    },
+    "enable_bucket": {
+        "kind": "locked_true",
+        "reason": "constant-token bucketing 是 Anima static-shape compile 的硬约束。",
+    },
+    "cache_latents": {
+        "kind": "locked_true",
+        "reason": "anima_lora 训练流程依赖预计算 latent 缓存,关掉训练会失败。",
+    },
+    "cache_latents_to_disk": {
+        "kind": "locked_true",
+        "reason": "缓存必须落盘以避免每次 epoch 重算。",
+    },
+    "cache_text_encoder_outputs": {
+        "kind": "locked_true",
+        "reason": "TE 输出必缓存,否则训练时拖累 Qwen3 的 forward。",
+    },
+    "cache_text_encoder_outputs_to_disk": {
+        "kind": "locked_true",
+        "reason": "TE 缓存必须落盘。",
+    },
+    "cache_llm_adapter_outputs": {
+        "kind": "locked_true",
+        "reason": "LLM adapter 输出必缓存。",
+    },
+    # — value-locked 整数 —
+    "static_token_count": {
+        "kind": "locked_value",
+        "reason": "Anima DiT torch.compile 路径锁死 4096(constant-token bucket map)。其它值会引发每个分辨率重新编译。",
+    },
+    "vae_chunk_size": {
+        "kind": "locked_value",
+        "reason": "QwenImage VAE memory layout 锁死 64;改了多半 OOM 或无收益。",
+    },
+    "caption_extension": {
+        "kind": "locked_value",
+        "reason": "数据 pipeline 写死 .txt 后缀;改了所有图片会被跳过且无警告。",
+    },
+    "save_model_as": {
+        "kind": "locked_value",
+        "reason": "Anima 只能加载 safetensors;其它格式无法 round-trip。",
+    },
+    # — risky (能改但有副作用) —
+    "vae_disable_cache": {
+        "kind": "risky",
+        "reason": "改成 false 会拖慢 VAE encode ~30%,但与官方 VAE 行为一致。",
+    },
+    "no_half_vae": {
+        "kind": "risky",
+        "reason": "true 半精度 VAE 省显存,但偶尔在边缘数据集上产生 NaN。",
+    },
+    "trim_crossattn_kv": {
+        "kind": "risky",
+        "reason": "true 启用 KV trimming(短 caption 加速 ~10-15%),但需匹配 caption 长度分布。",
+    },
+    "save_precision": {
+        "kind": "risky",
+        "reason": "fp32 是双倍体积无质量收益;fp16 略小但偶有量化损失;bf16 是 upstream 默认。",
+    },
+    "persistent_data_loader_workers": {
+        "kind": "risky",
+        "reason": "true 减少 epoch 边界 stall,但长跑可能泄漏 file handle。",
+    },
+    "keep_tokens": {
+        "kind": "risky",
+        "reason": "anima 训练模板把 trigger / character / character-feature 三件放前 3 位;改了 trigger word 不再可靠。",
+    },
+    "validation_split_num": {
+        "kind": "risky",
+        "reason": "0 = 关 CMMD 验证(val_loss 不再更新)。",
+    },
+}
 
 _log = logging.getLogger(__name__)
 
@@ -87,6 +184,7 @@ def compile_config(
         raise CompilationError(msg)
 
     _enforce_compile_constraints(opts)
+    _warn_locked_fields_changed(opts)
 
     workspace = workspace.resolve()
     output_dir = workspace / "ckpt"
@@ -129,6 +227,54 @@ def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
             "the conflicting offload knobs."
         )
         raise CompilationError(msg)
+
+
+def _warn_locked_fields_changed(opts: AnimaLoraOptions) -> None:
+    """Log a warning for every locked field the user moved off its default.
+
+    LoraHub exposes every ``base.toml`` field for editor completeness, but
+    upstream's argparse can't actually flip several of them off (no
+    reverse ``--no_<x>`` flag, or the value is hard-baked into the
+    static-shape compile path). When the user changes a locked-True
+    field to False, or a locked-value field to a non-default, we emit a
+    warning so the operator notices instead of being silently ignored
+    by the trainer. See ``LOCKED_FIELDS`` for the per-field rationale.
+    """
+    # Defaults match the schema constructor's annotations. Hardcoded so
+    # the warning is honest about what "the default" means even if a
+    # caller passes ``opts`` from a non-validated source.
+    locked_defaults: dict[str, object] = {
+        "masked_loss": True,
+        "torch_compile": True,
+        "skip_cache_check": True,
+        "dataloader_pin_memory": True,
+        "enable_bucket": True,
+        "cache_latents": True,
+        "cache_latents_to_disk": True,
+        "cache_text_encoder_outputs": True,
+        "cache_text_encoder_outputs_to_disk": True,
+        "cache_llm_adapter_outputs": True,
+        "static_token_count": 4096,
+        "vae_chunk_size": 64,
+        "caption_extension": ".txt",
+        "save_model_as": "safetensors",
+    }
+    for field, default in locked_defaults.items():
+        if not hasattr(opts, field):
+            continue
+        actual = getattr(opts, field)
+        if actual != default:
+            meta = LOCKED_FIELDS.get(field, {})
+            kind = meta.get("kind", "locked")
+            reason = meta.get("reason", "upstream cannot change this field")
+            _log.warning(
+                "anima_lora: %s set to %r (default %r, %s) — %s",
+                field,
+                actual,
+                default,
+                kind,
+                reason,
+            )
 
 
 def _shared_overrides(
@@ -246,6 +392,33 @@ def _shared_overrides(
         out += ["--validation_sample_steps", str(opts.validation_sample_steps)]
     if opts.validation_cfg_scale is not None:
         out += ["--validation_cfg_scale", _fmt_float(opts.validation_cfg_scale)]
+
+    # ---- Upstream-locked / risky fields (B5 cut-locks) ----
+    # Most of these are store_true and base.toml already pins them on,
+    # so we emit the flag whenever opts.* is True. When the user sets
+    # a locked-True field to False the emit is skipped — the compiler
+    # also logs a warning above so the operator notices the no-op.
+    if opts.masked_loss:
+        out += ["--masked_loss"]
+    if opts.torch_compile:
+        out += ["--torch_compile"]
+    if opts.skip_cache_check:
+        out += ["--skip_cache_check"]
+    if opts.dataloader_pin_memory:
+        out += ["--dataloader_pin_memory"]
+    if opts.persistent_data_loader_workers:
+        out += ["--persistent_data_loader_workers"]
+    if opts.trim_crossattn_kv:
+        out += ["--trim_crossattn_kv"]
+    out += ["--save_model_as", opts.save_model_as]
+    out += ["--save_precision", opts.save_precision]
+    out += ["--log_every_n_steps", str(opts.log_every_n_steps)]
+    # keep_tokens / caption_extension / validation_split_num /
+    # enable_bucket / path_pattern live in the dataset blueprint, not
+    # the argparse namespace. We surface them in the LoraHub schema for
+    # editor-side warnings; the actual dataset_config TOML is whatever
+    # base.toml ships with. cut B5 follow-up will materialise a
+    # per-recipe dataset.toml override if a user actually changes one.
 
     # ---- Seed ----
     seed = cfg.schedule.seed if cfg.schedule.seed is not None else 42

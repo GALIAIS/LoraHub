@@ -1011,6 +1011,89 @@ class AnimaLoraOptions(BaseModel):
     validation_sample_steps: int | None = Field(default=None, ge=1)
     validation_cfg_scale: float | None = Field(default=None, gt=0)
 
+    # ---- Upstream-default fields (B5 cut-locks) ----
+    #
+    # These mirror keys from anima_lora's vendored ``configs/base.toml``
+    # and ``configs/methods/lora.toml`` ``[[datasets]]`` block. Many of
+    # them are "pipeline-locked" in upstream — base.toml hard-codes them
+    # to true and the train.py argparse offers no ``--no_<x>`` reverse
+    # flag, so flipping them off in LoraHub silently does nothing. The
+    # frontend renders a 🔒 badge on each one and the compiler logs a
+    # warning (not an error) when the user sets a locked field to a
+    # value the upstream would ignore.
+    #
+    # Lock taxonomy:
+    #   * LOCKED_TRUE    — base.toml has it = true and there's no
+    #     reverse CLI flag. Setting False in LoraHub is a no-op.
+    #   * LOCKED_VALUE   — base.toml or method file pins a specific
+    #     non-bool value the trainer's static-shape compile chain
+    #     depends on (e.g. static_token_count = 4096 for Anima DiT).
+    #   * RISKY          — can be changed but breaks something obvious.
+    # See ``lorahub.core.backends.anima_lora.compiler.LOCKED_FIELDS``.
+
+    # 🔒 LOCKED_TRUE — masked loss is part of the Anima training pipeline
+    # contract; upstream's _compute_loss path branches on it without a
+    # backward edge. Disabling is a silent no-op.
+    masked_loss: bool = True
+    # 🔒 LOCKED_TRUE — torch.compile is required for the static-shape
+    # constant-token bucketing to pay off; upstream's loop assumes it.
+    torch_compile: bool = True
+    # 🔒 LOCKED_TRUE — skip_cache_check trades safety for startup speed
+    # (skips per-image hash verification before training). On by
+    # default; turning off would force a 248-image dataset to re-hash
+    # every run with no functional benefit.
+    skip_cache_check: bool = True
+    # 🔒 LOCKED_TRUE — DataLoader pin_memory; upstream sets it true and
+    # offers no off-switch. Off would slow down host→GPU transfers.
+    dataloader_pin_memory: bool = True
+    # ⚠️ RISKY — persistent dataloader workers; upstream default is
+    # false (workers re-spawn each epoch). Setting true reduces epoch
+    # boundary stalls but may leak file handles on long runs.
+    persistent_data_loader_workers: bool = False
+    # 🔒 LOCKED_TRUE — base.toml writes ``trim_crossattn_kv = false``,
+    # but the corresponding flag is store_true so users *can* turn it
+    # on via CLI. Setting True enables KV trimming for short captions
+    # (~10-15% throughput gain). Default false is upstream-faithful.
+    trim_crossattn_kv: bool = False
+
+    # ⚠️ RISKY — save format. Always safetensors for Anima (other
+    # formats are kohya legacies that don't round-trip through Anima's
+    # weight loading). LoraHub doesn't expose alternatives.
+    save_model_as: Literal["safetensors"] = "safetensors"
+    # ⚠️ RISKY — save dtype. fp16 is smaller, bf16 is upstream-default
+    # and matches the training compute dtype on Ampere+; fp32 doubles
+    # disk usage with no quality benefit.
+    save_precision: Literal["bf16", "fp16", "fp32"] = "bf16"
+
+    # log_every_n_steps — how often the trainer flushes step events to
+    # tensorboard. Cosmetic; default 2 ≈ 0.5Hz.
+    log_every_n_steps: int = Field(2, ge=1)
+
+    # ---- Dataset blueprint fields (under [[datasets]] / [general]) ----
+    # These live in the dataset blueprint section of base.toml and
+    # aren't argparse-driven — LoraHub emits them through a separate
+    # ``--dataset_config`` override or a method-TOML shallow-merge.
+    # Default values mirror upstream.
+
+    # ⚠️ RISKY — caption-shuffle "keep first N tags" knob. base.toml
+    # uses 3 (matching Anima's training-time T5 caption format with
+    # the trigger / character / character-feature triple at front).
+    # Changing this can degrade trigger-word reliability.
+    keep_tokens: int = Field(3, ge=0)
+    # 🔒 LOCKED_VALUE — caption file extension (``.txt``). upstream's
+    # data pipeline scans for this exact suffix; changing it skips
+    # every image with no warning. Exposed for completeness.
+    caption_extension: str = ".txt"
+    # ⚠️ RISKY — held-out validation set count. base.toml uses 16.
+    # 0 disables CMMD val (val_loss series stops updating).
+    validation_split_num: int = Field(16, ge=0)
+    # Bucketing is a hard requirement of Anima's static-shape compile;
+    # 🔒 LOCKED_TRUE here too.
+    enable_bucket: bool = True
+    # ⚠️ RISKY — fnmatch glob for image discovery; ``*`` trains on
+    # everything. Use ``char_a/*|char_b/*`` to OR-combine subfolders.
+    path_pattern: str = "*"
+
     # ---- Method-specific sub-configs ----
     # Only the sub-config matching `method` is consumed by the compiler;
     # populating the others is allowed (lets users keep per-method

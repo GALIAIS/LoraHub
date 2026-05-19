@@ -15,7 +15,8 @@
  *      pipeline from train.py to scripts/distill_turbo.py)
  */
 import { memo, useCallback } from "react"
-import { Sparkles } from "lucide-react"
+import { Lock, Sparkles } from "lucide-react"
+import { ANIMA_LORA_LOCKS, LockBadge } from "../anima-lora-locks"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import {
   EnumSelect,
@@ -25,6 +26,13 @@ import {
   Section,
   ToggleSwitch,
 } from "../widgets"
+
+/** Look up the lock badge for a field key; returns ``null`` when the field
+ *  is unrestricted (most non-base.toml knobs). */
+function lockBadgeFor(field: string) {
+  const meta = ANIMA_LORA_LOCKS[field]
+  return meta ? <LockBadge meta={meta} /> : null
+}
 
 const METHOD_OPTIONS = [
   { value: "lora", label: "lora — LoRA + OrthoLoRA + T-LoRA(默认堆叠)" },
@@ -286,13 +294,13 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 缓存 === */}
       <Section title="缓存" subtitle="latent / TE / LLM adapter 输出落盘">
-        <Row label="cache_latents">
+        <Row label="cache_latents" labelBadge={lockBadgeFor("cacheLatents")}>
           <ToggleSwitch
             checked={v.cacheLatents ?? true}
             onCheckedChange={(c) => set(["backend", "animaLora", "cacheLatents"], c)}
           />
         </Row>
-        <Row label="cache_latents_to_disk">
+        <Row label="cache_latents_to_disk" labelBadge={lockBadgeFor("cacheLatentsToDisk")}>
           <ToggleSwitch
             checked={v.cacheLatentsToDisk ?? true}
             onCheckedChange={(c) =>
@@ -300,7 +308,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_text_encoder_outputs">
+        <Row label="cache_text_encoder_outputs" labelBadge={lockBadgeFor("cacheTextEncoderOutputs")}>
           <ToggleSwitch
             checked={v.cacheTextEncoderOutputs ?? true}
             onCheckedChange={(c) =>
@@ -308,7 +316,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_text_encoder_outputs_to_disk">
+        <Row label="cache_text_encoder_outputs_to_disk" labelBadge={lockBadgeFor("cacheTextEncoderOutputsToDisk")}>
           <ToggleSwitch
             checked={v.cacheTextEncoderOutputsToDisk ?? true}
             onCheckedChange={(c) =>
@@ -316,7 +324,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_llm_adapter_outputs">
+        <Row label="cache_llm_adapter_outputs" labelBadge={lockBadgeFor("cacheLlmAdapterOutputs")}>
           <ToggleSwitch
             checked={v.cacheLlmAdapterOutputs ?? true}
             onCheckedChange={(c) =>
@@ -332,7 +340,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="static_token_count" description="Anima 必须 4096">
+        <Row label="static_token_count" labelBadge={lockBadgeFor("staticTokenCount")} description="Anima 必须 4096">
           <FloatInput
             value={v.staticTokenCount}
             onChange={(n) => set(["backend", "animaLora", "staticTokenCount"], n)}
@@ -340,7 +348,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="vae_chunk_size">
+        <Row label="vae_chunk_size" labelBadge={lockBadgeFor("vaeChunkSize")}>
           <FloatInput
             value={v.vaeChunkSize}
             onChange={(n) => set(["backend", "animaLora", "vaeChunkSize"], n)}
@@ -348,7 +356,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="vae_disable_cache">
+        <Row label="vae_disable_cache" labelBadge={lockBadgeFor("vaeDisableCache")}>
           <ToggleSwitch
             checked={v.vaeDisableCache ?? false}
             onCheckedChange={(c) => set(["backend", "animaLora", "vaeDisableCache"], c)}
@@ -682,6 +690,186 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           </Row>
         </Section>
       )}
+
+      {/* === 上游默认 / 锁定字段 (B5 cut-locks) === */}
+      <Section
+        icon={<Lock className="size-3.5" />}
+        title="上游默认 / 锁定字段"
+        subtitle="anima_lora base.toml 写死的字段。带 🔒 是 upstream 无法 override 的;带 ⚠️ 可改但有副作用。"
+      >
+        <Row
+          label="masked_loss"
+          labelBadge={lockBadgeFor("maskedLoss")}
+          description="Anima 训练管线硬依赖,关掉是无效操作。"
+        >
+          <ToggleSwitch
+            checked={v.maskedLoss ?? true}
+            onCheckedChange={(c) => set(["backend", "animaLora", "maskedLoss"], c)}
+          />
+        </Row>
+        <Row
+          label="torch_compile"
+          labelBadge={lockBadgeFor("torchCompile")}
+          description="static_token_count 性能收益的前提,upstream 训练循环假定开启。"
+        >
+          <ToggleSwitch
+            checked={v.torchCompile ?? true}
+            onCheckedChange={(c) => set(["backend", "animaLora", "torchCompile"], c)}
+          />
+        </Row>
+        <Row
+          label="skip_cache_check"
+          labelBadge={lockBadgeFor("skipCacheCheck")}
+          description="跳过缓存哈希校验,只影响启动速度。"
+        >
+          <ToggleSwitch
+            checked={v.skipCacheCheck ?? true}
+            onCheckedChange={(c) => set(["backend", "animaLora", "skipCacheCheck"], c)}
+          />
+        </Row>
+        <Row
+          label="dataloader_pin_memory"
+          labelBadge={lockBadgeFor("dataloaderPinMemory")}
+        >
+          <ToggleSwitch
+            checked={v.dataloaderPinMemory ?? true}
+            onCheckedChange={(c) =>
+              set(["backend", "animaLora", "dataloaderPinMemory"], c)
+            }
+          />
+        </Row>
+        <Row
+          label="persistent_data_loader_workers"
+          labelBadge={lockBadgeFor("persistentDataLoaderWorkers")}
+          description="减少 epoch 边界 stall,但长跑可能泄漏 file handle。"
+        >
+          <ToggleSwitch
+            checked={v.persistentDataLoaderWorkers ?? false}
+            onCheckedChange={(c) =>
+              set(["backend", "animaLora", "persistentDataLoaderWorkers"], c)
+            }
+          />
+        </Row>
+        <Row
+          label="trim_crossattn_kv"
+          labelBadge={lockBadgeFor("trimCrossattnKv")}
+          description="启用 KV trimming(短 caption 加速 ~10-15%)。"
+        >
+          <ToggleSwitch
+            checked={v.trimCrossattnKv ?? false}
+            onCheckedChange={(c) =>
+              set(["backend", "animaLora", "trimCrossattnKv"], c)
+            }
+          />
+        </Row>
+        <Row
+          label="no_half_vae"
+          labelBadge={lockBadgeFor("noHalfVae")}
+          description="true 半精度 VAE 省显存,但偶尔在边缘数据集产生 NaN。"
+        >
+          <ToggleSwitch
+            checked={v.noHalfVae ?? false}
+            onCheckedChange={(c) => set(["backend", "animaLora", "noHalfVae"], c)}
+          />
+        </Row>
+        <Row
+          label="save_precision"
+          labelBadge={lockBadgeFor("savePrecision")}
+          description="bf16 是 upstream 默认且匹配训练 dtype。"
+        >
+          <EnumSelect
+            value={v.savePrecision ?? "bf16"}
+            onChange={(s) => set(["backend", "animaLora", "savePrecision"], s)}
+            options={[
+              { value: "bf16", label: "bf16(默认)" },
+              { value: "fp16", label: "fp16" },
+              { value: "fp32", label: "fp32(2× 体积无质量收益)" },
+            ]}
+          />
+        </Row>
+        <Row
+          label="save_model_as"
+          labelBadge={lockBadgeFor("saveModelAs")}
+          description="Anima 只能加载 safetensors。"
+        >
+          <EnumSelect
+            value={v.saveModelAs ?? "safetensors"}
+            onChange={(s) => set(["backend", "animaLora", "saveModelAs"], s)}
+            options={[{ value: "safetensors", label: "safetensors(锁定)" }]}
+          />
+        </Row>
+        <Row label="log_every_n_steps">
+          <FloatInput
+            value={v.logEveryNSteps}
+            onChange={(n) => set(["backend", "animaLora", "logEveryNSteps"], n)}
+            placeholder="2"
+            min={1}
+          />
+        </Row>
+
+        {/* — Dataset blueprint 字段(写在 [[datasets]] / [general] 段) — */}
+        <Row
+          label="keep_tokens"
+          labelBadge={lockBadgeFor("keepTokens")}
+          description="caption shuffle 保前 N 个 tag。改 < 3 trigger word 不再可靠。"
+        >
+          <FloatInput
+            value={v.keepTokens}
+            onChange={(n) => set(["backend", "animaLora", "keepTokens"], n)}
+            placeholder="3"
+            min={0}
+          />
+        </Row>
+        <Row
+          label="caption_extension"
+          labelBadge={lockBadgeFor("captionExtension")}
+          description="caption 文件后缀。改了所有图片会被跳过。"
+        >
+          <PathInput
+            value={v.captionExtension ?? ""}
+            onChange={(s) =>
+              set(["backend", "animaLora", "captionExtension"], s || ".txt")
+            }
+            placeholder=".txt"
+          />
+        </Row>
+        <Row
+          label="validation_split_num"
+          labelBadge={lockBadgeFor("validationSplitNum")}
+          description="留出验证集大小;0 = 关 CMMD 验证。"
+        >
+          <FloatInput
+            value={v.validationSplitNum}
+            onChange={(n) => set(["backend", "animaLora", "validationSplitNum"], n)}
+            placeholder="16"
+            min={0}
+          />
+        </Row>
+        <Row
+          label="enable_bucket"
+          labelBadge={lockBadgeFor("enableBucket")}
+          description="多分辨率 bucketing,Anima static-shape compile 硬约束。"
+        >
+          <ToggleSwitch
+            checked={v.enableBucket ?? true}
+            onCheckedChange={(c) =>
+              set(["backend", "animaLora", "enableBucket"], c)
+            }
+          />
+        </Row>
+        <Row
+          label="path_pattern"
+          description="fnmatch 模式;* 全部图,char_a/*|char_b/* OR-合并子文件夹。"
+        >
+          <PathInput
+            value={v.pathPattern ?? ""}
+            onChange={(s) =>
+              set(["backend", "animaLora", "pathPattern"], s || "*")
+            }
+            placeholder="*"
+          />
+        </Row>
+      </Section>
 
       {/* === Turbo 蒸馏(独立路径) === */}
       <Section

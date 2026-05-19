@@ -74,6 +74,9 @@ export const Section = memo(function Section({
 
 interface RowProps {
   label: string
+  /** Optional badge / icon rendered inline next to the label. Used by the
+   *  anima_lora 🔒 / ⚠️ markers without forcing every Row to take ReactNode. */
+  labelBadge?: React.ReactNode
   description?: React.ReactNode
   required?: boolean
   errors?: string[]
@@ -83,6 +86,7 @@ interface RowProps {
 
 export const Row = memo(function Row({
   label,
+  labelBadge,
   description,
   required,
   errors,
@@ -92,8 +96,11 @@ export const Row = memo(function Row({
   return (
     <div className="grid grid-cols-[10rem_1fr] gap-x-4 items-start">
       <Label htmlFor={htmlFor} className="text-xs pt-2 leading-tight">
-        {label}
-        {required && <span className="ml-1 text-destructive/80">*</span>}
+        <span className="inline-flex items-center gap-1.5 flex-wrap">
+          <span>{label}</span>
+          {labelBadge}
+          {required && <span className="ml-1 text-destructive/80">*</span>}
+        </span>
       </Label>
       <div className="min-w-0">
         {children}

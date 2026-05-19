@@ -346,6 +346,24 @@ export interface ConfigFormValue {
       validationSeed?: number | null
       validationSampleSteps?: number | null
       validationCfgScale?: number | null
+      // Upstream-locked / risky fields (B5 cut-locks). Most of these
+      // mirror base.toml defaults that anima_lora's argparse can't
+      // actually flip off; the editor surfaces them with 🔒 / ⚠️
+      // badges so the user knows what's a no-op vs what's risky.
+      maskedLoss?: boolean
+      torchCompile?: boolean
+      skipCacheCheck?: boolean
+      dataloaderPinMemory?: boolean
+      persistentDataLoaderWorkers?: boolean
+      trimCrossattnKv?: boolean
+      saveModelAs?: "safetensors"
+      savePrecision?: "bf16" | "fp16" | "fp32"
+      logEveryNSteps?: number
+      keepTokens?: number
+      captionExtension?: string
+      validationSplitNum?: number
+      enableBucket?: boolean
+      pathPattern?: string
       // method = lora sub-config (default OrthoLoRA + T-LoRA stack).
       lora?: {
         useOrtho?: boolean
