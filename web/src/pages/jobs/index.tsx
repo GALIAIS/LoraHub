@@ -114,6 +114,23 @@ export function JobsPage() {
     return filtered
   }, [list, statusFilter, hideCompleted, query])
 
+  // Auto-select the most recent job on first load when no URL param
+  // pre-selected one — opening the page with no selection feels broken
+  // ("从列表中选择一个任务" is technically correct but unhelpful when
+  // there obviously is a newest run the user wants to look at). Runs
+  // exactly once after the jobs list resolves; manual deselects later
+  // are respected.
+  const autoSelectedRef = useRef(false)
+  useEffect(() => {
+    if (autoSelectedRef.current) return
+    if (!consumedQueryRef.current) return
+    if (!jobs.isSuccess) return
+    autoSelectedRef.current = true
+    if (selectedId) return
+    if (visibleJobs.length === 0) return
+    setSelectedId(visibleJobs[0].id)
+  }, [jobs.isSuccess, selectedId, visibleJobs])
+
   // When compare mode is turned off, drop the selection so re-enabling it
   // doesn't surprise the user with stale ticks.
   useEffect(() => {
