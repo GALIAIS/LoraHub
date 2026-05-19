@@ -82,7 +82,20 @@ _image_studio_store: ImageStudioStore | None = None
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+    from lorahub.api.paths import ensure_initialised, project_root
     from lorahub.api.store import JobStore, default_store_path
+
+    # Pin and chdir to the LoraHub project root before anything else
+    # touches disk. Without this, store paths resolve via
+    # ``Path.cwd() / "runs"`` and any restart from a different cwd
+    # (desktop shortcut, ``lorahub serve`` from a user dir, service
+    # wrapper, …) would land on a fresh empty SQLite tree, making
+    # the user's training history disappear. See ``api/paths.py``.
+    pre_chdir = os.getcwd()
+    root = ensure_initialised()
+    log.info("project root: %s", project_root())
+    if pre_chdir != str(root):
+        log.info("cwd was %s, chdir'd to project root", pre_chdir)
 
     if state.registry.store is None:
         store_path = default_store_path()

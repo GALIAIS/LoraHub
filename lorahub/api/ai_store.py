@@ -789,8 +789,10 @@ ON CONFLICT(task_id) DO UPDATE SET
 
 
 def default_ai_store_path() -> Path:
-    """``<cwd>/runs/ai.sqlite``."""
-    return Path.cwd() / "runs" / "ai.sqlite"
+    """``<project_root>/runs/ai.sqlite``."""
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    return runs_dir() / "ai.sqlite"
 
 
 __all__ = [

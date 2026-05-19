@@ -220,10 +220,11 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     sweep_id = str(ulid.new())
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
     workspace_root = (
         Path(req.workspace_root).resolve()
         if req.workspace_root
-        else (Path.cwd() / "runs").resolve()
+        else runs_dir().resolve()
     )
 
     # For TPE, point the study at a per-sweep sqlite file under the

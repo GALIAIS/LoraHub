@@ -240,8 +240,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def default_session_store_path() -> Path:
-    """`<cwd>/runs/sessions.sqlite`."""
-    return Path.cwd() / "runs" / "sessions.sqlite"
+    """``<project_root>/runs/sessions.sqlite``."""
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    return runs_dir() / "sessions.sqlite"
 
 
 __all__ = ["SessionStore", "SessionKind", "default_session_store_path"]

@@ -136,8 +136,10 @@ def _row_to_record(row: sqlite3.Row) -> SweepRecord:
 
 
 def default_sweep_store_path() -> Path:
-    """`<cwd>/runs/sweeps.sqlite`."""
-    return Path.cwd() / "runs" / "sweeps.sqlite"
+    """``<project_root>/runs/sweeps.sqlite``."""
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    return runs_dir() / "sweeps.sqlite"
 
 
 __all__ = ["SweepRecord", "SweepStore", "default_sweep_store_path"]

@@ -154,7 +154,10 @@ class ImageEmbedding:
 
 
 def default_image_studio_store_path() -> Path:
-    return Path("runs") / "image_studio.sqlite"
+    """``<project_root>/runs/image_studio.sqlite``."""
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    return runs_dir() / "image_studio.sqlite"
 
 
 class ImageStudioStore:

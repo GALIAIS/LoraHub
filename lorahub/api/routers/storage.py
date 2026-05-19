@@ -47,7 +47,9 @@ def _du(path: Path) -> _DirSize:
 
 
 def _runs_root() -> Path:
-    return (Path.cwd() / "runs").resolve()
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    return runs_dir().resolve()
 
 
 def _archive_root() -> Path:

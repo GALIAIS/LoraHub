@@ -415,11 +415,19 @@ def _parse_dt_optional(s: str | None) -> datetime | None:
 def default_store_path() -> Path:
     """Where lorahub keeps the jobs DB.
 
-    Returns ``runs/jobs.sqlite`` going forward. If a legacy
-    ``runs/.lorahub.sqlite`` exists from an older release we keep using it
-    so users don't lose history on upgrade.
+    Returns ``<project_root>/runs/jobs.sqlite`` going forward, anchored
+    on the resolved project root rather than ``Path.cwd()``. If a
+    legacy ``runs/.lorahub.sqlite`` exists from an older release we
+    keep using it so users don't lose history on upgrade.
+
+    The cwd-anchored layout was the historical source of "training
+    history disappears after a restart" reports — every uvicorn
+    restart from a different cwd would land on a fresh empty SQLite
+    file. See ``lorahub.api.paths`` for the resolution rules.
     """
-    runs = Path.cwd() / "runs"
+    from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+    runs = runs_dir()
     legacy = runs / ".lorahub.sqlite"
     if legacy.is_file():
         return legacy

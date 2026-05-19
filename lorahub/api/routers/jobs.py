@@ -91,8 +91,9 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
         # directories. Users who need cache reuse can still pass an
         # explicit `workspace` and opt in.
         from datetime import datetime, UTC  # noqa: PLC0415
+        from lorahub.api.paths import runs_dir  # noqa: PLC0415
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        workspace = (Path.cwd() / "runs" / f"{cfg.output.name}-{stamp}").resolve()
+        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
     return _launch_job(cfg, workspace)
 
 
