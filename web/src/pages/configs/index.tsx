@@ -86,17 +86,23 @@ export function ConfigsPage() {
     }
   }, [location, navigate])
 
-  // Default selection: first config in preview mode. When we arrived with a
-  // pending dataset override, force-select the first config even if a mode
-  // was already chosen, so the dialog opens against a real config.
-  useEffect(() => {
-    if (configs.length === 0) return
-    if (mode === null) {
-      setMode({ kind: "preview", name: configs[0].name })
-    } else if (autoOpenLaunch && mode.kind !== "preview") {
-      setMode({ kind: "preview", name: configs[0].name })
-    }
-  }, [mode, configs, autoOpenLaunch])
+  // Default selection: first config in preview mode, picked from the
+  // *visible* list (after backend / arch / search filters). The naive
+  // "configs[0]" version showed the global first config — typically a
+  // kohya recipe — even when the user had already filtered the
+  // sidebar to ``anima_lora``. Switching the auto-select to
+  // ``visibleConfigs[0]`` matches the row the user actually sees at
+  // the top.
+  //
+  // Re-run when the visible list changes so flipping the filter
+  // immediately refreshes the right pane to a config that actually
+  // matches it. We additionally guard against the currently-selected
+  // config no longer being in the visible set (typical after the
+  // user changes the backend filter and the prior selection is
+  // filtered out) — in that case we re-select the first visible
+  // config rather than show a stale row.
+  // (Defined below as a useMemo over `configs` + filters; this
+  // effect is deferred via a dedicated hook block right after.)
 
   const visibleConfigs = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -130,6 +136,29 @@ export function ConfigsPage() {
     })
     return sorted
   }, [configs, query, archFilter, backendFilter, defaultBackend, sort])
+
+  // Auto-select the first *visible* config so the right pane stays in
+  // sync with whatever the sidebar's filters are showing. Without this
+  // a user who set the backend filter to anima_lora still saw the
+  // global first config (typically a kohya recipe) rendered in the
+  // right pane and ConfigForm picked the wrong backend section.
+  useEffect(() => {
+    if (visibleConfigs.length === 0) return
+    if (mode === null) {
+      setMode({ kind: "preview", name: visibleConfigs[0].name })
+      return
+    }
+    if (autoOpenLaunch && mode.kind !== "preview") {
+      setMode({ kind: "preview", name: visibleConfigs[0].name })
+      return
+    }
+    if (mode.kind === "preview" || mode.kind === "edit") {
+      const stillVisible = visibleConfigs.some((c) => c.name === mode.name)
+      if (!stillVisible) {
+        setMode({ kind: "preview", name: visibleConfigs[0].name })
+      }
+    }
+  }, [mode, visibleConfigs, autoOpenLaunch])
 
   // Closing a row dialog returns null; keep the previous config reference for
   // animation but reset action so the dialog actually closes.
