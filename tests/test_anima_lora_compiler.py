@@ -85,9 +85,14 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     assert "--use_ortho" in pairs
     assert "--use_timestep_mask" in pairs
     assert pairs["--min_rank"] == ["8"]
-    # files-to-write must always be empty for anima_lora — upstream owns
-    # its own merge chain via base.toml / presets.toml / methods/<x>.toml.
-    assert files == {}
+    # files-to-write contains exactly the generated dataset_config TOML
+    # — upstream's argparse has no flag for the three data path keys
+    # (source / resized / cache), so we deliver them via
+    # --dataset_config <path>. Method / preset merge stays
+    # upstream-owned through configs/base.toml + configs/methods/<x>.toml.
+    assert len(files) == 1
+    [only_path] = list(files.keys())
+    assert only_path.name == "_lorahub_anima_dataset.toml"
 
 
 def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
@@ -334,25 +339,32 @@ def test_compile_emits_source_resized_lora_cache_paths(tmp_path: Path) -> None:
     """The compiler pins source / resized / cache to absolute LoraHub paths.
 
     cfg.dataset.source is the user-facing raw image directory (kohya /
-    dp parity); the resized + cache dirs are LoraHub-managed under
-    ``<workspace>/post_image_dataset/{resized,lora}``. All three must
-    surface on argv as absolute paths so anima_lora's own
-    ``configs/base.toml`` defaults (relative to the vendored repo root)
-    are bypassed.
+    dp parity); the resized + cache dirs are LoRaHub-managed under
+    ``<workspace>/post_image_dataset/{resized,lora}``. The three are
+    surfaced via a generated ``--dataset_config <path>`` TOML
+    (train.py has no CLI flag for the three keys — they live as
+    ``configs/base.toml`` top-level scalars). The TOML must contain
+    absolute paths for the resized + cache dirs so anima_lora's own
+    ``configs/base.toml`` defaults (relative to the vendored repo
+    root) are bypassed.
     """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     ws = tmp_path / "ws"
-    argv, _ = compile_config(cfg, ws)
+    argv, files = compile_config(cfg, ws)
     pairs = _argv_pairs(argv)
 
-    src = Path(pairs["--source_image_dir"][0])
-    resized = Path(pairs["--resized_image_dir"][0])
-    cache = Path(pairs["--lora_cache_dir"][0])
+    # Dataset config is delivered as a single --dataset_config flag
+    # whose value is a path to a TOML written under the workspace.
+    cfg_path = Path(pairs["--dataset_config"][0])
+    assert cfg_path.is_absolute()
+    assert cfg_path.parent == ws.resolve()
+    assert cfg_path in files, "compile_config must hand the TOML body back via the files dict"
 
-    assert src.is_absolute()
-    assert resized.is_absolute()
-    assert cache.is_absolute()
-    assert src == cfg.dataset.source.resolve()
-    assert resized == (ws / "post_image_dataset" / "resized").resolve()
-    assert cache == (ws / "post_image_dataset" / "lora").resolve()
+    body = files[cfg_path]
+    resized_expected = str((ws / "post_image_dataset" / "resized").resolve())
+    cache_expected = str((ws / "post_image_dataset" / "lora").resolve())
+    # TOML strings are double-quoted with backslashes escaped on
+    # Windows; do a substring check that survives both forms.
+    assert resized_expected.replace("\\", "\\\\") in body or resized_expected in body
+    assert cache_expected.replace("\\", "\\\\") in body or cache_expected in body

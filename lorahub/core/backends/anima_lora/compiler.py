@@ -198,18 +198,24 @@ def compile_config(
     argv += _shared_overrides(cfg, opts, output_dir)
 
     # Layer 3: dataset path overrides — pin source / resized / cache to
-    # absolute paths under the LoraHub workspace so anima_lora's own
+    # absolute paths under the LoRaHub workspace so anima_lora's own
     # ``base.toml`` defaults (which are relative to the vendored repo
     # root) are bypassed. ``cfg.dataset.source`` is the user-facing
     # raw image dir (same shape kohya / dp use), and the resized + cache
-    # dirs are LoraHub-managed under the workspace.
-    argv += _dataset_path_overrides(cfg, workspace)
+    # dirs are LoRaHub-managed under the workspace. This is delivered
+    # as a generated ``--dataset_config <path>`` TOML because train.py
+    # has no CLI flag for the three path keys (they live as
+    # ``configs/base.toml`` top-level scalars, not argparse).
+    ds_argv, ds_files = _dataset_config_override(cfg, workspace)
+    argv += ds_argv
 
     # Layer 4: method-specific sub-config overrides.
     argv += _method_overrides(opts)
 
-    # Files: nothing. Upstream's config chain is untouched.
-    files: dict[Path, str] = {}
+    # Files: a single dataset_config TOML that pins the three data
+    # paths. Written under the workspace by ``backend.launch`` before
+    # spawning train.py.
+    files: dict[Path, str] = dict(ds_files)
     return argv, files
 
 
@@ -378,7 +384,14 @@ def _shared_overrides(
     if opts.compile_inductor_mode is not None:
         out += ["--compile_inductor_mode", opts.compile_inductor_mode]
     if opts.use_custom_down_autograd:
-        out += ["--use_custom_down_autograd"]
+        # Upstream consumes this as a network kwarg, not an argparse flag.
+        # See ``networks/lora_anima/factory.py`` line 120 — the value
+        # is read off ``--network_args`` and dispatched onto each LoRA
+        # module's ``use_custom_down_autograd`` attribute. train.py's
+        # argparse only knows ``--network_args``; emitting
+        # ``--use_custom_down_autograd`` directly trips
+        # "unrecognized arguments".
+        out += ["--network_args", "use_custom_down_autograd=true"]
 
     # ---- Memory / offload ----
     if opts.blocks_to_swap > 0:
@@ -435,40 +448,99 @@ def _shared_overrides(
     return out
 
 
-def _dataset_path_overrides(
+def _dataset_config_override(
     cfg: TrainingConfig,
     workspace: Path,
-) -> list[str]:
-    """Pin upstream's three dataset path keys to LoraHub-managed absolute paths.
+) -> tuple[list[str], dict[Path, str]]:
+    """Pin dataset paths via a generated ``--dataset_config`` TOML.
 
-    anima_lora's ``configs/base.toml`` declares three top-level scalars
-    (``source_image_dir`` / ``resized_image_dir`` / ``lora_cache_dir``) that
-    its dataset blueprint reads via ``{...}`` template substitution. Without
-    overrides those resolve **relative to the anima_lora repo root** (we set
-    ``cwd=external/anima_lora/`` for the trainer), which is fine for
-    upstream's ``make preprocess`` workflow but inconsistent with kohya / dp
-    where ``cfg.dataset.source`` always points at a project-rooted raw image
-    directory.
+    Upstream's CLI doesn't expose the three relevant path keys
+    (``source_image_dir`` / ``resized_image_dir`` / ``lora_cache_dir``)
+    as argparse flags — they live as top-level scalars in
+    ``configs/base.toml`` and feed the dataset blueprint via
+    ``{...}`` template substitution. Trying to emit them as
+    ``--source_image_dir <path>`` etc. trips
+    "unrecognized arguments" against ``train.py``.
 
-    Emitting ``--source_image_dir`` / ``--resized_image_dir`` /
-    ``--lora_cache_dir`` as absolute paths makes the convention identical
-    across all three backends:
+    The clean injection point is ``--dataset_config <path>``, which
+    train.py honours by loading the supplied TOML and skipping the
+    base blueprint entirely. We materialise a minimal blueprint
+    pointing the resized + cache dirs at the LoraHub workspace's
+    ``post_image_dataset/`` (where the auto-preprocess step writes),
+    and the source image dir at ``cfg.dataset.source`` — same shape
+    kohya / dp use across the rest of LoraHub.
 
-    - ``cfg.dataset.source`` → raw images + ``.txt`` captions (user-supplied)
-    - ``<workspace>/post_image_dataset/resized`` → VAE-aligned PNGs
-      (LoraHub-managed, written by the auto-preprocess step in
-      :mod:`lorahub.core.backends.anima_lora.preprocess`)
-    - ``<workspace>/post_image_dataset/lora`` → VAE / TE / LLM-adapter caches
-      (LoraHub-managed, written by the auto-preprocess step)
+    Returns ``(argv, files)`` so the caller can fold both into the
+    final compile result; ``files`` is a single ``{path: content}``
+    pair that ``backend.launch`` writes to disk before spawning
+    ``train.py``.
     """
-    return [
-        "--source_image_dir",
-        str(cfg.dataset.source.resolve()),
-        "--resized_image_dir",
-        str((workspace / "post_image_dataset" / "resized").resolve()),
-        "--lora_cache_dir",
-        str((workspace / "post_image_dataset" / "lora").resolve()),
-    ]
+    opts = cfg.backend.anima_lora
+    assert opts is not None  # narrowed by compile_config
+
+    # Match upstream's default blueprint shape exactly — same keys,
+    # same nesting. Only the path fields are LoraHub-specific.
+    src = cfg.dataset.source.resolve()
+    resized = (workspace / "post_image_dataset" / "resized").resolve()
+    cache = (workspace / "post_image_dataset" / "lora").resolve()
+
+    # Quote paths defensively. anima_lora's TOML parser uses tomllib
+    # (PEP 680) which accepts double-quoted strings with a fixed
+    # escape table; backslashes (Windows) and embedded double-quotes
+    # both need escaping.
+    def _q(p: Path | str) -> str:
+        s = str(p).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{s}"'
+
+    # Resolution: take the first dim of cfg.dataset.resolution.
+    # anima_lora's blueprint uses a single int (square) when given
+    # one number, or "[H, W]" pair when given two.
+    res = cfg.dataset.resolution
+    if isinstance(res, (list, tuple)) and len(res) == 2:
+        res_token = f"[{int(res[0])}, {int(res[1])}]"
+    elif isinstance(res, (list, tuple)) and len(res) == 1:
+        res_token = str(int(res[0]))
+    else:
+        res_token = "1024"
+
+    batch_size = max(1, int(cfg.schedule.batch_size or 1))
+    keep_tokens = int(opts.keep_tokens)
+    caption_ext = (opts.caption_extension or ".txt").strip() or ".txt"
+
+    body = (
+        "# LoRaHub-generated dataset_config — pins anima_lora's three\n"
+        "# data paths (source / resized / cache) at LoRaHub-managed\n"
+        "# absolute locations. Regenerated on every launch.\n"
+        "[general]\n"
+        f"caption_extension = {_q(caption_ext)}\n"
+        f"keep_tokens = {keep_tokens}\n"
+        "\n"
+        "[[datasets]]\n"
+        f"resolution = {res_token}\n"
+        f"batch_size = {batch_size}\n"
+        "enable_bucket = true\n"
+        "\n"
+        "  [[datasets.subsets]]\n"
+        f"  image_dir = {_q(resized)}\n"
+        f"  cache_dir = {_q(cache)}\n"
+        "  num_repeats = 1\n"
+    )
+
+    # Tag with a sub-folder so multiple parallel jobs writing to
+    # different workspaces don't collide on filename.
+    target = workspace / "_lorahub_anima_dataset.toml"
+
+    # We additionally export the three path keys via env-side
+    # config so the auto-preprocess step (which we already write to
+    # the workspace, see preprocess.py) and train.py see the same
+    # values. The argv side is just the --dataset_config pointer.
+    argv = ["--dataset_config", str(target)]
+    files = {target: body}
+    # Stash source path as an env hint for any downstream tooling
+    # (e.g. the GUI) that wants to know which raw dir backed this
+    # generated blueprint. Not consumed by train.py itself.
+    _ = src
+    return argv, files
 
 
 def _method_overrides(opts: AnimaLoraOptions) -> list[str]:
