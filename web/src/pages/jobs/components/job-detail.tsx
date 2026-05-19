@@ -24,6 +24,8 @@ import {
   FolderOpen,
   Archive,
   Skull,
+  Pause,
+  Play,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -70,7 +72,7 @@ export function JobDetail({
     },
   })
   const stream = useJobStream(jobId)
-  const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill">(null)
+  const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill" | "pause" | "resume">(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [killOpen, setKillOpen] = useState(false)
@@ -117,6 +119,21 @@ export function JobDetail({
     || data?.state === "queued"
     || data?.state === "canceling"
   const isTerminal = data ? TERMINAL_STATES.has(data.state) : false
+  // "Paused" is purely a metadata signal stamped by ``DELETE
+  // /jobs/<id>?paused=true`` so the UI can flip the next render
+  // from "取消" to "恢复训练". The job is in canceled state on the
+  // backend; ``isPaused`` just changes which button we show.
+  const isPaused = Boolean(
+    data?.metadata && (data.metadata as Record<string, unknown>).paused === true,
+  )
+  // Resume eligibility: the route accepts canceled / failed /
+  // interrupted (see _RESUMABLE_STATES). We additionally show the
+  // button on paused jobs because that's the workflow we set up
+  // explicitly.
+  const isResumable =
+    data?.state === "canceled"
+    || data?.state === "failed"
+    || data?.state === "interrupted"
   // Compare-mode in the jobs page is a *jumping-off point*: we keep the
   // checkbox UX in the sidebar, but the actual compare panels live on
   // the analysis workbench so the detail view stays focused on running
@@ -127,6 +144,45 @@ export function JobDetail({
     if (!data) return
     await api.cancelJob(data.id)
     job.refetch()
+  }
+
+  async function onPause() {
+    if (!data) return
+    setBusy("pause")
+    setActionError(null)
+    try {
+      await api.pauseJob(data.id)
+      await job.refetch()
+      toast.success("已请求暂停,等待训练写出最新 state...", {
+        description: "随后点「恢复训练」从此处继续",
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setActionError(msg)
+      toast.error("暂停失败", { description: msg })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function onResume() {
+    if (!data) return
+    setBusy("resume")
+    setActionError(null)
+    try {
+      const fresh = await api.resumeJob(data.id)
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      await job.refetch()
+      toast.success("训练已从断点恢复", {
+        description: `任务 ID ${fresh.id.slice(-8)}`,
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setActionError(msg)
+      toast.error("恢复失败", { description: msg })
+    } finally {
+      setBusy(null)
+    }
   }
 
   async function onKill() {
@@ -316,8 +372,36 @@ export function JobDetail({
               <Archive className="size-3" /> 归档
             </Button>
           )}
+          {isResumable && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={onResume}
+              disabled={busy !== null}
+              title="从最新 state + safetensors 续训(保留 optimizer / lr 进度)"
+            >
+              <Play
+                className={cn("size-3", busy === "resume" && "animate-spin")}
+              />{" "}
+              {isPaused ? "继续训练" : "恢复训练"}
+            </Button>
+          )}
           {isLive && (
             <>
+              {data?.state === "running" || data?.state === "preparing" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onPause}
+                  disabled={busy !== null}
+                  title="发送 SIGINT,等待训练写出最新 state 后停止;之后点「继续训练」从此处续"
+                >
+                  <Pause
+                    className={cn("size-3", busy === "pause" && "animate-spin")}
+                  />{" "}
+                  暂停
+                </Button>
+              ) : null}
               <Button variant="destructive" size="sm" onClick={onCancel}>
                 <Square className="size-3" /> 取消
               </Button>

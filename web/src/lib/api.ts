@@ -12,6 +12,9 @@ export interface JobSummary {
   returncode: number | null
   error: string | null
   pid: number | null
+  /** Free-form bag stamped by orchestrators. UI consumers care about
+   *  ``paused``: when true, the cancel button flips into "继续训练". */
+  metadata?: Record<string, unknown> | null
 }
 
 /** /jobs/{id} returns the summary plus the config snapshot. */
@@ -544,6 +547,10 @@ export const api = {
     http<{ events: TrainingEvent[] }>(`/jobs/${id}/events?limit=${limit}`),
   cancelJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}`, { method: "DELETE" }),
+  /** Cancel + stamp ``metadata.paused=true`` so the UI swaps the next
+   *  render to "恢复训练". The actual cancel mechanics are identical. */
+  pauseJob: (id: string) =>
+    http<JobSummary>(`/jobs/${id}?paused=true`, { method: "DELETE" }),
   rerunJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}/rerun`, { method: "POST" }),
   resumeJob: (id: string) =>

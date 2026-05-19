@@ -550,10 +550,26 @@ def kill_job(job_id: str) -> dict[str, Any]:
 
 
 @router.delete("/jobs/{job_id}")
-def cancel_job(job_id: str, archive: bool = False) -> dict[str, Any]:
+def cancel_job(
+    job_id: str,
+    archive: bool = False,
+    paused: bool = False,
+) -> dict[str, Any]:
+    """Cancel a job. ``paused=true`` stamps ``metadata.paused=true`` so the
+    UI can flip the cancel button into a "恢复训练" button on the next
+    render. The actual cancel/save/resume mechanics are unchanged — paused
+    is purely an intent signal."""
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+
+    if paused:
+        # Stamp before flipping state so the registry update below
+        # persists both at once.
+        meta = dict(job.metadata or {})
+        meta["paused"] = True
+        meta["paused_at"] = datetime.now(UTC).isoformat()
+        job.metadata = meta
 
     if archive:
         if job.state not in _TERMINAL_STATES:

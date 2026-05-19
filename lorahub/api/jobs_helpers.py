@@ -1113,8 +1113,41 @@ def _dispatch_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
         return _kohya_resume_spec(workspace)
     if backend_type == "diffusion-pipe":
         return _dp_resume_spec(cfg, workspace)
+    if backend_type == "anima_lora":
+        return _anima_lora_resume_spec(workspace)
     raise ResumeNotReady(
         f"resume not implemented for backend.type={backend_type!r}"
+    )
+
+
+def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
+    """Locate anima_lora ``--save_state`` artifacts and pack them into a ResumeSpec.
+
+    anima_lora is a sd-scripts fork, so its state-dir layout matches kohya:
+    ``<output_name>-state`` (end-of-run) and ``<output_name>-state-step<N>``
+    (interval). The compiler writes them under ``<workspace>/ckpt/``.
+    Reuse the same finders kohya does and emit ``--resume=<state_dir>`` +
+    ``--network_weights=<latest.safetensors>`` so the trainer reattaches
+    weights AND optimizer/scheduler state.
+    """
+    state_dir = _find_latest_state_dir(workspace)
+    if state_dir is None:
+        raise ResumeNotReady(
+            f"no anima_lora state directory found under {workspace}; "
+            "resume requires ``cfg.resume.saveState=true`` (default) so "
+            "the trainer wrote optimizer state at least once"
+        )
+    weights = _find_latest_safetensors(workspace)
+    if weights is None:
+        raise ResumeNotReady(
+            f"no .safetensors weights found under {workspace}; "
+            "cannot seed --network_weights"
+        )
+    return ResumeSpec(
+        extra_argv=[
+            f"--resume={state_dir}",
+            f"--network_weights={weights}",
+        ],
     )
 
 

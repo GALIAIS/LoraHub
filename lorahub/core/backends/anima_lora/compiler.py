@@ -445,6 +445,26 @@ def _shared_overrides(
     seed = cfg.schedule.seed if cfg.schedule.seed is not None else 42
     out += ["--seed", str(seed)]
 
+    # ---- Resume / state writing ----
+    # Mirror kohya's behaviour: write optimizer/scheduler state next to
+    # checkpoints so a later /resume can re-attach. Without this, a
+    # cancelled run can resume the LoRA weights but loses the optimizer
+    # momentum + lr schedule position.
+    if cfg.resume.save_state:
+        out += ["--save_state"]
+    if cfg.resume.save_state_at_end:
+        out += ["--save_state_on_train_end"]
+    if cfg.resume.save_last_n_epochs_state is not None:
+        out += [
+            "--save_last_n_epochs_state",
+            str(cfg.resume.save_last_n_epochs_state),
+        ]
+    if cfg.resume.save_last_n_steps_state is not None:
+        out += [
+            "--save_last_n_steps_state",
+            str(cfg.resume.save_last_n_steps_state),
+        ]
+
     return out
 
 
