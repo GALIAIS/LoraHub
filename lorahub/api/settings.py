@@ -293,6 +293,9 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         _venv_python,
         default_repo_path,
     )
+    from lorahub.core.backends.anima_lora.models import (  # noqa: PLC0415
+        missing_files as _anima_missing_models,
+    )
 
     repo_raw = (
         os.environ.get(_ENV_REPO)
@@ -344,6 +347,11 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         # python binary missing and python_ok would already be False.
         "requirements_ok": True,
         "missing_requirements": [],
+        # Anima base / TE / VAE checkpoints are downloaded separately
+        # (multi-GB) — we surface presence here so the install panel
+        # can show a "Download models" CTA after `uv sync` finishes.
+        "missing_models": _anima_missing_models(),
+        "models_ok": not _anima_missing_models(),
         # `ready` here means "we can dispatch to the backend" — repo
         # files present + python interpreter resolvable. Whether the
         # interpreter actually has torch nightly is not knowable

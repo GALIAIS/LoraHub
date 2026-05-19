@@ -11,6 +11,7 @@ import {
 import {
   api,
   useBootstrapStream,
+  type AnimaModelDownloadStatus,
   type BackendDescriptor,
   type BackendId,
   type BootstrapEvent,
@@ -245,6 +246,115 @@ function EventLog({ events }: { events: BootstrapEvent[] }) {
 }
 
 /**
+ * One-click download for the three multi-GB anima checkpoints (DiT,
+ * Qwen3 TE, Qwen Image VAE). Renders only when ``uv sync`` finished
+ * but the files aren't on disk yet — i.e. the venv is ready and the
+ * user only needs the weights to start training. Shows live progress
+ * while a download is running and a clear "all set" state once done.
+ */
+function AnimaModelDownloadCard({
+  missing,
+  status,
+  isPending,
+  onDownload,
+  error,
+}: {
+  missing: string[]
+  status: AnimaModelDownloadStatus | undefined
+  isPending: boolean
+  onDownload: () => void
+  error: string | null
+}) {
+  const isRunning = status?.status === "running"
+  const failed = status?.status === "failed"
+  const succeeded = status?.status === "succeeded" && missing.length === 0
+  const percent = status?.percent ?? 0
+  const filesDone = status?.files_done ?? 0
+  const filesTotal = status?.files_total ?? missing.length
+  const lastEvent = status?.events?.[status.events.length - 1]
+
+  return (
+    <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-3 space-y-2.5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="flex-1 text-xs text-amber-700 dark:text-amber-400">
+          <div className="font-semibold text-foreground">
+            anima 模型未就绪
+          </div>
+          <div className="mt-0.5 leading-relaxed">
+            训练 / 推理需要 3 个 safetensors 检查点（DiT 基模型、Qwen3 文本编码器、
+            Qwen Image VAE），从 HuggingFace
+            <code className="mx-1 text-foreground">circlestone-labs/Anima</code>
+            下载约 <strong className="text-foreground">14 GB</strong>，存放到项目根
+            <code className="mx-1 text-foreground">models/</code>
+            目录。
+          </div>
+          {missing.length > 0 && !succeeded && (
+            <ul className="mt-1.5 ml-2 font-mono text-[11px] space-y-0.5 text-muted-foreground">
+              {missing.map((f) => (
+                <li key={f}>· {f}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <Button
+          size="sm"
+          variant={succeeded ? "outline" : "default"}
+          disabled={isRunning || isPending || succeeded}
+          onClick={onDownload}
+        >
+          {isRunning || isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : succeeded ? (
+            <Check className="size-3" />
+          ) : (
+            <Download className="size-3" />
+          )}
+          {isRunning
+            ? "下载中…"
+            : succeeded
+              ? "已完成"
+              : failed
+                ? "重试"
+                : "下载模型"}
+        </Button>
+      </div>
+
+      {(isRunning || filesDone > 0) && filesTotal > 0 && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-[11px] text-muted-foreground">
+            <span>
+              已完成 {filesDone} / {filesTotal} 文件
+            </span>
+            <span className="font-mono tabular-nums">{percent.toFixed(0)}%</span>
+          </div>
+          <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+            <div
+              className={cn(
+                "h-full transition-[width] duration-300",
+                failed ? "bg-destructive" : "bg-emerald-500",
+              )}
+              style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+            />
+          </div>
+          {lastEvent && (
+            <div className="font-mono text-[10px] text-muted-foreground/80 break-all">
+              {lastEvent.message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(failed || error) && (
+        <div className="rounded-[3px] border border-destructive/40 bg-destructive/5 px-2.5 py-1.5 text-[11px] font-mono text-destructive break-all">
+          {status?.error || error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * One-click install panel. The user picks a backend, hits 安装, and the
  * server kicks off the registry-driven bootstrap runner. Because the server
  * keeps a single bootstrap session at a time, while one is in flight we
@@ -347,6 +457,26 @@ export function InstallTab() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
       qc.invalidateQueries({ queryKey: ["settings"] })
+      qc.invalidateQueries({ queryKey: ["backends"] })
+    },
+  })
+
+  // Anima base / TE / VAE checkpoints — separate download flow because
+  // the files are multi-GB and shouldn't ride the bootstrap pipeline.
+  const animaModelStatus = useQuery({
+    queryKey: ["anima-model-download-status"],
+    queryFn: api.getAnimaModelDownloadStatus,
+    enabled: effective === "anima_lora",
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1500 : false,
+  })
+
+  const downloadAnimaModels = useMutation({
+    mutationFn: () => api.startAnimaModelDownload(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["anima-model-download-status"] })
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["backends"] })
     },
   })
@@ -478,6 +608,23 @@ export function InstallTab() {
               首次安装大约下载 6-8 GB（torch + CUDA wheels）。
             </div>
           )}
+
+          {effective === "anima_lora" &&
+            descriptor?.ready &&
+            descriptor.status.id === "anima_lora" &&
+            !descriptor.status.models_ok && (
+              <AnimaModelDownloadCard
+                missing={descriptor.status.missing_models}
+                status={animaModelStatus.data}
+                isPending={downloadAnimaModels.isPending}
+                onDownload={() => downloadAnimaModels.mutate()}
+                error={
+                  downloadAnimaModels.error instanceof Error
+                    ? downloadAnimaModels.error.message
+                    : null
+                }
+              />
+            )}
 
           {descriptor && !descriptor.status.requirements_ok && descriptor.status.python_ok && !isRunning && (
             <div className="flex items-center gap-3 rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-2">

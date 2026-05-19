@@ -91,6 +91,11 @@ export interface AnimaLoraBackendStatus {
   // the type for shape parity with the other two probes.
   requirements_ok: boolean
   missing_requirements: string[]
+  // Anima base / TE / VAE checkpoints. ``ready`` only covers the venv;
+  // models are tracked separately so the install panel can offer a
+  // dedicated "Download models" CTA.
+  missing_models: string[]
+  models_ok: boolean
   ready: boolean
   // anima_lora's source dimension picks "vendored" instead of
   // "default" because the source ships with LoraHub itself, not as a
@@ -121,6 +126,31 @@ export interface BackendDescriptor {
 export interface BackendsResponse {
   backends: BackendDescriptor[]
   default: BackendId
+}
+
+export interface AnimaModelDownloadEvent {
+  message: string
+  percent: number
+  files_done: number
+  files_total: number
+  ts: number
+}
+
+export interface AnimaModelDownloadStatus {
+  // ``"idle"`` only appears from the GET endpoint when no session has
+  // ever started; POST always returns ``"running"`` (or 409 if another
+  // download is in flight).
+  status: "idle" | "running" | "succeeded" | "failed"
+  session_id?: string
+  percent?: number
+  files_done?: number
+  files_total?: number
+  events?: AnimaModelDownloadEvent[]
+  error?: string | null
+  started_at?: number
+  finished_at?: number | null
+  /** Files still missing on disk — empty array means all three are present. */
+  missing_files: string[]
 }
 
 export interface SettingsState {
@@ -653,6 +683,14 @@ export const api = {
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
+  startAnimaModelDownload: () =>
+    http<AnimaModelDownloadStatus>("/backends/anima_lora/download-models", {
+      method: "POST",
+    }),
+  getAnimaModelDownloadStatus: () =>
+    http<AnimaModelDownloadStatus>(
+      "/backends/anima_lora/download-models/status",
+    ),
   getRuntimeStatus: () =>
     http<{
       default_version: string
