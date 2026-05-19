@@ -501,6 +501,14 @@ class SmartCaptionBatchInput(BaseModel):
     captionMode: str = "style"  # general | style | character
     triggerWord: str | None = None
     stripStyleTags: bool = True  # accepted for compat; cleanup is built-in
+    # Parallelism + reliability knobs. Defaults chosen to match the
+    # "feels responsive on a 200-image set without DoS-ing the upstream
+    # VLM" sweet spot — most providers handle 4-8 concurrent requests
+    # without rate-limit. Per-image timeout protects against a single
+    # hang from blocking the rest of the batch.
+    concurrency: int = 4
+    perImageTimeoutSec: float = 90.0
+    maxRetries: int = 2
 
 
 def _smart_caption_single_image(
@@ -662,10 +670,23 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         _smart_caption_sessions[session.session_id] = session
 
     def run() -> None:
-        try:
-            for img_path in images:
+        # Bounded thread pool — concurrent requests to the VLM provider,
+        # each protected by a per-image timeout so one hang doesn't block
+        # the entire batch. Failures get retried up to `maxRetries` times
+        # with a small backoff before being recorded as errors.
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout  # noqa: PLC0415
+
+        max_workers = max(1, min(int(body.concurrency or 1), 16))
+        timeout = float(body.perImageTimeoutSec or 90.0)
+        max_retries = max(0, int(body.maxRetries or 0))
+
+        def process_one(img_path: Path) -> None:
+            if session.should_stop():
+                return
+            last_err: Exception | None = None
+            for attempt in range(max_retries + 1):
                 if session.should_stop():
-                    break
+                    return
                 try:
                     item = _smart_caption_single_image(
                         img_path, tagger, ai_store, route, body.mergeStrategy, store,
@@ -674,8 +695,46 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                         strip_style_tags=body.stripStyleTags,
                     )
                     session.add_result(item, img_path.name)
+                    return
                 except Exception as exc:  # noqa: BLE001
-                    session.add_error(str(img_path), str(exc), img_path.name)
+                    last_err = exc
+                    if attempt < max_retries:
+                        # Exponential-ish backoff capped at 4s — most VLM
+                        # transients clear in under 2s.
+                        _time.sleep(min(2.0 ** attempt, 4.0))
+                        continue
+            err_msg = f"{type(last_err).__name__}: {last_err}" if last_err else "unknown"
+            session.add_error(str(img_path), err_msg, img_path.name)
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix=f"sc-{session.session_id[:8]}",
+            ) as pool:
+                futures = {pool.submit(process_one, p): p for p in images}
+                for fut in list(futures.keys()):
+                    if session.should_stop():
+                        break
+                    try:
+                        fut.result(timeout=timeout)
+                    except _Timeout:
+                        p = futures[fut]
+                        session.add_error(
+                            str(p),
+                            f"timeout after {timeout:.0f}s",
+                            p.name,
+                        )
+                        # Best-effort cancel; the worker may still finish
+                        # its in-flight request, but its result will be
+                        # discarded since add_error already advanced
+                        # `processed`.
+                        fut.cancel()
+                    except Exception as exc:  # noqa: BLE001
+                        # process_one swallows exceptions; if we still see
+                        # one here it's an executor-level failure, not a
+                        # per-image one. Record it under the path we know.
+                        p = futures[fut]
+                        session.add_error(str(p), str(exc), p.name)
             session.finish("succeeded" if not session.should_stop() else "canceled")
         except Exception as exc:  # noqa: BLE001
             # Catastrophic failure (e.g. AI route token revoked mid-run).
