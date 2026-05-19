@@ -102,16 +102,24 @@ dev = [
 ]
 
 [tool.uv]
+# ``unsafe-best-match`` would otherwise pick PyPI's ``torch+cpu`` wheel
+# over the CUDA build because both satisfy ``torch>=2.11`` and PyPI is
+# tried first. The named ``pytorch-cu128`` index below + the explicit
+# ``[tool.uv.sources]`` map pin torch to the CUDA channel. We use cu128
+# because that's where torch 2.11 / 2.12 wheels actually live — the
+# legacy cu124 channel froze at torch 2.6.
 index-strategy = "unsafe-best-match"
-# LoraHub fork: extra-index-url for the PyTorch CDN was removed. The
-# default index (pypi.org or the user's mirror via `uv sync
-# --default-index`) is now the only source. PyTorch publishes torch
-# 2.11/2.12 to PyPI directly nowadays, so we don't strictly need a
-# CUDA-tagged extra index for torch>=2.11. Users who want a CUDA-
-# specific pin can pass `--extra-index-url <pytorch-mirror>` at sync
-# time, or restore the upstream block in this file.
 prerelease = "allow"
 override-dependencies = ["numpy>=2.0.0"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 
 [tool.pyright]
 extraPaths = ["."]

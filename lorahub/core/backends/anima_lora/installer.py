@@ -39,13 +39,20 @@ class BootstrapPlan:
     ``base_python`` is optional — when None, ``uv sync`` reads the
     ``requires-python`` constraint from ``pyproject.toml`` and fetches
     CPython 3.13 itself.
+
+    Note: anima's ``pyproject.toml`` declares a named ``pytorch-cu124``
+    index and pins torch / torchvision to it via ``[tool.uv.sources]``.
+    Without that, ``uv sync`` would silently resolve torch against
+    PyPI and land a ``+cpu`` build on Windows — preprocess / train
+    would then hang on CPU tensor ops. Don't drop the source map
+    upstream without rechecking ``cache_latents.py`` throughput.
     """
 
     target: Path
     # Optional: pin the base interpreter `uv sync` builds the venv on.
     # Leave None to let uv auto-fetch CPython matching `requires-python`.
     base_python: Path | None = None
-    # Optional PyPI index URL forwarded to `uv sync` via ``--index-url``.
+    # Optional PyPI index URL forwarded to `uv sync` via ``--default-index``.
     # Useful in regions where the default PyPI is slow.
     pypi_index: str | None = None
 
@@ -81,12 +88,11 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
         # Forward only when the user opted in via Settings. We use
         # `--default-index` (uv ≥ 0.4) instead of the deprecated
         # `--index-url` so future uv versions don't drop support.
-        # The pinned `download.pytorch.org/whl/cu13x` extra-index in
-        # anima_lora's pyproject still wins for torch wheels — there's
-        # no way to mirror those through PyPI. Only the non-torch
-        # packages (accelerate, diffusers, transformers, ~30 deps) get
-        # routed through the user's mirror, which is still a useful
-        # speedup in regions where pypi.org is slow.
+        # The named ``pytorch-cu124`` index in anima's pyproject still
+        # wins for torch + torchvision via ``[tool.uv.sources]`` — only
+        # the non-torch packages (accelerate, diffusers, transformers,
+        # ~30 deps) get routed through the user's mirror, which is
+        # still a useful speedup in regions where pypi.org is slow.
         args += ["--default-index", plan.pypi_index]
     label = f"uv sync -> {plan.venv_dir}"
     try:
