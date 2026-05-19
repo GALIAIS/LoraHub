@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PathDisplay } from "@/components/path-display"
@@ -28,7 +29,6 @@ import {
   Play,
   Pencil,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
 
 import { StateBadge } from "../../dashboard"
 import { TERMINAL_STATES } from "../utils"
@@ -352,7 +352,11 @@ export function JobDetail({
             disabled={!data || busy !== null}
             title="在文件管理器中打开工作区" aria-label="在文件管理器中打开工作区"
           >
-            <FolderOpen className="size-3" />
+            {busy === "reveal" ? (
+              <Spinner className="size-3" />
+            ) : (
+              <FolderOpen className="size-3" />
+            )}
           </Button>
           <Button
             variant="outline"
@@ -360,9 +364,11 @@ export function JobDetail({
             onClick={onRerun}
             disabled={!data || busy !== null}
           >
-            <RefreshCw
-              className={cn("size-3", busy === "rerun" && "animate-spin")}
-            />{" "}
+            {busy === "rerun" ? (
+              <Spinner className="size-3" />
+            ) : (
+              <RefreshCw className="size-3" />
+            )}{" "}
             再次运行
           </Button>
           {isTerminal && (
@@ -372,7 +378,12 @@ export function JobDetail({
               onClick={() => setArchiveOpen(true)}
               disabled={busy !== null}
             >
-              <Archive className="size-3" /> 归档
+              {busy === "archive" ? (
+                <Spinner className="size-3" />
+              ) : (
+                <Archive className="size-3" />
+              )}{" "}
+              归档
             </Button>
           )}
           {isResumable && (
@@ -384,9 +395,11 @@ export function JobDetail({
                 disabled={busy !== null}
                 title="从最新 state + safetensors 续训(保留 optimizer / lr 进度)"
               >
-                <Play
-                  className={cn("size-3", busy === "resume" && "animate-spin")}
-                />{" "}
+                {busy === "resume" ? (
+                  <Spinner className="size-3" />
+                ) : (
+                  <Play className="size-3" />
+                )}{" "}
                 {isPaused ? "继续训练" : "恢复训练"}
               </Button>
               <Button
@@ -417,9 +430,11 @@ export function JobDetail({
                   disabled={busy !== null}
                   title="发送 SIGINT,等待训练写出最新 state 后停止;之后点「继续训练」从此处续"
                 >
-                  <Pause
-                    className={cn("size-3", busy === "pause" && "animate-spin")}
-                  />{" "}
+                  {busy === "pause" ? (
+                    <Spinner className="size-3" />
+                  ) : (
+                    <Pause className="size-3" />
+                  )}{" "}
                   暂停
                 </Button>
               ) : null}
@@ -433,7 +448,12 @@ export function JobDetail({
                 title="强制 SIGKILL 进程组(用于卡死的训练任务)"
                 disabled={busy !== null || !data?.pid}
               >
-                <Skull className="size-3" /> 强制终止
+                {busy === "kill" ? (
+                  <Spinner className="size-3" />
+                ) : (
+                  <Skull className="size-3" />
+                )}{" "}
+                强制终止
               </Button>
             </>
           )}

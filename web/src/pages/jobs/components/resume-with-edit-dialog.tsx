@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { Play, X } from "lucide-react"
 import { api, type JobDetail, type ValidationFieldError } from "@/lib/api"
 import { Button } from "@/components/ui/button"
+import { Spinner } from "@/components/ui/spinner"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
 
 interface ResumeWithEditDialogProps {
@@ -135,7 +136,12 @@ export function ResumeWithEditDialog({
             onClick={() => submit.mutate()}
             disabled={!draft || submit.isPending}
           >
-            <Play className="size-3" /> {submit.isPending ? "续训中…" : "用新配置续训"}
+            {submit.isPending ? (
+              <Spinner className="size-3" />
+            ) : (
+              <Play className="size-3" />
+            )}{" "}
+            {submit.isPending ? "续训中…" : "用新配置续训"}
           </Button>
         </footer>
       </div>
