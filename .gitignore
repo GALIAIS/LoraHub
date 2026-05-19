@@ -72,6 +72,13 @@ _smoke/
 datasets/
 !tests/fixtures/datasets/
 !web/src/pages/datasets/
+# `datasets/` above is meant for user image folders, but it also
+# matches vendored anima_lora's Python sub-package
+# `external/anima_lora/library/datasets/` (which contains the
+# `BucketManager` class needed by the preprocess step). Re-include
+# the whole subtree so the vendored source stays complete.
+!external/anima_lora/library/datasets/
+!external/anima_lora/library/datasets/**
 
 # Bundled kohya checkout (cloned by `lorahub bootstrap-kohya`, never committed)
 sd-scripts/

@@ -131,9 +131,24 @@ def _run_step(
     we call ``runner.wait()`` so :func:`ensure_cache` blocks until the
     step finishes before launching train.py.
     """
-    listener: EventListener = on_event if on_event is not None else (lambda _e: None)
-    if on_event is not None:
-        on_event(
+    # Block ``done`` events from this preprocess subprocess from
+    # reaching the upstream listener: jobs_helpers treats *any* `done`
+    # as the training process exiting, which closes the events sink
+    # and tears down the GPU sampler. The next preprocess step's
+    # `_safe_emit` then raises "JsonlEventSink used outside its
+    # context". We still let log / progress events through so the UI
+    # can show resize / cache progress.
+    upstream: EventListener | None = on_event
+
+    def filtered_listener(ev: TrainingEvent) -> None:
+        if ev.type is EventType.done:
+            return
+        if upstream is not None:
+            upstream(ev)
+
+    listener: EventListener = filtered_listener if upstream is not None else (lambda _e: None)
+    if upstream is not None:
+        upstream(
             TrainingEvent(
                 type=EventType.log,
                 payload={

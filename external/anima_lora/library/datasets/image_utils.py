@@ -1,0 +1,593 @@
+import glob
+import logging
+import os
+from typing import List, Optional, Tuple
+
+import numpy as np
+import torch
+from PIL import Image
+from torchvision import transforms
+
+import cv2
+
+from library.datasets.buckets import BucketManager
+from library.datasets.subsets import ImageInfo
+from library.runtime.device import clean_memory_on_device
+
+logger = logging.getLogger(__name__)
+
+
+# region Image resize utilities
+
+
+def pil_resize(image, size, interpolation):
+    has_alpha = image.shape[2] == 4 if len(image.shape) == 3 else False
+
+    if has_alpha:
+        pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA))
+    else:
+        pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    resized_pil = pil_image.resize(size, resample=interpolation)
+
+    if has_alpha:
+        resized_cv2 = cv2.cvtColor(np.array(resized_pil), cv2.COLOR_RGBA2BGRA)
+    else:
+        resized_cv2 = cv2.cvtColor(np.array(resized_pil), cv2.COLOR_RGB2BGR)
+
+    return resized_cv2
+
+
+def get_cv2_interpolation(interpolation: Optional[str]) -> Optional[int]:
+    if interpolation is None:
+        return None
+    if interpolation == "lanczos" or interpolation == "lanczos4":
+        return cv2.INTER_LANCZOS4
+    elif interpolation == "nearest":
+        return cv2.INTER_NEAREST_EXACT
+    elif interpolation == "bilinear" or interpolation == "linear":
+        return cv2.INTER_LINEAR
+    elif interpolation == "bicubic" or interpolation == "cubic":
+        return cv2.INTER_CUBIC
+    elif interpolation == "area":
+        return cv2.INTER_AREA
+    elif interpolation == "box":
+        return cv2.INTER_AREA
+    else:
+        return None
+
+
+def get_pil_interpolation(interpolation: Optional[str]) -> Optional[Image.Resampling]:
+    if interpolation is None:
+        return None
+    if interpolation == "lanczos":
+        return Image.Resampling.LANCZOS
+    elif interpolation == "nearest":
+        return Image.Resampling.NEAREST
+    elif interpolation == "bilinear" or interpolation == "linear":
+        return Image.Resampling.BILINEAR
+    elif interpolation == "bicubic" or interpolation == "cubic":
+        return Image.Resampling.BICUBIC
+    elif interpolation == "area":
+        return Image.Resampling.HAMMING
+    elif interpolation == "box":
+        return Image.Resampling.BOX
+    else:
+        return None
+
+
+def resize_image(
+    image: np.ndarray,
+    width: int,
+    height: int,
+    resized_width: int,
+    resized_height: int,
+    resize_interpolation: Optional[str] = None,
+):
+    """Resize image with chosen interpolation. Defaults to AREA for downscale, LANCZOS for upscale."""
+    width = int(width)
+    height = int(height)
+    resized_width = int(resized_width)
+    resized_height = int(resized_height)
+
+    if resize_interpolation is None:
+        if width >= resized_width and height >= resized_height:
+            resize_interpolation = "area"
+        else:
+            resize_interpolation = "lanczos"
+
+    use_pil = resize_interpolation in ["lanczos", "lanczos4", "box"]
+
+    resized_size = (resized_width, resized_height)
+    if use_pil:
+        interpolation = get_pil_interpolation(resize_interpolation)
+        image = pil_resize(image, resized_size, interpolation=interpolation)
+        logger.debug(f"resize image using {resize_interpolation} (PIL)")
+    else:
+        interpolation = get_cv2_interpolation(resize_interpolation)
+        image = cv2.resize(image, resized_size, interpolation=interpolation)
+        logger.debug(f"resize image using {resize_interpolation} (cv2)")
+
+    return image
+
+
+def validate_interpolation_fn(interpolation_str: str) -> bool:
+    return interpolation_str in [
+        "lanczos",
+        "nearest",
+        "bilinear",
+        "linear",
+        "bicubic",
+        "cubic",
+        "area",
+        "box",
+    ]
+
+
+# endregion
+
+
+IMAGE_EXTENSIONS = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+    ".PNG",
+    ".JPG",
+    ".JPEG",
+    ".WEBP",
+    ".BMP",
+]
+
+
+def load_mask_from_dir(
+    mask_dir: str,
+    image_path: str,
+    size: Tuple[int, int],
+    image_dir: Optional[str] = None,
+) -> Optional[torch.Tensor]:
+    """Load a mask from a separate file in mask_dir matching the image stem.
+
+    Args:
+        mask_dir: Directory containing ``{stem}_mask.png`` files.
+        image_path: Path to the source image (used for stem matching).
+        size: (width, height) to resize the mask to if needed.
+        image_dir: Optional source root. When set, the relative subpath from
+            ``image_dir`` to ``image_path`` is mirrored under ``mask_dir``,
+            matching the nested-output layout produced by the mask writers.
+            Falls back to the legacy flat lookup if no nested file exists so
+            old caches keep working mid-migration.
+
+    Returns:
+        Float tensor [H, W] in [0, 1] range, or None if no mask file found.
+    """
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    candidates: list[str] = []
+    if image_dir is not None:
+        try:
+            rel = os.path.relpath(os.path.dirname(image_path), image_dir)
+        except ValueError:
+            rel = ""
+        if rel and rel != "." and not rel.startswith(".."):
+            candidates.append(os.path.join(mask_dir, rel, f"{stem}_mask.png"))
+    candidates.append(os.path.join(mask_dir, f"{stem}_mask.png"))
+
+    mask_path = next((p for p in candidates if os.path.exists(p)), None)
+    if mask_path is None:
+        return None
+    mask = Image.open(mask_path).convert("L")
+    if (mask.width, mask.height) != size:
+        mask = mask.resize(size, Image.LANCZOS)
+    mask_np = np.array(mask, dtype=np.float32) / 255.0
+    return torch.FloatTensor(mask_np)
+
+
+try:
+    import pillow_avif  # noqa: F401
+
+    IMAGE_EXTENSIONS.extend([".avif", ".AVIF"])
+except Exception:
+    pass
+
+# JPEG-XL on Linux
+try:
+    from jxlpy import JXLImagePlugin  # noqa: F401
+    from library.jpeg_xl_util import get_jxl_size  # noqa: F401
+
+    IMAGE_EXTENSIONS.extend([".jxl", ".JXL"])
+except Exception:
+    pass
+
+# JPEG-XL on Linux and Windows
+try:
+    import pillow_jxl  # noqa: F401
+    from library.jpeg_xl_util import get_jxl_size  # noqa: F401
+
+    IMAGE_EXTENSIONS.extend([".jxl", ".JXL"])
+except Exception:
+    pass
+
+IMAGE_TRANSFORMS = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5]),
+    ]
+)
+
+TEXT_ENCODER_OUTPUTS_CACHE_SUFFIX = "_te_outputs.npz"
+TEXT_ENCODER_OUTPUTS_CACHE_SUFFIX_SD3 = "_sd3_te.npz"
+
+
+def load_image(image_path, alpha=False):
+    try:
+        with Image.open(image_path) as image:
+            if alpha:
+                if not image.mode == "RGBA":
+                    image = image.convert("RGBA")
+            else:
+                if not image.mode == "RGB":
+                    image = image.convert("RGB")
+            img = np.array(image, np.uint8)
+            return img
+    except (IOError, OSError) as e:
+        logger.error(f"Error loading file: {image_path}")
+        raise e
+
+
+def trim_and_resize_if_required(
+    random_crop: bool,
+    image: np.ndarray,
+    reso,
+    resized_size: Tuple[int, int],
+    resize_interpolation: Optional[str] = None,
+) -> Tuple[np.ndarray, Tuple[int, int], Tuple[int, int, int, int]]:
+    image_height, image_width = image.shape[0:2]
+    original_size = (image_width, image_height)
+
+    if image_width != resized_size[0] or image_height != resized_size[1]:
+        image = resize_image(
+            image,
+            image_width,
+            image_height,
+            resized_size[0],
+            resized_size[1],
+            resize_interpolation,
+        )
+
+    image_height, image_width = image.shape[0:2]
+
+    if image_width > reso[0]:
+        trim_size = image_width - reso[0]
+        import random
+
+        p = trim_size // 2 if not random_crop else random.randint(0, trim_size)
+        image = image[:, p : p + reso[0]]
+    if image_height > reso[1]:
+        trim_size = image_height - reso[1]
+        import random
+
+        p = trim_size // 2 if not random_crop else random.randint(0, trim_size)
+        image = image[p : p + reso[1]]
+
+    crop_ltrb = BucketManager.get_crop_ltrb(reso, original_size)
+
+    assert image.shape[0] == reso[1] and image.shape[1] == reso[0], (
+        f"internal error, illegal trimmed size: {image.shape}, {reso}"
+    )
+    return image, original_size, crop_ltrb
+
+
+# for new_cache_latents
+def load_images_and_masks_for_caching(
+    image_infos: List[ImageInfo], use_alpha_mask: bool, random_crop: bool
+) -> Tuple[
+    torch.Tensor,
+    List[np.ndarray],
+    List[Tuple[int, int]],
+    List[Tuple[int, int, int, int]],
+]:
+    r"""
+    requires image_infos to have: [absolute_path or image], bucket_reso, resized_size
+
+    returns: image_tensor, alpha_masks, original_sizes, crop_ltrbs
+
+    image_tensor: torch.Tensor = torch.Size([B, 3, H, W]), ...], normalized to [-1, 1]
+    alpha_masks: List[np.ndarray] = [np.ndarray([H, W]), ...], normalized to [0, 1]
+    original_sizes: List[Tuple[int, int]] = [(W, H), ...]
+    crop_ltrbs: List[Tuple[int, int, int, int]] = [(L, T, R, B), ...]
+    """
+    images: List[torch.Tensor] = []
+    alpha_masks: List[np.ndarray] = []
+    original_sizes: List[Tuple[int, int]] = []
+    crop_ltrbs: List[Tuple[int, int, int, int]] = []
+    for info in image_infos:
+        has_mask_file = getattr(info, "mask_path", None) is not None
+        image = (
+            load_image(info.absolute_path, use_alpha_mask and not has_mask_file)
+            if info.image is None
+            else np.array(info.image, np.uint8)
+        )
+        image, original_size, crop_ltrb = trim_and_resize_if_required(
+            random_crop,
+            image,
+            info.bucket_reso,
+            info.resized_size,
+            resize_interpolation=info.resize_interpolation,
+        )
+
+        original_sizes.append(original_size)
+        crop_ltrbs.append(crop_ltrb)
+
+        if has_mask_file:
+            alpha_mask = load_mask_from_dir(
+                os.path.dirname(info.mask_path),
+                info.absolute_path,
+                (image.shape[1], image.shape[0]),
+            )
+            if alpha_mask is None:
+                alpha_mask = torch.ones(
+                    (image.shape[0], image.shape[1]), dtype=torch.float32
+                )
+        elif use_alpha_mask:
+            if image.shape[2] == 4:
+                alpha_mask = image[:, :, 3]
+                alpha_mask = alpha_mask.astype(np.float32) / 255.0
+                alpha_mask = torch.FloatTensor(alpha_mask)
+            else:
+                alpha_mask = torch.ones_like(image[:, :, 0], dtype=torch.float32)
+        else:
+            alpha_mask = None
+        alpha_masks.append(alpha_mask)
+
+        image = image[:, :, :3]
+        image = IMAGE_TRANSFORMS(image)
+        images.append(image)
+
+    img_tensor = torch.stack(images, dim=0)
+    return img_tensor, alpha_masks, original_sizes, crop_ltrbs
+
+
+def cache_batch_latents(
+    vae,
+    cache_to_disk: bool,
+    image_infos: List[ImageInfo],
+    flip_aug: bool,
+    use_alpha_mask: bool,
+    random_crop: bool,
+) -> None:
+    r"""
+    requires image_infos to have: absolute_path, bucket_reso, resized_size, latents_npz
+    optionally requires image_infos to have: image
+    if cache_to_disk is True, set info.latents_npz
+        flipped latents is also saved if flip_aug is True
+    if cache_to_disk is False, set info.latents
+        latents_flipped is also set if flip_aug is True
+    latents_original_size and latents_crop_ltrb are also set
+    """
+    images = []
+    alpha_masks: List[np.ndarray] = []
+    for info in image_infos:
+        has_mask_file = getattr(info, "mask_path", None) is not None
+        image = (
+            load_image(info.absolute_path, use_alpha_mask and not has_mask_file)
+            if info.image is None
+            else np.array(info.image, np.uint8)
+        )
+        image, original_size, crop_ltrb = trim_and_resize_if_required(
+            random_crop,
+            image,
+            info.bucket_reso,
+            info.resized_size,
+            resize_interpolation=info.resize_interpolation,
+        )
+
+        info.latents_original_size = original_size
+        info.latents_crop_ltrb = crop_ltrb
+
+        if has_mask_file:
+            alpha_mask = load_mask_from_dir(
+                os.path.dirname(info.mask_path),
+                info.absolute_path,
+                (image.shape[1], image.shape[0]),
+            )
+            if alpha_mask is None:
+                alpha_mask = torch.ones(
+                    (image.shape[0], image.shape[1]), dtype=torch.float32
+                )
+        elif use_alpha_mask:
+            if image.shape[2] == 4:
+                alpha_mask = image[:, :, 3]
+                alpha_mask = alpha_mask.astype(np.float32) / 255.0
+                alpha_mask = torch.FloatTensor(alpha_mask)
+            else:
+                alpha_mask = torch.ones_like(image[:, :, 0], dtype=torch.float32)
+        else:
+            alpha_mask = None
+        alpha_masks.append(alpha_mask)
+
+        image = image[:, :, :3]
+        image = IMAGE_TRANSFORMS(image)
+        images.append(image)
+
+    img_tensors = torch.stack(images, dim=0)
+    img_tensors = img_tensors.to(device=vae.device, dtype=vae.dtype)
+
+    with torch.no_grad():
+        latents = vae.encode(img_tensors).latent_dist.sample().to("cpu")
+
+    if flip_aug:
+        img_tensors = torch.flip(img_tensors, dims=[3])
+        with torch.no_grad():
+            flipped_latents = vae.encode(img_tensors).latent_dist.sample().to("cpu")
+    else:
+        flipped_latents = [None] * len(latents)
+
+    for info, latent, flipped_latent, alpha_mask in zip(
+        image_infos, latents, flipped_latents, alpha_masks
+    ):
+        if torch.isnan(latents).any() or (
+            flipped_latent is not None and torch.isnan(flipped_latent).any()
+        ):
+            raise RuntimeError(f"NaN detected in latents: {info.absolute_path}")
+
+        if cache_to_disk:
+            pass
+        else:
+            info.latents = latent
+            if flip_aug:
+                info.latents_flipped = flipped_latent
+            info.alpha_mask = alpha_mask
+
+    # import here to avoid circular dependency at module level
+    from library.datasets.base import HIGH_VRAM
+
+    if not HIGH_VRAM:
+        clean_memory_on_device(vae.device)
+
+
+def save_text_encoder_outputs_to_disk(npz_path, hidden_state1, hidden_state2, pool2):
+    np.savez(
+        npz_path,
+        hidden_state1=hidden_state1.cpu().float().numpy(),
+        hidden_state2=hidden_state2.cpu().float().numpy(),
+        pool2=pool2.cpu().float().numpy(),
+    )
+
+
+def load_text_encoder_outputs_from_disk(npz_path):
+    with np.load(npz_path) as f:
+        hidden_state1 = torch.from_numpy(f["hidden_state1"])
+        hidden_state2 = (
+            torch.from_numpy(f["hidden_state2"]) if "hidden_state2" in f else None
+        )
+        pool2 = torch.from_numpy(f["pool2"]) if "pool2" in f else None
+    return hidden_state1, hidden_state2, pool2
+
+
+def is_disk_cached_latents_is_expected(
+    reso, npz_path: str, flip_aug: bool, alpha_mask: bool
+):
+    expected_latents_size = (reso[1] // 8, reso[0] // 8)
+
+    if not os.path.exists(npz_path):
+        return False
+
+    try:
+        npz = np.load(npz_path)
+        if "latents" not in npz or "original_size" not in npz or "crop_ltrb" not in npz:
+            return False
+        if npz["latents"].shape[1:3] != expected_latents_size:
+            return False
+
+        if flip_aug:
+            if "latents_flipped" not in npz:
+                return False
+            if npz["latents_flipped"].shape[1:3] != expected_latents_size:
+                return False
+
+        if alpha_mask:
+            if "alpha_mask" not in npz:
+                return False
+            if (npz["alpha_mask"].shape[1], npz["alpha_mask"].shape[0]) != reso:
+                return False
+        else:
+            if "alpha_mask" in npz:
+                return False
+    except Exception as e:
+        logger.error(f"Error loading file: {npz_path}")
+        raise e
+
+    return True
+
+
+def glob_images(directory, base="*", recursive: bool = False):
+    img_paths = []
+    if recursive and base == "*":
+        # Walk subfolders. Stems must remain unique across the whole tree
+        # because cache filenames are stem-keyed and live flat in cache_dir.
+        # _assert_unique_stems below enforces this once at the call site.
+        for ext in IMAGE_EXTENSIONS:
+            img_paths.extend(
+                glob.glob(
+                    os.path.join(glob.escape(directory), "**", "*" + ext),
+                    recursive=True,
+                )
+            )
+    else:
+        for ext in IMAGE_EXTENSIONS:
+            if base == "*":
+                img_paths.extend(
+                    glob.glob(os.path.join(glob.escape(directory), base + ext))
+                )
+            else:
+                img_paths.extend(
+                    glob.glob(glob.escape(os.path.join(directory, base + ext)))
+                )
+    img_paths = list(set(img_paths))
+    img_paths.sort()
+    return img_paths
+
+
+def _assert_unique_stems(img_paths, source_label: str = "directory") -> None:
+    """Raise if two image paths share a stem *within the same subfolder*.
+
+    Cache filenames are stem-keyed and the cache layout now mirrors the
+    source-tree subfolder structure, so the collision constraint is local:
+    two ``cover.png`` files in different character folders are fine, but
+    two files with the same stem in the same folder (e.g. ``cover.png`` +
+    ``cover.jpg``) would still overwrite each other's cache.
+    """
+    seen: dict[tuple[str, str], str] = {}
+    collisions: dict[tuple[str, str], list[str]] = {}
+    for p in img_paths:
+        parent = os.path.dirname(p)
+        stem = os.path.splitext(os.path.basename(p))[0]
+        key = (parent, stem)
+        if key in seen:
+            collisions.setdefault(key, [seen[key]]).append(p)
+        else:
+            seen[key] = p
+    if collisions:
+        lines = [
+            f"  stem '{stem}' in {parent}: " + ", ".join(paths)
+            for (parent, stem), paths in sorted(collisions.items())
+        ]
+        raise ValueError(
+            f"Duplicate image stems within a single folder of {source_label}. "
+            f"Cache filenames are stem-keyed; rename one of the colliding "
+            f"files (or move it to a different subfolder).\n" + "\n".join(lines)
+        )
+
+
+def glob_images_pathlib(dir_path, recursive):
+    image_paths = []
+    if recursive:
+        for ext in IMAGE_EXTENSIONS:
+            image_paths += list(dir_path.rglob("*" + ext))
+    else:
+        for ext in IMAGE_EXTENSIONS:
+            image_paths += list(dir_path.glob("*" + ext))
+    image_paths = list(set(image_paths))
+    image_paths.sort()
+    return image_paths
+
+
+class ImageLoadingDataset(torch.utils.data.Dataset):
+    def __init__(self, image_paths):
+        self.images = image_paths
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_path = self.images[idx]
+
+        try:
+            image = Image.open(img_path).convert("RGB")
+            tensor_pil = transforms.functional.pil_to_tensor(image)
+        except Exception:
+            logger.error("Could not load image path")
+            return None
+
+        return (tensor_pil, img_path)
