@@ -1,32 +1,31 @@
 ---
-title: Quick start
-description: Scaffold a config and run your first training job.
+title: 快速开始
+description: 起一份配置并跑出第一次训练。Scaffold a config and run your first training job.
 ---
 
-# Quick start
+# 快速开始
 
-Once LoraHub is installed and a backend is on disk, the path from zero to a
-running job is four commands.
+LoraHub 装完、后端在位之后,从零到一次训练只要四条命令。
 
 ```powershell
-# 1. Scaffold a config
+# 1. 起一份配置
 lorahub init my_character
 
-# 2. Edit configs/my_character.yaml: point at your checkpoint and dataset
+# 2. 编辑 configs/my_character.yaml: 指向你的 checkpoint 和数据集
 notepad configs/my_character.yaml
 
-# 3. Sanity check (no training yet)
+# 3. 干跑校验(不会真训练)
 lorahub validate configs/my_character.yaml
 lorahub info     configs/my_character.yaml
 
-# 4. Train
+# 4. 训练
 lorahub train    configs/my_character.yaml
 ```
 
-## A minimal config
+## 一份最小配置
 
-Configs use camelCase on the wire (the validator still accepts the legacy
-snake_case so old files keep loading):
+YAML wire 用 camelCase(validator 仍兼容旧的 snake_case,老配置不会
+失效):
 
 ```yaml
 schemaVersion: "1.0"
@@ -52,16 +51,16 @@ backend:
   type: kohya
 ```
 
-See [`configs/sdxl_character_8gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/sdxl_character_8gb.yaml)
-for a fully annotated example, and the bundled Anima configs at
+完整带注释的例子见 [`configs/sdxl_character_8gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/sdxl_character_8gb.yaml);
+diffusion-pipe 路径上的 Anima 配置见
 [`configs/anima_style_24gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_style_24gb.yaml)
-and `configs/anima_character_24gb.yaml` for the diffusion-pipe path.
+和 `configs/anima_character_24gb.yaml`。
 
-## Tune to your machine
+## 自动按机器调参
 
-`lorahub init --auto` probes `nvidia-smi` for VRAM, scans your dataset
-directory, detects the architecture from the checkpoint filename, and writes a
-config with rank / batch / grad_accum tuned per VRAM tier:
+`lorahub init --auto` 会探测 `nvidia-smi` 拿到显存,扫数据集目录数图片,
+从 checkpoint 文件名识别架构,然后写一份 rank / batch / grad_accum 按
+显存档位调好的配置:
 
 ```powershell
 lorahub init my_character --auto `
@@ -69,17 +68,44 @@ lorahub init my_character --auto `
     --dataset    .\datasets\my_character
 ```
 
-Use `--vram-mib 8192` to override detection.
+`--vram-mib 8192` 可手动覆盖显存检测。
 
-## What `lorahub info` shows
+## `lorahub info` 显示什么
 
-`lorahub info` is a dry run: it compiles the config to the backend argv it
-would launch (kohya CLI flags, or a diffusion-pipe TOML), prints the entry
-script, and estimates VRAM — without touching the GPU. Useful before a long
-training session.
+`lorahub info` 是 dry-run:把配置编译成将要 launch 的 backend argv
+(kohya CLI flags 或 diffusion-pipe TOML),打印 entry script,估算显存
+峰值,**不动 GPU**。开长跑前过一眼很有用。
 
-## Next
+## 下一步
 
-- [Smoke test](smoke-test.md) — full pipeline from BangumiBase images to a
-  trained LoRA.
-- [Config field reference](../recipes/fields.md) — every knob in the schema.
+- [冒烟测试](smoke-test.md) — 从 BangumiBase 图片到训练好的 LoRA 全流程。
+- [配置字段参考](../recipes/fields.md) — schema 的每一个旋钮。
+
+---
+
+## English
+
+After `pip install` and a backend bootstrap, the path from zero to a
+running job is four commands:
+
+```powershell
+lorahub init my_character
+notepad configs/my_character.yaml
+lorahub validate configs/my_character.yaml
+lorahub info     configs/my_character.yaml
+lorahub train    configs/my_character.yaml
+```
+
+The minimal config above describes a SDXL LoRA training run; YAML on
+the wire is camelCase, and the validator also accepts the legacy
+snake_case so older recipes keep loading.
+
+`lorahub init --auto` autotunes per machine: it probes `nvidia-smi` for
+VRAM, scans the dataset folder, infers the architecture from the
+checkpoint filename, and writes a config with rank / batch /
+grad_accum chosen for the detected VRAM tier. Use `--vram-mib N` to
+override detection.
+
+`lorahub info` is a dry run — it compiles the config to backend argv,
+prints the entry script, and reports an estimated VRAM peak without
+touching the GPU. Run it before a long training session.
