@@ -29,34 +29,40 @@ export function ConfigRow({
           : "border-l-2 border-l-transparent hover:bg-muted/40",
       )}
     >
-      <div className="flex items-center gap-2 mb-1 pr-20 flex-wrap">
+      {/* Line 1: status icon + name only. */}
+      <div className="flex items-center gap-2 pr-20">
         {config.valid ? (
-          <FileCheck2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+          <FileCheck2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
         ) : (
-          <FileWarning className="size-3.5 text-destructive" />
+          <FileWarning className="size-3.5 shrink-0 text-destructive" />
         )}
         <span className="text-sm font-medium truncate">{config.name}</span>
-        {/* Backend badge first — it's the coarsest filter the user is
-            scanning for. Arch goes after as a finer-grain hint. */}
-        {backendBadge && (
-          <Badge
-            variant="outline"
-            className={cn(
-              "rounded-[2px] uppercase text-[10px] tracking-[0.1em]",
-              backendBadge.toneClass,
-            )}
-            title={backendBadge.description}
-          >
-            {backendBadge.label}
-          </Badge>
-        )}
-        {config.arch && (
-          <Badge variant="outline" className="rounded-[2px] uppercase text-[10px] tracking-[0.1em]">
-            {config.arch}
-          </Badge>
-        )}
       </div>
-      <div className="text-xs text-muted-foreground truncate pr-20">
+      {/* Line 2: backend / arch badges on their own line so long names
+          don't get truncated by adjacent badges. Backend badge first
+          (coarsest filter), arch second (finer hint). */}
+      {(backendBadge || config.arch) && (
+        <div className="flex items-center gap-1.5 mt-1 pr-20 flex-wrap">
+          {backendBadge && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "rounded-[2px] uppercase text-[10px] tracking-[0.1em]",
+                backendBadge.toneClass,
+              )}
+              title={backendBadge.description}
+            >
+              {backendBadge.label}
+            </Badge>
+          )}
+          {config.arch && (
+            <Badge variant="outline" className="rounded-[2px] uppercase text-[10px] tracking-[0.1em]">
+              {config.arch}
+            </Badge>
+          )}
+        </div>
+      )}
+      <div className="text-xs text-muted-foreground truncate pr-20 mt-1">
         {config.valid ? config.summary : config.error}
       </div>
       <div
