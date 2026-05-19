@@ -128,8 +128,14 @@ class JobStore:
         unless its PID is still alive on this host. Training subprocesses
         spawned via deepspeed launch can outlive the API process (especially
         when uvicorn is killed without graceful shutdown), so we probe each
-        live job's PID with `os.kill(pid, 0)` first and skip the row if the
-        kernel reports it's still running.
+        live job's PID with `os.kill(pid, 0)` first.
+
+        Reachability matters for resource hygiene too: a training process
+        that survived a uvicorn crash holds GPU memory until it's killed.
+        Once it's been reparented to PID 1 we're never going to talk to it
+        again — we'd just be tracking a zombie that the user can't cancel.
+        Such processes are reaped (SIGKILL the whole pgroup) so their VRAM
+        gets freed before the new lifecycle begins.
 
         Queued jobs are intentionally left alone — they never started, so
         they have no PID and no checkpoint to resume from. The lifespan
@@ -146,12 +152,27 @@ class JobStore:
             ).fetchall()
             stale_ids: list[str] = []
             survivors: list[str] = []
+            reaped_pids: list[int] = []
             for row in rows:
                 pid = row["pid"]
                 if pid is None or not _pid_alive(pid):
                     stale_ids.append(row["id"])
+                    continue
+                # PID alive — but a fresh uvicorn can never re-attach to a
+                # subprocess from the previous run (Popen handle is gone,
+                # the child was reparented to init). Reap the orphan so we
+                # don't leak GPU memory across restarts.
+                if _reap_orphan(pid):
+                    reaped_pids.append(pid)
+                    stale_ids.append(row["id"])
                 else:
                     survivors.append(row["id"])
+            if reaped_pids:
+                print(
+                    f"[store] reaped {len(reaped_pids)} orphan training "
+                    f"process(es) from a previous run: pids={reaped_pids}",
+                    flush=True,
+                )
             if not stale_ids:
                 return 0
             placeholders = ", ".join("?" * len(stale_ids))
@@ -188,6 +209,63 @@ def _pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _reap_orphan(pid: int) -> bool:
+    """SIGKILL ``pid`` and its process group. Returns True on success.
+
+    Used by :meth:`JobStore.mark_orphans_interrupted` at uvicorn startup
+    to release GPU memory held by training subprocesses that outlived the
+    previous API process. We send SIGTERM first for a brief grace window
+    (~3s) so PyTorch / CUDA contexts can flush, then SIGKILL the entire
+    process group.
+    """
+    import os  # noqa: PLC0415
+    import signal  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    if sys.platform == "win32":
+        # Windows: use taskkill /T to walk the process tree.
+        import subprocess  # noqa: PLC0415
+
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        return not _pid_alive(pid)
+
+    # POSIX: prefer the process group so accelerate / deepspeed children
+    # come along for the ride. Falls back to per-PID kills when getpgid
+    # races a final exit.
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+
+    for sig, wait_s in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 1.0)):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            # Different uid — shouldn't happen for our own children, but
+            # bail out rather than spamming a kill loop.
+            return False
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            if not _pid_alive(pid):
+                return True
+            time.sleep(0.1)
+
+    return not _pid_alive(pid)
 
 
 _LIVE_STATES: tuple[JobState, ...] = (

@@ -12,6 +12,7 @@ constructor argument.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -198,28 +199,97 @@ class SubprocessRunner:
         return RunResult(returncode=rc, duration_s=duration)
 
     def stop(self, *, graceful: bool = True, timeout: float = 10.0) -> None:
+        """Stop the training subprocess **and all of its descendants**.
+
+        anima / kohya / diffusion-pipe trainers can fork further workers
+        (accelerate dataloader workers, deepspeed launchers, torch.compile
+        background processes). Killing only ``self._proc`` leaves those
+        children orphaned with ``PPid=1`` — they keep holding multi-GB GPU
+        allocations until the box reboots. We sidestep that by signalling
+        the entire process group (POSIX) or process tree (Windows).
+        """
         with self._lock:
             if self._proc is None or self._proc.poll() is not None:
                 return
             if graceful:
-                self._signal_graceful()
+                self._signal_group_graceful()
                 try:
                     self._proc.wait(timeout=timeout)
                     return
                 except subprocess.TimeoutExpired:
                     pass
-            self._proc.terminate()
+            self._signal_group_terminate()
             try:
                 self._proc.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                self._signal_group_kill()
+                # Reap so wait() returns even if the kernel hasn't fully
+                # cleaned up the descendants yet — the immediate child is
+                # what we own, and SIGKILL on it always works.
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self._proc.wait(timeout=5.0)
 
-    def _signal_graceful(self) -> None:
+    def _signal_group_graceful(self) -> None:
         assert self._proc is not None
         if sys.platform == "win32":
+            # CTRL_BREAK_EVENT is delivered to every process in the
+            # CREATE_NEW_PROCESS_GROUP we created at spawn time.
             self._proc.send_signal(signal.CTRL_BREAK_EVENT)
         else:
-            self._proc.send_signal(signal.SIGINT)
+            # start_new_session=True at spawn means the child became its
+            # own session leader (pgid == pid). killpg fans the signal
+            # out to every descendant in that group.
+            self._killpg(signal.SIGINT)
+
+    def _signal_group_terminate(self) -> None:
+        assert self._proc is not None
+        if sys.platform == "win32":
+            # Windows has no group SIGTERM equivalent; rely on the tree
+            # walker (taskkill /T) to wipe descendants.
+            self._taskkill(force=False)
+        else:
+            self._killpg(signal.SIGTERM)
+
+    def _signal_group_kill(self) -> None:
+        assert self._proc is not None
+        if sys.platform == "win32":
+            self._taskkill(force=True)
+        else:
+            self._killpg(signal.SIGKILL)
+
+    def _killpg(self, sig: int) -> None:
+        """POSIX: signal the spawned child's process group.
+
+        Falls back to ``self._proc.send_signal`` if the pgid lookup races
+        a process exit — that scenario is benign (the child already died).
+        """
+        assert self._proc is not None
+        try:
+            pgid = os.getpgid(self._proc.pid)
+        except ProcessLookupError:
+            return
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            pass
+
+    def _taskkill(self, *, force: bool) -> None:
+        """Windows: walk the process tree via ``taskkill /T``.
+
+        Subprocess.terminate on Windows only signals the immediate child,
+        so accelerate / deepspeed grandchildren survive a Ctrl-C cancel.
+        ``taskkill /T`` recursively walks the parent-child tree and
+        terminates every descendant, which is what we actually want.
+        """
+        assert self._proc is not None
+        args = ["taskkill", "/PID", str(self._proc.pid), "/T"]
+        if force:
+            args.append("/F")
+        try:
+            subprocess.run(args, capture_output=True, check=False, timeout=10)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            # Last-ditch: at least try to flag the immediate child.
+            self._proc.terminate() if not force else self._proc.kill()
 
 
 __all__ = [
