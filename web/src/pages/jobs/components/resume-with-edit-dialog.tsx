@@ -13,7 +13,6 @@ import { Play, X } from "lucide-react"
 import { api, type JobDetail, type ValidationFieldError } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
-import { ScrollArea } from "@/components/ui/scroll-area"
 
 interface ResumeWithEditDialogProps {
   job: JobDetail
@@ -84,13 +83,13 @@ export function ResumeWithEditDialog({
       onClick={onClose}
     >
       <div
-        className="relative flex w-[92vw] max-w-[1200px] max-h-[90vh] flex-col rounded-[6px] border border-border/60 bg-background shadow-2xl"
+        className="relative flex h-[90vh] w-[92vw] max-w-[1200px] flex-col overflow-hidden rounded-[6px] border border-border/60 bg-background shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between border-b border-border/60 px-5 py-3">
+        <header className="flex shrink-0 items-center justify-between border-b border-border/60 px-5 py-3">
           <div>
             <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              编辑配置后续训
+              编辑配置
             </div>
             <div className="text-sm font-mono">{job.id.slice(-8)}</div>
             <p className="mt-1 text-[11px] text-muted-foreground">
@@ -109,20 +108,26 @@ export function ResumeWithEditDialog({
         </header>
 
         {serverError && (
-          <div className="mx-5 mt-3 rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
+          <div className="mx-5 mt-3 shrink-0 rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
             {serverError}
           </div>
         )}
 
-        <ScrollArea className="flex-1 min-h-0 px-5 py-4">
+        {/* Native scroll container — base-ui's ScrollArea wraps the
+            content in a viewport that ignored ``flex-1 min-h-0`` here
+            and let the dialog grow to its content height instead of
+            paging. ``overflow-y-auto`` on the flex item with
+            ``min-h-0`` is the canonical fix that stops the column
+            from expanding past the parent. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
           {draft === null ? (
             <div className="text-sm text-muted-foreground py-6">加载中…</div>
           ) : (
             <ConfigForm value={draft} onChange={setDraft} errors={errors} />
           )}
-        </ScrollArea>
+        </div>
 
-        <footer className="flex items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
           <Button variant="outline" onClick={onClose} disabled={submit.isPending}>
             取消
           </Button>

@@ -396,7 +396,7 @@ export function JobDetail({
                 disabled={busy !== null || !data?.config_snapshot}
                 title="先编辑 lr / dropTokens / 数据集等再续训(权重相关字段会被锁)"
               >
-                <Pencil className="size-3" /> 编辑后续训
+                <Pencil className="size-3" /> 编辑
               </Button>
             </>
           )}
