@@ -1,92 +1,79 @@
 ---
-title: Configs
-description: The TrainingConfig schema is the single semantic description of a LoRA training run.
+title: 配置
+description: TrainingConfig schema 是一次 LoRA 训练的单一语义描述。
 ---
 
-# Configs
+# 配置
 
-A *config* is a single YAML file that fully describes a LoRA training run.
-LoraHub validates the file against the `TrainingConfig` Pydantic model, then
-a backend-specific compiler translates it into the native arguments of the
-chosen training engine (currently kohya-ss/sd-scripts or
-tdrussell/diffusion-pipe).
+一份 *config* 是一个 YAML 文件,描述一次 LoRA 训练的全部输入。LoraHub 用
+`TrainingConfig` Pydantic 模型校验该文件,然后由后端专属编译器把它翻成训练
+引擎的原生参数(目前是 kohya-ss/sd-scripts、tdrussell/diffusion-pipe,以及
+vendored 的 anima_lora)。
 
-The schema's job is to stay **semantic** — users describe *what* they want
-to train, not *how* the backend should be invoked. New backends can plug in
-without changing config files.
+schema 的定位是 **语义层**:用户描述要训什么,而不是怎么调后端。新后端接进
+来不需要改既有 config 文件。
 
-!!! note "Recipe → config rename"
-    Earlier docs and code paths called these files "recipes" and stored
-    them under `recipes/`. The on-disk directory is now `configs/` and the
-    REST endpoints live under `/api/configs`. The Python type is still
-    called `TrainingConfig` (it has always been). The aliases were updated
-    in lockstep — old code paths that still spelt `recipe` survive only as
-    abstract noun in comments and docstrings.
+!!! note "Recipe → config 改名"
+    早期文档与代码把这些文件叫"recipe"、放在 `recipes/`。磁盘目录现在叫
+    `configs/`,REST 端点挂 `/api/configs`。Python 类型仍叫 `TrainingConfig`
+    (一直是)。`recipe` 这个词只作为抽象名词保留在注释里。
 
-## Top-level structure
+## 顶层结构
 
 ```yaml
 schemaVersion: "1.0"
 
-baseModel:        # which checkpoint and architecture
-dataset:          # where the images live, resolution, bucket, captions
-network:          # LoRA / LoCon / LoHa / DoRA shape (rank, alpha, targets)
-optimizer:        # type, learning rates, schedule, warmup
+baseModel:        # 哪份 checkpoint, 什么架构
+dataset:          # 图在哪, 分辨率, bucket, caption
+network:          # LoRA / LoCon / LoHa / DoRA 形状(rank, alpha, target)
+optimizer:        # 类型, 学习率, schedule, warmup
 schedule:         # epochs, batchSize, gradAccum
 precision:        # fp16 / bf16 / fp32
-sampling:         # optional preview images during training
-output:           # filename, save cadence, dtype
-backend:          # which training engine + extra_args escape hatch
-resume:           # optimizer/scheduler state for resume support
+sampling:         # 训练中的 preview(可选)
+output:           # 文件名, 保存节奏, dtype
+backend:          # 训练引擎 + extraArgs 逃生口
+resume:           # resume 用的 optimizer / scheduler 状态
 ```
 
-Every section has tuned defaults aimed at SDXL on 8 GB VRAM, so a minimal
-config only needs `baseModel.checkpoint` and `dataset.source`.
+每段都有 SDXL × 8 GB 显存的默认值,所以最小 config 只需要给
+`baseModel.checkpoint` 与 `dataset.source`。
 
 ## camelCase / snake_case
 
-The Pydantic schema applies a `to_camel` alias generator with
-`populate_by_name=True`, so the validator accepts **either** form. New
-configs emit `camelCase` (matches the front-end form fields and the
-`camelCase` API wire format); legacy `snake_case` configs round-trip cleanly.
+Pydantic schema 用 `to_camel` alias generator + `populate_by_name=True`,
+validator 同时接受两种写法。新配置 emit `camelCase`(对齐前端表单字段与
+camelCase API wire);旧 `snake_case` 配置原样 round-trip。
 
 ```yaml
-# Both forms validate to the same TrainingConfig.
-schemaVersion: "1.0"   # or schema_version
-baseModel:             # or base_model
+# 两种写法都校验为同一个 TrainingConfig
+schemaVersion: "1.0"   # 或 schema_version
+baseModel:             # 或 base_model
   arch: sdxl
   checkpoint: ./model.safetensors
 schedule:
-  batchSize: 2         # or batch_size
-  gradAccum: 2         # or grad_accum
+  batchSize: 2         # 或 batch_size
+  gradAccum: 2         # 或 grad_accum
 ```
 
-Two values stay literal regardless:
+两个值始终保留字面写法:
 
-- `caption.strategy: tag_file` — Literal value, not a field name.
-- `backend.diffusionPipe.modelPaths.transformer_path` /
-  `vae_path` / `llm_path` — keys are passed verbatim to the diffusion-pipe
-  TOML, which expects upstream's snake_case names.
+- `caption.strategy: tag_file` — Literal,不是字段名。
+- `backend.diffusionPipe.modelPaths.transformer_path` / `vae_path` /
+  `llm_path` — key 直接写到 dp TOML,上游用 snake_case。
 
-## How a config becomes a training run
+## 一份 config 怎么变成训练运行
 
-1. **Load** — `load_config(path)` parses YAML, applies defaults, validates
-   types, and returns a `TrainingConfig`.
-2. **Path normalisation** — at job launch every recipe-relative path
-   (checkpoint, vae, archPaths.*, dataset.source, modelPaths.*, init_from,
-   prompts_file, ...) is absolutised against the project root so the
-   training subprocess can find them regardless of which cwd the backend
-   chdirs into.
-3. **Compile** — `compile_config(cfg, workspace)` returns the entry argv
-   plus a dict of files to write into the workspace (`dataset.toml`,
-   diffusion-pipe TOML, sample prompts, ...).
-4. **Launch** — the selected backend spawns the compiled command, parses
-   stdout into `TrainingEvent`s, and persists them to `events.jsonl` next
-   to the checkpoints. SSE / WS streams replay the file on reconnect.
+1. **Load** — `load_config(path)` 解析 YAML、套默认、校验类型,返回
+   `TrainingConfig`。
+2. **路径规范化** — job 启动时把 recipe 内每条相对路径(checkpoint、vae、
+   `archPaths.*`、`dataset.source`、`modelPaths.*`、`init_from`、
+   `prompts_file`)对项目根做绝对化,使训练子进程不论 chdir 到哪儿都能找到。
+3. **Compile** — `compile_config(cfg, workspace)` 返回入口 argv 与一组要写到
+   workspace 的文件(`dataset.toml`、diffusion-pipe TOML、sample prompts 等)。
+4. **Launch** — 选中的后端起子进程,把 stdout 解析成 `TrainingEvent`,持久
+   化到 `events.jsonl`。SSE / WS 流在重连时回放该文件。
 
-## Where to look next
+## 进一步阅读
 
-- [Templates](templates.md) — the built-in starting points and the
-  fill-in placeholders.
-- [Field reference](fields.md) — every knob in the schema, grouped by
-  section.
+- [模板](templates.md) — 内置起步模板与 placeholder 体系。
+- [字段参考](fields.md) — schema 的每一个旋钮,按段分组。

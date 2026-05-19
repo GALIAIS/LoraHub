@@ -1,49 +1,41 @@
-# Image Studio — design doc
+# Image Studio — 设计文档
 
-> Status: design / not yet implemented
-> Owner: LoraHub maintainer (single-user product)
+> Status: 已实现(B7 后路由拆分到 9 个子模块)
+> Owner: LoraHub maintainer(单用户产品)
 > Spec date: 2026-05-17
 
-## 1. Why this page
+## 1. 这页解决什么
 
-LoRA quality is bottlenecked by **dataset quality**. Today LoraHub helps the
-user prepare data through three loosely coupled surfaces — the Datasets page
-(scan + caption preview), wd14 / joytag tagging, and the Sample Gallery
-(post-training previews). None of them gives the user a place to **work on
-the image set itself**: triage duplicates, rate quality, fix bad crops,
-batch-edit captions across 200 images, or ask a VLM to fill in what wd14
-can't see.
+LoRA 质量瓶颈在 **数据集质量**。LoraHub 当前在三个相对独立的页面上处理数据
+准备:Datasets(扫目录 + caption 预览)、wd14 / joytag 自动打标、Sample
+Gallery(训练后的预览)。三者都没有给用户一个直接 **对图集本身做工** 的位
+置 — 排重、评分、修裁切、批量改 200 张图的 caption,或让 VLM 补 wd14 看不
+到的细节。
 
-The Image Studio fills that gap. It is a single, image-first workbench
-where the user opens a folder of training images and stays until the
-folder is "training ready". Every action either edits the dataset on
-disk or annotates it with metadata stored in `runs/image_studio.sqlite`.
+Image Studio 填这个空。它是一个图先行的工作台:用户打开一个训练用图目录,
+直到目录"训练就绪"才离开。每个动作要么改磁盘上的数据集,要么写入元数据到
+`runs/image_studio.sqlite`。
 
-This page is **the most important AI-touch surface in LoraHub** because:
+为什么这是 LoraHub 中最重要的 AI-touch 面:
 
-- VLM captioning is far higher-value than wd14 for natural-language
-  prompted models (Anima, FLUX, Wan).
-- Quality scoring + composition descriptions cut hours of manual triage
-  on a 300-image set into minutes.
-- Most users won't open a separate image editor. If we don't give them
-  edit + caption + AI-enrich in one place, they drop the project.
+- 对自然语言驱动的模型(Anima、FLUX、Wan),VLM caption 价值高于 wd14。
+- 画质评分 + 构图描述把 300 张图的人工排查从数小时缩到数分钟。
+- 多数用户不会切到外置图片编辑器。如果不在这一处把"编辑 + caption + AI 增
+  强"凑齐,项目通常被搁置。
 
-## 2. Out of scope
+## 2. 不做什么
 
-Things the Image Studio explicitly does **not** do, to keep this from
-ballooning into Photoshop-clone territory:
+为避免 image-studio 长成 Photoshop 克隆,以下功能明确不做:
 
-- Pixel painting / inpainting masks. (We expose ratio crop + simple
-  brightness/contrast/saturation; anything heavier the user does in
-  their preferred image editor.)
-- Multi-format conversion beyond `bmp/gif/jpg/jpeg/png/webp`. AVIF / HEIC
-  arrive only when needed.
-- Multi-user concurrent edit. LoraHub is single-user.
-- Cloud sync. Files stay where the user put them.
-- Generative img2img / outpainting. Feature 100% out — we don't run
-  inference servers, that's ComfyUI's job.
+- 像素级绘制 / inpainting mask。(支持比例裁切 + 简单亮度 / 对比度 / 饱
+  和度;更重的活让用户在自己惯用的图片编辑器里完成。)
+- 超出 `bmp/gif/jpg/jpeg/png/webp` 的多格式转换。AVIF / HEIC 按需再加。
+- 多用户并发编辑。LoraHub 是单用户。
+- 云同步。文件留在用户放置的位置。
+- 生成式 img2img / outpainting。明确不做 — 不跑推理服务,这是 ComfyUI
+  的事。
 
-## 3. Where it sits in the IA
+## 3. 在 IA 中的位置
 
 ```
 sidebar:
@@ -51,57 +43,50 @@ sidebar:
   训练任务 (jobs)
   超参 sweep
   训练配置 (configs)
-  数据集 (datasets)              ← stays as a thin scan-and-go entry
-  图像工作台 (image-studio) NEW  ← deep editor
+  数据集 (datasets)              ← 保留为薄薄的扫一眼即走入口
+  图像工作台 (image-studio) NEW  ← 深度编辑器
   样图画廊 (gallery)
   设置 / 关于
 ```
 
-The **数据集** page keeps its current shape — paste a path, see a flat
-sample grid, jump to training. It's the index. Clicking any image's
-"打开工作台" button (or the dataset card-level "进入工作台" button) opens
-that folder in **图像工作台**. The image-studio page is the editor.
+**数据集** 页保持原状 — 粘路径、看扁平网格、跳到训练。它是索引。任何图片的
+"打开工作台"按钮(或数据集卡片级"进入工作台"按钮)把目录交给 **图像工作
+台**。image-studio 是编辑器。
 
-The Sample Gallery (`/gallery`) is unaffected — that's training output,
-not training input.
+Sample Gallery(`/gallery`)不受影响 — 那是训练输出,不是输入。
 
-## 4. Information architecture
+## 4. 信息架构
 
-Image Studio is a single page (`/image-studio`) with a **path-state URL**:
+Image Studio 是单页(`/image-studio`),URL 携带路径状态:
 
 ```
 /image-studio?path=<encoded-dir>&recursive=0&page=1
 ```
 
-Layout is a three-column shell:
+三栏布局:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ Toolbar: path bar + recursive + filter chips + AI batch actions    │
+│ Toolbar: 路径栏 + 递归 + 过滤 chip + AI 批操作                     │
 ├──────────┬──────────────────────────────────────────┬───────────────┤
-│  filters │  image grid (virtualized)                │  inspector    │
-│   panel  │                                          │  (selected    │
-│          │                                          │   image)      │
+│  filters │  image grid (虚拟化)                     │  inspector    │
+│   panel  │                                          │  (选中图)     │
 └──────────┴──────────────────────────────────────────┴───────────────┘
 ```
 
-- **Toolbar**: same `PathBar` we already have, recursive switch, count
-  badge, "+ 选区" multi-select toggle, and a "AI" dropdown (bulk caption,
-  bulk score, bulk dedupe-suggest, bulk trigger-word suggest).
-- **Filters panel** (left, 14rem): caption coverage chip (有 / 缺), AI
-  quality bucket chips (优 / 中 / 差 / 未评), tag filter (multi-select
-  from observed tags), aspect-ratio chip (横 / 竖 / 方), duplicate-cluster
-  chip, file-size + resolution sliders, date range.
-- **Image grid** (centre, virtualized, supports keyboard nav j/k, x to
-  toggle select, e to edit caption, q to score, del to soft-delete).
-- **Inspector** (right, 22rem): full preview, EXIF / shape / size,
-  caption editor with diff vs AI suggestion, tag chips with weights,
-  AI panel (run on this image / show last result), action buttons
-  (rotate 90, flip H, crop ratio, replace, soft-delete).
+- **Toolbar**:沿用现有 `PathBar`、递归开关、计数 badge、"+ 选区"多选切
+  换、"AI"下拉(批量 caption / 评分 / 重复建议 / trigger 词建议)。
+- **过滤面板**(左 14rem):caption 覆盖 chip(有 / 缺)、AI 画质桶 chip
+  (优 / 中 / 差 / 未评)、tag 多选(从已观测 tag)、纵横比 chip(横 /
+  竖 / 方)、重复簇 chip、文件大小 + 分辨率 slider、日期范围。
+- **图片网格**(中,虚拟化,支持 j/k 键移动、x 切换选中、e 编辑 caption、
+  q 评分、del 软删)。
+- **Inspector**(右 22rem):整图、EXIF / 尺寸,caption 编辑器(对比 AI
+  建议)、带权 tag chip、AI 面板(对当前图运行 / 显示上次结果)、动作按
+  钮(旋转 90、水平翻转、比例裁切、替换、软删)。
 
-A **second tab** within the page — `/image-studio?view=clusters` —
-shows duplicate clusters in horizontal carousels with a per-cluster
-"keep this one" radio.
+第二个 tab — `/image-studio?view=clusters` — 把重复簇排成横向 carousel,
+每簇一个"留这个"radio。
 
 ## 5. State model
 
