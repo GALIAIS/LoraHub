@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ------------------------------------------------------------------
+# LoRaHub - Full environment installer (Linux)
+#
+# Installs EVERYTHING into the project directory:
+#   1. uv -> .tools/uv/
+#   2. Python 3.12 -> .tools/python/
+#   3. Virtual environment -> .venv/
+#   4. Python dependencies (lorahub[api,dev])
+#   5. Node.js portable -> .node/
+#   6. Frontend dependencies (npm install)
+#
+# No pre-existing Python/Node/uv needed. Fully self-contained.
+# After completion, use scripts/run.sh to start.
+# ------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$ROOT"
+
+TOOLS_DIR="$ROOT/.tools"
+UV_DIR="$TOOLS_DIR/uv"
+PY_DIR="$TOOLS_DIR/python"
+NODE_DIR="$ROOT/.node"
+
+echo ""
+echo "============================================================"
+echo "  LoRaHub Environment Installer (Linux)"
+echo "============================================================"
+echo "  Project: $ROOT"
+echo "  Tools:   $TOOLS_DIR"
+echo ""
+
+# ---- [1/6] Install uv locally ---------------------------------------
+echo "[1/6] Installing uv ..."
+if [ -f "$UV_DIR/uv" ]; then
+    echo "  OK uv already installed"
+else
+    mkdir -p "$UV_DIR"
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  UV_ARCH="x86_64-unknown-linux-gnu" ;;
+        aarch64) UV_ARCH="aarch64-unknown-linux-gnu" ;;
+        *)       echo "  [ERROR] Unsupported architecture: $ARCH"; exit 1 ;;
+    esac
+    curl -LsSf "https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz" \
+        -o "$UV_DIR/uv.tar.gz"
+    tar -xzf "$UV_DIR/uv.tar.gz" -C "$UV_DIR" --strip-components=1
+    rm -f "$UV_DIR/uv.tar.gz"
+    if [ ! -f "$UV_DIR/uv" ]; then
+        echo "  [ERROR] uv binary not found after extraction."
+        exit 1
+    fi
+    chmod +x "$UV_DIR/uv"
+    echo "  OK uv downloaded"
+fi
+UV="$UV_DIR/uv"
+export PATH="$UV_DIR:$PATH"
+echo "  $($UV --version)"
+echo ""
+
+# ---- [2/6] Install Python 3.12 locally ------------------------------
+echo "[2/6] Installing Python 3.12 ..."
+if find "$PY_DIR" -name "python3.12" -type f 2>/dev/null | grep -q .; then
+    echo "  OK Python already installed"
+else
+    mkdir -p "$PY_DIR"
+    "$UV" python install 3.12 --install-dir "$PY_DIR"
+    echo "  OK Python 3.12 installed"
+fi
+# Find the python executable
+PY_EXE=$(find "$PY_DIR" -name "python3.12" -type f 2>/dev/null | head -1)
+if [ -z "$PY_EXE" ]; then
+    PY_EXE=$(find "$PY_DIR" -name "python3" -type f 2>/dev/null | head -1)
+fi
+if [ -z "$PY_EXE" ]; then
+    PY_EXE=$(find "$PY_DIR" -name "python" -type f 2>/dev/null | head -1)
+fi
+if [ -z "$PY_EXE" ]; then
+    echo "  [ERROR] python executable not found in $PY_DIR"
+    exit 1
+fi
+echo "  Python: $PY_EXE"
+echo ""
+
+# ---- [3/6] Create virtual environment -------------------------------
+echo "[3/6] Creating virtual environment .venv ..."
+if [ -f ".venv/bin/python" ]; then
+    echo "  OK .venv already exists"
+else
+    "$UV" venv .venv --python "$PY_EXE"
+    echo "  OK .venv created"
+fi
+VENV_PY="$ROOT/.venv/bin/python"
+echo ""
+
+# ---- [4/6] Install Python dependencies ------------------------------
+echo "[4/6] Installing Python dependencies ..."
+"$UV" pip install -e ".[api,dev]" --python "$VENV_PY"
+echo "  OK Python dependencies installed"
+echo ""
+
+# ---- [5/6] Install Node.js locally ----------------------------------
+echo "[5/6] Installing Node.js ..."
+if [ -f "$NODE_DIR/bin/node" ]; then
+    export PATH="$NODE_DIR/bin:$PATH"
+    echo "  OK Node.js already installed (portable)"
+elif command -v node &>/dev/null; then
+    echo "  OK Node.js $(node --version) (system)"
+else
+    echo "  Downloading portable Node.js 20 ..."
+    mkdir -p "$NODE_DIR"
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  NODE_ARCH="x64" ;;
+        aarch64) NODE_ARCH="arm64" ;;
+        armv7l)  NODE_ARCH="armv7l" ;;
+        *)       echo "  [ERROR] Unsupported architecture: $ARCH"; exit 1 ;;
+    esac
+    NODE_VER="v20.18.1"
+    NODE_TAR="node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
+    curl -LsSf "https://nodejs.org/dist/${NODE_VER}/${NODE_TAR}" -o "$NODE_DIR/$NODE_TAR"
+    tar -xf "$NODE_DIR/$NODE_TAR" -C "$NODE_DIR" --strip-components=1
+    rm -f "$NODE_DIR/$NODE_TAR"
+    if [ ! -f "$NODE_DIR/bin/node" ]; then
+        echo "  [ERROR] node not found after extraction."
+        exit 1
+    fi
+    export PATH="$NODE_DIR/bin:$PATH"
+    echo "  OK Node.js downloaded"
+fi
+echo "  Node.js $(node --version)"
+echo ""
+
+# ---- [6/6] Install frontend dependencies ----------------------------
+echo "[6/6] Installing frontend dependencies (web/) ..."
+if [ -d "web/node_modules/vite" ]; then
+    echo "  OK web/node_modules already exists"
+else
+    cd web
+    npm install
+    cd "$ROOT"
+    echo "  OK Frontend dependencies installed"
+fi
+echo ""
+
+echo "============================================================"
+echo "  Installation Complete"
+echo "============================================================"
+echo ""
+echo "  All tools installed locally:"
+echo "    uv:      .tools/uv/"
+echo "    Python:  .tools/python/"
+echo "    Node.js: .node/"
+echo "    venv:    .venv/"
+echo ""
+echo "  To start LoRaHub:"
+echo "    scripts/run.sh              (dev mode: API + Vite HMR)"
+echo "    scripts/run.sh prod         (production: API + built SPA)"
+echo ""

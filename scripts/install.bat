@@ -1,0 +1,223 @@
+@echo off
+chcp 65001 >nul 2>&1
+setlocal enabledelayedexpansion
+
+rem ----------------------------------------------------------------
+rem LoRaHub - One-click environment installer (Windows)
+rem
+rem Installs EVERYTHING into the project directory:
+rem   1. uv -> .tools\uv\
+rem   2. Python 3.12 -> .tools\python\
+rem   3. Virtual environment -> .venv\
+rem   4. Python dependencies (lorahub[api,dev])
+rem   5. Node.js portable -> .node\
+rem   6. Frontend dependencies (npm install)
+rem
+rem No pre-existing Python/Node/uv needed. Fully self-contained.
+rem After completion, use scripts\run.bat to start.
+rem ----------------------------------------------------------------
+
+set "SCRIPT_DIR=%~dp0"
+set "ROOT=%SCRIPT_DIR%.."
+pushd "%ROOT%" || (
+  echo [ERROR] Cannot cd to project root: %ROOT%
+  goto :fail_pause
+)
+
+set "TOOLS_DIR=%CD%\.tools"
+set "UV_DIR=%TOOLS_DIR%\uv"
+set "PY_DIR=%TOOLS_DIR%\python"
+set "NODE_DIR=%CD%\.node"
+
+echo.
+echo ============================================================
+echo   LoRaHub Environment Installer
+echo ============================================================
+echo   Project: %CD%
+echo   Tools:   %TOOLS_DIR%
+echo.
+
+rem ---- [1/6] Install uv locally -------------------------------------
+echo [1/6] Installing uv ...
+if exist "%UV_DIR%\uv.exe" (
+  echo   OK uv already installed
+) else (
+  if not exist "%UV_DIR%" mkdir "%UV_DIR%"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile '%UV_DIR%\uv.zip'"
+  if errorlevel 1 (
+    echo   [ERROR] Failed to download uv.
+    goto :fail
+  )
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%UV_DIR%\uv.zip' -DestinationPath '%UV_DIR%' -Force"
+  if errorlevel 1 (
+    echo   [ERROR] Failed to extract uv.
+    goto :fail
+  )
+  rem uv zip extracts into a subdirectory, move files up
+  for /d %%d in ("%UV_DIR%\uv-*") do (
+    move /Y "%%d\uv.exe" "%UV_DIR%\" >nul 2>&1
+    move /Y "%%d\uvx.exe" "%UV_DIR%\" >nul 2>&1
+    rd /s /q "%%d" 2>nul
+  )
+  del "%UV_DIR%\uv.zip" 2>nul
+  if not exist "%UV_DIR%\uv.exe" (
+    echo   [ERROR] uv.exe not found after extraction.
+    goto :fail
+  )
+  echo   OK uv downloaded
+)
+set "UV=%UV_DIR%\uv.exe"
+set "PATH=%UV_DIR%;%PATH%"
+for /f "delims=" %%v in ('"%UV%" --version 2^>nul') do set "UV_VER=%%v"
+echo   %UV_VER%
+echo.
+
+rem ---- [2/6] Install Python 3.12 locally ----------------------------
+echo [2/6] Installing Python 3.12 ...
+if exist "%PY_DIR%\python.exe" (
+  echo   OK Python already installed
+) else (
+  if not exist "%PY_DIR%" mkdir "%PY_DIR%"
+  "%UV%" python install 3.12 --install-dir "%PY_DIR%"
+  if errorlevel 1 (
+    echo   [ERROR] Failed to install Python 3.12.
+    goto :fail
+  )
+  echo   OK Python 3.12 installed
+)
+rem Find the actual python.exe (may be in a subdirectory)
+set "PY_EXE="
+if exist "%PY_DIR%\python.exe" (
+  set "PY_EXE=%PY_DIR%\python.exe"
+) else (
+  for /r "%PY_DIR%" %%f in (python.exe) do (
+    if not defined PY_EXE set "PY_EXE=%%f"
+  )
+)
+if not defined PY_EXE (
+  echo   [ERROR] python.exe not found in %PY_DIR%
+  goto :fail
+)
+echo   Python: %PY_EXE%
+echo.
+
+rem ---- [3/6] Create virtual environment -----------------------------
+echo [3/6] Creating virtual environment .venv ...
+if exist ".venv\Scripts\python.exe" (
+  echo   OK .venv already exists
+) else (
+  "%UV%" venv .venv --python "%PY_EXE%"
+  if errorlevel 1 (
+    echo   [ERROR] Failed to create venv.
+    goto :fail
+  )
+  echo   OK .venv created
+)
+set "VENV_PY=%CD%\.venv\Scripts\python.exe"
+echo.
+
+rem ---- [4/6] Install Python dependencies ----------------------------
+echo [4/6] Installing Python dependencies ...
+"%UV%" pip install -e ".[api,dev]" --python "%VENV_PY%"
+if errorlevel 1 (
+  echo   [ERROR] pip install failed.
+  echo   Try with mirror: "%UV%" pip install -e ".[api,dev]" --python "%VENV_PY%" --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+  goto :fail
+)
+echo   OK Python dependencies installed
+echo.
+
+rem ---- [5/6] Install Node.js locally --------------------------------
+echo [5/6] Installing Node.js ...
+where node >nul 2>&1 && (
+  for /f "delims=" %%v in ('node --version 2^>nul') do set "NODE_VER=%%v"
+  echo   OK Node.js !NODE_VER! (system)
+  goto :node_done
+)
+if exist "%NODE_DIR%\node.exe" (
+  set "PATH=%NODE_DIR%;!PATH!"
+  echo   OK Node.js already installed (portable)
+  goto :node_done
+)
+echo   Downloading portable Node.js 20 ...
+if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
+if errorlevel 1 (
+  echo   [ERROR] Failed to download Node.js.
+  goto :fail
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%NODE_DIR%\node.zip' -DestinationPath '%NODE_DIR%' -Force"
+if errorlevel 1 (
+  echo   [ERROR] Failed to extract Node.js.
+  goto :fail
+)
+rem Flatten: move contents from node-v20.18.1-win-x64\ up to .node\
+for /d %%d in ("%NODE_DIR%\node-v*") do (
+  xcopy /E /Y /Q "%%d\*" "%NODE_DIR%\" >nul
+  rd /s /q "%%d"
+)
+del "%NODE_DIR%\node.zip" 2>nul
+if not exist "%NODE_DIR%\node.exe" (
+  echo   [ERROR] node.exe not found after extraction.
+  goto :fail
+)
+set "PATH=%NODE_DIR%;!PATH!"
+echo   OK Node.js downloaded
+:node_done
+for /f "delims=" %%v in ('node --version 2^>nul') do set "NODE_VER=%%v"
+echo   Node.js %NODE_VER%
+echo.
+
+rem ---- [6/6] Install frontend dependencies --------------------------
+echo [6/6] Installing frontend dependencies (web/) ...
+if exist "web\node_modules\vite" (
+  echo   OK web\node_modules already exists
+) else (
+  pushd "web" || (
+    echo   [ERROR] Cannot enter web directory
+    goto :fail
+  )
+  call npm.cmd install
+  set "NPM_RC=!errorlevel!"
+  popd
+  if not "!NPM_RC!"=="0" (
+    echo   [ERROR] npm install failed.
+    echo   Try: cd web ^&^& npm install --registry=https://registry.npmmirror.com
+    goto :fail
+  )
+  echo   OK Frontend dependencies installed
+)
+echo.
+
+echo ============================================================
+echo   Installation Complete
+echo ============================================================
+echo.
+echo   All tools installed locally:
+echo     uv:      .tools\uv\
+echo     Python:  .tools\python\
+echo     Node.js: .node\
+echo     venv:    .venv\
+echo.
+echo   To start LoRaHub:
+echo     scripts\run.bat              (dev mode: API + Vite HMR)
+echo     scripts\run.bat prod         (production: API + built SPA)
+echo.
+
+popd
+endlocal
+echo Press any key to exit ...
+pause >nul
+exit /b 0
+
+:fail
+popd
+:fail_pause
+echo.
+echo ============================================================
+echo   Installation Aborted
+echo ============================================================
+endlocal
+echo Press any key to exit ...
+pause >nul
+exit /b 1

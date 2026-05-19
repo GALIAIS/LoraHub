@@ -60,6 +60,12 @@ function Write-Info($msg) { Write-Host "[lorahub] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[lorahub] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "[lorahub] $msg" -ForegroundColor Red }
 
+# --- Add project-local tools to PATH ------------------------------------
+$localUv = Join-Path $Root '.tools\uv'
+if (Test-Path $localUv) { $env:PATH = "$localUv;$env:PATH" }
+$localNode = Join-Path $Root '.node'
+if (Test-Path (Join-Path $localNode 'node.exe')) { $env:PATH = "$localNode;$env:PATH" }
+
 # --- Python --------------------------------------------------------------
 function Resolve-Python {
   $venvWin = Join-Path $Root '.venv\Scripts\python.exe'

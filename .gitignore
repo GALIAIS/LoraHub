@@ -31,6 +31,10 @@ env/
 ENV/
 .python-version
 
+# Project-local tools (installed by scripts/install.bat|sh)
+.tools/
+.node/
+
 # Backend-specific vendored venvs (auto-bootstrapped)
 .lorahub/
 backends_venvs/
