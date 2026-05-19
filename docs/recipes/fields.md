@@ -119,7 +119,7 @@ description: TrainingConfig schema 的每个字段,按段分组。
 | `pythonExecutable` | `Path \| None` | `None` | 覆盖 kohya / dp / anima_lora 的 venv Python。 |
 | `extraArgs` | `dict[str, Any]` | `{}` | 后端 CLI flag 的逃生口。 |
 | `diffusionPipe` | `DiffusionPipeOptions \| None` | `None` | dp 专属(见下)。kohya 忽略。 |
-| `animaLora` | `AnimaLoraOptions \| None` | `None` | anima_lora 专属(见 `anima-lora-integration.md`)。kohya / dp 忽略。 |
+| `animaLora` | `AnimaLoraOptions \| None` | `None` | anima_lora 专属（见下）。kohya / dp 忽略。 |
 
 ## `backend.diffusionPipe`
 
@@ -148,9 +148,7 @@ description: TrainingConfig schema 的每个字段,按段分组。
 
 ## `backend.animaLora`
 
-仅在 `backend.type == "anima_lora"` 时消费。完整字段表(method / preset 枚
-举、network / optim / 缓存 / 注意力 / offload / 验证段,以及五个 method
-的子配置 discriminated union)见 [`anima-lora-integration.md`](../anima-lora-integration.md)。
+仅在 `backend.type == "anima_lora"` 时消费。完整字段表（method / preset 枚举、network / optim / 缓存 / 注意力 / offload / 验证段，以及五个 method 的子配置 discriminated union）由 [`AnimaLoraOptions`](https://github.com/GALIAIS/LoraHub/blob/main/lorahub/core/config/schema.py) 定义。
 
 简而言之:
 
