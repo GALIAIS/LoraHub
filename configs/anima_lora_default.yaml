@@ -16,19 +16,21 @@ schemaVersion: "1.0"
 
 baseModel:
   arch: anima
-  # 上游 base.toml 的三个模型路径(相对 anima_lora/ 项目根)
-  checkpoint: ./external/anima_lora/models/diffusion_models/anima-base-v1.0.safetensors
+  # 与 kohya / diffusion-pipe 模板共用的 LoraHub 项目根 ./models/ 路径
+  # (与 anima_character_24gb.yaml / anima_character_8gb.yaml 同款)。
+  # 用户切后端不必重下模型 — 三个权重统一由项目根 ./models/ 提供。
+  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
   archPaths:
-    qwen3: ./external/anima_lora/models/text_encoders/qwen_3_06b_base.safetensors
-    ae: ./external/anima_lora/models/vae/qwen_image_vae.safetensors
+    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
 
-# 数据集 — 上游 base.toml 用 image_dataset/ 作为源,post_image_dataset/lora 作
-# 为缓存。上游内部由 train.py 自己读 base.toml 的 source_image_dir /
-# resized_image_dir / lora_cache_dir,LoraHub schema 这边 dataset.source 应该
-# 指向已经 preprocessed 完的 cache 目录(post_image_dataset/lora)。
-# 训练前必须先在 anima_lora 项目根跑 `make preprocess` 生成 cache。
+# 数据集 — 与 kohya / dp 一致:source 指向**原始图片目录**(.jpg + 同名 .txt)。
+# LoraHub 的 anima_lora 后端在 launch 时会自动检测 cache 是否齐全,缺则调
+# external/anima_lora/preprocess/ 里的 resize_images.py / cache_latents.py /
+# cache_text_embeddings.py 写到 <workspace>/post_image_dataset/lora/。
+# 用户不需要手动 `make preprocess`,也不需要把 source 指向 cache 目录。
 dataset:
-  source: ./external/anima_lora/post_image_dataset/lora
+  source: ./datasets/your_dataset
   resolution: [1024, 1024]
   bucket:
     enabled: true

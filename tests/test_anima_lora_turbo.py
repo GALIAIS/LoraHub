@@ -37,6 +37,14 @@ def _recipe(tmp_path: Path, *, with_turbo: bool) -> TrainingConfig:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
+    # Drop a dummy image + matching TE cache so the auto-preprocess
+    # short-circuits ("everything cached"); these turbo tests only care
+    # about runner / argv selection, not the preprocess wiring.
+    (data / "img1.jpg").write_bytes(b"")
+    (data / "img1.txt").write_text("a tag", encoding="utf-8")
+    cache = tmp_path / "ws" / "post_image_dataset" / "lora"
+    cache.mkdir(parents=True)
+    (cache / "img1_anima_te.safetensors").write_bytes(b"")
     anima_lora_payload: dict = {}
     if with_turbo:
         anima_lora_payload["turbo"] = {}

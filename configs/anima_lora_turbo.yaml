@@ -15,10 +15,11 @@ baseModel:
   checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
   archPaths:
     ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
 
-# turbo 用 LoRA 蒸馏路径,数据集仍用 LoRA pipeline 的 cache。这里 source
-# 应该指向已经 preprocessed 的 cache 目录,而不是原始 image_dataset。
+# turbo 用 LoRA 蒸馏路径 — 与 kohya / dp 一致,source 始终是**原始图片目录**。
+# LoraHub 的 anima_lora 后端在 launch 时会自动跑 preprocess 把 cache 写到
+# <workspace>/post_image_dataset/lora/,turbo 训练 spawn 前再用同一份 cache。
 dataset:
   source: ./datasets/your_dataset
   resolution: [1024, 1024]

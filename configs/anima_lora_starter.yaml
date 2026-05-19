@@ -18,14 +18,19 @@ schemaVersion: "1.0"
 
 baseModel:
   arch: anima
-  # DiT 主权重
+  # DiT 主权重 — 与 kohya / dp 模板共用的 ./models/ 单一真相源
   checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
   archPaths:
     # QwenImage VAE
     ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-    # Qwen3 文本编码器目录
-    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+    # Qwen3 文本编码器
+    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
 
+# 数据集 — 形状与 kohya / dp 一致,source 始终指向**原始图片目录**。
+# LoraHub 的 anima_lora 后端在 launch 时会检查
+# <workspace>/post_image_dataset/lora/ 里的 cache 是否齐全,缺则自动调
+# external/anima_lora/preprocess/ 完成 resize → VAE latent → TE embedding
+# 全套 cache 后再 spawn train.py。
 dataset:
   source: ./datasets/your_dataset
   resolution: [1024, 1024]

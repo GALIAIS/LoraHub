@@ -189,6 +189,14 @@ def _recipe(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
+    # Drop a dummy image + matching TE cache so the auto-preprocess
+    # short-circuits ("everything cached") and tests can focus on
+    # validate / launch shape without spawning preprocess subprocesses.
+    (data / "img1.jpg").write_bytes(b"")
+    (data / "img1.txt").write_text("a tag", encoding="utf-8")
+    cache = tmp_path / "ws" / "post_image_dataset" / "lora"
+    cache.mkdir(parents=True)
+    (cache / "img1_anima_te.safetensors").write_bytes(b"")
     backend = {"type": "anima_lora", "animaLora": {}}
     backend.update(backend_extras)
     return TrainingConfig.model_validate(

@@ -197,7 +197,15 @@ def compile_config(
     # Layer 2: shared overrides (apply to every method).
     argv += _shared_overrides(cfg, opts, output_dir)
 
-    # Layer 3: method-specific sub-config overrides.
+    # Layer 3: dataset path overrides — pin source / resized / cache to
+    # absolute paths under the LoraHub workspace so anima_lora's own
+    # ``base.toml`` defaults (which are relative to the vendored repo
+    # root) are bypassed. ``cfg.dataset.source`` is the user-facing
+    # raw image dir (same shape kohya / dp use), and the resized + cache
+    # dirs are LoraHub-managed under the workspace.
+    argv += _dataset_path_overrides(cfg, workspace)
+
+    # Layer 4: method-specific sub-config overrides.
     argv += _method_overrides(opts)
 
     # Files: nothing. Upstream's config chain is untouched.
@@ -427,6 +435,42 @@ def _shared_overrides(
     return out
 
 
+def _dataset_path_overrides(
+    cfg: TrainingConfig,
+    workspace: Path,
+) -> list[str]:
+    """Pin upstream's three dataset path keys to LoraHub-managed absolute paths.
+
+    anima_lora's ``configs/base.toml`` declares three top-level scalars
+    (``source_image_dir`` / ``resized_image_dir`` / ``lora_cache_dir``) that
+    its dataset blueprint reads via ``{...}`` template substitution. Without
+    overrides those resolve **relative to the anima_lora repo root** (we set
+    ``cwd=external/anima_lora/`` for the trainer), which is fine for
+    upstream's ``make preprocess`` workflow but inconsistent with kohya / dp
+    where ``cfg.dataset.source`` always points at a project-rooted raw image
+    directory.
+
+    Emitting ``--source_image_dir`` / ``--resized_image_dir`` /
+    ``--lora_cache_dir`` as absolute paths makes the convention identical
+    across all three backends:
+
+    - ``cfg.dataset.source`` → raw images + ``.txt`` captions (user-supplied)
+    - ``<workspace>/post_image_dataset/resized`` → VAE-aligned PNGs
+      (LoraHub-managed, written by the auto-preprocess step in
+      :mod:`lorahub.core.backends.anima_lora.preprocess`)
+    - ``<workspace>/post_image_dataset/lora`` → VAE / TE / LLM-adapter caches
+      (LoraHub-managed, written by the auto-preprocess step)
+    """
+    return [
+        "--source_image_dir",
+        str(cfg.dataset.source.resolve()),
+        "--resized_image_dir",
+        str((workspace / "post_image_dataset" / "resized").resolve()),
+        "--lora_cache_dir",
+        str((workspace / "post_image_dataset" / "lora").resolve()),
+    ]
+
+
 def _method_overrides(opts: AnimaLoraOptions) -> list[str]:
     """Method-specific CLI overrides — only the selected method's sub-config.
 
@@ -606,10 +650,16 @@ def compile_turbo_config(
     if bm.checkpoint:
         argv += ["--dit_path", str(bm.checkpoint)]
     # Upstream's `data_dir` points at the LoRA cache folder
-    # (post_image_dataset/lora). We use cfg.dataset.source — the user is
-    # expected to have run ``make preprocess`` against image_dataset/
-    # already, just like the regular training path.
-    argv += ["--data_dir", str(cfg.dataset.source)]
+    # (post_image_dataset/lora). With LoraHub's auto-preprocess flow,
+    # the cache is written under the workspace at
+    # ``<workspace>/post_image_dataset/lora`` regardless of where
+    # ``cfg.dataset.source`` (the raw images) lives. cfg.dataset.source
+    # itself stays the user-facing raw image dir for shape parity with
+    # kohya / dp recipes.
+    argv += [
+        "--data_dir",
+        str((workspace / "post_image_dataset" / "lora").resolve()),
+    ]
     argv += ["--output_dir", str(output_dir)]
     argv += ["--output_name", opts.output_name]
     argv += ["--iterations", str(turbo.iterations)]

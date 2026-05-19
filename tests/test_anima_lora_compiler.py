@@ -323,3 +323,36 @@ def test_attn_mode_default_is_flash(tmp_path: Path) -> None:
     argv, _ = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv)
     assert pairs["--attn_mode"] == ["flash"]
+
+
+# --------------------------------------------------------------------------- #
+# Dataset path overrides — kohya / dp parity (cfg.dataset.source = raw images)
+# --------------------------------------------------------------------------- #
+
+
+def test_compile_emits_source_resized_lora_cache_paths(tmp_path: Path) -> None:
+    """The compiler pins source / resized / cache to absolute LoraHub paths.
+
+    cfg.dataset.source is the user-facing raw image directory (kohya /
+    dp parity); the resized + cache dirs are LoraHub-managed under
+    ``<workspace>/post_image_dataset/{resized,lora}``. All three must
+    surface on argv as absolute paths so anima_lora's own
+    ``configs/base.toml`` defaults (relative to the vendored repo root)
+    are bypassed.
+    """
+    opts = AnimaLoraOptions()
+    cfg = _recipe(tmp_path, opts)
+    ws = tmp_path / "ws"
+    argv, _ = compile_config(cfg, ws)
+    pairs = _argv_pairs(argv)
+
+    src = Path(pairs["--source_image_dir"][0])
+    resized = Path(pairs["--resized_image_dir"][0])
+    cache = Path(pairs["--lora_cache_dir"][0])
+
+    assert src.is_absolute()
+    assert resized.is_absolute()
+    assert cache.is_absolute()
+    assert src == cfg.dataset.source.resolve()
+    assert resized == (ws / "post_image_dataset" / "resized").resolve()
+    assert cache == (ws / "post_image_dataset" / "lora").resolve()

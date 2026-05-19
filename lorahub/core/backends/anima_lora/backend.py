@@ -25,6 +25,10 @@ from lorahub.core.backends.anima_lora.compiler import (
     compile_config,
     compile_turbo_config,
 )
+from lorahub.core.backends.anima_lora.preprocess import (
+    PreprocessError,
+    ensure_cache,
+)
 from lorahub.core.backends.anima_lora.runner import AnimaLoraRunner
 from lorahub.core.backends.anima_lora.turbo_runner import AnimaLoraTurboRunner
 from lorahub.core.backends.base import (
@@ -35,7 +39,7 @@ from lorahub.core.backends.base import (
     VRAMEstimate,
 )
 from lorahub.core.config.schema import TrainingConfig
-from lorahub.core.events import TrainingEvent
+from lorahub.core.events import EventType, TrainingEvent
 
 # anima_lora is purpose-built for Anima DiT; everything else falls
 # through to kohya / dp. Keeping this set tight means the validator
@@ -143,6 +147,32 @@ class AnimaLoraBackend:
             config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        # Auto-preprocess: ensure the LoRA cache under
+        # <workspace>/post_image_dataset/lora is populated before the
+        # trainer reads it. This keeps cfg.dataset.source pointing at
+        # the user's raw image dir (same shape kohya / dp use) instead
+        # of forcing them to ``make preprocess`` separately. Failures
+        # turn into a CompilationError so the launcher returns a clear
+        # error rather than a half-running training subprocess.
+        try:
+            ensure_cache(
+                image_dir=cfg.dataset.source,
+                workspace=workspace,
+                base_model=cfg.base_model,
+                env=bootstrap_env,
+                on_event=on_event,
+            )
+        except PreprocessError as e:
+            on_event(
+                TrainingEvent(
+                    type=EventType.error,
+                    payload={"source": "preprocess", "error": str(e)},
+                )
+            )
+            msg = f"anima_lora auto-preprocess failed: {e}"
+            raise CompilationError(msg) from e
 
         # Branch: turbo distillation (scripts/distill_turbo.py) vs the
         # regular train.py path. Turbo is picked when the recipe has
@@ -156,7 +186,6 @@ class AnimaLoraBackend:
             argv, files = compile_config(cfg, workspace)
         if extra_argv:
             argv = [*argv, *extra_argv]
-        workspace.mkdir(parents=True, exist_ok=True)
         # `files` is always empty for anima_lora — kept for shape parity
         # with kohya / dp launchers.
         for path, content in files.items():

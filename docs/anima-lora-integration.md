@@ -268,6 +268,7 @@ cut3 实现 `AnimaLoraInferenceBackend`,注册到 B5 表,优先级高于现有
 ## 已知风险
 
 - **torch 版本**:anima_lora 要求 torch 2.11/2.12 nightly + CUDA 13.x。LoraHub 主 venv 不一定达标 — 走子进程 + 用户自己的 anima_lora venv 规避;LoraHub 不 import anima_lora 代码。
-- **数据预处理**:anima_lora 用 `make preprocess` 预生成 cache(latent + TE 输出 + LLM adapter 输出)。LoraHub 不替用户跑预处理,只在 `dataset_config` 字段指 cache 目录。文档里写清。
+- **数据预处理**:LoraHub 的 anima_lora 后端在 `launch()` 进入主训练前会**自动**检测 `<workspace>/post_image_dataset/lora/{stem}_anima_te.safetensors` 是否齐全,缺则依次 spawn 上游 `preprocess/resize_images.py` → `cache_latents.py` → `cache_text_embeddings.py`,把 cache 写到 `<workspace>/post_image_dataset/lora/`。compiler 同时通过 `--source_image_dir` / `--resized_image_dir` / `--lora_cache_dir` 三个 CLI 覆盖把上游 `base.toml` 的相对路径锁到这套 LoraHub 管理的绝对路径。这样 `cfg.dataset.source` 与 kohya / dp 完全一致(始终指向**原始图片目录**),用户切后端不必重写 recipe 也不必手跑 `make preprocess`。preprocess 失败 → `PreprocessError` → backend.launch 返回 `CompilationError`,训练不会启动。
 - **stdout 格式**:anima_lora 的训练日志格式可能与 kohya 不同。runner.py 的 parser 要在 cut2 抓真实日志锁定;留 fallback 模式(parse 失败时仍写原始行到 events)。
 - **schema 膨胀风险**:method 子配置走 discriminated union,Pydantic 2 原生支持。不会影响 kohya/dp 路径的字段数。
+- **模型路径**:三个 yaml 模板默认走 `./models/circlestone-labs__Anima/split_files/...`,与 kohya / dp 模板共用 LoraHub 项目根 `./models/`,单一真相源。不再依赖 `external/anima_lora/models/` 子目录。
