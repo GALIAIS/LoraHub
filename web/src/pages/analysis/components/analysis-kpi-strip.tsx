@@ -183,7 +183,14 @@ function deriveKpis(
       ? ((lossStart - lossLatest) / lossStart) * 100
       : null
   const step = points.length > 0 ? points[points.length - 1].step : null
-  const totalSteps = fallbackTotalSteps ?? null
+  // Trainer-reported total_steps wins (kohya / anima emit it on every
+  // step event); fall back to the parent-supplied config-derived
+  // estimate when dp doesn't emit one. Same priority as the overview
+  // tab so the two screens agree.
+  const totalSteps =
+    typeof m?.total_steps === "number" && m.total_steps > 0
+      ? m.total_steps
+      : (fallbackTotalSteps ?? null)
   const percent =
     step != null && totalSteps != null && totalSteps > 0
       ? (step / totalSteps) * 100

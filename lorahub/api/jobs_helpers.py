@@ -237,6 +237,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
+        "total_steps": None,
         "overfit_signal": _empty_overfit_signal(),
     }
     if not log.is_file():
@@ -249,6 +250,13 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     samples: list[dict[str, Any]] = []
     gpu_samples: list[dict[str, Any]] = []
     epoch_counter = 0
+    # Trainer-reported total step count. We track the latest non-zero
+    # value seen on a `step` event so the front-end has a single
+    # authoritative denominator to use across the overview / summary /
+    # analysis tabs (which used to disagree because each rebuilt this
+    # number from a different source — config maxSteps vs step.payload
+    # vs config-derived fallback).
+    total_steps: int | None = None
 
     with log.open("r", encoding="utf-8") as fh:
         for line in fh:
@@ -296,6 +304,13 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                         ):
                             point[k_out] = payload[k_src]
                     loss.append(point)
+                    # Track trainer-reported total_steps. dp's parser
+                    # never emits this, but kohya / anima do; whichever
+                    # value we see last wins (some trainers update it
+                    # mid-run when warmup steps roll into the schedule).
+                    raw_total = payload.get("total_steps")
+                    if isinstance(raw_total, (int, float)) and raw_total > 0:
+                        total_steps = int(raw_total)
             elif etype == EventType.epoch_end.value:
                 epoch_counter += 1
                 epochs.append({"epoch": payload.get("epoch"), "ts": ts})
@@ -358,6 +373,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,
+        "total_steps": total_steps,
         "overfit_signal": overfit_signal,
     }
 
@@ -647,6 +663,13 @@ def _enqueue_launch(
         from lorahub.api import app as _app  # noqa: PLC0415
 
         slot_env.update(env_overrides(_app._settings_store.load()))
+        # Switch out of queued before backend.launch — anima_lora's
+        # auto-preprocess can run for a couple of minutes (resize +
+        # cache_latents + cache_text_embeddings) before the trainer
+        # subprocess is spawned. Without this the UI keeps reporting
+        # "排队中" even though the worker is already busy.
+        current.state = JobState.preparing
+        state.registry.update(current)
         sink.__enter__()
         try:
             handle = backend.launch(

@@ -419,7 +419,7 @@ function deriveSummary(
 
   // Progress
   const step = lossLatest != null ? points[points.length - 1].step : null
-  const totalSteps = pickTotalSteps(cfg, fallbackTotalSteps)
+  const totalSteps = pickTotalSteps(metrics, cfg, fallbackTotalSteps)
   const percent =
     step != null && totalSteps != null && totalSteps > 0
       ? (step / totalSteps) * 100
@@ -540,9 +540,19 @@ function pluckOne(obj: unknown, ...keys: string[]): unknown {
 }
 
 function pickTotalSteps(
+  metrics: JobMetricsResponse | undefined,
   cfg: Record<string, unknown>,
   fallback: number | null,
 ): number | null {
+  // Trainer-reported total wins — it's the only number that survives
+  // mid-run schedule changes (warmup steps rolling in, sample_ratio
+  // truncating the dataset, …). Falls back to schedule.maxSteps in the
+  // recipe, then to the config-derived estimate (epochs × repeats ×
+  // images / (batch × accum)) the parent computes off the dataset
+  // scan. This is the same priority order overview-tab uses, so the
+  // three tabs now agree.
+  const fromMetrics = metrics?.total_steps
+  if (typeof fromMetrics === "number" && fromMetrics > 0) return fromMetrics
   const sched = pluckObj(cfg, "schedule") ?? {}
   const explicit = pluckOne(sched, "maxSteps", "max_steps")
   if (typeof explicit === "number" && explicit > 0) return explicit

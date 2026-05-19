@@ -301,6 +301,14 @@ export interface JobMetricsResponse {
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null
+  /**
+   * Trainer-reported total step count, taken from the most recent
+   * `step` event payload's `total_steps`. Single source of truth for
+   * progress denominators across the overview / summary / analysis
+   * tabs (kohya + anima emit it; dp leaves it null and the UI falls
+   * back to a config-derived estimate).
+   */
+  total_steps: number | null
   overfit_signal: OverfitSignal
 }
 
