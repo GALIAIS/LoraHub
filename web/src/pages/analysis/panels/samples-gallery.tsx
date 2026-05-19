@@ -71,34 +71,41 @@ export function SamplesGallery({
             </span>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-          {enriched.map((s) => {
-            const url = api.jobFileUrl(jobId, s.path)
-            const name = s.path.split(/[\\/]/).pop() ?? s.path
-            return (
-              <button
-                key={s.path}
-                type="button"
-                onClick={() => setOpenSrc(url)}
-                className="group relative aspect-square overflow-hidden rounded-[4px] border border-border/60 bg-muted/20 transition hover:border-primary/60"
-                title={name}
-              >
-                <img
-                  src={url}
-                  alt={name}
-                  loading="lazy"
-                  className="h-full w-full object-cover transition group-hover:scale-105"
-                />
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
-                  {s.epoch != null && <span className="mr-2">e{s.epoch}</span>}
-                  {s.step != null && <span>s{s.step}</span>}
-                  {s.epoch == null && s.step == null && (
-                    <span className="truncate">{name}</span>
-                  )}
-                </div>
-              </button>
-            )
-          })}
+        {/* Local scroll container so a long sample run (hundreds of
+            checkpoints × multiple prompts) doesn't push the loss chart
+            and KPIs off-screen. Cap at ~5 rows of the densest grid
+            (lg = 5 cols × 5 rows ≈ 70vh). The aspect-square children
+            keep predictable thumbnail sizes inside the scroller. */}
+        <div className="max-h-[70vh] overflow-y-auto pr-1 -mr-1">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+            {enriched.map((s) => {
+              const url = api.jobFileUrl(jobId, s.path)
+              const name = s.path.split(/[\\/]/).pop() ?? s.path
+              return (
+                <button
+                  key={s.path}
+                  type="button"
+                  onClick={() => setOpenSrc(url)}
+                  className="group relative aspect-square overflow-hidden rounded-[4px] border border-border/60 bg-muted/20 transition hover:border-primary/60"
+                  title={name}
+                >
+                  <img
+                    src={url}
+                    alt={name}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition group-hover:scale-105"
+                  />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
+                    {s.epoch != null && <span className="mr-2">e{s.epoch}</span>}
+                    {s.step != null && <span>s{s.step}</span>}
+                    {s.epoch == null && s.step == null && (
+                      <span className="truncate">{name}</span>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </CardContent>
       {openSrc && <Lightbox src={openSrc} onClose={() => setOpenSrc(null)} />}

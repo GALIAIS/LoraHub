@@ -33,7 +33,20 @@ _TERMINAL_STATES = (
 _CHECKPOINT_SUFFIXES = {".safetensors", ".ckpt"}
 _SAMPLE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 _LOG_FILENAMES = {"events.jsonl"}
-_SKIP_DIR_NAMES = {"_archive", "__pycache__", ".git", ".ipynb_checkpoints"}
+# Directories whose contents must not be surfaced in the file picker
+# / samples gallery. ``post_image_dataset`` is anima_lora's preprocess
+# scratch — it holds VAE-resized copies of the user's dataset (PNGs)
+# plus latent / TE caches; without this skip the analysis tab's
+# samples gallery showed the resized dataset images as if they were
+# trainer-generated previews. Latent / TE caches don't have image
+# extensions so they fall through to "other" anyway.
+_SKIP_DIR_NAMES = {
+    "_archive",
+    "__pycache__",
+    ".git",
+    ".ipynb_checkpoints",
+    "post_image_dataset",
+}
 _SKIP_SUFFIXES = {".tmp"}
 
 
