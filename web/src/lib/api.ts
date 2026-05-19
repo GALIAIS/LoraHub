@@ -96,6 +96,20 @@ export interface AnimaLoraBackendStatus {
   // dedicated "Download models" CTA.
   missing_models: string[]
   models_ok: boolean
+  // MSVC build tools detection. Windows-only — on Linux/macOS the
+  // ``platform_relevant`` flag is False and the install panel hides
+  // the section entirely. On Windows ``ok=false`` means anima's
+  // torch.compile path will crash inside Inductor codegen on the
+  // first compile pass; we surface a one-click ``winget install``
+  // CTA in that case.
+  msvc: {
+    platform_relevant: boolean
+    ok: boolean
+    cl_path: string | null
+    msvc_version: string | null
+    reason: string | null
+    winget_available: boolean
+  }
   ready: boolean
   // anima_lora's source dimension picks "vendored" instead of
   // "default" because the source ships with LoraHub itself, not as a
@@ -151,6 +165,26 @@ export interface AnimaModelDownloadStatus {
   finished_at?: number | null
   /** Files still missing on disk — empty array means all three are present. */
   missing_files: string[]
+}
+
+export interface MsvcInstallStatus {
+  // Same shape as the model-download session but with a free-form
+  // log buffer instead of file counts (winget doesn't expose a clean
+  // percent signal). Server detects MSVC presence on every poll, so
+  // ``msvc.ok`` flips to True the moment winget finishes — the UI
+  // doesn't need to wait for the next backend-list refresh.
+  status: "idle" | "running" | "succeeded" | "failed"
+  session_id?: string
+  log?: string[]
+  error?: string | null
+  started_at?: number
+  finished_at?: number | null
+  msvc: {
+    ok: boolean
+    cl_path: string | null
+    msvc_version: string | null
+    reason: string | null
+  }
 }
 
 export interface SettingsState {
@@ -691,6 +725,12 @@ export const api = {
     http<AnimaModelDownloadStatus>(
       "/backends/anima_lora/download-models/status",
     ),
+  startMsvcInstall: () =>
+    http<MsvcInstallStatus>("/backends/anima_lora/install-msvc", {
+      method: "POST",
+    }),
+  getMsvcInstallStatus: () =>
+    http<MsvcInstallStatus>("/backends/anima_lora/install-msvc/status"),
   getRuntimeStatus: () =>
     http<{
       default_version: string

@@ -296,6 +296,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     from lorahub.core.backends.anima_lora.models import (  # noqa: PLC0415
         missing_files as _anima_missing_models,
     )
+    from lorahub.core.backends.anima_lora import msvc as _anima_msvc  # noqa: PLC0415
 
     repo_raw = (
         os.environ.get(_ENV_REPO)
@@ -332,6 +333,22 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     else:
         source = "vendored"
 
+    # MSVC Build Tools detection — only meaningful on Windows. anima's
+    # torch_compile path needs triton-windows -> cl.exe; without it
+    # the trainer crashes inside Inductor codegen with a TypeError
+    # that has nothing to do with the user's recipe. The install
+    # panel uses these fields to surface a one-click installer CTA.
+    msvc = _anima_msvc.detect()
+    import sys as _sys  # noqa: PLC0415
+    msvc_payload = {
+        "platform_relevant": _sys.platform == "win32",
+        "ok": msvc.installed,
+        "cl_path": msvc.cl_path,
+        "msvc_version": msvc.msvc_version,
+        "reason": msvc.reason,
+        "winget_available": _anima_msvc.winget_available(),
+    }
+
     return {
         "id": "anima_lora",
         "repo_path": str(repo_path),
@@ -352,6 +369,10 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         # can show a "Download models" CTA after `uv sync` finishes.
         "missing_models": _anima_missing_models(),
         "models_ok": not _anima_missing_models(),
+        # MSVC Build Tools — Windows-only; the install panel renders a
+        # one-click ``winget install`` button when ``msvc.ok`` is False
+        # on Windows (and hides the section everywhere else).
+        "msvc": msvc_payload,
         # `ready` here means "we can dispatch to the backend" — repo
         # files present + python interpreter resolvable. Whether the
         # interpreter actually has torch nightly is not knowable

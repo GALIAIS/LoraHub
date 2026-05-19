@@ -24,6 +24,7 @@ from lorahub.core.backends.anima_lora.models import (
     download_models as _download_anima_models,
     missing_files as _anima_missing_models,
 )
+from lorahub.core.backends.anima_lora import msvc as _anima_msvc
 from lorahub.core.backends.registry import list_backends
 
 router = APIRouter(prefix="/api")
@@ -201,3 +202,183 @@ def anima_model_download_status() -> dict[str, Any]:
     if session is None:
         return {"status": "idle", "missing_files": _anima_missing_models()}
     return session.snapshot() | {"missing_files": _anima_missing_models()}
+
+
+# --------------------------------------------------------------------------- #
+# Visual Studio Build Tools installer — Windows only.
+#
+# Driven by ``winget install Microsoft.VisualStudio.2022.BuildTools`` with
+# the C++ workload + Win 11 SDK selected via ``--override``. We capture
+# winget's stdout/stderr line-by-line into a session log so the UI can
+# stream a tail; winget itself prints rich progress indicators that
+# don't translate well to a percent bar, so we just expose the latest
+# few lines and let the user decide if it's progressing.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class _MsvcInstallSession:
+    session_id: str
+    status: Literal["running", "succeeded", "failed"] = "running"
+    log: list[str] = field(default_factory=list)
+    error: str | None = None
+    started_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def append_log(self, line: str) -> None:
+        with self.lock:
+            self.log.append(line)
+            # Cap the buffer — winget can emit hundreds of progress
+            # lines via its spinner. Tail-style 200-line cap keeps
+            # the snapshot small enough to JSON-encode cheaply.
+            if len(self.log) > 200:
+                self.log = self.log[-200:]
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "session_id": self.session_id,
+                "status": self.status,
+                "log": list(self.log),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+
+_msvc_sessions: dict[str, _MsvcInstallSession] = {}
+_msvc_sessions_lock = threading.Lock()
+_msvc_active_session: str | None = None
+
+
+@router.post("/backends/anima_lora/install-msvc", status_code=202)
+def start_msvc_install() -> dict[str, Any]:
+    """Drive ``winget install Microsoft.VisualStudio.2022.BuildTools``.
+
+    Refuses to start when MSVC is already detected (no point) or when
+    another install session is already in flight (409). Returns the
+    initial session snapshot otherwise; clients poll
+    ``GET .../install-msvc/status`` for updates.
+    """
+    global _msvc_active_session
+
+    detection = _anima_msvc.detect()
+    if detection.installed:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "already_installed",
+                "message": "MSVC build tools already detected",
+                "cl_path": detection.cl_path,
+                "msvc_version": detection.msvc_version,
+            },
+        )
+
+    cmd = _anima_msvc.install_command()
+    if cmd is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "winget is not available on this host — install "
+                "https://aka.ms/winget-cli or run the Build Tools "
+                "installer manually from "
+                "https://aka.ms/vs/17/release/vs_BuildTools.exe"
+            ),
+        )
+
+    with _msvc_sessions_lock:
+        if _msvc_active_session is not None:
+            existing = _msvc_sessions.get(_msvc_active_session)
+            if existing and existing.status == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "another MSVC install is already running",
+                        "session": existing.snapshot(),
+                    },
+                )
+
+    session = _MsvcInstallSession(session_id=uuid.uuid4().hex)
+    session.append_log("queued: " + " ".join(cmd))
+    with _msvc_sessions_lock:
+        _msvc_sessions[session.session_id] = session
+        _msvc_active_session = session.session_id
+
+    def run() -> None:
+        global _msvc_active_session
+        import subprocess as _sp  # noqa: PLC0415
+        try:
+            proc = _sp.Popen(
+                cmd,
+                stdout=_sp.PIPE,
+                stderr=_sp.STDOUT,
+                stdin=_sp.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    session.append_log(line)
+            rc = proc.wait()
+            with session.lock:
+                if rc == 0:
+                    session.status = "succeeded"
+                else:
+                    session.status = "failed"
+                    session.error = f"winget exited with code {rc}"
+                session.finished_at = time.time()
+        except Exception as exc:  # noqa: BLE001
+            with session.lock:
+                session.status = "failed"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.append_log(f"failed: {exc}")
+        finally:
+            with _msvc_sessions_lock:
+                if _msvc_active_session == session.session_id:
+                    _msvc_active_session = None
+
+    thread = threading.Thread(
+        target=run,
+        name=f"msvc-install-{session.session_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    return session.snapshot()
+
+
+@router.get("/backends/anima_lora/install-msvc/status")
+def msvc_install_status() -> dict[str, Any]:
+    """Poll the most recent (or in-flight) MSVC install session.
+
+    Always re-runs detection so a freshly-completed install flips
+    ``msvc_ok`` to True without the user having to refresh the
+    backends list.
+    """
+    fresh = _anima_msvc.detect()
+    detection = {
+        "ok": fresh.installed,
+        "cl_path": fresh.cl_path,
+        "msvc_version": fresh.msvc_version,
+        "reason": fresh.reason,
+    }
+    with _msvc_sessions_lock:
+        sid = _msvc_active_session
+        if sid is None:
+            recent = max(
+                _msvc_sessions.values(),
+                key=lambda s: s.started_at,
+                default=None,
+            )
+            if recent is None:
+                return {"status": "idle", "msvc": detection}
+            return recent.snapshot() | {"msvc": detection}
+        session = _msvc_sessions.get(sid)
+    if session is None:
+        return {"status": "idle", "msvc": detection}
+    return session.snapshot() | {"msvc": detection}

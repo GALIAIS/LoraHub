@@ -11,10 +11,12 @@ import {
 import {
   api,
   useBootstrapStream,
+  type AnimaLoraBackendStatus,
   type AnimaModelDownloadStatus,
   type BackendDescriptor,
   type BackendId,
   type BootstrapEvent,
+  type MsvcInstallStatus,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -355,6 +357,138 @@ function AnimaModelDownloadCard({
 }
 
 /**
+ * Visual Studio Build Tools (MSVC) install card.
+ *
+ * Renders only when the anima_lora venv is ready but Windows MSVC
+ * is missing. anima's ``--torch_compile`` path drives PyTorch
+ * Inductor to JIT through triton-windows; without ``cl.exe`` the
+ * trainer crashes inside the first compile pass with a TypeError
+ * from triton's MSVC discovery — a failure mode that has no
+ * obvious connection to the user's recipe and is hard to diagnose
+ * after the fact. The button shells out to ``winget install
+ * Microsoft.VisualStudio.2022.BuildTools`` with the C++ workload +
+ * Win 11 SDK pre-selected; the tail of winget's output is mirrored
+ * into the log block below the button so the user can see when
+ * MSI installers are still spinning vs actually wedged.
+ */
+function MsvcInstallCard({
+  detection,
+  status,
+  isPending,
+  onInstall,
+  error,
+}: {
+  detection: AnimaLoraBackendStatus["msvc"]
+  status: MsvcInstallStatus | undefined
+  isPending: boolean
+  onInstall: () => void
+  error: string | null
+}) {
+  const isRunning = status?.status === "running"
+  const failed = status?.status === "failed"
+  const succeeded = status?.msvc?.ok || status?.status === "succeeded"
+  const log = status?.log ?? []
+  const lastLine = log.length > 0 ? log[log.length - 1] : null
+
+  return (
+    <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-3 space-y-2.5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="flex-1 text-xs text-amber-700 dark:text-amber-400">
+          <div className="font-semibold text-foreground">
+            缺少 Visual Studio Build Tools
+          </div>
+          <div className="mt-0.5 leading-relaxed">
+            anima_lora 训练默认开启
+            <code className="mx-1 text-foreground">torch.compile</code>
+            ，PyTorch Inductor 需要通过 triton-windows 调用
+            <code className="mx-1 text-foreground">cl.exe</code>
+            。否则首次编译就会崩溃，无法继续训练。
+          </div>
+          <div className="mt-1 leading-relaxed">
+            点击下方按钮调用
+            <code className="mx-1 text-foreground">winget</code>
+            自动安装
+            <strong className="mx-0.5 text-foreground">
+              Build Tools for Visual Studio 2022
+            </strong>
+            （含 C++ 工作负载与 Windows 11 SDK，约 1.5–2 GB）。不会安装完整的 Visual Studio IDE。
+          </div>
+          {detection.reason && (
+            <div className="mt-1 font-mono text-[10px] text-muted-foreground/80 break-all">
+              {detection.reason}
+            </div>
+          )}
+          {!detection.winget_available && (
+            <div className="mt-1.5 text-[11px]">
+              <strong className="text-foreground">winget 不可用</strong>
+              ，需要手动下载安装：
+              <a
+                href="https://aka.ms/vs/17/release/vs_BuildTools.exe"
+                target="_blank"
+                rel="noreferrer"
+                className="ml-1 underline"
+              >
+                vs_BuildTools.exe
+              </a>
+            </div>
+          )}
+        </div>
+        <Button
+          size="sm"
+          variant={succeeded ? "outline" : "default"}
+          disabled={
+            isRunning || isPending || succeeded || !detection.winget_available
+          }
+          onClick={onInstall}
+        >
+          {isRunning || isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : succeeded ? (
+            <Check className="size-3" />
+          ) : (
+            <Download className="size-3" />
+          )}
+          {isRunning
+            ? "安装中…"
+            : succeeded
+              ? "已安装"
+              : failed
+                ? "重试"
+                : "一键安装"}
+        </Button>
+      </div>
+
+      {(isRunning || lastLine) && (
+        <div className="space-y-1">
+          {lastLine && (
+            <div className="font-mono text-[10px] text-muted-foreground/80 break-all">
+              {lastLine}
+            </div>
+          )}
+          {log.length > 1 && (
+            <details className="text-[10px] text-muted-foreground/70">
+              <summary className="cursor-pointer select-none">
+                查看完整日志（{log.length} 行）
+              </summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-[3px] border border-border/60 bg-muted/20 px-2 py-1.5 font-mono text-[10px] text-foreground/70">
+                {log.join("\n")}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+
+      {(failed || error) && (
+        <div className="rounded-[3px] border border-destructive/40 bg-destructive/5 px-2.5 py-1.5 text-[11px] font-mono text-destructive break-all">
+          {status?.error || error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * One-click install panel. The user picks a backend, hits 安装, and the
  * server kicks off the registry-driven bootstrap runner. Because the server
  * keeps a single bootstrap session at a time, while one is in flight we
@@ -475,6 +609,29 @@ export function InstallTab() {
     mutationFn: () => api.startAnimaModelDownload(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["anima-model-download-status"] })
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["backends"] })
+    },
+  })
+
+  // MSVC build tools — Windows-only. The poll has a tighter cadence
+  // than the model download because winget shells out to MSI installers
+  // that can take 5–15 min, and a status flip from "running" to
+  // "succeeded" / "failed" is the cue to refresh the backend catalog
+  // so ``msvc.ok`` lights up.
+  const msvcInstallStatus = useQuery({
+    queryKey: ["msvc-install-status"],
+    queryFn: api.getMsvcInstallStatus,
+    enabled: effective === "anima_lora",
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 2000 : false,
+  })
+
+  const installMsvc = useMutation({
+    mutationFn: () => api.startMsvcInstall(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["msvc-install-status"] })
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["backends"] })
@@ -621,6 +778,24 @@ export function InstallTab() {
                 error={
                   downloadAnimaModels.error instanceof Error
                     ? downloadAnimaModels.error.message
+                    : null
+                }
+              />
+            )}
+
+          {effective === "anima_lora" &&
+            descriptor?.ready &&
+            descriptor.status.id === "anima_lora" &&
+            descriptor.status.msvc.platform_relevant &&
+            !descriptor.status.msvc.ok && (
+              <MsvcInstallCard
+                detection={descriptor.status.msvc}
+                status={msvcInstallStatus.data}
+                isPending={installMsvc.isPending}
+                onInstall={() => installMsvc.mutate()}
+                error={
+                  installMsvc.error instanceof Error
+                    ? installMsvc.error.message
                     : null
                 }
               />
