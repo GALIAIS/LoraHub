@@ -146,16 +146,21 @@ echo.
 
 rem ---- [5/6] Install Node.js locally --------------------------------
 echo [5/6] Installing Node.js ...
-where node >nul 2>&1 && (
-  for /f "delims=" %%v in ('node --version 2^>nul') do set "NODE_VER=%%v"
-  echo   OK Node.js !NODE_VER! (system)
-  goto :node_done
-)
+
+rem Always use a project-local portable Node, never the system one.
+rem Mixed-version system installs are the single biggest source of
+rem "works on my machine" reports for this project, and a portable
+rem Node 20 is ~50 MB extracted — small enough that the trade is
+rem clearly in our favour.
 if exist "%NODE_DIR%\node.exe" (
-  set "PATH=%NODE_DIR%;!PATH!"
-  echo   OK Node.js already installed (portable)
-  goto :node_done
+  if exist "%NODE_DIR%\npm.cmd" (
+    set "PATH=%NODE_DIR%;%PATH%"
+    for /f "delims=" %%v in ('"%NODE_DIR%\node.exe" --version 2^>nul') do set "NODE_VER=%%v"
+    echo   OK Node.js %NODE_VER% (portable, cached)
+    goto :node_done
+  )
 )
+
 echo   Downloading portable Node.js 20 ...
 if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
@@ -178,11 +183,16 @@ if not exist "%NODE_DIR%\node.exe" (
   echo   [ERROR] node.exe not found after extraction.
   goto :fail
 )
-set "PATH=%NODE_DIR%;!PATH!"
-echo   OK Node.js downloaded
+if not exist "%NODE_DIR%\npm.cmd" (
+  echo   [ERROR] npm.cmd not found after extraction; archive may
+  echo            be corrupted.
+  goto :fail
+)
+set "PATH=%NODE_DIR%;%PATH%"
+for /f "delims=" %%v in ('"%NODE_DIR%\node.exe" --version 2^>nul') do set "NODE_VER=%%v"
+echo   OK Node.js %NODE_VER% (portable, downloaded)
+
 :node_done
-for /f "delims=" %%v in ('node --version 2^>nul') do set "NODE_VER=%%v"
-echo   Node.js %NODE_VER%
 echo.
 
 rem ---- [6/6] Install frontend dependencies --------------------------

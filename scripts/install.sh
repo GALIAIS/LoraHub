@@ -127,11 +127,13 @@ echo ""
 
 # ---- [5/6] Install Node.js locally ----------------------------------
 echo "[5/6] Installing Node.js ..."
-if [ -f "$NODE_DIR/bin/node" ]; then
+# Always use a project-local portable Node, never the system one — same
+# rationale as the Windows install.bat: a portable Node 20 is ~50 MB
+# and avoids the entire class of "different node version on dev box vs
+# CI vs VPS" problems.
+if [ -f "$NODE_DIR/bin/node" ] && [ -f "$NODE_DIR/bin/npm" ]; then
     export PATH="$NODE_DIR/bin:$PATH"
-    echo "  OK Node.js already installed (portable)"
-elif command -v node &>/dev/null; then
-    echo "  OK Node.js $(node --version) (system)"
+    echo "  OK Node.js $(node --version) (portable, cached)"
 else
     echo "  Downloading portable Node.js 20 ..."
     mkdir -p "$NODE_DIR"
@@ -147,14 +149,13 @@ else
     curl -LsSf "https://nodejs.org/dist/${NODE_VER}/${NODE_TAR}" -o "$NODE_DIR/$NODE_TAR"
     tar -xf "$NODE_DIR/$NODE_TAR" -C "$NODE_DIR" --strip-components=1
     rm -f "$NODE_DIR/$NODE_TAR"
-    if [ ! -f "$NODE_DIR/bin/node" ]; then
-        echo "  [ERROR] node not found after extraction."
+    if [ ! -f "$NODE_DIR/bin/node" ] || [ ! -f "$NODE_DIR/bin/npm" ]; then
+        echo "  [ERROR] node/npm not found after extraction."
         exit 1
     fi
     export PATH="$NODE_DIR/bin:$PATH"
-    echo "  OK Node.js downloaded"
+    echo "  OK Node.js $(node --version) (portable, downloaded)"
 fi
-echo "  Node.js $(node --version)"
 echo ""
 
 # ---- [6/6] Install frontend dependencies ----------------------------

@@ -28,8 +28,17 @@ set "API_PORT=18765"
 set "WEB_PORT=6006"
 
 rem ---- Add project-local tools to PATH -------------------------------
+rem Hard requirement: every binary the launcher touches comes from the
+rem project tree. We never fall back to system installs — that's the
+rem whole point of the install.bat layout.
 if exist ".tools\uv\uv.exe" set "PATH=%CD%\.tools\uv;!PATH!"
-if exist ".node\node.exe" set "PATH=%CD%\.node;!PATH!"
+if exist ".node\node.exe" (
+  set "PATH=%CD%\.node;!PATH!"
+) else (
+  echo [ERROR] Portable Node.js not found at .node\node.exe.
+  echo          Run scripts\install.bat first.
+  goto :fail
+)
 
 rem ---- Resolve Python ------------------------------------------------
 set "PYTHON="
