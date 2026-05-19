@@ -26,6 +26,7 @@ import {
   Skull,
   Pause,
   Play,
+  Pencil,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -36,6 +37,7 @@ import { OverviewTab } from "./overview-tab"
 import { EventsTab } from "./events-tab"
 import { FilesTab } from "./files-tab"
 import { RunSummaryCard } from "./run-summary-card"
+import { ResumeWithEditDialog } from "./resume-with-edit-dialog"
 
 type TabKey = "overview" | "events" | "files"
 
@@ -76,6 +78,7 @@ export function JobDetail({
   const [actionError, setActionError] = useState<string | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [killOpen, setKillOpen] = useState(false)
+  const [resumeEditOpen, setResumeEditOpen] = useState(false)
 
   // Fall back to a config-derived total step count when the backend hasn't
   // yet emitted a `total_steps` payload. We need the dataset image count,
@@ -296,7 +299,7 @@ export function JobDetail({
       <header className="px-7 py-5 border-b border-border/60 flex items-start gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
-            {data && <StateBadge state={data.state} />}
+            {data && <StateBadge state={data.state} paused={isPaused} />}
             <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
               {stream.status === "open"
                 ? "实时已连接"
@@ -373,18 +376,29 @@ export function JobDetail({
             </Button>
           )}
           {isResumable && (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={onResume}
-              disabled={busy !== null}
-              title="从最新 state + safetensors 续训(保留 optimizer / lr 进度)"
-            >
-              <Play
-                className={cn("size-3", busy === "resume" && "animate-spin")}
-              />{" "}
-              {isPaused ? "继续训练" : "恢复训练"}
-            </Button>
+            <>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onResume}
+                disabled={busy !== null}
+                title="从最新 state + safetensors 续训(保留 optimizer / lr 进度)"
+              >
+                <Play
+                  className={cn("size-3", busy === "resume" && "animate-spin")}
+                />{" "}
+                {isPaused ? "继续训练" : "恢复训练"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setResumeEditOpen(true)}
+                disabled={busy !== null || !data?.config_snapshot}
+                title="先编辑 lr / dropTokens / 数据集等再续训(权重相关字段会被锁)"
+              >
+                <Pencil className="size-3" /> 编辑后续训
+              </Button>
+            </>
           )}
           {isLive && (
             <>
@@ -536,6 +550,16 @@ export function JobDetail({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {resumeEditOpen && data && (
+        <ResumeWithEditDialog
+          job={data}
+          onClose={() => setResumeEditOpen(false)}
+          onResumed={() => {
+            setResumeEditOpen(false)
+            job.refetch()
+          }}
+        />
+      )}
     </div>
   )
 }

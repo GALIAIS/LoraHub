@@ -56,7 +56,12 @@ export function JobRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 mb-1">
-          <StateBadge state={job.state} />
+          <StateBadge
+            state={job.state}
+            paused={
+              Boolean(job.metadata && (job.metadata as Record<string, unknown>).paused === true)
+            }
+          />
           <code className="text-[11px] font-mono text-muted-foreground">
             {job.id.slice(-8)}
           </code>

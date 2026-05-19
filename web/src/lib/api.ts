@@ -553,8 +553,14 @@ export const api = {
     http<JobSummary>(`/jobs/${id}?paused=true`, { method: "DELETE" }),
   rerunJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}/rerun`, { method: "POST" }),
-  resumeJob: (id: string) =>
-    http<JobSummary>(`/jobs/${id}/resume`, { method: "POST" }),
+  /** Resume (optionally with a new config) — fields that pin checkpoint
+   *  shape are locked, others (lr, dropTokens, etc.) take effect on
+   *  the resumed run. Pass ``config: undefined`` to replay the original. */
+  resumeJob: (id: string, config?: Record<string, unknown>) =>
+    http<JobSummary>(`/jobs/${id}/resume`, {
+      method: "POST",
+      body: JSON.stringify(config !== undefined ? { config } : {}),
+    }),
   killJob: (id: string) =>
     http<{
       job_id: string

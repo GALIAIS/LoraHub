@@ -128,15 +128,87 @@ def rerun_job(job_id: str) -> dict[str, Any]:
     )
 
 
-@router.post("/jobs/{job_id}/resume", status_code=202)
-def resume_job(job_id: str) -> dict[str, Any]:
-    """Resume an interrupted/failed/canceled job from its last checkpoint.
+class ResumeJobRequest(BaseModel):
+    """Optional body for ``POST /jobs/<id>/resume``.
 
-    Backend-aware: kohya jobs are resumed via `--resume=<state_dir>` plus
-    `--network_weights=<latest.safetensors>`; diffusion-pipe jobs via
-    `--resume_from_checkpoint=<run_dir_basename>` with `output.output_dir`
-    pinned to the original run's output dir so dp's checkpoint discovery
-    finds the same `global_step*` folders.
+    When ``config`` is omitted, resume re-uses the original snapshot
+    verbatim (the legacy behaviour). When provided, the new dict is
+    validated through ``TrainingConfig`` and field-locked against the
+    snapshot — fields that would invalidate the on-disk checkpoint
+    (network rank/alpha, base model arch / paths, backend type) refuse
+    to change and surface a 409 with the conflicting key. Everything
+    else (lr, dropTokens, epoch counts, sampling, …) is allowed.
+    """
+
+    config: dict[str, Any] | None = None
+
+
+# Fields that pin checkpoint shape — changing any of these mid-run
+# either invalidates the .safetensors weights or splits the optimizer
+# state in a way the trainer can't reload. Resume rejects edits to
+# these. dot.path keys against the validated TrainingConfig dump.
+_RESUME_LOCKED_FIELDS = (
+    "baseModel.arch",
+    "baseModel.archVariant",
+    "baseModel.checkpoint",
+    "baseModel.archPaths",
+    "network.type",
+    "network.rank",
+    "network.alpha",
+    "network.convDim",
+    "network.convAlpha",
+    "backend.type",
+    # anima_lora method / preset both bake into the network factory's
+    # adapter shape; flipping them mid-run = different params.
+    "backend.animaLora.method",
+    "backend.animaLora.preset",
+    "backend.animaLora.networkModule",
+    "backend.animaLora.networkDim",
+    "backend.animaLora.networkAlpha",
+)
+
+
+def _diff_locked_fields(
+    snapshot: dict[str, Any], proposed: dict[str, Any],
+) -> list[str]:
+    """Return dot-paths of locked fields that differ between snapshot
+    and proposed config. Missing keys on either side are treated as
+    "no change" so partial updates from the UI don't trip the lock.
+    """
+    diffs: list[str] = []
+    for path in _RESUME_LOCKED_FIELDS:
+        keys = path.split(".")
+        a: Any = snapshot
+        b: Any = proposed
+        for k in keys:
+            a = a.get(k) if isinstance(a, dict) else None
+            b = b.get(k) if isinstance(b, dict) else None
+        if a != b and b is not None:
+            diffs.append(path)
+    return diffs
+
+
+@router.post("/jobs/{job_id}/resume", status_code=202)
+def resume_job(
+    job_id: str,
+    req: ResumeJobRequest | None = None,
+) -> dict[str, Any]:
+    """Resume an interrupted/failed/canceled/paused job from its last checkpoint.
+
+    Backend-aware: kohya / anima_lora jobs are resumed via
+    ``--resume=<state_dir>`` plus
+    ``--network_weights=<latest.safetensors>``; diffusion-pipe jobs via
+    ``--resume_from_checkpoint=<run_dir_basename>`` with
+    ``output.output_dir`` pinned to the original run's output dir so
+    dp's checkpoint discovery finds the same ``global_step*`` folders.
+
+    When the request body carries ``config``, the new dict replaces the
+    original snapshot **after** a field-lock check — any change to
+    fields listed in ``_RESUME_LOCKED_FIELDS`` (rank, arch, checkpoint
+    paths, backend.type, …) returns 409 because those changes would
+    invalidate the checkpoint shape. Everything else (lr, dropTokens,
+    epoch counts, dataset.source, sampling) is allowed and takes
+    effect on the resumed run.
 
     Re-launches the SAME JobRecord in place (id and workspace preserved)
     so a job's history stays as one timeline regardless of how many times
@@ -144,10 +216,10 @@ def resume_job(job_id: str) -> dict[str, Any]:
 
     Errors:
       404 — original job id not found
-      409 — original is not in a resumable state, or the backend reports
-            no resumable artifacts on disk yet (no kohya state dir / no
-            dp run_dir / no `latest` file)
-      422 — config snapshot no longer matches the current schema
+      409 — original is not in a resumable state, no resumable artifacts
+            on disk yet, or the new config tries to change a locked
+            field
+      422 — config snapshot (or new config) no longer matches the schema
     """
     original = state.registry.get(job_id)
     if original is None:
@@ -161,10 +233,31 @@ def resume_job(job_id: str) -> dict[str, Any]:
             ),
         )
 
-    try:
-        cfg = TrainingConfig.model_validate(original.config_snapshot)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    snapshot = original.config_snapshot or {}
+    if req is not None and req.config is not None:
+        diffs = _diff_locked_fields(snapshot, req.config)
+        if diffs:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "resume cannot change fields that pin checkpoint shape: "
+                    f"{diffs}. Start a new training run instead."
+                ),
+            )
+        try:
+            cfg = TrainingConfig.model_validate(req.config)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Persist the updated snapshot so subsequent /resume calls
+        # honour the latest cfg, and so the events / metrics tab can
+        # show the actual config the resumed run used.
+        original.config_snapshot = cfg.model_dump(mode="json")
+        state.registry.update(original)
+    else:
+        try:
+            cfg = TrainingConfig.model_validate(snapshot)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
         spec = _dispatch_resume_spec(cfg, original.workspace)

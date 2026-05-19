@@ -79,31 +79,47 @@ function EmptyState() {
 
 const STATE_LABELS: Record<string, string> = {
   running: "运行中",
+  preparing: "准备中",
   succeeded: "已完成",
   failed: "失败",
   canceled: "已取消",
   canceling: "取消中",
   queued: "排队中",
   interrupted: "已中断",
+  paused: "已暂停",
 }
 
-export function StateBadge({ state }: { state: string }) {
+export function StateBadge({
+  state,
+  paused = false,
+}: {
+  state: string
+  /** When true, render a "已暂停" badge instead of the canonical
+   *  state label. The backend keeps state=canceled for paused jobs;
+   *  the flag lives in metadata.paused. */
+  paused?: boolean
+}) {
+  const effective = paused && (state === "canceled" || state === "canceling")
+    ? "paused"
+    : state
   const variant = {
     running: "default",
+    preparing: "default",
     succeeded: "secondary",
     failed: "destructive",
     canceled: "outline",
     canceling: "outline",
     queued: "outline",
     interrupted: "destructive",
-  }[state] as "default" | "secondary" | "destructive" | "outline" | undefined
+    paused: "secondary",
+  }[effective] as "default" | "secondary" | "destructive" | "outline" | undefined
 
   return (
     <Badge
       variant={variant ?? "outline"}
       className="rounded-[2px] uppercase text-[10px] tracking-[0.1em]"
     >
-      {STATE_LABELS[state] ?? state}
+      {STATE_LABELS[effective] ?? effective}
     </Badge>
   )
 }
