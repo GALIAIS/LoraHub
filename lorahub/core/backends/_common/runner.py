@@ -106,6 +106,32 @@ class SubprocessRunner:
             full_env["PYTHONWARNINGS"] = (
                 f"{anima_filter},{existing_warn}" if existing_warn else anima_filter
             )
+            # Strip stale Visual Studio env vars that confuse triton's
+            # MSVC discovery on Windows.
+            #
+            # Symptom: when ``torch.compile`` triggers Inductor codegen
+            # and triton tries to invoke ``cl.exe`` for the kernel JIT,
+            # ``triton/windows_utils.py::find_msvc_env`` reads
+            # ``VCINSTALLDIR`` and ``VCToolsVersion`` from os.environ.
+            # Many Windows boxes have a half-finished VS install that
+            # left ``VCINSTALLDIR`` set but ``VCToolsVersion`` blank;
+            # triton then does ``Path(...) / None`` and crashes the
+            # whole training run with:
+            #
+            #     TypeError: unsupported operand type(s) for /:
+            #     'WindowsPath' and 'NoneType'
+            #
+            # Clearing both lets triton fall through to its vswhere /
+            # PATH-based discovery (or fail with a *clear* "MSVC not
+            # found" error), which is what users without VS Build
+            # Tools should see anyway. If a real VS install is
+            # actually wanted, callers can re-export the pair via
+            # ``self._env`` — that takes precedence below.
+            if sys.platform == "win32":
+                stale = full_env.get("VCToolsVersion")
+                if stale is None or not stale.strip():
+                    full_env.pop("VCINSTALLDIR", None)
+                    full_env.pop("VCToolsVersion", None)
             creationflags = (
                 subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
             )
