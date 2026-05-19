@@ -1167,6 +1167,14 @@ def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
     Reuse the same finders kohya does and emit ``--resume=<state_dir>`` +
     ``--network_weights=<latest.safetensors>`` so the trainer reattaches
     weights AND optimizer/scheduler state.
+
+    Also read ``train_state.json`` from the picked state directory and
+    inject ``--initial_step=<N>`` + ``--skip_until_initial_step``. Without
+    these, ``train.py`` resets ``initial_step`` to 0 (see
+    train.py:2474-2515) — accelerate restores optimizer/scheduler state
+    via ``--resume`` but the dataloader replays from step 0, so the
+    user sees the run "restart from step 1" even though weights are
+    correctly loaded.
     """
     state_dir = _find_latest_state_dir(workspace)
     if state_dir is None:
@@ -1181,12 +1189,28 @@ def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
             f"no .safetensors weights found under {workspace}; "
             "cannot seed --network_weights"
         )
-    return ResumeSpec(
-        extra_argv=[
-            f"--resume={state_dir}",
-            f"--network_weights={weights}",
-        ],
-    )
+    extra_argv = [
+        f"--resume={state_dir}",
+        f"--network_weights={weights}",
+    ]
+    # Pull current_step from train_state.json so the resumed run skips
+    # the dataloader forward to where the previous run left off. The
+    # file is tiny (~40 bytes, single JSON object); failure to read it
+    # falls back to "let train.py figure it out" rather than blocking
+    # resume — accelerate state still loads, just without dataloader
+    # fast-forward.
+    train_state = state_dir / "train_state.json"
+    try:
+        data = json.loads(train_state.read_text(encoding="utf-8"))
+        current_step = int(data.get("current_step", 0))
+    except (OSError, ValueError, TypeError):
+        current_step = 0
+    if current_step > 0:
+        extra_argv.extend([
+            f"--initial_step={current_step}",
+            "--skip_until_initial_step",
+        ])
+    return ResumeSpec(extra_argv=extra_argv)
 
 
 def _apply_cfg_overrides(cfg: TrainingConfig, overrides: dict[str, Any]) -> TrainingConfig:

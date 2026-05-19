@@ -2560,11 +2560,21 @@ class AnimaTrainer:
         accelerator.end_training()
         optimizer_eval_fn()
 
-        if is_main_process and (args.save_state or args.save_state_on_train_end):
+        # LoRaHub pause path — the pause hook in run_training_loop
+        # already overwrote ``<output_name>-checkpoint-state`` at the
+        # current step and will skip the train-end final-state and
+        # final-weights writes. Without this guard we'd add two more
+        # files (``<output_name>-state`` and ``<output_name>.safetensors``)
+        # plus delete the very checkpoint /resume needs.
+        paused = bool(getattr(args, "_lorahub_paused", False))
+        if is_main_process and not paused and (
+            args.save_state or args.save_state_on_train_end
+        ):
             save_state_on_train_end(args, accelerator)
 
-        saver.cleanup_resumable()
-        saver.save_final(network, loop_state.global_step, num_train_epochs)
+        if not paused:
+            saver.cleanup_resumable()
+            saver.save_final(network, loop_state.global_step, num_train_epochs)
 
     # endregion
 

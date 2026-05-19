@@ -209,3 +209,58 @@ def test_auto_resume_handles_stale_config_snapshot(
     resumed = _attempt_auto_resume(max_attempts=3, global_default=True)
     assert resumed == 0
     assert stub_enqueue == []
+
+
+def test_anima_lora_resume_spec_injects_initial_step(tmp_path: Path) -> None:
+    """Resume must surface ``--initial_step`` + ``--skip_until_initial_step``.
+
+    Without these, ``train.py``'s resume path resets initial_step to 0
+    (see external/anima_lora/train.py:2474-2515) — accelerate restores
+    optimizer/scheduler state via ``--resume`` but the dataloader replays
+    from step 0, so users see "resume started over from step 1" even
+    though weights are correctly loaded.
+    """
+    import json as _json
+    from lorahub.api.jobs_helpers import _anima_lora_resume_spec
+
+    ws = tmp_path / "anima_ws"
+    ckpt = ws / "ckpt"
+    ckpt.mkdir(parents=True)
+    state_dir = ckpt / "anima_lora-checkpoint-state"
+    state_dir.mkdir()
+    (state_dir / "train_state.json").write_text(
+        _json.dumps({"current_epoch": 4, "current_step": 48}),
+        encoding="utf-8",
+    )
+    (ckpt / "anima_lora-checkpoint.safetensors").write_bytes(b"")
+
+    spec = _anima_lora_resume_spec(ws)
+
+    argv = spec.extra_argv
+    assert any(a.startswith("--resume=") for a in argv)
+    assert any(a.startswith("--network_weights=") for a in argv)
+    assert "--initial_step=48" in argv
+    assert "--skip_until_initial_step" in argv
+
+
+def test_anima_lora_resume_spec_omits_initial_step_when_unknown(
+    tmp_path: Path,
+) -> None:
+    """Missing/unreadable train_state.json must not break resume."""
+    from lorahub.api.jobs_helpers import _anima_lora_resume_spec
+
+    ws = tmp_path / "anima_ws"
+    ckpt = ws / "ckpt"
+    ckpt.mkdir(parents=True)
+    state_dir = ckpt / "anima_lora-checkpoint-state"
+    state_dir.mkdir()
+    # No train_state.json — older runs / partial state dirs.
+    (ckpt / "anima_lora-checkpoint.safetensors").write_bytes(b"")
+
+    spec = _anima_lora_resume_spec(ws)
+
+    argv = spec.extra_argv
+    assert any(a.startswith("--resume=") for a in argv)
+    assert any(a.startswith("--network_weights=") for a in argv)
+    assert not any(a.startswith("--initial_step") for a in argv)
+    assert "--skip_until_initial_step" not in argv

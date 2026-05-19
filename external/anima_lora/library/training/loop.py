@@ -395,37 +395,36 @@ def _run_epoch_steps(trainer, state: LoopState, epoch: int) -> None:
 
         # LoRaHub pause hook — when an external process drops a
         # ``_lorahub_pause`` file under the workspace (parent of
-        # ``args.output_dir``), force an immediate state + weights
-        # save and break out of the loop. Mirrors what
-        # ``--save_every_n_steps`` would do at this step but without
-        # waiting for the cadence boundary, so the user's "暂停"
-        # button always has a checkpoint to resume from. Only the
-        # main process touches the file system; other ranks block in
-        # ``wait_for_everyone()``.
+        # ``args.output_dir``), overwrite the resumable
+        # ``<output_name>-checkpoint-state`` directory in place and
+        # break out of the loop. Reuses sd-scripts' own
+        # ``save_checkpoint_state`` (the same one
+        # ``checkpointing_epochs`` calls at each cadence boundary), so
+        # pausing never adds a *new* state directory — it just bumps
+        # the existing checkpoint to the current step. The matching
+        # weights are read out of the state dir's ``model.safetensors``
+        # at resume time, so we skip writing a separate step ckpt.
+        # Only the main process touches the file system; other ranks
+        # block in ``wait_for_everyone()``.
         if accelerator.sync_gradients and accelerator.is_main_process:
             try:
                 ws_root = os.path.dirname(os.path.abspath(args.output_dir))
                 pause_flag = os.path.join(ws_root, "_lorahub_pause")
                 if os.path.exists(pause_flag):
                     logger.info(
-                        "[lorahub] pause flag detected — saving state at step %d and exiting",
+                        "[lorahub] pause flag detected — saving checkpoint state at step %d and exiting",
                         state.global_step,
                     )
                     try:
                         from library.training.checkpoints import (
-                            get_step_ckpt_name,
-                            save_and_remove_state_stepwise,
+                            save_checkpoint_state,
                         )
-                        ckpt_name = get_step_ckpt_name(
-                            args, "." + args.save_model_as, state.global_step
-                        )
-                        state.saver.save(
-                            ckpt_name, state.network, state.global_step, epoch
-                        )
-                        if getattr(args, "save_state", False):
-                            save_and_remove_state_stepwise(
-                                args, accelerator, state.global_step
-                            )
+                        # Mark the run as paused before writing state
+                        # so train_state.json (written via accelerate
+                        # save-hooks registered by CheckpointSaver)
+                        # carries the right step. Then overwrite the
+                        # in-place checkpoint-state dir.
+                        save_checkpoint_state(args, accelerator)
                     except Exception as exc:  # noqa: BLE001
                         logger.exception(
                             "[lorahub] forced save failed: %s", exc
@@ -437,6 +436,15 @@ def _run_epoch_steps(trainer, state: LoopState, epoch: int) -> None:
                         os.remove(pause_flag)
                     except OSError:
                         pass
+                    # Tell train.py's epilogue not to write the
+                    # final ``<output_name>-state`` and
+                    # ``<output_name>.safetensors`` — they would
+                    # otherwise be written *after* this point and
+                    # add two more files the user doesn't want.
+                    # ``cleanup_resumable`` is also skipped via the
+                    # same flag so the checkpoint we just wrote
+                    # survives until /resume picks it up.
+                    args._lorahub_paused = True  # type: ignore[attr-defined]
                     state._lorahub_pause = True  # type: ignore[attr-defined]
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[lorahub] pause-flag check failed: %s", exc)
