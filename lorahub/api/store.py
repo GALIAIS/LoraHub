@@ -56,11 +56,9 @@ class JobStore:
                 "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
                 (_SCHEMA_VERSION,),
             )
-            # Idempotent migration: legacy databases created before the
-            # `metadata` column existed need an in-place ADD COLUMN. SQLite's
-            # ALTER doesn't support IF NOT EXISTS for columns, so we sniff
-            # `PRAGMA table_info` first and only ALTER when missing. Safe to
-            # run on fresh DBs (the column is already there from _SCHEMA).
+            # Idempotent migration for old jobs.sqlite files predating the
+            # `metadata` column. SQLite ALTER doesn't support IF NOT EXISTS
+            # for columns, so we sniff PRAGMA table_info first.
             cur = conn.execute("PRAGMA table_info(jobs)")
             cols = {row[1] for row in cur.fetchall()}
             if "metadata" not in cols:
@@ -415,23 +413,16 @@ def _parse_dt_optional(s: str | None) -> datetime | None:
 def default_store_path() -> Path:
     """Where lorahub keeps the jobs DB.
 
-    Returns ``<project_root>/runs/jobs.sqlite`` going forward, anchored
-    on the resolved project root rather than ``Path.cwd()``. If a
-    legacy ``runs/.lorahub.sqlite`` exists from an older release we
-    keep using it so users don't lose history on upgrade.
-
-    The cwd-anchored layout was the historical source of "training
-    history disappears after a restart" reports — every uvicorn
-    restart from a different cwd would land on a fresh empty SQLite
-    file. See ``lorahub.api.paths`` for the resolution rules.
+    Always ``<project_root>/runs/jobs.sqlite``, anchored on the resolved
+    project root rather than ``Path.cwd()``. The cwd-anchored layout was
+    the historical source of "training history disappears after a
+    restart" reports — every uvicorn restart from a different cwd would
+    land on a fresh empty SQLite file. See ``lorahub.api.paths`` for the
+    resolution rules.
     """
     from lorahub.api.paths import runs_dir  # noqa: PLC0415
 
-    runs = runs_dir()
-    legacy = runs / ".lorahub.sqlite"
-    if legacy.is_file():
-        return legacy
-    return runs / "jobs.sqlite"
+    return runs_dir() / "jobs.sqlite"
 
 
 __all__ = ["JobStore", "default_store_path"]

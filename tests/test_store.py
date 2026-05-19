@@ -128,7 +128,7 @@ def test_registry_works_without_store(tmp_path: Path) -> None:
 
 def test_default_store_path_under_runs() -> None:
     p = default_store_path()
-    assert p.name == ".lorahub.sqlite"
+    assert p.name == "jobs.sqlite"
     assert p.parent.name == "runs"
 
 

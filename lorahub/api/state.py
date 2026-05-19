@@ -119,8 +119,12 @@ class JobRegistry:
     def _persist(self, record: JobRecord) -> None:
         if self._store is None:
             return
-        with contextlib.suppress(Exception):
+        try:
             self._store.upsert(record)
+        except Exception:  # noqa: BLE001
+            import traceback  # noqa: PLC0415
+
+            traceback.print_exc()
 
     def create(self, workspace: Path, config_snapshot: dict[str, Any]) -> JobRecord:
         with self._lock:
