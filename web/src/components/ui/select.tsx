@@ -8,12 +8,18 @@ import { cn } from "@/lib/utils"
  * base-ui's <Select.Value> falls back to printing the raw value when it
  * cannot find a matching label in the store-level `items` prop on
  * <Select.Root>. We don't pass that prop — every consumer just renders
- * <SelectItem> children. To bridge the gap, we maintain a small
- * Context-backed registry: each <SelectItem> publishes its
- * `value -> rendered children` pair on mount, and our <SelectValue>
- * looks the current value up in that map. If the lookup misses (item
- * not yet mounted, or genuinely unknown value), we fall back to the
- * placeholder rather than the raw value.
+ * <SelectItem> children. To bridge the gap, we build a Context-backed
+ * label registry from two sources:
+ *
+ *   1. A static walk of the JSX children tree on every <Select> render
+ *      — picks up every <SelectItem> regardless of whether the popover
+ *      has ever been opened (base-ui mounts <SelectContent> lazily).
+ *   2. Runtime registration from each <SelectItem>'s effect — covers
+ *      cases where item children change after mount (e.g. translated
+ *      label that resolves async).
+ *
+ * <SelectValue> looks the current value up in this map; on miss it
+ * shows the placeholder rather than the raw value.
  */
 interface SelectLabelRegistry {
   register: (value: string, node: React.ReactNode) => void
@@ -23,27 +29,77 @@ interface SelectLabelRegistry {
 
 const SelectLabelContext = React.createContext<SelectLabelRegistry | null>(null)
 
+function _normalizeKey(value: unknown): string {
+  if (value == null) return ""
+  if (typeof value === "string") return value
+  return JSON.stringify(value)
+}
+
+/** Recursively walk a React subtree collecting `(value -> children)` pairs
+ *  from every <SelectItem>. Robust to wrapping <SelectGroup> / fragments
+ *  / arrays produced by {cond && <SelectItem .../>} conditionals.
+ */
+function _collectStaticLabels(
+  node: React.ReactNode,
+  out: Record<string, React.ReactNode>,
+): void {
+  if (node == null || typeof node === "boolean") return
+  if (Array.isArray(node)) {
+    for (const child of node) _collectStaticLabels(child, out)
+    return
+  }
+  if (!React.isValidElement(node)) return
+  const el = node as React.ReactElement<{
+    value?: unknown
+    children?: React.ReactNode
+  }>
+  if (el.type === SelectItem) {
+    const key = _normalizeKey(el.props.value)
+    if (key !== "" && key !== '""') {
+      out[key] = el.props.children
+    }
+    return
+  }
+  if (el.props && "children" in el.props) {
+    _collectStaticLabels(el.props.children, out)
+  }
+}
+
 function Select<Value = string, Multiple extends boolean | undefined = false>({
   children,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root<Value, Multiple>>) {
-  const [labels, setLabels] = React.useState<Record<string, React.ReactNode>>({})
+  // Pre-walk the JSX so the trigger renders the right label on first
+  // paint even before base-ui has lazily mounted the popover content.
+  const staticLabels = React.useMemo(() => {
+    const out: Record<string, React.ReactNode> = {}
+    _collectStaticLabels(children, out)
+    return out
+  }, [children])
+
+  const [dynamicLabels, setDynamicLabels] = React.useState<
+    Record<string, React.ReactNode>
+  >({})
+
   const registry = React.useMemo<SelectLabelRegistry>(
     () => ({
       register: (value, node) =>
-        setLabels((prev) =>
+        setDynamicLabels((prev) =>
           prev[value] === node ? prev : { ...prev, [value]: node },
         ),
       unregister: (value) =>
-        setLabels((prev) => {
+        setDynamicLabels((prev) => {
           if (!(value in prev)) return prev
           const next = { ...prev }
           delete next[value]
           return next
         }),
-      lookup: (value) => labels[value],
+      // Dynamic registration wins (live label updates) but we always
+      // have a static fallback for the first paint.
+      lookup: (value) =>
+        value in dynamicLabels ? dynamicLabels[value] : staticLabels[value],
     }),
-    [labels],
+    [dynamicLabels, staticLabels],
   )
   return (
     <SelectLabelContext.Provider value={registry}>
@@ -79,25 +135,18 @@ function SelectValue({
       if (childrenProp != null && childrenProp !== "") {
         return childrenProp
       }
-      const key =
-        value == null
-          ? ""
-          : typeof value === "string"
-            ? value
-            : JSON.stringify(value)
+      const key = _normalizeKey(value)
       // Empty value: nothing selected -> placeholder.
       if (key === "" || key === '""') {
         return placeholder ?? null
       }
       const label = registry?.lookup(key)
       if (label != null && label !== "") return label
-      // Registry miss: this happens BEFORE the user opens the dropdown
-      // for the first time, because base-ui mounts <SelectItem> children
-      // lazily inside the popover. Fall back to the raw value so the
-      // trigger shows something meaningful (e.g. "anima_lora") instead
-      // of an empty placeholder. The proper label takes over the moment
-      // the user opens the popover once (mount → registry.register).
-      return key
+      // Genuinely unknown value (no <SelectItem> with this value
+      // anywhere in the tree) — show the placeholder rather than
+      // leaking the raw token. Static label collection means a real
+      // miss here implies misconfiguration upstream, not lazy mount.
+      return placeholder ?? null
     },
     [childrenProp, placeholder, registry],
   )
@@ -202,12 +251,7 @@ function SelectItem({
   const registry = React.useContext(SelectLabelContext)
   React.useEffect(() => {
     if (!registry) return undefined
-    const key =
-      value == null
-        ? ""
-        : typeof value === "string"
-          ? value
-          : JSON.stringify(value)
+    const key = _normalizeKey(value)
     if (key === "" || key === '""') return undefined
     registry.register(key, children)
     return () => registry.unregister(key)
