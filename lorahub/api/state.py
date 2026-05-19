@@ -30,6 +30,10 @@ _DEFAULT_RING_SIZE = 1024
 
 class JobState(StrEnum):
     queued = "queued"
+    preparing = "preparing"  # backend.launch is running pre-flight work
+    # (anima_lora preprocess: resize / cache_latents / cache_text_embeddings).
+    # The job has been picked up by a worker slot but the trainer
+    # subprocess hasn't started yet.
     running = "running"
     canceling = "canceling"
     succeeded = "succeeded"
