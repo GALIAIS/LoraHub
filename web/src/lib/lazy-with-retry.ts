@@ -11,54 +11,34 @@
  *   1. Try the import once.
  *   2. If it fails, retry once after a short delay (covers transient
  *      network blips).
- *   3. If the retry also fails AND the error matches a chunk-load
- *      pattern, hard-reload the page once. A sessionStorage flag
- *      prevents reload loops if the failure is genuine (offline,
- *      server down, …).
+ *   3. If the retry also fails, hand recovery to the shared dynamic
+ *      import recovery helper.
  */
 import { lazy, type ComponentType } from "react"
-
-const RELOAD_FLAG = "lorahub:chunk-reload"
-
-function isChunkLoadError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const msg = err.message || ""
-  // Vite / native dynamic-import / webpack chunk-load shapes.
-  return (
-    msg.includes("Failed to fetch dynamically imported module") ||
-    msg.includes("Importing a module script failed") ||
-    msg.includes("error loading dynamically imported module") ||
-    /Loading chunk \S+ failed/.test(msg) ||
-    msg.includes("ChunkLoadError")
-  )
-}
+import {
+  clearDynamicImportRecovery,
+  importWithDynamicImportRecovery,
+  isDynamicImportRecoveryError,
+} from "./dynamic-import-recovery"
 
 export function lazyWithRetry<T extends ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
+  scope = "route:unknown",
 ): React.LazyExoticComponent<T> {
   return lazy(async () => {
     try {
       return await factory()
-    } catch (first) {
+    } catch {
       // Single retry — covers a transient blip without forcing a reload.
       try {
         await new Promise((r) => setTimeout(r, 200))
-        return await factory()
+        return await importWithDynamicImportRecovery(factory, scope)
       } catch (second) {
-        if (isChunkLoadError(second)) {
-          const alreadyReloaded =
-            sessionStorage.getItem(RELOAD_FLAG) === "1"
-          if (!alreadyReloaded) {
-            sessionStorage.setItem(RELOAD_FLAG, "1")
-            window.location.reload()
-            // Return a never-resolving promise so React doesn't render
-            // an error boundary in the split-second before reload.
-            return new Promise<{ default: T }>(() => {})
-          }
-          // Reload already attempted — clear the flag so a future
-          // genuine deploy can retry, then re-throw to surface the
-          // error boundary.
-          sessionStorage.removeItem(RELOAD_FLAG)
+        if (isDynamicImportRecoveryError(second)) {
+          // Recovery orchestration moved into
+          // `dynamic-import-recovery.ts`; if we are still here, that
+          // module already decided not to reload again in this window.
+          clearDynamicImportRecovery(scope)
         }
         throw second
       }
@@ -66,9 +46,9 @@ export function lazyWithRetry<T extends ComponentType<any>>(
   })
 }
 
-// Clear the reload guard once the app has successfully booted, so the
-// next stale-chunk event can trigger another reload. Called from
-// `main.tsx` after `createRoot().render()`.
+// Clear the global guards once the app has successfully booted, so the
+// next stale-chunk event can trigger another reload.
 export function clearChunkReloadGuard(): void {
-  sessionStorage.removeItem(RELOAD_FLAG)
+  clearDynamicImportRecovery("unhandledrejection")
+  clearDynamicImportRecovery("vite-preload")
 }

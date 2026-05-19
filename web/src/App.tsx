@@ -16,21 +16,27 @@ import {
   SlidersHorizontal,
   Sun,
 } from "lucide-react"
+import { preloadAppRoute, type AppRouteModuleKey } from "@/app/route-modules"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalStatusBar } from "@/components/global-status-bar"
 import { cn } from "@/lib/utils"
 
-const NAV = [
-  { to: "/", label: "数据面板", icon: Activity },
-  { to: "/jobs", label: "训练任务", icon: ListTree },
-  { to: "/analysis", label: "训练分析", icon: BarChart3 },
-  { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal },
-  { to: "/configs", label: "训练配置", icon: Layers },
-  { to: "/datasets", label: "数据集", icon: Database },
-  { to: "/image-studio", label: "图像工作台", icon: Palette },
-  { to: "/gallery", label: "样图画廊", icon: Images },
-  { to: "/settings", label: "设置", icon: Settings },
-  { to: "/about", label: "关于", icon: Info },
+const NAV: Array<{
+  to: string
+  label: string
+  icon: typeof Activity
+  routeKey: AppRouteModuleKey
+}> = [
+  { to: "/", label: "数据面板", icon: Activity, routeKey: "dashboard" },
+  { to: "/jobs", label: "训练任务", icon: ListTree, routeKey: "jobs" },
+  { to: "/analysis", label: "训练分析", icon: BarChart3, routeKey: "analysis" },
+  { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal, routeKey: "sweeps" },
+  { to: "/configs", label: "训练配置", icon: Layers, routeKey: "configs" },
+  { to: "/datasets", label: "数据集", icon: Database, routeKey: "datasets" },
+  { to: "/image-studio", label: "图像工作台", icon: Palette, routeKey: "image-studio" },
+  { to: "/gallery", label: "样图画廊", icon: Images, routeKey: "gallery" },
+  { to: "/settings", label: "设置", icon: Settings, routeKey: "settings" },
+  { to: "/about", label: "关于", icon: Info, routeKey: "about" },
 ]
 
 type ThemeMode = "light" | "dark" | "system"
@@ -44,6 +50,15 @@ const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
   { value: "amber", label: "琥珀" },
   { value: "rose", label: "蔷薇" },
 ]
+
+function logRouterEvent(message: string, payload?: unknown) {
+  if (typeof window === "undefined") return
+  if (payload === undefined) {
+    console.info(message)
+    return
+  }
+  console.info(message, payload)
+}
 
 export default function App() {
   // Route key — used both as React Suspense / ErrorBoundary reset key
@@ -59,6 +74,10 @@ export default function App() {
     const stored = window.localStorage.getItem(ACCENT_KEY)
     return stored === "cyan" || stored === "amber" || stored === "rose" ? stored : "slate"
   })
+
+  useEffect(() => {
+    logRouterEvent("[router] location changed", location.pathname)
+  }, [location.pathname])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -135,11 +154,19 @@ export default function App() {
         </div>
 
         <nav aria-label="工作台" className="flex flex-col gap-0.5">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {NAV.map(({ to, label, icon: Icon, routeKey }) => (
             <NavLink
               key={to}
               to={to}
               end={to === "/"}
+              onMouseEnter={() => void preloadAppRoute(routeKey)}
+              onFocus={() => void preloadAppRoute(routeKey)}
+              onClick={() => {
+                logRouterEvent("[router] nav click", {
+                  from: location.pathname,
+                  to,
+                })
+              }}
               className={({ isActive }) =>
                 cn(
                   "group flex items-center gap-2 rounded-[2px] px-2.5 py-1.5 text-[13px] transition-colors",
@@ -240,6 +267,7 @@ export default function App() {
             }
           >
             <ErrorBoundary resetKey={location.pathname}>
+              <RouteOutletLogger pathname={location.pathname} />
               <Outlet />
             </ErrorBoundary>
           </Suspense>
@@ -247,4 +275,11 @@ export default function App() {
       </main>
     </div>
   )
+}
+
+function RouteOutletLogger({ pathname }: { pathname: string }) {
+  useEffect(() => {
+    logRouterEvent("[router] render outlet", pathname)
+  }, [pathname])
+  return null
 }

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import App from "./App"
 import "./index.css"
+import { installDynamicImportRecovery } from "./lib/dynamic-import-recovery"
 import { clearChunkReloadGuard, lazyWithRetry } from "./lib/lazy-with-retry"
 
 // Code-split every page route. Suspense lives inside <App> so the
@@ -12,39 +13,45 @@ import { clearChunkReloadGuard, lazyWithRetry } from "./lib/lazy-with-retry"
 // wins are image-studio (virtualised grid + smart-caption modals),
 // configs (the schema-driven form), and analysis (the chart stack)
 // — without splitting they all rode the initial 1.2 MB bundle.
-//
-// `lazyWithRetry` recovers from stale-chunk errors after a deploy by
-// hard-reloading once when a chunk import fails — see
-// `lib/lazy-with-retry.ts`.
-const DashboardPage = lazyWithRetry(() =>
-  import("./pages/dashboard").then((m) => ({ default: m.DashboardPage })),
+const DashboardPage = lazyWithRetry(
+  () => import("./pages/dashboard").then((m) => ({ default: m.DashboardPage })),
+  "route:dashboard",
 )
-const JobsPage = lazyWithRetry(() =>
-  import("./pages/jobs").then((m) => ({ default: m.JobsPage })),
+const JobsPage = lazyWithRetry(
+  () => import("./pages/jobs").then((m) => ({ default: m.JobsPage })),
+  "route:jobs",
 )
-const AnalysisPage = lazyWithRetry(() =>
-  import("./pages/analysis").then((m) => ({ default: m.AnalysisPage })),
+const AnalysisPage = lazyWithRetry(
+  () => import("./pages/analysis").then((m) => ({ default: m.AnalysisPage })),
+  "route:analysis",
 )
-const SweepsPage = lazyWithRetry(() =>
-  import("./pages/sweeps").then((m) => ({ default: m.SweepsPage })),
+const SweepsPage = lazyWithRetry(
+  () => import("./pages/sweeps").then((m) => ({ default: m.SweepsPage })),
+  "route:sweeps",
 )
-const ConfigsPage = lazyWithRetry(() =>
-  import("./pages/configs").then((m) => ({ default: m.ConfigsPage })),
+const ConfigsPage = lazyWithRetry(
+  () => import("./pages/configs").then((m) => ({ default: m.ConfigsPage })),
+  "route:configs",
 )
-const DatasetsPage = lazyWithRetry(() =>
-  import("./pages/datasets").then((m) => ({ default: m.DatasetsPage })),
+const DatasetsPage = lazyWithRetry(
+  () => import("./pages/datasets").then((m) => ({ default: m.DatasetsPage })),
+  "route:datasets",
 )
-const ImageStudioPage = lazyWithRetry(() =>
-  import("./pages/image-studio").then((m) => ({ default: m.ImageStudioPage })),
+const ImageStudioPage = lazyWithRetry(
+  () => import("./pages/image-studio").then((m) => ({ default: m.ImageStudioPage })),
+  "route:image-studio",
 )
-const GalleryPage = lazyWithRetry(() =>
-  import("./pages/gallery").then((m) => ({ default: m.GalleryPage })),
+const GalleryPage = lazyWithRetry(
+  () => import("./pages/gallery").then((m) => ({ default: m.GalleryPage })),
+  "route:gallery",
 )
-const SettingsPage = lazyWithRetry(() =>
-  import("./pages/settings").then((m) => ({ default: m.SettingsPage })),
+const SettingsPage = lazyWithRetry(
+  () => import("./pages/settings").then((m) => ({ default: m.SettingsPage })),
+  "route:settings",
 )
-const AboutPage = lazyWithRetry(() =>
-  import("./pages/about").then((m) => ({ default: m.AboutPage })),
+const AboutPage = lazyWithRetry(
+  () => import("./pages/about").then((m) => ({ default: m.AboutPage })),
+  "route:about",
 )
 
 const queryClient = new QueryClient({
@@ -56,25 +63,19 @@ const queryClient = new QueryClient({
   },
 })
 
-// Catch chunk-load rejections that escape lazyWithRetry — anything that
-// uses raw `import()` (eg. on-demand third-party widgets) falls through
-// to the global handler.
-window.addEventListener("unhandledrejection", (ev) => {
-  const reason = ev.reason
-  const msg = reason instanceof Error ? reason.message : String(reason ?? "")
-  const looksStale =
-    msg.includes("Failed to fetch dynamically imported module") ||
-    msg.includes("Importing a module script failed") ||
-    /Loading chunk \S+ failed/.test(msg)
-  if (!looksStale) return
-  const flag = "lorahub:chunk-reload"
-  if (sessionStorage.getItem(flag) === "1") return
-  sessionStorage.setItem(flag, "1")
-  ev.preventDefault()
-  window.location.reload()
-})
+installDynamicImportRecovery()
 
-createRoot(document.getElementById("root")!).render(
+createRoot(document.getElementById("root")!, {
+  onUncaughtError(error, errorInfo) {
+    console.error("React root uncaught error:", error, errorInfo)
+  },
+  onCaughtError(error, errorInfo) {
+    console.error("React root caught error:", error, errorInfo)
+  },
+  onRecoverableError(error, errorInfo) {
+    console.warn("React root recoverable error:", error, errorInfo)
+  },
+}).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
