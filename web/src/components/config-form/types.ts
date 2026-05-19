@@ -97,6 +97,11 @@ export interface ConfigFormValue {
       dropoutEveryNEpochs?: number
       tagDropoutRate?: number
       keepTokens?: number
+      /** Hard-drop list. Each entry is removed verbatim (case-insensitive
+       *  substring match) from every caption at compile time, before the
+       *  trainer reads them. Tag-style entries (``"1girl"``) and
+       *  natural-language phrases (``"looking at viewer"``) both work. */
+      dropTokens?: string[]
       keepTokensSeparator?: string | null
       secondarySeparator?: string | null
       enableWildcard?: boolean

@@ -272,6 +272,25 @@ export const DatasetFields = memo(function DatasetFields({
               />
             </Row>
             <Row
+              label="dropTokens"
+              description="每行一个,完整移除指定字串(大小写不敏感,支持自然语言短语)。例：1girl / looking at viewer。编译时镜像到 captions_sanitized/,源文件不动。"
+              errors={errorMap.get("dataset.caption.dropTokens")}
+            >
+              <textarea
+                className="w-full max-w-2xl rounded-[4px] border border-input bg-background px-3 py-2 text-sm font-mono outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60"
+                rows={4}
+                placeholder={"1girl\nlooking at viewer\n2d, anime style"}
+                value={(caption.dropTokens ?? []).join("\n")}
+                onChange={(e) => {
+                  const lines = e.target.value
+                    .split("\n")
+                    .map((s) => s.trim())
+                    .filter((s) => s.length > 0)
+                  set(["dataset", "caption", "dropTokens"], lines)
+                }}
+              />
+            </Row>
+            <Row
               label="keepTokensSeparator"
               description="自定义 keepTokens 与可洗牌段之间的分隔符。"
             >

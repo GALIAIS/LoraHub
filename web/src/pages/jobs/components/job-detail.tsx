@@ -104,7 +104,18 @@ export function JobDetail({
 
   const data = job.data
   const events = stream.events
-  const isLive = data?.state === "running"
+  // "Live" = the job slot is held by us — running, preparing
+  // (anima_lora preprocess phase), queued (waiting for the slot),
+  // or canceling (we already asked it to stop). All four states
+  // need a visible "取消" button so the user can recover from a
+  // bug-stuck job without restarting uvicorn. Without this the
+  // queued / preparing rows had no way out and the user had to ssh
+  // in to flip them.
+  const isLive =
+    data?.state === "running"
+    || data?.state === "preparing"
+    || data?.state === "queued"
+    || data?.state === "canceling"
   const isTerminal = data ? TERMINAL_STATES.has(data.state) : false
   // Compare-mode in the jobs page is a *jumping-off point*: we keep the
   // checkbox UX in the sidebar, but the actual compare panels live on

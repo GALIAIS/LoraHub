@@ -204,6 +204,16 @@ class CaptionConfig(BaseModel):
     # First N comma-separated tokens are NEVER shuffled away; pinning
     # the trigger word at index 0 is the typical use.
     keep_tokens: int = Field(0, ge=0)
+    # Hard-drop list — every entry that appears in a caption is
+    # removed verbatim before training (case-insensitive substring
+    # match, then comma-list cleanup). Entries can be either tag-style
+    # (``"1girl"``, ``"looking at viewer"``) or natural-language
+    # phrases (``"a person standing in front of a window"``). Applied
+    # at compile time to a sanitised mirror of the dataset under
+    # ``<workspace>/captions_sanitized/`` so the trainer reads the
+    # filtered text, but the user's source ``.txt`` files are left
+    # untouched. Empty list = no-op (the mirror step is also skipped).
+    drop_tokens: list[str] = Field(default_factory=list)
     # Custom separator between "kept" and shufflable tokens; default ","
     keep_tokens_separator: str | None = None
     # Secondary separator within a token group (e.g. " ,"). kohya only.

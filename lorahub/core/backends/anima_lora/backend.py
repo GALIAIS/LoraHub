@@ -149,6 +149,22 @@ class AnimaLoraBackend:
         workspace = workspace.resolve()
         workspace.mkdir(parents=True, exist_ok=True)
 
+        # Caption sanitisation: when the recipe lists drop_tokens, mirror
+        # the dataset under <workspace>/captions_sanitized/ with the
+        # listed strings stripped from every .txt sidecar. The mirror
+        # uses symlinks for images so it's effectively free on disk.
+        # The trainer downstream only sees the filtered captions; no
+        # changes to the user's source files. No-op when drop_tokens
+        # is empty.
+        from lorahub.core.config.caption_filter import sanitise_dataset  # noqa: PLC0415
+        sanitised_source = sanitise_dataset(
+            source=cfg.dataset.source,
+            drop_tokens=list(cfg.dataset.caption.drop_tokens),
+            workspace=workspace,
+        )
+        if sanitised_source != cfg.dataset.source:
+            cfg.dataset.source = sanitised_source
+
         # Auto-preprocess: ensure the LoRA cache under
         # <workspace>/post_image_dataset/lora is populated before the
         # trainer reads it. This keeps cfg.dataset.source pointing at
