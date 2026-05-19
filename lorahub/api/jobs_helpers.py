@@ -970,31 +970,69 @@ def _gpu_sampler_loop(
             continue
 
 
-def _find_latest_state_dir(workspace: Path) -> Path | None:
-    """Most recently modified `*-state*` directory under the job workspace.
+_RESUME_SCAN_EXCLUDE_DIRS = frozenset(
+    {
+        # anima_lora preprocess scratch — `_anima_te.safetensors` text
+        # encoder caches live here and have very fresh mtimes, so without
+        # excluding them they'd outrank the real LoRA weights when the
+        # resume finder picks max(mtime).
+        "post_image_dataset",
+        # LoRaHub-managed dataset mirror (caption_filter sanitisation).
+        "captions_sanitized",
+        # archive / VCS / pycache noise.
+        "_archive",
+        "__pycache__",
+        ".git",
+        ".ipynb_checkpoints",
+    },
+)
 
-    sd-scripts writes state directories like `<output_name>-state` at the
-    end of a run and `<output_name>-state-step<N>` at each interval. We
-    look under the workspace tree (kohya defaults `--output_dir` to the
-    workspace) and pick the freshest match — that is what `/resume`
-    feeds into `--resume=<dir>`.
+
+def _find_latest_state_dir(workspace: Path) -> Path | None:
+    """Most recently modified ``*-state*`` directory under the job workspace.
+
+    sd-scripts writes state directories like ``<output_name>-state`` at
+    the end of a run and ``<output_name>-state-step<N>`` at each
+    interval. Walks the entire workspace (kohya can put output_dir
+    anywhere; anima_lora pins it under ``ckpt/``) but skips
+    ``post_image_dataset`` / ``captions_sanitized`` so cache artifacts
+    can't poison the most-recent-mtime pick.
     """
     if not workspace.is_dir():
         return None
-    candidates = [p for p in workspace.rglob("*-state*") if p.is_dir()]
+    candidates: list[Path] = []
+    for p in workspace.rglob("*"):
+        if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
+            continue
+        if p.is_dir() and "-state" in p.name:
+            candidates.append(p)
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def _find_latest_safetensors(workspace: Path) -> Path | None:
-    """Most recently modified `*.safetensors` under the workspace tree."""
+    """Most recently modified trainer-output ``*.safetensors`` under workspace.
+
+    Skips ``post_image_dataset`` / ``captions_sanitized`` for the same
+    reason ``_find_latest_state_dir`` does — every preprocessed image
+    has a ``<stem>_anima_te.safetensors`` text-encoder cache written
+    after preprocess, so the freshest-mtime pick used to be one of
+    those cache files instead of the actual LoRA weights. Resume then
+    fed ``--network_weights=<te_cache>`` into the trainer and
+    effectively started training from random init.
+    """
     if not workspace.is_dir():
         return None
-    files = list(workspace.rglob("*.safetensors"))
-    if not files:
+    candidates: list[Path] = []
+    for p in workspace.rglob("*.safetensors"):
+        if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
+            continue
+        if p.is_file():
+            candidates.append(p)
+    if not candidates:
         return None
-    return max(files, key=lambda p: p.stat().st_mtime)
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 # --------------------------------------------------------------------------- #

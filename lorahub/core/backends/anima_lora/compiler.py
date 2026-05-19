@@ -330,15 +330,21 @@ def _shared_overrides(
     out += ["--optimizer_type", opts.optimizer_type]
     out += ["--lr_scheduler", opts.lr_scheduler]
     out += ["--learning_rate", _fmt_float(opts.learning_rate)]
-    out += ["--max_train_epochs", str(opts.max_train_epochs)]
-    # ``cfg.schedule.max_steps`` is the user-facing "训练总步数" override
-    # — the form widgets all read from there. anima_lora's train.py
-    # honours ``--max_train_steps`` (sd-scripts inheritance), and when
-    # both flags are set the trainer stops at whichever comes first.
-    # We forward the schedule cap when present so the UI's number
-    # actually drives training.
+    # When ``cfg.schedule.max_steps`` is set, prefer it over the
+    # epoch budget. anima_lora's train.py unconditionally overwrites
+    # ``args.max_train_steps`` with ``epochs × steps_per_epoch`` if
+    # ``--max_train_epochs`` is present (see train.py line 1622), so
+    # passing both defeats the user's explicit step cap. Send only
+    # ``--max_train_steps`` in that case; epochs are still tracked
+    # internally by the trainer.
     if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
+        # cfg.schedule.max_steps is the user-facing "训练总步数"
+        # override — the form widgets all read from there. Send only
+        # this; omit --max_train_epochs so train.py doesn't overwrite
+        # max_train_steps with the epoch-derived value.
         out += ["--max_train_steps", str(int(cfg.schedule.max_steps))]
+    else:
+        out += ["--max_train_epochs", str(opts.max_train_epochs)]
     out += ["--save_every_n_epochs", str(opts.save_every_n_epochs)]
     if opts.save_every_n_steps is not None and opts.save_every_n_steps > 0:
         out += ["--save_every_n_steps", str(int(opts.save_every_n_steps))]
