@@ -164,7 +164,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         title="网络容量"
         subtitle="LoRA rank / alpha"
       >
-        <Row label="network_dim(rank)" errors={errorMap.get("backend.animaLora.networkDim")}>
+        <Row label="网络维度 (rank)" errors={errorMap.get("backend.animaLora.networkDim")}>
           <FloatInput
             value={v.networkDim}
             onChange={(n) => set(["backend", "animaLora", "networkDim"], n)}
@@ -172,7 +172,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="network_alpha" errors={errorMap.get("backend.animaLora.networkAlpha")}>
+        <Row label="网络 alpha" errors={errorMap.get("backend.animaLora.networkAlpha")}>
           <FloatInput
             value={v.networkAlpha}
             onChange={(n) => set(["backend", "animaLora", "networkAlpha"], n)}
@@ -181,7 +181,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="只训练 unet"
+          label="只训练 UNet"
           description="anima_lora 默认开启 — text encoder 不训练。"
         >
           <ToggleSwitch
@@ -193,21 +193,21 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 优化器 + 调度 === */}
       <Section title="优化器 / 学习率 / 调度">
-        <Row label="optimizer_type">
+        <Row label="优化器类型">
           <EnumSelect
             value={v.optimizerType ?? "AdamW"}
             onChange={(s) => set(["backend", "animaLora", "optimizerType"], s)}
             options={OPTIMIZER_OPTIONS}
           />
         </Row>
-        <Row label="lr_scheduler">
+        <Row label="学习率调度器">
           <EnumSelect
             value={v.lrScheduler ?? "constant"}
             onChange={(s) => set(["backend", "animaLora", "lrScheduler"], s)}
             options={LR_SCHEDULER_OPTIONS}
           />
         </Row>
-        <Row label="learning_rate" errors={errorMap.get("backend.animaLora.learningRate")}>
+        <Row label="学习率" errors={errorMap.get("backend.animaLora.learningRate")}>
           <FloatInput
             value={v.learningRate}
             onChange={(n) => set(["backend", "animaLora", "learningRate"], n)}
@@ -215,7 +215,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             step={1e-6}
           />
         </Row>
-        <Row label="max_train_epochs">
+        <Row label="最大训练轮数">
           <FloatInput
             value={v.maxTrainEpochs}
             onChange={(n) => set(["backend", "animaLora", "maxTrainEpochs"], n)}
@@ -223,7 +223,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="save_every_n_epochs">
+        <Row label="每 N 轮保存">
           <FloatInput
             value={v.saveEveryNEpochs}
             onChange={(n) => set(["backend", "animaLora", "saveEveryNEpochs"], n)}
@@ -231,7 +231,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="checkpointing_epochs" description="保存 optimizer state 的频率(用于断点续训)">
+        <Row label="检查点保存频率" description="保存 optimizer state 的频率（用于断点续训）。">
           <FloatInput
             value={v.checkpointingEpochs}
             onChange={(n) => set(["backend", "animaLora", "checkpointingEpochs"], n)}
@@ -239,7 +239,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="caption_dropout_rate">
+        <Row label="caption 丢弃率" description="训练时随机丢弃 caption 的概率,增强泛化。">
           <FloatInput
             value={v.captionDropoutRate}
             onChange={(n) => set(["backend", "animaLora", "captionDropoutRate"], n)}
@@ -253,14 +253,14 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 流匹配采样 === */}
       <Section title="流匹配采样" subtitle="Anima DiT 的 timestep + 损失权重">
-        <Row label="timestep_sampling">
+        <Row label="时间步采样方式">
           <EnumSelect
             value={v.timestepSampling ?? "sigmoid"}
             onChange={(s) => set(["backend", "animaLora", "timestepSampling"], s)}
             options={TIMESTEP_OPTIONS}
           />
         </Row>
-        <Row label="sigmoid_scale">
+        <Row label="sigmoid 缩放" description="控制 sigmoid 采样的集中程度。">
           <FloatInput
             value={v.sigmoidScale}
             onChange={(n) => set(["backend", "animaLora", "sigmoidScale"], n)}
@@ -268,7 +268,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             step={0.1}
           />
         </Row>
-        <Row label="discrete_flow_shift">
+        <Row label="离散流偏移" description="Flow matching 的 shift 参数。">
           <FloatInput
             value={v.discreteFlowShift}
             onChange={(n) => set(["backend", "animaLora", "discreteFlowShift"], n)}
@@ -277,7 +277,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="vr_loss_weight"
+          label="方差减少损失权重"
           description="可选 AsymFlow §5.2 方差减少损失。+40% step 计算成本,留空关闭。"
         >
           <FloatInput
@@ -294,13 +294,21 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 缓存 === */}
       <Section title="缓存" subtitle="latent / TE / LLM adapter 输出落盘">
-        <Row label="cache_latents" labelBadge={lockBadgeFor("cacheLatents")}>
+        <Row
+          label="缓存潜变量"
+          labelBadge={lockBadgeFor("cacheLatents")}
+          description="提前用 VAE 编码图片并存盘,大幅提速但占额外硬盘。"
+        >
           <ToggleSwitch
             checked={v.cacheLatents ?? true}
             onCheckedChange={(c) => set(["backend", "animaLora", "cacheLatents"], c)}
           />
         </Row>
-        <Row label="cache_latents_to_disk" labelBadge={lockBadgeFor("cacheLatentsToDisk")}>
+        <Row
+          label="潜变量缓存写盘"
+          labelBadge={lockBadgeFor("cacheLatentsToDisk")}
+          description="把潜变量缓存写到磁盘（释放内存）。"
+        >
           <ToggleSwitch
             checked={v.cacheLatentsToDisk ?? true}
             onCheckedChange={(c) =>
@@ -308,7 +316,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_text_encoder_outputs" labelBadge={lockBadgeFor("cacheTextEncoderOutputs")}>
+        <Row
+          label="缓存文本编码器输出"
+          labelBadge={lockBadgeFor("cacheTextEncoderOutputs")}
+          description="预计算 TE 输出并缓存,避免训练时重复 forward。"
+        >
           <ToggleSwitch
             checked={v.cacheTextEncoderOutputs ?? true}
             onCheckedChange={(c) =>
@@ -316,7 +328,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_text_encoder_outputs_to_disk" labelBadge={lockBadgeFor("cacheTextEncoderOutputsToDisk")}>
+        <Row
+          label="TE 缓存写盘"
+          labelBadge={lockBadgeFor("cacheTextEncoderOutputsToDisk")}
+          description="把文本编码器缓存写到磁盘（释放内存）。"
+        >
           <ToggleSwitch
             checked={v.cacheTextEncoderOutputsToDisk ?? true}
             onCheckedChange={(c) =>
@@ -324,7 +340,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cache_llm_adapter_outputs" labelBadge={lockBadgeFor("cacheLlmAdapterOutputs")}>
+        <Row
+          label="缓存 LLM Adapter 输出"
+          labelBadge={lockBadgeFor("cacheLlmAdapterOutputs")}
+          description="预计算 LLM adapter 输出并缓存。"
+        >
           <ToggleSwitch
             checked={v.cacheLlmAdapterOutputs ?? true}
             onCheckedChange={(c) =>
@@ -332,7 +352,10 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="use_shuffled_caption_variants">
+        <Row
+          label="打乱 caption 变体"
+          description="每 epoch 使用不同的 caption shuffle 变体,增加数据多样性。"
+        >
           <ToggleSwitch
             checked={v.useShuffledCaptionVariants ?? true}
             onCheckedChange={(c) =>
@@ -340,7 +363,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="static_token_count" labelBadge={lockBadgeFor("staticTokenCount")} description="Anima 必须 4096">
+        <Row
+          label="静态 token 数"
+          labelBadge={lockBadgeFor("staticTokenCount")}
+          description="Anima DiT torch.compile 路径锁死 4096。"
+        >
           <FloatInput
             value={v.staticTokenCount}
             onChange={(n) => set(["backend", "animaLora", "staticTokenCount"], n)}
@@ -348,7 +375,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="vae_chunk_size" labelBadge={lockBadgeFor("vaeChunkSize")}>
+        <Row
+          label="VAE 分块大小"
+          labelBadge={lockBadgeFor("vaeChunkSize")}
+          description="QwenImage VAE memory layout 锁死 64。"
+        >
           <FloatInput
             value={v.vaeChunkSize}
             onChange={(n) => set(["backend", "animaLora", "vaeChunkSize"], n)}
@@ -356,7 +387,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="vae_disable_cache" labelBadge={lockBadgeFor("vaeDisableCache")}>
+        <Row
+          label="禁用 VAE 缓存"
+          labelBadge={lockBadgeFor("vaeDisableCache")}
+          description="关闭 VAE 内部 KV 缓存,拖慢 ~30% 但与官方行为一致。"
+        >
           <ToggleSwitch
             checked={v.vaeDisableCache ?? false}
             onCheckedChange={(c) => set(["backend", "animaLora", "vaeDisableCache"], c)}
@@ -366,7 +401,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 注意力 / 编译 === */}
       <Section title="注意力 / torch.compile" subtitle="性能权衡旋钮">
-        <Row label="attn_mode" description="不装 flash-attn 时选 torch">
+        <Row label="注意力模式" description="不装 flash-attn 时选 torch。">
           <EnumSelect
             value={v.attnMode ?? "flash"}
             onChange={(s) => set(["backend", "animaLora", "attnMode"], s)}
@@ -374,8 +409,8 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="compile_mode"
-          description="full 与 gradient_checkpointing / blocks_to_swap 互斥(LoraHub 编译期会校验)"
+          label="编译模式"
+          description="full 与 gradient_checkpointing / blocks_to_swap 互斥（LoraHub 编译期会校验）。"
         >
           <EnumSelect
             value={v.compileMode ?? ""}
@@ -385,7 +420,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={COMPILE_MODE_OPTIONS}
           />
         </Row>
-        <Row label="compile_inductor_mode">
+        <Row label="Inductor 模式">
           <EnumSelect
             value={v.compileInductorMode ?? ""}
             onChange={(s) =>
@@ -397,7 +432,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={COMPILE_INDUCTOR_OPTIONS}
           />
         </Row>
-        <Row label="use_custom_down_autograd" description="anima_lora 自定义内存优化 autograd,默认开">
+        <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd,默认开。">
           <ToggleSwitch
             checked={v.useCustomDownAutograd ?? true}
             onCheckedChange={(c) =>
@@ -409,7 +444,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       {/* === 显存 / offload === */}
       <Section title="显存 / offload" subtitle="低显存训练相关">
-        <Row label="blocks_to_swap" description="0=关。graft preset 默认 20。">
+        <Row label="块交换数" description="0=关。graft preset 默认 20。">
           <FloatInput
             value={v.blocksToSwap}
             onChange={(n) => set(["backend", "animaLora", "blocksToSwap"], n)}
@@ -417,7 +452,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={0}
           />
         </Row>
-        <Row label="gradient_checkpointing">
+        <Row label="梯度检查点">
           <ToggleSwitch
             checked={v.gradientCheckpointing ?? false}
             onCheckedChange={(c) =>
@@ -425,7 +460,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="unsloth_offload_checkpointing" description="低显存预设的杀手锏">
+        <Row label="Unsloth offload 检查点" description="低显存预设的杀手锏。">
           <ToggleSwitch
             checked={v.unslothOffloadCheckpointing ?? false}
             onCheckedChange={(c) =>
@@ -436,7 +471,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="cpu_offload_checkpointing">
+        <Row label="CPU offload 检查点">
           <ToggleSwitch
             checked={v.cpuOffloadCheckpointing ?? false}
             onCheckedChange={(c) =>
@@ -444,7 +479,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
-        <Row label="mixed_precision">
+        <Row label="混合精度">
           <EnumSelect
             value={v.mixedPrecision ?? "bf16"}
             onChange={(s) => set(["backend", "animaLora", "mixedPrecision"], s)}
@@ -461,7 +496,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           subtitle="OrthoLoRA + T-LoRA 默认堆叠"
           defaultOpen
         >
-          <Row label="use_ortho" description="OrthoLoRA — SVD 参数化 + 正交正则">
+          <Row label="启用 OrthoLoRA" description="SVD 参数化 + 正交正则。">
             <ToggleSwitch
               checked={v.lora?.useOrtho ?? true}
               onCheckedChange={(c) =>
@@ -469,7 +504,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               }
             />
           </Row>
-          <Row label="use_timestep_mask" description="T-LoRA — 时间步相关 rank mask">
+          <Row label="启用时间步 mask" description="T-LoRA — 时间步相关 rank mask。">
             <ToggleSwitch
               checked={v.lora?.useTimestepMask ?? true}
               onCheckedChange={(c) =>
@@ -477,7 +512,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               }
             />
           </Row>
-          <Row label="min_rank">
+          <Row label="最小 rank">
             <FloatInput
               value={v.lora?.minRank}
               onChange={(n) =>
@@ -487,7 +522,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               min={1}
             />
           </Row>
-          <Row label="alpha_rank_scale">
+          <Row label="alpha/rank 缩放">
             <FloatInput
               value={v.lora?.alphaRankScale}
               onChange={(n) =>
@@ -503,7 +538,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === Method = postfix 子配置 === */}
       {method === "postfix" && (
         <Section title="method=postfix 子配置" defaultOpen>
-          <Row label="mode">
+          <Row label="模式">
             <EnumSelect
               value={v.postfix?.mode ?? "cond"}
               onChange={(s) => set(["backend", "animaLora", "postfix", "mode"], s)}
@@ -513,7 +548,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               ]}
             />
           </Row>
-          <Row label="cond_hidden_dim">
+          <Row label="条件隐藏维度">
             <FloatInput
               value={v.postfix?.condHiddenDim}
               onChange={(n) =>
@@ -523,7 +558,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               min={1}
             />
           </Row>
-          <Row label="lambda_init">
+          <Row label="lambda 初始值">
             <FloatInput
               value={v.postfix?.lambdaInit}
               onChange={(n) =>
@@ -533,7 +568,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={0.05}
             />
           </Row>
-          <Row label="te_cache_dir">
+          <Row label="TE 缓存目录">
             <PathInput
               value={v.postfix?.teCacheDir ?? ""}
               onChange={(s) =>
@@ -551,7 +586,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === Method = chimera 子配置 === */}
       {method === "chimera" && (
         <Section title="method=chimera 子配置" defaultOpen>
-          <Row label="balance_w_content">
+          <Row label="内容平衡权重">
             <FloatInput
               value={v.chimera?.balanceWContent}
               onChange={(n) =>
@@ -561,7 +596,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={1e-8}
             />
           </Row>
-          <Row label="balance_w_freq">
+          <Row label="频率平衡权重">
             <FloatInput
               value={v.chimera?.balanceWFreq}
               onChange={(n) =>
@@ -571,7 +606,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={1e-8}
             />
           </Row>
-          <Row label="balance_loss_warmup_ratio">
+          <Row label="平衡损失预热比例">
             <FloatInput
               value={v.chimera?.balanceLossWarmupRatio}
               onChange={(n) =>
@@ -592,7 +627,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === Method = easycontrol 子配置 === */}
       {method === "easycontrol" && (
         <Section title="method=easycontrol 子配置" defaultOpen>
-          <Row label="b_cond_init" description="softmax gate 初始值,-10 让 step 0 等同 baseline DiT">
+          <Row label="条件门初始值" description="softmax gate 初始值,-10 让 step 0 等同 baseline DiT。">
             <FloatInput
               value={v.easycontrol?.bCondInit}
               onChange={(n) =>
@@ -602,7 +637,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={0.5}
             />
           </Row>
-          <Row label="cond_token_count">
+          <Row label="条件 token 数">
             <FloatInput
               value={v.easycontrol?.condTokenCount}
               onChange={(n) =>
@@ -615,7 +650,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               min={1}
             />
           </Row>
-          <Row label="apply_ffn_lora">
+          <Row label="应用 FFN LoRA">
             <ToggleSwitch
               checked={v.easycontrol?.applyFfnLora ?? true}
               onCheckedChange={(c) =>
@@ -626,7 +661,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               }
             />
           </Row>
-          <Row label="drop_p" description="image-CFG dropout">
+          <Row label="图像丢弃率" description="image-CFG dropout。">
             <FloatInput
               value={v.easycontrol?.dropP}
               onChange={(n) =>
@@ -644,7 +679,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === Method = ip_adapter 子配置 === */}
       {method === "ip_adapter" && (
         <Section title="method=ip_adapter 子配置" defaultOpen>
-          <Row label="encoder">
+          <Row label="编码器">
             <EnumSelect
               value={v.ipAdapter?.encoder ?? "PE-Core-L14-336"}
               onChange={(s) =>
@@ -656,7 +691,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               ]}
             />
           </Row>
-          <Row label="ip_scale">
+          <Row label="IP 缩放系数">
             <FloatInput
               value={v.ipAdapter?.ipScale}
               onChange={(n) =>
@@ -666,7 +701,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={0.1}
             />
           </Row>
-          <Row label="gate_lr" description="门 LR,通常 10× 全局 LR">
+          <Row label="门学习率" description="门 LR,通常 10× 全局 LR。">
             <FloatInput
               value={v.ipAdapter?.gateLr}
               onChange={(n) =>
@@ -676,7 +711,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               step={1e-4}
             />
           </Row>
-          <Row label="image_drop_p">
+          <Row label="图像丢弃率">
             <FloatInput
               value={v.ipAdapter?.imageDropP}
               onChange={(n) =>
@@ -698,7 +733,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         subtitle="anima_lora base.toml 写死的字段。带 🔒 是 upstream 无法 override 的;带 ⚠️ 可改但有副作用。"
       >
         <Row
-          label="masked_loss"
+          label="Masked Loss"
           labelBadge={lockBadgeFor("maskedLoss")}
           description="Anima 训练管线硬依赖,关掉是无效操作。"
         >
@@ -708,7 +743,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="torch_compile"
+          label="torch.compile"
           labelBadge={lockBadgeFor("torchCompile")}
           description="static_token_count 性能收益的前提,upstream 训练循环假定开启。"
         >
@@ -718,7 +753,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="skip_cache_check"
+          label="跳过缓存校验"
           labelBadge={lockBadgeFor("skipCacheCheck")}
           description="跳过缓存哈希校验,只影响启动速度。"
         >
@@ -728,8 +763,9 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="dataloader_pin_memory"
+          label="DataLoader pin_memory"
           labelBadge={lockBadgeFor("dataloaderPinMemory")}
+          description="DataLoader pin_memory 一直开;upstream 没提供反向 flag。"
         >
           <ToggleSwitch
             checked={v.dataloaderPinMemory ?? true}
@@ -739,7 +775,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="persistent_data_loader_workers"
+          label="持久化 DataLoader workers"
           labelBadge={lockBadgeFor("persistentDataLoaderWorkers")}
           description="减少 epoch 边界 stall,但长跑可能泄漏 file handle。"
         >
@@ -751,9 +787,9 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="trim_crossattn_kv"
+          label="裁剪交叉注意力 KV"
           labelBadge={lockBadgeFor("trimCrossattnKv")}
-          description="启用 KV trimming(短 caption 加速 ~10-15%)。"
+          description="启用 KV trimming（短 caption 加速 ~10-15%）。"
         >
           <ToggleSwitch
             checked={v.trimCrossattnKv ?? false}
@@ -763,7 +799,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="no_half_vae"
+          label="半精度 VAE"
           labelBadge={lockBadgeFor("noHalfVae")}
           description="true 半精度 VAE 省显存,但偶尔在边缘数据集产生 NaN。"
         >
@@ -773,7 +809,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="save_precision"
+          label="保存精度"
           labelBadge={lockBadgeFor("savePrecision")}
           description="bf16 是 upstream 默认且匹配训练 dtype。"
         >
@@ -788,7 +824,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="save_model_as"
+          label="保存格式"
           labelBadge={lockBadgeFor("saveModelAs")}
           description="Anima 只能加载 safetensors。"
         >
@@ -798,7 +834,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={[{ value: "safetensors", label: "safetensors(锁定)" }]}
           />
         </Row>
-        <Row label="log_every_n_steps">
+        <Row label="日志记录步数" description="每 N 步记录一次训练日志。">
           <FloatInput
             value={v.logEveryNSteps}
             onChange={(n) => set(["backend", "animaLora", "logEveryNSteps"], n)}
@@ -809,7 +845,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
         {/* — Dataset blueprint 字段(写在 [[datasets]] / [general] 段) — */}
         <Row
-          label="keep_tokens"
+          label="保留 token 数"
           labelBadge={lockBadgeFor("keepTokens")}
           description="caption shuffle 保前 N 个 tag。改 < 3 trigger word 不再可靠。"
         >
@@ -821,7 +857,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="caption_extension"
+          label="caption 文件后缀"
           labelBadge={lockBadgeFor("captionExtension")}
           description="caption 文件后缀。改了所有图片会被跳过。"
         >
@@ -834,7 +870,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="validation_split_num"
+          label="验证集大小"
           labelBadge={lockBadgeFor("validationSplitNum")}
           description="留出验证集大小;0 = 关 CMMD 验证。"
         >
@@ -846,7 +882,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="enable_bucket"
+          label="多分辨率分桶"
           labelBadge={lockBadgeFor("enableBucket")}
           description="多分辨率 bucketing,Anima static-shape compile 硬约束。"
         >
@@ -858,7 +894,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
-          label="path_pattern"
+          label="路径匹配模式"
           description="fnmatch 模式;* 全部图,char_a/*|char_b/* OR-合并子文件夹。"
         >
           <PathInput
@@ -900,7 +936,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         {v.turbo && (
           <>
-            <Row label="iterations">
+            <Row label="迭代次数">
               <FloatInput
                 value={v.turbo.iterations}
                 onChange={(n) =>
@@ -910,7 +946,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 min={1}
               />
             </Row>
-            <Row label="student_rank / student_alpha" description="学生 LoRA 容量">
+            <Row label="学生 rank / alpha" description="学生 LoRA 容量。">
               <div className="flex gap-2 items-center">
                 <FloatInput
                   value={v.turbo.studentRank}
@@ -931,7 +967,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 />
               </div>
             </Row>
-            <Row label="student_steps" description="推理步数,蒸馏后用 --infer_steps N">
+            <Row label="学生推理步数" description="蒸馏后用 --infer_steps N。">
               <FloatInput
                 value={v.turbo.studentSteps}
                 onChange={(n) =>
@@ -941,7 +977,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 min={1}
               />
             </Row>
-            <Row label="teacher_cfg" description="教师 CFG,会被烤进学生(推理时 --cfg 1.0)">
+            <Row label="教师 CFG" description="教师 CFG,会被烤进学生（推理时 --cfg 1.0）。">
               <FloatInput
                 value={v.turbo.teacherCfg}
                 onChange={(n) =>
@@ -951,7 +987,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 step={0.5}
               />
             </Row>
-            <Row label="student_lr">
+            <Row label="学生学习率">
               <FloatInput
                 value={v.turbo.studentLr}
                 onChange={(n) =>
@@ -961,7 +997,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 step={1e-7}
               />
             </Row>
-            <Row label="fake_lr">
+            <Row label="Fake 学习率">
               <FloatInput
                 value={v.turbo.fakeLr}
                 onChange={(n) =>
@@ -971,7 +1007,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 step={1e-6}
               />
             </Row>
-            <Row label="save_every">
+            <Row label="保存间隔" description="每 N 次迭代保存一次。">
               <FloatInput
                 value={v.turbo.saveEvery}
                 onChange={(n) =>
