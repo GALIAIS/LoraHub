@@ -567,17 +567,36 @@ def _method_overrides(opts: AnimaLoraOptions) -> list[str]:
     raise CompilationError(msg)
 
 
-def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """LoRA / OrthoLoRA / T-LoRA stack — the default anima_lora behaviour."""
+def _network_args(*pairs: str) -> list[str]:
+    """Format ``key=value`` pieces as repeated ``--network_args`` argv.
+
+    train.py only exposes ``--network_args [NETWORK_ARGS ...]`` (nargs="*");
+    each adapter family reads its own kwargs out of that bag (see
+    ``networks/lora_anima/factory.py:120`` and the ``kwargs.get(...)``
+    sites under ``networks/methods/``). Emitting ``--use_ortho`` or
+    ``--b_cond_init`` etc. directly trips "unrecognized arguments" —
+    upstream's argparse never declared them as flags.
+    """
     out: list[str] = []
-    sub = opts.lora
-    if sub.use_ortho:
-        out += ["--use_ortho"]
-    if sub.use_timestep_mask:
-        out += ["--use_timestep_mask"]
-    out += ["--min_rank", str(sub.min_rank)]
-    out += ["--alpha_rank_scale", _fmt_float(sub.alpha_rank_scale)]
+    for piece in pairs:
+        out += ["--network_args", piece]
     return out
+
+
+def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
+    """LoRA / OrthoLoRA / T-LoRA stack — the default anima_lora behaviour.
+
+    All four knobs feed ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs``
+    via ``--network_args`` k=v pairs; none of them is an argparse flag.
+    """
+    sub = opts.lora
+    pieces: list[str] = [
+        f"use_ortho={'true' if sub.use_ortho else 'false'}",
+        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
+        f"min_rank={sub.min_rank}",
+        f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}",
+    ]
+    return _network_args(*pieces)
 
 
 def _postfix_overrides(opts: AnimaLoraOptions) -> list[str]:
@@ -586,8 +605,6 @@ def _postfix_overrides(opts: AnimaLoraOptions) -> list[str]:
     if sub is None:  # validated upstream by AnimaLoraOptions model_validator
         msg = "method='postfix' missing sub-config (validator should have caught this)"
         raise CompilationError(msg)
-    # Postfix uses `network_args` upstream — pass each k=v through the
-    # same flag the trainer already supports for adapter knobs.
     pieces = [
         f"mode={sub.mode}",
         f"cond_hidden_dim={sub.cond_hidden_dim}",
@@ -599,66 +616,82 @@ def _postfix_overrides(opts: AnimaLoraOptions) -> list[str]:
     ]
     if sub.te_cache_dir is not None:
         pieces.append(f"te_cache_dir={sub.te_cache_dir}")
-    out: list[str] = []
-    for p in pieces:
-        out += ["--network_args", p]
-    return out
+    return _network_args(*pieces)
 
 
 def _chimera_overrides(opts: AnimaLoraOptions) -> list[str]:
     """ChimeraHydra dual-pool MoE — pinned router knobs.
 
-    `use_chimera_hydra=True` flips three router fields simultaneously
-    upstream (`use_moe_style="shared_A"` + `route_per_layer=True` +
-    `router_source="input"`); we pass the high-level flag and let
-    upstream handle the pinning to keep behaviour aligned with the
-    vendored `methods/chimera.toml` contract.
+    All keys (use_chimera_hydra / balance_* / fei_feature_dim /
+    sigma_feature_dim) are read out of ``kwargs`` in
+    ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs`` and
+    ``networks/__init__.py::_parse_bool_flag``; emit them through
+    ``--network_args``.
     """
     sub = opts.chimera
     if sub is None:
         msg = "method='chimera' missing sub-config"
         raise CompilationError(msg)
-    out: list[str] = ["--use_chimera_hydra"]
-    out += ["--balance_w_content", _fmt_float(sub.balance_w_content)]
-    out += ["--balance_w_freq", _fmt_float(sub.balance_w_freq)]
-    out += ["--balance_loss_warmup_ratio", _fmt_float(sub.balance_loss_warmup_ratio)]
-    out += ["--fei_feature_dim", str(sub.fei_feature_dim)]
-    out += ["--sigma_feature_dim", str(sub.sigma_feature_dim)]
-    return out
+    pieces = [
+        "use_chimera_hydra=true",
+        f"balance_w_content={_fmt_float(sub.balance_w_content)}",
+        f"balance_w_freq={_fmt_float(sub.balance_w_freq)}",
+        f"balance_loss_warmup_ratio={_fmt_float(sub.balance_loss_warmup_ratio)}",
+        f"fei_feature_dim={sub.fei_feature_dim}",
+        f"sigma_feature_dim={sub.sigma_feature_dim}",
+    ]
+    return _network_args(*pieces)
 
 
 def _easycontrol_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """EasyControl per-block conditioning LoRA + softmax gate."""
+    """EasyControl per-block conditioning LoRA + softmax gate.
+
+    ``--use_easycontrol`` / ``--easycontrol_drop_p`` /
+    ``--easycontrol_cond_noise_max`` ARE real argparse flags (see
+    ``library/anima/training.py``). The gate / scaling knobs live in
+    ``networks/methods/easycontrol.py:make_easycontrol_network`` which
+    reads them from kwargs, so they must go through ``--network_args``.
+    """
     sub = opts.easycontrol
     if sub is None:
         msg = "method='easycontrol' missing sub-config"
         raise CompilationError(msg)
     out: list[str] = ["--use_easycontrol"]
-    out += ["--b_cond_init", _fmt_float(sub.b_cond_init)]
-    out += ["--cond_scale", _fmt_float(sub.cond_scale)]
-    if sub.apply_ffn_lora:
-        out += ["--apply_ffn_lora"]
-    out += ["--cond_token_count", str(sub.cond_token_count)]
     out += ["--easycontrol_drop_p", _fmt_float(sub.drop_p)]
     out += ["--easycontrol_cond_noise_max", _fmt_float(sub.cond_noise_max)]
+    pieces = [
+        f"b_cond_init={_fmt_float(sub.b_cond_init)}",
+        f"cond_scale={_fmt_float(sub.cond_scale)}",
+        f"apply_ffn_lora={'1' if sub.apply_ffn_lora else '0'}",
+        f"cond_token_count={sub.cond_token_count}",
+    ]
+    out += _network_args(*pieces)
     return out
 
 
 def _ip_adapter_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """IP-Adapter — PE-Core encoder + resampler + per-block KV."""
+    """IP-Adapter — PE-Core encoder + resampler + per-block KV.
+
+    ``--use_ip_adapter`` / ``--ip_encoder`` / ``--ip_image_drop_p`` /
+    ``--ip_features_cache_to_disk`` ARE argparse flags. The resampler
+    sizing + IP scale + gate LR live in the network factory's kwargs.
+    """
     sub = opts.ip_adapter
     if sub is None:
         msg = "method='ip_adapter' missing sub-config"
         raise CompilationError(msg)
     out: list[str] = ["--use_ip_adapter"]
     out += ["--ip_encoder", sub.encoder]
-    out += ["--ip_resampler_layers", str(sub.resampler_layers)]
-    out += ["--ip_resampler_heads", str(sub.resampler_heads)]
-    out += ["--ip_scale", _fmt_float(sub.ip_scale)]
     out += ["--ip_image_drop_p", _fmt_float(sub.image_drop_p)]
-    out += ["--gate_lr", _fmt_float(sub.gate_lr)]
     if sub.features_cache_to_disk:
         out += ["--ip_features_cache_to_disk"]
+    pieces = [
+        f"ip_resampler_layers={sub.resampler_layers}",
+        f"ip_resampler_heads={sub.resampler_heads}",
+        f"ip_scale={_fmt_float(sub.ip_scale)}",
+        f"gate_lr={_fmt_float(sub.gate_lr)}",
+    ]
+    out += _network_args(*pieces)
     return out
 
 

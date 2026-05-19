@@ -74,7 +74,12 @@ def _argv_pairs(argv: list[str]) -> dict[str, list[str]]:
 
 
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
-    """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml."""
+    """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
+
+    All four LoRA toggles flow through ``--network_args`` (kwargs read by
+    ``networks/lora_anima/config.py``), not as discrete argparse flags —
+    upstream's train.py never declared them.
+    """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
@@ -82,9 +87,11 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
 
     assert pairs["--method"] == ["lora"]
     assert pairs["--preset"] == ["default"]
-    assert "--use_ortho" in pairs
-    assert "--use_timestep_mask" in pairs
-    assert pairs["--min_rank"] == ["8"]
+    network_args = pairs["--network_args"]
+    assert "use_ortho=true" in network_args
+    assert "use_timestep_mask=true" in network_args
+    assert "min_rank=8" in network_args
+    assert any(p.startswith("alpha_rank_scale=") for p in network_args)
     # files-to-write contains exactly the generated dataset_config TOML
     # — upstream's argparse has no flag for the three data path keys
     # (source / resized / cache), so we deliver them via
@@ -113,6 +120,12 @@ def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
 
 
 def test_chimera_method_emits_balance_weights(tmp_path: Path) -> None:
+    """ChimeraHydra knobs flow through --network_args, not as argparse flags.
+
+    ``use_chimera_hydra`` / ``balance_w_*`` / ``fei_feature_dim`` are all
+    read off ``kwargs`` in ``networks/lora_anima/config.py:LoRAConfig.from_kwargs``.
+    Emitting them as discrete CLI flags trips train.py's argparse.
+    """
     opts = AnimaLoraOptions(
         method="chimera",
         chimera=AnimaLoraMethodChimeraConfig(),
@@ -122,12 +135,21 @@ def test_chimera_method_emits_balance_weights(tmp_path: Path) -> None:
     pairs = _argv_pairs(argv)
 
     assert pairs["--method"] == ["chimera"]
-    assert "--use_chimera_hydra" in pairs
-    assert "--balance_w_content" in pairs
-    assert "--balance_w_freq" in pairs
+    network_args = pairs["--network_args"]
+    assert "use_chimera_hydra=true" in network_args
+    assert any(p.startswith("balance_w_content=") for p in network_args)
+    assert any(p.startswith("balance_w_freq=") for p in network_args)
+    assert any(p.startswith("fei_feature_dim=") for p in network_args)
 
 
 def test_easycontrol_method_emits_b_cond_init(tmp_path: Path) -> None:
+    """EasyControl mixes argparse flags + network_args.
+
+    ``--use_easycontrol`` / ``--easycontrol_drop_p`` / ``--easycontrol_cond_noise_max``
+    are real argparse flags. ``b_cond_init`` / ``cond_scale`` / ``apply_ffn_lora``
+    / ``cond_token_count`` are read from kwargs in
+    ``networks/methods/easycontrol.py``.
+    """
     opts = AnimaLoraOptions(
         method="easycontrol",
         easycontrol=AnimaLoraMethodEasyControlConfig(),
@@ -138,12 +160,15 @@ def test_easycontrol_method_emits_b_cond_init(tmp_path: Path) -> None:
 
     assert pairs["--method"] == ["easycontrol"]
     assert "--use_easycontrol" in pairs
+    assert "--easycontrol_drop_p" in pairs
+    network_args = pairs["--network_args"]
     # b_cond_init = -10 zeros the gate at step 0.
-    assert pairs["--b_cond_init"][0].startswith("-10")
-    assert pairs["--cond_token_count"] == ["4096"]
+    assert any(p.startswith("b_cond_init=-10") for p in network_args)
+    assert "cond_token_count=4096" in network_args
 
 
 def test_ip_adapter_method_emits_pe_encoder(tmp_path: Path) -> None:
+    """IP-Adapter mixes argparse flags + network_args (resampler dims, ip_scale, gate_lr)."""
     opts = AnimaLoraOptions(
         method="ip_adapter",
         ip_adapter=AnimaLoraMethodIPAdapterConfig(),
@@ -155,8 +180,10 @@ def test_ip_adapter_method_emits_pe_encoder(tmp_path: Path) -> None:
     assert pairs["--method"] == ["ip_adapter"]
     assert "--use_ip_adapter" in pairs
     assert pairs["--ip_encoder"] == ["PE-Core-L14-336"]
-    # gate_lr is 10x global LR per upstream rationale.
-    assert pairs["--gate_lr"] == ["0.001"]
+    # gate_lr is 10x global LR per upstream rationale; rides --network_args.
+    network_args = pairs["--network_args"]
+    assert any(p.startswith("gate_lr=") for p in network_args)
+    assert any(p.startswith("ip_scale=") for p in network_args)
 
 
 # --------------------------------------------------------------------------- #
