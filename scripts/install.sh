@@ -63,23 +63,46 @@ echo ""
 
 # ---- [2/6] Install Python 3.12 locally ------------------------------
 echo "[2/6] Installing Python 3.12 ..."
-if find "$PY_DIR" -name "python3.12" -type f 2>/dev/null | grep -q .; then
+# uv lays out two entries per install: a real ``cpython-3.12.<patch>-...``
+# directory and a symlink ``cpython-3.12-...`` pointing at it. The
+# symlink is uv's stable minor-version alias — pinning the venv to it
+# means a future ``uv python install 3.12`` (which repoints the symlink
+# to a newer patch) keeps the venv working instead of breaking
+# pyvenv.cfg.
+_find_anima_python() {
+    # Look for the minor-version alias first (most stable).
+    local alias_dir
+    alias_dir=$(find "$1" -maxdepth 1 -type l -name "cpython-3.12-*" 2>/dev/null | head -1)
+    if [ -z "$alias_dir" ]; then
+        # Older uv: the alias may not exist, fall back to the real
+        # patched cpython-3.12.<X>-... directory.
+        alias_dir=$(find "$1" -maxdepth 1 -type d -name "cpython-3.12.*-*" 2>/dev/null | head -1)
+    fi
+    if [ -z "$alias_dir" ]; then
+        return 0
+    fi
+    for cand in "python3.12" "python3" "python"; do
+        local exe="$alias_dir/bin/$cand"
+        if [ -x "$exe" ]; then
+            echo "$exe"
+            return 0
+        fi
+    done
+}
+if [ -n "$(_find_anima_python "$PY_DIR")" ]; then
     echo "  OK Python already installed"
 else
     mkdir -p "$PY_DIR"
-    "$UV" python install 3.12 --install-dir "$PY_DIR"
+    # ``--no-bin`` skips uv's per-user shim in ~/.local/bin. We invoke
+    # python by full path so the shim adds no value, and skipping it
+    # avoids a confusing warning when a prior global ``uv python
+    # install`` already wrote one there.
+    "$UV" python install 3.12 --install-dir "$PY_DIR" --no-bin
     echo "  OK Python 3.12 installed"
 fi
-# Find the python executable
-PY_EXE=$(find "$PY_DIR" -name "python3.12" -type f 2>/dev/null | head -1)
+PY_EXE=$(_find_anima_python "$PY_DIR")
 if [ -z "$PY_EXE" ]; then
-    PY_EXE=$(find "$PY_DIR" -name "python3" -type f 2>/dev/null | head -1)
-fi
-if [ -z "$PY_EXE" ]; then
-    PY_EXE=$(find "$PY_DIR" -name "python" -type f 2>/dev/null | head -1)
-fi
-if [ -z "$PY_EXE" ]; then
-    echo "  [ERROR] python executable not found in $PY_DIR"
+    echo "  [ERROR] python executable not found under $PY_DIR/cpython-3.12*"
     exit 1
 fi
 echo "  Python: $PY_EXE"

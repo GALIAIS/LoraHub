@@ -74,29 +74,46 @@ echo.
 
 rem ---- [2/6] Install Python 3.12 locally ----------------------------
 echo [2/6] Installing Python 3.12 ...
-if exist "%PY_DIR%\python.exe" (
+rem uv lays out two entries per install: a real ``cpython-3.12.<patch>-...``
+rem directory and a junction ``cpython-3.12-...`` pointing at it. The
+rem junction is uv's stable minor-version alias ??? pinning the venv to
+rem the junction means a future ``uv python install 3.12`` (which would
+rem repoint the junction to a newer patch) keeps the venv working
+rem instead of breaking pyvenv.cfg.
+set "PY_EXE="
+if exist "%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe" (
+  set "PY_EXE=%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe"
+)
+if defined PY_EXE (
   echo   OK Python already installed
 ) else (
   if not exist "%PY_DIR%" mkdir "%PY_DIR%"
-  "%UV%" python install 3.12 --install-dir "%PY_DIR%"
+  rem ``--no-bin`` skips uv's per-user shim launcher in
+  rem ``%USERPROFILE%\.local\bin``. The project doesn't need it (we
+  rem invoke python.exe by full path) and it would otherwise emit a
+  rem confusing warning if a prior global ``uv python install`` had
+  rem already written a shim there.
+  "%UV%" python install 3.12 --install-dir "%PY_DIR%" --no-bin
   if errorlevel 1 (
     echo   [ERROR] Failed to install Python 3.12.
     goto :fail
   )
-  echo   OK Python 3.12 installed
-)
-rem Find the actual python.exe (may be in a subdirectory)
-set "PY_EXE="
-if exist "%PY_DIR%\python.exe" (
-  set "PY_EXE=%PY_DIR%\python.exe"
-) else (
-  for /r "%PY_DIR%" %%f in (python.exe) do (
-    if not defined PY_EXE set "PY_EXE=%%f"
+  if exist "%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe" (
+    set "PY_EXE=%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe"
   )
-)
-if not defined PY_EXE (
-  echo   [ERROR] python.exe not found in %PY_DIR%
-  goto :fail
+  rem Junction missing on older uv builds ??? fall back to the newest
+  rem real cpython-3.12.<patch>-... directory.
+  if not defined PY_EXE (
+    for /d %%d in ("%PY_DIR%\cpython-3.12.*-windows-x86_64-none") do (
+      if exist "%%d\python.exe" set "PY_EXE=%%d\python.exe"
+    )
+  )
+  if not defined PY_EXE (
+    echo   [ERROR] uv reported success but no python.exe found under
+    echo            %PY_DIR%\cpython-3.12*-windows-x86_64-none
+    goto :fail
+  )
+  echo   OK Python 3.12 installed
 )
 echo   Python: %PY_EXE%
 echo.
