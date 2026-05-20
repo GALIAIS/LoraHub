@@ -127,7 +127,7 @@ export function AnalysisPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(260px,300px)_1fr] overflow-hidden">
-      <aside className="flex flex-col min-h-0 border-r border-border/60 bg-muted/15">
+      <aside className="shiro-page-aside flex flex-col min-h-0">
         <header className="px-4 pt-4 pb-2 space-y-2.5">
           <div className="flex items-center gap-2">
             <BarChart3 className="size-4 text-primary" />

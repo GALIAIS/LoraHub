@@ -11,7 +11,7 @@ export function FilterPanel({ filters, onChange, onClose }: FilterPanelProps) {
     onChange({ ...filters, [key]: value })
 
   return (
-    <aside className="w-52 shrink-0 overflow-y-auto border-r bg-background p-3">
+    <aside className="shiro-page-aside w-52 shrink-0 overflow-y-auto p-3">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-semibold">筛选</span>
         <button

@@ -168,7 +168,7 @@ export function JobsPage() {
     >
       <aside
         className={cn(
-          "border-r border-border/60 flex flex-col min-h-0 min-w-0 overflow-hidden",
+          "shiro-page-aside flex flex-col min-h-0 min-w-0 overflow-hidden",
           !sidebarOpen && "pointer-events-none opacity-0",
         )}
         aria-hidden={!sidebarOpen}

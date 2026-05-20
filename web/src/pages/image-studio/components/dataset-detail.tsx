@@ -529,7 +529,7 @@ export function DatasetDetail() {
           </div>
 
           {showTagging && (
-            <aside className="w-56 shrink-0 overflow-y-auto border-l bg-background">
+            <aside className="shiro-page-aside w-56 shrink-0 overflow-y-auto">
               <TaggingPanel datasetPath={path} />
             </aside>
           )}

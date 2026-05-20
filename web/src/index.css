@@ -528,6 +528,36 @@ code {
     z-index: 1;
   }
 
+  /* Secondary in-page sidebar (jobs / configs / sweeps / analysis).
+     Sits inside SidebarInset, so it must paint its own backdrop on
+     top of the transparent shell — otherwise the body grid bleeds
+     through and it looks unfinished. Subtly tinted, with a vertical
+     wash so it reads as a panel adjacent to the main content. */
+  .shiro-page-aside {
+    position: relative;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--sidebar) 78%, var(--background) 22%),
+        color-mix(in oklab, var(--sidebar) 64%, var(--background) 36%)
+      );
+    box-shadow:
+      inset -1px 0 0 color-mix(in oklab, var(--border) 70%, transparent),
+      inset 1px 0 0 color-mix(in oklab, white 18%, transparent);
+  }
+
+  .dark .shiro-page-aside {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--sidebar) 88%, var(--background) 12%),
+        color-mix(in oklab, var(--sidebar) 76%, black 24%)
+      );
+    box-shadow:
+      inset -1px 0 0 color-mix(in oklab, var(--border) 90%, transparent),
+      inset 1px 0 0 rgb(255 255 255 / 0.04);
+  }
+
   .shiro-hero-panel {
     position: relative;
     isolation: isolate;

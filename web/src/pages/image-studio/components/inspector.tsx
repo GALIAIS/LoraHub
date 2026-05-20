@@ -55,7 +55,7 @@ export function Inspector({ detail, loading, path, onClose }: InspectorProps) {
   }
 
   return (
-    <aside className="w-[22rem] shrink-0 overflow-y-auto border-l bg-background p-3">
+    <aside className="shiro-page-aside w-[22rem] shrink-0 overflow-y-auto p-3">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium truncate">{detail?.name ?? "..."}</h3>
         <button
