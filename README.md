@@ -19,13 +19,15 @@
 ```powershell
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-scripts\install.bat
+scripts\install.bat              # 默认走 GitHub / PyPI / nodejs.org
+scripts\install-cn.bat           # 国内镜像版（gh-proxy + 清华 PyPI + npmmirror）
 ```
 
 ```bash
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-bash scripts/install.sh
+bash scripts/install.sh          # 国外
+bash scripts/install-cn.sh       # 国内镜像版
 ```
 
 装好后用 `scripts\run.bat` / `scripts/run.sh` 启动：

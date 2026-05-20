@@ -14,6 +14,23 @@ set -euo pipefail
 #
 # No pre-existing Python/Node/uv needed. Fully self-contained.
 # After completion, use scripts/run.sh to start.
+#
+# Mirror knobs (pass via env). Empty -> upstream default. Inside China
+# users typically want the matching install-cn.sh wrapper which presets
+# every variable below.
+#
+#   LORAHUB_GH_PROXY         GitHub proxy prefix (e.g. https://gh-proxy.org/)
+#                            applied to uv release tarball download
+#   UV_PYTHON_INSTALL_MIRROR python-build-standalone mirror, e.g.
+#                            https://registry.npmmirror.com/-/binary/python-build-standalone
+#                            (uv reads this env var natively for `uv python install`)
+#   UV_INDEX_URL             PyPI index for `uv pip install` (e.g.
+#                            https://pypi.tuna.tsinghua.edu.cn/simple)
+#   LORAHUB_NODE_MIRROR      Node.js binary mirror base, default
+#                            https://nodejs.org/dist (popular alt:
+#                            https://npmmirror.com/mirrors/node)
+#   NPM_CONFIG_REGISTRY      npm registry, e.g. https://registry.npmmirror.com
+#                            (npm reads this env var natively)
 # ------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,12 +45,20 @@ UV_DIR="$TOOLS_DIR/uv"
 PY_DIR="$TOOLS_DIR/python"
 NODE_DIR="$ROOT/.node"
 
+GH_PROXY="${LORAHUB_GH_PROXY:-}"
+NODE_MIRROR="${LORAHUB_NODE_MIRROR:-https://nodejs.org/dist}"
+
 echo ""
 echo "============================================================"
 echo "  LoRaHub Environment Installer (Linux)"
 echo "============================================================"
 echo "  Project: $ROOT"
 echo "  Tools:   $TOOLS_DIR"
+if [ -n "$GH_PROXY" ];               then echo "  GH proxy:  $GH_PROXY";               fi
+if [ -n "${UV_PYTHON_INSTALL_MIRROR:-}" ]; then echo "  Python:    $UV_PYTHON_INSTALL_MIRROR"; fi
+if [ -n "${UV_INDEX_URL:-}" ];       then echo "  PyPI:      $UV_INDEX_URL";           fi
+if [ "$NODE_MIRROR" != "https://nodejs.org/dist" ]; then echo "  Node:      $NODE_MIRROR"; fi
+if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then echo "  npm:       $NPM_CONFIG_REGISTRY";    fi
 echo ""
 
 # ---- [1/6] Install uv locally ---------------------------------------
@@ -48,8 +73,9 @@ else
         aarch64) UV_ARCH="aarch64-unknown-linux-gnu" ;;
         *)       echo "  [ERROR] Unsupported architecture: $ARCH"; exit 1 ;;
     esac
-    curl -LsSf "https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz" \
-        -o "$UV_DIR/uv.tar.gz"
+    UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz"
+    [ -n "$GH_PROXY" ] && UV_URL="${GH_PROXY%/}/${UV_URL}"
+    curl -LsSf "$UV_URL" -o "$UV_DIR/uv.tar.gz"
     tar -xzf "$UV_DIR/uv.tar.gz" -C "$UV_DIR" --strip-components=1
     rm -f "$UV_DIR/uv.tar.gz"
     if [ ! -f "$UV_DIR/uv" ]; then
@@ -124,6 +150,9 @@ echo ""
 
 # ---- [4/6] Install Python dependencies ------------------------------
 echo "[4/6] Installing Python dependencies ..."
+# uv pip install reads UV_INDEX_URL natively when set; explicit
+# --index-url here would override that, so leave the env var to do
+# its job.
 "$UV" pip install -e ".[api,dev]" --python "$VENV_PY"
 echo "  OK Python dependencies installed"
 echo ""
@@ -138,7 +167,7 @@ if [ -f "$NODE_DIR/bin/node" ] && [ -f "$NODE_DIR/bin/npm" ]; then
     export PATH="$NODE_DIR/bin:$PATH"
     echo "  OK Node.js $(node --version) (portable, cached)"
 else
-    echo "  Downloading portable Node.js 20 ..."
+    echo "  Downloading portable Node.js 20 (mirror: $NODE_MIRROR) ..."
     mkdir -p "$NODE_DIR"
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -149,7 +178,7 @@ else
     esac
     NODE_VER="v20.18.1"
     NODE_TAR="node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
-    curl -LsSf "https://nodejs.org/dist/${NODE_VER}/${NODE_TAR}" -o "$NODE_DIR/$NODE_TAR"
+    curl -LsSf "${NODE_MIRROR%/}/${NODE_VER}/${NODE_TAR}" -o "$NODE_DIR/$NODE_TAR"
     tar -xf "$NODE_DIR/$NODE_TAR" -C "$NODE_DIR" --strip-components=1
     rm -f "$NODE_DIR/$NODE_TAR"
     if [ ! -f "$NODE_DIR/bin/node" ] || [ ! -f "$NODE_DIR/bin/npm" ]; then
@@ -163,6 +192,7 @@ echo ""
 
 # ---- [6/6] Install frontend dependencies ----------------------------
 echo "[6/6] Installing frontend dependencies (web/) ..."
+# npm reads NPM_CONFIG_REGISTRY natively when set.
 if [ -d "web/node_modules/vite" ]; then
     echo "  OK web/node_modules already exists"
 else

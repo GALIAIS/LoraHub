@@ -15,6 +15,18 @@ rem   6. Frontend dependencies (npm install)
 rem
 rem No pre-existing Python/Node/uv needed. Fully self-contained.
 rem After completion, use scripts\run.bat to start.
+rem
+rem Mirror knobs (set via env). Empty -> upstream default. Inside
+rem China users typically want the install-cn.bat wrapper which
+rem presets every variable below.
+rem
+rem   LORAHUB_GH_PROXY         GitHub proxy prefix (e.g. https://gh-proxy.org/)
+rem   UV_PYTHON_INSTALL_MIRROR python-build-standalone mirror
+rem                            (uv reads natively for `uv python install`)
+rem   UV_INDEX_URL             PyPI index for `uv pip install`
+rem   LORAHUB_NODE_MIRROR      Node binary mirror base
+rem                            (default https://nodejs.org/dist)
+rem   NPM_CONFIG_REGISTRY      npm registry (npm reads natively)
 rem ----------------------------------------------------------------
 
 set "SCRIPT_DIR=%~dp0"
@@ -29,12 +41,19 @@ set "UV_DIR=%TOOLS_DIR%\uv"
 set "PY_DIR=%TOOLS_DIR%\python"
 set "NODE_DIR=%CD%\.node"
 
+if not defined LORAHUB_NODE_MIRROR set "LORAHUB_NODE_MIRROR=https://nodejs.org/dist"
+
 echo.
 echo ============================================================
 echo   LoRaHub Environment Installer
 echo ============================================================
 echo   Project: %CD%
 echo   Tools:   %TOOLS_DIR%
+if defined LORAHUB_GH_PROXY         echo   GH proxy:  %LORAHUB_GH_PROXY%
+if defined UV_PYTHON_INSTALL_MIRROR  echo   Python:    %UV_PYTHON_INSTALL_MIRROR%
+if defined UV_INDEX_URL              echo   PyPI:      %UV_INDEX_URL%
+if not "%LORAHUB_NODE_MIRROR%"=="https://nodejs.org/dist" echo   Node:      %LORAHUB_NODE_MIRROR%
+if defined NPM_CONFIG_REGISTRY      echo   npm:       %NPM_CONFIG_REGISTRY%
 echo.
 
 rem ---- [1/6] Install uv locally -------------------------------------
@@ -43,7 +62,9 @@ if exist "%UV_DIR%\uv.exe" (
   echo   OK uv already installed
 ) else (
   if not exist "%UV_DIR%" mkdir "%UV_DIR%"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile '%UV_DIR%\uv.zip'"
+  set "UV_URL=https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+  if defined LORAHUB_GH_PROXY set "UV_URL=%LORAHUB_GH_PROXY%!UV_URL!"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '!UV_URL!' -OutFile '%UV_DIR%\uv.zip'"
   if errorlevel 1 (
     echo   [ERROR] Failed to download uv.
     goto :fail
@@ -135,10 +156,13 @@ echo.
 
 rem ---- [4/6] Install Python dependencies ----------------------------
 echo [4/6] Installing Python dependencies ...
+rem uv pip install reads UV_INDEX_URL natively when set; we don't
+rem pass --index-url here so the env-driven override stays in effect.
 "%UV%" pip install -e ".[api,dev]" --python "%VENV_PY%"
 if errorlevel 1 (
   echo   [ERROR] pip install failed.
-  echo   Try with mirror: "%UV%" pip install -e ".[api,dev]" --python "%VENV_PY%" --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+  echo   If your network blocks pypi.org, retry with the China-mirror
+  echo   wrapper:  scripts\install-cn.bat
   goto :fail
 )
 echo   OK Python dependencies installed
@@ -161,9 +185,9 @@ if exist "%NODE_DIR%\node.exe" (
   )
 )
 
-echo   Downloading portable Node.js 20 ...
+echo   Downloading portable Node.js 20 (mirror: %LORAHUB_NODE_MIRROR%) ...
 if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
 if errorlevel 1 (
   echo   [ERROR] Failed to download Node.js.
   goto :fail
@@ -209,7 +233,8 @@ if exist "web\node_modules\vite" (
   popd
   if not "!NPM_RC!"=="0" (
     echo   [ERROR] npm install failed.
-    echo   Try: cd web ^&^& npm install --registry=https://registry.npmmirror.com
+    echo   If your network blocks registry.npmjs.org, retry with the
+    echo   China-mirror wrapper:  scripts\install-cn.bat
     goto :fail
   )
   echo   OK Frontend dependencies installed
