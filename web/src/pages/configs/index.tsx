@@ -43,6 +43,14 @@ export function ConfigsPage() {
     staleTime: 60_000,
   })
   const defaultBackend = settingsQuery.data?.settings?.default_backend
+  // While the workbench settings are still loading, an "default" filter
+  // can't resolve to a concrete backend yet. Previously we fell back to
+  // "all" in that window, which made the right pane flash the *full*
+  // config list for a beat before snapping down to just the default
+  // backend's recipes. Track the loading state so visibleConfigs can
+  // hold the list empty until we know what to filter to.
+  const settingsResolved =
+    settingsQuery.isSuccess || settingsQuery.isError
 
   const [mode, setMode] = useState<Mode | null>(null)
   // Pre-populated dataset path that flows in from the Datasets page via
@@ -105,6 +113,12 @@ export function ConfigsPage() {
   // effect is deferred via a dedicated hook block right after.)
 
   const visibleConfigs = useMemo(() => {
+    // Don't reveal the unfiltered list while we wait for `default_backend`
+    // to come back — the page would flash every backend's configs and
+    // then snap down to one. Keep it empty until settings resolve.
+    if (backendFilter === "default" && !settingsResolved) {
+      return [] as ConfigListEntry[]
+    }
     const q = query.trim().toLowerCase()
     // Resolve the effective backend filter: "default" expands to the
     // workbench setting (or "all" if settings haven't loaded yet);
@@ -135,7 +149,7 @@ export function ConfigsPage() {
       }
     })
     return sorted
-  }, [configs, query, archFilter, backendFilter, defaultBackend, sort])
+  }, [configs, query, archFilter, backendFilter, defaultBackend, sort, settingsResolved])
 
   // Auto-select the first *visible* config so the right pane stays in
   // sync with whatever the sidebar's filters are showing. Without this
@@ -237,7 +251,8 @@ export function ConfigsPage() {
         />
         <ScrollArea className="flex-1 min-h-0">
           <ul className="divide-y divide-border/40">
-            {list.isLoading && (
+            {(list.isLoading ||
+              (backendFilter === "default" && !settingsResolved)) && (
               <li className="px-5 py-10 text-sm text-muted-foreground text-center">
                 加载中…
               </li>
@@ -248,11 +263,14 @@ export function ConfigsPage() {
                 <code className="text-foreground"> lorahub init</code>。
               </li>
             )}
-            {!list.isLoading && configs.length > 0 && visibleConfigs.length === 0 && (
-              <li className="px-5 py-10 text-sm text-muted-foreground text-center">
-                没有匹配的配置。
-              </li>
-            )}
+            {!list.isLoading &&
+              settingsResolved &&
+              configs.length > 0 &&
+              visibleConfigs.length === 0 && (
+                <li className="px-5 py-10 text-sm text-muted-foreground text-center">
+                  没有匹配的配置。
+                </li>
+              )}
             {visibleConfigs.map((r) => {
               const active =
                 (mode?.kind === "preview" || mode?.kind === "edit") && mode.name === r.name

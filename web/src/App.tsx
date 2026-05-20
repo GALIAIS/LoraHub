@@ -1,5 +1,6 @@
 import { Suspense, startTransition, useCallback, useEffect, useRef, useState } from "react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { useQueryClient } from "@tanstack/react-query"
 import { Toaster } from "sonner"
 import {
   Activity,
@@ -17,6 +18,7 @@ import {
   Sun,
 } from "lucide-react"
 import { preloadAppRoute, type AppRouteModuleKey } from "@/app/route-modules"
+import { api } from "@/lib/api"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalStatusBar } from "@/components/global-status-bar"
 import {
@@ -76,6 +78,7 @@ const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [mode, setMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system"
     const stored = window.localStorage.getItem(THEME_MODE_KEY)
@@ -152,6 +155,14 @@ export default function App() {
       for (const key of keys) {
         void preloadAppRoute(key)
       }
+      // Prefetch the workbench-level settings so pages that need
+      // `default_backend` (e.g. ConfigsPage's backend filter) don't
+      // flash an unfiltered list before the response arrives.
+      void queryClient.prefetchQuery({
+        queryKey: ["settings"],
+        queryFn: api.getSettings,
+        staleTime: 60_000,
+      })
     }
 
     const w = window as Window & {
