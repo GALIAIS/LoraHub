@@ -890,6 +890,59 @@ export const api = {
       { method: "POST" },
     ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
+  getSystemVersion: (
+    channel: "main" | "tag" = "tag",
+    force = false,
+  ) =>
+    http<UpdateInfo>(
+      `/system/version?channel=${channel}${force ? "&force=true" : ""}`,
+    ),
+  /**
+   * Run a self-update via the SSE stream endpoint. ``onEvent`` fires
+   * for every progress line; the returned promise resolves when the
+   * stream closes (terminal ``done`` / ``error`` event delivered).
+   * Cancel mid-stream by aborting the passed signal.
+   */
+  applySystemUpdate: async (
+    body: { channel: "main" | "tag"; build: boolean; restart: boolean },
+    onEvent: (ev: UpdateEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const url = `${API_BASE}/system/update`
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!resp.ok || !resp.body) {
+      throw new Error(`update request failed (${resp.status})`)
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n")
+      let idx
+      // SSE frames end at a blank line. Each frame looks like
+      //   data: {...}\n\n
+      // — strip the prefix and parse.
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx).trim()
+        buf = buf.slice(idx + 2)
+        if (!frame.startsWith("data:")) continue
+        const payload = frame.slice(5).trim()
+        try {
+          const parsed = JSON.parse(payload) as UpdateEvent
+          onEvent(parsed)
+        } catch {
+          // ignore non-JSON keepalive comments
+        }
+      }
+    }
+  },
   listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
   probeMirrors: (
     body: {
@@ -2068,4 +2121,26 @@ export async function terminalExec(
       }
     }
   }
+}
+
+// --- Self-update -----------------------------------------------------
+
+export interface UpdateInfo {
+  channel: "main" | "tag"
+  current: string
+  latest: string | null
+  update_available: boolean
+  release_url: string
+  release_notes: string
+  checked_at: string
+  is_dirty: boolean
+  error: string | null
+  tag_name: string | null
+  published_at: string | null
+}
+
+export interface UpdateEvent {
+  phase: "git" | "deps" | "build" | "done" | "restart" | "error"
+  level: "info" | "warn" | "error"
+  message: string
 }

@@ -13,13 +13,16 @@ import {
   ArrowDown,
   ArrowUp,
   Cpu,
+  Download,
   MemoryStick,
   Wifi,
   WifiOff,
   Zap,
 } from "lucide-react"
+import { Link } from "react-router-dom"
 import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
+import { useSystemVersion } from "@/hooks/use-system-version"
 import { cn } from "@/lib/utils"
 
 const POLL_MS = 10_000
@@ -105,6 +108,7 @@ export function GlobalStatusBar() {
       ) : (
         <span className="text-muted-foreground/70">正在连接系统监控…</span>
       )}
+      <UpdateBadge />
     </div>
   )
 }
@@ -184,4 +188,39 @@ function fmtRate(b: number): string {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB/s`
   if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB/s`
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB/s`
+}
+
+/**
+ * Right-aligned dot + label that lights up when the version-check
+ * background job has spotted a release ahead of the current install.
+ * Clicking deeplinks to ``/settings?tab=environment`` so the user
+ * lands on the update card without hunting.
+ */
+function UpdateBadge() {
+  const tag = useSystemVersion("tag")
+  if (!tag.data) return null
+  if (!tag.data.update_available) {
+    // Stay quiet when up-to-date; the row already shows version info
+    // on the maintenance page when the user actually wants it.
+    return null
+  }
+  const label = tag.data.tag_name ?? tag.data.latest ?? "新版本"
+  return (
+    <Link
+      to="/settings?tab=environment"
+      className={cn(
+        "ml-auto inline-flex items-center gap-1.5 rounded-[2px] border border-primary/40",
+        "bg-primary/10 px-2 py-0.5 text-[11px] text-primary",
+        "hover:bg-primary/15 transition-colors",
+      )}
+      title={`已检测到新版本 ${label}（点击查看详情）`}
+    >
+      <span className="relative flex size-1.5">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/50" />
+        <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+      </span>
+      <Download className="size-3" />
+      新版本 {label}
+    </Link>
+  )
 }

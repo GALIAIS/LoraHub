@@ -1,0 +1,290 @@
+/**
+ * Self-update card — version check + one-click upgrade.
+ *
+ * The card mirrors ShiroManager's update-status panel:
+ *  - Shows current vs latest tag/commit on the chosen channel.
+ *  - Lets the user pick channel: ``tag`` (release cuts, default) or
+ *    ``main`` (bleeding edge).
+ *  - "立即更新" runs the SSE-streamed upgrade (git → deps → build) and
+ *    by default re-execs the daemon at the end so the new code wins
+ *    without the user having to touch the shell.
+ *  - Renders the streaming log line-by-line (same shape as the
+ *    bootstrap installer panel).
+ */
+import { useEffect, useRef, useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import {
+  AlertTriangle,
+  CheckCircle,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+} from "lucide-react"
+import { api, type UpdateEvent } from "@/lib/api"
+import {
+  useSystemVersion,
+  type UpdateChannel,
+} from "@/hooks/use-system-version"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Switch } from "@/components/ui/switch"
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
+
+const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
+  git: "拉取代码",
+  deps: "安装 Python 依赖",
+  build: "构建前端",
+  done: "完成",
+  restart: "重启服务",
+  error: "失败",
+}
+
+export function UpdateCard() {
+  const qc = useQueryClient()
+  const [channel, setChannel] = useState<UpdateChannel>("tag")
+  const version = useSystemVersion(channel)
+  const [restart, setRestart] = useState(true)
+  const [build, setBuild] = useState(true)
+  const [events, setEvents] = useState<UpdateEvent[]>([])
+  const [running, setRunning] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const logRef = useRef<HTMLDivElement | null>(null)
+
+  // Auto-scroll the log to the latest line as events stream in.
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
+  }, [events.length])
+
+  const recheck = useMutation({
+    mutationFn: () => api.getSystemVersion(channel, true),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["system-version", channel] })
+    },
+  })
+
+  const runUpdate = async () => {
+    setEvents([])
+    setRunning(true)
+    const ac = new AbortController()
+    abortRef.current = ac
+    try {
+      await api.applySystemUpdate(
+        { channel, build, restart },
+        (ev) => setEvents((prev) => [...prev, ev]),
+        ac.signal,
+      )
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc)
+      setEvents((prev) => [
+        ...prev,
+        { phase: "error", level: "error", message },
+      ])
+    } finally {
+      setRunning(false)
+      abortRef.current = null
+      qc.invalidateQueries({ queryKey: ["system-version"] })
+    }
+  }
+
+  const cancel = () => {
+    abortRef.current?.abort()
+  }
+
+  const info = version.data
+  const checkedAt = info?.checked_at
+    ? new Date(info.checked_at).toLocaleString()
+    : "—"
+
+  const headerStatus = (() => {
+    if (!info) return null
+    if (info.error) {
+      return (
+        <Badge variant="outline" className="rounded-[2px] gap-1 text-amber-700 dark:text-amber-400 border-amber-500/40">
+          <AlertTriangle className="size-3" />
+          网络异常
+        </Badge>
+      )
+    }
+    if (info.update_available) {
+      return (
+        <Badge className="rounded-[2px] gap-1 bg-primary/15 text-primary border-primary/40">
+          <Download className="size-3" />
+          有可用更新
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="rounded-[2px] gap-1 text-emerald-700 dark:text-emerald-400 border-emerald-500/40">
+        <CheckCircle className="size-3" />
+        已是最新
+      </Badge>
+    )
+  })()
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Download className="size-4 text-muted-foreground" />
+              软件更新
+            </CardTitle>
+            <CardDescription>
+              通过 GitHub Releases 检查并升级 LoraHub。镜像加速可在「网络加速」配置。
+            </CardDescription>
+          </div>
+          {headerStatus}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Tabs value={channel} onValueChange={(v) => setChannel(v as UpdateChannel)}>
+          <TabsList variant="line" className="h-8">
+            <TabsTrigger value="tag" className="text-xs">
+              发布版（tag）
+            </TabsTrigger>
+            <TabsTrigger value="main" className="text-xs">
+              开发版（main）
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <div className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
+          <span className="text-muted-foreground">当前版本</span>
+          <code className="font-mono text-[12px]">{info?.current ?? "—"}</code>
+
+          <span className="text-muted-foreground">远端版本</span>
+          <code className="font-mono text-[12px]">
+            {info?.tag_name ?? info?.latest ?? "—"}
+          </code>
+
+          <span className="text-muted-foreground">最近检查</span>
+          <span className="text-[12px] text-muted-foreground">{checkedAt}</span>
+
+          {info?.is_dirty && (
+            <>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px]">
+                工作树状态
+              </span>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px]">
+                有未提交修改 — 请先提交或 stash 后再升级
+              </span>
+            </>
+          )}
+
+          {info?.error && (
+            <>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px]">
+                提示
+              </span>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px] font-mono">
+                {info.error}
+              </span>
+            </>
+          )}
+        </div>
+
+        {info?.release_notes && (
+          <details className="rounded-[4px] border border-border/60 bg-muted/30 px-3 py-2">
+            <summary className="text-[12px] cursor-pointer select-none text-muted-foreground hover:text-foreground">
+              更新说明
+            </summary>
+            <pre className="mt-2 max-h-48 overflow-y-auto text-[11px] font-mono whitespace-pre-wrap leading-relaxed">
+              {info.release_notes}
+            </pre>
+          </details>
+        )}
+
+        <div className="flex flex-wrap gap-x-6 gap-y-2 text-[12px]">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Switch checked={build} onCheckedChange={setBuild} disabled={running} />
+            <span>升级时重新构建前端</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <Switch checked={restart} onCheckedChange={setRestart} disabled={running} />
+            <span>升级完成后自动重启服务</span>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            disabled={running || !info?.update_available || info?.is_dirty}
+            onClick={runUpdate}
+          >
+            {running ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Download className="size-3" />
+            )}
+            {running ? "正在升级…" : "立即更新"}
+          </Button>
+          {running && (
+            <Button size="sm" variant="outline" onClick={cancel}>
+              取消
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={recheck.isPending || running}
+            onClick={() => recheck.mutate()}
+          >
+            <RefreshCw className={cn("size-3", recheck.isPending && "animate-spin")} />
+            重新检查
+          </Button>
+          <a
+            href={info?.release_url ?? "https://github.com/GALIAIS/LoraHub/releases"}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="size-3" />
+            打开 GitHub
+          </a>
+        </div>
+
+        {events.length > 0 && (
+          <div
+            ref={logRef}
+            className="rounded-[4px] border border-border/60 bg-muted/30 max-h-64 overflow-y-auto p-2 text-[11px] font-mono leading-relaxed"
+          >
+            {events.map((ev, i) => {
+              const tone =
+                ev.level === "error"
+                  ? "text-destructive"
+                  : ev.level === "warn"
+                    ? "text-amber-700 dark:text-amber-400"
+                    : ev.phase === "done" || ev.phase === "restart"
+                      ? "text-emerald-700 dark:text-emerald-400"
+                      : "text-muted-foreground"
+              return (
+                <div key={i} className={cn("flex gap-2", tone)}>
+                  <span className="shrink-0 text-[10px] uppercase tracking-[0.1em] opacity-70">
+                    {PHASE_LABEL[ev.phase] ?? ev.phase}
+                  </span>
+                  <span className="break-all">{ev.message}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}

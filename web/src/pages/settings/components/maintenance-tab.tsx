@@ -25,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { fmtBytes, fmtUnixSeconds } from "@/pages/jobs/utils"
+import { UpdateCard } from "./update-card"
 
 /**
  * Storage maintenance — disk usage, archive pruning, HuggingFace cache
@@ -72,6 +73,7 @@ export function MaintenanceTab() {
 
   return (
     <div className="space-y-5">
+      <UpdateCard />
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">

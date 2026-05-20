@@ -3,14 +3,27 @@
 Pure read-only — `/api/system/stats` returns a snapshot every call, and the
 WebSocket at `/api/system/stream` (registered in app.py) streams a snapshot
 every second.
+
+Self-update endpoints (`/api/system/version`, `/api/system/update`) live
+here too; they're the workbench-control surface, conceptually adjacent to
+``stats`` (both answer "tell me about the system itself"). The streaming
+update endpoint emits SSE events for git/deps/build phases so the UI can
+mirror the bootstrap-session log shape users already know.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
+import threading
+from collections.abc import AsyncIterator
+from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
     attention_backends_for_gpu,
@@ -114,3 +127,128 @@ def system_cluster() -> dict[str, Any]:
         "ssh_available": which("ssh") is not None,
         **extra,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Self-update                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+_VALID_CHANNELS = ("main", "tag")
+
+
+@router.get("/system/version")
+def system_version(
+    channel: Literal["main", "tag"] = "tag",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Resolve current vs remote for the given channel.
+
+    Cached for 5 minutes per channel; pass ``force=true`` to bypass.
+    Network errors degrade to the cached payload + an ``error`` field
+    so the UI can render "offline, last seen v1.0.5" rather than
+    nothing.
+    """
+    info = system_update.check(channel=channel, force=force)
+    return info.to_dict()
+
+
+class _UpdateRequest(BaseModel):
+    channel: Literal["main", "tag"] = "tag"
+    build: bool = True
+    restart: bool = True
+
+
+@router.post("/system/update")
+async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
+    """Run the upgrade. Streams progress via SSE.
+
+    Each event is a JSON object on a single line:
+
+        {"phase": "git", "level": "info", "message": "git fetch ..."}
+
+    Terminal events:
+        {"phase": "done", "level": "info", "message": "update applied"}
+        {"phase": "error", "level": "error", "message": "..."}
+        {"phase": "restart", "level": "info", "message": "service restarting"}
+    """
+    if req.channel not in _VALID_CHANNELS:
+        raise HTTPException(422, f"channel must be one of {_VALID_CHANNELS}")
+
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def emit(phase: str, level: str, message: str) -> None:
+        # Cross-thread put_nowait via the running event loop.
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"phase": phase, "level": level, "message": message},
+        )
+
+    def runner() -> None:
+        try:
+            system_update.apply(
+                channel=req.channel,
+                build=req.build,
+                progress=emit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            emit("error", "error", f"{type(exc).__name__}: {exc}")
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+            return
+        if req.restart:
+            emit("restart", "info", "scheduling service restart in 1.5s")
+            # Defer the actual restart so the SSE stream has time to
+            # flush the final event to the browser before uvicorn
+            # shuts down. We use a daemon thread instead of asyncio
+            # because the executor that ran apply() has already gone.
+            threading.Timer(1.5, _trigger_restart).start()
+        loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(
+        target=runner, name="system-update", daemon=True
+    ).start()
+
+    async def stream() -> AsyncIterator[bytes]:
+        # SSE framing: each event is "data: <json>\n\n".
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield (f"data: {json.dumps(event, ensure_ascii=False)}\n\n").encode("utf-8")
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _trigger_restart() -> None:
+    """Re-exec the current process so the just-installed code wins.
+
+    POSIX: ``os.execv`` replaces the running uvicorn process in place.
+    Windows: spawn a fresh process detached + exit cleanly. Either way
+    the systemd / launchd / Task Scheduler unit (if any) sees a clean
+    exit and won't fight us — we set ``Restart=on-failure`` so a
+    voluntary exit followed by a re-spawn from the unit is fine.
+    """
+    import os
+    import sys
+
+    args = [sys.executable, *sys.argv]
+    if sys.platform == "win32":
+        # Spawn detached child running same argv, then bail.
+        import subprocess
+
+        subprocess.Popen(  # noqa: S603
+            args,
+            close_fds=True,
+            creationflags=0x00000008 | 0x08000000,  # DETACHED_PROCESS|CREATE_NO_WINDOW
+        )
+        os._exit(0)  # noqa: SLF001 — needed: skip atexit / running tasks
+        return
+    os.execv(sys.executable, args)

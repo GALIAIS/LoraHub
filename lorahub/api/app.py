@@ -257,8 +257,51 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
             available_slots=list(range(desired)),
         )
     sched.scheduler.start()
+
+    # Background self-update polling. Two cadences:
+    #   * 3 seconds after startup — a single seed check so the version
+    #     card on the Settings page renders an answer the first time
+    #     the user opens it without spinning.
+    #   * Every 6 hours afterwards — long enough that GitHub's 60/hr
+    #     unauthenticated rate limit is irrelevant, short enough that
+    #     a release tagged in the morning is visible by lunch.
+    _update_check_task = asyncio.create_task(_update_check_loop())
     yield
+    _update_check_task.cancel()
     sched.scheduler.stop(timeout=2.0)
+
+
+async def _update_check_loop() -> None:
+    """Seed + periodic background refresh of the update cache."""
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    from lorahub.api import system_update  # noqa: PLC0415
+
+    try:
+        await _asyncio.sleep(3.0)
+        # Both channels eagerly so the first UI render has both numbers
+        # ready (they're cached separately and this only costs two HTTP
+        # GETs to api.github.com).
+        for chan in ("tag", "main"):
+            try:
+                await _asyncio.to_thread(
+                    system_update.check, chan, force=False
+                )
+            except Exception:  # noqa: BLE001
+                # Network errors are expected on cold-boot — degrade
+                # gracefully and let the next cycle try again.
+                pass
+        while True:
+            await _asyncio.sleep(6 * 60 * 60)
+            for chan in ("tag", "main"):
+                try:
+                    await _asyncio.to_thread(
+                        system_update.check, chan, force=True
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+    except _asyncio.CancelledError:
+        return
 
 
 app = FastAPI(
