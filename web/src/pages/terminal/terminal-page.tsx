@@ -146,12 +146,12 @@ export function TerminalPage() {
             signal: controller.signal,
             onEvent: (event: TerminalEvent) => {
               if (event.type === "start") {
+                // We capture argv/cwd silently so the failure handler
+                // below can dump them. Successful runs don't need a
+                // "▶ <rewritten argv>" header — the original prompt
+                // line above and the command's own output is enough.
                 lastArgv = event.argv
                 lastCwd = event.cwd
-                appendLine({
-                  kind: "info",
-                  text: `▶ ${event.argv.join(" ")}`,
-                })
               } else if (event.type === "stdout" || event.type === "stderr") {
                 sawOutput = true
                 appendLine({
@@ -160,30 +160,34 @@ export function TerminalPage() {
                 })
               } else if (event.type === "exit") {
                 const ok = event.code === 0
-                appendLine({
-                  kind: ok ? "info" : "error",
-                  text: ok
-                    ? "✓ 命令完成 (exit 0)"
-                    : `✗ 命令失败 (exit ${event.code})`,
-                })
-                if (!ok && !sawOutput && lastArgv) {
-                  // Help users diagnose silent failures: dump the
-                  // resolved argv + cwd so they can spot a missing
-                  // executable, broken venv path, etc.
+                if (!ok) {
+                  // Successful runs stay quiet — output was the answer.
+                  // Only surface a footer line when something actually
+                  // went wrong, and dump diagnostic context if there
+                  // was no stdout/stderr to read.
                   appendLine({
                     kind: "error",
-                    text: `  argv: ${lastArgv.join(" ")}`,
+                    text: `✗ 命令失败 (exit ${event.code})`,
                   })
-                  if (lastCwd) {
+                  if (!sawOutput && lastArgv) {
+                    // Help users diagnose silent failures: dump the
+                    // resolved argv + cwd so they can spot a missing
+                    // executable, broken venv path, etc.
                     appendLine({
                       kind: "error",
-                      text: `  cwd:  ${lastCwd}`,
+                      text: `  argv: ${lastArgv.join(" ")}`,
+                    })
+                    if (lastCwd) {
+                      appendLine({
+                        kind: "error",
+                        text: `  cwd:  ${lastCwd}`,
+                      })
+                    }
+                    appendLine({
+                      kind: "error",
+                      text: "  无任何输出。请确认该后端的 venv python 可用、且命令本身在该 venv 中存在。",
                     })
                   }
-                  appendLine({
-                    kind: "error",
-                    text: "  无任何输出。请确认该后端的 venv python 可用、且命令本身在该 venv 中存在。",
-                  })
                 }
               } else if (event.type === "error") {
                 appendLine({ kind: "error", text: event.data ?? "未知错误" })
