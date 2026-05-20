@@ -65,6 +65,8 @@ class UpdateSettingsRequest(BaseModel):
     download_proxy: str | None = None
     huggingface_token: str | None = None
     wandb_api_key: str | None = None
+    terminal_unrestricted: bool | None = None
+    terminal_command_timeout_s: int | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -201,6 +203,16 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             req.wandb_api_key,
             current.wandb_api_key,
             _mask_secret(current.wandb_api_key),
+        ),
+        terminal_unrestricted=(
+            req.terminal_unrestricted
+            if req.terminal_unrestricted is not None
+            else current.terminal_unrestricted
+        ),
+        terminal_command_timeout_s=(
+            req.terminal_command_timeout_s
+            if req.terminal_command_timeout_s is not None
+            else current.terminal_command_timeout_s
         ),
         extra=current.extra,
     )

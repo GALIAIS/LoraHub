@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Archive, Database, HardDrive, Loader2, Trash2 } from "lucide-react"
+import { Archive, Database, HardDrive, Loader2, ShieldAlert, Terminal as TerminalIcon, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -236,6 +239,8 @@ export function MaintenanceTab() {
         </CardContent>
       </Card>
 
+      <TerminalSettingsCard />
+
       {(deleteEntry.isError || clearArchive.isError || clearHfCache.isError) && (
         <div className="text-xs text-destructive font-mono">
           {String(
@@ -337,5 +342,123 @@ function ConfirmButton({
         </AlertDialogContent>
       </AlertDialog>
     </>
+  )
+}
+
+/**
+ * Settings panel for the in-app terminal: command-whitelist toggle and
+ * per-command timeout. Both flags read from + write to ``Settings`` via
+ * the standard PUT /api/settings round trip.
+ */
+function TerminalSettingsCard() {
+  const qc = useQueryClient()
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+    staleTime: 10_000,
+  })
+  const s = settingsQuery.data?.settings as
+    | (Record<string, unknown> & {
+        terminal_unrestricted?: boolean
+        terminal_command_timeout_s?: number
+      })
+    | undefined
+
+  const unrestricted = !!s?.terminal_unrestricted
+  const initialTimeout = Number(s?.terminal_command_timeout_s ?? 600)
+  const [timeoutDraft, setTimeoutDraft] = useState<string>(String(initialTimeout))
+
+  // Re-hydrate the local draft when the upstream value lands or
+  // changes (e.g. another browser tab edited it).
+  useMemo(() => {
+    setTimeoutDraft(String(initialTimeout))
+  }, [initialTimeout])
+
+  const update = useMutation({
+    mutationFn: (body: Parameters<typeof api.updateSettings>[0]) =>
+      api.updateSettings(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  })
+
+  const saveTimeout = () => {
+    const n = Number.parseInt(timeoutDraft, 10)
+    if (!Number.isFinite(n) || n < 5) return
+    update.mutate({ terminal_command_timeout_s: n })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <TerminalIcon className="size-4 text-muted-foreground" />
+          终端
+        </CardTitle>
+        <CardDescription>
+          控制 「工具 → 终端」 页面的安全策略与运行时长上限。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1 flex-1 min-w-0">
+            <div className="text-sm font-medium flex items-center gap-2">
+              自由命令模式
+              {unrestricted && (
+                <Badge
+                  variant="outline"
+                  className="rounded-[2px] text-[10px] border-amber-500/40 text-amber-600 dark:text-amber-400"
+                >
+                  <ShieldAlert className="size-3" />
+                  已开启
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              关闭时(默认):只允许 <code className="font-mono">pip / uv / python</code> 命令,
+              且 <code className="font-mono">pip</code> 自动改写为 <code className="font-mono">python -m pip</code>{" "}
+              以确保命中所选后端的 venv。
+              <br />
+              开启时:任何命令都能执行,但你需要自己保证它的安全性。
+            </p>
+          </div>
+          <Switch
+            checked={unrestricted}
+            onCheckedChange={(v) =>
+              update.mutate({ terminal_unrestricted: v })
+            }
+            disabled={update.isPending}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">单条命令超时(秒)</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={5}
+              max={86400}
+              value={timeoutDraft}
+              onChange={(e) => setTimeoutDraft(e.target.value)}
+              className="h-8 text-[12px] max-w-[8rem] font-mono"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-[11px]"
+              onClick={saveTimeout}
+              disabled={
+                update.isPending ||
+                !timeoutDraft ||
+                Number.parseInt(timeoutDraft, 10) === initialTimeout
+              }
+            >
+              保存
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              超时后会强制结束子进程。pip install 大轮子建议 ≥ 600。
+            </span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

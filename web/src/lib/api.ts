@@ -206,6 +206,8 @@ export interface SettingsState {
   download_proxy: string | null
   huggingface_token: string | null
   wandb_api_key: string | null
+  terminal_unrestricted: boolean
+  terminal_command_timeout_s: number
   extra: Record<string, unknown>
 }
 
@@ -1959,4 +1961,105 @@ export function datasetUpload(
   })
 
   return { eventSource: stream, abort: () => controller.abort() }
+}
+
+// --------------------------------------------------------------------------- //
+// Terminal — venv-scoped command runner
+// --------------------------------------------------------------------------- //
+
+export interface TerminalEnvironment {
+  backend_id: string
+  name: string
+  repo_path: string
+  python_path: string | null
+  venv_dir: string | null
+  venv_detected: boolean
+  ready: boolean
+  prompt: string
+}
+
+export interface TerminalSessionsResponse {
+  backends: TerminalEnvironment[]
+  default_backend: string
+  unrestricted: boolean
+  command_timeout_s: number
+}
+
+export type TerminalEvent =
+  | { type: "start"; argv: string[]; cwd: string }
+  | { type: "stdout"; data: string }
+  | { type: "stderr"; data: string }
+  | { type: "exit"; code: number }
+  | { type: "error"; data: string }
+
+export async function terminalListSessions(): Promise<TerminalSessionsResponse> {
+  return http<TerminalSessionsResponse>("/terminal/sessions")
+}
+
+/**
+ * Stream a terminal command from the backend, calling ``onEvent`` for
+ * each SSE frame as it arrives. Returns an async function that resolves
+ * once the stream completes (either via an ``exit`` event or the abort
+ * signal). The caller passes an AbortController to cancel mid-stream.
+ *
+ * Why fetch + ReadableStream and not EventSource: EventSource doesn't
+ * let us POST a request body, and we need to send {backend_id, command}
+ * via JSON. Manual SSE parsing is short and gives us abort + headers.
+ */
+export async function terminalExec(
+  body: { backend_id: string; command: string },
+  opts: {
+    signal?: AbortSignal
+    onEvent: (event: TerminalEvent) => void
+  },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/terminal/exec`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  })
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`
+    try {
+      const data = await res.json()
+      if (data?.detail) message = String(data.detail)
+    } catch {
+      try {
+        message = await res.text()
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(message)
+  }
+  const reader = res.body?.getReader()
+  if (!reader) {
+    throw new Error("Streaming response missing — does the proxy buffer SSE?")
+  }
+  const decoder = new TextDecoder()
+  let buf = ""
+  // SSE framing: events are separated by a blank line. Each frame
+  // contains one or more `data:` lines whose payloads we concatenate.
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, nl)
+      buf = buf.slice(nl + 2)
+      const data = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n")
+      if (!data) continue
+      try {
+        opts.onEvent(JSON.parse(data) as TerminalEvent)
+      } catch {
+        /* malformed frame — ignore so the stream stays usable */
+      }
+    }
+  }
 }

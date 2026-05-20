@@ -28,6 +28,7 @@ from .storage import router as storage_router
 from .sweeps import router as sweeps_router
 from .system import router as system_router
 from .tagging import router as tagging_router
+from .terminal import router as terminal_router
 
 all_routers: list[APIRouter] = [
     health_router,
@@ -48,6 +49,7 @@ all_routers: list[APIRouter] = [
     sweeps_router,
     system_router,
     tagging_router,
+    terminal_router,
 ]
 
 __all__ = ["all_routers"]

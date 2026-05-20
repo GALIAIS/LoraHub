@@ -16,6 +16,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sun,
+  TerminalSquare,
 } from "lucide-react"
 import { preloadAppRoute, type AppRouteModuleKey } from "@/app/route-modules"
 import { api } from "@/lib/api"
@@ -49,6 +50,7 @@ const NAV: Array<{
   { to: "/jobs", label: "训练任务", icon: ListTree, routeKey: "jobs", group: "workspace" },
   { to: "/analysis", label: "训练分析", icon: BarChart3, routeKey: "analysis", group: "workspace" },
   { to: "/sweeps", label: "超参 sweep", icon: SlidersHorizontal, routeKey: "sweeps", group: "workspace" },
+  { to: "/terminal", label: "终端", icon: TerminalSquare, routeKey: "terminal", group: "tools" },
   { to: "/configs", label: "训练配置", icon: Layers, routeKey: "configs", group: "tools" },
   { to: "/datasets", label: "数据集", icon: Database, routeKey: "datasets", group: "tools" },
   { to: "/image-studio", label: "图像工作台", icon: Palette, routeKey: "image-studio", group: "tools" },

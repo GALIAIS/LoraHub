@@ -54,6 +54,10 @@ const AboutPage = lazyWithRetry(
   () => import("./pages/about").then((m) => ({ default: m.AboutPage })),
   "route:about",
 )
+const TerminalPage = lazyWithRetry(
+  () => import("./pages/terminal").then((m) => ({ default: m.TerminalPage })),
+  "route:terminal",
+)
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -92,6 +96,7 @@ createRoot(document.getElementById("root")!, {
             <Route path="datasets" element={<DatasetsPage />} />
             <Route path="image-studio" element={<ImageStudioPage />} />
             <Route path="gallery" element={<GalleryPage />} />
+            <Route path="terminal" element={<TerminalPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="about" element={<AboutPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

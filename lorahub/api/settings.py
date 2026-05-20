@@ -92,6 +92,18 @@ class Settings:
     # metadata.auto_resume_attempts on each resumed JobRecord.
     auto_resume_max_attempts: int = 3
 
+    # --- Terminal ---
+    # In-app terminal restricts commands to a small whitelist of Python
+    # package management entry points (pip / uv / python) by default so
+    # a stray paste / prompt injection can't fire `rm -rf` against the
+    # user's tree. Flip to True only if you actually need a free shell;
+    # the UI surfaces this as a single toggle.
+    terminal_unrestricted: bool = False
+    # Per-command timeout (seconds). pip install for a heavy wheel can
+    # take a while, so the default sits at 10 minutes; users can crank
+    # it up locally if they're upgrading torch on a slow link.
+    terminal_command_timeout_s: int = 600
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

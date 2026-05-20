@@ -11,6 +11,7 @@ export type AppRouteModuleKey =
   | "gallery"
   | "settings"
   | "about"
+  | "terminal"
 
 type AppRouteImporter = () => Promise<unknown>
 
@@ -25,6 +26,7 @@ export const appRouteImporters: Record<AppRouteModuleKey, AppRouteImporter> = {
   gallery: () => import("@/pages/gallery"),
   settings: () => import("@/pages/settings"),
   about: () => import("@/pages/about"),
+  terminal: () => import("@/pages/terminal"),
 }
 
 const inflight = new Map<AppRouteModuleKey, Promise<unknown>>()
