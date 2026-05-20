@@ -138,7 +138,17 @@ export function DatasetsPage() {
                 icon={<FileText className="size-3.5" />}
                 label="标注覆盖"
                 value={`${data.caption_files}/${data.image_files}`}
-                tone={data.caption_files === data.image_files ? "default" : "warning"}
+                tone={
+                  // Only call the dataset "complete" once it actually
+                  // has images. 0/0 used to render as success which
+                  // misled users into thinking an empty folder was
+                  // already labeled.
+                  data.image_files === 0
+                    ? "warning"
+                    : data.caption_files === data.image_files
+                      ? "default"
+                      : "warning"
+                }
               />
             </div>
 

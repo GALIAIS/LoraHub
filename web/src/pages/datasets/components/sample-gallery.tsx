@@ -1,4 +1,5 @@
-import { Pencil } from "lucide-react"
+import { useState } from "react"
+import { ImageOff, Pencil } from "lucide-react"
 import { api, type DatasetScanResponse } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 
@@ -44,6 +45,7 @@ function SampleCard({
   onPreviewImage?: () => void
 }) {
   const isImage = isImageSample(sample)
+  const [broken, setBroken] = useState(false)
   return (
     <div className="relative rounded-[6px] border border-border/60 bg-card/60 overflow-hidden transition-colors hover:border-primary/40 flex flex-col">
       <button
@@ -54,15 +56,20 @@ function SampleCard({
       >
         {isImage ? (
           <div className="aspect-square overflow-hidden">
-            <img
-              src={api.datasetThumbUrl(sample.path, 336)}
-              loading="lazy"
-              alt={sample.name}
-              className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
-              onError={(event) => {
-                ;(event.currentTarget as HTMLImageElement).style.visibility = "hidden"
-              }}
-            />
+            {broken ? (
+              <div className="w-full h-full grid place-items-center text-muted-foreground/70 text-[11px] gap-1 flex-col flex">
+                <ImageOff className="size-5" />
+                <span>缩略图不可用</span>
+              </div>
+            ) : (
+              <img
+                src={api.datasetThumbUrl(sample.path, 336)}
+                loading="lazy"
+                alt={sample.name}
+                className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+                onError={() => setBroken(true)}
+              />
+            )}
           </div>
         ) : (
           <div className="aspect-square grid place-items-center text-[11px] text-muted-foreground/70 font-mono px-3 text-center">

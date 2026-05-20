@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { ChevronRight, ExternalLink, Images, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Images, X } from "lucide-react"
 import {
   api,
   type JobSummary,
@@ -37,6 +37,20 @@ export function GalleryPage() {
 
   const jobs = useJobsList()
 
+  // Pause the slow background refresh while a lightbox is open or the
+  // tab is hidden — re-fetching the entire feed every 6s is wasted work
+  // when the user can't see the grid.
+  const [docHidden, setDocHidden] = useState(
+    typeof document !== "undefined" ? document.hidden : false,
+  )
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    const onChange = () => setDocHidden(document.hidden)
+    document.addEventListener("visibilitychange", onChange)
+    return () => document.removeEventListener("visibilitychange", onChange)
+  }, [])
+  const refetchInterval = active != null || docHidden ? false : 6000
+
   // Refresh the gallery on a slow cadence so freshly produced samples
   // appear without forcing a manual reload, but not so fast that every
   // mouse-move re-fetches the entire feed.
@@ -49,12 +63,34 @@ export function GalleryPage() {
         offset,
         jobIds: selectedJobIds.length > 0 ? selectedJobIds : undefined,
       }),
-    refetchInterval: 6000,
+    refetchInterval,
   })
 
   const items = samples.data?.items ?? []
   const total = samples.data?.total ?? 0
   const allJobs = jobs.data?.jobs ?? []
+
+  // Lightbox arrow-key navigation. Mapped against the *current* item
+  // list so the user can flip through results without closing first.
+  const activeIndex = active
+    ? items.findIndex(
+        (it) => it.job_id === active.job_id && it.path === active.path,
+      )
+    : -1
+  useEffect(() => {
+    if (active == null) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft" && activeIndex > 0) {
+        event.preventDefault()
+        setActive(items[activeIndex - 1])
+      } else if (event.key === "ArrowRight" && activeIndex >= 0 && activeIndex < items.length - 1) {
+        event.preventDefault()
+        setActive(items[activeIndex + 1])
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [active, activeIndex, items])
 
   return (
     <div className="h-full overflow-y-auto">
@@ -105,6 +141,10 @@ export function GalleryPage() {
                     : [...prev, id],
                 )
               }
+              onSelectAll={() =>
+                setSelectedJobIds(allJobs.map((j) => j.id))
+              }
+              onClear={() => setSelectedJobIds([])}
             />
           </CardContent>
         </Card>
@@ -158,6 +198,16 @@ export function GalleryPage() {
       <SampleLightbox
         item={active}
         onClose={() => setActive(null)}
+        onPrev={() =>
+          activeIndex > 0 ? setActive(items[activeIndex - 1]) : undefined
+        }
+        onNext={() =>
+          activeIndex >= 0 && activeIndex < items.length - 1
+            ? setActive(items[activeIndex + 1])
+            : undefined
+        }
+        hasPrev={activeIndex > 0}
+        hasNext={activeIndex >= 0 && activeIndex < items.length - 1}
       />
     </div>
   )
@@ -167,50 +217,71 @@ function JobFilterChips({
   jobs,
   selectedJobIds,
   onToggle,
+  onSelectAll,
+  onClear,
 }: {
   jobs: JobSummary[]
   selectedJobIds: string[]
   onToggle: (id: string) => void
+  onSelectAll: () => void
+  onClear: () => void
 }) {
-  if (jobs.length === 0) {
+  // IMPORTANT: hooks must run unconditionally — keep useMemo above
+  // any early return. The previous version short-circuited on
+  // `jobs.length === 0` first, which made React's hook count change
+  // when jobs flipped from 0 to ≥1 and threw "Rendered more hooks
+  // than during the previous render".
+  const ordered = useMemo(
+    () =>
+      [...jobs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+    [jobs],
+  )
+  if (ordered.length === 0) {
     return (
       <div className="text-[11px] text-muted-foreground/70">
         当前还没有任务记录。
       </div>
     )
   }
-  // Newest jobs first so a fresh run is one click away from the dashboard.
-  const ordered = useMemo(
-    () =>
-      [...jobs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
-    [jobs],
-  )
+  const allSelected = selectedJobIds.length === ordered.length
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {ordered.map((job) => {
-        const active = selectedJobIds.includes(job.id)
-        const shortId = job.id.slice(-8)
-        const wsName = job.workspace.split(/[\\/]/).filter(Boolean).pop() ?? ""
-        return (
-          <button
-            key={job.id}
-            type="button"
-            onClick={() => onToggle(job.id)}
-            className={cn(
-              "rounded-[3px] border px-2 py-1 text-[11px] font-mono transition-colors",
-              active
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border/60 bg-background/60 text-muted-foreground hover:bg-muted/40",
-            )}
-            title={job.workspace}
-          >
-            <span>{shortId}</span>
-            {wsName && (
-              <span className="ml-1.5 text-muted-foreground/70">{wsName}</span>
-            )}
-          </button>
-        )
-      })}
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+        <span>按任务筛选</span>
+        <button
+          type="button"
+          onClick={allSelected ? onClear : onSelectAll}
+          className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {allSelected ? "反选" : "全选"}
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {ordered.map((job) => {
+          const active = selectedJobIds.includes(job.id)
+          const shortId = job.id.slice(-8)
+          const wsName = job.workspace.split(/[\\/]/).filter(Boolean).pop() ?? ""
+          return (
+            <button
+              key={job.id}
+              type="button"
+              onClick={() => onToggle(job.id)}
+              className={cn(
+                "rounded-[3px] border px-2 py-1 text-[11px] font-mono transition-colors",
+                active
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border/60 bg-background/60 text-muted-foreground hover:bg-muted/40",
+              )}
+              title={`${job.workspace} · ${new Date(job.created_at).toLocaleString()}`}
+            >
+              <span>{shortId}</span>
+              {wsName && (
+                <span className="ml-1.5 text-muted-foreground/70">{wsName}</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -222,6 +293,7 @@ function SampleTile({
   item: SampleGalleryItem
   onOpen: () => void
 }) {
+  const [broken, setBroken] = useState(false)
   const filename = item.path.split(/[\\/]/).pop() ?? item.path
   const shortId = item.job_id.slice(-8)
   return (
@@ -232,12 +304,20 @@ function SampleTile({
       title={`${shortId} · ${item.path}`}
     >
       <div className="aspect-square bg-muted/40 grid place-items-center overflow-hidden">
-        <img
-          src={item.raw_url}
-          loading="lazy"
-          alt={filename}
-          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
-        />
+        {broken ? (
+          <div className="flex flex-col items-center gap-1 text-muted-foreground/70 text-[10px]">
+            <Images className="size-5" />
+            <span>样图已不可用</span>
+          </div>
+        ) : (
+          <img
+            src={item.raw_url}
+            loading="lazy"
+            alt={filename}
+            className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+            onError={() => setBroken(true)}
+          />
+        )}
       </div>
       <div className="px-2 py-1.5 text-[11px] space-y-0.5">
         <div className="flex items-center justify-between gap-1.5">
@@ -262,11 +342,20 @@ function SampleTile({
 function SampleLightbox({
   item,
   onClose,
+  onPrev,
+  onNext,
+  hasPrev,
+  hasNext,
 }: {
   item: SampleGalleryItem | null
   onClose: () => void
+  onPrev: () => void
+  onNext: () => void
+  hasPrev: boolean
+  hasNext: boolean
 }) {
   const navigate = useNavigate()
+  const filename = item ? item.path.split(/[\\/]/).pop() ?? item.path : ""
   return (
     <Dialog open={!!item} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-[min(calc(100%-2rem),64rem)]">
@@ -277,12 +366,32 @@ function SampleLightbox({
                 {item.path}
               </DialogTitle>
             </DialogHeader>
-            <div className="rounded-[4px] border border-border/60 bg-muted/40 overflow-hidden grid place-items-center max-h-[70vh]">
+            <div className="relative rounded-[4px] border border-border/60 bg-muted/40 overflow-hidden grid place-items-center max-h-[70vh]">
               <img
                 src={item.raw_url}
                 alt={item.path}
                 className="max-h-[70vh] w-auto object-contain"
               />
+              {hasPrev && (
+                <button
+                  type="button"
+                  onClick={onPrev}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-background/80 p-1.5 text-foreground border border-border/60 hover:bg-background transition-colors"
+                  title="上一张 (←)"
+                >
+                  <ChevronLeft className="size-4" />
+                </button>
+              )}
+              {hasNext && (
+                <button
+                  type="button"
+                  onClick={onNext}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-background/80 p-1.5 text-foreground border border-border/60 hover:bg-background transition-colors"
+                  title="下一张 (→)"
+                >
+                  <ChevronRight className="size-4" />
+                </button>
+              )}
             </div>
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
               <Stat label="任务" value={item.job_id.slice(-8)} />
@@ -301,6 +410,13 @@ function SampleLightbox({
               />
             </dl>
             <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                size="sm"
+                render={<a href={item.raw_url} download={filename} />}
+              >
+                <Download className="size-3" /> 下载
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -350,7 +466,8 @@ function fmtRelativeTime(ts: number): string {
   if (!Number.isFinite(ts) || ts <= 0) return "—"
   const now = Date.now() / 1000
   const delta = now - ts
-  if (delta < 60) return "刚刚"
+  if (delta < 5) return "刚刚"
+  if (delta < 60) return `${Math.floor(delta)} 秒前`
   if (delta < 3600) return `${Math.floor(delta / 60)} 分钟前`
   if (delta < 86400) return `${Math.floor(delta / 3600)} 小时前`
   if (delta < 86400 * 30) return `${Math.floor(delta / 86400)} 天前`

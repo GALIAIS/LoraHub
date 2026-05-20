@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Filter, FolderOpen, HelpCircle, Loader2, Sparkles, Tag } from "lucide-react"
@@ -80,6 +80,19 @@ export function DatasetDetail() {
   const queryClient = useQueryClient()
   const datasetName = path.split(/[/\\]/).pop() || ""
 
+  // Track the WD14 polling interval so unmount / restart cleans it up
+  // — previously a stray setInterval kept calling setState on an
+  // unmounted component when the user navigated away mid-tagging.
+  const wd14PollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (wd14PollRef.current) {
+        clearInterval(wd14PollRef.current)
+        wd14PollRef.current = null
+      }
+    }
+  }, [])
+
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
     next.set("page", String(p))
@@ -110,9 +123,16 @@ export function DatasetDetail() {
 
   const batchFavMutation = useMutation({
     mutationFn: async () => {
-      for (const p of multiSelected) {
-        await imageStudioSaveAnnotation({ path: p, favorite: true })
-      }
+      // Fan out the per-image saves in parallel — previously this was
+      // a sequential `for...of await` loop, which made marking 1000
+      // images take ~1000× longer than necessary. We still surface
+      // the first error encountered (Promise.all rejects on the first
+      // failure) so the toast caller can show a useful message.
+      await Promise.all(
+        Array.from(multiSelected).map((p) =>
+          imageStudioSaveAnnotation({ path: p, favorite: true }),
+        ),
+      )
     },
     onSuccess: () => {
       setMultiSelected(new Set())
@@ -199,14 +219,13 @@ export function DatasetDetail() {
           e.preventDefault()
           if (currentIdx >= 0) setSelectedPath(items[currentIdx].path)
           break
-        case "q": // quality vote
-          e.preventDefault()
-          break
-        case "d": // soft-delete
+        case "d": // soft-delete current focused tile
           e.preventDefault()
           if (currentIdx >= 0) {
-            imageStudioSaveAnnotation({ path: items[currentIdx].path, softDeleted: true })
-              .then(() => queryClient.invalidateQueries({ queryKey: ["image-studio"] }))
+            // Open the existing single-delete confirm dialog instead
+            // of nuking immediately — keyboard-trigger destructives
+            // without confirm is too easy to fire by accident.
+            setPendingDeleteSingle(items[currentIdx])
           }
           break
         case "a":
@@ -256,6 +275,19 @@ export function DatasetDetail() {
             captionMode: params.captionMode as "general" | "style" | "character",
             triggerWord: params.triggerWord as string | undefined,
             stripStyleTags: params.stripStyleTags as boolean | undefined,
+            onProgress: (snap) => {
+              const last = snap.last_image
+                ? snap.last_image.split(/[/\\]/).pop() ?? ""
+                : ""
+              setAiProgress({
+                running: snap.status === "running" || snap.status === "pending",
+                label: snap.status === "running" || snap.status === "pending"
+                  ? `智能标注中… ${last ? `· ${last}` : ""}`
+                  : "智能标注完成",
+                processed: snap.processed,
+                total: snap.total,
+              })
+            },
           })
           setAiProgress({ running: false, label: "智能标注完成", processed: res.processed })
           break
@@ -288,8 +320,13 @@ export function DatasetDetail() {
             overwrite: params.overwrite as boolean,
             recursive,
           })
-          // Poll session progress
-          const poll = setInterval(async () => {
+          // Cancel any previous poll before starting a new one.
+          if (wd14PollRef.current) {
+            clearInterval(wd14PollRef.current)
+            wd14PollRef.current = null
+          }
+          // Poll session progress; the ref is cleared on unmount.
+          wd14PollRef.current = setInterval(async () => {
             try {
               const snap = await getTaggingSession(session.session_id)
               setAiProgress({
@@ -302,18 +339,46 @@ export function DatasetDetail() {
                 error: snap.error ?? undefined,
               })
               if (snap.status !== "running") {
-                clearInterval(poll)
+                if (wd14PollRef.current) {
+                  clearInterval(wd14PollRef.current)
+                  wd14PollRef.current = null
+                }
                 queryClient.invalidateQueries({ queryKey: ["image-studio"] })
               }
-            } catch { clearInterval(poll) }
+            } catch {
+              if (wd14PollRef.current) {
+                clearInterval(wd14PollRef.current)
+                wd14PollRef.current = null
+              }
+            }
           }, 2000)
           return
         }
         case "trigger-words":
-          setAiProgress({ running: true, label: "触发词分析中..." })
-          // Uses smart caption endpoint with a different merge strategy as a proxy
-          await imageStudioSmartCaption({ path: taskPath, recursive, mergeStrategy: "replace" })
-          setAiProgress({ running: false, label: "触发词分析完成" })
+          // The "trigger words" tab repurposes smart-caption with a
+          // replace strategy. Surface that honestly in the progress
+          // label so the user isn't waiting for some separate trigger
+          // word feature that doesn't exist yet.
+          setAiProgress({ running: true, label: "重新生成描述 (替换合并)..." })
+          await imageStudioSmartCaption({
+            path: taskPath,
+            recursive,
+            mergeStrategy: "replace",
+            onProgress: (snap) => {
+              const last = snap.last_image
+                ? snap.last_image.split(/[/\\]/).pop() ?? ""
+                : ""
+              setAiProgress({
+                running: snap.status === "running" || snap.status === "pending",
+                label: snap.status === "running" || snap.status === "pending"
+                  ? `重新生成中… ${last ? `· ${last}` : ""}`
+                  : "重新生成完成",
+                processed: snap.processed,
+                total: snap.total,
+              })
+            },
+          })
+          setAiProgress({ running: false, label: "重新生成完成" })
           break
       }
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })

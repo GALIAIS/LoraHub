@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Image as ImageIcon, Loader2, Save } from "lucide-react"
+import { AlertTriangle, Image as ImageIcon, Loader2, RefreshCw, Save } from "lucide-react"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -44,11 +44,13 @@ export function CaptionEditorModal({
   const [draft, setDraft] = useState<string | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
 
+  // Reset draft + saved-flash state whenever the modal closes OR the
+  // edited image switches. Without the imagePath dependency, opening
+  // image B right after editing image A would leave A's draft sitting
+  // in the textarea — what the user reported as "上一张沾到下一张".
   useEffect(() => {
-    if (!open) {
-      setDraft(null)
-      setSavedAt(null)
-    }
+    setDraft(null)
+    setSavedAt(null)
   }, [open, imagePath])
 
   const baseText = captionQuery.data?.caption ?? ""
@@ -81,18 +83,36 @@ export function CaptionEditorModal({
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 px-1">
             <Loader2 className="size-3.5 animate-spin" /> 读取标注…
           </div>
-        ) : captionQuery.isError ? (
-          <div className="text-xs text-destructive font-mono">
-            {(captionQuery.error as Error).message}
-          </div>
         ) : (
-          <textarea
-            value={text}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={10}
-            className="w-full font-mono text-sm border border-border/60 rounded-[4px] p-2 bg-background resize-y"
-            placeholder="逗号分隔的标签…"
-          />
+          <div className="space-y-2">
+            {captionQuery.isError && (
+              <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[11px] font-mono text-destructive flex items-start justify-between gap-2">
+                <span className="flex items-start gap-1.5">
+                  <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                  读取失败：{(captionQuery.error as Error).message}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[11px] shrink-0"
+                  onClick={() => captionQuery.refetch()}
+                  disabled={captionQuery.isFetching}
+                >
+                  <RefreshCw
+                    className={`size-3 ${captionQuery.isFetching ? "animate-spin" : ""}`}
+                  />
+                  重试
+                </Button>
+              </div>
+            )}
+            <textarea
+              value={text}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={10}
+              className="w-full font-mono text-sm border border-border/60 rounded-[4px] p-2 bg-background resize-y"
+              placeholder="逗号分隔的标签…"
+            />
+          </div>
         )}
 
         <DialogFooter className="flex items-center justify-between gap-3">
