@@ -112,9 +112,8 @@ diffusion-pipe/
 # committing it would drift behind whatever tag is current.
 lorahub/_version.py
 
-# Local dev scratch — ad-hoc temp scripts, claude/agent worktrees,
-# and stdout/err captures from launch-dev style helpers. Stays
-# out of git so the repo doesn't accumulate per-machine debris.
+# Local dev scratch — ad-hoc temp scripts and stdout/err captures.
+# Stays out of git so the repo doesn't accumulate per-machine debris.
 .tmp_*
 .claude/
 *-local.err

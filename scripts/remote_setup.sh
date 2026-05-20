@@ -2,8 +2,8 @@
 # remote_setup.sh — one-shot installer that runs on the LoraHub VPS.
 #
 # Idempotent: re-runs are safe and will only redo the steps that need it.
-# Designed to be invoked by `scripts/wsl_remote.sh setup` from the WSL host
-# (which wraps the heavy lifting in setsid + tee logs to /root/_setup.log).
+# Run directly on the VPS over ssh; the companion `scripts/remote_serve.sh`
+# starts uvicorn on top of the install.
 #
 # Steps:
 #   1. Ensure /root/autodl-tmp/opt/node20 exists (Node 20 portable binary).

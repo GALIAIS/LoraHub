@@ -6,8 +6,8 @@ rem ----------------------------------------------------------------
 rem LoRaHub - One-click environment installer (Windows)
 rem
 rem Installs EVERYTHING into the project directory:
-rem   1. uv -> .tools\uv\
-rem   2. Python 3.12 -> .tools\python\
+rem   1. uv -> .lorahub\uv\
+rem   2. Python 3.12 -> .lorahub\python\
 rem   3. Virtual environment -> .venv\
 rem   4. Python dependencies (lorahub[api,dev])
 rem   5. Node.js portable -> .node\
@@ -24,7 +24,7 @@ pushd "%ROOT%" || (
   goto :fail_pause
 )
 
-set "TOOLS_DIR=%CD%\.tools"
+set "TOOLS_DIR=%CD%\.lorahub"
 set "UV_DIR=%TOOLS_DIR%\uv"
 set "PY_DIR=%TOOLS_DIR%\python"
 set "NODE_DIR=%CD%\.node"
@@ -221,8 +221,8 @@ echo   Installation Complete
 echo ============================================================
 echo.
 echo   All tools installed locally:
-echo     uv:      .tools\uv\
-echo     Python:  .tools\python\
+echo     uv:      .lorahub\uv\
+echo     Python:  .lorahub\python\
 echo     Node.js: .node\
 echo     venv:    .venv\
 echo.

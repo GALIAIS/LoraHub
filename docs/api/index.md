@@ -50,7 +50,7 @@ lorahub serve --port 18765
     scripts/run.sh api
     ```
 
-启动器会优先用项目根的 `.tools/uv`、`.node/`、`.venv/`（一键安装脚本生成的本地工具链），再在缺失时回退系统 PATH。
+启动器会优先用项目根的 `.lorahub/uv`、`.node/`、`.venv/`（一键安装脚本生成的本地工具链），再在缺失时回退系统 PATH。
 
 ## 读 OpenAPI
 

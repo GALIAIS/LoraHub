@@ -27,7 +27,7 @@ WEB_PORT="6006"
 # Hard requirement: every binary the launcher touches comes from the
 # project tree. We never fall back to system installs — that's the
 # whole point of the install.sh layout.
-[ -d "$ROOT/.tools/uv" ] && export PATH="$ROOT/.tools/uv:$PATH"
+[ -d "$ROOT/.lorahub/uv" ] && export PATH="$ROOT/.lorahub/uv:$PATH"
 if [ -f "$ROOT/.node/bin/node" ]; then
     export PATH="$ROOT/.node/bin:$PATH"
 else

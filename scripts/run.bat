@@ -32,7 +32,7 @@ rem ---- Add project-local tools to PATH -------------------------------
 rem Hard requirement: every binary the launcher touches comes from the
 rem project tree. We never fall back to system installs — that's the
 rem whole point of the install.bat layout.
-if exist ".tools\uv\uv.exe" set "PATH=%CD%\.tools\uv;!PATH!"
+if exist ".lorahub\uv\uv.exe" set "PATH=%CD%\.lorahub\uv;!PATH!"
 if exist ".node\node.exe" (
   set "PATH=%CD%\.node;!PATH!"
 ) else (

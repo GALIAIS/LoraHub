@@ -5,8 +5,8 @@ set -euo pipefail
 # LoRaHub - Full environment installer (Linux)
 #
 # Installs EVERYTHING into the project directory:
-#   1. uv -> .tools/uv/
-#   2. Python 3.12 -> .tools/python/
+#   1. uv -> .lorahub/uv/
+#   2. Python 3.12 -> .lorahub/python/
 #   3. Virtual environment -> .venv/
 #   4. Python dependencies (lorahub[api,dev])
 #   5. Node.js portable -> .node/
@@ -20,7 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-TOOLS_DIR="$ROOT/.tools"
+# Single managed-tools home, shared with the LoraHub API. Both write to
+# the same .lorahub/ directory so a runtime installed by this script is
+# visible to the Settings UI (and vice versa).
+TOOLS_DIR="$ROOT/.lorahub"
 UV_DIR="$TOOLS_DIR/uv"
 PY_DIR="$TOOLS_DIR/python"
 NODE_DIR="$ROOT/.node"
@@ -175,8 +178,8 @@ echo "  Installation Complete"
 echo "============================================================"
 echo ""
 echo "  All tools installed locally:"
-echo "    uv:      .tools/uv/"
-echo "    Python:  .tools/python/"
+echo "    uv:      .lorahub/uv/"
+echo "    Python:  .lorahub/python/"
 echo "    Node.js: .node/"
 echo "    venv:    .venv/"
 echo ""

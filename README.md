@@ -14,7 +14,7 @@
 
 ### 一键脚本
 
-`scripts/install.bat`（Windows）或 `scripts/install.sh`（Linux）会从零搭好运行环境：通过 uv 安装 Python 3.12、创建 `.venv`、装 Python 依赖、装便携 Node.js、装前端依赖。所有产物落在项目根目录的 `.tools/`、`.venv/`、`.node/` 下，完全自包含。
+`scripts/install.bat`（Windows）或 `scripts/install.sh`（Linux）会从零搭好运行环境：通过 uv 安装 Python 3.12、创建 `.venv`、装 Python 依赖、装便携 Node.js、装前端依赖。所有产物落在项目根目录的 `.lorahub/`、`.venv/`、`.node/` 下，完全自包含。
 
 ```powershell
 git clone https://github.com/GALIAIS/LoraHub
