@@ -114,6 +114,44 @@ export default function App() {
     }
   }, [])
 
+  // Eagerly warm every route chunk during browser idle time so the
+  // first click on a nav item never pays a network round-trip. We
+  // also kick a queueMicrotask fallback for browsers without
+  // requestIdleCallback (Safari).
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const keys = NAV.map((n) => n.routeKey)
+    let cancelled = false
+
+    const warm = () => {
+      if (cancelled) return
+      for (const key of keys) {
+        void preloadAppRoute(key)
+      }
+    }
+
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+
+    let idleId: number | undefined
+    let timerId: number | undefined
+    if (typeof w.requestIdleCallback === "function") {
+      idleId = w.requestIdleCallback(warm, { timeout: 2000 })
+    } else {
+      timerId = window.setTimeout(warm, 600)
+    }
+
+    return () => {
+      cancelled = true
+      if (idleId !== undefined && typeof w.cancelIdleCallback === "function") {
+        w.cancelIdleCallback(idleId)
+      }
+      if (timerId !== undefined) window.clearTimeout(timerId)
+    }
+  }, [])
+
   const prefetchRoute = useCallback((routeKey: AppRouteModuleKey) => {
     void preloadAppRoute(routeKey)
   }, [])
@@ -191,6 +229,7 @@ export default function App() {
                             to={item.to}
                             end={item.to === "/"}
                             onClick={(e) => handleNavClick(e, item.to)}
+                            onPointerDown={() => prefetchRoute(item.routeKey)}
                           />
                         }
                         isActive={isRouteActive(item.to)}

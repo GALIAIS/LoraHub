@@ -69,63 +69,63 @@ export function SettingsPage() {
           <TabsContent value="overview" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <OverviewTab />
+                {tab === "overview" && <OverviewTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="dependencies" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <DependenciesTab />
+                {tab === "dependencies" && <DependenciesTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="backends" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <BackendsTab />
+                {tab === "backends" && <BackendsTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="install" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <InstallTab />
+                {tab === "install" && <InstallTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="network" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <NetworkTab />
+                {tab === "network" && <NetworkTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="models" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <ModelsTab />
+                {tab === "models" && <ModelsTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="tagging" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <TaggingTab />
+                {tab === "tagging" && <TaggingTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="ai" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <AIProvidersTab />
+                {tab === "ai" && <AIProvidersTab />}
               </div>
             </div>
           </TabsContent>
           <TabsContent value="maintenance" className="h-full">
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
-                <MaintenanceTab />
+                {tab === "maintenance" && <MaintenanceTab />}
               </div>
             </div>
           </TabsContent>
