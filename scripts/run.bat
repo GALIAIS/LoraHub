@@ -87,15 +87,27 @@ goto :skip_api
 :start_api
 if "%MODE%"=="prod" (
   echo [lorahub] Open: http://%API_HOST%:%API_PORT%
-) else (
+) else if "%MODE%"=="api" (
   echo [lorahub] API:  http://%API_HOST%:%API_PORT%
+) else (
+  rem dev mode — make it obvious which URL is the one to open in the
+  rem browser. The API port is only the proxy target; opening it
+  rem directly serves the previously-built (or stale) production SPA
+  rem and skips Vite HMR + dev-only tooling like the React Query
+  rem devtools floating button.
+  echo [lorahub] API target ^(proxied^):  http://%API_HOST%:%API_PORT%
 )
 start "" /B "%PYTHON%" -m uvicorn lorahub.api.app:app --host %API_HOST% --port %API_PORT%
 :skip_api
 
 rem ---- Start Web dev server (dev mode only) -------------------------
 if not "%MODE%"=="dev" goto :skip_web
-echo [lorahub] Web:  http://localhost:%WEB_PORT%
+echo.
+echo [lorahub] ============================================================
+echo [lorahub]   Open in browser:  http://localhost:%WEB_PORT%
+echo [lorahub]   ^(the API at :%API_PORT% is the proxy target, not the UI^)
+echo [lorahub] ============================================================
+echo.
 set "LORAHUB_API_TARGET=http://%API_HOST%:%API_PORT%"
 pushd web
 start "" /B npm.cmd run dev -- --host 127.0.0.1 --port %WEB_PORT%
