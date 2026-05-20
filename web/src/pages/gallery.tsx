@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Images, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Images, Search, X } from "lucide-react"
 import {
   api,
   type JobSummary,
@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Pagination } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
 import { fmtBytes, fmtUnixSeconds } from "./jobs/utils"
@@ -25,6 +26,8 @@ const PAGE_SIZE_OPTIONS = [24, 48, 96, 192]
 
 export function GalleryPage() {
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([])
+  const [selectedConfigs, setSelectedConfigs] = useState<string[]>([])
+  const [search, setSearch] = useState("")
   const [active, setActive] = useState<SampleGalleryItem | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(48)
@@ -33,7 +36,7 @@ export function GalleryPage() {
   // be parked on page 5 of an empty filter result.
   useEffect(() => {
     setPage(1)
-  }, [selectedJobIds, pageSize])
+  }, [selectedJobIds, selectedConfigs, search, pageSize])
 
   const jobs = useJobsList()
 
@@ -70,10 +73,44 @@ export function GalleryPage() {
   const total = samples.data?.total ?? 0
   const allJobs = jobs.data?.jobs ?? []
 
-  // Lightbox arrow-key navigation. Mapped against the *current* item
-  // list so the user can flip through results without closing first.
+  // Client-side narrowing on top of the server-side job filter. Search
+  // hits filename and config name; config chips narrow to specific
+  // configs. The server doesn't (yet) expose either as parameters, so
+  // it's a "filter the visible page" — good enough since most users
+  // pair this with a small selectedJobIds.
+  const configOptions = useMemo(() => {
+    const seen = new Map<string, number>()
+    for (const it of items) {
+      if (!it.config_name) continue
+      seen.set(it.config_name, (seen.get(it.config_name) ?? 0) + 1)
+    }
+    return Array.from(seen.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }))
+  }, [items])
+
+  const visibleItems = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return items.filter((item) => {
+      if (selectedConfigs.length > 0) {
+        if (!item.config_name || !selectedConfigs.includes(item.config_name)) {
+          return false
+        }
+      }
+      if (q) {
+        const filename = item.path.split(/[\\/]/).pop() ?? ""
+        const haystack = [filename, item.config_name ?? "", item.job_name].join(" ").toLowerCase()
+        if (!haystack.includes(q)) return false
+      }
+      return true
+    })
+  }, [items, selectedConfigs, search])
+
+  // Lightbox arrow-key navigation — mapped against visibleItems so
+  // the user flips through whatever is currently shown after client
+  // filters, not the full server response.
   const activeIndex = active
-    ? items.findIndex(
+    ? visibleItems.findIndex(
         (it) => it.job_id === active.job_id && it.path === active.path,
       )
     : -1
@@ -82,15 +119,19 @@ export function GalleryPage() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "ArrowLeft" && activeIndex > 0) {
         event.preventDefault()
-        setActive(items[activeIndex - 1])
-      } else if (event.key === "ArrowRight" && activeIndex >= 0 && activeIndex < items.length - 1) {
+        setActive(visibleItems[activeIndex - 1])
+      } else if (
+        event.key === "ArrowRight" &&
+        activeIndex >= 0 &&
+        activeIndex < visibleItems.length - 1
+      ) {
         event.preventDefault()
-        setActive(items[activeIndex + 1])
+        setActive(visibleItems[activeIndex + 1])
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [active, activeIndex, items])
+  }, [active, activeIndex, visibleItems])
 
   return (
     <div className="h-full overflow-y-auto">
@@ -120,16 +161,31 @@ export function GalleryPage() {
                 onPageSizeChange={setPageSize}
                 className="flex-1"
               />
-              {selectedJobIds.length > 0 && (
+              {(selectedJobIds.length > 0 ||
+                selectedConfigs.length > 0 ||
+                search.trim()) && (
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setSelectedJobIds([])}
+                  onClick={() => {
+                    setSelectedJobIds([])
+                    setSelectedConfigs([])
+                    setSearch("")
+                  }}
                   className="h-7 text-[11px]"
                 >
                   <X className="size-3" /> 清除筛选
                 </Button>
               )}
+            </div>
+            <div className="relative max-w-md">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/70" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜文件名 / 配置名 / 任务名"
+                className="h-8 pl-8 text-[12px]"
+              />
             </div>
             <JobFilterChips
               jobs={allJobs}
@@ -146,6 +202,51 @@ export function GalleryPage() {
               }
               onClear={() => setSelectedJobIds([])}
             />
+            {configOptions.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+                  <span>按配置筛选</span>
+                  {selectedConfigs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedConfigs([])}
+                      className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {configOptions.map(({ name, count }) => {
+                    const isActive = selectedConfigs.includes(name)
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() =>
+                          setSelectedConfigs((prev) =>
+                            prev.includes(name)
+                              ? prev.filter((p) => p !== name)
+                              : [...prev, name],
+                          )
+                        }
+                        className={cn(
+                          "rounded-[3px] border px-2 py-1 text-[11px] transition-colors",
+                          isActive
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border/60 bg-background/60 text-muted-foreground hover:bg-muted/40",
+                        )}
+                      >
+                        <span>{name}</span>
+                        <span className="ml-1 text-muted-foreground/70 tabular-nums">
+                          ({count})
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -172,10 +273,30 @@ export function GalleryPage() {
           </div>
         )}
 
-        {items.length > 0 && (
+        {!samples.isLoading && items.length > 0 && visibleItems.length === 0 && (
+          <div className="rounded-[6px] border border-dashed border-border/70 bg-muted/30 px-6 py-12 text-center">
+            <Images className="size-7 mx-auto text-muted-foreground/60" />
+            <div className="mt-3 text-sm text-muted-foreground">
+              当前页 {items.length} 张样图均未匹配筛选条件。
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3 h-7 text-[11px]"
+              onClick={() => {
+                setSelectedConfigs([])
+                setSearch("")
+              }}
+            >
+              清除客户端筛选
+            </Button>
+          </div>
+        )}
+
+        {visibleItems.length > 0 && (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-              {items.map((item) => (
+              {visibleItems.map((item) => (
                 <SampleTile
                   key={`${item.job_id}:${item.path}`}
                   item={item}
@@ -199,15 +320,15 @@ export function GalleryPage() {
         item={active}
         onClose={() => setActive(null)}
         onPrev={() =>
-          activeIndex > 0 ? setActive(items[activeIndex - 1]) : undefined
+          activeIndex > 0 ? setActive(visibleItems[activeIndex - 1]) : undefined
         }
         onNext={() =>
-          activeIndex >= 0 && activeIndex < items.length - 1
-            ? setActive(items[activeIndex + 1])
+          activeIndex >= 0 && activeIndex < visibleItems.length - 1
+            ? setActive(visibleItems[activeIndex + 1])
             : undefined
         }
         hasPrev={activeIndex > 0}
-        hasNext={activeIndex >= 0 && activeIndex < items.length - 1}
+        hasNext={activeIndex >= 0 && activeIndex < visibleItems.length - 1}
       />
     </div>
   )

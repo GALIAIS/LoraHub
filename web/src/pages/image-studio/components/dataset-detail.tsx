@@ -617,6 +617,8 @@ export function DatasetDetail() {
               filters={filters}
               onChange={setFilters}
               onClose={() => setShowFilters(false)}
+              items={data?.items ?? []}
+              onReset={() => setFilters(defaultFilters)}
             />
           )}
 
