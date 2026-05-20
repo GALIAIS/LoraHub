@@ -238,10 +238,10 @@ export default function App() {
       </Sidebar>
 
       {/* --- Main content --- */}
-      <SidebarInset className="min-h-screen bg-transparent">
-        <div className="relative flex min-h-screen flex-1 flex-col">
+      <SidebarInset className="h-screen overflow-hidden bg-transparent">
+        <div className="relative flex h-full flex-col overflow-hidden">
           {/* Header */}
-          <header className="sticky top-0 z-30">
+          <header className="shrink-0 z-30">
             <div className="shiro-toolbar px-3 py-3 md:px-4">
               <div className="flex items-center gap-3">
                 <SidebarTrigger />
@@ -261,7 +261,7 @@ export default function App() {
           </header>
 
           {/* Page content */}
-          <main className="mx-auto flex w-full max-w-[1720px] min-w-0 flex-1 flex-col px-4 py-5 md:px-6 md:py-6 xl:px-8">
+          <div className="mx-auto flex w-full max-w-[1720px] min-w-0 min-h-0 flex-1 flex-col px-4 py-5 md:px-6 md:py-6 xl:px-8 overflow-hidden">
             <Suspense
               fallback={
                 <div
@@ -275,7 +275,7 @@ export default function App() {
                 <Outlet />
               </ErrorBoundary>
             </Suspense>
-          </main>
+          </div>
         </div>
       </SidebarInset>
     </SidebarProvider>
