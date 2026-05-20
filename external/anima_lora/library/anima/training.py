@@ -423,6 +423,24 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Path to EMA model safetensors file to resume EMA state from a previous run",
     )
 
+    # Per-block LR weights — friendlier alternative to ``--network_args
+    # network_reg_lrs="^...=lr,..."`` for the common case of "scale
+    # every block's LR independently". Comma-separated list of floats
+    # whose length must match the DiT block count; weight ``w_i`` is
+    # multiplied with the base unet LR and applied to ``blocks_{i}_``
+    # modules across every adapter family (LoRA / Hydra / Ortho /
+    # Chimera). Useful for character-vs-style LoRA splits where mid
+    # blocks carry the bulk of the signal.
+    parser.add_argument(
+        "--block_lr_weights",
+        type=str,
+        default=None,
+        help='Per-block LR multipliers as a comma-separated list, e.g. '
+        '"1.0,1.0,0.8,0.8,0.5,0.5,...". Length must match the DiT '
+        "block count. Each w_i multiplies args.unet_lr (or "
+        "args.learning_rate) for modules under blocks_{i}_.",
+    )
+
     # NaN / spike guard. Cheap insurance against a single bad sample
     # taking down a whole training run (caption corruption, latent
     # NaN that snuck past the cache filter, optimizer-state blow-up
@@ -532,11 +550,52 @@ def compute_loss_weighting_for_anima(
     elif weighting_scheme == "cosmap":
         bot = 1 - 2 * sigmas + 2 * sigmas**2
         weighting = 2 / (math.pi * bot)
+    elif weighting_scheme == "min_snr_rf":
+        # Min-SNR-γ adapted to rectified flow.
+        #
+        # Hang et al. (ICCV'23, arXiv:2303.09556) show that re-weighting
+        # each timestep's MSE loss by ``min(SNR, γ) / SNR`` yields ~30%
+        # convergence speedup vs. uniform on DDPM. The transformation
+        # downweights low-SNR (high-noise) steps where the loss is
+        # naturally larger but contributes less to the final image.
+        #
+        # For rectified flow the path is ``z = (1-σ)·x + σ·ε``, giving
+        # α(σ)=1-σ and noise(σ)=σ, hence SNR(σ) = ((1-σ)/σ)². The
+        # weighting shape preserves the paper's intent: clamp the
+        # high-SNR end so it doesn't dominate.
+        #
+        # γ comes from --min_snr_gamma if set (recommended 5.0); we
+        # leave the explicit constant out of compute_loss_weighting_for_anima's
+        # signature and inject it via a closure-style read at the call
+        # site (see train.py compute_loss_weighting_for_anima usage).
+        # When γ is None we fall back to uniform — same behaviour as
+        # the legacy "none"/"uniform" branch.
+        gamma = getattr(compute_loss_weighting_for_anima, "_min_snr_gamma", None)
+        if gamma is None or gamma <= 0:
+            weighting = torch.ones_like(sigmas)
+        else:
+            sigmas_f = sigmas.float().clamp(min=1e-6, max=1.0 - 1e-6)
+            snr = ((1.0 - sigmas_f) / sigmas_f) ** 2
+            # min(SNR, γ) / SNR — element-wise clamp.
+            weighting = torch.minimum(snr, torch.full_like(snr, float(gamma))) / snr
     elif weighting_scheme == "none" or weighting_scheme is None:
         weighting = torch.ones_like(sigmas)
     else:
         weighting = torch.ones_like(sigmas)
     return weighting
+
+
+def set_min_snr_gamma(gamma: Optional[float]) -> None:
+    """Stash γ on ``compute_loss_weighting_for_anima`` for the
+    ``min_snr_rf`` branch to read.
+
+    Stored as a function attribute rather than a global so it scopes
+    naturally to this module and unit tests can clear it via
+    ``set_min_snr_gamma(None)``.
+    """
+    compute_loss_weighting_for_anima._min_snr_gamma = (
+        float(gamma) if gamma is not None and gamma > 0 else None
+    )
 
 
 # Parameter groups (6 groups with separate LRs)

@@ -740,10 +740,14 @@ def add_dit_training_arguments(parser: argparse.ArgumentParser):
             "logit_normal",
             "mode",
             "cosmap",
+            "min_snr_rf",
             "none",
             "uniform",
         ],
-        help="weighting scheme for timestep distribution. Default is uniform",
+        help="weighting scheme for timestep distribution. Default is uniform. "
+        "``min_snr_rf`` enables Min-SNR-γ loss weighting adapted to rectified "
+        "flow (Hang et al. ICCV'23) — set ``--min_snr_gamma 5`` for the "
+        "paper-recommended γ.",
     )
     parser.add_argument(
         "--logit_mean",

@@ -1109,6 +1109,60 @@ class AnimaTrainer:
             args, lora=True
         ).to_metadata_dict()
 
+    def _apply_block_lr_weights(self, args, network, raw: str) -> None:
+        """Expand ``--block_lr_weights`` into ``cfg.reg_lrs`` entries.
+
+        ``raw`` is a comma-separated list of floats whose length must
+        match the DiT block count. Each weight ``w_i`` produces a
+        ``reg_lrs`` entry mapping ``r"^.*blocks_{i}_.*$"`` to
+        ``base_lr * w_i``. The base LR comes from ``args.unet_lr``
+        (LoRA convention), falling back to ``args.learning_rate``.
+
+        User-supplied ``network_reg_lrs`` (parsed earlier into
+        ``cfg.reg_lrs``) takes precedence: we only insert keys that
+        aren't already present, so a tighter manual regex still wins.
+        """
+        try:
+            weights = [float(x.strip()) for x in raw.split(",") if x.strip()]
+        except ValueError as exc:
+            logger.warning(
+                "ignoring --block_lr_weights %r: %s", raw, exc,
+            )
+            return
+        if not weights:
+            return
+
+        base_lr = float(getattr(args, "unet_lr", None) or args.learning_rate or 0.0)
+        if base_lr <= 0:
+            logger.warning(
+                "--block_lr_weights ignored: base lr is 0; nothing to scale"
+            )
+            return
+
+        unwrapped = network
+        cfg = getattr(unwrapped, "cfg", None)
+        if cfg is None:
+            logger.warning("--block_lr_weights ignored: network has no cfg")
+            return
+        existing = dict(cfg.reg_lrs) if cfg.reg_lrs is not None else {}
+        added = 0
+        for idx, w in enumerate(weights):
+            # blocks_<idx>_ comes from the LoRA module-name pattern
+            # (see lora_anima/network.py:440 — original_name has dots
+            # replaced by underscores). The regex is anchored on the
+            # idx so block 1 doesn't accidentally match block 10.
+            pat = rf"^.*blocks_{idx}_.*$"
+            if pat in existing:
+                continue
+            existing[pat] = base_lr * w
+            added += 1
+        cfg.reg_lrs = existing
+        logger.info(
+            "block_lr_weights: added %d per-block reg_lrs (base=%g, weights=%s)",
+            added, base_lr,
+            [round(w, 3) for w in weights],
+        )
+
     def update_metadata(self, metadata, args):
         metadata["ss_weighting_scheme"] = args.weighting_scheme
         metadata["ss_logit_mean"] = args.logit_mean
@@ -1542,6 +1596,20 @@ class AnimaTrainer:
     ):
         """Build optimizer, dataloaders, and LR scheduler; finalize max_train_steps."""
         accelerator.print("prepare optimizer, data loader etc.")
+
+        # ----- Per-block LR weights ----------------------------------
+        # ``--block_lr_weights "1.0,1.0,0.8,..."`` is a friendlier API
+        # over the existing ``--network_args network_reg_lrs=...`` regex
+        # mechanism: we expand it into a regex map keyed on the block
+        # index that LoRA module names already carry. The resulting
+        # entries are merged into ``network.cfg.reg_lrs`` *before*
+        # ``prepare_optimizer_params`` reads it so per-block LRs work
+        # uniformly across vanilla LoRA, Hydra, OrthoLoRA, ChimeraHydra.
+        # User-provided ``network_reg_lrs`` entries win on conflict so
+        # this stays additive.
+        bw = getattr(args, "block_lr_weights", None)
+        if bw:
+            self._apply_block_lr_weights(args, network, bw)
 
         # make backward compatibility for text_encoder_lr
         support_multiple_lrs = hasattr(
@@ -2526,6 +2594,13 @@ class AnimaTrainer:
         # alive: CMMD validation enumerates its image_data to pair held-out
         # references with generated samples.
         del train_dataset_group
+
+        # Wire --min_snr_gamma into the rectified-flow loss weighting.
+        # The flag has been argparse-only since the SD3 port; reading
+        # it here means ``--weighting_scheme min_snr_rf --min_snr_gamma 5``
+        # produces the paper-recommended weighting on the FM target
+        # without further plumbing.
+        anima_train_utils.set_min_snr_gamma(getattr(args, "min_snr_gamma", None))
 
         # ----- EMA (Exponential Moving Average) shadow ----------------
         # When --ema is set, build a shadow over the LoRA network's
