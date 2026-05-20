@@ -79,8 +79,8 @@ lorahub serve --port 18765
 或者用一键脚本：
 
 ```powershell
-scripts\run.bat                # dev：API + Vite 热更新
-scripts\run.bat prod           # prod：API + 已构建的 SPA
+scripts\run.bat                # 默认 prod：API + 已构建的 SPA
+scripts\run.bat dev            # dev：API + Vite 热更新
 ```
 
 启动后访问 `http://127.0.0.1:18765`。Job 详情页通过 SSE 实时推送事件，断线后通过 `Last-Event-ID` 续传。

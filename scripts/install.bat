@@ -227,8 +227,8 @@ echo     Node.js: .node\
 echo     venv:    .venv\
 echo.
 echo   To start LoRaHub:
-echo     scripts\run.bat              (dev mode: API + Vite HMR)
-echo     scripts\run.bat prod         (production: API + built SPA)
+echo     scripts\run.bat              (default prod: API serves built SPA)
+echo     scripts\run.bat dev          (dev mode: API + Vite HMR)
 echo.
 
 popd

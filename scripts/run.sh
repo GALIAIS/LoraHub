@@ -4,20 +4,21 @@ set -euo pipefail
 # ------------------------------------------------------------------
 # LoRaHub Launcher (Linux)
 #
-# Starts the API backend (uvicorn) and frontend dev server (Vite).
-# Uses project-local tools (.tools/, .node/, .venv/).
+# Starts the API backend (uvicorn). In prod mode the API also serves
+# the prebuilt SPA from web/dist; in dev mode a separate Vite HMR
+# server is started on its own port.
 #
 # Usage:
-#   scripts/run.sh              dev mode (API + Vite HMR)
-#   scripts/run.sh prod         production (API + prebuilt SPA)
-#   scripts/run.sh api          API only
+#   scripts/run.sh              prod mode (default — API serves SPA)
+#   scripts/run.sh dev          dev mode (API + Vite HMR)
+#   scripts/run.sh api          API only (no SPA build, no Vite)
 # ------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-MODE="${1:-dev}"
+MODE="${1:-prod}"
 API_HOST="127.0.0.1"
 API_PORT="18765"
 WEB_PORT="6006"
@@ -70,23 +71,32 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ---- Build SPA for prod mode (must run before API start so the
+#      static mount in lorahub.api.app picks up web/dist) -----------
+if [[ "$MODE" == "prod" ]]; then
+    if [ ! -f "web/dist/index.html" ]; then
+        echo "[lorahub] Building frontend SPA ..."
+        cd web && npm run build && cd "$ROOT"
+        if [ ! -f "web/dist/index.html" ]; then
+            echo "[ERROR] Frontend build failed — web/dist/index.html missing."
+            exit 1
+        fi
+    fi
+fi
+
 # ---- Start API -------------------------------------------------------
 if [[ "$MODE" == "dev" || "$MODE" == "prod" || "$MODE" == "api" ]]; then
-    echo "[lorahub] API:  http://${API_HOST}:${API_PORT}"
+    if [[ "$MODE" == "prod" ]]; then
+        echo "[lorahub] Open: http://${API_HOST}:${API_PORT}"
+    else
+        echo "[lorahub] API:  http://${API_HOST}:${API_PORT}"
+    fi
     "$PYTHON" -m uvicorn lorahub.api.app:app \
         --host "$API_HOST" --port "$API_PORT" &
     PIDS+=($!)
 fi
 
-# ---- Build SPA for prod mode -----------------------------------------
-if [[ "$MODE" == "prod" ]]; then
-    if [ ! -f "web/dist/index.html" ]; then
-        echo "[lorahub] Building frontend SPA ..."
-        cd web && npm run build && cd "$ROOT"
-    fi
-fi
-
-# ---- Start Web dev server --------------------------------------------
+# ---- Start Web dev server (dev mode only) ---------------------------
 if [[ "$MODE" == "dev" ]]; then
     echo "[lorahub] Web:  http://localhost:${WEB_PORT}"
     export LORAHUB_API_TARGET="http://${API_HOST}:${API_PORT}"

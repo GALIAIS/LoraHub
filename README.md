@@ -31,8 +31,8 @@ bash scripts/install.sh
 装好后用 `scripts\run.bat` / `scripts/run.sh` 启动：
 
 ```text
-scripts\run.bat              # 开发模式：API + Vite 热更新
-scripts\run.bat prod         # 生产模式：API + 已构建的 SPA
+scripts\run.bat              # 默认生产模式：API + 已构建的 SPA
+scripts\run.bat dev          # 开发模式：API + Vite 热更新
 scripts\run.bat api          # 仅启动 API
 ```
 
