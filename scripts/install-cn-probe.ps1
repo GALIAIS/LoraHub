@@ -60,8 +60,10 @@ function Pick-Fastest {
 $ghProxies = @(
   ''  # empty = direct GitHub, in case network is unrestricted
   'https://gh-proxy.org/'
-  'https://ghproxy.net/'
-  'https://mirror.ghproxy.com/'
+  'https://hk.gh-proxy.org/'
+  'https://cdn.gh-proxy.org/'
+  'https://v6.gh-proxy.org/'
+  'https://ghfast.top/'
 )
 
 $pythonBuildMirrors = @(
@@ -90,7 +92,7 @@ $npmRegistries = @(
 
 # --- Run probes ---------------------------------------------------------
 
-$gh   = Pick-Fastest 'GitHub proxy'           $ghProxies          { param($c) "${c}https://github.com/astral-sh/uv" }
+$gh   = Pick-Fastest 'GitHub proxy'           $ghProxies          { param($c) "${c}https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" }
 $py   = Pick-Fastest 'python-build-standalone' $pythonBuildMirrors { param($c) if ($c -match 'npmmirror') { "$c/" } else { $c } }
 $pypi = Pick-Fastest 'PyPI'                   $pypiIndexes        { param($c) "$c/pip/" }
 $node = Pick-Fastest 'Node binary'            $nodeMirrors        { param($c) "$c/index.json" }

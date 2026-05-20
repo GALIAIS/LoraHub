@@ -75,7 +75,13 @@ else
     esac
     UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz"
     [ -n "$GH_PROXY" ] && UV_URL="${GH_PROXY%/}/${UV_URL}"
-    curl -LsSf "$UV_URL" -o "$UV_DIR/uv.tar.gz"
+    echo "  fetching $UV_URL"
+    # --connect-timeout bounds the TCP handshake so a black-holed mirror
+    # fails fast instead of hanging the whole install. --max-time caps
+    # the full transfer so a stalled-but-alive socket eventually errors
+    # out (uv tarball is ~25MB; 300s covers even slow 4G).
+    curl -L --fail --show-error --connect-timeout 10 --max-time 300 \
+        "$UV_URL" -o "$UV_DIR/uv.tar.gz"
     tar -xzf "$UV_DIR/uv.tar.gz" -C "$UV_DIR" --strip-components=1
     rm -f "$UV_DIR/uv.tar.gz"
     if [ ! -f "$UV_DIR/uv" ]; then
@@ -178,7 +184,10 @@ else
     esac
     NODE_VER="v20.18.1"
     NODE_TAR="node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
-    curl -LsSf "${NODE_MIRROR%/}/${NODE_VER}/${NODE_TAR}" -o "$NODE_DIR/$NODE_TAR"
+    NODE_URL="${NODE_MIRROR%/}/${NODE_VER}/${NODE_TAR}"
+    echo "  fetching $NODE_URL"
+    curl -L --fail --show-error --connect-timeout 10 --max-time 600 \
+        "$NODE_URL" -o "$NODE_DIR/$NODE_TAR"
     tar -xf "$NODE_DIR/$NODE_TAR" -C "$NODE_DIR" --strip-components=1
     rm -f "$NODE_DIR/$NODE_TAR"
     if [ ! -f "$NODE_DIR/bin/node" ] || [ ! -f "$NODE_DIR/bin/npm" ]; then

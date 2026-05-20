@@ -20,8 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GH_PROXIES=(
   ""
   "https://gh-proxy.org/"
-  "https://ghproxy.net/"
-  "https://mirror.ghproxy.com/"
+  "https://hk.gh-proxy.org/"
+  "https://cdn.gh-proxy.org/"
+  "https://v6.gh-proxy.org/"
+  "https://ghfast.top/"
 )
 
 PYTHON_BUILD_MIRRORS=(
@@ -105,9 +107,11 @@ pick_fastest() {
 # --- Builders: each maps a candidate base URL to a small probe URL ---
 
 probe_gh_proxy() {
-    # gh-proxy expects the full GitHub URL appended; uv's release tag
-    # listing page works as a tiny probe target.
-    echo "$1https://github.com/astral-sh/uv"
+    # Probe the actual download URL the installer will hit. gh-proxy
+    # variants sometimes accept the API surface but reject release
+    # binaries (or vice versa); using the same URL we'll really fetch
+    # gives a faithful reachability signal.
+    echo "$1https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz"
 }
 
 probe_python_build() {
