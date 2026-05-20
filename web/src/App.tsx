@@ -1,4 +1,4 @@
-import { Suspense, startTransition, useCallback, useEffect, useState } from "react"
+import { Suspense, startTransition, useCallback, useEffect, useRef, useState } from "react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { Toaster } from "sonner"
 import {
@@ -106,6 +106,30 @@ export default function App() {
     return () => media.removeEventListener("change", apply)
   }, [mode, accent])
 
+  // Run a quick cross-fade transition class for one frame pair after
+  // mode/accent changes so the swap from one palette to the other
+  // doesn't feel like a hard cut. View-Transitions-capable browsers
+  // get a radial reveal instead (driven by handleThemeChange below).
+  const isFirstThemeRun = useRef(true)
+  useEffect(() => {
+    if (isFirstThemeRun.current) {
+      isFirstThemeRun.current = false
+      return
+    }
+    const root = document.documentElement
+    if (root.dataset.viewTransitionInProgress === "true") {
+      return
+    }
+    root.classList.add("theme-transition")
+    const id = window.setTimeout(() => {
+      root.classList.remove("theme-transition")
+    }, 260)
+    return () => {
+      window.clearTimeout(id)
+      root.classList.remove("theme-transition")
+    }
+  }, [mode, accent])
+
   useEffect(() => {
     const prevent = (e: Event) => e.preventDefault()
     document.addEventListener("contextmenu", prevent)
@@ -175,6 +199,35 @@ export default function App() {
       })
     },
     [navigate],
+  )
+
+  // Theme-change handler. Uses the View Transitions API for a radial
+  // reveal centered on the click, falling back to the css fade class
+  // (see index.css) on browsers that don't support it.
+  const runThemeChange = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, apply: () => void) => {
+      const docAny = document as Document & {
+        startViewTransition?: (cb: () => void) => { finished: Promise<void> }
+      }
+      if (typeof docAny.startViewTransition !== "function") {
+        apply()
+        return
+      }
+      const root = document.documentElement
+      const rect = event.currentTarget.getBoundingClientRect()
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      root.style.setProperty("--theme-origin-x", `${x}px`)
+      root.style.setProperty("--theme-origin-y", `${y}px`)
+      root.dataset.viewTransitionInProgress = "true"
+      const transition = docAny.startViewTransition(() => {
+        apply()
+      })
+      transition.finished.finally(() => {
+        delete root.dataset.viewTransitionInProgress
+      })
+    },
+    [],
   )
 
   const isRouteActive = (href: string) =>
@@ -263,7 +316,7 @@ export default function App() {
                   <button
                     key={value}
                     type="button"
-                    onClick={() => setMode(value)}
+                    onClick={(e) => runThemeChange(e, () => setMode(value))}
                     className={cn(
                       "h-7 rounded-[2px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors",
                       mode === value
@@ -287,7 +340,7 @@ export default function App() {
                   <button
                     key={item.value}
                     type="button"
-                    onClick={() => setAccent(item.value)}
+                    onClick={(e) => runThemeChange(e, () => setAccent(item.value))}
                     className={cn(
                       "h-7 rounded-[2px] border px-2 text-[11px] transition-colors",
                       accent === item.value
