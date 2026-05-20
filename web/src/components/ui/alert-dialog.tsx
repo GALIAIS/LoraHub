@@ -60,7 +60,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Popup
         data-slot="alert-dialog-content"
         className={cn(
-          "shiro-surface fixed top-1/2 left-1/2 z-50 grid w-full max-w-[min(calc(100%-2rem),28rem)] -translate-x-1/2 -translate-y-1/2 gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          "shiro-modal-surface fixed top-1/2 left-1/2 z-50 grid w-full max-w-[min(calc(100%-2rem),28rem)] -translate-x-1/2 -translate-y-1/2 gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           className,
         )}
         {...props}

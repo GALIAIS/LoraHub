@@ -58,8 +58,8 @@ function DialogContent({
         data-slot="dialog-content"
         className={cn(
           compositorSafe
-            ? "shiro-surface fixed inset-0 z-50 m-auto grid w-full max-h-[calc(100dvh-2rem)] max-w-[calc(100%-2rem)] gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
-            : "shiro-surface fixed top-1/2 left-1/2 z-50 grid w-full max-w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 -translate-y-1/2 gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+            ? "shiro-modal-surface fixed inset-0 z-50 m-auto grid w-full max-h-[calc(100dvh-2rem)] max-w-[calc(100%-2rem)] gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+            : "shiro-modal-surface fixed top-1/2 left-1/2 z-50 grid w-full max-w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 -translate-y-1/2 gap-4 bg-popover p-4 text-sm text-popover-foreground duration-75 outline-none will-change-[opacity] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           className
         )}
         {...props}

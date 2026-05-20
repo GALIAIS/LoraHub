@@ -130,6 +130,41 @@ body {
   overflow: hidden;
 }
 
+/* Global scrollbar styling — Shiro design language */
+* {
+  scrollbar-width: thin;
+  scrollbar-color:
+    color-mix(in oklab, var(--foreground) 20%, transparent)
+    transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background:
+    color-mix(in oklab, var(--foreground) 18%, transparent)
+    padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background:
+    color-mix(in oklab, var(--foreground) 32%, transparent)
+    padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 input,
 textarea,
 [contenteditable="true"],
@@ -407,6 +442,90 @@ code {
         color-mix(in oklab, var(--foreground) 42%, transparent)
       )
       padding-box;
+  }
+
+  .shiro-sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color:
+      color-mix(in oklab, var(--sidebar-foreground) 22%, transparent)
+      transparent;
+  }
+
+  .shiro-sidebar-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .shiro-sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .shiro-sidebar-scroll::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background:
+      color-mix(in oklab, var(--sidebar-foreground) 18%, transparent)
+      padding-box;
+  }
+
+  .shiro-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background:
+      color-mix(in oklab, var(--sidebar-foreground) 32%, transparent)
+      padding-box;
+  }
+
+  .shiro-sidebar-surface {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .shiro-sidebar-surface::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--sidebar) 92%, white 8%), color-mix(in oklab, var(--sidebar) 88%, var(--background) 12%));
+    opacity: 1;
+  }
+
+  .dark .shiro-sidebar-surface::before {
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--sidebar) 96%, white 2%), color-mix(in oklab, var(--sidebar) 90%, black 10%));
+  }
+
+  .shiro-sidebar-surface > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .shiro-modal-surface {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, var(--border) 92%, transparent);
+    background:
+      linear-gradient(to bottom, color-mix(in oklab, var(--popover) 98%, transparent), color-mix(in oklab, var(--popover) 92%, var(--background) 8%));
+    box-shadow: var(--panel-shadow-strong);
+  }
+
+  .shiro-modal-surface::before {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    inset: 0;
+    background:
+      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(225deg, var(--panel-line-strong) 0 1px, transparent 1px) top right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
+      linear-gradient(45deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat;
+    opacity: 0.85;
+  }
+
+  .shiro-modal-surface > * {
+    position: relative;
+    z-index: 1;
   }
 
   .shiro-hero-panel {

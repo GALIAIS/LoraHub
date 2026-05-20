@@ -230,7 +230,7 @@ function Sidebar({
         <div
           data-sidebar="sidebar"
           data-slot="sidebar-inner"
-          className="shiro-surface flex size-full flex-col overflow-hidden border border-sidebar-border/80 bg-sidebar shadow-[var(--shell-shadow)] group-data-[variant=floating]:ring-0 rounded-none"
+          className="shiro-sidebar-surface flex size-full flex-col overflow-hidden border-r border-sidebar-border/80 bg-sidebar text-sidebar-foreground shadow-[var(--shell-shadow)] group-data-[variant=floating]:ring-0 rounded-none"
         >
           {children}
         </div>
@@ -355,7 +355,7 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(
-        "no-scrollbar flex min-h-0 flex-1 flex-col gap-0 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        "shiro-sidebar-scroll flex min-h-0 flex-1 flex-col gap-0 overflow-y-auto overflow-x-hidden group-data-[collapsible=icon]:overflow-hidden",
         className
       )}
       {...props}

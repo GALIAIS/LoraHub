@@ -155,7 +155,7 @@ export default function App() {
           </div>
         </SidebarHeader>
 
-        <SidebarContent className="shiro-scrollbar px-3 py-4">
+        <SidebarContent className="px-3 py-4">
           {NAV_GROUPS.map((group, index) => (
             <SidebarGroup key={group.key} className={index > 0 ? "mt-5" : undefined}>
               <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
