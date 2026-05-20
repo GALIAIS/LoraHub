@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { FlipHorizontal, Heart, Pencil, RotateCw, Save, Sparkles, Trash2, X } from "lucide-react"
+import { FlipHorizontal, Heart, Maximize2, Pencil, RotateCw, Save, Sparkles, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   api,
@@ -22,15 +22,17 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { TagChipEditor } from "./tag-chip-editor"
 
 interface InspectorProps {
   detail: ImageStudioDetailItem | null
   loading: boolean
   path: string
   onClose: () => void
+  onOpenLightbox?: () => void
 }
 
-export function Inspector({ detail, loading, path, onClose }: InspectorProps) {
+export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: InspectorProps) {
   const queryClient = useQueryClient()
   const [editingCaption, setEditingCaption] = useState(false)
   const [captionDraft, setCaptionDraft] = useState("")
@@ -170,8 +172,18 @@ export function Inspector({ detail, loading, path, onClose }: InspectorProps) {
 
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium">描述</span>
+              <span className="text-xs font-medium">描述（标签）</span>
               <div className="flex items-center gap-0.5">
+                {!editingCaption && onOpenLightbox && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={onOpenLightbox}
+                    title="全屏查看 (F)"
+                  >
+                    <Maximize2 className="size-3" />
+                  </Button>
+                )}
                 {!editingCaption && (
                   <Button
                     variant="ghost"
@@ -196,27 +208,13 @@ export function Inspector({ detail, loading, path, onClose }: InspectorProps) {
               </div>
             </div>
             {editingCaption ? (
-              <div className="flex flex-col gap-1.5">
-                <textarea
-                  value={captionDraft}
-                  onChange={(e) => setCaptionDraft(e.target.value)}
-                  rows={4}
-                  className="w-full rounded border bg-background px-2 py-1.5 text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-y"
-                />
-                <div className="flex gap-1.5">
-                  <Button size="sm" onClick={saveCaption} className="h-7 text-[11px]">
-                    <Save className="size-3" /> 保存
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setEditingCaption(false)}
-                    className="h-7 text-[11px]"
-                  >
-                    <X className="size-3" /> 取消
-                  </Button>
-                </div>
-              </div>
+              <TagChipEditor
+                value={captionDraft}
+                onChange={setCaptionDraft}
+                onSave={saveCaption}
+                onCancel={() => setEditingCaption(false)}
+                disabled={execMutation.isPending}
+              />
             ) : displayedCaption ? (
               <p className="rounded bg-muted/50 p-2 text-xs leading-relaxed whitespace-pre-wrap break-words">
                 {displayedCaption}

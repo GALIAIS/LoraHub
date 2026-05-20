@@ -14,6 +14,7 @@ interface ImageTileProps {
   multiSelected: boolean
   onClick: () => void
   onCtrlClick: () => void
+  onDoubleClick?: () => void
   onContextAction: (action: string, item: ImageStudioItem) => void
 }
 
@@ -23,6 +24,7 @@ export function ImageTile({
   multiSelected,
   onClick,
   onCtrlClick,
+  onDoubleClick,
   onContextAction,
 }: ImageTileProps) {
   const handleClick = (e: React.MouseEvent) => {
@@ -40,6 +42,7 @@ export function ImageTile({
         <button
           type="button"
           onClick={handleClick}
+          onDoubleClick={onDoubleClick}
           className={`group relative flex flex-col overflow-hidden rounded-md border transition-colors ${
             selected
               ? "border-primary ring-2 ring-primary/30"
@@ -78,6 +81,9 @@ export function ImageTile({
       <ContextMenuContent>
         <ContextMenuItem onClick={() => onContextAction("inspect", item)}>
           打开详情
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => onContextAction("lightbox", item)}>
+          全屏查看
         </ContextMenuItem>
         <ContextMenuItem onClick={() => onContextAction("edit-caption", item)}>
           编辑描述

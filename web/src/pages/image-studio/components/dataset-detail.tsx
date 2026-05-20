@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Filter, FolderOpen, HelpCircle, Loader2, Sparkles, Tag } from "lucide-react"
+import {
+  Filter,
+  FolderOpen,
+  HelpCircle,
+  ListChecks,
+  Loader2,
+  Sparkles,
+  Tag,
+} from "lucide-react"
 import { toast } from "sonner"
 import {
   imageStudioList,
   imageStudioGetImage,
+  imageStudioListOps,
   imageStudioSaveAnnotation,
   imageStudioAddOp,
   imageStudioApplyOps,
@@ -40,6 +49,8 @@ import { cn } from "@/lib/utils"
 import { FilterPanel } from "./filter-panel"
 import { ImageGrid } from "./image-grid"
 import { Inspector } from "./inspector"
+import { LightboxModal } from "./lightbox-modal"
+import { PendingOpsDialog } from "./pending-ops-dialog"
 import { UploadDropZone } from "./upload-zone"
 import { BatchToolbar } from "./batch-toolbar"
 import { HelpOverlay } from "./help-overlay"
@@ -63,6 +74,10 @@ export function DatasetDetail() {
   const [showFilters, setShowFilters] = useState(false)
   const [showAiBulk, setShowAiBulk] = useState(false)
   const [showTagging, setShowTagging] = useState(false)
+  const [showOpsQueue, setShowOpsQueue] = useState(false)
+  // Lightbox is path-based so the modal can flip through whatever the
+  // current filtered grid is showing — we resolve to an index lazily.
+  const [lightboxPath, setLightboxPath] = useState<string | null>(null)
   const [filters, setFilters] = useState<FilterState>(defaultFilters)
   // AlertDialog targets — pinning either of these opens the modal;
   // confirming triggers the destructive action, cancelling clears.
@@ -79,6 +94,19 @@ export function DatasetDetail() {
 
   const queryClient = useQueryClient()
   const datasetName = path.split(/[/\\]/).pop() || ""
+
+  // Lightweight pending-ops counter so the toolbar can flag the badge
+  // when the user has unflushed edits. Refetches every 5s and on
+  // cache invalidation (image-studio mutations bust everything under
+  // the "image-studio" key, so this stays in sync without bookkeeping).
+  const opsCountQuery = useQuery({
+    queryKey: ["image-studio", "ops-count", path],
+    queryFn: () => imageStudioListOps(path),
+    enabled: !!path,
+    refetchInterval: 5000,
+    select: (data) => data.ops.length,
+  })
+  const pendingOpsCount = opsCountQuery.data ?? 0
 
   // Track the WD14 polling interval so unmount / restart cleans it up
   // — previously a stray setInterval kept calling setState on an
@@ -169,6 +197,9 @@ export function DatasetDetail() {
         case "copy-path":
           navigator.clipboard.writeText(item.path)
           break
+        case "lightbox":
+          setLightboxPath(item.path)
+          break
         case "delete":
           setPendingDeleteSingle(item)
           break
@@ -218,6 +249,10 @@ export function DatasetDetail() {
         case "e": // edit caption
           e.preventDefault()
           if (currentIdx >= 0) setSelectedPath(items[currentIdx].path)
+          break
+        case "f": // open the focused image full-screen
+          e.preventDefault()
+          if (currentIdx >= 0) setLightboxPath(items[currentIdx].path)
           break
         case "d": // soft-delete current focused tile
           e.preventDefault()
@@ -500,6 +535,28 @@ export function DatasetDetail() {
         <Button
           variant="ghost"
           size="sm"
+          onClick={() => setShowOpsQueue(true)}
+          className={cn(
+            "relative size-7 p-0",
+            pendingOpsCount > 0 && "text-primary",
+          )}
+          aria-label={`待应用操作 (${pendingOpsCount})`}
+          title={
+            pendingOpsCount > 0
+              ? `${pendingOpsCount} 个待应用操作`
+              : "待应用操作 (空)"
+          }
+        >
+          <ListChecks className="size-4" />
+          {pendingOpsCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold leading-none text-primary-foreground">
+              {pendingOpsCount > 99 ? "99+" : pendingOpsCount}
+            </span>
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowHelp(true)}
           className="size-7 p-0"
           aria-label="键盘快捷键 (?)"
@@ -584,6 +641,7 @@ export function DatasetDetail() {
                   multiSelected={multiSelected}
                   onSelect={setSelectedPath}
                   onMultiToggle={toggleMultiSelect}
+                  onDoubleSelect={(p) => setLightboxPath(p)}
                   onContextAction={handleContextAction}
                 />
                 {totalPages > 1 && (
@@ -605,6 +663,7 @@ export function DatasetDetail() {
               loading={detailQuery.isLoading}
               path={selectedPath}
               onClose={() => setSelectedPath(null)}
+              onOpenLightbox={() => setLightboxPath(selectedPath)}
             />
           )}
         </div>
@@ -716,6 +775,38 @@ export function DatasetDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <LightboxModal
+        open={lightboxPath != null}
+        items={filteredItems}
+        index={
+          lightboxPath != null
+            ? Math.max(
+                0,
+                filteredItems.findIndex((it) => it.path === lightboxPath),
+              )
+            : 0
+        }
+        onIndexChange={(idx) => {
+          const next = filteredItems[idx]
+          if (next) setLightboxPath(next.path)
+        }}
+        onClose={() => setLightboxPath(null)}
+        onToggleFavorite={(item) => {
+          imageStudioSaveAnnotation({
+            path: item.path,
+            favorite: !item.annotation?.favorite,
+          }).then(() =>
+            queryClient.invalidateQueries({ queryKey: ["image-studio"] }),
+          )
+        }}
+      />
+
+      <PendingOpsDialog
+        open={showOpsQueue}
+        onOpenChange={setShowOpsQueue}
+        path={path}
+      />
     </div>
   )
 }

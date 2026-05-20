@@ -9,6 +9,7 @@ interface ImageGridProps {
   multiSelected: Set<string>
   onSelect: (path: string) => void
   onMultiToggle: (path: string) => void
+  onDoubleSelect?: (path: string) => void
   onContextAction: (action: string, item: ImageStudioItem) => void
 }
 
@@ -18,6 +19,7 @@ export function ImageGrid({
   multiSelected,
   onSelect,
   onMultiToggle,
+  onDoubleSelect,
   onContextAction,
 }: ImageGridProps) {
   const gridRef = useRef<HTMLDivElement>(null)
@@ -33,11 +35,12 @@ export function ImageGrid({
           multiSelected={multiSelected.has(item.path)}
           onClick={() => onSelect(item.path)}
           onCtrlClick={() => onMultiToggle(item.path)}
+          onDoubleClick={onDoubleSelect ? () => onDoubleSelect(item.path) : undefined}
           onContextAction={onContextAction}
         />
       )
     },
-    [items, selectedPath, multiSelected, onSelect, onMultiToggle, onContextAction],
+    [items, selectedPath, multiSelected, onSelect, onMultiToggle, onDoubleSelect, onContextAction],
   )
 
   if (items.length === 0) {
