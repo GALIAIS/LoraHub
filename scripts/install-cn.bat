@@ -3,37 +3,44 @@ chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 
 rem ----------------------------------------------------------------
-rem LoRaHub installer — China mirrors preset.
+rem LoRaHub installer — China-region edition with auto mirror selection.
 rem
-rem Forwards to scripts\install.bat with all download endpoints
-rem flipped to in-China mirrors. Every variable below is documented
-rem at the top of install.bat; you can mix-and-match by exporting
-rem them yourself before invoking install.bat directly.
+rem Probes a small candidate pool for each download endpoint via
+rem PowerShell, picks the fastest reachable one, then forwards to
+rem scripts\install.bat. The user does nothing.
 rem ----------------------------------------------------------------
 
-rem uv release tarball: GitHub via gh-proxy.org
-if not defined LORAHUB_GH_PROXY set "LORAHUB_GH_PROXY=https://gh-proxy.org/"
+set "SCRIPT_DIR=%~dp0"
+set "PROBE_PS=%SCRIPT_DIR%install-cn-probe.ps1"
 
-rem python-build-standalone: npmmirror's mirror that uv knows how to use.
-if not defined UV_PYTHON_INSTALL_MIRROR set "UV_PYTHON_INSTALL_MIRROR=https://registry.npmmirror.com/-/binary/python-build-standalone"
+if not exist "%PROBE_PS%" (
+  echo [install-cn] missing %PROBE_PS%
+  exit /b 1
+)
 
-rem PyPI: TUNA (Tsinghua) — the largest and most consistently
-rem up-to-date of the in-China PyPI mirrors.
-if not defined UV_INDEX_URL set "UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
+echo [install-cn] selecting fastest mirrors ...
+echo.
 
-rem Node binary releases: Aliyun's npmmirror also hosts these.
-if not defined LORAHUB_NODE_MIRROR set "LORAHUB_NODE_MIRROR=https://npmmirror.com/mirrors/node"
+rem PowerShell prints exactly 5 KEY=VALUE lines (in declared order).
+rem We capture them and re-export into this cmd session. Empty values
+rem (e.g. GH proxy = direct) are skipped so install.bat falls back to
+rem its built-in default for that endpoint.
+for /f "usebackq tokens=1,* delims==" %%a in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%PROBE_PS%"`) do (
+  if not "%%a"=="" if not "%%b"=="" set "%%a=%%b"
+)
 
-rem npm package registry: same mirror.
-if not defined NPM_CONFIG_REGISTRY set "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com"
+if not defined UV_INDEX_URL (
+  echo [install-cn] probe failed; aborting.
+  exit /b 1
+)
 
-echo [install-cn] using China mirrors:
-echo   GitHub:  %LORAHUB_GH_PROXY%
+echo.
+echo [install-cn] selected mirrors:
+if defined LORAHUB_GH_PROXY ( echo   GitHub:  %LORAHUB_GH_PROXY% ) else ( echo   GitHub:  ^(direct^) )
 echo   Python:  %UV_PYTHON_INSTALL_MIRROR%
 echo   PyPI:    %UV_INDEX_URL%
 echo   Node:    %LORAHUB_NODE_MIRROR%
 echo   npm:     %NPM_CONFIG_REGISTRY%
 echo.
 
-set "SCRIPT_DIR=%~dp0"
 call "%SCRIPT_DIR%install.bat" %*

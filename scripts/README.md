@@ -26,10 +26,12 @@ scripts\run.bat api          # API only
 
 ## First-time install
 
+Two flavours per platform — pick the one matching your network.
+
 ```pwsh
 # Windows
 scripts\install.bat              # upstream sources (GitHub / PyPI / nodejs.org)
-scripts\install-cn.bat           # China mirrors preset (gh-proxy + TUNA + npmmirror)
+scripts\install-cn.bat           # China mirrors (gh-proxy + TUNA + npmmirror)
 
 # Linux / macOS / WSL
 ./scripts/install.sh
@@ -42,23 +44,6 @@ Installs into the repo:
 - `.venv/` — main API venv
 - `.node/` — portable Node 20
 - `web/node_modules/` — frontend deps
-
-Mirror env vars (read by `install.{sh,bat}`; the `-cn` wrappers preset them):
-
-| Variable | Purpose |
-|----------|---------|
-| `LORAHUB_GH_PROXY` | GitHub proxy prefix applied to the uv release URL |
-| `UV_PYTHON_INSTALL_MIRROR` | python-build-standalone mirror (uv reads natively) |
-| `UV_INDEX_URL` | PyPI index for `uv pip install` |
-| `LORAHUB_NODE_MIRROR` | Node binary mirror base (default `https://nodejs.org/dist`) |
-| `NPM_CONFIG_REGISTRY` | npm registry (npm reads natively) |
-
-Mix-and-match by exporting the ones you want and invoking `install.{sh,bat}`
-directly:
-
-```bash
-UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple ./scripts/install.sh
-```
 
 ## VPS deploy
 
@@ -87,10 +72,7 @@ bash scripts/remote_serve.sh   # restart uvicorn
 tail -f /root/uvicorn.log
 ```
 
-Mirror env vars accepted by `remote_setup.sh`:
-
-```bash
-LORAHUB_PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-LORAHUB_NPM_REGISTRY=https://registry.npmmirror.com
-LORAHUB_GH_PROXY=https://gh-proxy.org/
-```
+`remote_setup.sh` already defaults to in-China mirrors (gh-proxy.org +
+TUNA + npmmirror) since the script targets AutoDL-style boxes; users
+outside China can override with `LORAHUB_PYPI_INDEX=...`,
+`LORAHUB_NPM_REGISTRY=...`, `LORAHUB_GH_PROXY=` (empty to disable).
