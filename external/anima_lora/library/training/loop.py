@@ -710,6 +710,44 @@ def _maybe_recover_from_nan(state: LoopState) -> None:
     state.nan_consecutive = 0
 
 
+def _compute_ema_telemetry(ema, network) -> dict:
+    """Cosine + L2 distance between EMA shadow and live network params.
+
+    Reads each shadow param and its matching live param, flattens
+    everything into one big concat, computes both metrics on the
+    concat (so a single dominant tensor doesn't drown out the signal
+    from the smaller heads). Returns a dict ready to merge into the
+    tracker logs:
+
+        {"ema/cos_sim": 0.997, "ema/l2_dist": 0.142}
+
+    No-op (returns ``{}``) when shadow and live disagree on count —
+    matches ``EMAModel.step``'s own drift-tolerance.
+    """
+    from library.training.ema import _named_trainables  # noqa: PLC0415
+
+    named = _named_trainables(network)
+    if len(named) != len(ema.shadow_params):
+        return {}
+
+    flat_live: list[torch.Tensor] = []
+    flat_shadow: list[torch.Tensor] = []
+    for shadow, (_, live) in zip(ema.shadow_params, named):
+        # Both move to fp32 on the shadow's device so .dot() and
+        # .norm() agree on the underlying type. Live is cloned in case
+        # it's bf16; .float() handles the cast.
+        live_f = live.detach().to(shadow.device, dtype=torch.float32).reshape(-1)
+        shadow_f = shadow.detach().to(torch.float32).reshape(-1)
+        flat_live.append(live_f)
+        flat_shadow.append(shadow_f)
+    live_v = torch.cat(flat_live)
+    shadow_v = torch.cat(flat_shadow)
+
+    cos = torch.nn.functional.cosine_similarity(live_v, shadow_v, dim=0).item()
+    l2 = (live_v - shadow_v).norm().item()
+    return {"ema/cos_sim": float(cos), "ema/l2_dist": float(l2)}
+
+
 def _profiler_step_begin(state: LoopState) -> None:
     if (
         state.profile_range
@@ -843,6 +881,19 @@ def _log_step(
                 MetricContext(args=args, network=_unwrapped_net),
             )
         )
+        # EMA telemetry — cosine similarity + L2 distance between the
+        # live network's trainable params and their shadow. Useful for
+        # spotting "EMA isn't tracking" (cos≈1 stuck means decay is too
+        # aggressive or live params have stalled). Only fires when EMA
+        # is actually configured; the cost is one big concat per
+        # parameter list (~ms at LoRA scale, negligible at log cadence).
+        if state.ema is not None:
+            try:
+                logs.update(_compute_ema_telemetry(state.ema, _unwrapped_net))
+            except Exception:  # noqa: BLE001
+                # Telemetry must never sink a training step; swallow.
+                pass
+
         trainer.step_logging(state.accelerator, logs, state.global_step, epoch + 1)
 
 

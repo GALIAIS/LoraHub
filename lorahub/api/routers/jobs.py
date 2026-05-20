@@ -559,6 +559,62 @@ def analyze_job(job_id: str) -> dict[str, Any]:
     return {"analysis": analysis}
 
 
+@router.get("/jobs/{job_id}/diagnose")
+def diagnose_job(job_id: str) -> dict[str, Any]:
+    """Run the heuristic failure-mode classifier over this job's
+    workspace and return the findings.
+
+    Pure-read endpoint: no model calls, no AI roundtrip, no DB write.
+    Cheap to call repeatedly — the matcher only re-reads the trailing
+    lines of the training log + events.jsonl on demand.
+
+    Useful for the "this job is red, what now?" loop without users
+    having to ssh in and grep logs themselves.
+    """
+    from lorahub.api.training_assistant import diagnose_failure  # noqa: PLC0415
+
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return diagnose_failure(
+        workspace=job.workspace,
+        returncode=job.returncode,
+        error=job.error,
+    )
+
+
+class _RecommendInput(BaseModel):
+    dataset_size: int
+    gpu_vram_mb: int
+    backend: str = "anima_lora"
+    target: str = "character"
+
+
+@router.post("/jobs/recommend")
+def recommend_hyperparams_endpoint(req: _RecommendInput) -> dict[str, Any]:
+    """Suggest a hyperparameter starting point for a fresh training run.
+
+    Inputs are decoupled from any specific job — the user might be
+    setting up a new recipe in the UI without an existing run. The
+    response carries both the concrete numbers and a list of one-line
+    rationales so a power user can see why we picked each value.
+    """
+    from lorahub.api.training_assistant import (  # noqa: PLC0415
+        BackendName,
+        recommend_hyperparams,
+    )
+
+    backend = req.backend if req.backend in ("kohya", "diffusion-pipe", "anima_lora") else "anima_lora"
+    target = req.target if req.target in ("character", "style", "concept") else "character"
+    suggestion = recommend_hyperparams(
+        dataset_size=int(req.dataset_size),
+        gpu_vram_mb=int(req.gpu_vram_mb),
+        backend=backend,  # type: ignore[arg-type]
+        target=target,  # type: ignore[arg-type]
+    )
+    return {"suggestion": suggestion.to_dict()}
+
+
 @router.post("/jobs/{job_id}/kill")
 def kill_job(job_id: str) -> dict[str, Any]:
     """Force-kill a stuck training job by signalling its PID + process group.

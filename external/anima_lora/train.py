@@ -2122,6 +2122,23 @@ class AnimaTrainer:
         cmmd_value = cmmd_from_pools(ref_pool, gen_pool)
         val_loss_recorder.add(epoch=epoch, step=global_step, loss=cmmd_value)
 
+        # Optional LPIPS — perceptual distance between each ref item's
+        # source image and our just-generated counterpart. Gated by
+        # ``--validation_lpips`` because lpips pip-package import + the
+        # AlexNet/VGG backbone load adds noticeable boot time. Reusing
+        # the already-decoded pixel_images means no second sampling
+        # pass.
+        lpips_value = None
+        if bool(getattr(args, "validation_lpips", False)):
+            try:
+                lpips_value = self._compute_lpips_metric(
+                    ref_items=ref_items,
+                    gen_pixels=pixel_images,
+                    device=accelerator.device,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("LPIPS validation failed: %s", exc)
+
         if ctx.is_tracking:
             logs = {
                 log_avg_key: cmmd_value,
@@ -2130,8 +2147,78 @@ class AnimaTrainer:
                 log_avg_key.removesuffix("_average") + "_cmmd": cmmd_value,
                 log_avg_key.removesuffix("_average") + "_n": len(ref_items),
             }
+            if lpips_value is not None:
+                logs[log_avg_key.removesuffix("_average") + "_lpips"] = lpips_value
             logging_fn(accelerator, logs, global_step, epoch + 1)
         return True
+
+    # Lazy-loaded LPIPS module on the trainer so re-validations across
+    # epochs reuse the loaded backbone (the pip package's first call
+    # downloads ~50MB of AlexNet weights).
+    _lpips_model = None
+
+    def _compute_lpips_metric(
+        self, *, ref_items, gen_pixels, device,
+    ) -> float | None:
+        """Mean LPIPS between each ref item's on-disk image and the
+        matching generated tensor.
+
+        Both images must live in [-1, 1] and be 3-channel. We resize
+        the ref to the gen's shape with bilinear (LPIPS is mostly
+        scale-invariant; the gen already lives at training bucket
+        resolution, so this avoids any model-bound mismatch). Returns
+        ``None`` when the ``lpips`` package is missing — caller logs
+        and continues.
+        """
+        try:
+            import lpips  # noqa: PLC0415
+        except ImportError as exc:
+            logger.warning(
+                "LPIPS validation requested but ``lpips`` not installed. "
+                "Skipping. Install via: uv pip install lpips. "
+                "(%s)", exc,
+            )
+            return None
+
+        from PIL import Image as _Image  # noqa: PLC0415
+        import torch.nn.functional as F  # noqa: PLC0415
+        from torchvision.transforms import functional as TF  # noqa: PLC0415
+
+        if self._lpips_model is None:
+            # AlexNet backbone — fastest of the three options and the
+            # one most papers cite. ``net="vgg"`` is closer to "human"
+            # but ~2x slower and uses 4x more VRAM.
+            self._lpips_model = lpips.LPIPS(net="alex", verbose=False)
+            self._lpips_model.eval()
+        model = self._lpips_model.to(device)
+
+        n = min(len(ref_items), len(gen_pixels))
+        if n == 0:
+            return None
+
+        scores = []
+        with torch.no_grad():
+            for i in range(n):
+                gen = gen_pixels[i].to(device)
+                if gen.dim() == 3:
+                    gen = gen.unsqueeze(0)
+                # Load the on-disk reference and resize to gen.
+                ref_path = ref_items[i].absolute_path
+                pil = _Image.open(ref_path).convert("RGB")
+                ref = TF.to_tensor(pil).unsqueeze(0).to(device)  # [0,1]
+                ref = ref * 2.0 - 1.0  # match gen's [-1,1]
+                if ref.shape[-2:] != gen.shape[-2:]:
+                    ref = F.interpolate(
+                        ref, size=gen.shape[-2:],
+                        mode="bilinear", align_corners=False,
+                    )
+                d = model(ref, gen)
+                scores.append(d.flatten().item())
+                pil.close()
+        # Park the model on CPU between val passes so it doesn't eat
+        # VRAM during training itself. The next call moves it back.
+        self._lpips_model.to("cpu")
+        return float(sum(scores) / len(scores))
 
     def _run_fm_validation(
         self,

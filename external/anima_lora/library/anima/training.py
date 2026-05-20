@@ -461,6 +461,18 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         "args.learning_rate) for modules under blocks_{i}_.",
     )
 
+    # Auxiliary validation metrics. CMMD is the primary; LPIPS gives a
+    # complementary perceptual signal that's often more useful for
+    # character/style LoRA where the reference image *is* the target.
+    parser.add_argument(
+        "--validation_lpips",
+        action="store_true",
+        help="In addition to CMMD, compute LPIPS (AlexNet backbone) "
+        "between each held-out reference image and its just-generated "
+        "counterpart. Logged as ``val/<dataset>_lpips``. Requires the "
+        "``lpips`` pip package; falls back silently when missing.",
+    )
+
     # NaN / spike guard. Cheap insurance against a single bad sample
     # taking down a whole training run (caption corruption, latent
     # NaN that snuck past the cache filter, optimizer-state blow-up
