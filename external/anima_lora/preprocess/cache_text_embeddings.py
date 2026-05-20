@@ -30,7 +30,10 @@ from library.datasets.image_utils import IMAGE_EXTENSIONS
 
 
 def _generate_caption_variants(
-    caption: str, num_variants: int, tag_dropout_rate: float
+    caption: str,
+    num_variants: int,
+    tag_dropout_rate: float,
+    shuffle_window: int | None = None,
 ) -> list[str]:
     """Generate N caption variants for stochastic sampling at training time.
 
@@ -62,7 +65,9 @@ def _generate_caption_variants(
         variants = [caption]
 
     for _ in range(max(0, num_variants - 1)):
-        shuffled = anima_train_utils.anima_smart_shuffle_caption(tags.copy())
+        shuffled = anima_train_utils.anima_smart_shuffle_caption(
+            tags.copy(), window_size=shuffle_window
+        )
         if tag_dropout_rate > 0.0 and len(shuffled) > split_idx:
             kept = list(shuffled[:split_idx])
             for tag in shuffled[split_idx:]:
@@ -164,6 +169,19 @@ def main() -> None:
             "Per-tag dropout probability applied to v1..v{N-1} only. Tags up "
             "to and including the first @artist marker are never dropped. "
             "Ignored when --caption_shuffle_variants <= 0."
+        ),
+    )
+    parser.add_argument(
+        "--caption_shuffle_window",
+        type=int,
+        default=0,
+        help=(
+            "Window size for tag shuffling (0 = unrestricted random "
+            "shuffle, the default). When > 1, tags after the @artist "
+            "prefix are partitioned into windows of this size and "
+            "shuffled inside each window only — preserves global tag "
+            "ordering at window boundaries, useful when full random "
+            "shuffle disrupts learned co-occurrences."
         ),
     )
     parser.add_argument(
@@ -282,6 +300,8 @@ def main() -> None:
     caption_dropout_rate = torch.tensor(0.0, dtype=torch.float32)
 
     tag_dropout_rate = float(args.caption_tag_dropout_rate)
+    shuffle_window_arg = int(getattr(args, "caption_shuffle_window", 0) or 0)
+    shuffle_window = shuffle_window_arg if shuffle_window_arg > 1 else None
     if N > 0:
         print(
             f"Caption shuffle variants: {N} "
@@ -289,6 +309,11 @@ def main() -> None:
             + (
                 f" + tag dropout p={tag_dropout_rate:.3f}"
                 if tag_dropout_rate > 0.0
+                else ""
+            )
+            + (
+                f", window={shuffle_window}"
+                if shuffle_window is not None
                 else ""
             )
             + ")"
@@ -363,7 +388,10 @@ def main() -> None:
             all_captions: list[str] = []
             for _, caption, _ in to_encode:
                 all_captions.extend(
-                    _generate_caption_variants(caption, N, tag_dropout_rate)
+                    _generate_caption_variants(
+                        caption, N, tag_dropout_rate,
+                        shuffle_window=shuffle_window,
+                    )
                 )
 
             prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask, crossattn_emb = (

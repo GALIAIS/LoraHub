@@ -82,7 +82,10 @@ def strip_no_artist_sentinel(tags: List[str]) -> List[str]:
     return [t for t in tags if t != NO_ARTIST_SENTINEL]
 
 
-def anima_smart_shuffle_caption(flex_tokens: List[str]) -> List[str]:
+def anima_smart_shuffle_caption(
+    flex_tokens: List[str],
+    window_size: Optional[int] = None,
+) -> List[str]:
     """Shuffle caption tags with awareness of @artist prefix and 'on the ...' sections.
 
     - Tags up to and including the trailing artist tag of the leading run are
@@ -90,6 +93,12 @@ def anima_smart_shuffle_caption(flex_tokens: List[str]) -> List[str]:
       and the ``@no-artist`` sentinel both preserve the full handle run.
     - Remaining tags are split into sections by 'on the ...' / 'in the ...'
       delimiters; tags within each section are shuffled independently.
+    - When ``window_size`` is set, each section's body is partitioned into
+      contiguous blocks of ``window_size`` tags and shuffled **inside each
+      block only**. Useful when full random shuffle is too aggressive
+      (reorders tags too far from their training-time companions and
+      disrupts learned co-occurrences) but you still want some
+      regularisation.
     - The ``@no-artist`` sentinel is preserved in the output so the boundary
       index stays usable; callers that feed the result to a tokenizer must
       call :func:`strip_no_artist_sentinel` before joining.
@@ -115,8 +124,19 @@ def anima_smart_shuffle_caption(flex_tokens: List[str]) -> List[str]:
             header, body = [section[0]], section[1:]
         else:
             header, body = [], section
-        shuffled = body.copy()
-        random.shuffle(shuffled)
+        if window_size is not None and window_size > 1:
+            # Window mode: partition body into adjacent windows and
+            # shuffle inside each window only. Preserves global
+            # ordering at window boundaries so the trainer sees a
+            # softer regularisation than full random shuffle.
+            shuffled: list[str] = []
+            for start in range(0, len(body), window_size):
+                chunk = list(body[start : start + window_size])
+                random.shuffle(chunk)
+                shuffled.extend(chunk)
+        else:
+            shuffled = body.copy()
+            random.shuffle(shuffled)
         result.extend(header + shuffled)
     return result
 
@@ -979,8 +999,93 @@ def sample_images(
     if cuda_rng_state is not None:
         torch.cuda.set_rng_state(cuda_rng_state)
 
+    # Optional grid composite: glue this epoch's per-prompt samples
+    # into a single horizontal strip under output_dir/sample/grids/.
+    # Off by default — toggle with ``--sample_grid``. Useful when the
+    # user wants a single image per epoch they can flip-book through
+    # to eyeball convergence without alt-tabbing a file browser.
+    if getattr(args, "sample_grid", False):
+        try:
+            _write_sample_grid(args, save_dir, prompts, epoch, steps)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sample grid composite failed: %s", exc)
+
     dit.switch_block_swap_for_training()
     clean_memory_on_device(accelerator.device)
+
+
+def _write_sample_grid(
+    args: argparse.Namespace,
+    save_dir: str,
+    prompts: list,
+    epoch,
+    steps: int,
+) -> None:
+    """Compose this epoch's per-prompt samples into a horizontal strip.
+
+    Filename pattern in ``save_dir`` is set by ``_sample_image_inference``:
+    ``<output_name>_<num_suffix>_{i:02d}_<ts>[_<seed>].png`` where
+    ``num_suffix`` is ``e{epoch:06d}`` (epoch path) or ``{steps:06d}``
+    (step path), and ``i`` is the prompt's ``enum`` index. We glob for
+    that prefix, sort by ``i``, and stack along the X axis.
+
+    Output lands in ``save_dir/grids/<output_name>_<num_suffix>.png``
+    so the grid sits next to the per-prompt PNGs without polluting the
+    main sample listing. The function is best-effort — failures are
+    swallowed by the caller (training continues).
+    """
+    from PIL import Image  # noqa: PLC0415
+
+    grid_dir = os.path.join(save_dir, "grids")
+    os.makedirs(grid_dir, exist_ok=True)
+
+    name_part = "" if args.output_name is None else args.output_name + "_"
+    num_suffix = f"e{epoch:06d}" if epoch is not None else f"{steps:06d}"
+
+    # The timestamp + seed suffix vary, so we glob over the stable
+    # prefix and then pull the matching prompt index from the
+    # filename. ``_sample_image_inference`` writes one image per
+    # prompt — duplicates only happen when the user supplies multiple
+    # seeds per prompt, which we fold into the same row by picking
+    # the first match per index.
+    import glob  # noqa: PLC0415
+
+    pattern = os.path.join(save_dir, f"{name_part}{num_suffix}_*_*.png")
+    by_idx: dict[int, str] = {}
+    for fp in glob.glob(pattern):
+        base = os.path.splitext(os.path.basename(fp))[0]
+        # Strip the leading ``<name>_<num_suffix>_``; the next field
+        # is the zero-padded prompt index.
+        rest = base[len(f"{name_part}{num_suffix}_") :]
+        parts = rest.split("_", 1)
+        try:
+            idx = int(parts[0])
+        except ValueError:
+            continue
+        by_idx.setdefault(idx, fp)
+
+    if not by_idx:
+        logger.debug("sample_grid: no images matched %s", pattern)
+        return
+
+    images = [Image.open(by_idx[i]).convert("RGB") for i in sorted(by_idx)]
+
+    # Stack horizontally; pad short rows to the tallest image so the
+    # strip stays rectangular without resampling (preserves exact
+    # decoded pixels).
+    max_h = max(im.height for im in images)
+    total_w = sum(im.width for im in images)
+    grid = Image.new("RGB", (total_w, max_h), (0, 0, 0))
+    x = 0
+    for im in images:
+        grid.paste(im, (x, 0))
+        x += im.width
+        im.close()
+
+    out_path = os.path.join(grid_dir, f"{name_part}{num_suffix}.png")
+    grid.save(out_path)
+    grid.close()
+    logger.info("sample grid: %s (%d prompts)", out_path, len(images))
 
 
 def _sample_image_inference(

@@ -635,6 +635,14 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         help="file for prompts to generate sample images",
     )
     parser.add_argument(
+        "--sample_grid",
+        action="store_true",
+        help="In addition to per-prompt PNGs, write a horizontal strip "
+        "of all prompts side-by-side under <output>/sample/grids/. One "
+        "file per epoch/step — easy to flip-book through to eyeball "
+        "convergence.",
+    )
+    parser.add_argument(
         "--sample_sampler",
         type=str,
         default="ddim",
