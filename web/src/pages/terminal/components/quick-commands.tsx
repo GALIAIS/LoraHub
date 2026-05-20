@@ -20,7 +20,17 @@ const PRESETS: Array<{ label: string; command: string; hint?: string }> = [
   {
     label: "升级 pip",
     command: "pip install --upgrade pip",
-    hint: "更新 pip 自身",
+    hint: "更新 pip 自身（uv venv 自动用 uv pip 路由）",
+  },
+  {
+    label: "uv pip list",
+    command: "uv pip list",
+    hint: "通过 uv 直接列包（适合 uv venv）",
+  },
+  {
+    label: "ensurepip",
+    command: "python -m ensurepip --upgrade",
+    hint: "在 venv 内补装 pip",
   },
   { label: "python -V", command: "python -V", hint: "解释器版本" },
   {

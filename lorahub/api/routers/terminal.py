@@ -6,10 +6,12 @@ Scope is intentionally narrow:
   ``anima_lora``) so the backend interpreter + repo dir are server-side facts;
   the client never gets to influence either.
 * By default the command's argv[0] must be one of ``pip``, ``uv``, ``python``,
-  with ``pip``/``uv`` further auto-rewritten so they invoke the venv's
-  interpreter (``python -m pip ...``). A ``terminal_unrestricted`` flag in
-  Settings opens the door to anything else, but only if the user explicitly
-  flips it.
+  with ``pip`` rerouted to the venv's interpreter as either
+  ``<venv-python> -m pip ...`` (when the venv ships pip) or
+  ``uv pip --python <venv-python> ...`` (uv-managed venvs without pip).
+  Bare ``python`` is also redirected at the venv interpreter. A
+  ``terminal_unrestricted`` flag in Settings opens the door to anything
+  else, but only if the user explicitly flips it.
 * We stream stdout/stderr line-by-line via Server-Sent Events. WebSocket
   was tempting but SSE is enough for unidirectional output and removes a
   whole reconnect-state machine on the client.
@@ -25,6 +27,8 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
@@ -244,19 +248,13 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
 # Command policy
 # --------------------------------------------------------------------------- #
 
-# argv[0] -> a normaliser that decides what argv we actually run. When
-# the user types ``pip install x`` we rewrite it to
-# ``<venv-python> -m pip install x`` so it always targets the venv even
-# if the OS PATH would otherwise pick up a different pip.
-_PYTHON_TOOL_REWRITES = {
-    "pip": ("python", "-m", "pip"),
-    "pip3": ("python", "-m", "pip"),
-    "python": ("python",),
-    "python3": ("python",),
-    "py": ("python",),
-}
-
+# Top-level entry points the user is allowed to invoke (and aliases).
+# `pip` / `python` get routed at the venv interpreter; `uv` runs as-is
+# but with `--python <venv-python>` injected when missing so it always
+# targets the right environment.
 _ALLOWED_TOP_LEVEL = {"pip", "pip3", "python", "python3", "py", "uv"}
+_PIP_ALIASES = {"pip", "pip3"}
+_PYTHON_ALIASES = {"python", "python3", "py"}
 
 
 def _enforce_command_policy(
@@ -266,12 +264,16 @@ def _enforce_command_policy(
 
     In restricted mode (default), the only entry points the user can call
     are ``pip``, ``uv`` and ``python`` (plus their aliases). In every
-    case we redirect ``pip`` and bare ``python`` invocations through the
-    venv's interpreter so the command actually targets the backend's
-    environment, not whatever happens to be on ``PATH``.
+    case we redirect the command at the resolved venv interpreter so it
+    actually targets the backend's environment, not whatever happens to
+    be on ``PATH``.
 
-    ``uv`` runs as-is (uv resolves the venv via ``--python`` / ``VIRTUAL_ENV``;
-    the latter is set by ``TerminalSession.process_env()``).
+    Pip rewriting strategy: many of our backends ship uv-managed venvs
+    that do **not** include pip. So before we settle on
+    ``<venv-python> -m pip ...`` we probe the venv for pip; if it's
+    missing we fall back to ``uv pip --python <venv-python> ...`` which
+    works even on a barebones ``uv venv`` install. ``python`` (no -m
+    pip) goes through unchanged at the venv interpreter.
 
     In unrestricted mode we leave argv exactly as the user typed it.
     """
@@ -285,15 +287,83 @@ def _enforce_command_policy(
             )
         head = base
 
-    rewrite = _PYTHON_TOOL_REWRITES.get(head)
-    if rewrite is None:
-        # Either uv (allowed verbatim) or, in unrestricted mode, anything
-        # else — both fall through unchanged.
-        return argv
+    if head in _PYTHON_ALIASES:
+        if python_path is None:
+            raise TerminalDenied(
+                "未找到该后端的 venv python 解释器，无法运行 python 命令。"
+            )
+        return [str(python_path), *argv[1:]]
 
-    if python_path is None:
+    if head in _PIP_ALIASES:
+        if python_path is None:
+            raise TerminalDenied(
+                "未找到该后端的 venv python 解释器，无法运行 pip 命令。"
+            )
+        return _route_pip(python_path, argv[1:])
+
+    if head == "uv":
+        return _route_uv(python_path, argv[1:])
+
+    # Unrestricted fall-through.
+    return argv
+
+
+def _route_pip(python_path: Path, pip_args: list[str]) -> list[str]:
+    """Route a `pip ...` invocation at the resolved venv interpreter.
+
+    First attempts ``<venv-python> -m pip``. If pip is not installed in
+    the venv (typical for uv-managed envs) and a ``uv`` binary is on
+    PATH, swap to ``uv pip --python <venv-python> ...`` instead. That
+    keeps the user's mental model of typing pip while letting it work
+    on whatever venv shape the backend actually shipped.
+    """
+    if _venv_has_pip(python_path):
+        return [str(python_path), "-m", "pip", *pip_args]
+    uv_binary = shutil.which("uv")
+    if uv_binary is None:
         raise TerminalDenied(
-            "未找到该后端的 venv python 解释器，无法运行 pip/python 命令。"
+            "该 venv 未安装 pip，且 PATH 上找不到 uv。请先在该 venv 中执行 "
+            "`python -m ensurepip` 或安装 uv。"
         )
-    rest = list(rewrite[1:]) + argv[1:]
-    return [str(python_path), *rest]
+    return [uv_binary, "pip", "--python", str(python_path), *pip_args]
+
+
+def _route_uv(python_path: Path | None, uv_args: list[str]) -> list[str]:
+    """Inject ``--python <venv>`` for ``uv pip`` when the user omitted it.
+
+    Without this, ``uv pip install foo`` runs against whatever interpreter
+    uv discovers (often the system one), which silently misses the user's
+    venv. We only inject when the user types ``uv pip ...`` (other uv
+    subcommands like ``uv venv`` / ``uv lock`` are left alone).
+    """
+    uv_binary = shutil.which("uv")
+    if uv_binary is None:
+        raise TerminalDenied("PATH 上找不到 uv 可执行文件。")
+    if (
+        python_path is not None
+        and len(uv_args) >= 1
+        and uv_args[0] == "pip"
+        and "--python" not in uv_args
+        and "-p" not in uv_args
+    ):
+        return [uv_binary, "pip", "--python", str(python_path), *uv_args[1:]]
+    return [uv_binary, *uv_args]
+
+
+def _venv_has_pip(python_path: Path) -> bool:
+    """Return True iff ``<venv-python> -m pip --version`` succeeds.
+
+    Cheap (~50ms) probe with a hard timeout. We deliberately don't cache:
+    the user might run ``ensurepip`` between two commands and expect the
+    next pip invocation to switch over without restarting the server.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            [str(python_path), "-m", "pip", "--version"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
