@@ -298,6 +298,7 @@ class CheckpointSaver:
         get_sai_model_spec_fn: Callable[[argparse.Namespace], dict],
         current_epoch,
         current_step,
+        ema=None,
     ):
         self.args = args
         self.accelerator = accelerator
@@ -307,6 +308,12 @@ class CheckpointSaver:
         self.get_sai_model_spec_fn = get_sai_model_spec_fn
         self.current_epoch = current_epoch
         self.current_step = current_step
+        # EMA shadow (optional). When set, every save() call also writes
+        # an ``<name>_ema.<ext>`` sibling holding the swapped-in shadow
+        # weights. The trainer constructs this in train.py and passes
+        # it in via ``saver.ema = ...`` after build_loop_state — keeps
+        # the constructor signature stable for callers that don't care.
+        self.ema = ema
         # Set by the load_state pre-hook when resuming. Read by train() to
         # decide initial_step.
         self.steps_from_state: Optional[int] = None
@@ -390,7 +397,12 @@ class CheckpointSaver:
             )
 
     def save(self, ckpt_name: str, network: Any, steps: int, epoch_no: int) -> None:
-        """Write a network checkpoint with up-to-date training metadata."""
+        """Write a network checkpoint with up-to-date training metadata.
+
+        When ``self.ema`` is set, also writes a sibling ``<stem>_ema.<ext>``
+        with the shadow weights swapped in. The swap is scoped — live
+        params are restored before training resumes.
+        """
         args = self.args
         accelerator = self.accelerator
         unwrapped_nw = accelerator.unwrap_model(network)
@@ -409,6 +421,19 @@ class CheckpointSaver:
 
         unwrapped_nw.save_weights(ckpt_file, self.save_dtype, metadata_to_save)
 
+        if self.ema is not None:
+            stem, ext = os.path.splitext(ckpt_file)
+            ema_file = f"{stem}_ema{ext}"
+            ema_metadata = dict(metadata_to_save)
+            ema_metadata["ss_ema"] = "true"
+            ema_metadata["ss_ema_decay"] = str(self.ema.decay)
+            ema_metadata["ss_ema_num_updates"] = str(self.ema.num_updates)
+            with self.ema.swap(unwrapped_nw):
+                unwrapped_nw.save_weights(
+                    ema_file, self.save_dtype, ema_metadata,
+                )
+            accelerator.print(f"saved EMA checkpoint: {ema_file}")
+
     def remove(self, old_ckpt_name: str) -> None:
         """Delete an old checkpoint plus its HydraLoRA ``_moe`` sibling if present."""
         args = self.args
@@ -421,6 +446,12 @@ class CheckpointSaver:
         if os.path.exists(moe_file):
             accelerator.print(f"removing old checkpoint: {moe_file}")
             os.remove(moe_file)
+        # EMA sibling produced by save() — same retention as the live ckpt.
+        stem, ext = os.path.splitext(old_ckpt_file)
+        ema_file = f"{stem}_ema{ext}"
+        if os.path.exists(ema_file):
+            accelerator.print(f"removing old EMA checkpoint: {ema_file}")
+            os.remove(ema_file)
 
     def maybe_save_step(self, network: Any, global_step: int, epoch: int) -> None:
         """Step-cadence save. ``global_step`` must already be incremented."""

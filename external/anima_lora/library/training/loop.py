@@ -91,6 +91,18 @@ class LoopState:
     global_step: int = 0
     profile_started: bool = False
 
+    # Optional EMA shadow of the LoRA-network's trainable params.
+    # Built in train.py when --ema is set; consumed by _run_step (post
+    # optimizer.step) and by the saver via its own ``ema=`` field.
+    # None when the user didn't opt in.
+    ema: Any = None
+
+    # Counters for the NaN/spike guard. Bumped from _run_step;
+    # consumed by the rollback path. Module-level state would break
+    # multi-instance trainers, so keep it on the loop state.
+    nan_skips: int = 0
+    nan_consecutive: int = 0
+
 
 def build_loop_state(
     trainer,
@@ -126,6 +138,7 @@ def build_loop_state(
     epoch_to_start,
     initial_step,
     metadata,
+    ema=None,
 ) -> LoopState:
     """Build :class:`LoopState`. Mirrors the pre-loop setup that used to sit
     between ``_prepare_with_accelerator()`` and the for-epoch loop in
@@ -303,6 +316,7 @@ def build_loop_state(
         profile_range=profile_range,
         on_step_start_for_network=on_step_start_for_network,
         global_step=global_step,
+        ema=ema,
     )
 
 
@@ -523,6 +537,26 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
         if state.profile_started:
             torch.cuda.nvtx.range_pop()
 
+        # NaN/spike guard — pre-backward. A NaN/Inf loss must NOT
+        # propagate through ``accelerator.backward()`` because the
+        # gradient computation will poison every parameter touched by
+        # the graph. We zero_grad and bail out early; the optimizer
+        # will skip this step entirely. Cheap (one .isfinite() reduction
+        # per accumulation slice) so always-on when the user opts in.
+        nan_guard_on = bool(getattr(args, "nan_guard", False))
+        skipped_for_nan = False
+        if nan_guard_on and not torch.isfinite(loss).all():
+            state.nan_skips += 1
+            state.nan_consecutive += 1
+            state.optimizer.zero_grad(set_to_none=True)
+            if accelerator.is_main_process:
+                logger.warning(
+                    "non-finite loss at global_step=%d (skip #%d, consecutive=%d)",
+                    state.global_step, state.nan_skips, state.nan_consecutive,
+                )
+            _maybe_recover_from_nan(state)
+            return loss.detach()
+
         if state.profile_started:
             torch.cuda.nvtx.range_push("backward")
         accelerator.backward(loss)
@@ -552,6 +586,35 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
                 ).get_trainable_params()
                 accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
+            # NaN/spike guard — post-backward, post-clip. Catches the
+            # case where the loss was finite but per-param grads
+            # contain NaN/Inf (mixed-precision under/overflow,
+            # poison-pill module). Bail out before optimizer.step()
+            # so the parameters stay clean.
+            if nan_guard_on:
+                params_to_check = accelerator.unwrap_model(network).get_trainable_params()
+                bad = False
+                for p in params_to_check:
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        bad = True
+                        break
+                if bad:
+                    state.nan_skips += 1
+                    state.nan_consecutive += 1
+                    state.optimizer.zero_grad(set_to_none=True)
+                    if accelerator.is_main_process:
+                        logger.warning(
+                            "non-finite gradient at global_step=%d "
+                            "(skip #%d, consecutive=%d)",
+                            state.global_step, state.nan_skips,
+                            state.nan_consecutive,
+                        )
+                    _maybe_recover_from_nan(state)
+                    skipped_for_nan = True
+
+        if skipped_for_nan:
+            return loss.detach()
+
         if state.profile_started:
             torch.cuda.nvtx.range_push("optimizer")
         state.optimizer.step()
@@ -560,7 +623,91 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
         if state.profile_started:
             torch.cuda.nvtx.range_pop()
 
+        # Successful step — reset the consecutive counter so a future
+        # spike has to clear the fresh threshold.
+        if state.nan_consecutive > 0 and accelerator.sync_gradients:
+            state.nan_consecutive = 0
+
+        # EMA shadow update — must run after the optimizer step so
+        # we read post-update parameter values, and only when the
+        # gradients have actually synchronised (gradient_accumulation
+        # otherwise applies decay on a half-finished step).
+        if (
+            state.ema is not None
+            and accelerator.sync_gradients
+        ):
+            state.ema.step(accelerator.unwrap_model(network))
+
     return loss
+
+
+def _maybe_recover_from_nan(state: LoopState) -> None:
+    """Trigger recovery when too many consecutive NaN steps stack up.
+
+    Two modes, picked by ``--nan_guard_recover``:
+
+    * Off (default): log a hard warning when threshold is exceeded.
+      The user gets a clear signal that the run is unhealthy without
+      the script silently mutating training state.
+    * On: halve every param group's LR and, if EMA is configured,
+      swap the shadow back into the live network. This is conservative
+      — we don't restart the LR schedule, just clamp it once.
+    """
+    args = state.args
+    threshold = max(1, int(getattr(args, "nan_guard_max_consecutive", 5) or 5))
+    if state.nan_consecutive < threshold:
+        return
+    if not state.accelerator.is_main_process:
+        return
+    if not bool(getattr(args, "nan_guard_recover", False)):
+        logger.error(
+            "NaN/spike threshold reached (%d consecutive). "
+            "Pass --nan_guard_recover to auto-halve LR + restore EMA, "
+            "or stop training and inspect the data pipeline.",
+            state.nan_consecutive,
+        )
+        # Reset so we don't log this every step until end of run.
+        state.nan_consecutive = 0
+        return
+
+    # Halve every group's LR. We don't touch the scheduler — it'll
+    # carry on but from a lower base. Most schedulers (cosine, polynomial,
+    # constant_with_warmup) work off ``base_lrs`` not ``lr``, so we
+    # update both fields where present.
+    for group in state.optimizer.param_groups:
+        old = float(group.get("lr", 0.0))
+        new = old * 0.5
+        group["lr"] = new
+    if hasattr(state.lr_scheduler, "base_lrs"):
+        try:
+            state.lr_scheduler.base_lrs = [
+                lr * 0.5 for lr in state.lr_scheduler.base_lrs
+            ]
+        except Exception:  # noqa: BLE001
+            pass
+    logger.warning(
+        "nan_guard recovery: halved LR (now %s)",
+        [g.get("lr") for g in state.optimizer.param_groups],
+    )
+
+    if state.ema is not None:
+        # Swap the EMA shadow into the live network so we restart
+        # from the last *good* parameter snapshot. The swap context
+        # manager normally restores live values on exit, but here we
+        # want the swap to persist — so do it explicitly.
+        unwrapped = state.accelerator.unwrap_model(state.network)
+        from library.training.ema import _named_trainables
+
+        named = _named_trainables(unwrapped)
+        if len(named) == len(state.ema.shadow_params):
+            with torch.no_grad():
+                for shadow, (_, live) in zip(state.ema.shadow_params, named):
+                    live.data.copy_(shadow.to(live.device, dtype=live.dtype))
+            logger.warning(
+                "nan_guard recovery: restored network params from EMA shadow",
+            )
+
+    state.nan_consecutive = 0
 
 
 def _profiler_step_begin(state: LoopState) -> None:

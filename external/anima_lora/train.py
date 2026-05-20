@@ -2527,6 +2527,64 @@ class AnimaTrainer:
         # references with generated samples.
         del train_dataset_group
 
+        # ----- EMA (Exponential Moving Average) shadow ----------------
+        # When --ema is set, build a shadow over the LoRA network's
+        # trainable params. The saver writes a sibling ``<name>_ema.<ext>``
+        # alongside every checkpoint; the per-step update fires from
+        # ``_run_step`` after ``optimizer.step()``. Resume support: if
+        # --ema_resume_path is set we load that file's shadow back in.
+        ema = None
+        if getattr(args, "ema", False):
+            from library.training.ema import EMAModel
+
+            unwrapped_nw = accelerator.unwrap_model(network)
+            ema_device = "cpu" if getattr(args, "ema_device", "gpu") == "cpu" else accelerator.device
+            ema = EMAModel(
+                unwrapped_nw,
+                decay=float(getattr(args, "ema_decay", 0.9999)),
+                use_num_updates=bool(getattr(args, "ema_use_num_updates", False)),
+                device="cpu" if ema_device == "cpu" else "gpu",
+            )
+            if ema_device != "cpu":
+                ema.to(accelerator.device)
+
+            ema_resume = getattr(args, "ema_resume_path", None)
+            if ema_resume:
+                try:
+                    from safetensors.torch import load_file as _safe_load
+
+                    sd = _safe_load(ema_resume)
+                    # Adapter checkpoints flatten naturally — just align
+                    # by name. Anything in sd that isn't in the live
+                    # network is silently dropped (e.g. saved with a
+                    # different routing config).
+                    by_name: dict[str, torch.Tensor] = {}
+                    for name, _ in (
+                        (n, p) for n, p in unwrapped_nw.named_parameters() if p.requires_grad
+                    ):
+                        if name in sd:
+                            by_name[name] = sd[name]
+                    if by_name:
+                        ema.load_state_dict({
+                            "decay": ema.decay,
+                            "use_num_updates": ema.use_num_updates,
+                            "num_updates": 0,
+                            "param_names": list(by_name.keys()),
+                            "shadow_params": [by_name[n] for n in by_name],
+                        })
+                        logger.info(
+                            "loaded EMA resume from %s (%d params)",
+                            ema_resume, len(by_name),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("EMA resume failed (%s); starting fresh", exc)
+
+            saver.ema = ema
+            logger.info(
+                "EMA enabled: decay=%g warmup=%s device=%s",
+                ema.decay, ema.use_num_updates, ema_device,
+            )
+
         loop_state = build_loop_state(
             self,
             args=args,
@@ -2560,6 +2618,7 @@ class AnimaTrainer:
             epoch_to_start=epoch_to_start,
             initial_step=initial_step,
             metadata=metadata,
+            ema=ema,
         )
 
         run_training_loop(self, loop_state)

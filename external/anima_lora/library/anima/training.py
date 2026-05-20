@@ -423,6 +423,33 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Path to EMA model safetensors file to resume EMA state from a previous run",
     )
 
+    # NaN / spike guard. Cheap insurance against a single bad sample
+    # taking down a whole training run (caption corruption, latent
+    # NaN that snuck past the cache filter, optimizer-state blow-up
+    # under aggressive LR). Detection-only is the default — flip
+    # ``--nan_guard_recover`` to also halve LR + restore EMA after N
+    # consecutive bad steps.
+    parser.add_argument(
+        "--nan_guard",
+        action="store_true",
+        help="Enable NaN/Inf detection on loss + grads. Skip the bad "
+        "step instead of letting NaN poison the parameters.",
+    )
+    parser.add_argument(
+        "--nan_guard_max_consecutive",
+        type=int,
+        default=5,
+        help="After this many consecutive NaN steps, trigger recovery "
+        "(if --nan_guard_recover) or abort training. Default: 5.",
+    )
+    parser.add_argument(
+        "--nan_guard_recover",
+        action="store_true",
+        help="On reaching --nan_guard_max_consecutive, halve every "
+        "param group's LR and (if --ema is on) swap EMA shadow back "
+        "into the live network instead of aborting.",
+    )
+
     # Variance-reduced flow-matching loss (AsymFlow §5.2, arXiv:2605.12964).
     # See bench/fm_vr_headroom/proposal.md. Gated off by default.
     parser.add_argument(
