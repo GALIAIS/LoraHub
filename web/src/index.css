@@ -1067,4 +1067,39 @@ code {
     transform: scaleY(1);
     opacity: 1;
   }
+
+  /* Terminal page — themed scrollback shell.
+     Light mode: a quiet card-tinted surface so the grid stays readable.
+     Dark mode: drops a few notches darker than `--background` so the
+     terminal reads like a real console without the harsh /  off-palette
+     pure-black we used in the first cut. */
+  .shiro-terminal-shell {
+    background: color-mix(in oklab, var(--card) 96%, var(--muted) 4%);
+  }
+
+  .dark .shiro-terminal-shell {
+    background: color-mix(in oklab, var(--background) 90%, black 10%);
+  }
+
+  /* Slightly tighter scrollbar for the terminal view — the global one
+     is already thin, but the terminal track sits on a darker fill so a
+     transparent track would look unfinished. */
+  .shiro-terminal-scrollback {
+    scrollbar-width: thin;
+    scrollbar-color:
+      color-mix(in oklab, var(--foreground) 26%, transparent)
+      transparent;
+  }
+
+  .shiro-terminal-scrollback::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .shiro-terminal-scrollback::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background:
+      color-mix(in oklab, var(--foreground) 24%, transparent)
+      padding-box;
+  }
 }

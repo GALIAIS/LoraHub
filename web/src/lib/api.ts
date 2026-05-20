@@ -2039,12 +2039,15 @@ export async function terminalExec(
   }
   const decoder = new TextDecoder()
   let buf = ""
-  // SSE framing: events are separated by a blank line. Each frame
-  // contains one or more `data:` lines whose payloads we concatenate.
+  // SSE framing: events are separated by a blank line. The spec allows
+  // the line terminator to be \n, \r, or \r\n, so we normalise CRLF to
+  // LF before splitting frames. Without this, a server that emits CRLF
+  // line endings would never produce a `\n\n` separator and the
+  // browser would buffer the entire stream until end-of-stream.
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
-    buf += decoder.decode(value, { stream: true })
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
     let nl: number
     while ((nl = buf.indexOf("\n\n")) >= 0) {
       const frame = buf.slice(0, nl)

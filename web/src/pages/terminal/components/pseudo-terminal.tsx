@@ -3,6 +3,10 @@
  *
  * Implementation notes:
  *
+ * - Scrollback is local to this component: clicking inside, scrolling
+ *   the wheel, or focusing the input never bleeds into the page-level
+ *   scroll. The wrapper sits in a fixed-height frame and the inner
+ *   pre's `overflow-y-auto` is what the user actually scrolls.
  * - We auto-scroll to the bottom on every new line, but bail out if the
  *   user has scrolled up. "Scrolled up" is checked via the distance of
  *   the scrollTop+clientHeight from scrollHeight; staying within 32px is
@@ -13,6 +17,9 @@
  *   presses ↑, so they don't lose half-typed input.
  * - Ctrl+L clears the scrollback (matches bash). Ctrl+C cancels the
  *   running command without clearing the buffer.
+ * - Theme adapts: light mode uses card surface, dark mode reads as the
+ *   conventional inky terminal. Driven by the same CSS vars as the
+ *   rest of the workbench so accent toggles flow through.
  */
 import {
   useEffect,
@@ -21,7 +28,8 @@ import {
   useState,
   type KeyboardEvent,
 } from "react"
-import { Loader2, Square, Trash2 } from "lucide-react"
+import { Copy, Loader2, Square, Trash2 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { TerminalLine } from "./types"
@@ -154,33 +162,71 @@ export function PseudoTerminal({
     () =>
       cn(
         "select-none text-[11px] font-mono shrink-0",
-        running ? "text-amber-500/80" : "text-emerald-600/80 dark:text-emerald-400/80",
+        running ? "text-amber-500/80" : "text-emerald-600 dark:text-emerald-400/80",
       ),
     [running],
   )
 
+  const copyTranscript = () => {
+    if (lines.length === 0) {
+      toast.info("终端日志为空")
+      return
+    }
+    const text = lines
+      .map((line) => {
+        if (line.kind === "prompt") {
+          return `${line.prompt ?? "$"} ${line.text}`
+        }
+        return line.text
+      })
+      .join("\n")
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success(`已复制 ${lines.length} 行日志`))
+      .catch((err) =>
+        toast.error("复制失败", {
+          description: err instanceof Error ? err.message : String(err),
+        }),
+      )
+  }
+
   return (
-    <div className="rounded-[6px] border border-border/60 bg-zinc-950 dark:bg-zinc-950 text-zinc-100 overflow-hidden flex flex-col min-h-[24rem] shadow-[var(--panel-shadow)]">
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/60 text-[11px] text-zinc-400">
-        <span className="font-mono">{prompt}</span>
+    <div
+      className={cn(
+        "shiro-terminal-shell rounded-[6px] border border-border/70 overflow-hidden flex flex-col h-[28rem] shadow-[var(--panel-shadow)]",
+      )}
+    >
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/70 bg-muted/40 text-[11px] text-muted-foreground">
+        <span className="font-mono truncate">{prompt}</span>
         <span className="ml-auto" />
-        {running ? (
+        {running && (
           <Button
             variant="ghost"
             size="sm"
             onClick={onCancel}
-            className="h-6 text-[11px] text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"
+            className="h-6 text-[11px] text-amber-600 dark:text-amber-300 hover:bg-amber-500/10"
             title="中断当前命令 (Ctrl+C)"
           >
             <Square className="size-3" />
             停止
           </Button>
-        ) : null}
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={copyTranscript}
+          className="h-6 text-[11px]"
+          title="复制全部日志"
+          disabled={lines.length === 0}
+        >
+          <Copy className="size-3" />
+          复制
+        </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={onClear}
-          className="h-6 text-[11px] text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+          className="h-6 text-[11px]"
           title="清屏 (Ctrl+L)"
           disabled={lines.length === 0}
         >
@@ -191,22 +237,20 @@ export function PseudoTerminal({
 
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all"
+        className="shiro-terminal-scrollback flex-1 min-h-0 overflow-y-auto px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all"
       >
         {lines.length === 0 ? (
-          <div className="text-zinc-500 italic">
+          <div className="text-muted-foreground/70 italic">
             {ready
               ? "在下方输入命令，或点击「快捷命令」开始。"
               : "选择一个已安装的后端后即可使用终端。"}
           </div>
         ) : (
-          lines.map((line, idx) => (
-            <LineRow key={idx} line={line} />
-          ))
+          lines.map((line, idx) => <LineRow key={idx} line={line} />)
         )}
       </div>
 
-      <div className="flex items-center gap-2 px-3 py-2 border-t border-zinc-800 bg-zinc-900/40">
+      <div className="flex items-center gap-2 px-3 py-2 border-t border-border/70 bg-muted/20">
         <span className={promptClasses}>{prompt}</span>
         <input
           ref={inputRef}
@@ -215,13 +259,13 @@ export function PseudoTerminal({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKey}
           placeholder={ready ? "" : "选择一个已安装的后端后再输入命令"}
-          className="flex-1 bg-transparent border-0 outline-none font-mono text-[12px] text-zinc-100 placeholder:text-zinc-600"
+          className="flex-1 bg-transparent border-0 outline-none font-mono text-[12px] placeholder:text-muted-foreground/60"
           spellCheck={false}
           autoComplete="off"
           disabled={!ready}
         />
         {running && (
-          <Loader2 className="size-3 animate-spin text-amber-400 shrink-0" />
+          <Loader2 className="size-3 animate-spin text-amber-500 shrink-0" />
         )}
       </div>
     </div>
@@ -232,17 +276,19 @@ function LineRow({ line }: { line: TerminalLine }) {
   if (line.kind === "prompt") {
     return (
       <div className="flex gap-2 items-baseline">
-        <span className="text-emerald-400/90 select-none">{line.prompt}</span>
-        <span className="text-zinc-100">{line.text}</span>
+        <span className="text-emerald-600 dark:text-emerald-400/90 select-none">
+          {line.prompt}
+        </span>
+        <span className="text-foreground">{line.text}</span>
       </div>
     )
   }
   const className = cn(
     "block",
-    line.kind === "stdout" && "text-zinc-200",
-    line.kind === "stderr" && "text-amber-300",
-    line.kind === "info" && "text-cyan-400/90",
-    line.kind === "error" && "text-rose-400",
+    line.kind === "stdout" && "text-foreground/90",
+    line.kind === "stderr" && "text-amber-600 dark:text-amber-300",
+    line.kind === "info" && "text-cyan-700 dark:text-cyan-400/90",
+    line.kind === "error" && "text-rose-600 dark:text-rose-400",
   )
   return <span className={className}>{line.text}</span>
 }

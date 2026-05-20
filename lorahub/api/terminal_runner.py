@@ -8,6 +8,7 @@ about *resolving the backend's venv*, *building the env block*, and
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import threading
@@ -19,6 +20,8 @@ from typing import Any
 
 from lorahub.api.settings import Settings
 from lorahub.core.backends._common.bootstrap import venv_python
+
+_log = logging.getLogger(__name__)
 
 
 class TerminalDenied(Exception):
@@ -224,6 +227,13 @@ def stream_command(
         # process doesn't briefly flash a console window.
         creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
+    _log.info(
+        "terminal exec: argv=%s cwd=%s python=%s",
+        argv,
+        cwd,
+        env.get("VIRTUAL_ENV", "(none)"),
+    )
+
     try:
         proc = subprocess.Popen(  # noqa: S603
             argv,
@@ -239,11 +249,15 @@ def stream_command(
             creationflags=creationflags,
         )
     except FileNotFoundError as exc:
-        yield {"type": "error", "data": f"无法启动: {exc}"}
+        msg = f"无法启动子进程: {exc}\nargv = {argv}\ncwd = {cwd}"
+        _log.warning("terminal exec FileNotFoundError: %s", msg)
+        yield {"type": "error", "data": msg}
         yield {"type": "exit", "code": -1}
         return
     except OSError as exc:
-        yield {"type": "error", "data": f"OSError: {exc}"}
+        msg = f"OSError 启动子进程: {exc}\nargv = {argv}\ncwd = {cwd}"
+        _log.warning("terminal exec OSError: %s", msg)
+        yield {"type": "error", "data": msg}
         yield {"type": "exit", "code": -1}
         return
 
@@ -303,6 +317,7 @@ def stream_command(
             }
 
     rc = proc.wait()
+    _log.info("terminal exec finished: rc=%d argv=%s", rc, argv)
     yield {"type": "exit", "code": int(rc)}
 
 

@@ -133,6 +133,12 @@ export function TerminalPage() {
       const controller = new AbortController()
       abortRef.current = controller
       setRunning(true)
+      // Track output so we can detect "exit non-zero with no output" —
+      // a common failure shape on Windows when the venv python is
+      // missing a runtime dep and produces no stdout/stderr at all.
+      let sawOutput = false
+      let lastArgv: string[] | null = null
+      let lastCwd: string | null = null
       try {
         await terminalExec(
           { backend_id: activeSession.backend_id, command: trimmed },
@@ -140,23 +146,45 @@ export function TerminalPage() {
             signal: controller.signal,
             onEvent: (event: TerminalEvent) => {
               if (event.type === "start") {
+                lastArgv = event.argv
+                lastCwd = event.cwd
                 appendLine({
                   kind: "info",
                   text: `▶ ${event.argv.join(" ")}`,
                 })
               } else if (event.type === "stdout" || event.type === "stderr") {
+                sawOutput = true
                 appendLine({
                   kind: event.type,
                   text: event.data ?? "",
                 })
               } else if (event.type === "exit") {
+                const ok = event.code === 0
                 appendLine({
-                  kind: event.code === 0 ? "info" : "error",
-                  text:
-                    event.code === 0
-                      ? "✓ 命令完成 (exit 0)"
-                      : `✗ 命令失败 (exit ${event.code})`,
+                  kind: ok ? "info" : "error",
+                  text: ok
+                    ? "✓ 命令完成 (exit 0)"
+                    : `✗ 命令失败 (exit ${event.code})`,
                 })
+                if (!ok && !sawOutput && lastArgv) {
+                  // Help users diagnose silent failures: dump the
+                  // resolved argv + cwd so they can spot a missing
+                  // executable, broken venv path, etc.
+                  appendLine({
+                    kind: "error",
+                    text: `  argv: ${lastArgv.join(" ")}`,
+                  })
+                  if (lastCwd) {
+                    appendLine({
+                      kind: "error",
+                      text: `  cwd:  ${lastCwd}`,
+                    })
+                  }
+                  appendLine({
+                    kind: "error",
+                    text: "  无任何输出。请确认该后端的 venv python 可用、且命令本身在该 venv 中存在。",
+                  })
+                }
               } else if (event.type === "error") {
                 appendLine({ kind: "error", text: event.data ?? "未知错误" })
               }
