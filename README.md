@@ -38,6 +38,28 @@ scripts\run.bat dev          # 开发模式：API + Vite 热更新
 scripts\run.bat api          # 仅启动 API
 ```
 
+或注册全局 `lorahub` CLI（推荐）：
+
+```bash
+# Linux / macOS / WSL
+.venv/bin/lorahub self install   # → ~/.local/bin/lorahub
+
+# Windows
+.venv\Scripts\lorahub self install   # → %LOCALAPPDATA%\lorahub\bin\lorahub.cmd
+
+# 之后可在任意目录使用：
+lorahub doctor                # 查看环境健康度
+lorahub service start         # 启动后台守护（随机端口）
+lorahub service start --port 18765  # 指定端口
+lorahub service status        # 查看运行状态
+lorahub service stop          # 停止
+lorahub service enable        # 注册系统级开机自启（Linux/macOS，需 sudo）
+lorahub self update           # 拉最新代码 + 重装依赖 + 重建前端
+lorahub self upgrade          # 切到最新 release tag
+```
+
+完整子命令见 `scripts/README.md`。
+
 ### 手动安装
 
 ```bash

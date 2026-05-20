@@ -2,16 +2,18 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------
-# LoRaHub Launcher (Linux)
+# LoRaHub Launcher (Linux / macOS)
 #
-# Starts the API backend (uvicorn). In prod mode the API also serves
-# the prebuilt SPA from web/dist; in dev mode a separate Vite HMR
-# server is started on its own port.
+# Thin wrapper around the `lorahub` CLI. After running
+# `scripts/install.sh` once, you can invoke `lorahub service start`
+# directly — this script exists for muscle-memory and for setting
+# up the project-local PATH so a fresh shell doesn't need to source
+# the venv first.
 #
 # Usage:
-#   scripts/run.sh              prod mode (default — API serves SPA)
-#   scripts/run.sh dev          dev mode (API + Vite HMR)
-#   scripts/run.sh api          API only (no SPA build, no Vite)
+#   scripts/run.sh              prod mode (foreground uvicorn on :18765)
+#   scripts/run.sh dev          dev mode  (uvicorn :18765 + Vite :6006)
+#   scripts/run.sh api          alias for prod
 # ------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,91 +26,61 @@ API_PORT="18765"
 WEB_PORT="6006"
 
 # ---- Add project-local tools to PATH --------------------------------
-# Hard requirement: every binary the launcher touches comes from the
-# project tree. We never fall back to system installs — that's the
-# whole point of the install.sh layout.
 [ -d "$ROOT/.lorahub/uv" ] && export PATH="$ROOT/.lorahub/uv:$PATH"
-if [ -f "$ROOT/.node/bin/node" ]; then
-    export PATH="$ROOT/.node/bin:$PATH"
-else
-    echo "[ERROR] Portable Node.js not found at .node/bin/node."
-    echo "         Run scripts/install.sh first."
-    exit 1
-fi
+[ -f "$ROOT/.node/bin/node" ] && export PATH="$ROOT/.node/bin:$PATH"
 
 # ---- Resolve Python --------------------------------------------------
-PYTHON=""
-if [ -f ".venv/bin/python" ]; then
-    PYTHON="$ROOT/.venv/bin/python"
-else
+if [ ! -f ".venv/bin/python" ]; then
     echo "[ERROR] .venv not found. Run scripts/install.sh first."
     exit 1
 fi
+PYTHON="$ROOT/.venv/bin/python"
 
-# ---- Verify dependencies ---------------------------------------------
+# ---- Sanity-check API deps ------------------------------------------
 if ! "$PYTHON" -c "import lorahub, fastapi, uvicorn" 2>/dev/null; then
-    echo "[ERROR] Python dependencies not installed. Run scripts/install.sh first."
+    echo "[ERROR] Python dependencies missing. Run scripts/install.sh first."
     exit 1
 fi
 
-echo ""
-echo "============================================================"
-echo "  LoRaHub - $MODE mode"
-echo "============================================================"
-echo ""
-
-# Track child PIDs for cleanup
-PIDS=()
-
-cleanup() {
-    echo ""
-    echo "[lorahub] Shutting down..."
-    for pid in "${PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-    wait 2>/dev/null
-    echo "[lorahub] Stopped."
-}
-trap cleanup EXIT INT TERM
-
-# ---- Build SPA for prod mode (must run before API start so the
-#      static mount in lorahub.api.app picks up web/dist) -----------
-if [[ "$MODE" == "prod" ]]; then
-    if [ ! -f "web/dist/index.html" ]; then
-        echo "[lorahub] Building frontend SPA ..."
-        cd web && npm run build && cd "$ROOT"
-        if [ ! -f "web/dist/index.html" ]; then
-            echo "[ERROR] Frontend build failed — web/dist/index.html missing."
-            exit 1
-        fi
-    fi
-fi
-
-# ---- Start API -------------------------------------------------------
-if [[ "$MODE" == "dev" || "$MODE" == "prod" || "$MODE" == "api" ]]; then
-    if [[ "$MODE" == "prod" ]]; then
-        echo "[lorahub] Open: http://${API_HOST}:${API_PORT}"
-    else
-        echo "[lorahub] API:  http://${API_HOST}:${API_PORT}"
-    fi
-    "$PYTHON" -m uvicorn lorahub.api.app:app \
-        --host "$API_HOST" --port "$API_PORT" &
-    PIDS+=($!)
-fi
-
-# ---- Start Web dev server (dev mode only) ---------------------------
+# ---- Dev mode: vite + uvicorn in two foreground children ------------
+# The CLI's `service start` only manages a single uvicorn daemon; vite
+# HMR + auto-reload during dev is a different shape (two processes,
+# both noisy on stdout, both quit together). Keep the legacy two-child
+# logic for `dev` only.
 if [[ "$MODE" == "dev" ]]; then
+    if [[ ! -f "$ROOT/.node/bin/node" ]]; then
+        echo "[ERROR] Portable Node.js missing. Run scripts/install.sh first."
+        exit 1
+    fi
+    PIDS=()
+    cleanup() {
+        echo ""; echo "[lorahub] Shutting down ..."
+        for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
+        wait 2>/dev/null
+    }
+    trap cleanup EXIT INT TERM
+
+    echo "[lorahub] API:  http://${API_HOST}:${API_PORT}"
+    "$PYTHON" -m uvicorn lorahub.api.app:app --host "$API_HOST" --port "$API_PORT" --reload &
+    PIDS+=($!)
+
     echo "[lorahub] Web:  http://localhost:${WEB_PORT}"
     export LORAHUB_API_TARGET="http://${API_HOST}:${API_PORT}"
-    cd web
-    npm run dev -- --host 127.0.0.1 --port "$WEB_PORT" &
+    (cd web && npm run dev -- --host 127.0.0.1 --port "$WEB_PORT") &
     PIDS+=($!)
-    cd "$ROOT"
+
+    wait -n "${PIDS[@]}" 2>/dev/null || true
+    exit 0
 fi
 
-echo ""
-echo "[lorahub] Services running. Press Ctrl+C to stop."
-echo ""
+# ---- Prod / api: build SPA if missing, then run via the CLI --------
+if [[ ! -f "web/dist/index.html" ]]; then
+    echo "[lorahub] Building frontend SPA ..."
+    "$PYTHON" -m lorahub self build || {
+        echo "[ERROR] Frontend build failed."
+        exit 1
+    }
+fi
 
-# ---- Wait for any child to exit --------------------------------------
-wait -n "${PIDS[@]}" 2>/dev/null || true
+echo "[lorahub] starting on http://${API_HOST}:${API_PORT}"
+exec "$PYTHON" -m lorahub service start --host "$API_HOST" --port "$API_PORT" --foreground

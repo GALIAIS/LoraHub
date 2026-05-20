@@ -44,6 +44,8 @@ console = Console()
 # `lorahub system gpu`. Imported lazily to avoid the import chain pulling
 # in the API store at module load when the user just runs `--help`.
 from lorahub.cli.jobs import jobs_app  # noqa: E402
+from lorahub.cli.self_cmd import self_app  # noqa: E402
+from lorahub.cli.service import service_app  # noqa: E402
 from lorahub.cli.sweep import sweep_app  # noqa: E402
 from lorahub.cli.system import system_app  # noqa: E402
 
@@ -54,6 +56,8 @@ app.add_typer(jobs_app, name="jobs")
 # users can submit + list adaptive sweeps without the web UI.
 app.add_typer(sweep_app, name="sweeps")
 app.add_typer(system_app, name="system")
+app.add_typer(service_app, name="service")
+app.add_typer(self_app, name="self")
 err_console = Console(stderr=True)
 
 
@@ -61,6 +65,83 @@ err_console = Console(stderr=True)
 def version() -> None:
     """Print the installed lorahub version."""
     console.print(f"lorahub {__version__}")
+
+
+@app.command()
+def doctor() -> None:
+    """Inspect the local install — venv, Python, Node, web/dist, backends.
+
+    Prints a short table listing each component, where it should live,
+    and whether it's actually there. Use this as the first step when
+    something feels off ("`lorahub serve` says module not found",
+    "the UI shows port :18765 but my browser can't reach it", etc.).
+    """
+    import sys as _sys  # noqa: PLC0415
+
+    from lorahub.core.paths import lorahub_dir, project_root  # noqa: PLC0415
+
+    root = project_root()
+    venv = root / ".venv"
+    venv_py = venv / ("Scripts" if _sys.platform == "win32" else "bin") / (
+        "python.exe" if _sys.platform == "win32" else "python"
+    )
+    node_dir = root / ".node"
+    node_bin = node_dir / ("node.exe" if _sys.platform == "win32" else "bin/node")
+    web_dist = root / "web" / "dist" / "index.html"
+    uv_dir = lorahub_dir() / "uv"
+    uv_bin = uv_dir / ("uv.exe" if _sys.platform == "win32" else "uv")
+    py_dir = lorahub_dir() / "python"
+
+    table = Table(title=f"lorahub doctor — {root}", show_lines=False)
+    table.add_column("component")
+    table.add_column("location")
+    table.add_column("status")
+
+    def row(label: str, path: Path, present: bool, hint: str = "") -> None:
+        status = "[green]OK[/]" if present else "[red]missing[/]"
+        if hint and not present:
+            status += f"  [dim]{hint}[/]"
+        table.add_row(label, str(path), status)
+
+    row("interpreter", Path(_sys.executable), Path(_sys.executable).is_file())
+    row(".venv", venv_py, venv_py.is_file(), "run scripts/install.{sh,bat}")
+    row(".lorahub/uv", uv_bin, uv_bin.is_file(), "run scripts/install.{sh,bat}")
+    row(".lorahub/python", py_dir, py_dir.is_dir() and any(py_dir.iterdir()) if py_dir.is_dir() else False, "run scripts/install.{sh,bat}")
+    row(".node", node_bin, node_bin.is_file(), "run scripts/install.{sh,bat}")
+    row("web/dist", web_dist, web_dist.is_file(), "run `lorahub build`")
+
+    console.print(table)
+
+    # Backend status — best-effort, only if the api extras imported.
+    try:
+        from lorahub.api import app as _app_mod  # noqa: PLC0415
+        from lorahub.api.settings import probe_all_backends  # noqa: PLC0415
+
+        store = getattr(_app_mod, "_settings_store", None)
+        if store is not None:
+            settings = store.load()
+            backends = probe_all_backends(settings)
+            be_table = Table(title="backends", show_lines=False)
+            be_table.add_column("id")
+            be_table.add_column("ready")
+            be_table.add_column("python")
+            be_table.add_column("notes")
+            for bid, info in backends.items():
+                ready = "[green]yes[/]" if info.get("ready") else "[yellow]no[/]"
+                py = info.get("python") or "-"
+                notes: list[str] = []
+                if info.get("missing_scripts"):
+                    notes.append(f"missing scripts: {len(info['missing_scripts'])}")
+                if info.get("missing_models"):
+                    notes.append(f"missing models: {len(info['missing_models'])}")
+                if not info.get("venv_detected"):
+                    notes.append("no venv")
+                be_table.add_row(bid, ready, str(py), ", ".join(notes) or "—")
+            console.print(be_table)
+    except Exception:  # noqa: BLE001
+        # api extras not installed — that's a valid user choice for the
+        # CLI-only flow. doctor's table above is the answer they need.
+        pass
 
 
 @app.command()
