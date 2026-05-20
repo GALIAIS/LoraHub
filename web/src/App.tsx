@@ -305,7 +305,7 @@ export default function App() {
       </Sidebar>
 
       {/* --- Main content --- */}
-      <SidebarInset className="h-screen overflow-hidden bg-transparent">
+      <SidebarInset className="shiro-page-canvas h-screen overflow-hidden">
         <div className="relative flex h-full flex-col overflow-hidden">
           {/* Header */}
           <header className="shrink-0 z-30">

@@ -528,6 +528,29 @@ code {
     z-index: 1;
   }
 
+  /* Main content canvas. Lives inside SidebarInset and paints an
+     opaque page-background-tinted wash so individual pages don't
+     have to manage their own backdrop. The body grid remains the
+     shell-level decoration; it shows around the chrome edges and
+     in any explicitly-transparent surface, not behind page bodies. */
+  .shiro-page-canvas {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--background) 96%, white 4%),
+        color-mix(in oklab, var(--background) 88%, var(--muted) 12%)
+      );
+  }
+
+  .dark .shiro-page-canvas {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--background) 94%, white 2%),
+        color-mix(in oklab, var(--background) 90%, black 10%)
+      );
+  }
+
   /* Secondary in-page sidebar (jobs / configs / sweeps / analysis).
      Sits inside SidebarInset, so it must paint its own backdrop on
      top of the transparent shell — otherwise the body grid bleeds
