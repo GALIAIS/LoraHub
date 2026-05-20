@@ -27,12 +27,15 @@ export const appRouteImporters: Record<AppRouteModuleKey, AppRouteImporter> = {
   about: () => import("@/pages/about"),
 }
 
+const inflight = new Map<AppRouteModuleKey, Promise<unknown>>()
+
 export function preloadAppRoute(routeKey: AppRouteModuleKey) {
-  if (typeof window !== "undefined") {
-    console.info("[router] preload route chunk", routeKey)
-  }
-  return importWithDynamicImportRecovery(
+  const cached = inflight.get(routeKey)
+  if (cached) return cached
+  const promise = importWithDynamicImportRecovery(
     appRouteImporters[routeKey],
     `route:${routeKey}`,
   )
+  inflight.set(routeKey, promise)
+  return promise
 }

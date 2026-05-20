@@ -1,5 +1,5 @@
-import { Suspense, useCallback, useEffect, useState } from "react"
-import { NavLink, Outlet, useLocation } from "react-router-dom"
+import { Suspense, startTransition, useCallback, useEffect, useState } from "react"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { Toaster } from "sonner"
 import {
   Activity,
@@ -75,6 +75,7 @@ const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
 
 export default function App() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [mode, setMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system"
     const stored = window.localStorage.getItem(THEME_MODE_KEY)
@@ -116,6 +117,27 @@ export default function App() {
   const prefetchRoute = useCallback((routeKey: AppRouteModuleKey) => {
     void preloadAppRoute(routeKey)
   }, [])
+
+  const handleNavClick = useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>, to: string) => {
+      // Skip modifier-key clicks (open in new tab, etc.)
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return
+      }
+      event.preventDefault()
+      startTransition(() => {
+        navigate(to)
+      })
+    },
+    [navigate],
+  )
 
   const isRouteActive = (href: string) =>
     href === "/"
@@ -164,7 +186,13 @@ export default function App() {
                   {NAV.filter((n) => n.group === group.key).map((item) => (
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton
-                        render={<NavLink to={item.to} end={item.to === "/"} />}
+                        render={
+                          <NavLink
+                            to={item.to}
+                            end={item.to === "/"}
+                            onClick={(e) => handleNavClick(e, item.to)}
+                          />
+                        }
                         isActive={isRouteActive(item.to)}
                         tooltip={item.label}
                         onMouseEnter={() => prefetchRoute(item.routeKey)}
@@ -272,7 +300,7 @@ export default function App() {
               }
             >
               <ErrorBoundary resetKey={location.pathname}>
-                <div key={location.pathname} className="shiro-page-enter flex-1 min-h-0 flex flex-col">
+                <div className="shiro-page-enter flex-1 min-h-0 flex flex-col">
                   <Outlet />
                 </div>
               </ErrorBoundary>
