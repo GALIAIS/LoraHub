@@ -2,7 +2,7 @@
 
 We use uv's `python install/list` machinery (which downloads
 python-build-standalone from astral-sh's official mirror) to keep a portable
-CPython under `<user_data>/lorahub/runtimes/`. Every backend's bootstrap
+CPython under `<project_root>/.lorahub/python/`. Every backend's bootstrap
 plan can opt to use this runtime as the venv base, so the user never needs
 a system Python installed at all to train models.
 
@@ -27,20 +27,25 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from platformdirs import user_data_path
-
+from lorahub.core.paths import lorahub_dir
 from lorahub.core.toolchain import uv as _uv
 
-# Anchor for runtimes uv installs into. uv has its own --install-dir flag we
-# pass to keep everything inside the LoraHub user-data tree, and we never
-# look at PYTHONHOME so the user's system Python is left untouched.
-PYTHON_ROOT = user_data_path("lorahub", "lorahub") / "runtimes"
+# Anchor for runtimes uv installs into. Lives under the project's
+# ``.lorahub/`` directory so installs done via ``scripts/install.{sh,bat}``
+# (which writes to the same location) are visible to the API and vice
+# versa. The legacy split between ``platformdirs.user_data_path`` and
+# ``<repo>/.tools`` was the single biggest source of "I just installed it
+# but the UI says it's missing" reports.
+PYTHON_ROOT = lorahub_dir() / "python"
 
 # We pin 3.11 by default because that's what `requires-python` in pyproject
-# (and most model-training tooling) demands. The user can ask for 3.12 in
-# the UI; everything older we hide.
+# (and most model-training tooling) demands. The user can ask for 3.12 or
+# 3.13 in the UI; everything older we hide. 3.13 is required by anima_lora
+# (its own pyproject pins ``==3.13.*``); the install button on the
+# Dependencies tab will pre-fetch it so anima_lora's ``uv sync`` doesn't
+# stall on a separate runtime download mid-install.
 DEFAULT_VERSION = "3.11"
-RECOMMENDED_VERSIONS: tuple[str, ...] = ("3.11", "3.12")
+RECOMMENDED_VERSIONS: tuple[str, ...] = ("3.11", "3.12", "3.13")
 
 
 _PB_PROGRESS = _uv.ProgressCallback
@@ -64,28 +69,117 @@ def _uv_python_command() -> list[str]:
     return [uv_bin, "python"]
 
 
+def _uv_python_env() -> dict[str, str]:
+    """Env vars that point uv at our project-local install dir.
+
+    Setting both ``UV_PYTHON_INSTALL_DIR`` and ``UV_PYTHON_BIN_DIR`` makes
+    every ``uv python ...`` subprocess we spawn read/write under
+    ``PYTHON_ROOT`` regardless of whether the caller passes
+    ``--install-dir`` explicitly. ``--install-dir`` is forwarded too as
+    a belt-and-suspenders for older uv builds that ignore the env var.
+    """
+    import os as _os  # noqa: PLC0415
+
+    env = dict(_os.environ)
+    env["UV_PYTHON_INSTALL_DIR"] = str(PYTHON_ROOT)
+    return env
+
+
 def installed_runtimes() -> list[dict[str, Any]]:
     """Return uv's view of locally installed CPython builds.
 
     Entries look like ``{"version": "3.11.10", "path": "...", "implementation":
     "cpython", "arch": "x86_64", ...}``. uv emits a JSON line per runtime
     when ``--output-format json`` is set; older uv versions returned plain
-    text so we tolerate both.
+    text so we tolerate both. Always scopes the listing to ``PYTHON_ROOT``
+    so we never surface a runtime the user installed via a different uv
+    invocation outside the project.
     """
-    cmd = [*_uv_python_command(), "list", "--only-installed", "--output-format", "json"]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    PYTHON_ROOT.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        *_uv_python_command(),
+        "list",
+        "--only-installed",
+        "--output-format", "json",
+        "--install-dir", str(PYTHON_ROOT),
+    ]
+    result = subprocess.run(
+        cmd, check=False, capture_output=True, text=True, env=_uv_python_env(),
+    )
     if result.returncode != 0:
-        return []
-    return _parse_uv_python_listing(result.stdout)
+        # Older uv builds reject ``--install-dir`` on list. Retry without.
+        cmd_legacy = [
+            *_uv_python_command(),
+            "list", "--only-installed", "--output-format", "json",
+        ]
+        result = subprocess.run(
+            cmd_legacy, check=False, capture_output=True, text=True,
+            env=_uv_python_env(),
+        )
+        if result.returncode != 0:
+            return _scan_install_dir()
+    parsed = _parse_uv_python_listing(result.stdout)
+    if parsed:
+        return parsed
+    # uv saw nothing — fall back to a manual scan of PYTHON_ROOT so a
+    # runtime installed by ``scripts/install.{sh,bat}`` still shows up
+    # even if the uv on PATH disagrees about the layout.
+    return _scan_install_dir()
 
 
 def available_runtimes() -> list[dict[str, Any]]:
     """Return runtimes uv knows it could install on this host."""
     cmd = [*_uv_python_command(), "list", "--output-format", "json"]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, check=False, capture_output=True, text=True, env=_uv_python_env(),
+    )
     if result.returncode != 0:
         return []
     return _parse_uv_python_listing(result.stdout)
+
+
+def _scan_install_dir() -> list[dict[str, Any]]:
+    """Filesystem fallback for ``installed_runtimes`` when uv is silent.
+
+    Walks ``PYTHON_ROOT`` looking for the standard
+    ``cpython-<version>-<os>-<arch>-...`` layout that uv (and our
+    ``scripts/install.{sh,bat}`` helpers) produce. Returns an empty
+    list if the directory doesn't exist yet.
+    """
+    if not PYTHON_ROOT.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in sorted(PYTHON_ROOT.iterdir()):
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if not name.startswith("cpython-"):
+            continue
+        # Resolve symlinks so the patched real directory wins over uv's
+        # ``cpython-3.12`` minor-version alias (we'd otherwise list both).
+        real = entry.resolve()
+        py = real / "bin" / "python"
+        if not py.is_file():
+            py = real / ("python.exe" if py.parent.parent.name.endswith("none") else "python")
+        if not py.is_file():
+            # Windows: the python.exe lives at the runtime root.
+            py = real / "python.exe"
+        if not py.is_file():
+            continue
+        # Pull the version out of the directory name. e.g.
+        # ``cpython-3.12.7-linux-x86_64-gnu`` -> ``3.12.7``.
+        rest = name.removeprefix("cpython-")
+        version = rest.split("-", 1)[0]
+        out.append({
+            "version": version,
+            "implementation": "cpython",
+            "arch": "",
+            "os": "",
+            "path": str(py),
+            "key": name,
+            "installed": True,
+        })
+    return out
 
 
 def _parse_uv_python_listing(stdout: str) -> list[dict[str, Any]]:
@@ -146,7 +240,9 @@ def install_runtime(
     ]
     if progress is not None:
         progress(f"uv python install {version} -> {PYTHON_ROOT}")
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(
+        cmd, check=False, stderr=subprocess.PIPE, text=True, env=_uv_python_env(),
+    )
     if result.returncode != 0:
         tail = "\n".join((result.stderr or "").strip().splitlines()[-12:])
         msg = f"uv python install failed (exit {result.returncode}):\n{tail}"

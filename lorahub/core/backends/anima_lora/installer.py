@@ -84,19 +84,16 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
     args = ["sync", "--directory", str(plan.target)]
     if plan.base_python is not None:
         args += ["--python", str(plan.base_python)]
-    if plan.pypi_index:
-        # Forward only when the user opted in via Settings. We use
-        # `--default-index` (uv ≥ 0.4) instead of the deprecated
-        # `--index-url` so future uv versions don't drop support.
-        # The named ``pytorch-cu124`` index in anima's pyproject still
-        # wins for torch + torchvision via ``[tool.uv.sources]`` — only
-        # the non-torch packages (accelerate, diffusers, transformers,
-        # ~30 deps) get routed through the user's mirror, which is
-        # still a useful speedup in regions where pypi.org is slow.
-        args += ["--default-index", plan.pypi_index]
     label = f"uv sync -> {plan.venv_dir}"
     try:
-        _uv.run_uv(args, step=label, progress=progress)
+        # ``run_uv`` injects ``--default-index <plan.pypi_index>`` when
+        # the caller didn't already pin one. The named ``pytorch-cu124``
+        # index in anima's pyproject still wins for torch + torchvision
+        # via ``[tool.uv.sources]`` — only the non-torch packages
+        # (accelerate, diffusers, transformers, ~30 deps) get routed
+        # through the user's mirror, which is still a useful speedup
+        # in regions where pypi.org is slow.
+        _uv.run_uv(args, step=label, progress=progress, pypi_index=plan.pypi_index)
     except RuntimeError as exc:
         raise BootstrapError("uv sync anima_lora", 1) from exc
 

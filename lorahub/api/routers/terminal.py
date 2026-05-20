@@ -362,13 +362,13 @@ def _route_uv(python_path: Path | None, uv_args: list[str]) -> list[str]:
 def _find_uv() -> str | None:
     """Locate the uv executable, preferring the project-local copy.
 
-    Hub's installer drops uv at ``.tools/uv/uv.exe`` (Windows) or
-    ``.tools/uv/uv``. Prefer that over PATH so a globally-installed
+    Hub's installer drops uv at ``.lorahub/uv/uv.exe`` (Windows) or
+    ``.lorahub/uv/uv``. Prefer that over PATH so a globally-installed
     older uv doesn't shadow the bundled one. Falls back to ``shutil.which``
     when the bundled copy isn't there (dev checkouts, fresh installs).
     """
     name = "uv.exe" if os.name == "nt" else "uv"
-    candidate = Path.cwd() / ".tools" / "uv" / name
+    candidate = Path.cwd() / ".lorahub" / "uv" / name
     if candidate.is_file():
         return str(candidate)
     return shutil.which("uv")

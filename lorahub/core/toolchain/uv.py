@@ -31,16 +31,17 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from platformdirs import user_data_path
+from lorahub.core.paths import lorahub_dir
 
 ProgressCallback = Callable[[str], None]
 
 
-# Where we drop the bootstrapped `uv` binary when the system doesn't have
-# one. We reuse the LoraHub user-data directory so it persists across
-# venvs and across LoraHub versions.
+# Where we drop the bootstrapped ``uv`` binary when the system doesn't
+# have one. Lives under the project's ``.lorahub/`` directory so a
+# ``scripts/install.{sh,bat}`` invocation and the API end up reading
+# from / writing to the same place.
 def _bin_dir() -> Path:
-    return user_data_path("lorahub", "lorahub") / "bin"
+    return lorahub_dir() / "uv"
 
 
 def _local_uv_path() -> Path:
@@ -52,13 +53,20 @@ _UV_CACHED: str | None = None
 
 
 def find_uv() -> str | None:
-    """Return the path to a discoverable `uv` binary or None if not present."""
-    onpath = shutil.which("uv")
-    if onpath:
-        return onpath
+    """Return the path to a discoverable `uv` binary or None if not present.
+
+    Priority: project-local (``.lorahub/uv``) > system PATH. The local
+    copy wins so a user who runs ``scripts/install.{sh,bat}`` always
+    keeps using *that* uv, even if a different version exists on PATH.
+    Mirroring this priority on the API side prevents the "two uv's
+    disagree about installed Pythons" class of bugs.
+    """
     local = _local_uv_path()
     if local.is_file():
         return str(local)
+    onpath = shutil.which("uv")
+    if onpath:
+        return onpath
     return None
 
 
@@ -248,6 +256,7 @@ def run_uv(
     *,
     step: str,
     progress: ProgressCallback | None = None,
+    pypi_index: str | None = None,
 ) -> None:
     """Run an arbitrary ``uv <args>`` invocation through the bootstrap binary.
 
@@ -255,9 +264,26 @@ def run_uv(
     that need ``uv sync`` / ``uv lock`` etc. and don't fit the
     pip_install / create_venv shapes. Surfaces failures as RuntimeError
     so callers can wrap into their own backend-specific error type.
+
+    ``pypi_index`` injects ``--default-index <url>`` into the argv unless
+    the caller already passed an index override. This lets ``uv sync``
+    pick up the user's PyPI mirror (e.g. tsinghua) the same way
+    ``pip_install`` does. Pinned source maps inside the target's
+    ``[tool.uv.sources]`` (such as anima_lora's pytorch-cu124 index)
+    still take precedence — uv only consults ``--default-index`` for
+    packages without an explicit source.
     """
     uv = ensure_uv(progress)
-    _capture([uv, *args], step, progress)
+    final_args = list(args)
+    if pypi_index and not _has_index_override(final_args):
+        # uv sync wants ``--default-index`` to come *after* the
+        # subcommand but before any --extra / package args. Inserting
+        # right after the subcommand keeps it simple.
+        if final_args and final_args[0] in {"sync", "lock", "add", "pip"}:
+            final_args = [final_args[0], "--default-index", pypi_index, *final_args[1:]]
+        else:
+            final_args = [*final_args, "--default-index", pypi_index]
+    _capture([uv, *final_args], step, progress)
 
 
 __all__ = [

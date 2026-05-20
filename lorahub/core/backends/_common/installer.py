@@ -46,6 +46,7 @@ class BootstrapPlanLike(Protocol):
     github_proxy: str | None
     base_python: Path | None
     pypi_index: str | None
+    torch_index_base: str | None
 
     @property
     def venv_python(self) -> Path: ...

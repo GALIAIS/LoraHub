@@ -157,17 +157,21 @@ def default_build_bootstrap_runner(
     return _build_kohya_runner(req)
 
 
-def _resolve_base_python() -> Path | None:
+def _resolve_base_python(version: str | None = None) -> Path | None:
     """Return the portable Python uv has cached for us, if any.
 
     None means "let uv pick whatever interpreter created it" — i.e. the
     interpreter running the API. The Settings UI's Dependencies tab makes
     sure a portable runtime is always installed before the user gets here,
     so this fallback only fires for scripted / power-user flows.
+
+    ``version`` lets a caller request a non-default runtime (e.g.
+    ``"3.13"`` for anima_lora). Falls through to the default version
+    when omitted.
     """
     from lorahub.core.toolchain import python_runtime  # noqa: PLC0415
 
-    return python_runtime.runtime_python(python_runtime.DEFAULT_VERSION)
+    return python_runtime.runtime_python(version or python_runtime.DEFAULT_VERSION)
 
 
 def _build_kohya_runner(
@@ -191,6 +195,7 @@ def _build_kohya_runner(
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
         pypi_index=settings.pypi_index_url,
+        torch_index_base=settings.torch_index_url,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -242,6 +247,7 @@ def _build_diffusion_pipe_runner(
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
         pypi_index=settings.pypi_index_url,
+        torch_index_base=settings.torch_index_url,
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -295,10 +301,14 @@ def _build_anima_lora_runner(
     settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
-        # uv reads requires-python from anima_lora's pyproject.toml
-        # ("==3.13.*") and fetches CPython 3.13 itself, so we don't
-        # need to point base_python at the LoraHub-managed runtime.
-        base_python=None,
+        # anima_lora's pyproject pins ``requires-python = "==3.13.*"``.
+        # If the user already pre-fetched 3.13 from the Dependencies tab
+        # (or via ``scripts/install.{sh,bat}``) we hand uv that path so
+        # ``uv sync`` doesn't burn another 30s pulling its own copy of
+        # python-build-standalone. When 3.13 is missing we leave
+        # base_python None and let uv self-fetch — same behaviour as
+        # before, just opportunistically faster.
+        base_python=_resolve_base_python("3.13"),
         pypi_index=settings.pypi_index_url,
     )
     if not (plan.target / "pyproject.toml").is_file():

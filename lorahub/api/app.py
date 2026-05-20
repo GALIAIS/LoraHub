@@ -97,6 +97,30 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     if pre_chdir != str(root):
         log.info("cwd was %s, chdir'd to project root", pre_chdir)
 
+    # One-time migration: older versions of ``scripts/install.{sh,bat}``
+    # dropped portable Python + uv into ``<repo>/.tools/``; the toolchain
+    # layer now reads from ``<repo>/.lorahub/``. Rename if the legacy dir
+    # exists and the new one doesn't, so users upgrading don't lose their
+    # already-downloaded interpreter and have to re-fetch ~150MB.
+    legacy_tools = root / ".tools"
+    new_lorahub = root / ".lorahub"
+    if legacy_tools.is_dir() and not new_lorahub.exists():
+        try:
+            legacy_tools.rename(new_lorahub)
+            log.info("migrated legacy .tools/ -> .lorahub/")
+        except OSError as exc:
+            log.warning(
+                "failed to migrate .tools/ -> .lorahub/ (%s); both directories "
+                "now coexist. Move the contents manually or delete .tools/ "
+                "if you want a clean state.",
+                exc,
+            )
+    elif legacy_tools.is_dir() and new_lorahub.is_dir():
+        log.info(
+            ".tools/ still present alongside .lorahub/. Safe to delete .tools/ "
+            "manually — installs go to .lorahub/ now.",
+        )
+
     if state.registry.store is None:
         store_path = default_store_path()
         store = JobStore(store_path)

@@ -75,9 +75,18 @@ export function DependenciesTab() {
   const error = install.error as Error | undefined
 
   const versions = useMemo(
-    () => status.data?.recommended_versions ?? ["3.11", "3.12"],
+    () => status.data?.recommended_versions ?? ["3.11", "3.12", "3.13"],
     [status.data?.recommended_versions],
   )
+  // Per-version usage hint shown in the picker. 3.13 is **required** by
+  // anima_lora (its pyproject pins ``==3.13.*``); 3.11 / 3.12 are the
+  // default base for kohya / diffusion-pipe. Keeping this map small means
+  // we don't fork the recommended_versions data on the API side.
+  const versionHint: Record<string, string> = {
+    "3.11": "推荐 · kohya / diffusion-pipe",
+    "3.12": "推荐 · kohya / diffusion-pipe",
+    "3.13": "anima_lora 必需",
+  }
   const versionOptions = useMemo(
     () => versions.map((v) => ({ value: v, label: `Python ${v}` })),
     [versions],
@@ -171,7 +180,14 @@ export function DependenciesTab() {
                     <SelectContent>
                       {versions.map((v) => (
                         <SelectItem key={v} value={v}>
-                          Python {v}
+                          <span className="flex items-center gap-2">
+                            <span className="font-mono">Python {v}</span>
+                            {versionHint[v] && (
+                              <span className="text-[10px] text-muted-foreground">
+                                {versionHint[v]}
+                              </span>
+                            )}
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -281,8 +297,11 @@ export function DependenciesTab() {
         </CardContent>
       </Card>
 
-      <div className="text-[11px] text-muted-foreground/80 px-1">
+      <div className="text-[11px] text-muted-foreground/80 px-1 leading-relaxed">
         · 便携 Python 不会修改系统环境变量；卸载只需删除安装目录即可。
+        <br />· 后端版本对应：<span className="font-mono">3.11 / 3.12</span> 给
+        kohya 与 diffusion-pipe；<span className="font-mono">3.13</span> 给
+        anima_lora。两者都装上后，安装后端时会自动复用对应版本，避免 uv 重复下载。
         <br />· 若机器无法访问 astral-sh 默认镜像，可结合「网络加速」标签的 GitHub
         / HuggingFace 代理设置使用。
       </div>

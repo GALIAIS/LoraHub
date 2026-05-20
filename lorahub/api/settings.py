@@ -76,6 +76,17 @@ class Settings:
     # --index-url. Leaves wheel-store URLs (download.pytorch.org/...) alone.
     pypi_index_url: str | None = None
 
+    # Optional PyTorch wheel index mirror. Leave empty to use the official
+    # ``download.pytorch.org/whl/{cuda}`` (correct outside China). Inside
+    # China the official index is unreachable; popular mirrors:
+    #   - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/whl
+    #   - https://mirrors.aliyun.com/pytorch-wheels
+    # When set, the value is suffixed with ``/{cuda_version}`` automatically
+    # by ``BootstrapPlan.torch_index`` so the user only configures the base
+    # URL. Setting this also covers xformers (kohya) since xformers wheels
+    # live on the same index.
+    torch_index_url: str | None = None
+
     # Optional SOCKS5/HTTP proxy for model downloads (HuggingFace, ModelScope).
     # Format: socks5h://user:pass@host:port or http://user:pass@host:port
     download_proxy: str | None = None

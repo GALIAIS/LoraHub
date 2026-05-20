@@ -36,6 +36,7 @@ type Draft = {
   modelscope_enabled: boolean
   modelscope_token: string
   pypi_index_url: string
+  torch_index_url: string
   download_proxy: string
   wandb_api_key: string
 }
@@ -48,6 +49,7 @@ function buildDraft(s: SettingsState): Draft {
     modelscope_enabled: s.modelscope_enabled,
     modelscope_token: s.modelscope_token ?? "",
     pypi_index_url: s.pypi_index_url ?? "",
+    torch_index_url: s.torch_index_url ?? "",
     download_proxy: s.download_proxy ?? "",
     wandb_api_key: s.wandb_api_key ?? "",
   }
@@ -239,6 +241,7 @@ export function NetworkTab() {
     draft.modelscope_enabled !== saved.modelscope_enabled ||
     draft.modelscope_token !== (saved.modelscope_token ?? "") ||
     draft.pypi_index_url !== (saved.pypi_index_url ?? "") ||
+    draft.torch_index_url !== (saved.torch_index_url ?? "") ||
     draft.download_proxy !== (saved.download_proxy ?? "") ||
     draft.wandb_api_key !== (saved.wandb_api_key ?? "")
 
@@ -409,6 +412,79 @@ export function NetworkTab() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
+            <Cloud className="size-4 text-muted-foreground" />
+            PyTorch 镜像（torch / torchvision / xformers）
+          </CardTitle>
+          <CardDescription>
+            kohya 与 diffusion-pipe 安装时直接拉 PyTorch 官方 wheel 索引
+            <code className="text-foreground"> download.pytorch.org/whl/{"{cuda}"} </code>
+            ；境内访问不畅时可在此填写镜像 base URL，会自动追加
+            <code className="text-foreground"> /{"{cuda}"} </code> 后缀。留空使用官方源。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-[4px] border border-border/60 divide-y divide-border/40 overflow-hidden">
+            {[
+              {
+                label: "官方（默认）",
+                value: "",
+              },
+              {
+                label: "清华 TUNA",
+                value: "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/whl",
+              },
+              {
+                label: "阿里云",
+                value: "https://mirrors.aliyun.com/pytorch-wheels",
+              },
+            ].map((p) => {
+              const isCurrent = draft.torch_index_url === p.value
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => setDraft({ ...draft, torch_index_url: p.value })}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-3 py-2 text-xs text-left transition-colors",
+                    isCurrent
+                      ? "bg-primary/10 text-foreground"
+                      : "hover:bg-muted/50 text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium truncate">{p.label}</span>
+                    {p.value && (
+                      <span className="block text-[10px] font-mono text-muted-foreground/70 truncate">
+                        {p.value}
+                      </span>
+                    )}
+                  </span>
+                  {isCurrent && (
+                    <span className="rounded-[2px] bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] shrink-0">
+                      已选
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-center">
+            <Label className="text-xs">自定义</Label>
+            <Input
+              value={draft.torch_index_url}
+              placeholder="https://mirror/.../pytorch-wheels（不含 /cuXXX 后缀）"
+              onChange={(e) =>
+                setDraft({ ...draft, torch_index_url: e.target.value })
+              }
+              className="font-mono"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
             <Globe2 className="size-4 text-muted-foreground" />
             下载代理（模型下载）
           </CardTitle>
@@ -487,6 +563,7 @@ export function NetworkTab() {
               modelscope_enabled: draft.modelscope_enabled,
               modelscope_token: draft.modelscope_token || null,
               pypi_index_url: draft.pypi_index_url || null,
+              torch_index_url: draft.torch_index_url || null,
               download_proxy: draft.download_proxy || null,
               huggingface_token: draft.huggingface_token || null,
               wandb_api_key: draft.wandb_api_key || null,

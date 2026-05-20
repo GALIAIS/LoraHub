@@ -62,6 +62,7 @@ class UpdateSettingsRequest(BaseModel):
     modelscope_enabled: bool | None = None
     modelscope_token: str | None = None
     pypi_index_url: str | None = None
+    torch_index_url: str | None = None
     download_proxy: str | None = None
     huggingface_token: str | None = None
     wandb_api_key: str | None = None
@@ -193,6 +194,11 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             _mask_secret(current.modelscope_token),
         ),
         pypi_index_url=_norm(req.pypi_index_url),
+        torch_index_url=(
+            _norm(req.torch_index_url)
+            if req.torch_index_url is not None
+            else current.torch_index_url
+        ),
         download_proxy=_norm(req.download_proxy),
         huggingface_token=_resolve_secret(
             req.huggingface_token,

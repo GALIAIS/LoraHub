@@ -52,6 +52,11 @@ class BootstrapPlan:
     # their pinned --index-url because those wheels live on a separate
     # CDN regardless of which PyPI mirror the user picked.
     pypi_index: str | None = None
+    # Optional PyTorch wheel index mirror **base** (without the trailing
+    # ``/{cuda}`` suffix). Empty -> default to the official
+    # ``download.pytorch.org/whl``. Inside China the user typically
+    # configures a Tsinghua/Aliyun mirror via Settings.
+    torch_index_base: str | None = None
 
     @property
     def venv_python(self) -> Path:
@@ -59,7 +64,8 @@ class BootstrapPlan:
 
     @property
     def torch_index(self) -> str:
-        return f"https://download.pytorch.org/whl/{self.cuda_version}"
+        base = (self.torch_index_base or "").rstrip("/") or "https://download.pytorch.org/whl"
+        return f"{base}/{self.cuda_version}"
 
 
 def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
