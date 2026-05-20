@@ -328,13 +328,13 @@ export default function App() {
           </header>
 
           {/* Page content */}
-          <div className="mx-auto flex w-full max-w-[1720px] min-w-0 min-h-0 flex-1 flex-col px-4 py-5 md:px-6 md:py-6 xl:px-8 overflow-hidden">
+          <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
             <Suspense
               fallback={
                 <div
                   role="status"
                   aria-live="polite"
-                  className="h-full w-full rounded-[6px] bg-muted/30 shiro-loading-pulse"
+                  className="h-full w-full bg-muted/30 shiro-loading-pulse"
                 />
               }
             >
