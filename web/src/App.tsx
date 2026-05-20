@@ -155,7 +155,7 @@ export default function App() {
           </div>
         </SidebarHeader>
 
-        <SidebarContent className="px-3 py-4">
+        <SidebarContent className="shiro-scrollbar px-3 py-4">
           {NAV_GROUPS.map((group, index) => (
             <SidebarGroup key={group.key} className={index > 0 ? "mt-5" : undefined}>
               <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
@@ -267,12 +267,14 @@ export default function App() {
                 <div
                   role="status"
                   aria-live="polite"
-                  className="h-full w-full bg-background/40"
+                  className="h-full w-full rounded-[6px] bg-muted/30 shiro-loading-pulse"
                 />
               }
             >
               <ErrorBoundary resetKey={location.pathname}>
-                <Outlet />
+                <div key={location.pathname} className="shiro-page-enter flex-1 min-h-0 flex flex-col">
+                  <Outlet />
+                </div>
               </ErrorBoundary>
             </Suspense>
           </div>
