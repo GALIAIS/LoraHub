@@ -26,6 +26,7 @@ subprocess plumbing so the route handler stays thin and unit-testable.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -313,41 +314,64 @@ def _route_pip(python_path: Path, pip_args: list[str]) -> list[str]:
 
     First attempts ``<venv-python> -m pip``. If pip is not installed in
     the venv (typical for uv-managed envs) and a ``uv`` binary is on
-    PATH, swap to ``uv pip --python <venv-python> ...`` instead. That
-    keeps the user's mental model of typing pip while letting it work
-    on whatever venv shape the backend actually shipped.
+    PATH, swap to ``uv pip <subcommand> --python <venv-python> ...``.
+    Note ``--python`` is a flag on each ``uv pip`` *subcommand*, not on
+    ``uv pip`` itself, so it has to come after argv[0].
     """
     if _venv_has_pip(python_path):
         return [str(python_path), "-m", "pip", *pip_args]
-    uv_binary = shutil.which("uv")
+    uv_binary = _find_uv()
     if uv_binary is None:
         raise TerminalDenied(
-            "该 venv 未安装 pip，且 PATH 上找不到 uv。请先在该 venv 中执行 "
+            "该 venv 未安装 pip，且找不到 uv。请先在该 venv 中执行 "
             "`python -m ensurepip` 或安装 uv。"
         )
-    return [uv_binary, "pip", "--python", str(python_path), *pip_args]
+    if not pip_args:
+        # Bare `pip` with no subcommand — uv refuses; surface uv's own
+        # help to keep behaviour predictable.
+        return [uv_binary, "pip", "--help"]
+    sub, rest = pip_args[0], pip_args[1:]
+    return [uv_binary, "pip", sub, "--python", str(python_path), *rest]
 
 
 def _route_uv(python_path: Path | None, uv_args: list[str]) -> list[str]:
-    """Inject ``--python <venv>`` for ``uv pip`` when the user omitted it.
+    """Inject ``--python <venv>`` for ``uv pip <subcommand>`` invocations.
 
     Without this, ``uv pip install foo`` runs against whatever interpreter
     uv discovers (often the system one), which silently misses the user's
-    venv. We only inject when the user types ``uv pip ...`` (other uv
-    subcommands like ``uv venv`` / ``uv lock`` are left alone).
+    venv. We only inject when the user types ``uv pip <sub> ...`` (other
+    uv subcommands like ``uv venv`` / ``uv lock`` are left alone), and
+    place ``--python`` after the subcommand because that's where uv
+    actually expects it.
     """
-    uv_binary = shutil.which("uv")
+    uv_binary = _find_uv()
     if uv_binary is None:
-        raise TerminalDenied("PATH 上找不到 uv 可执行文件。")
+        raise TerminalDenied("找不到 uv 可执行文件。")
     if (
         python_path is not None
-        and len(uv_args) >= 1
+        and len(uv_args) >= 2
         and uv_args[0] == "pip"
         and "--python" not in uv_args
         and "-p" not in uv_args
     ):
-        return [uv_binary, "pip", "--python", str(python_path), *uv_args[1:]]
+        sub, rest = uv_args[1], uv_args[2:]
+        return [uv_binary, "pip", sub, "--python", str(python_path), *rest]
     return [uv_binary, *uv_args]
+
+
+def _find_uv() -> str | None:
+    """Locate the uv executable, preferring the project-local copy.
+
+    Hub's installer drops uv at ``.tools/uv/uv.exe`` (Windows) or
+    ``.tools/uv/uv``. Prefer that over PATH so a globally-installed
+    older uv doesn't shadow the bundled one. Falls back to ``shutil.which``
+    when the bundled copy isn't there (dev checkouts, fresh installs).
+    """
+    name = "uv.exe" if os.name == "nt" else "uv"
+    candidate = Path.cwd() / ".tools" / "uv" / name
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("uv")
 
 
 def _venv_has_pip(python_path: Path) -> bool:
