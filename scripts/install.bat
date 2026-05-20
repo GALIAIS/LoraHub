@@ -141,9 +141,36 @@ echo.
 
 rem ---- [3/6] Create virtual environment -----------------------------
 echo [3/6] Creating virtual environment .venv ...
+rem Detect a stale .venv whose pyvenv.cfg `home = ...` points at a
+rem Python that's no longer there (typical after we migrated from
+rem .tools/python/ to .lorahub/python/, or after the user manually
+rem deleted the runtime). If the base interpreter is gone, the venv
+rem itself is unusable — uv pip install --python .venv\... fails with
+rem "No virtual environment found". Wipe and rebuild from scratch.
+set "VENV_VALID="
 if exist ".venv\Scripts\python.exe" (
+  if exist ".venv\pyvenv.cfg" (
+    for /f "usebackq tokens=1,* delims==" %%a in (".venv\pyvenv.cfg") do (
+      if /i "%%~a"=="home " (
+        set "VENV_HOME=%%~b"
+      ) else if /i "%%~a"=="home" (
+        set "VENV_HOME=%%~b"
+      )
+    )
+    rem strip leading space from the value (cmd's tokenizer keeps it)
+    if defined VENV_HOME (
+      for /f "tokens=* delims= " %%h in ("!VENV_HOME!") do set "VENV_HOME=%%h"
+      if exist "!VENV_HOME!\python.exe" set "VENV_VALID=1"
+    )
+  )
+)
+if defined VENV_VALID (
   echo   OK .venv already exists
 ) else (
+  if exist ".venv" (
+    echo   stale .venv detected ^(home=!VENV_HOME!^); rebuilding
+    rmdir /s /q ".venv"
+  )
   "%UV%" venv .venv --python "%PY_EXE%"
   if errorlevel 1 (
     echo   [ERROR] Failed to create venv.

@@ -145,9 +145,23 @@ echo ""
 
 # ---- [3/6] Create virtual environment -------------------------------
 echo "[3/6] Creating virtual environment .venv ..."
-if [ -f ".venv/bin/python" ]; then
+# Detect a stale .venv whose pyvenv.cfg `home =` points at a Python
+# that's been removed (typical after the .tools -> .lorahub move).
+# uv pip install --python <stale-venv> fails with "No virtual
+# environment found", so we wipe and rebuild from scratch instead.
+_venv_valid() {
+    [ -f ".venv/bin/python" ] || return 1
+    local home
+    home=$(awk -F= '/^home[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' .venv/pyvenv.cfg 2>/dev/null)
+    [ -n "$home" ] && [ -x "$home/python" -o -x "$home/python3" -o -x "$home/python.exe" ]
+}
+if _venv_valid; then
     echo "  OK .venv already exists"
 else
+    if [ -d ".venv" ]; then
+        echo "  stale .venv detected; rebuilding"
+        rm -rf .venv
+    fi
     "$UV" venv .venv --python "$PY_EXE"
     echo "  OK .venv created"
 fi
