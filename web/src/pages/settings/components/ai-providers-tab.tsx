@@ -1020,6 +1020,13 @@ function RoutesPanel() {
     queryKey: ["ai-models"],
     queryFn: () => api.aiListModels(),
   })
+  // Bundled recommended system prompts keyed by task id. Empty result
+  // (e.g. no caption-shaped tasks recommended) is fine — buttons hide.
+  const recommended = useQuery({
+    queryKey: ["ai-recommended-prompts"],
+    queryFn: api.aiListRecommendedPrompts,
+    staleTime: 60 * 60 * 1000,
+  })
 
   const providerList = providers.data?.providers ?? []
   const routeMap = useMemo(() => {
@@ -1040,6 +1047,7 @@ function RoutesPanel() {
           route={routeMap.get(taskId) ?? null}
           providers={providerList}
           allModels={allModels.data?.models ?? []}
+          recommendedPrompt={recommended.data?.prompts?.[taskId]}
         />
       ))}
     </div>
@@ -1051,11 +1059,13 @@ function RouteRow({
   route,
   providers,
   allModels,
+  recommendedPrompt,
 }: {
   taskId: AITaskId
   route: AIRouteRecord | null
   providers: AIProviderRecord[]
   allModels: AIModelRecord[]
+  recommendedPrompt?: string
 }) {
   const qc = useQueryClient()
   const [providerId, setProviderId] = useState(route?.providerId ?? "")
@@ -1182,6 +1192,16 @@ function RouteRow({
             className="font-mono text-[12px] w-full rounded-[3px] border border-input bg-background/76 px-2 py-1.5"
             placeholder="可选 — 会作为 system 消息加在用户 prompt 之前"
           />
+          {recommendedPrompt && recommendedPrompt !== systemPrompt && (
+            <button
+              type="button"
+              onClick={() => setSystemPrompt(recommendedPrompt)}
+              className="text-[11px] text-primary hover:underline mt-1"
+              title="将 Anima 推荐 caption 模板填入此字段（点保存才会持久化）"
+            >
+              使用 Anima 推荐 prompt
+            </button>
+          )}
         </Field>
         <button
           type="button"

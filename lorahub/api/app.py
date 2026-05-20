@@ -128,6 +128,10 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         # `enabled=True` + null provider/model — the user picks them in
         # the routes panel. We don't overwrite existing rows.
         from lorahub.api.ai_store import AIRoute  # noqa: PLC0415
+        from lorahub.core.ai.prompts import (  # noqa: PLC0415
+            ANIMA_CAPTION_DEFAULT_TASKS,
+            ANIMA_CAPTION_PROMPT,
+        )
 
         _LORAHUB_TASKS: tuple[tuple[str, str], ...] = (
             ("global.default", "未单独配置的任务都走这里"),
@@ -141,12 +145,23 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         )
         for task_id, hint in _LORAHUB_TASKS:
             if _ai_store.get_route(task_id) is None:
+                # Caption-shaped tasks get the Anima recommended prompt
+                # as a starting point so a fresh install can run AI
+                # captioning end-to-end without the user hand-writing
+                # a prompt first. The "use recommended" button on the
+                # routes panel lets users restore this on existing
+                # rows, too.
+                seeded_prompt = (
+                    ANIMA_CAPTION_PROMPT
+                    if task_id in ANIMA_CAPTION_DEFAULT_TASKS
+                    else ""
+                )
                 _ai_store.upsert_route(
                     AIRoute(
                         task_id=task_id,
                         provider_id=None,
                         model_id=None,
-                        system_prompt="",
+                        system_prompt=seeded_prompt,
                         enabled=True,
                     )
                 )

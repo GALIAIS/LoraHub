@@ -866,6 +866,8 @@ export const api = {
       { method: "POST" },
     ),
   aiListRoutes: () => http<{ routes: AIRouteRecord[] }>("/ai/routes"),
+  aiListRecommendedPrompts: () =>
+    http<{ prompts: Record<string, string> }>("/ai/recommended-prompts"),
   aiSaveRoute: (draft: AIRouteDraft) =>
     http<{ route: AIRouteRecord }>("/ai/routes", {
       method: "PUT",

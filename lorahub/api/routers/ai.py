@@ -366,6 +366,26 @@ class RouteDraft(BaseModel):
     enabled: bool = True
 
 
+@router.get("/ai/recommended-prompts")
+def list_recommended_prompts() -> dict[str, Any]:
+    """Return the bundled recommended system_prompt templates by task.
+
+    The Settings → AI 路由 panel hits this so a "use recommended" button
+    can splice the suggested prompt into the right textarea without us
+    duplicating the body across the React bundle.
+    """
+    from lorahub.core.ai.prompts import (  # noqa: PLC0415
+        ANIMA_CAPTION_DEFAULT_TASKS,
+        ANIMA_CAPTION_PROMPT,
+    )
+
+    return {
+        "prompts": {
+            task_id: ANIMA_CAPTION_PROMPT for task_id in ANIMA_CAPTION_DEFAULT_TASKS
+        }
+    }
+
+
 @router.get("/ai/routes")
 def list_routes() -> dict[str, Any]:
     return {"routes": [_serialise_route(r) for r in _store().list_routes()]}
