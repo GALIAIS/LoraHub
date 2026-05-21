@@ -486,6 +486,24 @@ def apply(
         if progress is not None:
             progress(phase, level, message)
 
+    # Snapshot every file under ``configs/`` (tracked + untracked) so
+    # the upgrade leaves the user's training recipes untouched.  The
+    # repo still ships its own yaml here — they get overwritten in the
+    # working tree by the checkout, then we put the user's bytes back
+    # on top.  Net effect: ``git pull`` updates everything except
+    # configs/ (the user's slot).
+    configs_snapshot = _snapshot_dir(cwd, "configs", emit)
+    # If the user had local modifications to tracked configs/ files,
+    # git stash / git checkout would refuse with "your local changes
+    # would be overwritten by checkout".  Reset only configs/ to HEAD
+    # so the upcoming git ops see a clean tree there; the snapshot
+    # above already captured the user's bytes for restoration.
+    if configs_snapshot:
+        _stream_subprocess(
+            ["git", "checkout", "HEAD", "--", "configs"],
+            cwd=cwd, phase="git", emit=emit,
+        )
+
     # Force mode: nuke the working tree before doing anything else so
     # the rest of the flow runs against a known-clean checkout.
     # Destructive — only enter when the user explicitly opted in via
@@ -494,13 +512,14 @@ def apply(
     if force:
         emit(
             "git", "warn",
-            "force=True: discarding local changes (git reset --hard + clean -fd)",
+            "force=True: discarding local changes (git reset --hard + clean -fd); "
+            "configs/ is preserved by the snapshot/restore step",
         )
         _stream_subprocess(
             ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
         )
         _stream_subprocess(
-            ["git", "clean", "-fd"], cwd=cwd, phase="git", emit=emit,
+            ["git", "clean", "-fd", "-e", "configs"], cwd=cwd, phase="git", emit=emit,
         )
     elif _has_any_local_changes(cwd):
         # Stash + pop to preserve local edits across checkout. Cheap
@@ -553,6 +572,11 @@ def apply(
         msg = f"git checkout {target_ref} failed (exit {rc})"
         raise RuntimeError(msg)
 
+    # Restore the user's configs/ snapshot.  This overwrites whatever
+    # version of configs/ the new ref ships — the user's local copy
+    # always wins.  Idempotent / safe when the snapshot was empty.
+    _restore_dir(cwd, "configs", configs_snapshot, emit)
+
     # 3. Reinstall Python deps.
     emit("deps", "info", "reinstalling Python dependencies")
     py_cmd = _build_pip_command(cwd)
@@ -596,6 +620,61 @@ def _has_any_local_changes(cwd: Path) -> bool:
     stash gate where we want to preserve *every* modified path."""
     out = _git(["status", "--porcelain"], cwd=cwd)
     return out.returncode == 0 and bool(out.stdout.strip())
+
+
+def _snapshot_dir(
+    cwd: Path, rel: str, emit: ProgressCallback,
+) -> dict[str, bytes]:
+    """Capture every regular file under ``cwd/rel`` (recursive) into
+    ``{relpath: bytes}``.  Used to protect ``configs/`` across an
+    upgrade — the user's recipes win regardless of whether origin's
+    ref happens to ship a different version of the same path.
+
+    Empty when the directory doesn't exist.  Best-effort: read errors
+    log a warning and skip the file rather than aborting the upgrade.
+    """
+    root = cwd / rel
+    if not root.is_dir():
+        return {}
+    snapshot: dict[str, bytes] = {}
+    for full in root.rglob("*"):
+        if not full.is_file():
+            continue
+        try:
+            key = full.relative_to(cwd).as_posix()
+            snapshot[key] = full.read_bytes()
+        except OSError as exc:
+            emit("git", "warn", f"could not snapshot {full}: {exc}")
+    if snapshot:
+        emit(
+            "git", "info",
+            f"snapshotted {len(snapshot)} file(s) under {rel}/ for restore",
+        )
+    return snapshot
+
+
+def _restore_dir(
+    cwd: Path, rel: str, snapshot: dict[str, bytes], emit: ProgressCallback,
+) -> None:
+    """Write the snapshot back, overwriting whatever the checkout left.
+
+    Files the user had locally win over the new ref's version.  Files
+    the user didn't have but the new ref ships (e.g. a freshly added
+    official preset) are left in place — that's how new defaults reach
+    users.
+
+    Idempotent and safe to call when the snapshot is empty.
+    """
+    if not snapshot:
+        return
+    for key, body in snapshot.items():
+        full = cwd / key
+        try:
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_bytes(body)
+        except OSError as exc:
+            emit("git", "warn", f"could not restore {key}: {exc}")
+    emit("git", "info", f"restored {len(snapshot)} file(s) under {rel}/")
 
 
 def _resolve_latest_tag(cwd: Path) -> str | None:
