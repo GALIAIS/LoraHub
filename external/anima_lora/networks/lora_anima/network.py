@@ -264,6 +264,12 @@ class LoRANetwork(torch.nn.Module):
         multiplier: float = 1.0,
     ) -> None:
         super().__init__()
+        # Reset VeRA's class-level (A, B) shared pool before any module
+        # construction — otherwise a previous network's random matrices
+        # leak into this one when training fires twice in the same
+        # process (rare but happens in tests / GUI session).
+        from networks.lora_modules.vera import VeRAModule  # noqa: PLC0415
+        VeRAModule.reset_shared_pool()
         self.cfg = cfg
 
         # Mutable runtime state — explicitly NOT in cfg. ``set_multiplier`` and

@@ -213,3 +213,71 @@ def test_glora_vera_reject_conv2d():
         GLoRAModule("g_conv", org, lora_dim=2, alpha=2)
     with pytest.raises(ValueError, match="Conv2d"):
         VeRAModule("v_conv", org, lora_dim=2, alpha=2)
+
+
+def test_vera_shared_pool_reuses_ab_across_modules():
+    """Two VeRAModules wrapping same-shape Linears share one (A, B) pair."""
+    VeRAModule.reset_shared_pool()
+    torch.manual_seed(0)
+
+    org1 = _make_linear(8, 6, seed=20)
+    org2 = _make_linear(8, 6, seed=21)
+    m1 = VeRAModule("v_share_1", org1, lora_dim=4, alpha=4, share_pool=True)
+    m2 = VeRAModule("v_share_2", org2, lora_dim=4, alpha=4, share_pool=True)
+
+    # Same buffer storage — modifying one's A would mutate the other.
+    assert m1.vera_A.data_ptr() == m2.vera_A.data_ptr()
+    assert m1.vera_B.data_ptr() == m2.vera_B.data_ptr()
+    # Trainable scale vectors stay independent.
+    assert m1.vera_lambda_b is not m2.vera_lambda_b
+
+
+def test_vera_shared_pool_separates_by_shape():
+    """Different (in, out, rank) tuples don't share."""
+    VeRAModule.reset_shared_pool()
+    torch.manual_seed(0)
+
+    a = VeRAModule(
+        "v_shape_a", _make_linear(8, 6, seed=22), lora_dim=4, alpha=4,
+        share_pool=True,
+    )
+    b = VeRAModule(
+        "v_shape_b", _make_linear(10, 6, seed=23), lora_dim=4, alpha=4,
+        share_pool=True,
+    )
+    # Different in_dim → distinct pool entries.
+    assert a.vera_A.data_ptr() != b.vera_A.data_ptr()
+
+
+def test_vera_share_pool_off_gives_independent_ab():
+    """``share_pool=False`` falls back to per-Linear A/B (legacy path)."""
+    VeRAModule.reset_shared_pool()
+    torch.manual_seed(0)
+
+    a = VeRAModule(
+        "v_indep_a", _make_linear(8, 6, seed=24), lora_dim=4, alpha=4,
+        share_pool=False,
+    )
+    b = VeRAModule(
+        "v_indep_b", _make_linear(8, 6, seed=25), lora_dim=4, alpha=4,
+        share_pool=False,
+    )
+    assert a.vera_A.data_ptr() != b.vera_A.data_ptr()
+
+
+def test_vera_reset_shared_pool_clears_cache():
+    VeRAModule.reset_shared_pool()
+    a = VeRAModule(
+        "v_reset_a", _make_linear(8, 6, seed=26), lora_dim=4, alpha=4,
+        share_pool=True,
+    )
+    A_before = a.vera_A.detach().clone()
+    VeRAModule.reset_shared_pool()
+    b = VeRAModule(
+        "v_reset_b", _make_linear(8, 6, seed=27), lora_dim=4, alpha=4,
+        share_pool=True,
+    )
+    # Different memory now (pool was reset between constructions).
+    assert a.vera_A.data_ptr() != b.vera_A.data_ptr()
+    # And different values (re-randomised after reset).
+    assert not torch.allclose(A_before, b.vera_A)
