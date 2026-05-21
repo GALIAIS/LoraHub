@@ -204,9 +204,65 @@ def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _detect_dirty(cwd: Path) -> bool:
-    """``True`` iff the working tree has uncommitted changes."""
+    """``True`` iff the working tree has uncommitted changes the user
+    *cares about preserving across upgrade*.
+
+    Naive ``git status --porcelain`` returns every modified file,
+    which causes a routine "I edited my training config" to block
+    upgrade. We filter out paths the user is expected to mutate
+    locally:
+
+      * ``configs/`` — user's own training recipes
+      * ``runs/``, ``output/``, ``models/`` — runtime artefacts
+      * ``.env``, ``.env.local`` — local secrets / overrides
+      * ``external/anima_lora/uv.lock`` — anima locks itself
+
+    Anything still flagged after that filter is genuine "you edited
+    LoraHub source code" territory; the upgrade flow's stash-pop
+    cycle handles those non-conflicting cases automatically (see
+    ``apply()``), and the dirty flag exists mainly as a UI hint.
+    """
     out = _git(["status", "--porcelain"], cwd=cwd)
-    return out.returncode == 0 and bool(out.stdout.strip())
+    if out.returncode != 0:
+        return False
+    for raw in out.stdout.splitlines():
+        # Porcelain v1 format: ``XY <path>`` (status codes + space + path).
+        # Untracked rows look like ``?? <path>``.
+        line = raw.rstrip()
+        if len(line) < 4:
+            continue
+        path = line[3:].lstrip()
+        # Renames show as ``orig -> new``; pick the destination so the
+        # ignore filter applies to where the user expects to see it.
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[1]
+        path = path.strip('"')
+        if _is_user_owned_path(path):
+            continue
+        return True
+    return False
+
+
+_USER_OWNED_PREFIXES = (
+    "configs/",
+    "runs/",
+    "output/",
+    "models/",
+    "datasets/",
+    ".env",
+    "external/anima_lora/uv.lock",
+    "external/anima_lora/output/",
+    "external/anima_lora/post_image_dataset/",
+)
+
+
+def _is_user_owned_path(path: str) -> bool:
+    """Match against the curated ignore list for the dirty check."""
+    norm = path.replace("\\", "/")
+    for prefix in _USER_OWNED_PREFIXES:
+        if norm == prefix.rstrip("/") or norm.startswith(prefix):
+            return True
+    return False
 
 
 def _git_root() -> Path | None:
@@ -418,16 +474,28 @@ def apply(
     if cwd is None:
         msg = "this install is not a git checkout — `lorahub self update` is required."
         raise RuntimeError(msg)
-    if _detect_dirty(cwd):
-        msg = (
-            "working tree has uncommitted changes; commit or stash before updating "
-            "to avoid losing local edits."
-        )
-        raise RuntimeError(msg)
 
     def emit(phase: str, level: str, message: str) -> None:
         if progress is not None:
             progress(phase, level, message)
+
+    # Stash + pop to preserve local edits across checkout. We always
+    # try the stash, even when ``_detect_dirty`` says the tree is
+    # clean (cheap no-op when there's nothing to save), so that any
+    # filtered-but-still-modified files (e.g. a user-edited training
+    # config under ``configs/``) survive the upgrade transparently.
+    # Conflicts on pop fall through to a clear error so the user
+    # can resolve them rather than silently lose the change.
+    stash_active = False
+    if _has_any_local_changes(cwd):
+        emit("git", "info", "git stash --include-untracked (preserving local edits)")
+        rc = _stream_subprocess(
+            ["git", "stash", "push", "--include-untracked",
+             "-m", "lorahub-self-update"],
+            cwd=cwd, phase="git", emit=emit,
+        )
+        if rc == 0:
+            stash_active = True
 
     # 1. Fetch
     emit("git", "info", "git fetch --tags origin")
@@ -435,6 +503,8 @@ def apply(
         ["git", "fetch", "--tags", "--prune", "origin"], cwd=cwd, phase="git", emit=emit,
     )
     if rc != 0:
+        if stash_active:
+            _stream_subprocess(["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit)
         msg = f"git fetch failed (exit {rc})"
         raise RuntimeError(msg)
 
@@ -475,7 +545,29 @@ def apply(
                 msg = f"npm run build failed (exit {rc})"
                 raise RuntimeError(msg)
 
+    # 5. Pop stash if we created one. Conflicts on pop are surfaced
+    # but don't abort — the user can resolve them after the daemon
+    # restarts; the stash entry is preserved for git stash list.
+    if stash_active:
+        emit("git", "info", "git stash pop (restoring local edits)")
+        rc = _stream_subprocess(
+            ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
+        )
+        if rc != 0:
+            emit(
+                "git", "warn",
+                "stash pop reported conflicts — your local edits are still "
+                "in `git stash list`; resolve manually after this update.",
+            )
+
     emit("done", "info", "update applied")
+
+
+def _has_any_local_changes(cwd: Path) -> bool:
+    """Raw ``git status --porcelain`` check — no filter. Used by the
+    stash gate where we want to preserve *every* modified path."""
+    out = _git(["status", "--porcelain"], cwd=cwd)
+    return out.returncode == 0 and bool(out.stdout.strip())
 
 
 def _resolve_latest_tag(cwd: Path) -> str | None:

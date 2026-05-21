@@ -182,7 +182,7 @@ export function UpdateCard() {
                 工作树状态
               </span>
               <span className="text-amber-700 dark:text-amber-400 text-[12px]">
-                有未提交修改 — 请先提交或 stash 后再升级
+                检测到本地源码修改 — 升级时会自动 stash + pop,冲突需手动解决
               </span>
             </>
           )}
@@ -224,7 +224,7 @@ export function UpdateCard() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            disabled={running || !info?.update_available || info?.is_dirty}
+            disabled={running || !info?.update_available}
             onClick={runUpdate}
           >
             {running ? (
