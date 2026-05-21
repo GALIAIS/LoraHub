@@ -194,107 +194,125 @@ def update(
             help="Skip the frontend rebuild (faster; backend-only update).",
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Discard local changes (git reset --hard + clean -fd) before "
+                 "pulling. Same as the Settings UI's 'ignore conflicts' toggle.",
+        ),
+    ] = False,
 ) -> None:
-    """Pull the latest commits, reinstall deps, rebuild the SPA.
+    """Pull the latest commits from origin/main, reinstall deps, rebuild SPA.
 
-    Runs in this order:
-      1. ``git pull --ff-only``
-      2. ``uv pip install -e ".[api,dev]"`` (or ``pip install -e ...``)
-      3. ``cd web && npm install && npm run build`` (unless ``--skip-build``)
+    Goes through ``lorahub.api.system_update.apply(channel='main')`` so
+    the CLI behaves identically to the Settings → Update button:
 
-    After completion, prompt the user to ``lorahub service restart``
-    so the new code takes effect.
+      * ``configs/``, ``runs/``, ``output/``, ``models/``, ``datasets/``,
+        ``.env*`` and ``external/anima_lora/uv.lock`` are user-owned and
+        never block the upgrade.
+      * Other uncommitted edits get auto-stashed before checkout and
+        popped after. Conflicts on pop surface in ``git stash list`` so
+        the user can resolve them.
+
+    With ``--force``: skip the stash dance, ``git reset --hard`` + ``git
+    clean -fd`` first, then pull. Use when local edits aren't worth
+    preserving (the typical CI / VPS path after pushing from the dev box).
     """
-    from lorahub.core.paths import project_root  # noqa: PLC0415
+    from lorahub.api import system_update  # noqa: PLC0415
 
-    root = project_root()
-
-    console.print("[bold]1/3[/] git pull --ff-only")
-    rc = subprocess.run(  # noqa: S603, S607
-        ["git", "pull", "--ff-only"],
-        cwd=root,
-        check=False,
-    ).returncode
-    if rc != 0:
-        err_console.print("[red]git pull failed.[/] Resolve the conflict and retry.")
-        raise typer.Exit(code=rc)
-
-    console.print("[bold]2/3[/] reinstall Python deps")
-    py = sys.executable
-    uv_bin = _find_uv()
-    if uv_bin is not None:
-        rc = subprocess.run(  # noqa: S603
-            [str(uv_bin), "pip", "install", "-e", ".[api,dev]", "--python", py],
-            cwd=root,
-            check=False,
-        ).returncode
-    else:
-        rc = subprocess.run(  # noqa: S603
-            [py, "-m", "pip", "install", "-e", ".[api,dev]"],
-            cwd=root,
-            check=False,
-        ).returncode
-    if rc != 0:
-        err_console.print("[red]pip install failed.[/]")
-        raise typer.Exit(code=rc)
-
-    if skip_build:
-        console.print("[bold]3/3[/] [dim]skipping frontend rebuild (--skip-build)[/]")
-    else:
-        console.print("[bold]3/3[/] rebuild frontend")
-        npm = _find_npm(root)
-        if npm is None:
-            err_console.print(
-                "[yellow]npm not found. Skipping rebuild — run scripts/install.{sh,bat} "
-                "to install the portable Node toolchain.[/]"
-            )
+    def _emit(phase: str, level: str, message: str) -> None:
+        prefix = {
+            "git": "[blue]git[/]",
+            "deps": "[cyan]deps[/]",
+            "build": "[magenta]build[/]",
+            "done": "[green]done[/]",
+        }.get(phase, f"[dim]{phase}[/]")
+        if level == "warn":
+            err_console.print(f"{prefix} [yellow]{message}[/]")
+        elif level == "error":
+            err_console.print(f"{prefix} [red]{message}[/]")
         else:
-            web = root / "web"
-            rc = subprocess.run([str(npm), "install"], cwd=web, check=False).returncode  # noqa: S603
-            if rc != 0:
-                err_console.print("[red]npm install failed.[/]")
-                raise typer.Exit(code=rc)
-            rc = subprocess.run([str(npm), "run", "build"], cwd=web, check=False).returncode  # noqa: S603
-            if rc != 0:
-                err_console.print("[red]npm run build failed.[/]")
-                raise typer.Exit(code=rc)
+            console.print(f"{prefix} {message}")
+
+    try:
+        system_update.apply(
+            channel="main",
+            build=not skip_build,
+            progress=_emit,
+            force=force,
+        )
+    except RuntimeError as exc:
+        err_console.print(f"[red]update failed:[/] {exc}")
+        if not force:
+            err_console.print(
+                "[yellow]Hint:[/] retry with [bold]lorahub self update --force[/] "
+                "to discard local changes that block the merge."
+            )
+        raise typer.Exit(code=1) from None
 
     console.print("[green]update complete[/]")
     console.print("Restart the daemon: [bold]lorahub service restart[/]")
 
 
 @self_app.command()
-def upgrade() -> None:
+def upgrade(
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Discard local changes (git reset --hard + clean -fd) "
+                 "before checking out the latest tag.",
+        ),
+    ] = False,
+    skip_build: Annotated[
+        bool,
+        typer.Option(
+            "--skip-build",
+            help="Skip the SPA rebuild after checkout.",
+        ),
+    ] = False,
+) -> None:
     """Switch the working tree to the latest published release tag.
 
-    Looks for ``v*`` tags reachable from origin, picks the highest
-    semver, and ``git checkout``s it. Useful for users who want a
-    stable cut rather than ``main``.
+    Same flow as ``lorahub self update`` but checks out the highest
+    semver ``v*`` tag instead of ``origin/main``. Reuses the same
+    user-owned path filter + auto stash/pop machinery as the UI.
     """
-    from lorahub.core.paths import project_root  # noqa: PLC0415
+    from lorahub.api import system_update  # noqa: PLC0415
 
-    root = project_root()
+    def _emit(phase: str, level: str, message: str) -> None:
+        prefix = {
+            "git": "[blue]git[/]",
+            "deps": "[cyan]deps[/]",
+            "build": "[magenta]build[/]",
+            "done": "[green]done[/]",
+        }.get(phase, f"[dim]{phase}[/]")
+        if level == "warn":
+            err_console.print(f"{prefix} [yellow]{message}[/]")
+        elif level == "error":
+            err_console.print(f"{prefix} [red]{message}[/]")
+        else:
+            console.print(f"{prefix} {message}")
 
-    subprocess.run(["git", "fetch", "--tags", "origin"], cwd=root, check=False)  # noqa: S603, S607
-    out = subprocess.run(  # noqa: S603, S607
-        ["git", "tag", "-l", "v*", "--sort=-v:refname"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    ).stdout
-    tags = [t.strip() for t in out.splitlines() if t.strip()]
-    if not tags:
-        err_console.print("[red]no v* tags found.[/] Use `lorahub self update` to pull main.")
-        raise typer.Exit(code=1)
-    latest = tags[0]
-    console.print(f"latest tag: [bold]{latest}[/]")
-    rc = subprocess.run(["git", "checkout", latest], cwd=root, check=False).returncode  # noqa: S603, S607
-    if rc != 0:
-        err_console.print("[red]git checkout failed.[/] Stash or commit local changes first.")
-        raise typer.Exit(code=rc)
-    console.print(f"[green]switched to {latest}[/]")
-    console.print("Run [bold]lorahub self update --skip-build && lorahub build[/] to refresh deps.")
+    try:
+        system_update.apply(
+            channel="tag",
+            build=not skip_build,
+            progress=_emit,
+            force=force,
+        )
+    except RuntimeError as exc:
+        err_console.print(f"[red]upgrade failed:[/] {exc}")
+        if not force:
+            err_console.print(
+                "[yellow]Hint:[/] retry with [bold]lorahub self upgrade --force[/] "
+                "to discard local changes."
+            )
+        raise typer.Exit(code=1) from None
+
+    console.print("[green]upgrade complete[/]")
+    console.print("Restart the daemon: [bold]lorahub service restart[/]")
 
 
 @self_app.command()
