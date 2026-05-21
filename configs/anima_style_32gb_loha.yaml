@@ -1,0 +1,176 @@
+# Anima style LoRA on the anima_lora backend — 32GB VPS recipe.
+#
+# Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
+# Expected throughput: ~1.2-1.8 s/step (LoHA is ~20% slower than DoRA at the
+# same rank — two LoRA pairs per Linear instead of one).
+# Expected VRAM peak: ~24-27 GB.
+#
+# What separates this from anima_character_32gb_dora.yaml:
+#   - algorithm = loha (Hadamard product; effective rank up to r²)
+#   - dataset has wider AR range and heavier caption dropout
+#   - more epochs (style needs more variety per image than character)
+#   - optimizer with slightly higher lr (style trains faster than identity)
+#
+# Style training intuition:
+#   1. Caption dropRate 0.15-0.20 → push the network to represent style
+#      *outside* any caption, so it generalises to prompts you never tagged
+#   2. numRepeats 3-4 → don't burn the same 100 images into the network 8
+#      times per epoch; let it see fresh variety
+#   3. LoHA at r=16 → effective rank ~256, plenty for multi-scale texture /
+#      colour / brush coupling that pure LoRA can't fit at the same params
+
+schemaVersion: "1.0"
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 1024
+
+dataset:
+  source: ./datasets/your_style
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    # Style datasets mix portraits / landscapes / scenes — wider AR
+    # range than the character recipe.
+    min: 512
+    max: 1664
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    # Heavier dropRate than character — style should bleed across prompts.
+    dropRate: 0.18
+    keepTokens: 1
+  # 3 repeats × 200 imgs × 10 epochs / (batch 2 × accum 4) ≈ 750 steps.
+  # ~15 minutes wall-clock at 1.5 s/step. Style benefits from variety
+  # over repetition; if your dataset is small (<100 imgs) bump
+  # numRepeats to 4-5.
+  numRepeats: 3
+
+schedule:
+  epochs: 10
+  batchSize: 2
+  gradAccum: 4
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+gradientCheckpointing: false
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  enabled: true
+  everyNEpochs: 2
+  atFirst: false
+  resolution: [1024, 1024]
+  seed: 42
+
+output:
+  name: style_anima_32gb
+  saveEveryNEpochs: 2
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  animaLora:
+    method: lora
+    preset: default
+    outputName: style_anima_32gb
+
+    # Algorithm: LoHA — same choice as the 8GB recipe, scaled up.
+    # Effective rank is ``r²`` so r=16 here is comparable in expressive
+    # power to a r≈256 plain LoRA, at 32 × the parameter cost (vs r=16
+    # plain LoRA).
+    lora:
+      algorithm: loha
+      # T-LoRA mask is a no-op for LoHA (atomic decomposition owns the
+      # full ΔW); explicit off for clarity.
+      useTimestepMask: false
+
+    # Network sizing. r=16 here gives effective rank up to 256 via the
+    # Hadamard product. Going higher quickly hits OOM at 1024² because
+    # LoHA stores 4 matrices per Linear (vs LoRA's 2).
+    networkDim: 16
+    networkAlpha: 16.0
+    networkTrainUnetOnly: true
+
+    optimizerType: AdamW
+    lrScheduler: cosine
+    # Slightly higher than character — style converges faster because
+    # the gradient signal is denser (every image carries the same style
+    # signal vs character training where only a few images carry the
+    # specific identity feature).
+    learningRate: 7.0e-05
+    maxTrainEpochs: 10
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.18
+
+    # Flow-matching sampling.
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    # Caching — full fanout.
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    vaeChunkSize: 64
+
+    # Attention.
+    attnMode: torch
+
+    # COMPILE — same fast path as character. cudagraph_trees + LoHA's
+    # forward (two matmul pairs + Hadamard) compiles fine; the
+    # per-step kernel count is higher than DoRA so the % wins from
+    # compilation are if anything bigger here.
+    compileMode: blocks
+    compileInductorMode: reduce-overhead
+    torchCompile: true
+    useCustomDownAutograd: true
+
+    # Memory / offload — all OFF.
+    blocksToSwap: 0
+    gradientCheckpointing: false
+    unslothOffloadCheckpointing: false
+    cpuOffloadCheckpointing: false
+    mixedPrecision: bf16
+
+    # Training stabilisers. Same default as character: EMA off to
+    # preserve cudagraph_trees throughput, nan_guard on.
+    ema: false
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    # Per-epoch contact-sheet of sample previews. Lets you eyeball
+    # style emergence over the run remotely.
+    sampleGrid: true
+
+    # Validation. Style-eval CMMD has more variance than character but
+    # still gives a useful signal at 16 held-out images.
+    useCmmd: true
+    validationSplitNum: 16
+    validationSeed: 42
+
+    # Output / save.
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 2
+    keepTokens: 1
+    captionExtension: .txt
+    enableBucket: true
+    pathPattern: '*'

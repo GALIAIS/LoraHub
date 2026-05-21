@@ -1,0 +1,207 @@
+# Anima character LoRA on the anima_lora backend — 32GB VPS recipe.
+#
+# Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
+# Expected throughput: ~1.0-1.5 s/step (vs ~6-12 s/step on the 8GB config).
+# Expected VRAM peak: ~22-25 GB (leaves ~7 GB headroom for sample / validation).
+#
+# Trade-offs vs anima_character_8gb_dora.yaml (the same algorithm tuned for
+# the opposite hardware budget):
+#   - resolution 1024² (full anima native; 4096 tokens) instead of 768²
+#   - blocks_to_swap = 0 (every DiT block on GPU; saves CPU↔GPU H2D bandwidth)
+#   - gradient_checkpointing OFF (activations stay resident, no recompute)
+#   - compile_inductor_mode = reduce-overhead (cudagraph_trees fast path)
+#   - network_dim 32 (4x the 8GB recipe; richer identity features)
+#   - validation enabled with 16 held-out samples (CMMD-style live signal)
+#   - sampling enabled (1024² generation fits at this VRAM scale)
+#
+# What we explicitly didn't enable (and why):
+#   - EMA off — cudagraph_trees + EMA collide (input-tensor liveness check
+#     fails mid-step). The compiler force-overrides inductor mode to
+#     default if you flip ema: true, which costs ~10-15% throughput. Make
+#     the call: long-running runs + want shadow weights → ema: true; want
+#     wallclock → leave off.
+#   - flash-attn off — torch SDPA is universally available; switch to
+#     ``attnMode: flash`` only after verifying flash-attn 2 wheels match
+#     your CUDA version (the install-cn / install scripts don't pin it).
+#
+# Tuning knobs to know:
+#   - VRAM peak above 28 GB on your card → drop networkDim 32 → 24
+#   - Want bigger effective batch → batchSize 4 + gradAccum 1 (peak ~28 GB)
+#   - Want absolute fastest, no shadow weights → leave EMA off (default)
+#   - Want EMA shadow → ema: true (compiler auto-sets inductor=default)
+
+schemaVersion: "1.0"
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    # 1024 cap matches anima's training-time T5/Qwen3 max length —
+    # past this the cached TE outputs grow but the model can't use it.
+    qwen3MaxTokenLength: 1024
+
+dataset:
+  source: ./datasets/your_character
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    # Wider AR than the 8GB recipe — 32GB easily fits the longer-edge
+    # buckets and bucket count is no longer constrained by VRAM.
+    min: 512
+    max: 1536
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    dropRate: 0.05
+    keepTokens: 1
+  # 4 repeats × ~50 imgs × 8 epochs / (batch 2 × accum 4) ≈ 200 steps.
+  # ~5 minutes wall-clock at 1.5 s/step. The schedule below pushes 12
+  # epochs because we have the throughput headroom; on 24GB+ training
+  # 200-400 step runs are the sweet spot for character LoRA.
+  numRepeats: 4
+
+schedule:
+  epochs: 12
+  # batchSize 2 doubles per-step compute and roughly doubles VRAM —
+  # 32GB has the room. gradAccum keeps effective batch at 8 (the value
+  # AdamW8bit was tuned for in the 8GB recipe; AdamW fp32 here is fine
+  # at the same effective batch).
+  batchSize: 2
+  gradAccum: 4
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+# OFF — 32GB doesn't need to recompute activations. Drop ~15% step time
+# vs the 8GB recipe's ckpt-on path.
+gradientCheckpointing: false
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  # 1024² sampling fits comfortably at 32GB. Disable in long automated
+  # runs if you don't watch the previews.
+  enabled: true
+  everyNEpochs: 2
+  atFirst: false
+  resolution: [1024, 1024]
+  seed: 42
+
+output:
+  name: character_anima_32gb
+  saveEveryNEpochs: 2
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  animaLora:
+    method: lora
+    preset: default
+    outputName: character_anima_32gb
+
+    # Algorithm: DoRA — same choice as the 8GB recipe. Identity-scale
+    # capture via the magnitude column composes with the higher rank /
+    # bigger batch we run here.
+    lora:
+      algorithm: dora
+      useTimestepMask: true
+      minRank: 8
+      alphaRankScale: 1.0
+
+    # Network sizing — 4x the 8GB recipe. Headroom on 32GB lets the
+    # network represent finer detail without hurting batch parallelism.
+    networkDim: 32
+    networkAlpha: 32.0
+    networkTrainUnetOnly: true
+
+    # Optimizer — full fp32 AdamW. AdamW8bit was an 8GB necessity, not
+    # a quality choice; on 32GB the extra 0.5 GB optimizer state is
+    # well below the headroom budget and we get cleaner gradients.
+    optimizerType: AdamW
+    lrScheduler: cosine
+    learningRate: 5.0e-05
+    maxTrainEpochs: 12
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.05
+
+    # Flow-matching sampling.
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    # Caching — full fanout. Disk is plentiful on a VPS so we cache
+    # everything we can and do every per-image step in pre-computed
+    # space.
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    # 64 — match anima's base.toml. The 8GB recipe set this to 1 to fit
+    # cache-time VRAM; we have no such constraint here.
+    vaeChunkSize: 64
+
+    # Attention. ``torch`` (PyTorch SDPA) is universal and gives ~85-95%
+    # of flash-attn throughput on Ampere+. Switch to ``flash`` only when
+    # flash-attn 2 wheels match your CUDA build.
+    attnMode: torch
+
+    # COMPILE — the single biggest throughput win on 32GB.
+    # ``reduce-overhead`` enables cudagraph_trees which fuses the entire
+    # static-shape graph and skips the per-step Python overhead. This is
+    # *incompatible with EMA* (cudagraph liveness check fails when the
+    # shadow buffer touches LoRA params); see the EMA toggle below.
+    compileMode: blocks
+    compileInductorMode: reduce-overhead
+    torchCompile: true
+    # Saves ~32-128 MiB / Linear of fp32 activation (we keep bf16 x for
+    # backward instead of upcasting to fp32). Bitwise-equal grads.
+    useCustomDownAutograd: true
+
+    # Memory / offload — all OFF, this is what 32GB buys us.
+    blocksToSwap: 0
+    gradientCheckpointing: false
+    unslothOffloadCheckpointing: false
+    cpuOffloadCheckpointing: false
+    mixedPrecision: bf16
+
+    # Training stabilisers.
+    # EMA off by default to keep the cudagraph_trees fast path. Flip to
+    # true if you want shadow weights for inference; the LoraHub compiler
+    # will force compileInductorMode → default automatically (warning logged).
+    ema: false
+    # nan_guard is cheap regardless of compile mode — keeps long runs
+    # alive through the occasional bf16 numerical hiccup.
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    # Sample composite. With sampling enabled above, this writes a
+    # contact-sheet PNG per epoch — useful when monitoring a long
+    # multi-hour run remotely.
+    sampleGrid: true
+
+    # Validation — held-out CMMD signal at 1024² is a luxury we can
+    # afford on 32GB. If you don't have spare images, set to 0.
+    useCmmd: true
+    validationSplitNum: 16
+    validationSeed: 42
+
+    # Output / save.
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 2
+    keepTokens: 1
+    captionExtension: .txt
+    enableBucket: true
+    pathPattern: '*'
