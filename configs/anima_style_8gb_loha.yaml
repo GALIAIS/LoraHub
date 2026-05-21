@@ -1,131 +1,152 @@
-# Anima style LoRA on the anima_lora backend — 8GB notebook recipe.
-#
-# Target hardware: RTX 3060 / 3070 / 4060 / 4070 mobile (8 GB VRAM, 16-32 GB RAM).
-# Expected throughput: ~7-12 s/step.
-# Expected VRAM peak: ~7.0-7.5 GB.
-#
-# Style training differs from character training in three ways and the
-# config below picks knobs accordingly:
-#   1. Lower per-image weight  → higher dropRate, fewer numRepeats, more variety
-#   2. Wider AR distribution    → bucket min/max widened (style sees portraits +
-#                                 landscapes + scenes, not just standing figures)
-#   3. Algorithm = LoHA         → Hadamard product gives effective rank up to r²
-#                                 at twice a LoRA's parameter count, which lets
-#                                 the network capture multi-scale texture / brush /
-#                                 colour relations a pure rank-r delta can't fit
-#
-# Tuning knobs to know:
-#   - OOM during forward     → blocks_to_swap += 4 (max 26 for Anima)
-#   - Style is too weak      → caption.dropRate += 0.05 (push the network to
-#                              represent the style outside any caption)
-#   - Style overfits to a few images → numRepeats -= 1, increase epochs
-#   - Slow throughput        → drop blocks_to_swap to 20 if you have any
-#                              spare VRAM (e.g. closed all other apps)
-
-schemaVersion: "1.0"
-
+schemaVersion: '1.0'
 baseModel:
   arch: anima
-  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archVariant: ''
+  checkpoint: models\circlestone-labs__Anima\anima-base-v1.0.safetensors
   archPaths:
-    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
-    ae: ./models/vae/qwen_image_vae.safetensors
+    ae: models\circlestone-labs__Anima\qwen_image_vae.safetensors
+    qwen3: models\circlestone-labs__Anima\qwen_3_06b_base.safetensors
     qwen3MaxTokenLength: 384
-
+    applyT5AttnMask: false
+    applyLgAttnMask: false
+    t5DropoutRate: 0.0
+    clipLDropoutRate: 0.0
+    clipGDropoutRate: 0.0
+    posEmbRandomCropRate: 0.0
+    enableScaledPosEmbed: false
+    vaeDisableCache: false
+    textEncoderCpu: false
 dataset:
-  # Edit to your style dataset path. Style datasets are typically 50-300
-  # images of varied composition; smart-caption them with descriptive tags
-  # (avoid character-identity tags) so the LoRA learns aesthetic, not faces.
-  source: ./datasets/your_style
-  resolution: [768, 768]
+  source: datasets\thornsdance
+  resolution:
+  - 768
+  - 768
   bucket:
     enabled: true
-    # Wider AR range than character — style images vary in composition.
     min: 384
     max: 1280
     step: 64
+    noUpscale: false
+    skipImageResolution: false
   caption:
     strategy: tag_file
     ext: .txt
     shuffle: true
-    # Heavier dropRate than character — style should generalise to captions
-    # it has never seen, so push the network to represent style implicitly.
     dropRate: 0.15
+    dropoutEveryNEpochs: 0
+    tagDropoutRate: 0.0
     keepTokens: 1
-  # 4 repeats × 100 imgs / batch 1 / accum 8 / 8 epochs ≈ 400 steps.
-  # Style needs more variety than character; raising numRepeats above 4
-  # collapses what the network sees into the same few images per epoch.
+    dropTokens: []
+    enableWildcard: false
+    weighted: false
+    shuffleTags: false
   numRepeats: 4
-
+  valSplit: 0.0
+  subsets: []
+  frameBuckets:
+  - 1
+network:
+  type: lora
+  rank: 32
+  alpha: 16
+  targetUnet: true
+  targetTextEncoder: false
+  networkDropout: 0.0
+  rankDropout: 0.0
+  moduleDropout: 0.0
+  baseWeights: []
+  baseWeightsMultiplier: []
+  fuseAdapters: []
+optimizer:
+  type: adamw8bit
+  lr:
+    unet: 0.0001
+    textEncoder: 5.0e-05
+  schedule: cosine_with_restarts
+  warmupSteps: 100
+  betas:
+  - 0.9
+  - 0.999
+  weightDecay: 0.0
+  eps: 1.0e-08
+  optimizerArgs: {}
+  maxGradNorm: 1.0
+  schedulerArgs: {}
+  schedulerNumCycles: 1
+  schedulerPower: 1.0
+  gradientRelease: false
+loss:
+  noiseOffset: 0.0
+  noiseOffsetRandomStrength: false
+  multiresNoiseDiscount: 0.3
+  ipNoiseGammaRandomStrength: false
+  zeroTerminalSnr: false
+  priorLossWeight: 1.0
+  lossType: l2
+  debiasedEstimation: false
+  maskedLoss: false
+  scaleVPredLossLikeNoisePred: false
+  vParameterization: false
+flowMatch: {}
 schedule:
   epochs: 8
   batchSize: 1
   gradAccum: 8
   seed: 42
-  maxSteps: null
-
 precision: bf16
 gradientCheckpointing: true
 cacheLatents: true
 cacheLatentsToDisk: true
 skipCacheCheck: true
-
+cacheInfo: false
+trainInpainting: false
 sampling:
   enabled: false
-
+  everyNEpochs: 1
+  atFirst: false
+  resolution:
+  - 1024
+  - 1024
+  seed: 42
+  enableLiveInference: false
+  inferenceSteps: 24
+  inferenceCfg: 5.0
 output:
   name: style_anima_8gb
   saveEveryNEpochs: 2
   saveDtype: bf16
-
+  noMetadata: false
+  metadata: {}
 backend:
   type: anima_lora
+  extraArgs: {}
   animaLora:
     method: lora
     preset: low_vram
     outputName: style_anima_8gb
-
-    # Algorithm: LoHA — two LoRA pairs whose products are element-wise
-    # multiplied. Effective rank up to r² (Hadamard), parameter count is 2x
-    # plain LoRA. For style work this is exactly the right shape — multi-
-    # scale brush / texture / colour relations need cross-rank coupling
-    # that a single (B·A) can't express.
-    lora:
-      algorithm: loha
-      # T-LoRA timestep mask is a no-op for atomic decompositions; left
-      # off here for clarity (the LoraHub compiler ignores it on loha
-      # anyway).
-      useTimestepMask: false
-
-    # Smaller dim than character — style is a low-rank signal in W-space,
-    # putting more capacity into LoHA's Hadamard structure pays off more
-    # than a higher rank.
+    networkModule: networks.lora_anima
     networkDim: 8
     networkAlpha: 8.0
     networkTrainUnetOnly: true
-
     optimizerType: AdamW8bit
     lrScheduler: cosine
-    # Slightly higher than character — style needs faster convergence
-    # because we have fewer effective steps per image.
     learningRate: 7.0e-05
     maxTrainEpochs: 8
     saveEveryNEpochs: 2
     checkpointingEpochs: 2
     captionDropoutRate: 0.15
-
-    # Flow-matching sampling.
     timestepSampling: sigmoid
     sigmoidScale: 1.0
     discreteFlowShift: 1.0
-    # Min-SNR-γ over rectified flow — particularly helpful for style
-    # because heavy noise steps are where colour palette / global tone
-    # gets locked in, and γ-weighting gives them their fair share of the
-    # gradient budget on small datasets.
     weightingScheme: min_snr_rf
     minSnrGamma: 5.0
-
-    # Caching.
+    ema: true
+    emaDecay: 0.999
+    emaUseNumUpdates: true
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+    sampleGrid: false
     cacheLatents: true
     cacheLatentsToDisk: true
     cacheTextEncoderOutputs: true
@@ -134,31 +155,27 @@ backend:
     useShuffledCaptionVariants: true
     staticTokenCount: 4096
     vaeChunkSize: 1
-
-    # Attention.
+    vaeDisableCache: false
+    noHalfVae: false
     attnMode: torch
-    compileMode: null
+    xformers: false
+    splitAttn: false
     compileInductorMode: default
-    torchCompile: false
-
-    # Memory / offload.
+    useCustomDownAutograd: true
     blocksToSwap: 24
     gradientCheckpointing: true
     unslothOffloadCheckpointing: true
-    cpuOffloadCheckpointing: true
+    # cpu_offload_checkpointing is mutually exclusive with blocks_to_swap
+    # in anima_lora's train.py — keep blocks_to_swap, drop this.
+    cpuOffloadCheckpointing: false
     mixedPrecision: bf16
-
-    # Training stabilisers.
-    ema: true
-    # Slightly lower decay than character — style trains for fewer effective
-    # steps relative to dataset size, so the EMA shadow tracks faster.
-    emaDecay: 0.999
-    emaUseNumUpdates: true
-    nanGuard: true
-    nanGuardRecover: true
-    nanGuardMaxConsecutive: 5
-
-    # Output.
+    useCmmd: false
+    maskedLoss: true
+    torchCompile: false
+    skipCacheCheck: true
+    dataloaderPinMemory: true
+    persistentDataLoaderWorkers: false
+    trimCrossattnKv: false
     saveModelAs: safetensors
     savePrecision: bf16
     logEveryNSteps: 5
@@ -167,3 +184,47 @@ backend:
     validationSplitNum: 0
     enableBucket: true
     pathPattern: '*'
+    lora:
+      algorithm: loha
+      lokrFactor: 8
+      boftFactors: 4
+      useTimestepMask: false
+      minRank: 8
+      alphaRankScale: 1.0
+resume:
+  saveState: true
+  saveStateAtEnd: true
+  skipUntilInitialStep: false
+validation:
+  everyNEpochs: 1
+attention:
+  training: auto
+  split: false
+optimization:
+  torchCompile: false
+  fusedBackwardPass: false
+  fullBf16: false
+  fullFp16: false
+  blocksToSwap: 0
+  fp8Base: false
+  fp8BaseUnet: false
+  fp8Scaled: false
+  fp8VlTextEncoder: false
+  lowram: false
+  highvram: false
+  noHalfVae: false
+  disableMmapLoadSafetensors: false
+  cpuOffloadCheckpointing: false
+  unslothOffloadCheckpointing: false
+  cacheTextEncoderOutputs: false
+  cacheTextEncoderOutputsToDisk: false
+dataloader:
+  numWorkers: 8
+  persistentWorkers: false
+  vaeBatchSize: 1
+  cacheShuffleNum: 0
+augmentation:
+  flip: false
+  color: false
+  randomCrop: false
+  alphaMask: false

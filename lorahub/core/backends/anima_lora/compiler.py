@@ -296,25 +296,44 @@ def _check_ema_compile_conflict(
 
 
 def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
-    """``compile_mode = 'full'`` is incompatible with checkpointing / swap.
+    """Reject combos anima_lora's ``train.py`` asserts against at startup.
 
-    Documented in upstream's `CLAUDE.md`. Raise at compile time so the
-    user sees the conflict instead of an opaque torch.compile error.
+    Catching these at compile time turns an opaque mid-launch crash
+    into a structured error the UI can render before the user waits
+    through model load + dataset cache.
+
+    Constraints enforced:
+
+      * ``compile_mode='full'`` is incompatible with grad
+        checkpointing / unsloth offload / ``blocks_to_swap > 0``
+        (upstream's CLAUDE.md).
+      * ``blocks_to_swap > 0`` is incompatible with
+        ``cpu_offload_checkpointing=true``
+        (``train.py:326`` AssertionError).
     """
-    if opts.compile_mode != "full":
-        return
     bad: list[str] = []
-    if opts.gradient_checkpointing:
-        bad.append("gradient_checkpointing=true")
-    if opts.unsloth_offload_checkpointing:
-        bad.append("unsloth_offload_checkpointing=true")
-    if opts.blocks_to_swap > 0:
-        bad.append(f"blocks_to_swap={opts.blocks_to_swap}")
-    if bad:
+    if opts.compile_mode == "full":
+        if opts.gradient_checkpointing:
+            bad.append("gradient_checkpointing=true")
+        if opts.unsloth_offload_checkpointing:
+            bad.append("unsloth_offload_checkpointing=true")
+        if opts.blocks_to_swap > 0:
+            bad.append(f"blocks_to_swap={opts.blocks_to_swap}")
+        if bad:
+            msg = (
+                f"compile_mode='full' is incompatible with: {', '.join(bad)}. "
+                "Either drop compile_mode (set to None or 'blocks') or disable "
+                "the conflicting offload knobs."
+            )
+            raise CompilationError(msg)
+
+    if opts.blocks_to_swap > 0 and opts.cpu_offload_checkpointing:
         msg = (
-            f"compile_mode='full' is incompatible with: {', '.join(bad)}. "
-            "Either drop compile_mode (set to None or 'blocks') or disable "
-            "the conflicting offload knobs."
+            f"blocks_to_swap={opts.blocks_to_swap} is incompatible with "
+            "cpu_offload_checkpointing=true (anima_lora train.py:326). "
+            "Pick one: keep blocks_to_swap (the bigger memory win) and "
+            "set cpu_offload_checkpointing=false, or vice versa. "
+            "unsloth_offload_checkpointing composes with blocks_to_swap."
         )
         raise CompilationError(msg)
 

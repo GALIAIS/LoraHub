@@ -280,6 +280,36 @@ def test_compile_blocks_with_gradient_checkpointing_allowed(tmp_path: Path) -> N
     assert "--gradient_checkpointing" in pairs
 
 
+def test_blocks_to_swap_with_cpu_offload_checkpointing_rejected(
+    tmp_path: Path,
+) -> None:
+    """anima_lora train.py:326 asserts these two are mutually exclusive.
+
+    Catching it at compile time turns a startup-after-cache crash into
+    a structured error before the trainer ever spawns.
+    """
+    opts = AnimaLoraOptions(
+        blocks_to_swap=24,
+        cpu_offload_checkpointing=True,
+    )
+    cfg = _recipe(tmp_path, opts)
+    with pytest.raises(CompilationError, match="cpu_offload_checkpointing"):
+        compile_config(cfg, tmp_path / "ws")
+
+
+def test_blocks_to_swap_with_unsloth_offload_allowed(tmp_path: Path) -> None:
+    """``unsloth_offload_checkpointing`` composes with blocks_to_swap (the 8GB recipe)."""
+    opts = AnimaLoraOptions(
+        blocks_to_swap=24,
+        unsloth_offload_checkpointing=True,
+        cpu_offload_checkpointing=False,
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "--blocks_to_swap" in argv
+    assert "--unsloth_offload_checkpointing" in argv
+
+
 # --------------------------------------------------------------------------- #
 # Output dir + output name
 # --------------------------------------------------------------------------- #

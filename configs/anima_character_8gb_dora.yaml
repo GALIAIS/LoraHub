@@ -155,10 +155,15 @@ backend:
     torchCompile: false
 
     # Memory / offload (the actual work).
+    # NOTE: blocks_to_swap is mutually exclusive with
+    # cpu_offload_checkpointing in anima_lora's train.py (asserts at
+    # startup). We pick blocks_to_swap because it's the bigger win at
+    # 8 GB; unsloth_offload_checkpointing still composes with it and
+    # delivers most of the activation-offload benefit.
     blocksToSwap: 24              # 24/28 DiT blocks live on CPU; ~5.5 GB freed
     gradientCheckpointing: true
     unslothOffloadCheckpointing: true
-    cpuOffloadCheckpointing: true
+    cpuOffloadCheckpointing: false
     mixedPrecision: bf16
 
     # Training stabilisers (cheap on 8 GB; pay back on long laptop sessions).
