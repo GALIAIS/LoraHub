@@ -157,6 +157,11 @@ class _UpdateRequest(BaseModel):
     channel: Literal["main", "tag"] = "tag"
     build: bool = True
     restart: bool = True
+    # Destructive: when True, ``git reset --hard`` + ``git clean -fd``
+    # blow away local changes before checkout. The UI guards this
+    # behind an explicit confirm dialog; the API itself stays cheap
+    # and stateless and trusts the caller's intent.
+    force: bool = False
 
 
 @router.post("/system/update")
@@ -191,6 +196,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 channel=req.channel,
                 build=req.build,
                 progress=emit,
+                force=req.force,
             )
         except Exception as exc:  # noqa: BLE001
             emit("error", "error", f"{type(exc).__name__}: {exc}")

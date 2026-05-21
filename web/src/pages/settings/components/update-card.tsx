@@ -29,6 +29,16 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Card,
   CardContent,
   CardDescription,
@@ -58,6 +68,14 @@ export function UpdateCard() {
   const version = useSystemVersion(channel)
   const [restart, setRestart] = useState(true)
   const [build, setBuild] = useState(true)
+  // ``force`` discards local changes (git reset --hard + clean -fd)
+  // before checkout. Destructive — guarded by the AlertDialog below.
+  const [force, setForce] = useState(false)
+  // Two-phase confirm: when force is on, the apply button instead
+  // pops a dialog asking the user to acknowledge what they're about
+  // to lose. Cancel rolls force back to false; confirm runs the
+  // upgrade.
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [events, setEvents] = useState<UpdateEvent[]>([])
   const [running, setRunning] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -84,7 +102,7 @@ export function UpdateCard() {
     abortRef.current = ac
     try {
       await api.applySystemUpdate(
-        { channel, build, restart },
+        { channel, build, restart, force },
         (ev) => setEvents((prev) => [...prev, ev]),
         ac.signal,
       )
@@ -99,6 +117,17 @@ export function UpdateCard() {
       abortRef.current = null
       qc.invalidateQueries({ queryKey: ["system-version"] })
     }
+  }
+
+  // Apply-button click: force=on sends the user through the
+  // destructive-confirm dialog first; force=off goes straight to
+  // runUpdate. The dialog's Confirm calls runUpdate after closing.
+  const onApplyClick = () => {
+    if (force) {
+      setConfirmOpen(true)
+      return
+    }
+    void runUpdate()
   }
 
   const cancel = () => {
@@ -219,20 +248,37 @@ export function UpdateCard() {
             <Switch checked={restart} onCheckedChange={setRestart} disabled={running} />
             <span>升级完成后自动重启服务</span>
           </label>
+          <label
+            className={cn(
+              "flex items-center gap-2 cursor-pointer",
+              force && "text-destructive",
+            )}
+          >
+            <Switch
+              checked={force}
+              onCheckedChange={setForce}
+              disabled={running}
+            />
+            <span className="flex items-center gap-1">
+              忽略冲突强制升级
+              {force && <AlertTriangle className="size-3" />}
+            </span>
+          </label>
         </div>
 
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             disabled={running || !info?.update_available}
-            onClick={runUpdate}
+            onClick={onApplyClick}
+            variant={force ? "destructive" : "default"}
           >
             {running ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
               <Download className="size-3" />
             )}
-            {running ? "正在升级…" : "立即更新"}
+            {running ? "正在升级…" : force ? "强制升级 (危险)" : "立即更新"}
           </Button>
           {running && (
             <Button size="sm" variant="outline" onClick={cancel}>
@@ -285,6 +331,53 @@ export function UpdateCard() {
           </div>
         )}
       </CardContent>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-5 text-destructive" />
+              确认强制升级
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作会执行 <code className="font-mono">git reset --hard</code> +{" "}
+              <code className="font-mono">git clean -fd</code>,
+              <strong className="text-destructive">
+                丢弃工作树内全部本地修改 (含未跟踪文件)
+              </strong>
+              ,然后切到目标版本。已 commit 的提交不会丢失,但未提交修改不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-sm leading-relaxed">
+            <p className="text-muted-foreground">
+              受影响的典型路径:
+            </p>
+            <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-0.5">
+              <li>
+                <code className="font-mono">configs/</code> 自定义训练配置
+              </li>
+              <li>
+                <code className="font-mono">.env</code> 本地凭据 / 覆盖
+              </li>
+              <li>未跟踪的临时脚本、调试代码</li>
+            </ul>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmOpen(false)}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmOpen(false)
+                void runUpdate()
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              我已了解,继续强制升级
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

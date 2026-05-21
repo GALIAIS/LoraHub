@@ -944,7 +944,12 @@ export const api = {
    * Cancel mid-stream by aborting the passed signal.
    */
   applySystemUpdate: async (
-    body: { channel: "main" | "tag"; build: boolean; restart: boolean },
+    body: {
+      channel: "main" | "tag"
+      build: boolean
+      restart: boolean
+      force?: boolean
+    },
     onEvent: (ev: UpdateEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> => {

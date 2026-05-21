@@ -455,6 +455,7 @@ def apply(
     *,
     build: bool = True,
     progress: ProgressCallback | None = None,
+    force: bool = False,
 ) -> None:
     """Execute the upgrade in the current working tree.
 
@@ -465,6 +466,12 @@ def apply(
       3. ``uv pip install -e .[api,dev]`` if the project has uv on PATH,
          else ``pip install -e .[api,dev]``
       4. ``npm run build`` if ``build`` is True
+
+    When ``force`` is True, local working-tree changes that would
+    conflict with the upgrade are wiped via ``git reset --hard`` +
+    ``git clean -fd`` (untracked files included). Use only when the
+    user explicitly opted in via a confirmation dialog — this is
+    destructive and unrecoverable.
 
     Raises ``RuntimeError`` on any non-zero step. ``progress`` is invoked
     with ``(phase, level, message)`` for each line of subprocess output
@@ -479,15 +486,30 @@ def apply(
         if progress is not None:
             progress(phase, level, message)
 
-    # Stash + pop to preserve local edits across checkout. We always
-    # try the stash, even when ``_detect_dirty`` says the tree is
-    # clean (cheap no-op when there's nothing to save), so that any
-    # filtered-but-still-modified files (e.g. a user-edited training
-    # config under ``configs/``) survive the upgrade transparently.
-    # Conflicts on pop fall through to a clear error so the user
-    # can resolve them rather than silently lose the change.
+    # Force mode: nuke the working tree before doing anything else so
+    # the rest of the flow runs against a known-clean checkout.
+    # Destructive — only enter when the user explicitly opted in via
+    # the UI's "ignore conflicts" toggle.
     stash_active = False
-    if _has_any_local_changes(cwd):
+    if force:
+        emit(
+            "git", "warn",
+            "force=True: discarding local changes (git reset --hard + clean -fd)",
+        )
+        _stream_subprocess(
+            ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
+        )
+        _stream_subprocess(
+            ["git", "clean", "-fd"], cwd=cwd, phase="git", emit=emit,
+        )
+    elif _has_any_local_changes(cwd):
+        # Stash + pop to preserve local edits across checkout. Cheap
+        # no-op when the tree is already clean, so that any
+        # filtered-but-still-modified files (e.g. a user-edited
+        # training config under ``configs/``) survive the upgrade
+        # transparently. Conflicts on pop fall through to a clear
+        # warning so the user can resolve them rather than silently
+        # lose the change.
         emit("git", "info", "git stash --include-untracked (preserving local edits)")
         rc = _stream_subprocess(
             ["git", "stash", "push", "--include-untracked",
@@ -518,10 +540,16 @@ def apply(
     else:
         target_ref = "origin/main"
     emit("git", "info", f"git checkout {target_ref}")
-    rc = _stream_subprocess(
-        ["git", "checkout", target_ref], cwd=cwd, phase="git", emit=emit,
-    )
+    checkout_cmd = ["git", "checkout"]
+    if force:
+        checkout_cmd.append("--force")
+    checkout_cmd.append(target_ref)
+    rc = _stream_subprocess(checkout_cmd, cwd=cwd, phase="git", emit=emit)
     if rc != 0:
+        if stash_active:
+            _stream_subprocess(
+                ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
+            )
         msg = f"git checkout {target_ref} failed (exit {rc})"
         raise RuntimeError(msg)
 
