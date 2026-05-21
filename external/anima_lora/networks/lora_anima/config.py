@@ -261,6 +261,11 @@ class LoRANetworkCfg:
     use_ortho: bool = False
     ortho_init_std: float = 0.02
 
+    # LoKr factor (consumed only when ``use_lokr=True``). Selects the
+    # ``(a, c)`` split of out_dim and ``(b, d)`` split of in_dim for the
+    # Kronecker product. Default 8 mirrors LyCORIS.
+    lokr_factor: int = 8
+
     # σ-conditional router parameters (consumed when ``router_source="sigma"``).
     # Layer scope is shared with Hydra and FEI via ``router_targets`` above.
     sigma_feature_dim: int = 16
@@ -450,6 +455,7 @@ class LoRANetworkCfg:
 
         use_ortho = _as_bool(kwargs.get("use_ortho"))
         ortho_init_std = float(kwargs.get("ortho_init_std", 0.02))
+        lokr_factor = int(kwargs.get("lokr_factor", 8))
 
         # FECL knobs. Default off; turning it on requires `num_bands >= 3`
         # to be a meaningful objective (see compute_fecl docstring).
@@ -618,6 +624,7 @@ class LoRANetworkCfg:
             router_tau=router_tau,
             use_ortho=use_ortho,
             ortho_init_std=ortho_init_std,
+            lokr_factor=lokr_factor,
             fera_fecl_weight=fera_fecl_weight,
             fera_num_bands=fera_num_bands,
             use_chimera_hydra=use_chimera_hydra,

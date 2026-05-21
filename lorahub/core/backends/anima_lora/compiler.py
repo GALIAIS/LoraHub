@@ -734,9 +734,10 @@ def _network_args(*pairs: str) -> list[str]:
 
 
 def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """LoRA / OrthoLoRA / T-LoRA / DoRA / IA3 stack — anima_lora's default surface.
+    """LoRA family stack — anima_lora's default surface.
 
-    All knobs feed ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs``
+    Covers LoRA / OrthoLoRA / T-LoRA / DoRA / IA3 / LoKr / LoHA. All
+    knobs feed ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs``
     via ``--network_args`` k=v pairs; none of them is an argparse flag.
     """
     sub = opts.lora
@@ -744,6 +745,9 @@ def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
         f"use_ortho={'true' if sub.use_ortho else 'false'}",
         f"use_dora={'true' if sub.use_dora else 'false'}",
         f"use_ia3={'true' if sub.use_ia3 else 'false'}",
+        f"use_lokr={'true' if sub.use_lokr else 'false'}",
+        f"use_loha={'true' if sub.use_loha else 'false'}",
+        f"lokr_factor={sub.lokr_factor}",
         f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
         f"min_rank={sub.min_rank}",
         f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}",

@@ -37,6 +37,8 @@ from networks.lora_modules import (
     DoRAModule,
     HydraLoRAModule,
     IA3Module,
+    LoHAModule,
+    LoKrModule,
     LoRAModule,
     OrthoHydraLoRAModule,
     OrthoLoRAModule,
@@ -110,6 +112,12 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_ortho",
     "use_dora",
     "use_ia3",
+    "use_lokr",
+    "use_loha",
+    # LoKr factor (only consumed when use_lokr=True). Picks the (a, c)
+    # split of out_dim and (b, d) split of in_dim. Larger factor → more
+    # expressive W₁ matrix, smaller LoRA leg.
+    "lokr_factor",
     # PSOFT-style Cayley-init magnitude (consumed by OrthoHydra +
     # StackedExperts in ortho mode).
     "ortho_init_std",
@@ -254,6 +262,23 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=IA3Module,
         save_variant="ia3",
     ),
+    # LoKr (LyCORIS, arXiv:2212.10650) — Kronecker decomposition.
+    # Linear-only in the Phase-1 cut. Custom save_variant because the
+    # on-disk keys are ``lokr_w1`` / ``lokr_w2_a`` / ``lokr_w2_b``,
+    # neither shape nor name overlapping the LoRA family.
+    "lokr": NetworkSpec(
+        name="lokr",
+        module_class=LoKrModule,
+        save_variant="lokr",
+    ),
+    # LoHA (FedPara, arXiv:2108.06098) — Hadamard product of two LoRA
+    # pairs. Linear-only here. Saves under ``loha`` for the same shape
+    # mismatch reason as LoKr.
+    "loha": NetworkSpec(
+        name="loha",
+        module_class=LoHAModule,
+        save_variant="loha",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -344,22 +369,34 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     use_ortho = _parse_bool_flag(kwargs, "use_ortho")
     use_dora = _parse_bool_flag(kwargs, "use_dora")
     use_ia3 = _parse_bool_flag(kwargs, "use_ia3")
+    use_lokr = _parse_bool_flag(kwargs, "use_lokr")
+    use_loha = _parse_bool_flag(kwargs, "use_loha")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
-    if use_ia3:
+    # Atomic-decomposition variants: each owns its own forward and
+    # save layout, so they can't compose with LoRA legs / Ortho /
+    # MoE / DoRA. Reject the combo loudly.
+    _atomic = {"use_ia3": use_ia3, "use_lokr": use_lokr, "use_loha": use_loha}
+    enabled_atomic = [k for k, v in _atomic.items() if v]
+    if len(enabled_atomic) > 1:
+        raise ValueError(
+            f"Mutually exclusive variants enabled: {enabled_atomic}"
+        )
+    if enabled_atomic:
         if use_dora or use_ortho:
             raise ValueError(
-                "use_ia3=True is mutually exclusive with use_dora / use_ortho"
-                " (IA3 has no LoRA legs to compose with)."
+                f"{enabled_atomic[0]}=True is mutually exclusive with "
+                "use_dora / use_ortho (no LoRA legs to compose with)."
             )
         raw_moe = kwargs.get("use_moe_style")
         if raw_moe and str(raw_moe).lower() not in ("false", "none", ""):
             raise ValueError(
-                "use_ia3=True is mutually exclusive with use_moe_style"
-                f"={raw_moe!r} (no MoE expert layout has IA3 semantics)."
+                f"{enabled_atomic[0]}=True is mutually exclusive with "
+                f"use_moe_style={raw_moe!r}."
             )
-        return NETWORK_REGISTRY["ia3"]
+        # Strip the ``use_`` prefix to get the registry key.
+        return NETWORK_REGISTRY[enabled_atomic[0][len("use_") :]]
 
     raw_moe = kwargs.get("use_moe_style")
     if isinstance(raw_moe, str):

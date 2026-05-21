@@ -182,12 +182,15 @@ def save_network_weights(
     # plumb ``save_variant`` through.
     is_stacked_experts_variant = save_variant == "stacked_experts_global_fei"
     is_chimera_variant = save_variant == "chimera_hydra_moe"
-    is_ia3_variant = save_variant == "ia3"
+    # Atomic-decomposition variants (no LoRA legs / qkv defuse). Each
+    # writes an opaque key set: ``ia3_weight`` for IA3,
+    # ``lokr_w1/w2_a/w2_b`` for LoKr, ``hada_w1_a/b/w2_a/b`` for LoHA.
+    is_atomic_variant = save_variant in ("ia3", "lokr", "loha")
     is_hydra_variant = (
         save_variant in ("hydra_moe", "ortho_hydra_to_hydra")
         or (
             not is_chimera_variant
-            and not is_ia3_variant
+            and not is_atomic_variant
             and any(k.endswith(".lora_up_weight") for k in state_dict.keys())
         )
     ) and not is_stacked_experts_variant
@@ -223,12 +226,11 @@ def save_network_weights(
         # a uniform expert average defeats layer-local routing.
         return
 
-    # Standard (lora / ortho / dora) write path. IA3 piggybacks the
-    # same write because its on-disk shape is just a 1-D ``ia3_weight``
-    # per Linear — the dora rename + qkv defuse don't fire on those
-    # keys, so it's safe to skip the helper but go through the same
-    # safetensors path.
-    if not is_ia3_variant:
+    # Standard (lora / ortho / dora) write path. Atomic variants (IA3 /
+    # LoKr / LoHA) piggyback the same write because they have no LoRA-leg
+    # keys for ``rename_dora_and_defuse_standard`` to act on, but still
+    # need the dtype cast + safetensors hashing tail.
+    if not is_atomic_variant:
         rename_dora_and_defuse_standard(state_dict)
 
     if dtype is not None:

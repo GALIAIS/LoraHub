@@ -696,3 +696,42 @@ def test_ia3_mutex_with_dora_or_ortho_rejected(tmp_path: Path) -> None:
         AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True, use_dora=True)
     with pytest.raises(ValueError, match="use_ia3"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_ia3=True)
+
+
+def test_lokr_emits_use_lokr_and_factor(tmp_path: Path) -> None:
+    """``use_lokr=True`` reaches train.py with ``lokr_factor`` alongside."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_lokr=True, lokr_factor=12),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_lokr=true" in argv
+    assert "lokr_factor=12" in argv
+
+
+def test_loha_emits_use_loha(tmp_path: Path) -> None:
+    """``use_loha=True`` reaches train.py via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_loha=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_loha=true" in argv
+
+
+def test_atomic_variants_mutually_exclusive(tmp_path: Path) -> None:
+    """Only one of {ia3, lokr, loha} can be on — pydantic rejects the combo."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    with pytest.raises(ValueError, match="Mutually exclusive"):
+        AnimaLoraMethodLoraConfig(
+            use_ortho=False, use_ia3=True, use_lokr=True
+        )
+    with pytest.raises(ValueError, match="Mutually exclusive"):
+        AnimaLoraMethodLoraConfig(
+            use_ortho=False, use_lokr=True, use_loha=True
+        )
