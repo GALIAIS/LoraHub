@@ -389,6 +389,46 @@ export interface JobAnalysis {
   summary_payload: Record<string, unknown>
 }
 
+// --- Diagnose / recommend (training_assistant) -----------------------
+
+export interface DiagnosisFinding {
+  category: string
+  severity: "info" | "warn" | "error"
+  message: string
+  remediation: string
+  evidence: string
+}
+
+export interface JobDiagnosis {
+  findings: DiagnosisFinding[]
+  summary: string
+  log_excerpt: string
+  log_path: string | null
+}
+
+export interface HyperparamRecommendInput {
+  dataset_size: number
+  gpu_vram_mb: number
+  backend?: "kohya" | "diffusion-pipe" | "anima_lora"
+  target?: "character" | "style" | "concept"
+}
+
+export interface HyperparamSuggestion {
+  batch_size: number
+  gradient_accumulation_steps: number
+  learning_rate: number
+  network_dim: number
+  network_alpha: number
+  max_train_epochs: number
+  optimizer_type: string
+  extra_flags: Record<string, unknown>
+  rationale: string[]
+}
+
+export interface HyperparamRecommendResponse {
+  suggestion: HyperparamSuggestion
+}
+
 export interface ConfigTemplatePlaceholder {
   key: string
   label: string
@@ -965,6 +1005,24 @@ export const api = {
     http<{ analysis: JobAnalysis | null }>(`/jobs/${id}/analysis`),
   analyzeJob: (id: string) =>
     http<{ analysis: JobAnalysis }>(`/jobs/${id}/analyze`, { method: "POST" }),
+  /**
+   * Heuristic failure-mode diagnosis. Reads the job's events.jsonl +
+   * trailing log lines on the server, runs a small regex panel, and
+   * returns findings + remediation hints. Pure read — cheap to call
+   * repeatedly.
+   */
+  diagnoseJob: (id: string) =>
+    http<JobDiagnosis>(`/jobs/${id}/diagnose`),
+  /**
+   * Hyperparameter recommender: dataset_size + gpu_vram_mb in,
+   * concrete config knobs out. Decoupled from any specific job —
+   * useful in the "new training run" flow.
+   */
+  recommendHyperparams: (input: HyperparamRecommendInput) =>
+    http<HyperparamRecommendResponse>("/jobs/recommend", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   jobFileUrl: (id: string, path: string) =>
     `/api/jobs/${id}/files/raw?path=${encodeURIComponent(path)}`,
   duplicateConfig: (name: string, newName: string) =>

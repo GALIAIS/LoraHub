@@ -14,6 +14,8 @@ import {
   ThroughputTile,
 } from "./realtime-tile"
 import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
+import { DiagnosticsCard } from "./diagnostics-card"
+import { TrainingFeatureBadges } from "./training-feature-badges"
 
 const THROUGHPUT_WINDOW = 60
 const LOSS_WINDOW = 100
@@ -56,7 +58,7 @@ export function OverviewTab({
   fallbackTotalSteps = null,
 }: {
   jobId: string
-  job: JobSummary | undefined
+  job: (JobSummary & { config_snapshot?: Record<string, unknown> }) | undefined
   events: TrainingEvent[]
   fallbackTotalSteps?: number | null
 }) {
@@ -177,6 +179,7 @@ export function OverviewTab({
 
   return (
     <div className="space-y-5">
+      <TrainingFeatureBadges configSnapshot={job?.config_snapshot} />
       <div className="grid grid-cols-3 gap-3">
         <Stat label="状态" value={job?.state ? stateLabel(job.state) : "—"} />
         <Stat
@@ -246,6 +249,11 @@ export function OverviewTab({
           </div>
         </div>
       ) : null}
+
+      {/* Heuristic failure-mode diagnosis. Only fetches when the job
+          actually finished — running jobs aren't interesting (they're
+          definitionally not failed yet) and noise the access log. */}
+      <DiagnosticsCard jobId={jobId} enabled={isTerminal} />
 
       <div>
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">

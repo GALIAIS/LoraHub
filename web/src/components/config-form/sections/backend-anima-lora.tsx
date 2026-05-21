@@ -26,6 +26,7 @@ import {
   Section,
   ToggleSwitch,
 } from "../widgets"
+import { SuggestDialog } from "./suggest-dialog"
 
 /** Look up the lock badge for a field key; returns ``null`` when the field
  *  is unrestricted (most non-base.toml knobs). */
@@ -130,6 +131,9 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
   return (
     <>
+      <div className="flex justify-end -mt-1 mb-2">
+        <SuggestDialog set={set} backend="anima_lora" />
+      </div>
       <Row
         label="训练方法"
         required
