@@ -472,3 +472,81 @@ def test_extra_args_pass_through_verbatim(tmp_path: Path) -> None:
     assert "--weighting_scheme=min_snr_rf" in argv
     assert "--should_be_dropped" not in argv
     assert "--also_dropped" not in argv
+
+
+def test_ema_forces_inductor_mode_default_when_unset(tmp_path: Path) -> None:
+    """``ema=true`` + no compile_inductor_mode → forced to ``default``.
+
+    anima base.toml ships ``compile_inductor_mode = "reduce-overhead"``,
+    which enables cudagraph_trees. EMA's per-step ``shadow.copy_(live...)``
+    breaks the input-tensor liveness invariant cudagraph_trees checks,
+    so step 2 crashes with ``RuntimeError: graph recording observed an
+    input tensor deallocate during graph recording that did not occur
+    during replay``. The compiler force-overrides to silence this trap.
+    """
+    opts = AnimaLoraOptions()  # compile_inductor_mode left None
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {"ema": True, "ema_decay": 0.9999}
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--compile_inductor_mode=default" in argv
+    # The shared-layer emit only fires when opts has it set, so with
+    # opts=None we should not see the long-form ``--compile_inductor_mode default``.
+    assert "--compile_inductor_mode" not in argv  # the space-separated form
+
+
+def test_ema_overrides_reduce_overhead_from_opts(tmp_path: Path) -> None:
+    """``ema=true`` overrides an explicit reduce-overhead from opts."""
+    opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {"ema": True}
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    # Shared layer still emits the reduce-overhead pair, but the
+    # extra_args-driven default lands later and last-write-wins for
+    # the trainer's argparse.
+    assert argv.count("--compile_inductor_mode") == 1  # space form
+    assert "reduce-overhead" in argv
+    assert "--compile_inductor_mode=default" in argv
+    # Order matters: the override must appear AFTER the reduce-overhead pair.
+    idx_ro = argv.index("reduce-overhead")
+    idx_def = argv.index("--compile_inductor_mode=default")
+    assert idx_def > idx_ro
+
+
+def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
+    """``ema=true`` overrides reduce-overhead even when set via extra_args."""
+    opts = AnimaLoraOptions()
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {
+        "ema": True,
+        "compile_inductor_mode": "reduce-overhead",
+    }
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--compile_inductor_mode=default" in argv
+    assert "--compile_inductor_mode=reduce-overhead" not in argv
+
+
+def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
+    """``ema=true`` + already ``default`` → no surprise mutation."""
+    opts = AnimaLoraOptions(compile_inductor_mode="default")
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {"ema": True}
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--compile_inductor_mode" in argv  # from shared layer
+    assert "default" in argv  # value emitted by shared layer
+    # No second emit of ``=default`` from extra_args injection.
+    assert "--compile_inductor_mode=default" not in argv
+
+
+def test_no_ema_leaves_reduce_overhead_alone(tmp_path: Path) -> None:
+    """Without EMA, reduce-overhead is a legitimate fast path — don't touch it."""
+    opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {}
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "reduce-overhead" in argv
+    assert "--compile_inductor_mode=default" not in argv

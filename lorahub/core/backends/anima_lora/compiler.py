@@ -238,8 +238,39 @@ def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
     Same shape as kohya's escape hatch: ``True`` becomes a bare flag,
     ``False`` / ``None`` is dropped, anything else is ``--key=value``.
     Keys may include the leading ``--`` already; both forms work.
+
+    Cross-check: when ``ema`` is enabled, ``compile_inductor_mode``
+    must NOT be ``reduce-overhead`` — the cudagraph_trees path it
+    enables checks input-tensor liveness across capture/replay, and
+    EMA's ``shadow.copy_(live.detach()...)`` violates that contract
+    (RuntimeError at step 2). Force-override to ``default`` and warn,
+    because anima base.toml ships ``reduce-overhead`` and a silent
+    crash mid-training is worse than slightly slower kernels.
     """
-    for key, value in cfg.backend.extra_args.items():
+    extra: dict[str, object] = dict(cfg.backend.extra_args)
+
+    if extra.get("ema") is True:
+        opts = cfg.backend.anima_lora
+        explicit_mode = opts.compile_inductor_mode if opts is not None else None
+        ea_mode = extra.get("compile_inductor_mode")
+        effective_mode = ea_mode if ea_mode is not None else explicit_mode
+        # ``None`` here means "fall through to anima base.toml" which
+        # is reduce-overhead — same conflict, same fix.
+        if effective_mode in (None, "reduce-overhead"):
+            _log.warning(
+                "anima_lora: --ema with compile_inductor_mode=%r would "
+                "trigger cudagraph_trees liveness check failure mid-step "
+                "(EMA mutates LoRA params via detach/copy). Forcing "
+                "compile_inductor_mode=default. Set it explicitly to "
+                "silence this warning.",
+                effective_mode if effective_mode is not None else "<base.toml=reduce-overhead>",
+            )
+            # Override regardless of source — extra_args wins last
+            # in the emit order, so writing it here also overrides
+            # the shared-layer emit.
+            extra["compile_inductor_mode"] = "default"
+
+    for key, value in extra.items():
         flag = f"--{key}" if not key.startswith("--") else key
         if value is True:
             args.append(flag)
