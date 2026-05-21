@@ -1,5 +1,5 @@
-import { useSearchParams } from "react-router-dom"
 import { useMemo } from "react"
+import { useSearchParams } from "react-router-dom"
 import { DatasetManager } from "./components/dataset-manager"
 import { DatasetDetail } from "./components/dataset-detail"
 import { StageStepper, DEFAULT_STAGES } from "./components/stage-stepper"
@@ -12,9 +12,23 @@ import { ShipStage } from "./components/stages/ship-stage"
 export { ImageStudioPage }
 
 function ImageStudioPage() {
+  // All hooks at the top — never conditional, so the React reconciler
+  // sees a constant call sequence across every render. The previous
+  // version returned <DatasetManager/> before useMemo ran when no
+  // dataset was selected, which tripped React #300 ("Rendered fewer
+  // hooks than expected") on every path/no-path transition.
   const [params, setParams] = useSearchParams()
   const datasetPath = params.get("path") || ""
   const stageParam = (params.get("stage") || "curate") as StageId
+
+  const stages: StageInfo[] = useMemo(
+    () =>
+      DEFAULT_STAGES.map((s) => ({
+        ...s,
+        status: s.id === stageParam ? ("active" as const) : ("idle" as const),
+      })),
+    [stageParam],
+  )
 
   // No dataset selected → manager.
   if (!datasetPath) {
@@ -29,20 +43,6 @@ function ImageStudioPage() {
       />
     )
   }
-
-  // Stage status — for now everything starts as 'idle'. F1 will wire
-  // these to the audit report so the badge reflects what's actually
-  // done. Curate (the legacy main view) is shown as 'active' when the
-  // user is on it; that makes the stepper useful even before audit
-  // landing.
-  const stages: StageInfo[] = useMemo(
-    () =>
-      DEFAULT_STAGES.map((s) => ({
-        ...s,
-        status: s.id === stageParam ? ("active" as const) : ("idle" as const),
-      })),
-    [stageParam],
-  )
 
   const setStage = (next: StageId) => {
     const n = new URLSearchParams(params)
