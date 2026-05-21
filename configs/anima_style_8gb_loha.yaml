@@ -1,0 +1,169 @@
+# Anima style LoRA on the anima_lora backend — 8GB notebook recipe.
+#
+# Target hardware: RTX 3060 / 3070 / 4060 / 4070 mobile (8 GB VRAM, 16-32 GB RAM).
+# Expected throughput: ~7-12 s/step.
+# Expected VRAM peak: ~7.0-7.5 GB.
+#
+# Style training differs from character training in three ways and the
+# config below picks knobs accordingly:
+#   1. Lower per-image weight  → higher dropRate, fewer numRepeats, more variety
+#   2. Wider AR distribution    → bucket min/max widened (style sees portraits +
+#                                 landscapes + scenes, not just standing figures)
+#   3. Algorithm = LoHA         → Hadamard product gives effective rank up to r²
+#                                 at twice a LoRA's parameter count, which lets
+#                                 the network capture multi-scale texture / brush /
+#                                 colour relations a pure rank-r delta can't fit
+#
+# Tuning knobs to know:
+#   - OOM during forward     → blocks_to_swap += 4 (max 26 for Anima)
+#   - Style is too weak      → caption.dropRate += 0.05 (push the network to
+#                              represent the style outside any caption)
+#   - Style overfits to a few images → numRepeats -= 1, increase epochs
+#   - Slow throughput        → drop blocks_to_swap to 20 if you have any
+#                              spare VRAM (e.g. closed all other apps)
+
+schemaVersion: "1.0"
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 384
+
+dataset:
+  # Edit to your style dataset path. Style datasets are typically 50-300
+  # images of varied composition; smart-caption them with descriptive tags
+  # (avoid character-identity tags) so the LoRA learns aesthetic, not faces.
+  source: ./datasets/your_style
+  resolution: [768, 768]
+  bucket:
+    enabled: true
+    # Wider AR range than character — style images vary in composition.
+    min: 384
+    max: 1280
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    # Heavier dropRate than character — style should generalise to captions
+    # it has never seen, so push the network to represent style implicitly.
+    dropRate: 0.15
+    keepTokens: 1
+  # 4 repeats × 100 imgs / batch 1 / accum 8 / 8 epochs ≈ 400 steps.
+  # Style needs more variety than character; raising numRepeats above 4
+  # collapses what the network sees into the same few images per epoch.
+  numRepeats: 4
+
+schedule:
+  epochs: 8
+  batchSize: 1
+  gradAccum: 8
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+gradientCheckpointing: true
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  enabled: false
+
+output:
+  name: style_anima_8gb
+  saveEveryNEpochs: 2
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  animaLora:
+    method: lora
+    preset: low_vram
+    outputName: style_anima_8gb
+
+    # Algorithm: LoHA — two LoRA pairs whose products are element-wise
+    # multiplied. Effective rank up to r² (Hadamard), parameter count is 2x
+    # plain LoRA. For style work this is exactly the right shape — multi-
+    # scale brush / texture / colour relations need cross-rank coupling
+    # that a single (B·A) can't express.
+    lora:
+      algorithm: loha
+      # T-LoRA timestep mask is a no-op for atomic decompositions; left
+      # off here for clarity (the LoraHub compiler ignores it on loha
+      # anyway).
+      useTimestepMask: false
+
+    # Smaller dim than character — style is a low-rank signal in W-space,
+    # putting more capacity into LoHA's Hadamard structure pays off more
+    # than a higher rank.
+    networkDim: 8
+    networkAlpha: 8.0
+    networkTrainUnetOnly: true
+
+    optimizerType: AdamW8bit
+    lrScheduler: cosine
+    # Slightly higher than character — style needs faster convergence
+    # because we have fewer effective steps per image.
+    learningRate: 7.0e-05
+    maxTrainEpochs: 8
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.15
+
+    # Flow-matching sampling.
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    # Min-SNR-γ over rectified flow — particularly helpful for style
+    # because heavy noise steps are where colour palette / global tone
+    # gets locked in, and γ-weighting gives them their fair share of the
+    # gradient budget on small datasets.
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    # Caching.
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    vaeChunkSize: 1
+
+    # Attention.
+    attnMode: torch
+    compileMode: null
+    compileInductorMode: default
+    torchCompile: false
+
+    # Memory / offload.
+    blocksToSwap: 24
+    gradientCheckpointing: true
+    unslothOffloadCheckpointing: true
+    cpuOffloadCheckpointing: true
+    mixedPrecision: bf16
+
+    # Training stabilisers.
+    ema: true
+    # Slightly lower decay than character — style trains for fewer effective
+    # steps relative to dataset size, so the EMA shadow tracks faster.
+    emaDecay: 0.999
+    emaUseNumUpdates: true
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    # Output.
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 5
+    keepTokens: 1
+    captionExtension: .txt
+    validationSplitNum: 0
+    enableBucket: true
+    pathPattern: '*'
