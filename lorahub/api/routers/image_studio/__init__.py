@@ -17,6 +17,7 @@ from fastapi import APIRouter
 from . import ai as _ai
 from . import annotations as _annotations
 from . import audit as _audit
+from . import captions as _captions
 from . import curate as _curate
 from . import datasets as _datasets
 from . import dedupe as _dedupe
@@ -31,6 +32,7 @@ router.include_router(_annotations.router)
 router.include_router(_ops.router)
 router.include_router(_ai.router)
 router.include_router(_audit.router)
+router.include_router(_captions.router)
 router.include_router(_curate.router)
 router.include_router(_dedupe.router)
 router.include_router(_datasets.router)
