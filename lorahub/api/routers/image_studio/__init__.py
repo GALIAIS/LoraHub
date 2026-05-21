@@ -21,6 +21,7 @@ from . import captions as _captions
 from . import curate as _curate
 from . import datasets as _datasets
 from . import dedupe as _dedupe
+from . import intake as _intake
 from . import listings as _listings
 from . import ops as _ops
 from . import ship as _ship
@@ -37,6 +38,7 @@ router.include_router(_captions.router)
 router.include_router(_curate.router)
 router.include_router(_dedupe.router)
 router.include_router(_datasets.router)
+router.include_router(_intake.router)
 router.include_router(_ship.router)
 router.include_router(_similarity.router)
 router.include_router(_tagging.router)
