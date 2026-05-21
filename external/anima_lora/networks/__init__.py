@@ -8,6 +8,7 @@ class it instantiates and a ``save_variant`` label consumed by
 Flag precedence (evaluated top to bottom, first match wins):
 
     use_chimera_hydra                    → chimera_hydra
+    use_ia3                              → ia3
     use_moe_style="independent_A"        → stacked_experts_global_fei
     use_moe_style="shared_A" + use_ortho → ortho_hydra
     use_moe_style="shared_A"             → hydra
@@ -35,6 +36,7 @@ from networks.lora_modules import (
     ChimeraHydraLoRAModule,
     DoRAModule,
     HydraLoRAModule,
+    IA3Module,
     LoRAModule,
     OrthoHydraLoRAModule,
     OrthoLoRAModule,
@@ -107,6 +109,7 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     # Variant selectors (read by resolve_network_spec)
     "use_ortho",
     "use_dora",
+    "use_ia3",
     # PSOFT-style Cayley-init magnitude (consumed by OrthoHydra +
     # StackedExperts in ortho mode).
     "ortho_init_std",
@@ -242,6 +245,15 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=DoRAModule,
         save_variant="standard",
     ),
+    # IA3 (Liu et al. NeurIPS'22) — per-output rescaling with no LoRA
+    # legs. Saves under a dedicated ``ia3`` variant because the on-disk
+    # tensor (``.ia3_weight``) doesn't share structure with the LoRA
+    # / DoRA / Ortho families' ``lora_down`` + ``lora_up`` shape.
+    "ia3": NetworkSpec(
+        name="ia3",
+        module_class=IA3Module,
+        save_variant="ia3",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -331,9 +343,23 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     """
     use_ortho = _parse_bool_flag(kwargs, "use_ortho")
     use_dora = _parse_bool_flag(kwargs, "use_dora")
+    use_ia3 = _parse_bool_flag(kwargs, "use_ia3")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
+    if use_ia3:
+        if use_dora or use_ortho:
+            raise ValueError(
+                "use_ia3=True is mutually exclusive with use_dora / use_ortho"
+                " (IA3 has no LoRA legs to compose with)."
+            )
+        raw_moe = kwargs.get("use_moe_style")
+        if raw_moe and str(raw_moe).lower() not in ("false", "none", ""):
+            raise ValueError(
+                "use_ia3=True is mutually exclusive with use_moe_style"
+                f"={raw_moe!r} (no MoE expert layout has IA3 semantics)."
+            )
+        return NETWORK_REGISTRY["ia3"]
 
     raw_moe = kwargs.get("use_moe_style")
     if isinstance(raw_moe, str):

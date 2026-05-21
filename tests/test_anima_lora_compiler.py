@@ -674,3 +674,25 @@ def test_dora_and_ortho_mutex_rejected_at_validation(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="use_ortho=True"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_dora=True)
+
+
+def test_ia3_emits_use_ia3_network_arg(tmp_path: Path) -> None:
+    """``backend.animaLora.lora.useIa3=True`` reaches train.py via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_ia3=true" in argv
+
+
+def test_ia3_mutex_with_dora_or_ortho_rejected(tmp_path: Path) -> None:
+    """IA3 has no LoRA legs to compose with — pydantic rejects the combo."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    with pytest.raises(ValueError, match="use_ia3"):
+        AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True, use_dora=True)
+    with pytest.raises(ValueError, match="use_ia3"):
+        AnimaLoraMethodLoraConfig(use_ortho=True, use_ia3=True)

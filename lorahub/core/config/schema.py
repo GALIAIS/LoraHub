@@ -801,18 +801,30 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # OrthoLoRA's Cayley parameterization writes its own distill keys
     # that don't round-trip through the DoRA save layout.
     use_dora: bool = False
+    # IA3 (Liu et al. NeurIPS'22) — per-output rescaling of activations,
+    # no LoRA legs. Mutually exclusive with the LoRA-leg variants
+    # (lora / ortho / dora) and with the MoE expert layouts. Foldable
+    # at save time as ``W' = ℓ ⊙ W``, ``b' = ℓ ⊙ b`` so inference uses
+    # an unmodified Linear.
+    use_ia3: bool = False
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
     use_timestep_mask: bool = True
     min_rank: int = Field(8, ge=1)
     alpha_rank_scale: float = Field(1.0, gt=0)
 
     @model_validator(mode="after")
-    def _check_dora_ortho_mutex(self) -> AnimaLoraMethodLoraConfig:
+    def _check_mutex(self) -> AnimaLoraMethodLoraConfig:
         if self.use_dora and self.use_ortho:
             msg = (
                 "AnimaLoraMethodLoraConfig: use_dora=True with use_ortho=True "
                 "is not supported — DoRA writes per-Linear .magnitude that "
                 "OrthoLoRA's distill chain doesn't preserve. Pick one."
+            )
+            raise ValueError(msg)
+        if self.use_ia3 and (self.use_dora or self.use_ortho):
+            msg = (
+                "AnimaLoraMethodLoraConfig: use_ia3 cannot combine with "
+                "use_dora / use_ortho — IA3 has no LoRA legs to compose with."
             )
             raise ValueError(msg)
         return self
