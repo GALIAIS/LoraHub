@@ -186,9 +186,10 @@ def save_network_weights(
     # writes an opaque key set: ``ia3_weight`` for IA3,
     # ``lokr_w1/w2_a/w2_b`` for LoKr, ``hada_w1_a/b/w2_a/b`` for LoHA,
     # ``delta`` (out × in) for Full, ``oft_skew`` for Diag-OFT,
-    # ``boft_skew`` for BOFT.
+    # ``boft_skew`` for BOFT, plain LoRA pair + ``glora_gate`` for
+    # GLoRA, frozen ``vera_A/B`` + scale vectors for VeRA.
     is_atomic_variant = save_variant in (
-        "ia3", "lokr", "loha", "full", "oft", "boft"
+        "ia3", "lokr", "loha", "full", "oft", "boft", "glora", "vera"
     )
     is_hydra_variant = (
         save_variant in ("hydra_moe", "ortho_hydra_to_hydra")

@@ -8,8 +8,8 @@ class it instantiates and a ``save_variant`` label consumed by
 Flag precedence (evaluated top to bottom, first match wins):
 
     use_chimera_hydra                    → chimera_hydra
-    use_ia3 / use_lokr / use_loha / use_full / use_diag_oft / use_boft
-                                         → atomic decomposition variant
+    use_ia3 / use_lokr / use_loha / use_full / use_diag_oft / use_boft /
+    use_glora / use_vera                 → atomic decomposition variant
     use_dylora                           → dylora
     use_moe_style="independent_A"        → stacked_experts_global_fei
     use_moe_style="shared_A" + use_ortho → ortho_hydra
@@ -41,6 +41,7 @@ from networks.lora_modules import (
     DoRAModule,
     DyLoRAModule,
     FullModule,
+    GLoRAModule,
     HydraLoRAModule,
     IA3Module,
     LoHAModule,
@@ -49,6 +50,7 @@ from networks.lora_modules import (
     OrthoHydraLoRAModule,
     OrthoLoRAModule,
     StackedExpertsLoRAModule,
+    VeRAModule,
 )
 
 
@@ -124,6 +126,8 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_full",
     "use_diag_oft",
     "use_boft",
+    "use_glora",
+    "use_vera",
     # LoKr factor (only consumed when use_lokr=True). Picks the (a, c)
     # split of out_dim and (b, d) split of in_dim. Larger factor → more
     # expressive W₁ matrix, smaller LoRA leg.
@@ -327,6 +331,22 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=BOFTModule,
         save_variant="boft",
     ),
+    # GLoRA-light (Chavan et al. arXiv:2306.07967) — LoRA + per-rank
+    # diagonal gate. Saves under ``glora`` because the on-disk shape
+    # adds a ``glora_gate`` (r,) sibling to the standard LoRA pair.
+    "glora": NetworkSpec(
+        name="glora",
+        module_class=GLoRAModule,
+        save_variant="glora",
+    ),
+    # VeRA (Kopiczko et al. ICLR'24, arXiv:2310.11454) — frozen random
+    # A / B + two trainable scale vectors. Saves under ``vera``;
+    # checkpoint carries A / B (persistent buffers) plus the scales.
+    "vera": NetworkSpec(
+        name="vera",
+        module_class=VeRAModule,
+        save_variant="vera",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -423,6 +443,8 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     use_full = _parse_bool_flag(kwargs, "use_full")
     use_diag_oft = _parse_bool_flag(kwargs, "use_diag_oft")
     use_boft = _parse_bool_flag(kwargs, "use_boft")
+    use_glora = _parse_bool_flag(kwargs, "use_glora")
+    use_vera = _parse_bool_flag(kwargs, "use_vera")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
@@ -436,6 +458,8 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
         "use_full": use_full,
         "use_diag_oft": use_diag_oft,
         "use_boft": use_boft,
+        "use_glora": use_glora,
+        "use_vera": use_vera,
     }
     enabled_atomic = [k for k, v in _atomic.items() if v]
     if len(enabled_atomic) > 1:

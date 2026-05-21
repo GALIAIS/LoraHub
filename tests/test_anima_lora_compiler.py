@@ -800,3 +800,27 @@ def test_boft_emits_use_boft_and_factors(tmp_path: Path) -> None:
     argv, _ = compile_config(cfg, tmp_path / "ws")
     assert "use_boft=true" in argv
     assert "boft_factors=6" in argv
+
+
+def test_glora_emits_use_glora(tmp_path: Path) -> None:
+    """GLoRA-light selector forwards via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_glora=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_glora=true" in argv
+
+
+def test_vera_emits_use_vera(tmp_path: Path) -> None:
+    """VeRA selector forwards via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_vera=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_vera=true" in argv

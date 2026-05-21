@@ -11,6 +11,7 @@ from networks.lora_modules.diag_oft import DiagOFTModule
 from networks.lora_modules.dora import DoRAModule
 from networks.lora_modules.dylora import DyLoRAModule
 from networks.lora_modules.full import FullModule
+from networks.lora_modules.glora import GLoRAModule
 from networks.lora_modules.hydra import HydraLoRAModule, _sigma_sinusoidal_features
 from networks.lora_modules.ia3 import IA3Module
 from networks.lora_modules.loha import LoHAModule
@@ -22,6 +23,7 @@ from networks.lora_modules.ortho import (
 )
 from networks.lora_modules.reft import ReFTModule
 from networks.lora_modules.stacked_experts import StackedExpertsLoRAModule
+from networks.lora_modules.vera import VeRAModule
 
 __all__ = [
     "BaseLoRAModule",
@@ -32,6 +34,7 @@ __all__ = [
     "DoRAModule",
     "DyLoRAModule",
     "FullModule",
+    "GLoRAModule",
     "HydraLoRAModule",
     "IA3Module",
     "LoHAModule",
@@ -41,6 +44,7 @@ __all__ = [
     "OrthoLoRAModule",
     "ReFTModule",
     "StackedExpertsLoRAModule",
+    "VeRAModule",
     "_absorb_channel_scale",
     "_sigma_sinusoidal_features",
 ]

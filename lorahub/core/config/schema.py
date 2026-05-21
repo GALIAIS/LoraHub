@@ -838,6 +838,17 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     use_boft: bool = False
     # Number of butterfly stages composed when ``use_boft=True``.
     boft_factors: int = Field(4, ge=1)
+    # GLoRA-light (Chavan et al. arXiv:2306.07967) — LoRA + a per-rank
+    # diagonal gate vector ``d ∈ R^r``. Encourages rank pruning by
+    # sparsifying the gate. Mutually exclusive with the other atomic
+    # variants and the LoRA-leg modifiers.
+    use_glora: bool = False
+    # VeRA (Kopiczko et al. ICLR'24, arXiv:2310.11454) — frozen random
+    # ``A`` (r × in) + ``B`` (out × r) plus two trainable scale
+    # vectors ``λ_b ∈ R^out`` and ``λ_d ∈ R^r``. Per-Linear in this
+    # implementation (not full-network shared); see vera.py for the
+    # tradeoff note.
+    use_vera: bool = False
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
     use_timestep_mask: bool = True
     min_rank: int = Field(8, ge=1)
@@ -859,6 +870,8 @@ class AnimaLoraMethodLoraConfig(BaseModel):
             ("use_full", self.use_full),
             ("use_diag_oft", self.use_diag_oft),
             ("use_boft", self.use_boft),
+            ("use_glora", self.use_glora),
+            ("use_vera", self.use_vera),
         ]
         enabled = [name for name, on in atomic if on]
         if len(enabled) > 1:
