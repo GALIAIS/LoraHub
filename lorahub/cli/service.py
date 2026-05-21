@@ -202,8 +202,29 @@ def start(
 
     if port == 0:
         port = _free_port()
-    py = _venv_python()
 
+    if foreground:
+        # In-process uvicorn — we're already inside the venv's Python,
+        # no need to re-exec (which on Windows mishandles paths
+        # containing spaces, e.g. "E:\\Lora Scripts\\..."). Same shape
+        # as the legacy ``lorahub serve`` command.
+        try:
+            import uvicorn  # noqa: PLC0415
+        except ImportError as exc:
+            err_console.print(
+                "[red]API extras not installed.[/red] Run: pip install lorahub[api]"
+            )
+            raise typer.Exit(code=1) from exc
+        console.print(f"[bold]LoraHub[/bold] foreground http://{host}:{port}")
+        uvicorn.run(
+            "lorahub.api.app:app",
+            host=host,
+            port=port,
+            log_level="info",
+        )
+        return
+
+    py = _venv_python()
     cmd = [
         str(py),
         "-m",
@@ -216,11 +237,6 @@ def start(
         "--log-level",
         "info",
     ]
-
-    if foreground:
-        console.print(f"[bold]LoraHub[/bold] foreground http://{host}:{port}")
-        os.execv(str(py), cmd)
-        return  # unreachable
 
     log = _log_file()
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -369,7 +385,12 @@ def logs(
         return
     if follow:
         # Hand off to the platform's tail tool — re-implementing tail-f
-        # in pure Python is more code than it's worth.
+        # in pure Python is more code than it's worth. We invoke via
+        # subprocess.call instead of os.execvp because Windows' execvp
+        # mishandles argv when the spawning process's path or
+        # arguments contain spaces (the underlying CreateProcess uses
+        # the legacy whitespace-split argv parsing). subprocess uses
+        # explicit argv handoff, which is portable.
         if sys.platform == "win32":
             cmd = [
                 "powershell",
@@ -379,8 +400,8 @@ def logs(
             ]
         else:
             cmd = ["tail", "-n", str(n), "-f", str(log)]
-        os.execvp(cmd[0], cmd)
-        return
+        rc = subprocess.call(cmd)  # noqa: S603
+        raise typer.Exit(code=rc)
     # One-shot: read last N lines without loading the whole file.
     with log.open("rb") as fh:
         fh.seek(0, 2)
