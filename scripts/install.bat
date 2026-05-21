@@ -268,6 +268,16 @@ if exist "web\node_modules\vite" (
 )
 echo.
 
+rem ---- [extra] register the `lorahub` CLI in the user PATH ----------
+rem ``.venv\Scripts\lorahub.exe`` exists after the editable install, but
+rem we want users to type ``lorahub`` from any cmd window. ``self install``
+rem writes ``%LOCALAPPDATA%\lorahub\bin\lorahub.cmd`` and adds that dir to
+rem the user PATH via setx. Errors are non-fatal — the venv shim still
+rem works, the user just has to invoke it via the full path.
+echo [extra] Registering lorahub CLI ...
+"%VENV_PY%" -m lorahub self install
+echo.
+
 echo ============================================================
 echo   Installation Complete
 echo ============================================================
@@ -281,6 +291,9 @@ echo.
 echo   To start LoRaHub:
 echo     scripts\run.bat              (default prod: API serves built SPA)
 echo     scripts\run.bat dev          (dev mode: API + Vite HMR)
+echo     lorahub service start        (background daemon - random port)
+echo.
+echo   Open a new shell so the updated PATH picks up ``lorahub``.
 echo.
 
 popd

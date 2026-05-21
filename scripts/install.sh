@@ -226,6 +226,16 @@ else
 fi
 echo ""
 
+# ---- [extra] register the `lorahub` CLI in the user PATH ----------
+# .venv/bin/lorahub already exists thanks to ``uv pip install -e .``,
+# but it isn't reachable without the venv being activated. Run the
+# CLI's own self-install path so a fresh shell can call ``lorahub``
+# from anywhere — silent when already installed, fails soft so a
+# weird HOME / permission setup doesn't sink the whole installer.
+echo "[extra] Registering lorahub CLI ..."
+"$VENV_PY" -m lorahub self install 2>&1 || true
+echo ""
+
 echo "============================================================"
 echo "  Installation Complete"
 echo "============================================================"
@@ -239,4 +249,8 @@ echo ""
 echo "  To start LoRaHub:"
 echo "    scripts/run.sh              (default prod: API serves built SPA)"
 echo "    scripts/run.sh dev          (dev mode: API + Vite HMR)"
+echo "    lorahub service start       (background daemon — random port)"
+echo ""
+echo "  If 'lorahub' isn't found, ensure ~/.local/bin is on PATH:"
+echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo ""
