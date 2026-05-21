@@ -515,7 +515,12 @@ def test_ema_overrides_reduce_overhead_from_opts(tmp_path: Path) -> None:
 
 
 def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
-    """``ema=true`` overrides reduce-overhead even when set via extra_args."""
+    """``ema=true`` overrides reduce-overhead even when set via extra_args.
+
+    extra_args is the legacy path; the cross-check still recognises ``ema``
+    set there. The override is appended after extra_args so argparse
+    last-write-wins picks ``default``.
+    """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     cfg.backend.extra_args = {
@@ -525,7 +530,12 @@ def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
     argv, _ = compile_config(cfg, tmp_path / "ws")
 
     assert "--compile_inductor_mode=default" in argv
-    assert "--compile_inductor_mode=reduce-overhead" not in argv
+    # Both values are present (extra_args verbatim + cross-check append),
+    # but the default override appears strictly after the reduce-overhead
+    # value — argparse takes the last one.
+    idx_ro = argv.index("--compile_inductor_mode=reduce-overhead")
+    idx_def = argv.index("--compile_inductor_mode=default")
+    assert idx_def > idx_ro
 
 
 def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
@@ -550,3 +560,84 @@ def test_no_ema_leaves_reduce_overhead_alone(tmp_path: Path) -> None:
 
     assert "reduce-overhead" in argv
     assert "--compile_inductor_mode=default" not in argv
+
+
+def test_ema_schema_field_emits_full_flag_set(tmp_path: Path) -> None:
+    """Schema-level ema=true emits --ema --ema_decay --ema_use_num_updates.
+
+    Mirrors the train.py CLI surface: the trainer reads each flag
+    independently, so missing any one leaves a knob at its argparse
+    default rather than the user's intent.
+    """
+    opts = AnimaLoraOptions(
+        compile_inductor_mode="default",  # avoid the cross-check append
+        ema=True,
+        ema_decay=0.999,
+        ema_use_num_updates=False,
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--ema" in argv
+    # Decay is emitted as space-separated value pair so it matches the
+    # shared-layer style (the rest of the file uses _argv_pairs which
+    # expects this shape).
+    pairs = _argv_pairs(argv)
+    assert pairs["--ema_decay"] == ["0.999"]
+    assert "--ema_use_num_updates" not in argv  # toggled off
+
+
+def test_nan_guard_schema_field_emits_recovery_flags(tmp_path: Path) -> None:
+    """Schema-level nan_guard=true emits the full recovery surface."""
+    opts = AnimaLoraOptions(
+        compile_inductor_mode="default",
+        nan_guard=True,
+        nan_guard_recover=True,
+        nan_guard_max_consecutive=10,
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+
+    assert "--nan_guard" in argv
+    assert pairs["--nan_guard_max_consecutive"] == ["10"]
+    assert "--nan_guard_recover" in argv
+
+
+def test_min_snr_rf_emits_gamma_when_provided(tmp_path: Path) -> None:
+    """min_snr_rf is the rectified-flow Min-SNR-γ weighting; emit γ pair."""
+    opts = AnimaLoraOptions(
+        weighting_scheme="min_snr_rf",
+        min_snr_gamma=5.0,
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+
+    assert pairs["--weighting_scheme"] == ["min_snr_rf"]
+    assert pairs["--min_snr_gamma"] == ["5.0"]
+
+
+def test_min_snr_rf_without_gamma_falls_back_uniform(tmp_path: Path, caplog) -> None:
+    """min_snr_rf without γ is a no-op in the trainer; warn at compile time."""
+    import logging
+
+    opts = AnimaLoraOptions(weighting_scheme="min_snr_rf", min_snr_gamma=None)
+    cfg = _recipe(tmp_path, opts)
+    with caplog.at_level(logging.WARNING):
+        argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--weighting_scheme" in argv
+    assert "--min_snr_gamma" not in argv
+    assert any("min_snr_gamma" in r.message for r in caplog.records)
+
+
+def test_sample_grid_schema_field_emits_flag(tmp_path: Path) -> None:
+    """sample_grid=true emits the bare ``--sample_grid`` flag."""
+    opts = AnimaLoraOptions(
+        compile_inductor_mode="default",
+        sample_grid=True,
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "--sample_grid" in argv

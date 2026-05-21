@@ -985,13 +985,48 @@ class AnimaLoraOptions(BaseModel):
     timestep_sampling: Literal["sigmoid", "uniform", "logit_normal"] = "sigmoid"
     sigmoid_scale: float = Field(1.0, gt=0)
     discrete_flow_shift: float = Field(1.0, gt=0)
-    weighting_scheme: Literal["sigma_sqrt", "logit_normal", "mode", "cosmap"] | None = None
+    # ``min_snr_rf`` is a rectified-flow-aware Min-SNR-γ weighting (Hang et
+    # al. ICCV'23 adapted to RF). Enable by selecting it here AND setting
+    # ``min_snr_gamma`` below — leaving ``min_snr_gamma`` None reduces to
+    # uniform weighting and the trainer logs a warning.
+    weighting_scheme: Literal[
+        "sigma_sqrt", "logit_normal", "mode", "cosmap", "min_snr_rf"
+    ] | None = None
+    # γ for ``weighting_scheme = "min_snr_rf"``. Recommended 5.0; ignored
+    # for any other weighting_scheme value.
+    min_snr_gamma: float | None = Field(default=None, gt=0)
     logit_mean: float | None = None
     logit_std: float | None = None
     mode_scale: float | None = None
     # Variance-reduced flow-matching loss (AsymFlow §5.2). +40% step compute
     # when enabled; leave None to skip.
     vr_loss_weight: float | None = Field(default=None, ge=0)
+
+    # ---- Training stabilisers ----
+    # Exponential Moving Average over the LoRA network's trainable params.
+    # Adds ~0% throughput overhead (one extra mul_/add_ per step), uses
+    # roughly 2x adapter VRAM for the shadow copy. The shadow weights are
+    # written next to every checkpoint as ``{name}_ema.safetensors`` and
+    # are usually higher-quality than the live weights at inference time.
+    ema: bool = False
+    # Decay factor — 0.9999 is a sane default for typical LoRA training
+    # (~10k step half-life). Lower it (0.999 / 0.99) for short runs so the
+    # shadow doesn't lag too far behind the live params.
+    ema_decay: float = Field(0.9999, gt=0, lt=1)
+    # When True, scale decay during warmup as min(decay, (1+t)/(10+t)) so
+    # the first ~hundred steps don't bake noise into the shadow.
+    ema_use_num_updates: bool = True
+    # Pre-backward + post-clip NaN/Inf guard on loss and gradients. When
+    # nan_guard_recover is also on, the trainer halves every param group's
+    # LR + restores the live params from EMA shadow after
+    # ``nan_guard_max_consecutive`` strikes; otherwise it logs and aborts.
+    nan_guard: bool = False
+    nan_guard_recover: bool = False
+    nan_guard_max_consecutive: int = Field(default=5, ge=1)
+    # Compose every epoch's sample images into a contact-sheet PNG so
+    # progression is visible in one click. Samples are still written
+    # individually too — this only adds the grid sibling.
+    sample_grid: bool = False
 
     # ---- Caching / data ----
     cache_latents: bool = True

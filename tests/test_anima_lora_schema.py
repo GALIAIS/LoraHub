@@ -49,7 +49,9 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.network_module == "networks.lora_anima"
     assert opts.network_dim == 16
     assert opts.optimizer_type == "AdamW"
-    assert opts.attn_mode == "flash"
+    # ``torch`` (PyTorch SDPA) is the default since the flash-attn
+    # gate landed — flash-attn 是可选可缺的扩展,SDPA 在每台机器上都可用。
+    assert opts.attn_mode == "torch"
     # method=lora's default stack: OrthoLoRA + T-LoRA both on.
     assert opts.lora.use_ortho is True
     assert opts.lora.use_timestep_mask is True

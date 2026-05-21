@@ -219,11 +219,15 @@ def compile_config(
     argv += _sampling_overrides(cfg, workspace)
 
     # Layer 6: escape hatch — pass cfg.backend.extra_args through verbatim
-    # so experimental train.py flags (--ema_decay, --nan_guard,
-    # --min_snr_gamma, --sample_grid, ...) can be set from a recipe
-    # without forcing every new knob into AnimaLoraOptions before it
-    # stabilises. Last write wins, mirroring kohya's _emit_extra_args.
+    # so experimental train.py flags can be set from a recipe without
+    # forcing every new knob into AnimaLoraOptions before it stabilises.
+    # Last write wins, mirroring kohya's _emit_extra_args.
     _emit_extra_args(cfg, argv)
+
+    # Layer 7: cross-check EMA × cudagraph_trees. Runs after every other
+    # emit so the ``--compile_inductor_mode=default`` override lands last
+    # and wins argparse parsing.
+    _check_ema_compile_conflict(opts, argv, dict(cfg.backend.extra_args))
 
     # Files: a single dataset_config TOML that pins the three data
     # paths. Written under the workspace by ``backend.launch`` before
@@ -238,39 +242,8 @@ def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
     Same shape as kohya's escape hatch: ``True`` becomes a bare flag,
     ``False`` / ``None`` is dropped, anything else is ``--key=value``.
     Keys may include the leading ``--`` already; both forms work.
-
-    Cross-check: when ``ema`` is enabled, ``compile_inductor_mode``
-    must NOT be ``reduce-overhead`` — the cudagraph_trees path it
-    enables checks input-tensor liveness across capture/replay, and
-    EMA's ``shadow.copy_(live.detach()...)`` violates that contract
-    (RuntimeError at step 2). Force-override to ``default`` and warn,
-    because anima base.toml ships ``reduce-overhead`` and a silent
-    crash mid-training is worse than slightly slower kernels.
     """
-    extra: dict[str, object] = dict(cfg.backend.extra_args)
-
-    if extra.get("ema") is True:
-        opts = cfg.backend.anima_lora
-        explicit_mode = opts.compile_inductor_mode if opts is not None else None
-        ea_mode = extra.get("compile_inductor_mode")
-        effective_mode = ea_mode if ea_mode is not None else explicit_mode
-        # ``None`` here means "fall through to anima base.toml" which
-        # is reduce-overhead — same conflict, same fix.
-        if effective_mode in (None, "reduce-overhead"):
-            _log.warning(
-                "anima_lora: --ema with compile_inductor_mode=%r would "
-                "trigger cudagraph_trees liveness check failure mid-step "
-                "(EMA mutates LoRA params via detach/copy). Forcing "
-                "compile_inductor_mode=default. Set it explicitly to "
-                "silence this warning.",
-                effective_mode if effective_mode is not None else "<base.toml=reduce-overhead>",
-            )
-            # Override regardless of source — extra_args wins last
-            # in the emit order, so writing it here also overrides
-            # the shared-layer emit.
-            extra["compile_inductor_mode"] = "default"
-
-    for key, value in extra.items():
+    for key, value in cfg.backend.extra_args.items():
         flag = f"--{key}" if not key.startswith("--") else key
         if value is True:
             args.append(flag)
@@ -278,6 +251,48 @@ def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
             continue
         else:
             args.append(f"{flag}={value}")
+
+
+def _check_ema_compile_conflict(
+    opts: AnimaLoraOptions,
+    args: list[str],
+    extra_args: dict[str, object] | None = None,
+) -> None:
+    """When EMA is on, force ``--compile_inductor_mode default``.
+
+    Background: ``compile_inductor_mode='reduce-overhead'`` enables
+    cudagraph_trees, which checks input-tensor liveness across
+    capture/replay. EMA's per-step ``shadow.copy_(live.detach()...)``
+    violates that contract and crashes at step 2 with
+    ``RuntimeError: graph recording observed an input tensor
+    deallocate during graph recording that did not occur during
+    replay``. anima base.toml ships ``reduce-overhead`` by default,
+    so a silent override beats a confusing crash mid-training.
+
+    Backward compat: also reads ``ema`` from ``cfg.backend.extra_args``
+    (legacy path before EMA became an AnimaLoraOptions field).
+    """
+    ema_on = bool(opts.ema)
+    if not ema_on and extra_args is not None and extra_args.get("ema") is True:
+        ema_on = True
+    if not ema_on:
+        return
+    explicit_mode = opts.compile_inductor_mode
+    if extra_args is not None:
+        ea_mode = extra_args.get("compile_inductor_mode")
+        if ea_mode is not None:
+            explicit_mode = ea_mode  # type: ignore[assignment]
+    if explicit_mode not in (None, "reduce-overhead"):
+        return
+    _log.warning(
+        "anima_lora: ema=True with compile_inductor_mode=%r would "
+        "trigger cudagraph_trees liveness check failure mid-step "
+        "(EMA mutates LoRA params via detach/copy). Forcing "
+        "--compile_inductor_mode=default. Set compile_inductor_mode "
+        "explicitly to a non-reduce-overhead value to silence this.",
+        explicit_mode if explicit_mode is not None else "<base.toml=reduce-overhead>",
+    )
+    args.append("--compile_inductor_mode=default")
 
 
 def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
@@ -428,6 +443,16 @@ def _shared_overrides(
     out += ["--discrete_flow_shift", _fmt_float(opts.discrete_flow_shift)]
     if opts.weighting_scheme is not None:
         out += ["--weighting_scheme", opts.weighting_scheme]
+    if opts.min_snr_gamma is not None:
+        out += ["--min_snr_gamma", _fmt_float(opts.min_snr_gamma)]
+    elif opts.weighting_scheme == "min_snr_rf":
+        # Trainer reduces to uniform weighting when γ is missing — log
+        # a warning so the user notices their min_snr_rf is a no-op.
+        _log.warning(
+            "anima_lora: weighting_scheme='min_snr_rf' set without "
+            "min_snr_gamma — the trainer falls back to uniform "
+            "weighting; set min_snr_gamma (recommended 5.0) to enable."
+        )
     if opts.logit_mean is not None:
         out += ["--logit_mean", _fmt_float(opts.logit_mean)]
     if opts.logit_std is not None:
@@ -436,6 +461,20 @@ def _shared_overrides(
         out += ["--mode_scale", _fmt_float(opts.mode_scale)]
     if opts.vr_loss_weight is not None:
         out += ["--vr_loss_weight", _fmt_float(opts.vr_loss_weight)]
+
+    # ---- Training stabilisers (EMA / NaN guard / sample grid) ----
+    if opts.ema:
+        out += ["--ema"]
+        out += ["--ema_decay", _fmt_float(opts.ema_decay)]
+        if opts.ema_use_num_updates:
+            out += ["--ema_use_num_updates"]
+    if opts.nan_guard:
+        out += ["--nan_guard"]
+        out += ["--nan_guard_max_consecutive", str(opts.nan_guard_max_consecutive)]
+        if opts.nan_guard_recover:
+            out += ["--nan_guard_recover"]
+    if opts.sample_grid:
+        out += ["--sample_grid"]
 
     # ---- Caching / data ----
     if opts.cache_latents:
