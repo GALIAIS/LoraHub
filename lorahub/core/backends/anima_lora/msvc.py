@@ -95,11 +95,6 @@ def _msvc_root_via_path() -> Path | None:
         if not piece:
             continue
         norm = piece.replace("/", "\\").lower()
-        if r"\vc\tools\msvc\\" not in norm and r"\vc\tools\msvc\\" not in norm:
-            # Be permissive: VS sometimes uses ``VC\\Tools\\MSVC``,
-            # sometimes ``VC\Tools\MSVC``; the lower-case substring
-            # match below catches both.
-            pass
         if r"\vc\tools\msvc\\".replace("\\\\", "\\") in norm:
             # Walk up to the ``MSVC`` root. The PATH entry we look for
             # is ``<root>\<ver>\bin\Hostx64\x64``; root is parents[3].

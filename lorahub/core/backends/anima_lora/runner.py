@@ -72,6 +72,18 @@ class AnimaLoraRunner(SubprocessRunner):
             str(train_py),
             *argv,
         ]
+        # Silence the ``SyntaxWarning: invalid escape sequence '\('``
+        # that fires every time vendored ``library/anima/text_strategies.py``
+        # is imported. Upstream's (string literal where a raw string was
+        # meant) — we don't patch vendored code. Keep the filter scoped to
+        # this backend: kohya / diffusion-pipe shouldn't inherit it.
+        # Format: ``action:message:category:module:lineno``.
+        merged_env = {**(env or {})}
+        anima_filter = "ignore:invalid escape sequence:SyntaxWarning"
+        existing = merged_env.get("PYTHONWARNINGS", "")
+        merged_env["PYTHONWARNINGS"] = (
+            f"{anima_filter},{existing}" if existing else anima_filter
+        )
         # cwd=repo so train.py can resolve relative paths in its own
         # `configs/base.toml` model paths (`models/...`) without the
         # caller having to pre-resolve everything.
@@ -82,6 +94,6 @@ class AnimaLoraRunner(SubprocessRunner):
             parse_line=parse_line,
             cwd=repo,
             job_id=job_id,
-            env=env,
+            env=merged_env,
             thread_label="anima_lora",
         )

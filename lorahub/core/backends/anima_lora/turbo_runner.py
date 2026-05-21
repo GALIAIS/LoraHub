@@ -40,6 +40,16 @@ class AnimaLoraTurboRunner(SubprocessRunner):
     ) -> None:
         distill_py = repo / "scripts" / "distill_turbo.py"
         full_argv = [str(python), str(distill_py), *argv]
+        # Inherit the anima ``SyntaxWarning`` filter (vendored
+        # text_strategies.py uses unraw escapes). Same rationale as
+        # AnimaLoraRunner — kept inside the backend so kohya/dp
+        # subprocesses don't get the filter.
+        merged_env = {**(env or {})}
+        anima_filter = "ignore:invalid escape sequence:SyntaxWarning"
+        existing = merged_env.get("PYTHONWARNINGS", "")
+        merged_env["PYTHONWARNINGS"] = (
+            f"{anima_filter},{existing}" if existing else anima_filter
+        )
         # cwd=repo so the script can resolve relative paths in its own
         # `configs/methods/turbo.toml` defaults (model paths,
         # post_image_dataset/...) without the caller pre-resolving.
@@ -50,6 +60,6 @@ class AnimaLoraTurboRunner(SubprocessRunner):
             parse_line=parse_line,
             cwd=repo,
             job_id=job_id,
-            env=env,
+            env=merged_env,
             thread_label="anima_lora_turbo",
         )

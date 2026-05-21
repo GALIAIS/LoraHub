@@ -92,20 +92,6 @@ class SubprocessRunner:
             # callers still pin a specific encoding (e.g. for tests).
             full_env.setdefault("PYTHONIOENCODING", "utf-8")
             full_env.setdefault("PYTHONUTF8", "1")
-            # Silence the noisy ``SyntaxWarning: invalid escape sequence
-            # '\('`` that fires every time anima's vendored
-            # ``library/anima/text_strategies.py`` is imported. The
-            # warning is upstream's (string literal where a raw string
-            # was meant) — vendored code we don't patch. We use a
-            # message-targeted filter so users' own SyntaxWarnings
-            # still surface. Format:
-            # ``action:message:category:module:lineno``. Callers can
-            # prepend more rules via env if they need to.
-            existing_warn = full_env.get("PYTHONWARNINGS", "")
-            anima_filter = "ignore:invalid escape sequence:SyntaxWarning"
-            full_env["PYTHONWARNINGS"] = (
-                f"{anima_filter},{existing_warn}" if existing_warn else anima_filter
-            )
             # Strip stale Visual Studio env vars that confuse triton's
             # MSVC discovery on Windows.
             #

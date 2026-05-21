@@ -149,16 +149,13 @@ class KohyaBackend:
         # Caption sanitisation: when the recipe lists drop_tokens, mirror
         # the dataset under <workspace>/captions_sanitized/ with the
         # listed strings stripped from every .txt sidecar before kohya's
-        # compiler reads ``cfg.dataset.source``. Symlinks for images
-        # keep the disk cost negligible. No-op for empty drop_tokens.
-        from lorahub.core.config.caption_filter import sanitise_dataset  # noqa: PLC0415
-        sanitised_source = sanitise_dataset(
-            source=cfg.dataset.source,
-            drop_tokens=list(cfg.dataset.caption.drop_tokens),
-            workspace=workspace,
+        # compiler reads ``cfg.dataset.source``. No-op for empty
+        # drop_tokens. Shared with dp / anima_lora — see
+        # _common.dataset_prep.
+        from lorahub.core.backends._common.dataset_prep import (  # noqa: PLC0415
+            apply_caption_dropouts,
         )
-        if sanitised_source != cfg.dataset.source:
-            cfg.dataset.source = sanitised_source
+        apply_caption_dropouts(cfg, workspace)
 
         script_name, argv, files, compile_env = compile_config(cfg, workspace)
         if extra_argv:
