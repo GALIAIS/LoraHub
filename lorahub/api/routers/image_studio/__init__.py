@@ -23,6 +23,7 @@ from . import datasets as _datasets
 from . import dedupe as _dedupe
 from . import listings as _listings
 from . import ops as _ops
+from . import ship as _ship
 from . import similarity as _similarity
 from . import tagging as _tagging
 
@@ -36,6 +37,7 @@ router.include_router(_captions.router)
 router.include_router(_curate.router)
 router.include_router(_dedupe.router)
 router.include_router(_datasets.router)
+router.include_router(_ship.router)
 router.include_router(_similarity.router)
 router.include_router(_tagging.router)
 
