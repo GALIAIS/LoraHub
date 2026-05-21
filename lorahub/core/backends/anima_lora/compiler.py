@@ -218,11 +218,35 @@ def compile_config(
     # them up via rglob without any extra plumbing.
     argv += _sampling_overrides(cfg, workspace)
 
+    # Layer 6: escape hatch — pass cfg.backend.extra_args through verbatim
+    # so experimental train.py flags (--ema_decay, --nan_guard,
+    # --min_snr_gamma, --sample_grid, ...) can be set from a recipe
+    # without forcing every new knob into AnimaLoraOptions before it
+    # stabilises. Last write wins, mirroring kohya's _emit_extra_args.
+    _emit_extra_args(cfg, argv)
+
     # Files: a single dataset_config TOML that pins the three data
     # paths. Written under the workspace by ``backend.launch`` before
     # spawning train.py.
     files: dict[Path, str] = dict(ds_files)
     return argv, files
+
+
+def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
+    """Append ``cfg.backend.extra_args`` verbatim, last-write-wins.
+
+    Same shape as kohya's escape hatch: ``True`` becomes a bare flag,
+    ``False`` / ``None`` is dropped, anything else is ``--key=value``.
+    Keys may include the leading ``--`` already; both forms work.
+    """
+    for key, value in cfg.backend.extra_args.items():
+        flag = f"--{key}" if not key.startswith("--") else key
+        if value is True:
+            args.append(flag)
+        elif value is False or value is None:
+            continue
+        else:
+            args.append(f"{flag}={value}")
 
 
 def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:

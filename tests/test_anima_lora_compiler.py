@@ -433,3 +433,42 @@ def test_compile_emits_source_resized_lora_cache_paths(tmp_path: Path) -> None:
     # Windows; do a substring check that survives both forms.
     assert resized_expected.replace("\\", "\\\\") in body or resized_expected in body
     assert cache_expected.replace("\\", "\\\\") in body or cache_expected in body
+
+
+def test_extra_args_pass_through_verbatim(tmp_path: Path) -> None:
+    """``backend.extra_args`` must reach argv as ``--flag``/``--flag=val``.
+
+    This is the escape hatch new train.py flags ride before they're
+    promoted into AnimaLoraOptions: EMA, nan_guard, min_snr_gamma,
+    sample_grid all live here in the recipe.
+    """
+    opts = AnimaLoraOptions()
+    cfg = _recipe(tmp_path, opts)
+    cfg.backend.extra_args = {
+        "ema": True,
+        "ema_decay": 0.9999,
+        "ema_use_num_updates": True,
+        "nan_guard": True,
+        "nan_guard_recover": True,
+        "min_snr_gamma": 5,
+        "sample_grid": True,
+        "weighting_scheme": "min_snr_rf",
+        "should_be_dropped": False,
+        "also_dropped": None,
+    }
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+
+    assert "--ema" in argv
+    assert "--ema_decay=0.9999" in argv
+    assert "--ema_use_num_updates" in argv
+    assert "--nan_guard" in argv
+    assert "--nan_guard_recover" in argv
+    assert "--min_snr_gamma=5" in argv
+    assert "--sample_grid" in argv
+    # extra_args last-write-wins for any flag also emitted by the
+    # shared layer — weighting_scheme defaults to None in opts so this
+    # one only gets emitted from extra_args, but the relative order
+    # still has the extra_args copy last.
+    assert "--weighting_scheme=min_snr_rf" in argv
+    assert "--should_be_dropped" not in argv
+    assert "--also_dropped" not in argv
