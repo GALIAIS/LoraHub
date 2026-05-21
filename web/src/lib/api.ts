@@ -2207,3 +2207,77 @@ export interface UpdateEvent {
   level: "info" | "warn" | "error"
   message: string
 }
+
+// ─── Image Studio: Audit ─────────────────────────────────────────────
+
+export interface AuditHistogramBucket {
+  bucket: string
+  count: number
+}
+
+export interface AuditTagRow {
+  tag: string
+  count: number
+}
+
+export type AuditIssueKind =
+  | "corrupt"
+  | "tiny"
+  | "exif_rotation"
+  | "no_caption"
+  | "missing_trigger"
+  | "blurry"
+
+export interface AuditIssue {
+  kind: AuditIssueKind
+  path: string
+  // Each kind carries its own extras (msg / width / score / etc.)
+  // Lift them with bracket access in the UI.
+  [key: string]: unknown
+}
+
+export interface AuditReport {
+  dataset_path: string
+  scanned_at: string
+  image_count: number
+  captioned_count: number
+  trigger_word: string | null
+  trigger_word_hits: number
+  resolution_histogram: AuditHistogramBucket[]
+  ar_histogram: AuditHistogramBucket[]
+  filesize_histogram: AuditHistogramBucket[]
+  caption_length_histogram: AuditHistogramBucket[]
+  tag_vocab: AuditTagRow[]
+  issues: AuditIssue[]
+  duration_s: number
+}
+
+export async function imageStudioAuditScan(body: {
+  dataset_path: string
+  recursive?: boolean
+  trigger_word?: string | null
+  blur_check?: boolean
+  max_images?: number | null
+}): Promise<AuditReport> {
+  return http<AuditReport>("/image-studio/audit/scan", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function imageStudioAuditReport(
+  datasetPath: string,
+): Promise<AuditReport | null> {
+  // 404 → no cache yet (caller renders empty state). Match against
+  // the message shape http() throws.
+  try {
+    return await http<AuditReport>(
+      `/image-studio/audit/report?dataset_path=${encodeURIComponent(
+        datasetPath,
+      )}`,
+    )
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("404 ")) return null
+    throw e
+  }
+}
