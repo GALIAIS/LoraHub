@@ -52,7 +52,6 @@ const STEP_PLANS: Record<BackendId, StepDef[]> = {
     // lorahub/core/toolchain/uv.py::create_venv). We also accept a
     // permissive form so a future label change still highlights this step.
     { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
-    { id: "pip", label: "升级 pip / wheel", match: /^upgrade\s+pip/i },
     { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
     {
       id: "requirements",
@@ -64,7 +63,6 @@ const STEP_PLANS: Record<BackendId, StepDef[]> = {
   "diffusion-pipe": [
     { id: "clone", label: "克隆仓库", match: /^clone\s+tdrussell\//i },
     { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
-    { id: "pip", label: "升级 pip / wheel", match: /^upgrade\s+pip/i },
     { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
     {
       id: "requirements",

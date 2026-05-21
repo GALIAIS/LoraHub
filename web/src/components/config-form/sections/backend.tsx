@@ -90,15 +90,16 @@ export const BackendFields = memo(function BackendFields({
           }
         />
       </Row>
-      <Row label="锁定版本" description="可选。锁定 sd-scripts / dp 的 git ref / tag(对 anima_lora 无效,vendored)。">
+      <Row
+        label="锁定版本"
+        description="schema-only 字段：保留以兼容旧 YAML,但当前 installer 不会读取。如需锁定到特定 git ref,手动 cd 到后端仓库后 git checkout。"
+      >
         <Input
           value={v.pinVersion ?? ""}
           className="font-mono w-64"
           onChange={(e) => set(["backend", "pinVersion"], e.target.value || null)}
-          placeholder={
-            type === "anima_lora" ? "(对 vendored 后端无效)" : "例如 main、sdxl、0.8.4"
-          }
-          disabled={type === "anima_lora"}
+          placeholder="(未实装,仅 YAML 占位)"
+          disabled
         />
       </Row>
     </>

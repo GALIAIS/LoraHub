@@ -91,7 +91,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
 
 
 class InstallDepsRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe"] = "diffusion-pipe"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
 
 
 @router.post("/backend/install-deps", status_code=202)
@@ -161,6 +161,34 @@ def _build_deps_runner(
         def runner(progress: Callable[[str], None]) -> None:
             installer.install_requirements(plan, progress=progress)
 
+    elif req.backend == "anima_lora":
+        # anima_lora doesn't have a "requirements only" install step —
+        # the whole flow is ``uv sync``. Re-running it is the moral
+        # equivalent of "reinstall deps", and the fast-path in uv
+        # makes it a near no-op when nothing changed.
+        from lorahub.core.backends.anima_lora import (  # noqa: PLC0415
+            bootstrap as al_bootstrap,
+            installer as al_installer,
+        )
+
+        target_path = al_bootstrap.default_repo_path()
+        if not (target_path / "pyproject.toml").is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"vendored anima_lora copy at {target_path} missing — "
+                    "the repo source tree may be corrupted."
+                ),
+            )
+        plan = al_installer.BootstrapPlan(
+            target=target_path,
+            base_python=None,
+            pypi_index=settings.pypi_index_url,
+        )
+
+        def runner(progress: Callable[[str], None]) -> None:
+            al_installer.sync(plan, progress=progress)
+
     else:
         from lorahub.core.backends.kohya import installer  # noqa: PLC0415
         from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
@@ -219,7 +247,7 @@ _FLASH_ATTN_DOC_URL = "https://github.com/Dao-AILab/flash-attention#installation
 
 
 class InstallFlashAttnRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe"] = "diffusion-pipe"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
     # FA2 is the only version we install automatically. FA3/FA4 are still
     # accepted so the frontend can surface a single endpoint, but they
     # return 501 with a link to the upstream install docs.
@@ -302,6 +330,11 @@ def _build_flash_attn2_runner(req: InstallFlashAttnRequest) -> Any:
         )
         repo_path = Path(repo_raw).expanduser()
         venv_py = _venv_python(repo_path)
+    elif req.backend == "anima_lora":
+        from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap  # noqa: PLC0415
+
+        repo_path = al_bootstrap.default_repo_path()
+        venv_py = al_bootstrap._venv_python(repo_path)
     else:
         from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
             _venv_python,

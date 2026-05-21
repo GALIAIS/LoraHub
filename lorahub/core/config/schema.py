@@ -19,10 +19,14 @@ spelunking a single field "is anyone reading this?":
 
   2. **Runtime-level fields** (``sampling.enable_live_inference``,
      ``sampling.inference_steps`` / ``inference_cfg``,
-     ``backend.sd_scripts_path``, ``backend.python_executable``,
-     ``backend.pin_version``). The compiler doesn't read these; they're
-     consumed by ``lorahub.api.jobs_helpers`` (live preview worker) or
-     ``lorahub.api.routers.bootstrap`` (which kohya checkout to install).
+     ``backend.sd_scripts_path``, ``backend.python_executable``).
+     The compiler doesn't read these; they're consumed by
+     ``lorahub.api.jobs_helpers`` (live preview worker).
+
+     ``backend.pin_version`` is **schema-only today** — kept for
+     YAML round-trip compatibility but the bootstrap installer
+     ignores it. If you want to lock to a specific git ref, do
+     it manually via ``cd <repo> && git checkout <sha>``.
 
   3. **UI-only fields** (``schema_version``, ``dataset.caption.strategy``).
      Frontend form gates UI controls on these; backends ignore them.
