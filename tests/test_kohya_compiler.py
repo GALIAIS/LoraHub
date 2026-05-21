@@ -208,71 +208,19 @@ def test_sampling_args_only_when_prompts_present() -> None:
     )
 
 
-def test_sampling_attention_default_emits_no_extra_argv() -> None:
-    """The schema default (`"default"`) must keep argv byte-identical to recipes
-    that omit the field entirely. Otherwise existing recipes would drift."""
+def test_sampling_attention_legacy_field_silently_ignored() -> None:
+    """The ``sampling.attention`` field was removed (schema-only knob,
+    no compiler ever wired it). Legacy YAML files carrying it must
+    still load — pydantic's default ``extra="ignore"`` policy on
+    SamplingConfig drops the unknown key. The compiled argv stays
+    byte-identical to a recipe that omits the field."""
     baseline = _argv(_recipe(sampling={"prompts_file": "/p/eval.txt"}))
-    explicit = _argv(
+    legacy = _argv(
         _recipe(
-            sampling={"prompts_file": "/p/eval.txt", "attention": "default"}
+            sampling={"prompts_file": "/p/eval.txt", "attention": "sageattn"}
         )
     )
-    assert baseline == explicit
-
-
-def test_sampling_attention_non_default_does_not_emit_attn_mode(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """SageAttention has no working backward; the compiler must NOT inject
-    ``--attn_mode`` into argv (which kohya wires into the *training* forward
-    on anima/hunyuan_image), and must surface a warning so the user knows the
-    field is parked until the wrapper lands."""
-    cfg = _recipe(
-        sampling={"prompts_file": "/p/eval.txt", "attention": "sageattn"}
-    )
-    with caplog.at_level("WARNING", logger="lorahub.core.backends.kohya.compiler"):
-        args = _argv(cfg)
-
-    assert not any(a.startswith("--attn_mode") for a in args)
-    assert any(
-        "sampling.attention" in rec.message and "sageattn" in rec.message
-        for rec in caplog.records
-    ), [rec.message for rec in caplog.records]
-
-
-def test_sampling_attention_non_default_compiles_for_every_kohya_arch(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Picking a non-default attention must never raise CompilationError --
-    the field is purely additive. Cover every kohya entry script so we catch
-    accidental coupling later."""
-    archs = [
-        "sd15", "sd2", "sdxl", "sd3", "flux", "lumina",
-        "hunyuan_image", "anima",
-    ]
-    for arch in archs:
-        cfg = TrainingConfig.model_validate(
-            {
-                "base_model": {"arch": arch, "checkpoint": "/m.safetensors"},
-                "dataset": {"source": "/d"},
-                "sampling": {"prompts_file": "/p/eval.txt", "attention": "xformers"},
-            }
-        )
-        # Should not raise; argv stays free of `--attn_mode` regardless of arch.
-        _, args, _files, _env = compile_config(cfg, Path("/ws"))
-        assert not any(a.startswith("--attn_mode") for a in args), arch
-
-
-def test_sampling_attention_silent_when_sampling_disabled(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """If sampling is disabled the attention preference is moot, no warning."""
-    cfg = _recipe(sampling={"enabled": False, "attention": "sageattn"})
-    with caplog.at_level("WARNING", logger="lorahub.core.backends.kohya.compiler"):
-        _argv(cfg)
-    assert not any(
-        "sampling.attention" in rec.message for rec in caplog.records
-    )
+    assert baseline == legacy
 
 
 def test_extra_args_escape_hatch() -> None:

@@ -555,33 +555,21 @@ def test_dp_optimization_kitchen_sink() -> None:
     assert 'optim_dtype = "bf16"' in main
     # torch_compile / fused_backward_pass remain dp no-ops.
     assert "fused_backward" not in main
-def test_sampling_attention_default_silent(caplog: pytest.LogCaptureFixture) -> None:
-    """Default value is the silent path: no warning, no TOML drift."""
-    cfg = _recipe(sampling={"attention": "default"})
-    with caplog.at_level("WARNING", logger="lorahub.core.backends.diffusion_pipe.compiler"):
-        argv, files = _compile(cfg)
-    assert argv  # sanity: still produced
-    assert not any(
-        "sampling.attention" in rec.message for rec in caplog.records
-    )
 
 
-def test_sampling_attention_non_default_warns_and_no_toml_drift(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """dp's eval pass shares the training attention kernel, so the field is
-    parked. Warn on non-default values; the resulting TOML must stay byte
-    identical to the default-attention recipe -- otherwise we'd silently
-    leak the field into upstream's TOML and break the run."""
+def test_sampling_attention_legacy_field_silently_ignored() -> None:
+    """``sampling.attention`` was removed (schema-only knob, dp's
+    eval/sample reuses the training attention kernel). Legacy YAML
+    files carrying it must still load — pydantic's default
+    ``extra="ignore"`` policy on SamplingConfig drops the unknown
+    key. Resulting TOML stays byte-identical to a recipe that omits
+    the field."""
     baseline = _main_toml(_recipe())
     cfg = _recipe(sampling={"attention": "sageattn"})
-    with caplog.at_level("WARNING", logger="lorahub.core.backends.diffusion_pipe.compiler"):
-        main = _main_toml(cfg)
+    main = _main_toml(cfg)
     assert main == baseline
-    assert any(
-        "sampling.attention" in rec.message and "sageattn" in rec.message
-        for rec in caplog.records
-    ), [rec.message for rec in caplog.records]
+
+
 # attention.training: dp auto-detects, so it's mostly advisory
 # --------------------------------------------------------------------------- #
 

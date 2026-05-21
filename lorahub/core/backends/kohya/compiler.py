@@ -568,27 +568,6 @@ def _emit_sampling_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -
         args.append(f"--sample_every_n_steps={s.every_n_steps}")
     if s.at_first:
         args.append("--sample_at_first")
-    # `sampling.attention != "default"` is reserved for a future sample-only
-    # attention dispatcher (motivated by SageAttention's INT8 forward, which
-    # has no matching backward and would corrupt LoRA gradients if injected
-    # into the training pass). The kohya entry scripts that *do* expose
-    # `--attn_mode` (anima, hunyuan_image) wire it into both the training
-    # forward AND the sample forward, so we deliberately do **not** emit
-    # `--attn_mode` here: doing so would silently flip training onto a
-    # gradient-broken kernel. The schema field is kept so recipes can be
-    # authored ahead of the wrapper landing.
-    # TODO(batch A2 follow-up): land `_sample_attn_patch.py` wrapper +
-    # PYTHONSTARTUP injection in runner.py once a per-arch dispatch audit
-    # confirms `library/attention.py` is the single hook point for sample
-    # path on every kohya script we support.
-    if s.attention != "default":
-        logger.warning(
-            "sampling.attention=%r is recorded but not yet wired into the "
-            "kohya sample pass; training argv stays on the training-pass "
-            "attention backend to keep LoRA gradients safe. Drop the field "
-            "or set it back to 'default' to silence this warning.",
-            s.attention,
-        )
 
 
 def _emit_resume_args(cfg: TrainingConfig, args: list[str]) -> None:

@@ -129,21 +129,6 @@ def compile_config(
     config_path = workspace / "diffusion_pipe.toml"
     dataset_path = workspace / "dataset.toml"
 
-    # diffusion-pipe's eval / sample path is just `model.eval()` followed by a
-    # forward pass on the same attention kernel the training pass uses (see
-    # `diffusion-pipe/train.py::evaluate_single`). There is no per-pass switch
-    # to flip into a different attention backend, so `sampling.attention` is
-    # currently unsupported on this backend; warn loudly so users move it to a
-    # kohya recipe instead of silently getting the training kernel.
-    # TODO(batch A2 follow-up): plumb dp-side attention swap through
-    # `diffusion-pipe/models/*` once an upstream-friendly hook lands.
-    if cfg.sampling.attention != "default":
-        _log.warning(
-            "sampling.attention=%r is recorded but ignored on the "
-            "diffusion-pipe backend; dp's eval/sample reuses the training "
-            "attention kernel and has no per-pass override yet.",
-            cfg.sampling.attention,
-        )
     _log_attention_choice(cfg)
 
     files: dict[Path, str] = {

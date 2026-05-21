@@ -508,14 +508,12 @@ class SamplingConfig(BaseModel):
     prompts_file: Path | None = None
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
     seed: int = 42
-    # Attention backend used ONLY for sample image generation. Training
-    # forward stays on `cfg.attention.training`. SageAttention is the
-    # main motivator: its INT8 forward kernel has no matching backward
-    # so it would corrupt LoRA gradients in training, but it's safe and
-    # fast in the sample/validation pipeline (long-video previews on
-    # Wan / HunyuanVideo are where it pays off most).
-    # `default` reuses the training backend; explicit choice overrides.
-    attention: Literal["default", "torch", "sdpa", "xformers", "flash", "sageattn"] = "default"
+    # NOTE: ``sampling.attention`` was removed — sample-stage attention
+    # backend selection was schema-only (no compiler ever wired it
+    # through to the trainer). Existing YAML files carrying it load
+    # cleanly because pydantic's default ``extra="ignore"`` policy
+    # silently drops the unknown key. Sample images now always reuse
+    # ``cfg.attention.training``.
 
     # diffusion-pipe doesn't generate preview images on its own. When
     # `enable_live_inference` is on, the lorahub job runner starts a
@@ -536,9 +534,11 @@ class SamplingConfig(BaseModel):
 class AttentionConfig(BaseModel):
     """Selects the attention kernel for the training forward+backward pass.
 
-    Backends with no working backward (every flavour of SageAttention) are
-    intentionally absent from this enum — they belong on
-    ``sampling.attention``. ``flash3`` / ``flash4`` require Hopper /
+    SageAttention and other backward-incompatible kernels are not in
+    this enum because there is no separate sampling-stage attention
+    selector — sample images reuse this same training backend. If the
+    backend's forward is unsafe in eval mode, the trainer surfaces it
+    as a launch warning. ``flash3`` / ``flash4`` require Hopper /
     Blackwell hardware respectively; the runtime gates them by
     compute-capability and falls back to ``flash`` (FlashAttention 2)
     when the host can't run the chosen kernel.

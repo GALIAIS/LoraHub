@@ -217,7 +217,6 @@ export interface ConfigFormValue {
     promptsFile?: string | null
     resolution?: [number, number] | number[]
     seed?: number
-    attention?: string
   }
   output?: {
     name?: string
