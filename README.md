@@ -2,7 +2,6 @@
 
 自托管的 LoRA 训练工作台。把 kohya / diffusion-pipe / anima_lora 三个训练后端套在同一份配置 schema、同一套 REST + SSE API 和同一个 React Web UI 之下。
 
-[![CI](https://github.com/GALIAIS/LoraHub/actions/workflows/ci.yml/badge.svg)](https://github.com/GALIAIS/LoraHub/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
