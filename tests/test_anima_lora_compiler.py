@@ -672,8 +672,13 @@ def test_dora_and_ortho_mutex_rejected_at_validation(tmp_path: Path) -> None:
     """
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
 
-    with pytest.raises(ValueError, match="use_ortho=True"):
+    # Two legacy bools both True is rejected by the multi-True guard.
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_dora=True)
+    # Explicit ``algorithm=ortho`` paired with ``use_dora=True`` is the
+    # other inconsistency path; reconciler emits a tailored message.
+    with pytest.raises(ValueError, match="use_dora=True disagrees"):
+        AnimaLoraMethodLoraConfig(algorithm="ortho", use_dora=True)
 
 
 def test_ia3_emits_use_ia3_network_arg(tmp_path: Path) -> None:
@@ -692,9 +697,9 @@ def test_ia3_mutex_with_dora_or_ortho_rejected(tmp_path: Path) -> None:
     """IA3 has no LoRA legs to compose with — pydantic rejects the combo."""
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
 
-    with pytest.raises(ValueError, match="use_ia3"):
-        AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True, use_dora=True)
-    with pytest.raises(ValueError, match="use_ia3"):
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
+        AnimaLoraMethodLoraConfig(use_ia3=True, use_dora=True)
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_ia3=True)
 
 
@@ -724,21 +729,15 @@ def test_loha_emits_use_loha(tmp_path: Path) -> None:
 
 
 def test_atomic_variants_mutually_exclusive(tmp_path: Path) -> None:
-    """Only one of {ia3, lokr, loha, full} can be on — pydantic rejects the combo."""
+    """Two legacy use_X True together is rejected by the multi-True guard."""
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
 
-    with pytest.raises(ValueError, match="Mutually exclusive"):
-        AnimaLoraMethodLoraConfig(
-            use_ortho=False, use_ia3=True, use_lokr=True
-        )
-    with pytest.raises(ValueError, match="Mutually exclusive"):
-        AnimaLoraMethodLoraConfig(
-            use_ortho=False, use_lokr=True, use_loha=True
-        )
-    with pytest.raises(ValueError, match="Mutually exclusive"):
-        AnimaLoraMethodLoraConfig(
-            use_ortho=False, use_full=True, use_ia3=True
-        )
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
+        AnimaLoraMethodLoraConfig(use_ia3=True, use_lokr=True)
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
+        AnimaLoraMethodLoraConfig(use_lokr=True, use_loha=True)
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
+        AnimaLoraMethodLoraConfig(use_full=True, use_ia3=True)
 
 
 def test_dylora_emits_use_dylora(tmp_path: Path) -> None:
@@ -769,9 +768,9 @@ def test_dylora_mutex_with_dora_or_ortho(tmp_path: Path) -> None:
     """DyLoRA's rank truncation doesn't compose with magnitude / Cayley."""
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
 
-    with pytest.raises(ValueError, match="use_dylora"):
-        AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True, use_dora=True)
-    with pytest.raises(ValueError, match="use_dylora"):
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
+        AnimaLoraMethodLoraConfig(use_dylora=True, use_dora=True)
+    with pytest.raises(ValueError, match="multiple legacy use_X"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_dylora=True)
 
 
@@ -824,3 +823,58 @@ def test_vera_emits_use_vera(tmp_path: Path) -> None:
     cfg = _recipe(tmp_path, opts)
     argv, _ = compile_config(cfg, tmp_path / "ws")
     assert "use_vera=true" in argv
+
+
+def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
+    """``algorithm=<name>`` (no legacy bools) emits the matching use_X=true.
+
+    Future-default path — once back-compat callers migrate, the legacy
+    booleans shouldn't need to appear at all.
+    """
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    cases = [
+        ("lora", "use_ortho=false"),  # plain LoRA — every selector false
+        ("ortho", "use_ortho=true"),
+        ("dora", "use_dora=true"),
+        ("ia3", "use_ia3=true"),
+        ("lokr", "use_lokr=true"),
+        ("loha", "use_loha=true"),
+        ("dylora", "use_dylora=true"),
+        ("full", "use_full=true"),
+        ("diag_oft", "use_diag_oft=true"),
+        ("boft", "use_boft=true"),
+        ("glora", "use_glora=true"),
+        ("vera", "use_vera=true"),
+    ]
+    for i, (algo, expected) in enumerate(cases):
+        # Distinct sub-tmp_path per case so _recipe's data.mkdir() and
+        # the dataset_config TOML write don't collide.
+        sub = tmp_path / f"case_{i}_{algo}"
+        sub.mkdir()
+        opts = AnimaLoraOptions(
+            lora=AnimaLoraMethodLoraConfig(algorithm=algo),
+        )
+        cfg = _recipe(sub, opts)
+        argv, _ = compile_config(cfg, sub / "ws")
+        assert expected in argv, (
+            f"algorithm={algo!r} should emit {expected!r}; argv={argv}"
+        )
+
+
+def test_legacy_bool_back_compat(tmp_path: Path) -> None:
+    """Setting only ``use_X=True`` (no enum) still works — bool wins."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    cfg_obj = AnimaLoraMethodLoraConfig(use_dora=True)
+    assert cfg_obj.algorithm == "dora"
+    cfg_obj = AnimaLoraMethodLoraConfig(use_lokr=True)
+    assert cfg_obj.algorithm == "lokr"
+
+
+def test_explicit_enum_disagrees_with_bool_rejected(tmp_path: Path) -> None:
+    """Explicit ``algorithm`` + contradictory ``use_X=True`` raises."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    with pytest.raises(ValueError, match="disagrees"):
+        AnimaLoraMethodLoraConfig(algorithm="lokr", use_dora=True)

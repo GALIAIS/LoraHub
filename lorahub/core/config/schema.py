@@ -41,7 +41,7 @@ diffusion-pipe.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -788,108 +788,143 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     get on kohya — upstream stacks OrthoLoRA + T-LoRA on top by default.
     Tracking those knobs here keeps the LoraHub schema explicit about the
     stack instead of hiding it in the compiler.
+
+    Algorithm selection: prefer ``algorithm`` (string enum) — it's the
+    single authoritative knob. The legacy ``use_X`` booleans are kept
+    for back-compat and resolved into ``algorithm`` by ``_normalise``;
+    setting both an inconsistent enum + bool pair is rejected.
     """
 
     model_config = _CAMEL_CONFIG
 
-    use_ortho: bool = True
-    # DoRA (Liu et al. ICML'24) — split each adapted Linear's weight into
-    # direction (W / ‖W‖_c) and a learnable per-output column magnitude.
-    # The LoRA Δ trains the direction; the magnitude trains the scale.
-    # Mutually exclusive with use_ortho — DoRA's magnitude column is
-    # consumed by ComfyUI's standard LoRA loader as ``.dora_scale``, but
-    # OrthoLoRA's Cayley parameterization writes its own distill keys
-    # that don't round-trip through the DoRA save layout.
-    use_dora: bool = False
-    # IA3 (Liu et al. NeurIPS'22) — per-output rescaling of activations,
-    # no LoRA legs. Mutually exclusive with the LoRA-leg variants
-    # (lora / ortho / dora) and with the MoE expert layouts. Foldable
-    # at save time as ``W' = ℓ ⊙ W``, ``b' = ℓ ⊙ b`` so inference uses
-    # an unmodified Linear.
-    use_ia3: bool = False
-    # LoKr (LyCORIS, arXiv:2212.10650) — Kronecker-product decomposition.
-    # Tiny parameter count for typical DiT projection sizes.
-    # Mutually exclusive with the rest of the LoRA-leg variants.
-    use_lokr: bool = False
-    # LoKr factor — picks the (a, c) split of out_dim and (b, d) split
-    # of in_dim. Larger factor → more expressive W₁, smaller LoRA leg.
+    # Authoritative algorithm selector. Default ``ortho`` preserves
+    # anima's upstream behaviour (OrthoLoRA stack on top of LoRA);
+    # set ``algorithm="lora"`` for the bare-LoRA baseline. Enum values
+    # match the keys in
+    # ``external/anima_lora/networks/__init__.py::NETWORK_REGISTRY``.
+    algorithm: Literal[
+        "lora",
+        "ortho",
+        "dora",
+        "ia3",
+        "lokr",
+        "loha",
+        "dylora",
+        "full",
+        "diag_oft",
+        "boft",
+        "glora",
+        "vera",
+    ] = "ortho"
+
+    # ---- Legacy boolean toggles (deprecated) ----
+    # Kept as optional shadows of ``algorithm`` for back-compat with
+    # YAML / API consumers written before the enum landed. ``None``
+    # means "user didn't touch this knob, use the enum"; ``True`` /
+    # ``False`` is reconciled against the enum in ``_normalise`` and
+    # an inconsistency raises.
+    use_ortho: bool | None = None
+    use_dora: bool | None = None
+    use_ia3: bool | None = None
+    use_lokr: bool | None = None
+    use_loha: bool | None = None
+    use_dylora: bool | None = None
+    use_full: bool | None = None
+    use_diag_oft: bool | None = None
+    use_boft: bool | None = None
+    use_glora: bool | None = None
+    use_vera: bool | None = None
+
+    # Algorithm-specific knobs (only consulted by the matching
+    # algorithm; ignored otherwise).
     lokr_factor: int = Field(8, ge=1)
-    # LoHA (FedPara, arXiv:2108.06098) — Hadamard product of two LoRA
-    # pairs; effective rank up to ``r²`` at twice a LoRA's parameter
-    # count. Mutually exclusive as above.
-    use_loha: bool = False
-    # DyLoRA (Valipour et al. EACL'23) — random rank truncation during
-    # training, full rank at inference. Saves bit-identical to plain
-    # LoRA so ComfyUI loads it without changes. Mutually exclusive
-    # with the atomic decompositions and the MoE expert layouts.
-    use_dylora: bool = False
-    # Full — free-Δ (out × in) wrapper, no decomposition.  Useful as
-    # a matched-capacity baseline; not foldable into base.toml's
-    # production presets but available for ablation runs.
-    use_full: bool = False
-    # Diag-OFT (Qiu et al. NeurIPS'23) — block-diagonal orthogonal
-    # rotation of the host weight via Cayley parameterisation. Hyper-
-    # spherical-energy preserving by construction; incompatible with
-    # any LoRA-leg variant or MoE expert layout.
-    use_diag_oft: bool = False
-    # BOFT (Liu et al. arXiv:2311.06243) — m-stage butterfly
-    # composition of block-diagonal orthogonals; recovers SO(out_dim)
-    # at m ≥ log_2(out_dim).  Same composition rules as Diag-OFT.
-    use_boft: bool = False
-    # Number of butterfly stages composed when ``use_boft=True``.
     boft_factors: int = Field(4, ge=1)
-    # GLoRA-light (Chavan et al. arXiv:2306.07967) — LoRA + a per-rank
-    # diagonal gate vector ``d ∈ R^r``. Encourages rank pruning by
-    # sparsifying the gate. Mutually exclusive with the other atomic
-    # variants and the LoRA-leg modifiers.
-    use_glora: bool = False
-    # VeRA (Kopiczko et al. ICLR'24, arXiv:2310.11454) — frozen random
-    # ``A`` (r × in) + ``B`` (out × r) plus two trainable scale
-    # vectors ``λ_b ∈ R^out`` and ``λ_d ∈ R^r``. Per-Linear in this
-    # implementation (not full-network shared); see vera.py for the
-    # tradeoff note.
-    use_vera: bool = False
+
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
+    # Composes with any LoRA-leg algorithm; a no-op for atomic variants
+    # (ia3 / lokr / loha / full / diag_oft / boft / glora / vera) but
+    # keeping the field on universally simplifies the front-end.
     use_timestep_mask: bool = True
     min_rank: int = Field(8, ge=1)
     alpha_rank_scale: float = Field(1.0, gt=0)
 
+    # Mapping legacy ``use_X`` booleans → algorithm enum value. Ordered
+    # so the first True one wins when two are accidentally co-enabled
+    # (the validator reports the conflict explicitly anyway).
+    _BOOL_TO_ALGORITHM: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("use_dora", "dora"),
+        ("use_ia3", "ia3"),
+        ("use_lokr", "lokr"),
+        ("use_loha", "loha"),
+        ("use_dylora", "dylora"),
+        ("use_full", "full"),
+        ("use_diag_oft", "diag_oft"),
+        ("use_boft", "boft"),
+        ("use_glora", "glora"),
+        ("use_vera", "vera"),
+        # ``use_ortho`` last so DoRA / atomic / etc. take priority over
+        # the ortho stack default — the bool reads "stack OrthoLoRA on
+        # top" and pre-enum YAML wrote ``use_ortho=true`` as the default.
+        ("use_ortho", "ortho"),
+    )
+
     @model_validator(mode="after")
-    def _check_mutex(self) -> AnimaLoraMethodLoraConfig:
-        if self.use_dora and self.use_ortho:
-            msg = (
-                "AnimaLoraMethodLoraConfig: use_dora=True with use_ortho=True "
-                "is not supported — DoRA writes per-Linear .magnitude that "
-                "OrthoLoRA's distill chain doesn't preserve. Pick one."
-            )
-            raise ValueError(msg)
-        atomic = [
-            ("use_ia3", self.use_ia3),
-            ("use_lokr", self.use_lokr),
-            ("use_loha", self.use_loha),
-            ("use_full", self.use_full),
-            ("use_diag_oft", self.use_diag_oft),
-            ("use_boft", self.use_boft),
-            ("use_glora", self.use_glora),
-            ("use_vera", self.use_vera),
+    def _normalise(self) -> AnimaLoraMethodLoraConfig:
+        """Reconcile ``algorithm`` with the legacy ``use_X`` shadows.
+
+        Three cases:
+          1. User set only ``algorithm``: leave ``use_X`` shadows as
+             ``None`` (front-end and compiler both read enum first).
+          2. User set only ``use_X`` toggles: derive ``algorithm`` from
+             the first True bool, leaving the explicit ``use_X = False``
+             shadows in place so a round-trip preserves intent.
+          3. User set both: reject if they disagree; otherwise pass.
+
+        ``use_ortho=True`` + a non-LoRA-leg algorithm (e.g. dora) is
+        rejected too — these don't compose for save-layout reasons.
+        """
+        # Collect explicitly-True legacy bools.
+        explicit_true = [
+            field for field, _ in self._BOOL_TO_ALGORITHM
+            if getattr(self, field) is True
         ]
-        enabled = [name for name, on in atomic if on]
-        if len(enabled) > 1:
+        if len(explicit_true) > 1:
             raise ValueError(
-                f"Mutually exclusive variants enabled: {enabled}"
+                f"AnimaLoraMethodLoraConfig: multiple legacy use_X toggles set "
+                f"to True ({explicit_true}); set at most one, or use the "
+                f"``algorithm`` enum instead."
             )
-        if enabled and (self.use_dora or self.use_ortho or self.use_dylora):
-            raise ValueError(
-                f"AnimaLoraMethodLoraConfig: {enabled[0]} cannot combine with "
-                "use_dora / use_ortho / use_dylora — these atomic decompositions"
-                " own the full delta and have no LoRA legs to compose with."
-            )
-        if self.use_dylora and (self.use_dora or self.use_ortho):
-            raise ValueError(
-                "AnimaLoraMethodLoraConfig: use_dylora cannot combine with "
-                "use_dora / use_ortho — rank-truncation prefix doesn't compose"
-                " with magnitude / Cayley distill."
-            )
+
+        # Did the user explicitly set ``algorithm``? If not, the legacy
+        # bool wins (back-compat: callers that pre-date the enum still
+        # work). Pydantic v2 exposes ``model_fields_set`` (via the
+        # internal ``__pydantic_fields_set__``) to disambiguate.
+        algorithm_explicit = "algorithm" in self.__pydantic_fields_set__
+
+        if explicit_true:
+            field = explicit_true[0]
+            mapped = dict(self._BOOL_TO_ALGORITHM)[field]
+            if algorithm_explicit and self.algorithm != mapped:
+                # ``use_ortho=True`` paired with another algorithm is the
+                # most likely "user added DoRA but forgot to drop the
+                # legacy ortho default" path; help them fix it.
+                if field == "use_ortho":
+                    raise ValueError(
+                        f"AnimaLoraMethodLoraConfig: use_ortho=True with "
+                        f"algorithm={self.algorithm!r} is not supported. "
+                        f"OrthoLoRA's Cayley distill keys don't compose "
+                        f"with the {self.algorithm} save layout. Pick one."
+                    )
+                raise ValueError(
+                    f"AnimaLoraMethodLoraConfig: legacy {field}=True "
+                    f"disagrees with algorithm={self.algorithm!r}. Drop "
+                    f"the bool, or set algorithm={mapped!r}."
+                )
+            # Legacy bool wins when algorithm is the default.
+            object.__setattr__(self, "algorithm", mapped)
+
+        # No-op: ``use_X=False`` is just confirming the algorithm not
+        # being chosen.
         return self
 
 

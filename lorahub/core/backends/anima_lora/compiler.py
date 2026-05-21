@@ -736,30 +736,50 @@ def _network_args(*pairs: str) -> list[str]:
 def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
     """LoRA family stack — anima_lora's full algorithm surface.
 
-    Covers LoRA / OrthoLoRA / T-LoRA / DoRA / IA3 / LoKr / LoHA /
-    DyLoRA / Full / Diag-OFT / BOFT / GLoRA / VeRA. All knobs feed
-    ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs`` via
-    ``--network_args`` k=v pairs; none of them is an argparse flag.
+    Drives selection from the canonical ``algorithm`` enum and emits
+    one ``use_X=true`` per matching algorithm so the existing anima
+    network factory (which still keys off the ``use_X`` flags) picks
+    up the choice. Algorithm-specific knobs (lokr_factor, boft_factors)
+    are forwarded too — harmless when the algorithm doesn't use them.
     """
     sub = opts.lora
-    pieces: list[str] = [
-        f"use_ortho={'true' if sub.use_ortho else 'false'}",
-        f"use_dora={'true' if sub.use_dora else 'false'}",
-        f"use_ia3={'true' if sub.use_ia3 else 'false'}",
-        f"use_lokr={'true' if sub.use_lokr else 'false'}",
-        f"use_loha={'true' if sub.use_loha else 'false'}",
-        f"use_dylora={'true' if sub.use_dylora else 'false'}",
-        f"use_full={'true' if sub.use_full else 'false'}",
-        f"use_diag_oft={'true' if sub.use_diag_oft else 'false'}",
-        f"use_boft={'true' if sub.use_boft else 'false'}",
-        f"use_glora={'true' if sub.use_glora else 'false'}",
-        f"use_vera={'true' if sub.use_vera else 'false'}",
-        f"lokr_factor={sub.lokr_factor}",
-        f"boft_factors={sub.boft_factors}",
-        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
-        f"min_rank={sub.min_rank}",
-        f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}",
-    ]
+    # Map enum value → ``use_X`` flag(s) to emit. Most algorithms map
+    # 1:1; ``ortho`` is the special case that just enables the legacy
+    # ortho stack (no other algorithm-specific bool needed).
+    flag_for_algorithm: dict[str, str | None] = {
+        "lora": None,
+        "ortho": "use_ortho",
+        "dora": "use_dora",
+        "ia3": "use_ia3",
+        "lokr": "use_lokr",
+        "loha": "use_loha",
+        "dylora": "use_dylora",
+        "full": "use_full",
+        "diag_oft": "use_diag_oft",
+        "boft": "use_boft",
+        "glora": "use_glora",
+        "vera": "use_vera",
+    }
+    pieces: list[str] = []
+    chosen = sub.algorithm
+    selector = flag_for_algorithm.get(chosen)
+    # Emit every selector explicitly false except the chosen one — the
+    # anima factory's resolve_network_spec walks them in order; an
+    # explicit false avoids legacy YAML's old defaults sneaking in.
+    for algo, flag in flag_for_algorithm.items():
+        if flag is None:
+            continue
+        pieces.append(f"{flag}={'true' if algo == chosen else 'false'}")
+    # Algorithm-specific scalars.
+    pieces.append(f"lokr_factor={sub.lokr_factor}")
+    pieces.append(f"boft_factors={sub.boft_factors}")
+    # T-LoRA / rank knobs — composed with any LoRA-leg algorithm,
+    # ignored by atomic variants.
+    pieces.append(
+        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}"
+    )
+    pieces.append(f"min_rank={sub.min_rank}")
+    pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")
     return _network_args(*pieces)
 
 

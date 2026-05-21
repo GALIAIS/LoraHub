@@ -52,8 +52,12 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     # ``torch`` (PyTorch SDPA) is the default since the flash-attn
     # gate landed — flash-attn 是可选可缺的扩展,SDPA 在每台机器上都可用。
     assert opts.attn_mode == "torch"
-    # method=lora's default stack: OrthoLoRA + T-LoRA both on.
-    assert opts.lora.use_ortho is True
+    # method=lora's default stack: algorithm=ortho keeps anima's upstream
+    # OrthoLoRA + T-LoRA layout; the legacy ``use_ortho`` shadow stays
+    # ``None`` because the user didn't touch it (the enum drives the
+    # algorithm choice now).
+    assert opts.lora.algorithm == "ortho"
+    assert opts.lora.use_ortho is None
     assert opts.lora.use_timestep_mask is True
     assert opts.lora.min_rank == 8
     # Other method sub-configs are None until the user opts in.
