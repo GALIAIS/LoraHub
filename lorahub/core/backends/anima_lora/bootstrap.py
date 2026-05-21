@@ -50,15 +50,46 @@ class AnimaLoraEnv:
 def default_repo_path() -> Path:
     """Where lorahub looks for the vendored anima_lora copy.
 
-    Walks up from this file to the LoraHub project root, then descends
-    into ``external/anima_lora``. Robust against ``cwd`` drift (tests
-    chdir into ``tmp_path`` constantly) since the resolution is
-    relative to the source tree, not the process cwd.
+    Resolution order (matches kohya / dp shape):
+      1. ``LORAHUB_ANIMA_LORA_REPO`` env var, when set.
+      2. Walk up from this file to the LoraHub project root and descend
+         into ``external/anima_lora`` — the source-checkout path.
+         Returned when the directory actually contains anima's
+         ``pyproject.toml`` so wheel installs don't masquerade as a
+         valid source tree.
+      3. ``platformdirs.user_data_path("lorahub", "lorahub") /
+         backends / anima_lora`` — fallback for wheel installs where
+         the source tree isn't reachable from this module's path.
+
+    The third leg lets a wheel-installed lorahub still locate (or
+    create) a writable anima copy without relying on the source
+    layout. Tests that chdir into tmp_path don't trip the env-var or
+    user-data legs because ``Path(__file__)`` is fixed.
     """
+    import os
+
+    env = os.environ.get("LORAHUB_ANIMA_LORA_REPO")
+    if env:
+        return Path(env).expanduser()
+
     here = Path(__file__).resolve()
     # lorahub/core/backends/anima_lora/bootstrap.py → up 5 = project root
-    project_root = here.parents[4]
-    return project_root / "external" / "anima_lora"
+    try:
+        project_root = here.parents[4]
+    except IndexError:
+        project_root = None
+
+    candidate = (
+        project_root / "external" / "anima_lora" if project_root else None
+    )
+    if candidate is not None and (candidate / "pyproject.toml").is_file():
+        return candidate
+
+    # Wheel install fallback. Same convention kohya / dp use for their
+    # ``default_repo_path`` source legs (see _common.bootstrap.default_repo_path).
+    from platformdirs import user_data_path  # noqa: PLC0415
+
+    return user_data_path("lorahub", "lorahub") / "backends" / "anima_lora"
 
 
 def resolve(

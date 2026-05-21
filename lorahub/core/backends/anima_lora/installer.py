@@ -110,15 +110,49 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
-    """Remove a half-installed .venv so the user can retry.
+    """Remove a half-installed .venv plus the models junction.
 
     Symmetrical to dp / kohya cleanup_partial. anima_lora source itself
-    is vendored and must never be removed — only ``.venv``.
+    is vendored and must never be removed — only ``.venv`` and the
+    ``models`` symlink/junction we create at install time. The models
+    junction needs explicit removal because Windows ``mklink /J`` and
+    POSIX symlinks both survive ``rmtree`` of their target dir; if the
+    user re-runs ``force=true`` install the link could otherwise still
+    point at a stale tree from a previous install run.
     """
     import shutil
 
     if plan.venv_dir.is_dir():
         shutil.rmtree(plan.venv_dir, ignore_errors=True)
+
+    # ``<repo>/models`` is the link that ``_link_anima_models_dir``
+    # creates pointing at the unified ``<lorahub_root>/models/``. We
+    # don't unlink it when it's a real directory the user populated
+    # manually (no junction marker on dirs they own); only delete
+    # symlinks / junctions.
+    models_link = plan.target / "models"
+    try:
+        if models_link.is_symlink():
+            models_link.unlink()
+        elif models_link.exists():
+            # Windows junctions report ``is_dir() == True`` and
+            # ``is_symlink() == False``. Detect via the reparse
+            # bit so we only remove links, not real directories.
+            import os as _os  # noqa: PLC0415
+
+            try:
+                stat = _os.lstat(models_link)
+                # FILE_ATTRIBUTE_REPARSE_POINT (0x400) marks both
+                # symlinks and junctions on Windows; pure dirs have
+                # ``st_file_attributes`` without this bit.
+                attrs = getattr(stat, "st_file_attributes", 0)
+                if attrs & 0x400:
+                    _os.rmdir(models_link)
+            except OSError:
+                pass
+    except OSError:
+        # cleanup_partial must never block the retry path; swallow.
+        pass
 
 
 __all__ = [

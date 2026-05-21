@@ -165,6 +165,33 @@ class SettingsStore:
 # --------------------------------------------------------------------------- #
 
 
+def _venv_site_packages(python: Path) -> Path | None:
+    """Walk to the venv's ``site-packages`` from its python interpreter.
+
+    POSIX: ``<venv>/lib/python<X.Y>/site-packages``.
+    Windows: ``<venv>/Lib/site-packages``.
+
+    Returns None when the layout doesn't match either (rare — distro
+    splits, build-from-source pythons). Callers treat None as "skip
+    this check" rather than "broken venv".
+    """
+    venv_root = python.parent
+    # POSIX: <venv>/bin/python; Windows: <venv>/Scripts/python.exe
+    if venv_root.name in ("bin", "Scripts"):
+        venv_root = venv_root.parent
+    win_layout = venv_root / "Lib" / "site-packages"
+    if win_layout.is_dir():
+        return win_layout
+    posix_lib = venv_root / "lib"
+    if posix_lib.is_dir():
+        for child in posix_lib.iterdir():
+            if child.is_dir() and child.name.startswith("python"):
+                cand = child / "site-packages"
+                if cand.is_dir():
+                    return cand
+    return None
+
+
 def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the configured kohya checkout looks usable."""
     from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
@@ -354,7 +381,31 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     elif settings.anima_lora_repo_path:
         source = "settings"
     else:
-        source = "vendored"
+        # ``default`` matches the kohya / diffusion-pipe probe shape so
+        # the UI doesn't have to switch on backend id when rendering
+        # the source label. The repo is still vendored (the path comes
+        # from default_repo_path() which walks up the source tree) —
+        # the field name is just signalling "no override active".
+        source = "default"
+
+    # Cheap "key packages installed?" check — sniff for the import
+    # entry-point files inside the venv's site-packages. Avoids the
+    # cost of spawning a subprocess to ``pip freeze`` on every probe
+    # while still catching the half-finished ``uv sync`` case
+    # (interpreter exists but deps weren't materialised). When the
+    # venv layout is unfamiliar (rare — Linux distro python_lib hash
+    # variations) we degrade to "ok=True" so a probing user isn't
+    # blocked by a layout-detection bug.
+    _anima_required_pkgs = ("torch", "accelerate", "diffusers", "safetensors")
+    requirements_ok = True
+    missing_pkgs: list[str] = []
+    if py_ok and py_path is not None:
+        site_pkgs = _venv_site_packages(py_path)
+        if site_pkgs is not None:
+            for pkg in _anima_required_pkgs:
+                if not (site_pkgs / pkg).exists():
+                    missing_pkgs.append(pkg)
+            requirements_ok = not missing_pkgs
 
     # MSVC Build Tools detection — only meaningful on Windows. anima's
     # torch_compile path needs triton-windows -> cl.exe; without it
@@ -381,12 +432,13 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         "python_ok": py_ok,
         "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
         # Vendored: no LoraHub-managed requirements.txt to diff against.
-        # `uv sync` in the install pipeline materialises every dep from
-        # the vendored uv.lock; presence of `.venv/<python>` is taken as
-        # "sync completed". A half-finished sync (rare) would leave the
-        # python binary missing and python_ok would already be False.
-        "requirements_ok": True,
-        "missing_requirements": [],
+        # We sniff site-packages for the four import-entry packages anima
+        # absolutely needs (torch / accelerate / diffusers / safetensors)
+        # so a half-finished ``uv sync`` (interpreter present, deps not
+        # materialised) shows up as ``ready=false`` instead of a
+        # misleading green tick.
+        "requirements_ok": requirements_ok,
+        "missing_requirements": missing_pkgs,
         # Anima base / TE / VAE checkpoints are downloaded separately
         # (multi-GB) — we surface presence here so the install panel
         # can show a "Download models" CTA after `uv sync` finishes.
@@ -397,10 +449,11 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         # on Windows (and hides the section everywhere else).
         "msvc": msvc_payload,
         # `ready` here means "we can dispatch to the backend" — repo
-        # files present + python interpreter resolvable. Whether the
-        # interpreter actually has torch nightly is not knowable
-        # cheaply; the runner surfaces that as a launch error.
-        "ready": (repo_ok and not missing) and py_ok,
+        # files present + python interpreter resolvable + key packages
+        # installed. Whether the interpreter has the *right* torch
+        # nightly version is not knowable cheaply; the runner surfaces
+        # that as a launch error.
+        "ready": (repo_ok and not missing) and py_ok and requirements_ok,
         "source": source,
     }
 
