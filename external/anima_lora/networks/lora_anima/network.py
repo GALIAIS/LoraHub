@@ -22,6 +22,7 @@ from networks.lora_anima.loading import (
     _stack_lora_ups,
 )
 from networks.lora_modules import (
+    BOFTModule,
     ChimeraHydraInferenceModule,
     ChimeraHydraLoRAModule,
     HydraLoRAModule,
@@ -599,6 +600,8 @@ class LoRANetwork(torch.nn.Module):
                     pass  # no extra kwargs — SVD init reads from org_module directly
                 elif effective_module_class == LoKrModule:
                     extra_kwargs["factor"] = getattr(cfg, "lokr_factor", 8)
+                elif effective_module_class == BOFTModule:
+                    extra_kwargs["boft_factors"] = getattr(cfg, "boft_factors", 4)
                 elif effective_module_class == ChimeraHydraLoRAModule:
                     # Pool split is the chimera's only constructor surface;
                     # σ/FEI feature dims are 0 by design (the network-level

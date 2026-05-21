@@ -827,6 +827,17 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # a matched-capacity baseline; not foldable into base.toml's
     # production presets but available for ablation runs.
     use_full: bool = False
+    # Diag-OFT (Qiu et al. NeurIPS'23) — block-diagonal orthogonal
+    # rotation of the host weight via Cayley parameterisation. Hyper-
+    # spherical-energy preserving by construction; incompatible with
+    # any LoRA-leg variant or MoE expert layout.
+    use_diag_oft: bool = False
+    # BOFT (Liu et al. arXiv:2311.06243) — m-stage butterfly
+    # composition of block-diagonal orthogonals; recovers SO(out_dim)
+    # at m ≥ log_2(out_dim).  Same composition rules as Diag-OFT.
+    use_boft: bool = False
+    # Number of butterfly stages composed when ``use_boft=True``.
+    boft_factors: int = Field(4, ge=1)
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
     use_timestep_mask: bool = True
     min_rank: int = Field(8, ge=1)
@@ -846,6 +857,8 @@ class AnimaLoraMethodLoraConfig(BaseModel):
             ("use_lokr", self.use_lokr),
             ("use_loha", self.use_loha),
             ("use_full", self.use_full),
+            ("use_diag_oft", self.use_diag_oft),
+            ("use_boft", self.use_boft),
         ]
         enabled = [name for name, on in atomic if on]
         if len(enabled) > 1:

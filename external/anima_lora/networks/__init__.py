@@ -8,8 +8,8 @@ class it instantiates and a ``save_variant`` label consumed by
 Flag precedence (evaluated top to bottom, first match wins):
 
     use_chimera_hydra                    → chimera_hydra
-    use_ia3 / use_lokr / use_loha / use_full
-                                         → ia3 / lokr / loha / full (atomic)
+    use_ia3 / use_lokr / use_loha / use_full / use_diag_oft / use_boft
+                                         → atomic decomposition variant
     use_dylora                           → dylora
     use_moe_style="independent_A"        → stacked_experts_global_fei
     use_moe_style="shared_A" + use_ortho → ortho_hydra
@@ -35,7 +35,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Type
 
 from networks.lora_modules import (
+    BOFTModule,
     ChimeraHydraLoRAModule,
+    DiagOFTModule,
     DoRAModule,
     DyLoRAModule,
     FullModule,
@@ -120,10 +122,16 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_loha",
     "use_dylora",
     "use_full",
+    "use_diag_oft",
+    "use_boft",
     # LoKr factor (only consumed when use_lokr=True). Picks the (a, c)
     # split of out_dim and (b, d) split of in_dim. Larger factor → more
     # expressive W₁ matrix, smaller LoRA leg.
     "lokr_factor",
+    # BOFT factor (only consumed when use_boft=True). Number of
+    # butterfly stages composed into the rotation; ≥ log_2(out_dim)
+    # is sufficient to span SO(out_dim). Default 4 follows upstream.
+    "boft_factors",
     # PSOFT-style Cayley-init magnitude (consumed by OrthoHydra +
     # StackedExperts in ortho mode).
     "ortho_init_std",
@@ -302,6 +310,23 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=FullModule,
         save_variant="full",
     ),
+    # Diag-OFT (Qiu et al. NeurIPS'23) — block-diagonal orthogonal
+    # rotation of the host weight via Cayley parameterisation. Saves
+    # under ``oft`` because the on-disk key is ``oft_skew`` (K, r, r)
+    # — neither shape nor name overlapping the LoRA family.
+    "diag_oft": NetworkSpec(
+        name="diag_oft",
+        module_class=DiagOFTModule,
+        save_variant="oft",
+    ),
+    # BOFT (Liu et al. arXiv:2311.06243) — m-stage butterfly
+    # composition of block-diagonal orthogonals. Saves under ``boft``
+    # for the same reason; key is ``boft_skew`` (m, K, r, r).
+    "boft": NetworkSpec(
+        name="boft",
+        module_class=BOFTModule,
+        save_variant="boft",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -396,6 +421,8 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     use_loha = _parse_bool_flag(kwargs, "use_loha")
     use_dylora = _parse_bool_flag(kwargs, "use_dylora")
     use_full = _parse_bool_flag(kwargs, "use_full")
+    use_diag_oft = _parse_bool_flag(kwargs, "use_diag_oft")
+    use_boft = _parse_bool_flag(kwargs, "use_boft")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
@@ -407,6 +434,8 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
         "use_lokr": use_lokr,
         "use_loha": use_loha,
         "use_full": use_full,
+        "use_diag_oft": use_diag_oft,
+        "use_boft": use_boft,
     }
     enabled_atomic = [k for k, v in _atomic.items() if v]
     if len(enabled_atomic) > 1:

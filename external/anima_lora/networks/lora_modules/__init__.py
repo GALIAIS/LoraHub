@@ -2,10 +2,12 @@
 # `from networks.lora_modules import LoRAModule, ...` works unchanged.
 
 from networks.lora_modules.base import BaseLoRAModule, _absorb_channel_scale
+from networks.lora_modules.boft import BOFTModule
 from networks.lora_modules.chimera import (
     ChimeraHydraInferenceModule,
     ChimeraHydraLoRAModule,
 )
+from networks.lora_modules.diag_oft import DiagOFTModule
 from networks.lora_modules.dora import DoRAModule
 from networks.lora_modules.dylora import DyLoRAModule
 from networks.lora_modules.full import FullModule
@@ -23,8 +25,10 @@ from networks.lora_modules.stacked_experts import StackedExpertsLoRAModule
 
 __all__ = [
     "BaseLoRAModule",
+    "BOFTModule",
     "ChimeraHydraInferenceModule",
     "ChimeraHydraLoRAModule",
+    "DiagOFTModule",
     "DoRAModule",
     "DyLoRAModule",
     "FullModule",

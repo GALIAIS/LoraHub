@@ -266,6 +266,11 @@ class LoRANetworkCfg:
     # Kronecker product. Default 8 mirrors LyCORIS.
     lokr_factor: int = 8
 
+    # BOFT butterfly factor count (consumed only when ``use_boft=True``).
+    # ``m ≥ log_2(out_dim)`` is sufficient to span SO(out_dim);
+    # default 4 follows upstream's recommended sweet spot.
+    boft_factors: int = 4
+
     # σ-conditional router parameters (consumed when ``router_source="sigma"``).
     # Layer scope is shared with Hydra and FEI via ``router_targets`` above.
     sigma_feature_dim: int = 16
@@ -456,6 +461,7 @@ class LoRANetworkCfg:
         use_ortho = _as_bool(kwargs.get("use_ortho"))
         ortho_init_std = float(kwargs.get("ortho_init_std", 0.02))
         lokr_factor = int(kwargs.get("lokr_factor", 8))
+        boft_factors = int(kwargs.get("boft_factors", 4))
 
         # FECL knobs. Default off; turning it on requires `num_bands >= 3`
         # to be a meaningful objective (see compute_fecl docstring).
@@ -625,6 +631,7 @@ class LoRANetworkCfg:
             use_ortho=use_ortho,
             ortho_init_std=ortho_init_std,
             lokr_factor=lokr_factor,
+            boft_factors=boft_factors,
             fera_fecl_weight=fera_fecl_weight,
             fera_num_bands=fera_num_bands,
             use_chimera_hydra=use_chimera_hydra,

@@ -773,3 +773,30 @@ def test_dylora_mutex_with_dora_or_ortho(tmp_path: Path) -> None:
         AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True, use_dora=True)
     with pytest.raises(ValueError, match="use_dylora"):
         AnimaLoraMethodLoraConfig(use_ortho=True, use_dylora=True)
+
+
+def test_diag_oft_emits_use_diag_oft(tmp_path: Path) -> None:
+    """Diag-OFT selector forwards via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_diag_oft=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_diag_oft=true" in argv
+
+
+def test_boft_emits_use_boft_and_factors(tmp_path: Path) -> None:
+    """BOFT propagates ``boft_factors`` so the network can construct R."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            use_ortho=False, use_boft=True, boft_factors=6
+        ),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_boft=true" in argv
+    assert "boft_factors=6" in argv
