@@ -734,14 +734,15 @@ def _network_args(*pairs: str) -> list[str]:
 
 
 def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """LoRA / OrthoLoRA / T-LoRA stack — the default anima_lora behaviour.
+    """LoRA / OrthoLoRA / T-LoRA / DoRA stack — the default anima_lora behaviour.
 
-    All four knobs feed ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs``
+    All knobs feed ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs``
     via ``--network_args`` k=v pairs; none of them is an argparse flag.
     """
     sub = opts.lora
     pieces: list[str] = [
         f"use_ortho={'true' if sub.use_ortho else 'false'}",
+        f"use_dora={'true' if sub.use_dora else 'false'}",
         f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
         f"min_rank={sub.min_rank}",
         f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}",

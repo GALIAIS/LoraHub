@@ -641,3 +641,36 @@ def test_sample_grid_schema_field_emits_flag(tmp_path: Path) -> None:
     cfg = _recipe(tmp_path, opts)
     argv, _ = compile_config(cfg, tmp_path / "ws")
     assert "--sample_grid" in argv
+
+
+def test_dora_emits_use_dora_network_arg(tmp_path: Path) -> None:
+    """``backend.animaLora.lora.useDora=True`` reaches train.py via network_args.
+
+    DoRA is selected at the network factory by ``use_dora=true`` — the
+    flag is read off ``--network_args`` (not as a top-level CLI arg)
+    because anima_lora's argparse doesn't define one. The compiler must
+    emit it alongside ``use_ortho`` so the variant resolver picks it up.
+    """
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dora=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_dora=true" in argv
+    assert "use_ortho=false" in argv
+
+
+def test_dora_and_ortho_mutex_rejected_at_validation(tmp_path: Path) -> None:
+    """``use_dora`` with ``use_ortho`` must fail pydantic validation.
+
+    The two are incompatible: DoRA stores per-Linear ``.magnitude``,
+    OrthoLoRA writes Cayley distill keys, and the standard save layout
+    can't carry both. Catching this at schema-validation time gives a
+    clean error before the trainer ever spawns.
+    """
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    with pytest.raises(ValueError, match="use_ortho=True"):
+        AnimaLoraMethodLoraConfig(use_ortho=True, use_dora=True)

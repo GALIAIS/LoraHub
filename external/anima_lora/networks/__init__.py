@@ -11,14 +11,19 @@ Flag precedence (evaluated top to bottom, first match wins):
     use_moe_style="independent_A"        → stacked_experts_global_fei
     use_moe_style="shared_A" + use_ortho → ortho_hydra
     use_moe_style="shared_A"             → hydra
+    use_dora                             → dora
     use_ortho                            → ortho
     (none)                               → lora
 
 The legacy ``use_hydra`` / ``use_sigma_router`` / ``use_fei_router``
 kwargs were retired in plan2 task #6 — see ``LoRANetworkCfg.from_kwargs``
-for the rejection message. ``use_dora`` was retired alongside the
-``lora_deprecated`` module; ``.dora_scale`` keys in external LoRAs still
-load through the plain ``lora`` spec.
+for the rejection message.
+
+DoRA (Liu et al. ICML'24) was reintroduced as ``use_dora`` after the
+LoraHub Phase-1 algorithm-set expansion (LoKr / LoHA / DoRA / IA3). It
+shares the standard save layout with plain LoRA — the magnitude column
+is renamed ``.dora_scale`` at save time so ComfyUI's stock LoRA loader
+picks it up unchanged.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Type
 
 from networks.lora_modules import (
     ChimeraHydraLoRAModule,
+    DoRAModule,
     HydraLoRAModule,
     LoRAModule,
     OrthoHydraLoRAModule,
@@ -100,6 +106,7 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_custom_down_autograd",
     # Variant selectors (read by resolve_network_spec)
     "use_ortho",
+    "use_dora",
     # PSOFT-style Cayley-init magnitude (consumed by OrthoHydra +
     # StackedExperts in ortho mode).
     "ortho_init_std",
@@ -225,6 +232,16 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=OrthoLoRAModule,
         save_variant="ortho_to_lora",
     ),
+    # DoRA (Liu et al. ICML'24) — shares the ``standard`` save variant
+    # because its delta layout (lora_down + lora_up + magnitude) maps
+    # one-to-one onto the plain LoRA layout after the magnitude is
+    # renamed ``.dora_scale`` (see ``rename_dora_keys`` in
+    # ``lora_modules.lora``).
+    "dora": NetworkSpec(
+        name="dora",
+        module_class=DoRAModule,
+        save_variant="standard",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -313,6 +330,7 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     a single ``num_experts`` — the user only sets the chimera flag.
     """
     use_ortho = _parse_bool_flag(kwargs, "use_ortho")
+    use_dora = _parse_bool_flag(kwargs, "use_dora")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
@@ -334,11 +352,29 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
         )
 
     if moe_style == "independent_A":
+        if use_dora:
+            raise ValueError(
+                "use_dora=True is mutually exclusive with use_moe_style='independent_A'"
+                " (FeRA's stacked experts do not share the DoRA magnitude layout)."
+            )
         return NETWORK_REGISTRY["stacked_experts_global_fei"]
     if moe_style == "shared_A":
+        if use_dora:
+            raise ValueError(
+                "use_dora=True is mutually exclusive with use_moe_style='shared_A'"
+                " (Hydra's per-expert ups don't compose with DoRA's per-Linear magnitude)."
+            )
         return (
             NETWORK_REGISTRY["ortho_hydra"] if use_ortho else NETWORK_REGISTRY["hydra"]
         )
+    if use_dora:
+        if use_ortho:
+            raise ValueError(
+                "use_dora=True with use_ortho=True is not supported — DoRA's"
+                " magnitude column doesn't round-trip through OrthoLoRA's"
+                " Cayley distill keys. Pick one."
+            )
+        return NETWORK_REGISTRY["dora"]
     if use_ortho:
         return NETWORK_REGISTRY["ortho"]
     return NETWORK_REGISTRY["lora"]
