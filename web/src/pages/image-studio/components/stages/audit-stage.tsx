@@ -5,12 +5,16 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
+  RotateCw,
   Tag as TagIcon,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
   imageStudioAuditReport,
   imageStudioAuditScan,
+  imageStudioAutoRotate,
+  imageStudioBatchByIssue,
   type AuditIssue,
   type AuditIssueKind,
   type AuditReport,
@@ -20,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { MiniHistogram } from "../mini-histogram"
+import { QuarantinePanel } from "../quarantine-panel"
 
 interface Props {
   datasetPath: string
@@ -140,6 +145,12 @@ export function AuditStage({ datasetPath }: Props) {
             <IssuesPanel
               report={report}
               issuesByKind={issuesByKind}
+              datasetPath={datasetPath}
+              onMutated={() => {
+                // After a batch action, the audit report is stale —
+                // re-scan so counts/histograms reflect the new state.
+                scanMutation.mutate()
+              }}
               className="lg:row-span-2"
             />
             <MiniHistogram
@@ -162,6 +173,10 @@ export function AuditStage({ datasetPath }: Props) {
           </div>
         )}
       </div>
+
+      {/* Persistent quarantine drawer at the bottom — collapsed by
+          default; expands to let the user review + restore. */}
+      <QuarantinePanel datasetPath={datasetPath} />
     </div>
   )
 }
@@ -251,12 +266,60 @@ function Stat({
 function IssuesPanel({
   report,
   issuesByKind,
+  datasetPath,
+  onMutated,
   className,
 }: {
   report: AuditReport
   issuesByKind: Record<string, AuditIssue[]>
+  datasetPath: string
+  onMutated: () => void
   className?: string
 }) {
+  const qc = useQueryClient()
+
+  const quarantineMutation = useMutation({
+    mutationFn: (issueKind: AuditIssueKind) =>
+      imageStudioBatchByIssue({
+        dataset_path: datasetPath,
+        issue_kinds: [issueKind],
+        action: "quarantine",
+      }),
+    onSuccess: (data, issueKind) => {
+      const moved = data.result?.moved_count ?? 0
+      toast.success(
+        `已隔离 ${moved} 张 (${ISSUE_KIND_META[issueKind]?.label ?? issueKind})`,
+        {
+          description:
+            "图与 caption 已移到 .workbench/quarantine/,可在 整理 阶段恢复",
+        },
+      )
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+      onMutated()
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error("批量隔离失败", { description: msg })
+    },
+  })
+
+  const autoRotateMutation = useMutation({
+    mutationFn: (paths: string[]) =>
+      imageStudioAutoRotate({
+        dataset_path: datasetPath,
+        paths,
+      }),
+    onSuccess: (data) => {
+      toast.success(`已应用 EXIF 旋转: ${data.rotated_count} 张`)
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+      onMutated()
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error("自动旋转失败", { description: msg })
+    },
+  })
+
   if (report.issues.length === 0) {
     return (
       <div className={cn("rounded-md border border-emerald-600/30 bg-emerald-50 dark:bg-emerald-950/20 p-4", className)}>
@@ -278,10 +341,20 @@ function IssuesPanel({
       </div>
       <div className="space-y-3 overflow-y-auto flex-1 min-h-0">
         {Object.entries(issuesByKind).map(([kind, items]) => {
-          const meta = ISSUE_KIND_META[kind as AuditIssueKind] ?? {
+          const issueKind = kind as AuditIssueKind
+          const meta = ISSUE_KIND_META[issueKind] ?? {
             label: kind,
             tone: "warn",
           }
+          // Available actions per issue kind. EXIF rotation gets its
+          // own "auto-rotate" since baking the orientation into pixels
+          // is a non-destructive fix; everything else routes to
+          // quarantine where the user can review before actually
+          // committing.
+          const isPending =
+            quarantineMutation.isPending && quarantineMutation.variables === issueKind
+          const isRotating =
+            autoRotateMutation.isPending && kind === "exif_rotation"
           return (
             <details
               key={kind}
@@ -298,9 +371,54 @@ function IssuesPanel({
                   )}
                 />
                 <span className="font-medium">{meta.label}</span>
-                <span className="text-muted-foreground tabular-nums ml-auto">
-                  {items.length}
+                <span className="text-muted-foreground tabular-nums">
+                  ({items.length})
                 </span>
+                <div className="ml-auto flex items-center gap-1">
+                  {kind === "exif_rotation" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px] gap-1"
+                      disabled={isRotating}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        autoRotateMutation.mutate(items.map((i) => i.path))
+                      }}
+                    >
+                      {isRotating ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <RotateCw className="size-3" />
+                      )}
+                      自动旋转
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[11px] gap-1 hover:text-red-600"
+                    disabled={isPending}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      if (
+                        !window.confirm(
+                          `把这 ${items.length} 张「${meta.label}」图移到隔离区?\n` +
+                            `(图与 caption 移到 .workbench/quarantine/,可恢复)`,
+                        )
+                      )
+                        return
+                      quarantineMutation.mutate(issueKind)
+                    }}
+                  >
+                    {isPending ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3" />
+                    )}
+                    隔离
+                  </Button>
+                </div>
               </summary>
               <ul className="border-t border-border/40 max-h-48 overflow-y-auto">
                 {items.slice(0, 200).map((iss, i) => (
