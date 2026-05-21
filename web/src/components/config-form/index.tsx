@@ -4,6 +4,13 @@
  * Built directly against TrainingConfig (lorahub/core/config/schema.py) so each
  * widget knows its semantics; the form is collapsible per section, validates
  * locally, and surfaces server validation errors next to the offending field.
+ *
+ * Backend-specific sections gate on cfg.backend.type so users only see the
+ * knobs the selected backend's compiler actually consumes — kohya reads
+ * almost the full schema, diffusion-pipe reads most of it, and anima_lora
+ * reads only its dedicated AnimaLoraOptions sub-tree (plus dataset / output
+ * / sampling). Hidden sections keep their values in form state so flipping
+ * backend back and forth never silently drops user input.
  */
 import { useCallback, useMemo } from "react"
 import {
@@ -56,6 +63,38 @@ import { ReadOnlyProvider, Section } from "./widgets"
 
 export type { ConfigFormValue } from "./types"
 
+// Which backends actually consume each section. Sections not listed here
+// are universal (every backend reads them — basemodel / dataset / schedule /
+// output / sampling / archPaths / backend overrides).
+//
+// Kept in sync with the compilers under lorahub/core/backends/<id>/. Update
+// here whenever a compiler starts (or stops) reading a top-level field.
+type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora"
+const BACKENDS_ALL: readonly BackendKey[] = ["kohya", "diffusion-pipe", "anima_lora"]
+
+const SECTION_BACKENDS: Record<string, readonly BackendKey[]> = {
+  network: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.networkDim/Alpha instead
+  optimizer: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.optimizerType / learningRate
+  loss: ["kohya", "diffusion-pipe"], // anima drives loss via flow-match weighting in animaLora.*
+  advancedLoss: ["kohya"], // multires-noise / huber / pseudo-huber are kohya-only
+  flowMatch: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.timestepSampling
+  attention: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.attnMode
+  precision: ["kohya", "diffusion-pipe"], // anima drives precision via animaLora.mixedPrecision
+  optimization: ["kohya", "diffusion-pipe"], // anima exposes its own offload/compile knobs
+  dataloader: ["kohya", "diffusion-pipe"], // anima ignores num_workers / vae_batch_size etc.
+  augmentation: ["kohya", "diffusion-pipe"], // anima has no augmentation knobs at the top level
+  validation: ["kohya", "diffusion-pipe"], // anima uses animaLora.useCmmd + validationSplitNum
+  resume: ["kohya", "diffusion-pipe", "anima_lora"], // all three back ends read save_state*
+}
+
+function showsForBackend(section: string, backend: BackendKey | undefined): boolean {
+  const allowed = SECTION_BACKENDS[section] ?? BACKENDS_ALL
+  // When backend is undefined (recipe still loading), show every section
+  // rather than hiding the whole form.
+  if (backend === undefined) return true
+  return allowed.includes(backend)
+}
+
 interface ConfigFormProps {
   value: ConfigFormValue
   onChange: (next: ConfigFormValue) => void
@@ -100,6 +139,44 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
   const body = (
     <div className="space-y-3">
       <Section
+        icon={<Wand2 className="size-3.5" />}
+        title="后端选择"
+        subtitle="先决定训练后端 — kohya / diffusion-pipe / anima_lora。下方表单按所选后端动态显示。"
+        defaultOpen
+      >
+        <BackendFields value={value.backend} set={set} errorMap={errorMap} />
+      </Section>
+
+      {value.backend?.type === "diffusion-pipe" && (
+        <Section
+          icon={<Workflow className="size-3.5" />}
+          title="diffusion-pipe 选项"
+          subtitle="仅在 diffusion-pipe 后端下生效"
+        >
+          <BackendDiffusionPipeFields
+            value={value.backend?.diffusionPipe}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
+
+      {value.backend?.type === "anima_lora" && (
+        <Section
+          icon={<Sparkles className="size-3.5" />}
+          title="anima_lora 选项"
+          subtitle="method / preset 与上游 lora.toml 对齐;turbo 字段切到 distill 路径"
+          defaultOpen
+        >
+          <BackendAnimaLoraFields
+            value={value.backend?.animaLora}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
+
+      <Section
         icon={<Cpu className="size-3.5" />}
         title="基础模型"
         subtitle="选择架构与待微调的 .safetensors 检查点"
@@ -136,40 +213,48 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <DatasetFields value={value.dataset} set={set} errorMap={errorMap} />
       </Section>
 
-      <Section
-        icon={<Layers className="size-3.5" />}
-        title="网络"
-        subtitle="LoRA 结构：rank、alpha、目标模块"
-        defaultOpen
-      >
-        <NetworkFields value={value.network} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("network", backendType) && (
+        <Section
+          icon={<Layers className="size-3.5" />}
+          title="网络"
+          subtitle="LoRA 结构：rank、alpha、目标模块"
+          defaultOpen
+        >
+          <NetworkFields value={value.network} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      <Section
-        icon={<SlidersHorizontal className="size-3.5" />}
-        title="优化器与学习率"
-        subtitle="权重的更新策略"
-      >
-        <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("optimizer", backendType) && (
+        <Section
+          icon={<SlidersHorizontal className="size-3.5" />}
+          title="优化器与学习率"
+          subtitle="权重的更新策略"
+        >
+          <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      <Section
-        icon={<Activity className="size-3.5" />}
-        title="损失整形"
-        subtitle="Min-SNR、噪声偏移、loss_type 等"
-      >
-        <LossFields value={value.loss} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("loss", backendType) && (
+        <Section
+          icon={<Activity className="size-3.5" />}
+          title="损失整形"
+          subtitle="Min-SNR、噪声偏移、loss_type 等"
+        >
+          <LossFields value={value.loss} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      <Section
-        icon={<Flame className="size-3.5" />}
-        title="高级损失"
-        subtitle="multires noise / huber schedule / pseudo huber / v_pred_like"
-      >
-        <AdvancedLossFields value={value.loss} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("advancedLoss", backendType) && (
+        <Section
+          icon={<Flame className="size-3.5" />}
+          title="高级损失"
+          subtitle="multires noise / huber schedule / pseudo huber / v_pred_like"
+        >
+          <AdvancedLossFields value={value.loss} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      {flowMatchVisible && (
+      {flowMatchVisible && showsForBackend("flowMatch", backendType) && (
         <Section
           icon={<Shuffle className="size-3.5" />}
           title="Flow Matching"
@@ -193,65 +278,77 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} />
       </Section>
 
-      <Section
-        icon={<Zap className="size-3.5" />}
-        title="注意力内核"
-        subtitle="Flash / xformers / sdpa；按 GPU 计算能力自动门控"
-      >
-        <AttentionFields value={value.attention} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("attention", backendType) && (
+        <Section
+          icon={<Zap className="size-3.5" />}
+          title="注意力内核"
+          subtitle="Flash / xformers / sdpa；按 GPU 计算能力自动门控"
+        >
+          <AttentionFields value={value.attention} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      <Section
-        icon={<PaintBucket className="size-3.5" />}
-        title="精度与显存"
-        subtitle="混合精度、梯度检查点、潜变量缓存"
-      >
-        <PrecisionFields value={value} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("precision", backendType) && (
+        <Section
+          icon={<PaintBucket className="size-3.5" />}
+          title="精度与显存"
+          subtitle="混合精度、梯度检查点、潜变量缓存"
+        >
+          <PrecisionFields value={value} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
-      <Section
-        icon={<Rocket className="size-3.5" />}
-        title="训练优化"
-        subtitle="torch_compile / full_bf16 / blocks_to_swap / fp8 等显存与速度开关"
-      >
-        <OptimizationFields
-          value={value.optimization}
-          set={set}
-          errorMap={errorMap}
-        />
-      </Section>
+      {showsForBackend("optimization", backendType) && (
+        <Section
+          icon={<Rocket className="size-3.5" />}
+          title="训练优化"
+          subtitle="torch_compile / full_bf16 / blocks_to_swap / fp8 等显存与速度开关"
+        >
+          <OptimizationFields
+            value={value.optimization}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
 
-      <Section
-        icon={<Database className="size-3.5" />}
-        title="DataLoader"
-        subtitle="num_workers / vae_batch_size / 缓存批大小"
-      >
-        <DataLoaderFields
-          value={value.dataloader}
-          set={set}
-          errorMap={errorMap}
-        />
-      </Section>
+      {showsForBackend("dataloader", backendType) && (
+        <Section
+          icon={<Database className="size-3.5" />}
+          title="DataLoader"
+          subtitle="num_workers / vae_batch_size / 缓存批大小"
+        >
+          <DataLoaderFields
+            value={value.dataloader}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
 
-      <Section
-        icon={<Shuffle className="size-3.5" />}
-        title="数据增强"
-        subtitle="flip / 颜色 / 随机裁剪 / face crop / alpha mask（kohya）"
-      >
-        <AugmentationFields
-          value={value.augmentation}
-          set={set}
-          errorMap={errorMap}
-        />
-      </Section>
+      {showsForBackend("augmentation", backendType) && (
+        <Section
+          icon={<Shuffle className="size-3.5" />}
+          title="数据增强"
+          subtitle="flip / 颜色 / 随机裁剪 / face crop / alpha mask（kohya）"
+        >
+          <AugmentationFields
+            value={value.augmentation}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
 
-      <Section
-        icon={<Gauge className="size-3.5" />}
-        title="验证"
-        subtitle="留出比例与验证频率"
-      >
-        <ValidationFields value={value} set={set} errorMap={errorMap} />
-      </Section>
+      {showsForBackend("validation", backendType) && (
+        <Section
+          icon={<Gauge className="size-3.5" />}
+          title="验证"
+          subtitle="留出比例与验证频率"
+        >
+          <ValidationFields value={value} set={set} errorMap={errorMap} />
+        </Section>
+      )}
 
       <Section
         icon={<Image className="size-3.5" />}
@@ -270,48 +367,13 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <OutputFields value={value.output} set={set} errorMap={errorMap} />
       </Section>
 
-      <Section
-        icon={<History className="size-3.5" />}
-        title="断点续训"
-        subtitle="optimizer / scheduler state 落盘策略"
-      >
-        <ResumeFields value={value.resume} set={set} errorMap={errorMap} />
-      </Section>
-
-      <Section
-        icon={<Wand2 className="size-3.5" />}
-        title="后端覆盖"
-        subtitle="按配置覆盖 kohya 检出目录与 Python 解释器"
-      >
-        <BackendFields value={value.backend} set={set} errorMap={errorMap} />
-      </Section>
-
-      {value.backend?.type === "diffusion-pipe" && (
+      {showsForBackend("resume", backendType) && (
         <Section
-          icon={<Workflow className="size-3.5" />}
-          title="diffusion-pipe 选项"
-          subtitle="仅在 diffusion-pipe 后端下生效"
+          icon={<History className="size-3.5" />}
+          title="断点续训"
+          subtitle="optimizer / scheduler state 落盘策略"
         >
-          <BackendDiffusionPipeFields
-            value={value.backend?.diffusionPipe}
-            set={set}
-            errorMap={errorMap}
-          />
-        </Section>
-      )}
-
-      {value.backend?.type === "anima_lora" && (
-        <Section
-          icon={<Sparkles className="size-3.5" />}
-          title="anima_lora 选项"
-          subtitle="method / preset 与上游 lora.toml 对齐;turbo 字段切到 distill 路径"
-          defaultOpen
-        >
-          <BackendAnimaLoraFields
-            value={value.backend?.animaLora}
-            set={set}
-            errorMap={errorMap}
-          />
+          <ResumeFields value={value.resume} set={set} errorMap={errorMap} />
         </Section>
       )}
     </div>
