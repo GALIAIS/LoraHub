@@ -235,7 +235,8 @@ export interface ConfigFormValue {
   backend?: {
     type?: string
     pinVersion?: string | null
-    sdScriptsPath?: string | null
+    sdScriptsPath?: string | null  // legacy alias — accepted on load, no longer written
+    repoPath?: string | null
     pythonExecutable?: string | null
     extraArgs?: Record<string, unknown>
     diffusionPipe?: {

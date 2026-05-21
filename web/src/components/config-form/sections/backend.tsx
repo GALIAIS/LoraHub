@@ -72,10 +72,10 @@ export const BackendFields = memo(function BackendFields({
           )}
         </div>
       </Row>
-      <Row label={repoLabel} errors={errorMap.get("backend.sdScriptsPath")}>
+      <Row label={repoLabel} errors={errorMap.get("backend.repoPath")}>
         <PathInput
-          value={v.sdScriptsPath ?? ""}
-          onChange={(s) => set(["backend", "sdScriptsPath"], s || null)}
+          value={v.repoPath ?? v.sdScriptsPath ?? ""}
+          onChange={(s) => set(["backend", "repoPath"], s || null)}
           placeholder={repoPlaceholder}
         />
       </Row>

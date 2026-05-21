@@ -85,11 +85,11 @@ class KohyaBackend:
 
         try:
             _bootstrap.resolve(
-                config_path=cfg.backend.sd_scripts_path,
+                config_path=cfg.backend.repo_path,
                 config_python=cfg.backend.python_executable,
             )
         except _bootstrap.BootstrapError as e:
-            issues.append(ValidationIssue(Severity.error, "backend.sd_scripts_path", str(e)))
+            issues.append(ValidationIssue(Severity.error, "backend.repo_path", str(e)))
 
         try:
             compile_config(cfg, workspace=Path("/"))
@@ -140,7 +140,7 @@ class KohyaBackend:
         env: dict[str, str] | None = None,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
-            config_path=cfg.backend.sd_scripts_path,
+            config_path=cfg.backend.repo_path,
             config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()

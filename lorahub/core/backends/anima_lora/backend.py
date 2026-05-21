@@ -84,12 +84,12 @@ class AnimaLoraBackend:
         # we resolve to external/anima_lora/ automatically.
         try:
             _bootstrap.resolve(
-                config_path=cfg.backend.sd_scripts_path,
+                config_path=cfg.backend.repo_path,
                 config_python=cfg.backend.python_executable,
             )
         except _bootstrap.BootstrapError as e:
             issues.append(
-                ValidationIssue(Severity.error, "backend.python_executable", str(e))
+                ValidationIssue(Severity.error, "backend.repo_path", str(e))
             )
 
         # Pass an arbitrary workspace — compile_config doesn't write
@@ -146,7 +146,7 @@ class AnimaLoraBackend:
         env: dict[str, str] | None = None,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
-            config_path=cfg.backend.sd_scripts_path,
+            config_path=cfg.backend.repo_path,
             config_python=cfg.backend.python_executable,
         )
         workspace = workspace.resolve()

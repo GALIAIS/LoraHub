@@ -19,7 +19,7 @@ spelunking a single field "is anyone reading this?":
 
   2. **Runtime-level fields** (``sampling.enable_live_inference``,
      ``sampling.inference_steps`` / ``inference_cfg``,
-     ``backend.sd_scripts_path``, ``backend.python_executable``).
+     ``backend.repo_path``, ``backend.python_executable``).
      The compiler doesn't read these; they're consumed by
      ``lorahub.api.jobs_helpers`` (live preview worker).
 
@@ -43,7 +43,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -1165,7 +1165,20 @@ class BackendConfig(BaseModel):
 
     type: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
     pin_version: str | None = None
-    sd_scripts_path: Path | None = None
+    # Generic "backend repo path". Accepts every historical key for
+    # backward compatibility with YAML files written before the rename:
+    #   - ``sd_scripts_path`` / ``sdScriptsPath`` (legacy names from when
+    #     this only meant kohya's sd-scripts checkout)
+    #   - ``repo_path`` / ``repoPath`` (current names; camelCase wins
+    #     on serialization via the model's _CAMEL_CONFIG alias generator)
+    # All four read into the same field; ``cfg.backend.repo_path`` is
+    # the canonical access in code.
+    repo_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "repo_path", "repoPath", "sd_scripts_path", "sdScriptsPath",
+        ),
+    )
     python_executable: Path | None = None
     extra_args: dict[str, Any] = Field(default_factory=dict)
     # Optional, dp-specific knobs. None means "use library defaults" so kohya

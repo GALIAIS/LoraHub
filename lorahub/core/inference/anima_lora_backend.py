@@ -196,11 +196,11 @@ def _anima_lora_factory(
         return None
 
     # Resolve the vendored copy + python interpreter. Recipe-level
-    # overrides live on backend.python_executable / backend.sd_scripts_path
+    # overrides live on backend.python_executable / backend.repo_path
     # the same way the training backend reads them.
     backend_cfg = getattr(recipe, "backend", None)
     config_python = getattr(backend_cfg, "python_executable", None) if backend_cfg else None
-    config_path = getattr(backend_cfg, "sd_scripts_path", None) if backend_cfg else None
+    config_path = getattr(backend_cfg, "repo_path", None) if backend_cfg else None
     try:
         env = _al_bootstrap.resolve(
             config_path=config_path,

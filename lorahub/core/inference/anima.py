@@ -397,8 +397,8 @@ def build_backend_from_config(
         py = Path("python")
 
     sd_scripts_repo_env = os.environ.get("LORAHUB_KOHYA_SD_SCRIPTS")
-    if recipe.backend.sd_scripts_path is not None:
-        repo = Path(str(recipe.backend.sd_scripts_path))
+    if recipe.backend.repo_path is not None:
+        repo = Path(str(recipe.backend.repo_path))
     elif sd_scripts_repo_env:
         repo = Path(sd_scripts_repo_env)
     else:

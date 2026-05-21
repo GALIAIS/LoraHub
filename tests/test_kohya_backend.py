@@ -101,7 +101,7 @@ def test_validate_reports_missing_sd_scripts(tmp_path: Path, backend: KohyaBacke
     recipe = _make_recipe(tmp_path, tmp_path / "missing")
     issues = backend.validate(recipe)
     assert any(
-        i.severity is Severity.error and "sd_scripts" in i.field for i in issues
+        i.severity is Severity.error and "repo_path" in i.field for i in issues
     )
 
 
