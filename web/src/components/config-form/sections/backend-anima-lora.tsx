@@ -21,6 +21,7 @@ import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import {
   EnumSelect,
   FloatInput,
+  IntInput,
   PathInput,
   Row,
   Section,
@@ -60,6 +61,18 @@ const TIMESTEP_OPTIONS = [
   { value: "sigmoid", label: "sigmoid(默认)" },
   { value: "uniform", label: "uniform" },
   { value: "logit_normal", label: "logit_normal" },
+] as const
+
+const WEIGHTING_SCHEME_OPTIONS = [
+  { value: "", label: "（关闭 - 等权 RF 损失,默认)" },
+  {
+    value: "min_snr_rf",
+    label: "min_snr_rf — Min-SNR-γ(整流流变体,需配合 min_snr_gamma)",
+  },
+  { value: "sigma_sqrt", label: "sigma_sqrt" },
+  { value: "logit_normal", label: "logit_normal" },
+  { value: "mode", label: "mode" },
+  { value: "cosmap", label: "cosmap" },
 ] as const
 
 const ATTN_OPTIONS = [
@@ -281,6 +294,32 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row
+          label="加权方案"
+          description="rectified-flow 损失加权;min_snr_rf 是 Min-SNR-γ 整流流变体,需要配合下方 min_snr_gamma 使用。"
+        >
+          <EnumSelect
+            value={v.weightingScheme ?? ""}
+            onChange={(s) =>
+              set(["backend", "animaLora", "weightingScheme"], s || null)
+            }
+            options={WEIGHTING_SCHEME_OPTIONS}
+          />
+        </Row>
+        <Row
+          label="min_snr_gamma"
+          description="Min-SNR-γ 整流流加权的 γ 阈值;推荐 5.0。仅当加权方案 = min_snr_rf 时生效。留空则该方案退化为等权。"
+        >
+          <FloatInput
+            value={v.minSnrGamma ?? undefined}
+            onChange={(n) =>
+              set(["backend", "animaLora", "minSnrGamma"], n ?? null)
+            }
+            placeholder="（留空 = 关闭)"
+            step={0.5}
+            min={0}
+          />
+        </Row>
+        <Row
           label="方差减少损失权重"
           description="可选 AsymFlow §5.2 方差减少损失。+40% step 计算成本,留空关闭。"
         >
@@ -292,6 +331,104 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             placeholder="（关闭)"
             step={0.1}
             min={0}
+          />
+        </Row>
+      </Section>
+
+      {/* === 训练增强（EMA / NaN guard / sample grid） === */}
+      <Section
+        title="训练增强"
+        subtitle="EMA 影子权重 / NaN guard 自愈 / 采样网格 — 全部可选"
+      >
+        <Row
+          label="启用 EMA"
+          description="对 LoRA 可训练参数维护一份指数移动平均影子;每个 ckpt 旁会写出 {name}_ema.safetensors,推理常优于在线权重。约 2× LoRA 显存占用。"
+        >
+          <ToggleSwitch
+            checked={!!v.ema}
+            onCheckedChange={(c) => set(["backend", "animaLora", "ema"], c)}
+          />
+        </Row>
+        {v.ema && (
+          <>
+            <Row
+              label="EMA decay"
+              description="衰减系数;0.9999 适合常规 LoRA(~1 万步半衰期),短训(< 2k step)可降到 0.999 / 0.99。"
+            >
+              <FloatInput
+                value={v.emaDecay ?? 0.9999}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "emaDecay"], n ?? 0.9999)
+                }
+                placeholder="0.9999"
+                step={0.0001}
+                min={0.9}
+                max={0.99999}
+              />
+            </Row>
+            <Row
+              label="warmup decay"
+              description="开启后前几百步用 min(decay, (1+t)/(10+t)) 缩放衰减,避免影子吃进噪声。"
+            >
+              <ToggleSwitch
+                checked={v.emaUseNumUpdates ?? true}
+                onCheckedChange={(c) =>
+                  set(["backend", "animaLora", "emaUseNumUpdates"], c)
+                }
+              />
+            </Row>
+            <Row
+              label="自动护栏"
+              description="开启 EMA 时,LoraHub 会强制 compile_inductor_mode = default 以避开 cudagraph_trees 与 EMA 的不兼容(否则会在 step 2 抛 RuntimeError)。无需手动设置。"
+            >
+              <span className="text-xs text-muted-foreground">已启用</span>
+            </Row>
+          </>
+        )}
+        <Row
+          label="启用 NaN guard"
+          description="在反向前 + 梯度裁剪后检查 loss / 梯度的 NaN/Inf。当连续超过阈值时按下方策略恢复或中止训练。"
+        >
+          <ToggleSwitch
+            checked={!!v.nanGuard}
+            onCheckedChange={(c) => set(["backend", "animaLora", "nanGuard"], c)}
+          />
+        </Row>
+        {v.nanGuard && (
+          <>
+            <Row
+              label="自动恢复"
+              description="超阈值时:把每个参数组的 LR 减半,并(若 EMA 已启用)用影子权重还原在线参数;关闭则直接中止训练。"
+            >
+              <ToggleSwitch
+                checked={!!v.nanGuardRecover}
+                onCheckedChange={(c) =>
+                  set(["backend", "animaLora", "nanGuardRecover"], c)
+                }
+              />
+            </Row>
+            <Row
+              label="连续异常上限"
+              description="连续多少步出现 NaN / Inf 后才触发恢复或中止;偶发尖峰会被吸收。默认 5。"
+            >
+              <IntInput
+                value={v.nanGuardMaxConsecutive ?? 5}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "nanGuardMaxConsecutive"], n ?? 5)
+                }
+                min={1}
+                placeholder="5"
+              />
+            </Row>
+          </>
+        )}
+        <Row
+          label="采样网格图"
+          description="每轮采样后额外合成一张 contact-sheet PNG(单图依然各自落盘),便于一眼看进度。"
+        >
+          <ToggleSwitch
+            checked={!!v.sampleGrid}
+            onCheckedChange={(c) => set(["backend", "animaLora", "sampleGrid"], c)}
           />
         </Row>
       </Section>

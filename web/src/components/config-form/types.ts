@@ -316,11 +316,20 @@ export interface ConfigFormValue {
       timestepSampling?: "sigmoid" | "uniform" | "logit_normal"
       sigmoidScale?: number
       discreteFlowShift?: number
-      weightingScheme?: "sigma_sqrt" | "logit_normal" | "mode" | "cosmap" | null
+      weightingScheme?: "sigma_sqrt" | "logit_normal" | "mode" | "cosmap" | "min_snr_rf" | null
+      minSnrGamma?: number | null
       logitMean?: number | null
       logitStd?: number | null
       modeScale?: number | null
       vrLossWeight?: number | null
+      // ---- Training stabilisers ----
+      ema?: boolean
+      emaDecay?: number
+      emaUseNumUpdates?: boolean
+      nanGuard?: boolean
+      nanGuardRecover?: boolean
+      nanGuardMaxConsecutive?: number
+      sampleGrid?: boolean
       cacheLatents?: boolean
       cacheLatentsToDisk?: boolean
       cacheTextEncoderOutputs?: boolean
