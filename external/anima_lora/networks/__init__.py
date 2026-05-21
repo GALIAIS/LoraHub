@@ -8,7 +8,9 @@ class it instantiates and a ``save_variant`` label consumed by
 Flag precedence (evaluated top to bottom, first match wins):
 
     use_chimera_hydra                    → chimera_hydra
-    use_ia3                              → ia3
+    use_ia3 / use_lokr / use_loha / use_full
+                                         → ia3 / lokr / loha / full (atomic)
+    use_dylora                           → dylora
     use_moe_style="independent_A"        → stacked_experts_global_fei
     use_moe_style="shared_A" + use_ortho → ortho_hydra
     use_moe_style="shared_A"             → hydra
@@ -35,6 +37,8 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Type
 from networks.lora_modules import (
     ChimeraHydraLoRAModule,
     DoRAModule,
+    DyLoRAModule,
+    FullModule,
     HydraLoRAModule,
     IA3Module,
     LoHAModule,
@@ -114,6 +118,8 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_ia3",
     "use_lokr",
     "use_loha",
+    "use_dylora",
+    "use_full",
     # LoKr factor (only consumed when use_lokr=True). Picks the (a, c)
     # split of out_dim and (b, d) split of in_dim. Larger factor → more
     # expressive W₁ matrix, smaller LoRA leg.
@@ -279,6 +285,23 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
         module_class=LoHAModule,
         save_variant="loha",
     ),
+    # DyLoRA (Valipour et al. EACL'23) — random rank truncation during
+    # training, full rank at inference. Saves under ``standard`` because
+    # the on-disk shape is bit-identical to plain LoRA.
+    "dylora": NetworkSpec(
+        name="dylora",
+        module_class=DyLoRAModule,
+        save_variant="standard",
+    ),
+    # Full — free-Δ wrapper (not a LoRA). Saves under a dedicated
+    # ``full`` variant; the on-disk key is ``delta`` (out × in) per
+    # Linear, which the standard rename + qkv defuse path doesn't
+    # touch.
+    "full": NetworkSpec(
+        name="full",
+        module_class=FullModule,
+        save_variant="full",
+    ),
     "hydra": NetworkSpec(
         name="hydra",
         module_class=HydraLoRAModule,
@@ -371,23 +394,30 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     use_ia3 = _parse_bool_flag(kwargs, "use_ia3")
     use_lokr = _parse_bool_flag(kwargs, "use_lokr")
     use_loha = _parse_bool_flag(kwargs, "use_loha")
+    use_dylora = _parse_bool_flag(kwargs, "use_dylora")
+    use_full = _parse_bool_flag(kwargs, "use_full")
     use_chimera = _parse_bool_flag(kwargs, "use_chimera_hydra")
     if use_chimera:
         return NETWORK_REGISTRY["chimera_hydra"]
     # Atomic-decomposition variants: each owns its own forward and
     # save layout, so they can't compose with LoRA legs / Ortho /
     # MoE / DoRA. Reject the combo loudly.
-    _atomic = {"use_ia3": use_ia3, "use_lokr": use_lokr, "use_loha": use_loha}
+    _atomic = {
+        "use_ia3": use_ia3,
+        "use_lokr": use_lokr,
+        "use_loha": use_loha,
+        "use_full": use_full,
+    }
     enabled_atomic = [k for k, v in _atomic.items() if v]
     if len(enabled_atomic) > 1:
         raise ValueError(
             f"Mutually exclusive variants enabled: {enabled_atomic}"
         )
     if enabled_atomic:
-        if use_dora or use_ortho:
+        if use_dora or use_ortho or use_dylora:
             raise ValueError(
                 f"{enabled_atomic[0]}=True is mutually exclusive with "
-                "use_dora / use_ortho (no LoRA legs to compose with)."
+                "use_dora / use_ortho / use_dylora (no LoRA legs to compose with)."
             )
         raw_moe = kwargs.get("use_moe_style")
         if raw_moe and str(raw_moe).lower() not in ("false", "none", ""):
@@ -397,6 +427,19 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
             )
         # Strip the ``use_`` prefix to get the registry key.
         return NETWORK_REGISTRY[enabled_atomic[0][len("use_") :]]
+    if use_dylora:
+        if use_dora or use_ortho:
+            raise ValueError(
+                "use_dylora=True is mutually exclusive with use_dora / use_ortho"
+                " (rank-truncation prefix doesn't compose with magnitude / Cayley distill)."
+            )
+        raw_moe = kwargs.get("use_moe_style")
+        if raw_moe and str(raw_moe).lower() not in ("false", "none", ""):
+            raise ValueError(
+                "use_dylora=True is mutually exclusive with use_moe_style"
+                f"={raw_moe!r} (per-expert ups don't share a single rank prefix)."
+            )
+        return NETWORK_REGISTRY["dylora"]
 
     raw_moe = kwargs.get("use_moe_style")
     if isinstance(raw_moe, str):

@@ -724,7 +724,7 @@ def test_loha_emits_use_loha(tmp_path: Path) -> None:
 
 
 def test_atomic_variants_mutually_exclusive(tmp_path: Path) -> None:
-    """Only one of {ia3, lokr, loha} can be on — pydantic rejects the combo."""
+    """Only one of {ia3, lokr, loha, full} can be on — pydantic rejects the combo."""
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
 
     with pytest.raises(ValueError, match="Mutually exclusive"):
@@ -735,3 +735,41 @@ def test_atomic_variants_mutually_exclusive(tmp_path: Path) -> None:
         AnimaLoraMethodLoraConfig(
             use_ortho=False, use_lokr=True, use_loha=True
         )
+    with pytest.raises(ValueError, match="Mutually exclusive"):
+        AnimaLoraMethodLoraConfig(
+            use_ortho=False, use_full=True, use_ia3=True
+        )
+
+
+def test_dylora_emits_use_dylora(tmp_path: Path) -> None:
+    """DyLoRA shares LoRA's on-disk shape; selector still forwards via network_args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_dylora=true" in argv
+
+
+def test_full_emits_use_full(tmp_path: Path) -> None:
+    """Full free-Δ wrapper is selected via use_full network_arg."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_full=True),
+    )
+    cfg = _recipe(tmp_path, opts)
+    argv, _ = compile_config(cfg, tmp_path / "ws")
+    assert "use_full=true" in argv
+
+
+def test_dylora_mutex_with_dora_or_ortho(tmp_path: Path) -> None:
+    """DyLoRA's rank truncation doesn't compose with magnitude / Cayley."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    with pytest.raises(ValueError, match="use_dylora"):
+        AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True, use_dora=True)
+    with pytest.raises(ValueError, match="use_dylora"):
+        AnimaLoraMethodLoraConfig(use_ortho=True, use_dylora=True)

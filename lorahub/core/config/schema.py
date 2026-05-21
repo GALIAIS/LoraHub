@@ -818,6 +818,15 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # pairs; effective rank up to ``r²`` at twice a LoRA's parameter
     # count. Mutually exclusive as above.
     use_loha: bool = False
+    # DyLoRA (Valipour et al. EACL'23) — random rank truncation during
+    # training, full rank at inference. Saves bit-identical to plain
+    # LoRA so ComfyUI loads it without changes. Mutually exclusive
+    # with the atomic decompositions and the MoE expert layouts.
+    use_dylora: bool = False
+    # Full — free-Δ (out × in) wrapper, no decomposition.  Useful as
+    # a matched-capacity baseline; not foldable into base.toml's
+    # production presets but available for ablation runs.
+    use_full: bool = False
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
     use_timestep_mask: bool = True
     min_rank: int = Field(8, ge=1)
@@ -836,17 +845,24 @@ class AnimaLoraMethodLoraConfig(BaseModel):
             ("use_ia3", self.use_ia3),
             ("use_lokr", self.use_lokr),
             ("use_loha", self.use_loha),
+            ("use_full", self.use_full),
         ]
         enabled = [name for name, on in atomic if on]
         if len(enabled) > 1:
             raise ValueError(
                 f"Mutually exclusive variants enabled: {enabled}"
             )
-        if enabled and (self.use_dora or self.use_ortho):
+        if enabled and (self.use_dora or self.use_ortho or self.use_dylora):
             raise ValueError(
                 f"AnimaLoraMethodLoraConfig: {enabled[0]} cannot combine with "
-                "use_dora / use_ortho — these atomic decompositions own the "
-                "full delta and have no LoRA legs to compose with."
+                "use_dora / use_ortho / use_dylora — these atomic decompositions"
+                " own the full delta and have no LoRA legs to compose with."
+            )
+        if self.use_dylora and (self.use_dora or self.use_ortho):
+            raise ValueError(
+                "AnimaLoraMethodLoraConfig: use_dylora cannot combine with "
+                "use_dora / use_ortho — rank-truncation prefix doesn't compose"
+                " with magnitude / Cayley distill."
             )
         return self
 

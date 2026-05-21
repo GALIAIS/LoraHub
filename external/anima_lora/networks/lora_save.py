@@ -184,8 +184,9 @@ def save_network_weights(
     is_chimera_variant = save_variant == "chimera_hydra_moe"
     # Atomic-decomposition variants (no LoRA legs / qkv defuse). Each
     # writes an opaque key set: ``ia3_weight`` for IA3,
-    # ``lokr_w1/w2_a/w2_b`` for LoKr, ``hada_w1_a/b/w2_a/b`` for LoHA.
-    is_atomic_variant = save_variant in ("ia3", "lokr", "loha")
+    # ``lokr_w1/w2_a/w2_b`` for LoKr, ``hada_w1_a/b/w2_a/b`` for LoHA,
+    # ``delta`` (out × in) for Full.
+    is_atomic_variant = save_variant in ("ia3", "lokr", "loha", "full")
     is_hydra_variant = (
         save_variant in ("hydra_moe", "ortho_hydra_to_hydra")
         or (
