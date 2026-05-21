@@ -63,6 +63,21 @@ const TIMESTEP_OPTIONS = [
   { value: "logit_normal", label: "logit_normal" },
 ] as const
 
+const LORA_ALGORITHM_OPTIONS = [
+  { value: "ortho", label: "ortho — OrthoLoRA(默认)" },
+  { value: "lora", label: "lora — 经典低秩 ΔW = BA" },
+  { value: "dora", label: "dora — 方向/幅度分离" },
+  { value: "dylora", label: "dylora — 训练随机 rank 截断" },
+  { value: "glora", label: "glora — LoRA + 每秩对角 gate" },
+  { value: "ia3", label: "ia3 — 每输出通道缩放,极小参数" },
+  { value: "lokr", label: "lokr — Kronecker 积分解" },
+  { value: "loha", label: "loha — Hadamard 积,r² 表达力" },
+  { value: "diag_oft", label: "diag_oft — 块对角正交(保 hyperspherical)" },
+  { value: "boft", label: "boft — 蝴蝶级联正交" },
+  { value: "vera", label: "vera — 冻结随机投影 + 缩放向量" },
+  { value: "full", label: "full — 自由 ΔW Parameter(baseline)" },
+] as const
+
 const WEIGHTING_SCHEME_OPTIONS = [
   { value: "", label: "（关闭 - 等权 RF 损失,默认)" },
   {
@@ -634,45 +649,101 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Section
           icon={<Sparkles className="size-3.5" />}
           title="method=lora 子配置"
-          subtitle="OrthoLoRA + T-LoRA 默认堆叠"
+          subtitle="选择 LoRA 家族的算法变体 + T-LoRA 时间步 mask"
           defaultOpen
         >
-          <Row label="启用 OrthoLoRA" description="SVD 参数化 + 正交正则。">
-            <ToggleSwitch
-              checked={v.lora?.useOrtho ?? true}
-              onCheckedChange={(c) =>
-                set(["backend", "animaLora", "lora", "useOrtho"], c)
+          <Row
+            label="算法"
+            description="决定如何参数化 ΔW。LoRA 是经典低秩,Ortho 在 LoRA 上叠 SVD+Cayley 正交,DoRA 加方向/幅度分离;原子分解类(IA3/LoKr/LoHA/Full/OFT/BOFT/GLoRA/VeRA)各自独占一种 ΔW 写法。"
+          >
+            <EnumSelect
+              value={v.lora?.algorithm ?? "ortho"}
+              onChange={(s) =>
+                set(["backend", "animaLora", "lora", "algorithm"], s)
               }
+              options={LORA_ALGORITHM_OPTIONS}
             />
           </Row>
-          <Row label="启用时间步 mask" description="T-LoRA — 时间步相关 rank mask。">
-            <ToggleSwitch
-              checked={v.lora?.useTimestepMask ?? true}
-              onCheckedChange={(c) =>
-                set(["backend", "animaLora", "lora", "useTimestepMask"], c)
-              }
-            />
-          </Row>
-          <Row label="最小 rank">
-            <FloatInput
-              value={v.lora?.minRank}
-              onChange={(n) =>
-                set(["backend", "animaLora", "lora", "minRank"], n)
-              }
-              placeholder="8"
-              min={1}
-            />
-          </Row>
-          <Row label="alpha/rank 缩放">
-            <FloatInput
-              value={v.lora?.alphaRankScale}
-              onChange={(n) =>
-                set(["backend", "animaLora", "lora", "alphaRankScale"], n)
-              }
-              placeholder="1.0"
-              step={0.1}
-            />
-          </Row>
+          {/* 算法专属字段 — 仅在选中对应算法时显示 */}
+          {v.lora?.algorithm === "lokr" && (
+            <Row
+              label="LoKr factor"
+              description="把 (out, in) 拆成 (a×c, b×d) 的最大块大小。8 是 LyCORIS 默认;越大 W₁ 越表达,LoRA 腿越小。"
+            >
+              <IntInput
+                value={v.lora?.lokrFactor ?? 8}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "lora", "lokrFactor"], n ?? 8)
+                }
+                min={1}
+                placeholder="8"
+              />
+            </Row>
+          )}
+          {v.lora?.algorithm === "boft" && (
+            <Row
+              label="BOFT 蝴蝶层数"
+              description="蝴蝶旋转的级联深度;m ≥ log₂(out_dim) 即可张满 SO(out_dim)。默认 4 够用。"
+            >
+              <IntInput
+                value={v.lora?.boftFactors ?? 4}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "lora", "boftFactors"], n ?? 4)
+                }
+                min={1}
+                placeholder="4"
+              />
+            </Row>
+          )}
+          {(v.lora?.algorithm === "lora" ||
+            v.lora?.algorithm === "ortho" ||
+            v.lora?.algorithm === "dora" ||
+            v.lora?.algorithm === "dylora" ||
+            v.lora?.algorithm === "glora") && (
+            <Row
+              label="启用时间步 mask"
+              description="T-LoRA — 时间步相关的 rank mask,叠在任何带 LoRA legs 的算法上。"
+            >
+              <ToggleSwitch
+                checked={v.lora?.useTimestepMask ?? true}
+                onCheckedChange={(c) =>
+                  set(["backend", "animaLora", "lora", "useTimestepMask"], c)
+                }
+              />
+            </Row>
+          )}
+          {(v.lora?.algorithm === "lora" ||
+            v.lora?.algorithm === "ortho" ||
+            v.lora?.algorithm === "dora" ||
+            v.lora?.algorithm === "dylora" ||
+            v.lora?.algorithm === "glora") && (
+            <Row label="T-mask 最小 rank">
+              <IntInput
+                value={v.lora?.minRank}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "lora", "minRank"], n ?? 8)
+                }
+                placeholder="8"
+                min={1}
+              />
+            </Row>
+          )}
+          {(v.lora?.algorithm === "lora" ||
+            v.lora?.algorithm === "ortho" ||
+            v.lora?.algorithm === "dora" ||
+            v.lora?.algorithm === "dylora" ||
+            v.lora?.algorithm === "glora") && (
+            <Row label="alpha/rank 缩放">
+              <FloatInput
+                value={v.lora?.alphaRankScale}
+                onChange={(n) =>
+                  set(["backend", "animaLora", "lora", "alphaRankScale"], n)
+                }
+                placeholder="1.0"
+                step={0.1}
+              />
+            </Row>
+          )}
         </Section>
       )}
 

@@ -379,8 +379,37 @@ export interface ConfigFormValue {
       enableBucket?: boolean
       pathPattern?: string
       // method = lora sub-config (default OrthoLoRA + T-LoRA stack).
+      // The ``algorithm`` enum is the authoritative selector; the legacy
+      // ``useX`` booleans are kept as optional deprecated shadows for
+      // compat with older YAML / API callers but the form drives the
+      // dropdown off ``algorithm``.
       lora?: {
-        useOrtho?: boolean
+        algorithm?:
+          | "lora"
+          | "ortho"
+          | "dora"
+          | "ia3"
+          | "lokr"
+          | "loha"
+          | "dylora"
+          | "full"
+          | "diag_oft"
+          | "boft"
+          | "glora"
+          | "vera"
+        useOrtho?: boolean | null
+        useDora?: boolean | null
+        useIa3?: boolean | null
+        useLokr?: boolean | null
+        useLoha?: boolean | null
+        useDylora?: boolean | null
+        useFull?: boolean | null
+        useDiagOft?: boolean | null
+        useBoft?: boolean | null
+        useGlora?: boolean | null
+        useVera?: boolean | null
+        lokrFactor?: number
+        boftFactors?: number
         useTimestepMask?: boolean
         minRank?: number
         alphaRankScale?: number
