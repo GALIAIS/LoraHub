@@ -47,8 +47,9 @@ ProgressCallback = Callable[[str, str, str], None]
 GITHUB_OWNER = "GALIAIS"
 GITHUB_REPO = "LoraHub"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+TAGS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
 COMMITS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
-WEB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+WEB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 WEB_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
 
 CACHE_TTL_SECONDS = 5 * 60
@@ -235,14 +236,86 @@ def _refresh_main(cwd: Path) -> dict[str, Any]:
 
 
 def _refresh_tag() -> dict[str, Any]:
-    """Probe the latest GitHub release."""
-    info = _fetch_json(RELEASES_API)
+    """Probe the latest GitHub release.
+
+    Falls back to the ``/tags`` API when ``/releases/latest`` 404s.
+    The repo currently uses lightweight git tags without published
+    GitHub Releases, so the canonical endpoint always returns 404 —
+    we still want the user to see the latest tag in the UI rather
+    than a network error.
+    """
+    try:
+        info = _fetch_json(RELEASES_API)
+    except OSError as exc:
+        if not _is_not_found(exc):
+            raise
+        return _refresh_tag_via_tags_api()
+
     tag = str(info.get("tag_name") or "")
     return {
         "tag_name": tag or None,
         "version_str": _normalize_version(tag) if tag else "",
         "release_notes": str(info.get("body") or "")[:8000],
         "published_at": str(info.get("published_at") or "") or None,
+    }
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    """``urlopen`` 4xx → ``HTTPError`` (which is an OSError). The
+    canonical message is ``HTTP Error 404: Not Found`` on the
+    HTTPError side and ``HTTP 404: ...`` on our manual raise. Match
+    both shapes so a future urllib refactor doesn't slip past."""
+    msg = str(exc)
+    return "404" in msg or "Not Found" in msg
+
+
+def _refresh_tag_via_tags_api() -> dict[str, Any]:
+    """Pick the highest semver ``v*`` tag from the lightweight tags API.
+
+    GitHub returns tags in commit-creation order, not version order, so
+    we sort them ourselves with ``packaging.version`` and skip non-semver
+    entries (e.g. ``docs-v1`` annotated tags).
+    """
+    tags_raw = _fetch_json(TAGS_API)
+    if not isinstance(tags_raw, list):
+        return _empty_tag_payload()
+
+    candidates: list[tuple[Version, str, str]] = []
+    for entry in tags_raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        if not name.startswith("v"):
+            continue
+        normalized = _normalize_version(name)
+        try:
+            ver = Version(normalized)
+        except InvalidVersion:
+            continue
+        sha = str(entry.get("commit", {}).get("sha") or "")
+        candidates.append((ver, name, sha))
+
+    if not candidates:
+        return _empty_tag_payload()
+
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    best_ver, best_name, _sha = candidates[0]
+    return {
+        "tag_name": best_name,
+        "version_str": str(best_ver),
+        # Lightweight tags don't carry release notes; the UI just gets
+        # an empty string and the "open in GitHub" link still works.
+        "release_notes": "",
+        "published_at": None,
+    }
+
+
+def _empty_tag_payload() -> dict[str, Any]:
+    return {
+        "tag_name": None,
+        "version_str": "",
+        "release_notes": "",
+        "published_at": None,
     }
 
 
