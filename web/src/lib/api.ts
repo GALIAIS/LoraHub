@@ -2,6 +2,44 @@ import { useEventStream } from "./use-event-stream"
 
 const API_BASE = "/api"
 
+// Default per-request timeout. Long enough that a remote LLM round-trip
+// completes; short enough that a stuck server doesn't freeze the UI
+// indefinitely. Overridable per-call via ``init.signal`` (the caller's
+// signal takes precedence and can extend or shorten the deadline).
+const DEFAULT_TIMEOUT_MS = 30_000
+
+/**
+ * Structured error thrown by every API client function.
+ *
+ * Callers used to type-check on ``e instanceof Error`` and parse the
+ * status out of ``e.message`` ("404 Not Found: …"). That's brittle —
+ * a future refactor of the message shape would silently change the
+ * branching. Prefer ``e instanceof ApiError && e.status === 404``;
+ * the legacy message format is preserved for any straggler that still
+ * uses ``startsWith("404 ")`` so existing call sites don't break.
+ */
+export class ApiError extends Error {
+  readonly status: number
+  /** Parsed JSON body when the response was JSON; raw text otherwise. */
+  readonly body: unknown
+  /** Path the request targeted (relative, sans API_BASE prefix). */
+  readonly path: string
+
+  constructor(status: number, statusText: string, body: unknown, path: string) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : typeof body === "string"
+          ? body
+          : ""
+    super(`${status} ${statusText}${detail ? `: ${detail}` : ""}`)
+    this.name = "ApiError"
+    this.status = status
+    this.body = body
+    this.path = path
+  }
+}
+
 export interface JobSummary {
   id: string
   state: string
@@ -636,14 +674,96 @@ export interface SweepParetoResponse {
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  // Wire in a default deadline. If the caller already passed a signal
+  // we honour it; if not, ``AbortSignal.any`` lets the timeout race
+  // alone. Either way the timeout fires after DEFAULT_TIMEOUT_MS unless
+  // the caller's signal aborts first.
+  const timeoutSignal =
+    typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+      ? AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+      : undefined
+  const signals = [init?.signal, timeoutSignal].filter(
+    (s): s is AbortSignal => Boolean(s),
+  )
+  const signal: AbortSignal | undefined =
+    signals.length === 0
+      ? undefined
+      : signals.length === 1
+        ? signals[0]
+        : "any" in AbortSignal
+          ? (AbortSignal as unknown as { any: (sigs: AbortSignal[]) => AbortSignal }).any(signals)
+          : signals[0]
+
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "content-type": "application/json" },
     ...init,
+    signal,
   })
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`)
+    const raw = await res.text()
+    let body: unknown = raw
+    try {
+      body = JSON.parse(raw)
+    } catch {
+      // Plain-text error body (e.g. nginx 502 page) — keep as string.
+    }
+    throw new ApiError(res.status, res.statusText, body, path)
   }
   return res.json() as Promise<T>
+}
+
+/**
+ * Iterate SSE frames from a fetch response body, yielding each parsed
+ * payload. Handles CRLF / CR / LF terminators uniformly and skips
+ * comment lines (``: ping``) and non-data fields.
+ *
+ * The ``terminalExec`` and ``applySystemUpdate`` paths used to inline
+ * their own framing readers — three near-identical copies of the same
+ * 30-line state machine. Bug fixes (CRLF normalisation, null body
+ * guard) only landed in one of them. Funnel everything through here
+ * so the next fix is a single edit.
+ */
+async function* iterSseFrames(
+  res: Response,
+): AsyncGenerator<string, void, void> {
+  if (!res.body) {
+    throw new Error("streaming response missing — does the proxy buffer SSE?")
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ""
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += decoder
+      .decode(value, { stream: true })
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+    let nl: number
+    while ((nl = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, nl)
+      buf = buf.slice(nl + 2)
+      const data = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n")
+      if (data) yield data
+    }
+  }
+}
+
+async function readSseEvents<T>(
+  res: Response,
+  onEvent: (ev: T) => void,
+): Promise<void> {
+  for await (const frame of iterSseFrames(res)) {
+    try {
+      onEvent(JSON.parse(frame) as T)
+    } catch {
+      // Malformed frame — skip rather than tear down the whole stream.
+    }
+  }
 }
 
 export const api = {
@@ -960,33 +1080,15 @@ export const api = {
       body: JSON.stringify(body),
       signal,
     })
-    if (!resp.ok || !resp.body) {
-      throw new Error(`update request failed (${resp.status})`)
+    if (!resp.ok) {
+      throw new ApiError(
+        resp.status,
+        resp.statusText,
+        await resp.text().catch(() => ""),
+        "/system/update",
+      )
     }
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ""
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n")
-      let idx
-      // SSE frames end at a blank line. Each frame looks like
-      //   data: {...}\n\n
-      // — strip the prefix and parse.
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const frame = buf.slice(0, idx).trim()
-        buf = buf.slice(idx + 2)
-        if (!frame.startsWith("data:")) continue
-        const payload = frame.slice(5).trim()
-        try {
-          const parsed = JSON.parse(payload) as UpdateEvent
-          onEvent(parsed)
-        } catch {
-          // ignore non-JSON keepalive comments
-        }
-      }
-    }
+    await readSseEvents<UpdateEvent>(resp, onEvent)
   },
   listMirrorPresets: () => http<Record<string, MirrorPreset[]>>("/network/presets"),
   probeMirrors: (
@@ -2139,51 +2241,19 @@ export async function terminalExec(
     signal: opts.signal,
   })
   if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
+    let errBody: unknown = ""
     try {
-      const data = await res.json()
-      if (data?.detail) message = String(data.detail)
+      errBody = await res.json()
     } catch {
       try {
-        message = await res.text()
+        errBody = await res.text()
       } catch {
-        /* ignore */
+        /* empty */
       }
     }
-    throw new Error(message)
+    throw new ApiError(res.status, res.statusText, errBody, "/terminal/exec")
   }
-  const reader = res.body?.getReader()
-  if (!reader) {
-    throw new Error("Streaming response missing — does the proxy buffer SSE?")
-  }
-  const decoder = new TextDecoder()
-  let buf = ""
-  // SSE framing: events are separated by a blank line. The spec allows
-  // the line terminator to be \n, \r, or \r\n, so we normalise CRLF to
-  // LF before splitting frames. Without this, a server that emits CRLF
-  // line endings would never produce a `\n\n` separator and the
-  // browser would buffer the entire stream until end-of-stream.
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-    let nl: number
-    while ((nl = buf.indexOf("\n\n")) >= 0) {
-      const frame = buf.slice(0, nl)
-      buf = buf.slice(nl + 2)
-      const data = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n")
-      if (!data) continue
-      try {
-        opts.onEvent(JSON.parse(data) as TerminalEvent)
-      } catch {
-        /* malformed frame — ignore so the stream stays usable */
-      }
-    }
-  }
+  await readSseEvents<TerminalEvent>(res, opts.onEvent)
 }
 
 // --- Self-update -----------------------------------------------------
@@ -2268,8 +2338,7 @@ export async function imageStudioAuditScan(body: {
 export async function imageStudioAuditReport(
   datasetPath: string,
 ): Promise<AuditReport | null> {
-  // 404 → no cache yet (caller renders empty state). Match against
-  // the message shape http() throws.
+  // 404 → no cache yet (caller renders empty state).
   try {
     return await http<AuditReport>(
       `/image-studio/audit/report?dataset_path=${encodeURIComponent(
@@ -2277,7 +2346,7 @@ export async function imageStudioAuditReport(
       )}`,
     )
   } catch (e) {
-    if (e instanceof Error && e.message.startsWith("404 ")) return null
+    if (e instanceof ApiError && e.status === 404) return null
     throw e
   }
 }
