@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { DatasetSourceSelect } from "@/components/config-form/dataset-source-select"
 import type { LaunchOverrides } from "../types"
 
 export function LaunchOverrideDialog({
@@ -48,13 +49,21 @@ export function LaunchOverrideDialog({
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-3">
-          <OverrideField
-            label="dataset.source"
-            placeholder={defaults.datasetSource || "./datasets/my_character"}
-            value={overrides.datasetSource}
-            onChange={(v) => update("datasetSource", v)}
-            description="本次训练使用的图片目录。"
-          />
+          <div className="flex flex-col gap-1.5">
+            <Label className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+              dataset.source
+            </Label>
+            <DatasetSourceSelect
+              value={overrides.datasetSource}
+              onChange={(v) => update("datasetSource", v)}
+              placeholder={
+                defaults.datasetSource || "./datasets/my_character"
+              }
+            />
+            <span className="text-[11px] text-muted-foreground">
+              本次训练使用的图片目录。留空 / 选回原值则使用配置默认。
+            </span>
+          </div>
           <OverrideField
             label="output.name"
             placeholder={defaults.outputName || "my_character_v1"}
