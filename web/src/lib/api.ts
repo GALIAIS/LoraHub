@@ -160,9 +160,6 @@ export type AnyBackendStatus =
   | DiffusionPipeBackendStatus
   | AnimaLoraBackendStatus
 
-// Legacy alias still used in older components — points at kohya for now.
-export type BackendStatus = KohyaBackendStatus
-
 export type BackendId = "kohya" | "diffusion-pipe" | "anima_lora"
 
 export interface BackendDescriptor {

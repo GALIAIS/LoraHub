@@ -575,7 +575,6 @@ export function InstallTab() {
       // Always force-overwrite. Users have repeatedly tripped on the
       // "target not empty" 409 because the install panel's whole point is
       // to wipe and re-install — there's no other meaningful intent.
-      console.info("[lorahub] startBootstrap", { backend, force: true })
       return api.startBootstrap({ backend, force: true })
     },
     onSuccess: () => {
@@ -584,10 +583,7 @@ export function InstallTab() {
   })
 
   const installDeps = useMutation({
-    mutationFn: (backend: BackendId) => {
-      console.info("[lorahub] installDeps", { backend })
-      return api.installDeps(backend)
-    },
+    mutationFn: (backend: BackendId) => api.installDeps(backend),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
       qc.invalidateQueries({ queryKey: ["settings"] })

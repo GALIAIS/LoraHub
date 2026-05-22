@@ -205,6 +205,7 @@ export function NetworkTab() {
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+    staleTime: 30_000,
   })
 
   const presetsQuery = useQuery({

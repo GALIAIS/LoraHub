@@ -29,6 +29,7 @@ export function TaggingTab() {
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+    staleTime: 30_000,
   })
 
   const [device, setDevice] = useState<Device | null>(null)

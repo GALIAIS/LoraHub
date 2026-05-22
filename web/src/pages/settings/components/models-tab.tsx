@@ -54,6 +54,7 @@ export function ModelsTab() {
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+    staleTime: 30_000,
   })
 
   const preferModelscope = settings.data?.settings.modelscope_enabled ?? false
