@@ -30,9 +30,10 @@ const POLL_MS = 10_000
 export function GlobalStatusBar() {
   const stream = useSystemStream(true)
   const polled = useQuery({
-    queryKey: ["system-stats-statusbar"],
+    queryKey: ["system", "stats"],
     queryFn: api.getSystemStats,
     refetchInterval: stream.status === "open" ? false : POLL_MS,
+    staleTime: 3_000,
   })
   const jobsQuery = useJobsList()
 

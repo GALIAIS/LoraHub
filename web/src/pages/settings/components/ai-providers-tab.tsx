@@ -122,6 +122,7 @@ function ProvidersPanel() {
   const providers = useQuery({
     queryKey: ["ai-providers"],
     queryFn: api.aiListProviders,
+    staleTime: 30_000,
   })
   const [editing, setEditing] = useState<string | "new" | null>(null)
 
@@ -673,6 +674,7 @@ function ModelsPanel() {
   const providers = useQuery({
     queryKey: ["ai-providers"],
     queryFn: api.aiListProviders,
+    staleTime: 30_000,
   })
   const [providerFilter, setProviderFilter] = useState<string>("all")
   const models = useQuery({
@@ -681,6 +683,7 @@ function ModelsPanel() {
       providerFilter === "all"
         ? api.aiListModels()
         : api.aiListModels(providerFilter),
+    staleTime: 30_000,
   })
   const [adding, setAdding] = useState(false)
   const [newProviderId, setNewProviderId] = useState<string>("")
@@ -1011,14 +1014,17 @@ function RoutesPanel() {
   const providers = useQuery({
     queryKey: ["ai-providers"],
     queryFn: api.aiListProviders,
+    staleTime: 30_000,
   })
   const routes = useQuery({
     queryKey: ["ai-routes"],
     queryFn: api.aiListRoutes,
+    staleTime: 30_000,
   })
   const allModels = useQuery({
     queryKey: ["ai-models"],
     queryFn: () => api.aiListModels(),
+    staleTime: 30_000,
   })
   // Bundled recommended system prompts keyed by task id. Empty result
   // (e.g. no caption-shaped tasks recommended) is fine — buttons hide.

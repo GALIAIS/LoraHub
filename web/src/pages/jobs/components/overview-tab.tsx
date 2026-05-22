@@ -85,6 +85,7 @@ export function OverviewTab({
     queryKey: ["job-metrics", jobId],
     queryFn: () => api.getJobMetrics(jobId),
     refetchInterval: isTerminal ? false : 4000,
+    staleTime: 2_000,
   })
 
   const m = metrics.data

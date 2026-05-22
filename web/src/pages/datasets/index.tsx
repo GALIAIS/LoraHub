@@ -44,6 +44,7 @@ export function DatasetsPage() {
   const datasetsList = useQuery({
     queryKey: ["image-studio-datasets"],
     queryFn: () => datasetList(),
+    staleTime: 30_000,
   })
   const knownDatasets = datasetsList.data?.datasets ?? []
 
@@ -81,6 +82,9 @@ export function DatasetsPage() {
     queryKey: ["dataset-scan", submitted, recursive, pageSize, offset],
     queryFn: () => api.scanDataset(submitted, recursive, pageSize, offset),
     enabled: submitted.trim().length > 0,
+    // 翻页时被命中的页可能已经在缓存里;5s 内的回扫直接用缓存,
+    // 减掉重复 IO(扫盘 + caption 文件计数)。
+    staleTime: 5_000,
   })
 
   const data = scan.data

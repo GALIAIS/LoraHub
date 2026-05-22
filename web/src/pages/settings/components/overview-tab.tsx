@@ -11,6 +11,7 @@ export function OverviewTab() {
   const backendsQuery = useQuery({
     queryKey: ["backends"],
     queryFn: api.listBackends,
+    staleTime: 10_000,
   })
 
   const setDefault = useMutation({

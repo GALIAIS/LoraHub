@@ -498,11 +498,13 @@ export function InstallTab() {
   const backendsQuery = useQuery({
     queryKey: ["backends"],
     queryFn: api.listBackends,
+    staleTime: 10_000,
   })
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+    staleTime: 30_000,
   })
 
   const noProxy = !settingsQuery.data?.settings.github_proxy

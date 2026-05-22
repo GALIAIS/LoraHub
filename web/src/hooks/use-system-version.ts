@@ -10,9 +10,10 @@
  *  - 6 hours ``refetchInterval``: matches the server-side background
  *    poll so the UI stays in sync without us having to re-query
  *    aggressively from the client.
- *  - ``refetchOnWindowFocus`` left default so re-focus triggers a
- *    fresh check (the server returns from cache anyway when within
- *    TTL — cheap).
+ *  - ``refetchOnWindowFocus: false``: every alt-tab back into the
+ *    browser would otherwise hit the GitHub API, defeating the
+ *    server-side TTL. Users who want a manual refresh hit the
+ *    explicit "再检查" button on the maintenance card.
  */
 import { useQuery } from "@tanstack/react-query"
 import { api, type UpdateInfo } from "@/lib/api"
@@ -31,6 +32,7 @@ export function useSystemVersion(
     queryFn: () => api.getSystemVersion(channel, false),
     staleTime: FIVE_MINUTES,
     refetchInterval: SIX_HOURS,
+    refetchOnWindowFocus: false,
     enabled: opts?.enabled ?? true,
   })
 }

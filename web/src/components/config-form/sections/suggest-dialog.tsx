@@ -57,10 +57,11 @@ export function SuggestDialog({ set, backend = "anima_lora" }: Props) {
   const [latestSuggestion, setLatestSuggestion] =
     useState<HyperparamSuggestion | null>(null)
 
-  // Sniff VRAM from the live system snapshot. The endpoint already
-  // powers the global status bar so this is a free piggyback.
+  // Sniff VRAM from the live system snapshot. Shares the cache with
+  // the dashboard / status-bar so opening the dialog typically gets an
+  // already-fresh answer instead of triggering its own poll.
   const stats = useQuery({
-    queryKey: ["system-stats-suggest"],
+    queryKey: ["system", "stats"],
     queryFn: api.getSystemStats,
     enabled: open,
     staleTime: 30_000,

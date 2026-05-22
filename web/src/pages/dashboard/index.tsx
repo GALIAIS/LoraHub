@@ -35,10 +35,13 @@ export function DashboardPage() {
   const stream = useSystemStream(true)
 
   // 实时通道不通时降级为 5s REST 轮询，保证看板永远有数据。
+  // 共用同一个 query key 让 GlobalStatusBar 和「建议训练参数」对话框
+  // 直接复用同一份缓存，避免三处轮询撞同一个端点。
   const polled = useQuery({
-    queryKey: ["system-stats"],
+    queryKey: ["system", "stats"],
     queryFn: api.getSystemStats,
     refetchInterval: stream.status === "open" ? false : POLL_INTERVAL_SYSTEM_MS,
+    staleTime: 3_000,
   })
 
   const snapshot: SystemSnapshot | null = stream.snapshot ?? polled.data ?? null

@@ -10,6 +10,9 @@ export function CompareTab({ compareIds }: { compareIds: string[] }) {
     queries: compareIds.map((id) => ({
       queryKey: ["job-metrics", id],
       queryFn: () => api.getJobMetrics(id),
+      // Compare 视图打开后立刻并发拉一批 metrics,2s 内被其他面板
+      // (overview / job-detail / analysis)再次打开时直接复用缓存。
+      staleTime: 2_000,
     })),
   })
 

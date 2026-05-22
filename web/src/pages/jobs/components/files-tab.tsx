@@ -135,6 +135,7 @@ export function FilesTab({
     queryKey: ["job-files", jobId],
     queryFn: () => api.getJobFiles(jobId),
     refetchInterval: isTerminal ? false : 4000,
+    staleTime: 2_000,
   })
 
   if (files.isLoading) {

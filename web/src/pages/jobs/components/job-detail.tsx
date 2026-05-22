@@ -58,7 +58,16 @@ export function JobDetail({
   const job = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => api.getJob(jobId),
-    refetchInterval: 2000,
+    // Stop polling once the job lands in a terminal state. Without
+    // this the detail panel kept hitting /api/jobs/<id> every 2s
+    // forever for a finished run; the SSE stream covers any remaining
+    // race-window updates anyway.
+    refetchInterval: (query) => {
+      const j = query.state.data as { state?: string } | undefined
+      if (j?.state && TERMINAL_STATES.has(j.state)) return false
+      return 2000
+    },
+    staleTime: 1_500,
   })
   // Drive the run-summary card on the job detail header. Mirrors the
   // refresh cadence of the metrics tab — short while running, off when
@@ -72,6 +81,7 @@ export function JobDetail({
       if (terminal) return false
       return 4000
     },
+    staleTime: 2_000,
   })
   const stream = useJobStream(jobId)
   const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill" | "pause" | "resume">(null)

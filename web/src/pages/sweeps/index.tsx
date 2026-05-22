@@ -108,6 +108,9 @@ export function SweepsPage() {
     queryKey: ["sweeps"],
     queryFn: api.listSweeps,
     refetchInterval: 4000,
+    // refetchInterval 已经每 4s 拉一次,挂载/可见性变化时不需要再
+    // 立刻补一发 — staleTime 顶住短时窗口的重复请求。
+    staleTime: 2_000,
   })
   const list = sweeps.data?.sweeps ?? []
 
@@ -315,6 +318,7 @@ function SweepDetailPanel({ sweepId }: { sweepId: string }) {
       const pending = data.queued + data.running + data.canceling
       return pending > 0 ? 3000 : false
     },
+    staleTime: 1_500,
   })
 
   if (detail.isLoading && !detail.data) {

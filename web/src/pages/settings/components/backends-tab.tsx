@@ -95,10 +95,12 @@ export function BackendsTab() {
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: api.getSettings,
+    staleTime: 30_000,
   })
   const backendsQuery = useQuery({
     queryKey: ["backends"],
     queryFn: api.listBackends,
+    staleTime: 10_000,
   })
 
   const [draft, setDraft] = useState<SettingsState | null>(null)

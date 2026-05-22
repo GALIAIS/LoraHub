@@ -31,7 +31,14 @@ type RowDialogState = {
 const SIDEBAR_KEY = "lorahub.configs.sidebar"
 
 export function ConfigsPage() {
-  const list = useQuery({ queryKey: ["configs"], queryFn: api.listConfigs })
+  const list = useQuery({
+    queryKey: ["configs"],
+    queryFn: api.listConfigs,
+    // Re-mount of the page (route in/out) shouldn't refetch within
+    // 5s — invalidations from create / rename / delete already cover
+    // the cases where the list legitimately changed.
+    staleTime: 5_000,
+  })
   const configs = list.data?.configs ?? []
   // Pull the workbench-level default backend so the configs list can
   // filter to "the backend the user is actually using" by default.
