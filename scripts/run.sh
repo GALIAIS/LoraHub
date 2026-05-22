@@ -76,7 +76,7 @@ fi
 # ---- Prod / api: build SPA if missing, then run via the CLI --------
 if [[ ! -f "web/dist/index.html" ]]; then
     echo "[lorahub] Building frontend SPA ..."
-    "$PYTHON" -m lorahub self build || {
+    "$PYTHON" -m lorahub manage build || {
         echo "[ERROR] Frontend build failed."
         exit 1
     }

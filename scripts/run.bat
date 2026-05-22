@@ -79,7 +79,7 @@ if "%MODE%"=="dev" (
 rem ---- Prod / api: build SPA if missing, then run via the CLI -------
 if not exist "web\dist\index.html" (
   echo [lorahub] Building frontend SPA ...
-  "%PYTHON%" -m lorahub self build
+  "%PYTHON%" -m lorahub manage build
   if errorlevel 1 goto :fail
 )
 

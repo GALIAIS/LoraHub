@@ -86,10 +86,10 @@ script lives in `.venv/bin/`. Add it to your user PATH with:
 
 ```bash
 # Linux / macOS / WSL
-.venv/bin/lorahub self install   # creates ~/.local/bin/lorahub symlink
+.venv/bin/lorahub manage install   # creates ~/.local/bin/lorahub symlink
 
 # Windows
-.venv\Scripts\lorahub self install   # writes %LOCALAPPDATA%\lorahub\bin shim + setx PATH
+.venv\Scripts\lorahub manage install   # writes %LOCALAPPDATA%\lorahub\bin shim + setx PATH
 ```
 
 After that, `lorahub` is available globally. Restart your shell to pick
@@ -108,10 +108,11 @@ up the new PATH.
 | `lorahub service enable` | Register as a systemd / launchd service (Linux/macOS, requires sudo) |
 | `lorahub service disable` | Unregister |
 | `lorahub service install-unit --print` | Print the unit file without writing |
-| `lorahub self update` | git pull + reinstall deps + rebuild SPA |
-| `lorahub self update --skip-build` | Backend-only update |
-| `lorahub self upgrade` | Switch to the newest `v*` tag |
-| `lorahub self build` | Rebuild the frontend (vite build) |
-| `lorahub self path` | Where is the active `lorahub` command? |
+| `lorahub manage update` | git pull + reinstall deps + rebuild SPA |
+| `lorahub manage update --skip-build` | Backend-only update |
+| `lorahub manage upgrade` | Switch to the newest `v*` tag |
+| `lorahub manage build` | Rebuild the frontend (vite build) |
+| `lorahub manage path` | Where is the active `lorahub` command? |
 | `lorahub serve` | Foreground uvicorn (dev / explicit) — same as `service start --foreground` |
 | `lorahub train / validate / info / sweep / init / ...` | Existing config + training commands |
+| `lorahub --lang en <subcommand>` | Switch help / output to English (default zh, also LORAHUB_LANG env) |

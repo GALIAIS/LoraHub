@@ -538,7 +538,7 @@ def apply(
     """
     cwd = _git_root()
     if cwd is None:
-        msg = "this install is not a git checkout — `lorahub self update` is required."
+        msg = "this install is not a git checkout — `lorahub manage update` is required."
         raise RuntimeError(msg)
 
     emit = progress if progress is not None else _NULL_EMIT

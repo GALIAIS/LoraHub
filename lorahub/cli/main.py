@@ -6,6 +6,13 @@ Commands:
     lorahub train <config>      Run training to completion.
     lorahub sweep <config>      Expand a grid sweep into per-variant configs.
     lorahub init <name>         Scaffold a starter config in the current dir.
+
+Language: every user-facing string in this CLI lives in
+``lorahub/cli/_i18n.py`` and is selected by the ``--lang zh|en``
+global flag (default ``zh``) or the ``LORAHUB_LANG`` env var. The
+flag has to be parsed *before* the typer subcommand modules are
+imported because their decorators evaluate ``t(...)`` at import time
+to populate help strings — see ``_pre_parse_lang`` below.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from rich.console import Console
 from rich.table import Table
 
 from lorahub import __version__
+from lorahub.cli._i18n import set_lang, t
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.backends.kohya.compiler import compile_config
@@ -31,9 +39,33 @@ from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 load_dotenv()  # picks up .env from cwd; existing env vars take precedence
 
+
+def _pre_parse_lang() -> None:
+    """Resolve ``--lang`` before subcommand modules import.
+
+    Every subcommand module evaluates ``t(...)`` at import time to
+    populate help strings — by the time typer's callback fires those
+    strings are already frozen. Sniff sys.argv for ``--lang`` (and
+    ``LORAHUB_LANG`` env via the helper) and pin the language now,
+    so subsequent imports pick up the correct locale.
+    """
+    argv = sys.argv[1:]
+    requested: str | None = None
+    for i, tok in enumerate(argv):
+        if tok in {"--lang", "-L"} and i + 1 < len(argv):
+            requested = argv[i + 1]
+            break
+        if tok.startswith("--lang="):
+            requested = tok.split("=", 1)[1]
+            break
+    set_lang(requested)
+
+
+_pre_parse_lang()
+
 app = typer.Typer(
     name="lorahub",
-    help="Open-source LoRA training workbench for diffusion models.",
+    help=t("app.help"),
     no_args_is_help=True,
     add_completion=False,
 )
@@ -44,7 +76,7 @@ console = Console()
 # `lorahub system gpu`. Imported lazily to avoid the import chain pulling
 # in the API store at module load when the user just runs `--help`.
 from lorahub.cli.jobs import jobs_app  # noqa: E402
-from lorahub.cli.self_cmd import self_app  # noqa: E402
+from lorahub.cli.manage_cmd import manage_app  # noqa: E402
 from lorahub.cli.service import service_app  # noqa: E402
 from lorahub.cli.sweep import sweep_app  # noqa: E402
 from lorahub.cli.system import system_app  # noqa: E402
@@ -57,8 +89,34 @@ app.add_typer(jobs_app, name="jobs")
 app.add_typer(sweep_app, name="sweeps")
 app.add_typer(system_app, name="system")
 app.add_typer(service_app, name="service")
-app.add_typer(self_app, name="self")
+# `manage` replaces the old `self` group. The rename is hard — old
+# `lorahub self update` no longer routes; users must learn the new
+# verb. Per-command help / hint strings are localised via _i18n so
+# `lorahub --lang en manage --help` still produces a sensible page.
+app.add_typer(manage_app, name="manage")
 err_console = Console(stderr=True)
+
+
+@app.callback()
+def _root(
+    lang: Annotated[
+        str | None,
+        typer.Option(
+            "--lang",
+            "-L",
+            help=t("app.lang.option"),
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Root callback: re-affirms the language for subcommand bodies.
+
+    The actual import-time language pin happens in ``_pre_parse_lang``
+    above. Re-running ``set_lang`` here costs nothing and lets typer
+    surface the option in ``--help``.
+    """
+    if lang is not None:
+        set_lang(lang)
 
 
 @app.command()
@@ -108,7 +166,7 @@ def doctor() -> None:
     row(".lorahub/uv", uv_bin, uv_bin.is_file(), "run scripts/install.{sh,bat}")
     row(".lorahub/python", py_dir, py_dir.is_dir() and any(py_dir.iterdir()) if py_dir.is_dir() else False, "run scripts/install.{sh,bat}")
     row(".node", node_bin, node_bin.is_file(), "run scripts/install.{sh,bat}")
-    row("web/dist", web_dist, web_dist.is_file(), "run `lorahub build`")
+    row("web/dist", web_dist, web_dist.is_file(), "run `lorahub manage build`")
 
     console.print(table)
 

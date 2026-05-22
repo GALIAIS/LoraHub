@@ -279,7 +279,7 @@ rem writes ``%LOCALAPPDATA%\lorahub\bin\lorahub.cmd`` and adds that dir to
 rem the user PATH via setx. Errors are non-fatal — the venv shim still
 rem works, the user just has to invoke it via the full path.
 echo [extra] Registering lorahub CLI ...
-"%VENV_PY%" -m lorahub self install
+"%VENV_PY%" -m lorahub manage install
 echo.
 
 echo ============================================================

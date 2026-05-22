@@ -237,7 +237,7 @@ echo ""
 # from anywhere — silent when already installed, fails soft so a
 # weird HOME / permission setup doesn't sink the whole installer.
 echo "[extra] Registering lorahub CLI ..."
-"$VENV_PY" -m lorahub self install 2>&1 || true
+"$VENV_PY" -m lorahub manage install 2>&1 || true
 echo ""
 
 echo "============================================================"

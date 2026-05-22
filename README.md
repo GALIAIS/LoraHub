@@ -41,10 +41,10 @@ scripts\run.bat api          # 仅启动 API
 
 ```bash
 # Linux / macOS / WSL
-.venv/bin/lorahub self install   # → ~/.local/bin/lorahub
+.venv/bin/lorahub manage install   # → ~/.local/bin/lorahub
 
 # Windows
-.venv\Scripts\lorahub self install   # → %LOCALAPPDATA%\lorahub\bin\lorahub.cmd
+.venv\Scripts\lorahub manage install   # → %LOCALAPPDATA%\lorahub\bin\lorahub.cmd
 
 # 之后可在任意目录使用：
 lorahub doctor                # 查看环境健康度
@@ -53,8 +53,10 @@ lorahub service start --port 18765  # 指定端口
 lorahub service status        # 查看运行状态
 lorahub service stop          # 停止
 lorahub service enable        # 注册系统级开机自启（Linux/macOS，需 sudo）
-lorahub self update           # 拉最新代码 + 重装依赖 + 重建前端
-lorahub self upgrade          # 切到最新 release tag
+lorahub manage update         # 拉最新代码 + 重装依赖 + 重建前端
+lorahub manage upgrade        # 切到最新 release tag
+lorahub manage build          # 仅重建前端
+lorahub --lang en --help      # 切换为英文 help / 输出
 ```
 
 完整子命令见 `scripts/README.md`。
