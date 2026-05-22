@@ -8,7 +8,6 @@ import {
   Pencil,
   Play,
   Search,
-  Sparkles,
 } from "lucide-react"
 import {
   api,
@@ -36,7 +35,6 @@ import {
 import { CaptionEditorModal } from "./components/caption-editor-modal"
 import { PathBar } from "./components/path-bar"
 import { SampleGallery } from "./components/sample-gallery"
-import { TaggingDialog } from "./components/tagging-dialog"
 
 type Sample = DatasetScanResponse["samples"][number]
 
@@ -58,7 +56,6 @@ export function DatasetsPage() {
   const [path, setPath] = useState("")
   const [submitted, setSubmitted] = useState("")
   const [recursive, setRecursive] = useState(false)
-  const [tagOpen, setTagOpen] = useState(false)
   const [editor, setEditor] = useState<{ imagePath: string } | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(48)
@@ -88,7 +85,6 @@ export function DatasetsPage() {
 
   const data = scan.data
   const canTrain = !!data && data.exists && data.image_files > 0
-  const canTag = !!data && data.exists && data.image_files > 0
 
   // Match-current-path so the dropdown's controlled value stays in
   // sync after navigateTo() walks into a sub-folder via PathBar
@@ -278,14 +274,6 @@ export function DatasetsPage() {
                     >
                       缺失标注 {data.missing_caption_files.length} 张
                     </Badge>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!canTag}
-                      onClick={() => setTagOpen(true)}
-                    >
-                      <Sparkles className="size-3.5" /> 自动标注
-                    </Button>
                   </div>
                 </div>
               </CardHeader>
@@ -342,15 +330,6 @@ export function DatasetsPage() {
           </>
         )}
       </div>
-
-      {data && (
-        <TaggingDialog
-          open={tagOpen}
-          onOpenChange={setTagOpen}
-          path={data.path}
-          onCompleted={() => scan.refetch()}
-        />
-      )}
 
       <CaptionEditorModal
         open={editor !== null}
