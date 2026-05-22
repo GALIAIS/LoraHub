@@ -95,6 +95,10 @@ def _config_payload(tmp_path: Path) -> dict[str, Any]:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
+    # Preflight refuses to launch a job whose dataset directory is
+    # empty. Drop a single placeholder image so the fixture stays
+    # valid; the stub trainer doesn't actually read it.
+    (data / "0.png").write_bytes(b"")
     return {
         "base_model": {"checkpoint": str(ckpt)},
         "dataset": {"source": str(data)},
@@ -293,6 +297,9 @@ def _dp_config_payload(tmp_path: Path) -> dict[str, Any]:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir(exist_ok=True)
+    # Preflight rejects an empty dataset dir; drop a placeholder image
+    # so resume / rerun fixtures clear the new gate.
+    (data / "0.png").write_bytes(b"")
     return {
         "base_model": {"checkpoint": str(ckpt), "arch": "sdxl"},
         "dataset": {"source": str(data)},

@@ -26,6 +26,7 @@ from lorahub.api.jobs_helpers import (
     _resolve_workspace_file,
     ResumeNotReady,
 )
+from lorahub.api.preflight import PreflightFinding, run_preflight
 from lorahub.api.state import JobState
 from lorahub.api.store import _pid_alive
 from lorahub.core.config.schema import TrainingConfig
@@ -37,6 +38,36 @@ _RESUMABLE_STATES = (
     JobState.failed,
     JobState.canceled,
 )
+
+
+def _raise_if_preflight_blocks(
+    cfg: TrainingConfig,
+    workspace: Path,
+    *,
+    skip: tuple[str, ...] = (),
+) -> list[PreflightFinding]:
+    """Run preflight; if any error finding fires, raise 422 with the full list.
+
+    Always returns the full set of findings (errors + warnings) so the
+    caller can stamp the warnings onto the JobRecord metadata. The
+    decision to bail is purely on severity == "error" — warnings are
+    surfaced through the response on a successful create as well.
+    """
+    findings = run_preflight(cfg, workspace, skip=skip)
+    blockers = [f for f in findings if f.severity == "error"]
+    if blockers:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"preflight failed: {len(blockers)} blocker"
+                    f"{'s' if len(blockers) != 1 else ''} before training "
+                    "can start. See `findings` for the per-field details."
+                ),
+                "findings": [f.to_dict() for f in findings],
+            },
+        )
+    return findings
 
 
 class CreateJobRequest(BaseModel):
@@ -94,7 +125,11 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
-    return _launch_job(cfg, workspace)
+    findings = _raise_if_preflight_blocks(cfg, workspace)
+    result = _launch_job(cfg, workspace)
+    if findings:
+        result["preflight_warnings"] = [f.to_dict() for f in findings]
+    return result
 
 
 @router.post("/jobs/{job_id}/rerun", status_code=202)
@@ -122,11 +157,15 @@ def rerun_job(job_id: str) -> dict[str, Any]:
             status_code=422, detail=f"config snapshot is no longer valid: {exc}"
         ) from exc
 
-    return _relaunch_job_in_place(
+    findings = _raise_if_preflight_blocks(cfg, Path(job.workspace))
+    result = _relaunch_job_in_place(
         job,
         cfg,
         metadata_patch={"last_rerun_at": datetime.now(UTC).isoformat()},
     )
+    if findings:
+        result["preflight_warnings"] = [f.to_dict() for f in findings]
+    return result
 
 
 class ResumeJobRequest(BaseModel):
@@ -267,6 +306,12 @@ def resume_job(
 
     cfg = _apply_cfg_overrides(cfg, spec.cfg_overrides)
 
+    # Run preflight against the (possibly overridden) cfg + the original
+    # workspace. Resume must still verify model/dataset/output paths
+    # because the recipe may have been edited and a path could have
+    # gone missing since the original run.
+    findings = _raise_if_preflight_blocks(cfg, Path(original.workspace))
+
     # Clear the LoRaHub pause flag so the resumed trainer doesn't
     # immediately re-pause on the first step. Best-effort.
     try:
@@ -274,12 +319,15 @@ def resume_job(
     except OSError:
         pass
 
-    return _relaunch_job_in_place(
+    result = _relaunch_job_in_place(
         original,
         cfg,
         extra_argv=spec.extra_argv,
         metadata_patch={"last_resumed_at": datetime.now(UTC).isoformat()},
     )
+    if findings:
+        result["preflight_warnings"] = [f.to_dict() for f in findings]
+    return result
 
 
 @router.post("/jobs/{job_id}/reveal")
