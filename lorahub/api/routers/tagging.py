@@ -16,7 +16,12 @@ from lorahub.core.dataset.anima import AnimaDatasetTransformer
 from lorahub.core.tagging.base import BaseTagger
 from lorahub.core.tagging.joytag import DEFAULT_THRESHOLD as JOYTAG_DEFAULT_THRESHOLD
 from lorahub.core.tagging.joytag import JoyTagger
-from lorahub.core.tagging.wd14 import DEFAULT_MODEL, CudaUnavailableError, WD14Tagger
+from lorahub.core.tagging.wd14 import (
+    DEFAULT_MODEL,
+    WD14_MODEL_CATALOG,
+    CudaUnavailableError,
+    WD14Tagger,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -163,6 +168,42 @@ def _build_tagger(req: TagDatasetRequest) -> BaseTagger:
         character_threshold=req.character,
         device=req.device,
     )
+
+
+@router.get("/tagging/wd14/models")
+def list_wd14_models() -> dict[str, Any]:
+    """Return the curated catalogue of WD tagger checkpoints.
+
+    Source of truth: ``lorahub.core.tagging.wd14.WD14_MODEL_CATALOG``.
+    The web Settings → 标注 panel and the smart-caption modal pull
+    this list to populate their model picker so users don't have to
+    paste a HuggingFace repo id by hand.
+    """
+    return {
+        "default": DEFAULT_MODEL,
+        "models": [
+            {"id": repo, "label": label}
+            for repo, label in WD14_MODEL_CATALOG
+        ],
+    }
+
+
+@router.get("/tagging/download-status")
+def tagger_download_status() -> dict[str, Any]:
+    """Snapshot of WD14 / JoyTag checkpoint downloads in flight.
+
+    The web app polls this every second while the floating download
+    toast is open. Each entry carries enough state to render a
+    single-file progress row (``percent`` may be null for the brief
+    window before the first chunk lands and tqdm reports the total).
+
+    Finished / errored jobs linger for a few seconds before being
+    pruned so the UI has a chance to flash a "下载完成" confirmation
+    before hiding the toast.
+    """
+    from lorahub.core.tagging.download_status import snapshot  # noqa: PLC0415
+
+    return snapshot()
 
 
 @router.post("/tagging/tag", status_code=202)

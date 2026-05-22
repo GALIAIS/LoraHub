@@ -24,6 +24,39 @@ if TYPE_CHECKING:
     import onnxruntime as ort
 
 DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
+
+# Curated catalogue of WD tagger checkpoints under the
+# ``SmilingWolf`` HF org. Order = recommended-first: v3-eva02 leads
+# because it's the highest-quality model in the family at the time of
+# writing; v3 vit / v3 swinv2 are the typical "good enough + fast"
+# alternatives; v2 entries are kept for compatibility with older
+# captioning workflows that pinned to specific tag distributions.
+#
+# Each entry mirrors the HF repo layout we depend on:
+#
+#     <repo_id>/model.onnx + selected_tags.csv
+#
+# Adding a new model id here is enough for the UI dropdown / CLI
+# autocomplete; nothing else is plumbed off-list. Use full
+# ``<owner>/<name>`` form so non-SmilingWolf forks (e.g. user-trained
+# checkpoints) can be listed alongside in the future without a code
+# change at every call site.
+WD14_MODEL_CATALOG: tuple[tuple[str, str], ...] = (
+    ("SmilingWolf/wd-eva02-large-tagger-v3", "v3 · EvaCLIP-Large(推荐)"),
+    ("SmilingWolf/wd-vit-large-tagger-v3", "v3 · ViT-Large"),
+    ("SmilingWolf/wd-swinv2-tagger-v3", "v3 · SwinV2(下载量最高)"),
+    ("SmilingWolf/wd-vit-tagger-v3", "v3 · ViT"),
+    ("SmilingWolf/wd-convnext-tagger-v3", "v3 · ConvNeXt"),
+    ("SmilingWolf/wd-v1-4-moat-tagger-v2", "v2 · MOAT"),
+    ("SmilingWolf/wd-v1-4-swinv2-tagger-v2", "v2 · SwinV2"),
+    ("SmilingWolf/wd-v1-4-convnextv2-tagger-v2", "v2 · ConvNeXtV2"),
+    ("SmilingWolf/wd-v1-4-convnext-tagger-v2", "v2 · ConvNeXt"),
+    ("SmilingWolf/wd-v1-4-vit-tagger-v2", "v2 · ViT"),
+    ("SmilingWolf/wd-v1-4-convnext-tagger", "v1 · ConvNeXt"),
+    ("SmilingWolf/wd-v1-4-vit-tagger", "v1 · ViT"),
+)
+WD14_MODEL_IDS: tuple[str, ...] = tuple(repo for repo, _ in WD14_MODEL_CATALOG)
+
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _RATING_CATEGORY = 9
 _GENERAL_CATEGORY = 0
@@ -113,8 +146,33 @@ class WD14Tagger:
             return
         import onnxruntime as ort  # noqa: PLC0415
 
-        model_path = hf_download(repo_id=self.model_id, filename="model.onnx")
-        labels_path = hf_download(repo_id=self.model_id, filename="selected_tags.csv")
+        from lorahub.core.tagging import download_status  # noqa: PLC0415
+
+        # Wire the HF download progress through the in-process status
+        # board so the web UI's floating download toast can show the
+        # actual byte count instead of an indeterminate spinner. The
+        # ONNX file is the heavy one (~700MB for eva02-large); the
+        # tags CSV is tiny but reported anyway for completeness.
+        try:
+            model_path = hf_download(
+                repo_id=self.model_id,
+                filename="model.onnx",
+                tqdm_class=download_status.tqdm_class_for(self.model_id, "model.onnx"),
+            )
+        except BaseException as exc:
+            download_status.mark_error(self.model_id, "model.onnx", exc)
+            raise
+        try:
+            labels_path = hf_download(
+                repo_id=self.model_id,
+                filename="selected_tags.csv",
+                tqdm_class=download_status.tqdm_class_for(
+                    self.model_id, "selected_tags.csv"
+                ),
+            )
+        except BaseException as exc:
+            download_status.mark_error(self.model_id, "selected_tags.csv", exc)
+            raise
 
         providers = _resolve_providers(self.device, ort.get_available_providers())
         self._session = ort.InferenceSession(model_path, providers=providers)

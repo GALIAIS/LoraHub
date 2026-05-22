@@ -108,9 +108,26 @@ class JoyTagger:
             )
             raise JoyTagModelError(msg) from exc
 
-        weights_path = hf_download(repo_id=self.model_id, filename="model.safetensors")
-        tags_path = hf_download(repo_id=self.model_id, filename="top_tags.txt")
-        config_path = hf_download(repo_id=self.model_id, filename="config.json")
+        from lorahub.core.tagging import download_status  # noqa: PLC0415
+
+        # Mirror WD14's progress reporting so the floating download
+        # toast shows JoyTag bytes too.
+        def _dl(filename: str) -> str:
+            try:
+                return hf_download(
+                    repo_id=self.model_id,
+                    filename=filename,
+                    tqdm_class=download_status.tqdm_class_for(
+                        self.model_id, filename
+                    ),
+                )
+            except BaseException as exc:
+                download_status.mark_error(self.model_id, filename, exc)
+                raise
+
+        weights_path = _dl("model.safetensors")
+        tags_path = _dl("top_tags.txt")
+        config_path = _dl("config.json")
 
         with Path(tags_path).open(encoding="utf-8") as fh:
             self._tag_names = [line.strip() for line in fh if line.strip()]

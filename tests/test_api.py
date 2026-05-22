@@ -2363,6 +2363,78 @@ def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) ->
     assert r.status_code == 422
 
 
+def test_tagging_wd14_catalog_lists_all_curated_models(client: TestClient) -> None:
+    """``GET /tagging/wd14/models`` returns the full catalogue + default.
+
+    Source of truth is ``WD14_MODEL_CATALOG``; this test guards against
+    accidental drift between the catalogue constant and the API surface
+    the UI dropdowns rely on.
+    """
+    from lorahub.core.tagging.wd14 import DEFAULT_MODEL, WD14_MODEL_CATALOG
+
+    r = client.get("/api/tagging/wd14/models")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["default"] == DEFAULT_MODEL
+    ids = [m["id"] for m in body["models"]]
+    assert ids == [repo for repo, _ in WD14_MODEL_CATALOG]
+    # eva02 is the recommended-first entry per the catalogue ordering.
+    assert ids[0] == "SmilingWolf/wd-eva02-large-tagger-v3"
+
+
+def test_tagging_download_status_reflects_in_flight_jobs(client: TestClient) -> None:
+    """``GET /tagging/download-status`` exposes the download_status board.
+
+    Drives the API directly via the helper functions used by the
+    custom tqdm class — that's the same path the real WD14 / JoyTag
+    download takes, so the assertion validates both layers.
+    """
+    from lorahub.core.tagging import download_status
+
+    download_status.reset()
+    download_status.mark_start("SmilingWolf/wd-eva02-large-tagger-v3", "model.onnx", total=1000)
+    download_status.mark_chunk("SmilingWolf/wd-eva02-large-tagger-v3", "model.onnx", 250)
+
+    r = client.get("/api/tagging/download-status")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["jobs"]) == 1
+    job = body["jobs"][0]
+    assert job["repo_id"] == "SmilingWolf/wd-eva02-large-tagger-v3"
+    assert job["filename"] == "model.onnx"
+    assert job["status"] == "running"
+    assert job["downloaded"] == 250
+    assert job["total"] == 1000
+    assert job["percent"] == 25.0
+
+
+def test_tagging_download_status_prunes_finished_jobs_after_linger(
+    client: TestClient,
+) -> None:
+    """Finished jobs disappear from the response after the linger window."""
+    import time as _time
+
+    from lorahub.core.tagging import download_status
+
+    download_status.reset()
+    download_status.mark_start("foo/bar", "weights.bin", total=10)
+    download_status.mark_chunk("foo/bar", "weights.bin", 10)
+    download_status.mark_done("foo/bar", "weights.bin")
+
+    # Immediately after done — the job should still be visible so the
+    # UI can render a "下载完成" flash before the toast disappears.
+    body = client.get("/api/tagging/download-status").json()
+    assert len(body["jobs"]) == 1
+    assert body["jobs"][0]["status"] == "done"
+
+    # Force the linger window to expire.
+    job = next(iter(download_status._jobs.values()))
+    job.finished_at = _time.time() - 30.0
+
+    body = client.get("/api/tagging/download-status").json()
+    assert body["jobs"] == []
+
+
 # --------------------------------------------------------------------------- #
 # Caption preprocessing (/api/captions/normalize)
 # --------------------------------------------------------------------------- #

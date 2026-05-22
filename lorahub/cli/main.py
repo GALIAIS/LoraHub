@@ -697,7 +697,7 @@ def tag(
     ] = "wd14",
     model: Annotated[
         str, typer.Option(help="Hugging Face model id of the WD tagger (ignored for joytag).")
-    ] = "SmilingWolf/wd-v1-4-vit-tagger-v2",
+    ] = "SmilingWolf/wd-eva02-large-tagger-v3",
     general_threshold: Annotated[
         float, typer.Option("--general", help="WD14 general-tag score threshold.")
     ] = 0.35,

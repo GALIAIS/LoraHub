@@ -49,9 +49,19 @@ def hf_download(
     repo_type: str | None = None,
     revision: str | None = None,
     local_dir: str | None = None,
+    tqdm_class: Any | None = None,
     **kwargs: Any,
 ) -> str:
-    """Wrapper around hf_hub_download that injects the configured endpoint."""
+    """Wrapper around hf_hub_download that injects the configured endpoint.
+
+    Optional ``tqdm_class`` is forwarded straight through to
+    ``hf_hub_download``. Callers that want UI-visible progress (e.g.
+    the WD14 tagger first-load) plug in
+    ``download_status.tqdm_class_for(repo_id, filename)`` so the
+    download bytes show up in ``GET /api/tagging/wd14/download-status``.
+    Most callers don't need it and can pass ``None`` to keep the
+    default tqdm behaviour.
+    """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
     ep = endpoint or _hf_endpoint()
@@ -68,6 +78,8 @@ def hf_download(
         kw["revision"] = revision
     if local_dir:
         kw["local_dir"] = local_dir
+    if tqdm_class is not None:
+        kw["tqdm_class"] = tqdm_class
     return hf_hub_download(**kw)
 
 
