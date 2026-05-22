@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCheck, Play, Save, XCircle } from "lucide-react"
@@ -41,18 +41,31 @@ export function ConfigEditor({
   const [name, setName] = useState<string>(isNew ? "" : mode.name)
   const [errors, setErrors] = useState<ValidationFieldError[]>([])
 
-  // Seed the draft from the source config (or sane defaults for new).
+  // Identify the (kind, name) pair the draft was last seeded against.
+  // The seeding effect below only re-fires when this pair *changes* —
+  // a background refetch of the same config no longer wipes a draft
+  // the user is editing. Switching to a different config (or new ↔
+  // edit) still rebuilds, which is what users expect.
+  const seededForRef = useRef<string | null>(null)
+
   useEffect(() => {
+    const seedKey = isNew ? "__new__" : mode.name
+    const alreadySeeded = seededForRef.current === seedKey
     if (isNew) {
       // Don't seed until settings have loaded — buildDefaults reads
       // default_backend to pick the right initial arch + sub-config.
       // First-load with settings undefined falls back to kohya which
-      // is fine; once settings land the effect re-fires and rebuilds.
+      // is fine; once settings land we still want to swap to the user
+      // preference, but only on the *initial* seed for this editor.
+      if (alreadySeeded) return
       setDraft(buildDefaults(defaultBackend))
       setName("")
+      seededForRef.current = seedKey
     } else if (sourceQuery.data?.parsed) {
+      if (alreadySeeded) return
       setDraft(sourceQuery.data.parsed as unknown as ConfigFormValue)
       setName(mode.name)
+      seededForRef.current = seedKey
     }
   }, [isNew, sourceQuery.data, mode, defaultBackend])
 
