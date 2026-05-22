@@ -963,7 +963,9 @@ function ModelsPanel() {
                   </CardDescription>
                 )}
               </CardHeader>
-              <CardContent className="space-y-1">
+              <CardContent className="space-y-1 max-h-[24rem] overflow-y-auto">
+                {/* OpenRouter / 中转站「发现模型」一键导入后,单 provider
+                    可能上百行 — 不限高的话整个面板被推到屏幕下方。 */}
                 {items.map((m) => (
                   <div
                     key={m.id}

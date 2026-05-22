@@ -543,17 +543,21 @@ function VariantTable({ jobs }: { jobs: SweepJobSummary[] }) {
           变体 · {jobs.length}
         </span>
       </header>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[24%]">变体</TableHead>
-            <TableHead className="w-[110px]">状态</TableHead>
-            <TableHead>取值</TableHead>
-            <TableHead className="w-[150px] whitespace-nowrap">起止</TableHead>
-            <TableHead className="w-[70px] text-right">操作</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+      {/* Cap the table at ~12 rows so a 256-cell grid sweep doesn't
+          push the Pareto card and bulk actions off-screen. The
+          ScrollArea is local — outer page scroll is unaffected. */}
+      <div className="max-h-[28rem] overflow-y-auto">
+        <Table>
+          <TableHeader className="sticky top-0 bg-background z-[1]">
+            <TableRow>
+              <TableHead className="w-[24%]">变体</TableHead>
+              <TableHead className="w-[110px]">状态</TableHead>
+              <TableHead>取值</TableHead>
+              <TableHead className="w-[150px] whitespace-nowrap">起止</TableHead>
+              <TableHead className="w-[70px] text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
           {jobs.map((job) => {
             const name = job.metadata?.variant_name ?? job.id.slice(-8)
             const axes = job.metadata?.axis_values ?? {}
@@ -611,6 +615,7 @@ function VariantTable({ jobs }: { jobs: SweepJobSummary[] }) {
           })}
         </TableBody>
       </Table>
+      </div>
     </section>
   )
 }

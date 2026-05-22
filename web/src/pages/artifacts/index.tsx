@@ -367,7 +367,10 @@ function ArtifactCard({
       </CardHeader>
       {row.checkpoints.length > 0 && (
         <CardContent className="pt-0">
-          <div className="rounded-[4px] border border-border/60 bg-muted/30 divide-y divide-border/60">
+          {/* 单卡片内按 ~7 行高度限高 — checkpoint 多时(每 epoch 存一份的
+              长跑训练 LoRA 常常 20-50 份)避免单个 job 把整页顶到屏幕外面去。
+              内层滚,外层"产物管理"主滚动条不动。 */}
+          <div className="rounded-[4px] border border-border/60 bg-muted/30 divide-y divide-border/60 max-h-[18rem] overflow-y-auto">
             {row.checkpoints.map((ckpt) => (
               <div
                 key={ckpt.path}

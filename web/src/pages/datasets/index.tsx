@@ -289,15 +289,20 @@ export function DatasetsPage() {
                       : "此目录下未发现图片样本。"}
                   </div>
                 ) : (
-                  <SampleGallery
-                    samples={data.samples}
-                    onEdit={(sample: Sample) =>
-                      setEditor({ imagePath: sample.path })
-                    }
-                    onPreviewImage={(sample) =>
-                      setEditor({ imagePath: sample.path })
-                    }
-                  />
+                  // pageSize 上限 192 时缩略图网格能撑得很高,
+                  // 把分页器和「训练此数据集」按钮挤到屏幕外。
+                  // 卡片内部限到 ~70vh 局部滚动。
+                  <div className="max-h-[70vh] overflow-y-auto pr-1">
+                    <SampleGallery
+                      samples={data.samples}
+                      onEdit={(sample: Sample) =>
+                        setEditor({ imagePath: sample.path })
+                      }
+                      onPreviewImage={(sample) =>
+                        setEditor({ imagePath: sample.path })
+                      }
+                    />
+                  </div>
                 )}
                 <Pagination
                   total={data.image_files}

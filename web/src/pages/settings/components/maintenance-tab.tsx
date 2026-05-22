@@ -155,7 +155,10 @@ export function MaintenanceTab() {
               暂无归档。
             </div>
           ) : (
-            <div className="rounded-[4px] border border-border/60 divide-y divide-border/40">
+            <div className="rounded-[4px] border border-border/60 divide-y divide-border/40 max-h-[24rem] overflow-y-auto">
+              {/* 久未清理的机器,_archive/ 目录可能积累几十到上百个归档,
+                  整列出来会把下方 HuggingFace 缓存 / 数据库等卡片推到很远;
+                  本卡片内部局部滚动,主页面滚动条不变化。 */}
               {archiveEntries.map((e) => (
                 <div
                   key={e.name}
