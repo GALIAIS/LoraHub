@@ -33,6 +33,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from lorahub.api import diagnosis_patterns as _diagnosis_patterns
+
 logger = logging.getLogger(__name__)
 
 BackendName = Literal["kohya", "diffusion-pipe", "anima_lora"]
@@ -221,79 +223,13 @@ class DiagnosisFinding:
 # diffusers / accelerate / anima). Add new patterns here when a new
 # failure mode shows up; the data lives next to the matcher so a UI
 # tooltip can quote the exact regex.
-_PATTERNS: list[tuple[str, str, Literal["info", "warn", "error"], str, str]] = [
-    (
-        "oom",
-        r"(CUDA out of memory|OutOfMemoryError|cudaMalloc.*failed|memory error)",
-        "error",
-        "GPU ran out of memory mid-training.",
-        "Reduce --train_batch_size, raise --gradient_accumulation_steps, "
-        "enable --gradient_checkpointing, or pick a higher --blocks_to_swap "
-        "value (anima only).",
-    ),
-    (
-        "nan_loss",
-        r"(non-finite loss|NaN.*loss|Loss is NaN|loss became NaN|nan_skip)",
-        "error",
-        "Loss became NaN — training is numerically unstable.",
-        "Try --nan_guard --nan_guard_recover to skip bad steps + auto-recover. "
-        "If it keeps firing, lower --learning_rate by 2× or switch to fp32 "
-        "mixed precision.",
-    ),
-    (
-        "missing_module",
-        r"ModuleNotFoundError: No module named ['\"](\w+)['\"]",
-        "error",
-        "A Python dependency is missing.",
-        "Re-run scripts/install.sh (or scripts/install-cn.sh inside China). "
-        "If the missing package is bitsandbytes/lpips/came-pytorch, those "
-        "are optional — install with: uv pip install <package>.",
-    ),
-    (
-        "missing_safetensors",
-        r"(FileNotFoundError|No such file or directory).*\.(safetensors|ckpt|pt)",
-        "error",
-        "A model file (safetensors / checkpoint) wasn't found.",
-        "Run `make download-models` (anima) or `lorahub doctor` to see "
-        "which model paths are missing. Check your YAML's model_paths.",
-    ),
-    (
-        "torch_compile_fail",
-        r"(torch._dynamo|InductorError|fx.GraphModule.*failed|recompile)",
-        "warn",
-        "torch.compile fell back to eager (training continues but slower).",
-        "Set --no_compile or check that your CUDA/PyTorch versions match. "
-        "Compile failures are usually harmless; only worry if step time "
-        "doubled.",
-    ),
-    (
-        "data_loader_corrupt",
-        r"(corrupt.*image|cannot identify image file|truncated.*image|"
-        r"PIL.UnidentifiedImageError)",
-        "error",
-        "An image in the dataset is corrupt or unreadable.",
-        "Run scripts/validate_dataset.py or open --dataset_dir manually "
-        "and remove the offending file. The traceback above usually "
-        "names the file path.",
-    ),
-    (
-        "user_cancel",
-        r"(KeyboardInterrupt|received signal|user aborted)",
-        "info",
-        "Training was canceled by the user (Ctrl+C / API cancel).",
-        "Resume with the same recipe — the saver wrote a checkpoint at "
-        "the last save_every_n_epochs boundary.",
-    ),
-    (
-        "vram_pressure",
-        r"(RuntimeError.*CUDA error.*out of memory)",
-        "error",
-        "Driver reported OOM during a CUDA call.",
-        "Same as oom: reduce batch / accumulate / checkpoint. If this "
-        "happens at startup, another process is hogging VRAM — check "
-        "nvidia-smi.",
-    ),
-]
+_PATTERNS: list[tuple[str, str, Literal["info", "warn", "error"], str, str]] = (
+    # The catalogue lives in lorahub.api.diagnosis_patterns so the
+    # streaming WARN watcher (Phase 3) can share the same regexes.
+    # Keep `_PATTERNS` as a module-level alias so existing tests /
+    # call sites that monkeypatch it still work.
+    list(_diagnosis_patterns.get_patterns())
+)
 
 
 def diagnose_failure(
