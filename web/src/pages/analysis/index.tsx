@@ -287,6 +287,7 @@ function SingleJobView({ job }: { job: JobSummary }) {
     queryKey: ["job", job.id],
     queryFn: () => api.getJob(job.id),
     refetchInterval: 4000,
+    staleTime: 2_000,
   })
   const datasetSource = useMemo(() => {
     const cfg = detail.data?.config_snapshot as

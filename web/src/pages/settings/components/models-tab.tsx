@@ -89,6 +89,7 @@ export function ModelsTab() {
     enabled: !!sessionId,
     refetchInterval: (query) =>
       query.state.data?.status === "running" || !query.state.data ? 800 : false,
+    staleTime: 400,
   })
 
   const current = session.data ?? startDownload.data ?? null

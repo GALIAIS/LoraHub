@@ -45,16 +45,19 @@ export function AnalysisWorkbench({
     queryKey: ["job-metrics", job.id],
     queryFn: () => api.getJobMetrics(job.id),
     refetchInterval: isTerminal ? false : 4000,
+    staleTime: 2_000,
   })
   const files = useQuery({
     queryKey: ["job-files", job.id],
     queryFn: () => api.getJobFiles(job.id),
     refetchInterval: isTerminal ? false : 8000,
+    staleTime: 4_000,
   })
   const aiCache = useQuery({
     queryKey: ["job-analysis", job.id],
     queryFn: () => api.getJobAnalysis(job.id),
     refetchInterval: false,
+    staleTime: 30_000,
   })
 
   const lossSeries: LossSeries[] = useMemo(() => {

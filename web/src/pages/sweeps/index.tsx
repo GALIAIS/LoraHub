@@ -682,6 +682,7 @@ function ParetoCard({
       // updates as each one finishes; once everything's done, stop.
       return data && data.pending > 0 ? 4000 : false
     },
+    staleTime: 2_000,
   })
 
   if (pareto.isLoading || !pareto.data) {

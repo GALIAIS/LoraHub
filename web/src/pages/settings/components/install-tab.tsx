@@ -517,6 +517,7 @@ export function InstallTab() {
     queryFn: api.getBootstrapStatus,
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 1500 : false,
+    staleTime: 750,
   })
 
   const rawStatus = statusQuery.data?.status ?? "idle"
@@ -599,6 +600,7 @@ export function InstallTab() {
     enabled: effective === "anima_lora",
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 1500 : false,
+    staleTime: 750,
   })
 
   const downloadAnimaModels = useMutation({
@@ -622,6 +624,7 @@ export function InstallTab() {
     enabled: effective === "anima_lora",
     refetchInterval: (query) =>
       query.state.data?.status === "running" ? 2000 : false,
+    staleTime: 1_000,
   })
 
   const installMsvc = useMutation({

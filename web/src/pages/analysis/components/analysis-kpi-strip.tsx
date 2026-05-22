@@ -37,6 +37,7 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
     queryFn: () => api.getJobMetrics(job!.id),
     enabled: !!job?.id,
     refetchInterval: isTerminal ? false : 4000,
+    staleTime: 2_000,
   })
 
   const summary = useMemo(
