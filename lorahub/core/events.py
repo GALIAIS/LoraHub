@@ -53,6 +53,18 @@ class EventType(StrEnum):
     # PNG. Payload keys: ``arch`` (str), ``available_backends`` (list[str]),
     # ``reason`` (str, human-readable).
     preview_unavailable = "preview_unavailable"
+    # Diagnostic match against a known failure-mode pattern, emitted in
+    # real time by the runner's stderr/stdout pump. Mirrors the shape of
+    # ``DiagnosisFinding`` so the UI can render the same toast / panel
+    # row whether the hit happens mid-run (this event) or post-mortem
+    # (``diagnose_failure`` reply). Payload keys:
+    #   - ``category`` (str): stable rule slug
+    #   - ``severity`` (info / warn / error)
+    #   - ``message`` (str): user-facing summary
+    #   - ``remediation`` (str): actionable next step
+    #   - ``evidence`` (str): line that triggered the match
+    #   - ``source`` (stdout / stderr): which pipe carried the line
+    diagnostic_warning = "diagnostic_warning"
 
 
 @dataclass(frozen=True, slots=True)

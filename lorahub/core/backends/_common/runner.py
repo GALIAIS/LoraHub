@@ -67,6 +67,20 @@ class SubprocessRunner:
         self._started_at: float | None = None
         self._lock = threading.RLock()
 
+        # Real-time pattern matcher. Imported lazily so this module
+        # stays importable in environments where lorahub.api isn't on
+        # the path (CLI-only invocations, doctor checks). The watcher
+        # only emits when a known failure-mode regex hits, so attaching
+        # it unconditionally is cheap.
+        from lorahub.api.streaming_diagnostics import (  # noqa: PLC0415
+            StreamingDiagnosticWatcher,
+        )
+
+        self._diag_watcher = StreamingDiagnosticWatcher(
+            on_event=self._safe_emit,
+            job_id=job_id,
+        )
+
     @property
     def pid(self) -> int | None:
         return self._proc.pid if self._proc is not None else None
@@ -204,6 +218,11 @@ class SubprocessRunner:
     def _pump(self, stream: IO[str], source: str) -> None:
         try:
             for raw in stream:
+                # Hand every raw line to the diagnostic watcher *first*
+                # so that even lines the backend's parser would discard
+                # (Python tracebacks, library warnings) still get a
+                # shot at matching a failure-mode regex.
+                self._diag_watcher.feed(raw, source=source)
                 event = self._parse_line(raw, job_id=self._job_id)
                 if event is None:
                     continue
