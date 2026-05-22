@@ -195,7 +195,28 @@ export function UpdateCard() {
 
         <div className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
-          <code className="font-mono text-[12px]">{info?.current ?? "—"}</code>
+          <span className="flex items-center gap-2 flex-wrap">
+            <code className="font-mono text-[12px]">{info?.current ?? "—"}</code>
+            {info?.version_source && info.version_source !== "hatch-vcs" && (
+              <Badge
+                variant="outline"
+                className="rounded-[2px] text-[10px] tracking-wide border-amber-500/40 text-amber-700 dark:text-amber-400"
+                title={
+                  info.version_source === "fallback"
+                    ? "无法读取版本元数据,使用回退占位"
+                    : info.version_source === "changelog"
+                      ? "从 CHANGELOG.md 读取的最近发布版本(可能落后于 commit)"
+                      : "从 dist 元数据读取(非 git 检出)"
+                }
+              >
+                {info.version_source === "fallback"
+                  ? "未知"
+                  : info.version_source === "changelog"
+                    ? "估算"
+                    : "已安装"}
+              </Badge>
+            )}
+          </span>
 
           <span className="text-muted-foreground">远端版本</span>
           <code className="font-mono text-[12px]">
@@ -204,6 +225,20 @@ export function UpdateCard() {
 
           <span className="text-muted-foreground">最近检查</span>
           <span className="text-[12px] text-muted-foreground">{checkedAt}</span>
+
+          {info && info.git_checkout === false && (
+            <>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px]">
+                安装方式
+              </span>
+              <span className="text-amber-700 dark:text-amber-400 text-[12px]">
+                未检测到 .git 目录(看起来是直接下载 ZIP 解压安装)。
+                在线更新无法运行,请改用 git clone 或在当前目录
+                <code className="font-mono text-[11px] mx-1">git init</code>
+                后从 origin/main 拉取一次。
+              </span>
+            </>
+          )}
 
           {info?.is_dirty && (
             <>
@@ -269,9 +304,18 @@ export function UpdateCard() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            disabled={running || !info?.update_available}
+            disabled={
+              running ||
+              !info?.update_available ||
+              info?.git_checkout === false
+            }
             onClick={onApplyClick}
             variant={force ? "destructive" : "default"}
+            title={
+              info?.git_checkout === false
+                ? "ZIP 安装无法在线更新 — 请按上方提示重装为 git 检出"
+                : undefined
+            }
           >
             {running ? (
               <Loader2 className="size-3 animate-spin" />

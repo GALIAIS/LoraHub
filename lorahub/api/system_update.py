@@ -92,6 +92,17 @@ class UpdateInfo:
     # Optional metadata: tag-only (None for "main" channel).
     tag_name: str | None = None
     published_at: str | None = None
+    # Where the ``current`` string was sourced from. ``hatch-vcs``
+    # is the canonical path (real git checkout, real install). The
+    # other values mark a degraded discovery — UI shows a tooltip so
+    # users understand why the version might lag a commit. Values
+    # match ``_VERSION_SOURCES``.
+    version_source: str = "hatch-vcs"
+    # ``True`` iff this install is a real ``git`` checkout (i.e. the
+    # in-app updater can actually run). ZIP-extracted trees set this
+    # to False and the UI greys out the apply button instead of
+    # raising ``RuntimeError`` mid-flight when the user clicks it.
+    git_checkout: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -108,18 +119,110 @@ def _now_iso() -> str:
 
 
 def _current_version() -> str:
-    """Return the running lorahub version (hatch-vcs string).
+    """Resolve the running lorahub version through a chain of fallbacks.
 
-    Falls back to ``0.0.0`` if the version module isn't materialised
-    yet — this happens for source checkouts that haven't been
-    ``pip install -e .``'d.
+    The historical path was ``hatch-vcs → _version.py → __version__``,
+    which only works when the user installed from a real git checkout.
+    Users who download a ZIP from GitHub and run scripts/install.{sh,bat}
+    against it have no ``.git/`` to read tags from, so hatch-vcs writes
+    ``0.0.0`` (or skips writing entirely) and the UI reports a useless
+    ``Current: 0.0.0``.
+
+    Resolution chain:
+
+      1. ``lorahub._version.__version__`` (hatch-vcs result) — only
+         taken if it isn't the placeholder ``0.0.0`` / ``0.0.0+unknown``.
+      2. Installed distribution metadata via ``importlib.metadata`` —
+         covers wheel installs (``pip install lorahub``) and any zip-
+         install where ``pyproject.toml`` wrote a static version into
+         the dist info.
+      3. The latest released entry in ``CHANGELOG.md`` — last-resort
+         heuristic for hand-extracted ZIP trees that never went through
+         pip at all. Only the version *number* line is parsed
+         (e.g. ``## [0.3.0] - 2026-05-18``).
+      4. ``0.0.0+unknown`` — the original fallback, only when every
+         source above silently failed.
+
+    The returned string is the literal version; callers that need to
+    differentiate "real" vs "guessed" use ``_resolve_version()`` below.
     """
+    return _resolve_version()[0]
+
+
+# Source label so the UI can mark a version as "guessed" rather than
+# implying parity with hatch-vcs precision.
+_VERSION_SOURCES = ("hatch-vcs", "dist-metadata", "changelog", "fallback")
+
+
+def _resolve_version() -> tuple[str, str]:
+    """Return ``(version_string, source_label)``.
+
+    ``source_label`` is one of the constants in ``_VERSION_SOURCES``.
+    The web UI surfaces it as a tooltip when the source is anything
+    but ``hatch-vcs`` so users understand why the number might lag
+    by a commit or two.
+    """
+    placeholders = {"", "0.0.0", "0.0.0+unknown"}
+
+    # 1. hatch-vcs (the canonical path).
     try:
         from lorahub import __version__  # noqa: PLC0415
 
-        return str(__version__) or "0.0.0"
+        v = str(__version__).strip()
+        if v and v not in placeholders:
+            return v, "hatch-vcs"
     except Exception:  # noqa: BLE001
-        return "0.0.0"
+        pass
+
+    # 2. importlib.metadata — wheel / pip install / static metadata.
+    try:
+        from importlib.metadata import PackageNotFoundError, version as dist_version  # noqa: PLC0415
+
+        try:
+            v = dist_version("lorahub").strip()
+            if v and v not in placeholders:
+                return v, "dist-metadata"
+        except PackageNotFoundError:
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. CHANGELOG.md — read the latest non-Unreleased ``## [X.Y.Z]`` line.
+    changelog_v = _read_changelog_version()
+    if changelog_v:
+        return changelog_v, "changelog"
+
+    # 4. Last-resort marker.
+    return "0.0.0+unknown", "fallback"
+
+
+def _read_changelog_version() -> str | None:
+    """Pluck the most recent released version from CHANGELOG.md.
+
+    Matches lines shaped like ``## [0.3.0] - 2026-05-18`` and skips
+    ``## [Unreleased]``. Stops at the first match — entries are written
+    newest-first per the project's CHANGELOG convention.
+    """
+    try:
+        from lorahub.core.paths import project_root  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    candidates = [
+        project_root() / "CHANGELOG.md",
+        Path(__file__).resolve().parents[2] / "CHANGELOG.md",
+    ]
+    pattern = re.compile(r"^##\s*\[\s*(\d+\.\d+\.\d+(?:[a-zA-Z0-9.+-]*)?)\s*\]")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                m = pattern.match(line.strip())
+                if m:
+                    return m.group(1)
+        except OSError:
+            continue
+    return None
 
 
 def _normalize_version(raw: str) -> str:
@@ -426,7 +529,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     """
     cwd = _git_root()
     is_dirty = _detect_dirty(cwd) if cwd else False
-    current = _current_version()
+    current, version_source = _resolve_version()
+    is_git_checkout = cwd is not None
 
     blob = _read_cache()
     cached = blob.data.get(channel)
@@ -437,7 +541,15 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     )
 
     if fresh_enough:
-        info = UpdateInfo(**{**cached, "current": current, "is_dirty": is_dirty})
+        info = UpdateInfo(
+            **{
+                **cached,
+                "current": current,
+                "is_dirty": is_dirty,
+                "version_source": version_source,
+                "git_checkout": is_git_checkout,
+            }
+        )
         return info
 
     try:
@@ -448,7 +560,15 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     except (OSError, ValueError) as exc:
         # Network failure — degrade gracefully to the cached payload.
         if cached:
-            info = UpdateInfo(**{**cached, "current": current, "is_dirty": is_dirty})
+            info = UpdateInfo(
+                **{
+                    **cached,
+                    "current": current,
+                    "is_dirty": is_dirty,
+                    "version_source": version_source,
+                    "git_checkout": is_git_checkout,
+                }
+            )
             info.error = f"refresh failed: {exc}"
             return info
         return UpdateInfo(
@@ -460,6 +580,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             checked_at=_now_iso(),
             is_dirty=is_dirty,
             error=f"refresh failed: {exc}",
+            version_source=version_source,
+            git_checkout=is_git_checkout,
         )
 
     latest = remote["version_str"] or None
@@ -484,6 +606,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         is_dirty=is_dirty,
         tag_name=remote["tag_name"],
         published_at=remote["published_at"],
+        version_source=version_source,
+        git_checkout=is_git_checkout,
     )
 
     blob.data[channel] = info.to_dict()
@@ -538,7 +662,23 @@ def apply(
     """
     cwd = _git_root()
     if cwd is None:
-        msg = "this install is not a git checkout — `lorahub manage update` is required."
+        # This is the path ZIP-extracted users hit. The check() endpoint
+        # already exposes ``git_checkout=False`` so the UI can grey out
+        # the "Apply" button before they click it; this string is the
+        # narrative version of that, surfaced when an outdated UI (or
+        # the CLI) reaches this point anyway.
+        msg = (
+            "无法在线更新:当前安装目录不是 git 检出(常见于直接下载 ZIP 解压)。\n"
+            "请按以下任一方式重装为可更新形态:\n"
+            "  1) 推荐:在新目录 `git clone https://github.com/GALIAIS/LoraHub` "
+            "再跑 scripts/install.{sh,bat};把旧目录的 datasets/、configs/、models/ "
+            "搬过去即可继承数据。\n"
+            "  2) 在当前目录 `git init && git remote add origin "
+            "https://github.com/GALIAIS/LoraHub.git && git fetch && git reset "
+            "--hard origin/main`,然后重跑 `pip install -e .` 让 hatch-vcs "
+            "重写 _version.py。\n"
+            "完成任一步骤后,Web 设置页 → 软件更新 即可正常使用。"
+        )
         raise RuntimeError(msg)
 
     emit = progress if progress is not None else _NULL_EMIT

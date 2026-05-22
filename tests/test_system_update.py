@@ -372,5 +372,93 @@ def test_apply_restores_configs_when_pip_fails(
 
 def test_apply_raises_when_not_a_git_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(su, "_git_root", lambda: None)
-    with pytest.raises(RuntimeError, match="not a git checkout"):
+    with pytest.raises(RuntimeError, match="不是 git 检出"):
         su.apply(channel="main", build=False)
+
+
+# --------------------------------------------------------------------- #
+# Version resolution (zip-install fallback chain)
+# --------------------------------------------------------------------- #
+
+
+def test_resolve_version_prefers_hatch_vcs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When _version.py is materialised, hatch-vcs wins."""
+    import lorahub
+    monkeypatch.setattr(lorahub, "__version__", "0.5.1.post3+gabc1234")
+    v, src = su._resolve_version()
+    assert v == "0.5.1.post3+gabc1234"
+    assert src == "hatch-vcs"
+
+
+def test_resolve_version_falls_through_placeholders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``0.0.0+unknown`` from __version__ shouldn't short-circuit the chain.
+
+    A ZIP-extracted install with hatch-vcs running blind sets ``__version__``
+    to the placeholder; we expect the resolver to push past it and try the
+    other sources.
+    """
+    import lorahub
+    monkeypatch.setattr(lorahub, "__version__", "0.0.0+unknown")
+    # Block dist metadata too so we definitely land on the changelog branch.
+    monkeypatch.setattr(
+        su,
+        "_read_changelog_version",
+        lambda: "0.4.0",
+    )
+    # Force importlib.metadata.version("lorahub") to raise so we skip step 2.
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "version", lambda name: (_ for _ in ()).throw(md.PackageNotFoundError(name)))
+    v, src = su._resolve_version()
+    assert v == "0.4.0"
+    assert src == "changelog"
+
+
+def test_resolve_version_fallback_when_all_sources_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing on disk → ``0.0.0+unknown`` + source ``fallback``."""
+    import lorahub
+    monkeypatch.setattr(lorahub, "__version__", "0.0.0")
+    monkeypatch.setattr(su, "_read_changelog_version", lambda: None)
+    import importlib.metadata as md
+    monkeypatch.setattr(
+        md,
+        "version",
+        lambda name: (_ for _ in ()).throw(md.PackageNotFoundError(name)),
+    )
+    v, src = su._resolve_version()
+    assert v == "0.0.0+unknown"
+    assert src == "fallback"
+
+
+def test_check_marks_zip_install_as_non_git(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``check()`` reports ``git_checkout=False`` when there's no .git/.
+
+    This is the signal the web UI uses to grey out the apply button
+    instead of letting the user click into a RuntimeError.
+    """
+    monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("0.4.0", "changelog"))
+    # Bypass network — return a stub remote payload directly.
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v0.5.0",
+            "version_str": "0.5.0",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    # Bypass the on-disk cache so the fresh path is exercised.
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda blob: None)
+
+    info = su.check(channel="tag", force=True)
+    assert info.git_checkout is False
+    assert info.version_source == "changelog"
+    assert info.current == "0.4.0"
