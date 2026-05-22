@@ -746,6 +746,46 @@ def test_put_settings_rejects_bad_tagger_device(client: TestClient) -> None:
     assert r.status_code == 422
 
 
+def test_put_settings_persists_anima_lora_paths_and_auto_resume(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Fields that the dataclass has had for months but the PUT body
+    used to silently drop. Regression guard for the audit fix."""
+    repo = tmp_path / "fake-anima-lora"
+    repo.mkdir()
+    py = tmp_path / "fake-python.exe"
+    py.write_bytes(b"")
+    payload = {
+        "anima_lora_repo_path": str(repo),
+        "anima_lora_python": str(py),
+        "auto_resume_interrupted": True,
+        "auto_resume_max_attempts": 5,
+    }
+    r = client.put("/api/settings", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["settings"]["anima_lora_repo_path"] == str(repo)
+    assert body["settings"]["anima_lora_python"] == str(py)
+    assert body["settings"]["auto_resume_interrupted"] is True
+    assert body["settings"]["auto_resume_max_attempts"] == 5
+
+    # GET round-trip — the values land on disk, not just in the response.
+    r2 = client.get("/api/settings")
+    settings = r2.json()["settings"]
+    assert settings["anima_lora_repo_path"] == str(repo)
+    assert settings["auto_resume_interrupted"] is True
+    assert settings["auto_resume_max_attempts"] == 5
+
+
+def test_put_settings_rejects_invalid_auto_resume_max_attempts(
+    client: TestClient,
+) -> None:
+    r = client.put("/api/settings", json={"auto_resume_max_attempts": 0})
+    assert r.status_code == 422
+    r = client.put("/api/settings", json={"auto_resume_max_attempts": -1})
+    assert r.status_code == 422
+
+
 # --------------------------------------------------------------------------- #
 # Dataset scanning
 # --------------------------------------------------------------------------- #
