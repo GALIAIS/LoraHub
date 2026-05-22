@@ -64,10 +64,11 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML",
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
     "httpx>=0.27",
-    "python-multipart>=0.0.9",
+    # Reuse the api extra rather than redeclaring fastapi / uvicorn /
+    # python-multipart / websockets — pip resolves the include and the
+    # dev install picks up future api-extra updates automatically.
+    "lorahub[api]",
 ]
 docs = [
     "mkdocs>=1.6",
@@ -115,7 +116,7 @@ line-length = 100
 target-version = "py311"
 # Vendored anima_lora (third backend's source tree). Owned upstream;
 # linting it would drown signal from our own code in noise. Mypy
-# already ignores it via `ignore_missing_imports`.
+# already ignores it via the per-module override below.
 extend-exclude = ["external/"]
 
 [tool.ruff.lint]
@@ -123,7 +124,9 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RET", "PTH"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B", "SIM"]
+# Tests use B011 (assert False) and SIM nesting freely; the rest of
+# B / SIM still applies to keep test code readable.
+"tests/**" = ["B011", "SIM117", "SIM102"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -131,8 +134,28 @@ strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_untyped_defs = true
-ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
+
+# Per-module ``ignore_missing_imports`` overrides. Setting this
+# globally (the previous behaviour) silently disabled strict mode for
+# *every* dependency, defeating the point of `strict = true`. Only
+# the libraries that genuinely don't ship type stubs are listed here.
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "onnxruntime.*",
+    "huggingface_hub.*",
+    "platformdirs.*",
+    "psutil.*",
+    "ulid.*",
+    "websockets.*",
+    "uvicorn.*",
+    "optuna.*",
+    "safetensors.*",
+    "PIL.*",
+    "yaml",
+]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
@@ -142,3 +165,18 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "slow: end-to-end / integration tests that take >1s — opt in with `-m slow`",
+    "gpu: requires a working CUDA / Metal device; skipped by default",
+    "integration: spans multiple subsystems (registry + scheduler + store)",
+]
+filterwarnings = [
+    # Treat unflagged DeprecationWarnings as errors so we don't ship
+    # past a warning we've ignored. Tests that legitimately need a
+    # noisy dependency can opt out with @pytest.mark.filterwarnings.
+    "error::DeprecationWarning",
+    # ── known-noisy upstream warnings, keep at default level ─────
+    "default::DeprecationWarning:huggingface_hub",
+    "default::DeprecationWarning:pydantic",
+    "default::DeprecationWarning:websockets",
+]
