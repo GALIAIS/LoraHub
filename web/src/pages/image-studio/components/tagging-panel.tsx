@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Tag } from "lucide-react"
 import { api } from "@/lib/api"
@@ -8,14 +8,35 @@ interface TaggingPanelProps {
   datasetPath: string
 }
 
+// Server-side ground truth — see ai-bulk-modal.tsx for the rationale.
+const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
+
 export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
-  const [model, setModel] = useState("wd-swinv2-v3")
+  const [model, setModel] = useState<string>(FALLBACK_DEFAULT_MODEL)
   const [device, setDevice] = useState<"auto" | "cpu" | "cuda">("auto")
   const [general, setGeneral] = useState(0.35)
   const [character, setCharacter] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
   const [recursive, setRecursive] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+
+  // Same dropdown source as ai-bulk-modal — short names like
+  // ``wd-swinv2-v3`` are missing the ``SmilingWolf/`` owner and the
+  // ``-tagger`` segment, which trips the HF resolver and 401s the
+  // tagging request mid-flight.
+  const wd14Models = useQuery({
+    queryKey: ["wd14-models"],
+    queryFn: api.listWd14Models,
+    staleTime: 60 * 60 * 1000,
+  })
+  useEffect(() => {
+    if (wd14Models.data?.default && model === FALLBACK_DEFAULT_MODEL) {
+      setModel(wd14Models.data.default)
+    }
+  }, [wd14Models.data?.default, model])
+  const modelOptions = wd14Models.data?.models ?? [
+    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
+  ]
 
   const startMutation = useMutation({
     mutationFn: () =>
@@ -60,10 +81,11 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
           onChange={(e) => setModel(e.target.value)}
           className="rounded border bg-background px-2 py-1 text-xs flex-1"
         >
-          <option value="wd-swinv2-v3">WD SwinV2 v3</option>
-          <option value="wd-vit-v3">WD ViT v3</option>
-          <option value="wd-convnext-v3">WD ConvNext v3</option>
-          <option value="joytag">JoyTag</option>
+          {modelOptions.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
         </select>
       </label>
 

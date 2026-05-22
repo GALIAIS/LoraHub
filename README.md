@@ -121,7 +121,7 @@ lorahub serve    --port 18765                   # 启动 Web UI + REST API（可
 
 - **三后端一份配置**：在「设置 → 后端配置」选 `kohya` / `diffusion-pipe` / `anima_lora`，三个后端共用同一份 schema 与 UI。
 - **可视化配置编辑器**：每个字段按 schema 与后端可见性过滤，锁定字段、警示字段都有徽标提示。
-- **图像工作台（Image Studio）**：WD14（默认 `wd-eva02-large-v3`）/ JoyTag 标注、smart-caption（WD14 + 视觉 LLM）、感知哈希去重、批量画质评分。
+- **图像工作台（Image Studio）**：WD14（默认 `SmilingWolf/wd-eva02-large-tagger-v3`）/ JoyTag 标注、smart-caption（WD14 + 视觉 LLM）、感知哈希去重、批量画质评分。
 - **任务调度**：单 GPU 队列，断点续训，多 GPU 通过每槽位 `CUDA_VISIBLE_DEVICES` 切片。重启后非终止任务标记为 `interrupted`，残留训练进程自动回收。
 - **实时事件**：`/api/jobs/{id}/sse`、`/api/system/sse`、`/api/backend/bootstrap/sse`，WebSocket 保留为兜底。
 - **超参 sweep**：grid、random、Optuna TPE 三种模式，TPE 提供 Pareto 视图，进度跨重启恢复。

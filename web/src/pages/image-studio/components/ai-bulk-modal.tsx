@@ -1,5 +1,7 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { X, Sparkles } from "lucide-react"
+import { api } from "@/lib/api"
 import type { AiBulkTab } from "./types"
 
 interface AiBulkModalProps {
@@ -17,17 +19,48 @@ const tabs: { id: AiBulkTab; label: string }[] = [
   { id: "trigger-words", label: "触发词建议" },
 ]
 
+// Server-side fallback when ``/api/tagging/wd14/models`` hasn't
+// resolved yet — same id the backend defaults to. Without this the
+// select would render with an empty value attribute on the very
+// first render and the form would post that to /api/tagging/tag,
+// which is exactly the 401 we just got bitten by.
+const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
+
 export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModalProps) {
   const [activeTab, setActiveTab] = useState<AiBulkTab>("smart-caption")
   const [device, setDevice] = useState("auto")
   const [mergeStrategy, setMergeStrategy] = useState("replace")
-  const [taggerModel, setTaggerModel] = useState("wd-eva02-large-v3")
+  const [taggerModel, setTaggerModel] = useState<string>(FALLBACK_DEFAULT_MODEL)
   const [generalThreshold, setGeneralThreshold] = useState(0.35)
   const [characterThreshold, setCharacterThreshold] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
   const [captionMode, setCaptionMode] = useState<"general" | "style" | "character">("style")
   const [triggerWord, setTriggerWord] = useState("")
   const [stripStyleTags, setStripStyleTags] = useState(true)
+
+  // Pull the curated SmilingWolf catalogue from the server. The
+  // dropdown was previously hard-coded to short names (e.g.
+  // ``wd-eva02-large-v3``) that the HF resolver couldn't find,
+  // tripping a 401 mid-tag-request. The single source of truth is
+  // ``lorahub/core/tagging/wd14.py:WD14_MODEL_CATALOG``.
+  const wd14Models = useQuery({
+    queryKey: ["wd14-models"],
+    queryFn: api.listWd14Models,
+    staleTime: 60 * 60 * 1000,  // catalogue is effectively static
+  })
+
+  // Once the canonical default arrives, swap in if the user hasn't
+  // touched the picker yet — the fallback short-circuits a flicker
+  // from "loading" to "wrong default" between mount and resolution.
+  useEffect(() => {
+    if (wd14Models.data?.default && taggerModel === FALLBACK_DEFAULT_MODEL) {
+      setTaggerModel(wd14Models.data.default)
+    }
+  }, [wd14Models.data?.default, taggerModel])
+
+  const wd14Options = wd14Models.data?.models ?? [
+    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
+  ]
 
   const handleStart = () => {
     const base = { device, paths }
@@ -192,11 +225,11 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setTaggerModel(e.target.value)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
-                  <option value="wd-eva02-large-v3">WD EVA02 Large v3 (推荐)</option>
-                  <option value="wd-swinv2-v3">WD SwinV2 v3</option>
-                  <option value="wd-vit-v3">WD ViT v3</option>
-                  <option value="wd-convnext-v3">WD ConvNext v3</option>
-                  <option value="joytag">JoyTag</option>
+                  {wd14Options.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="flex items-center gap-2">

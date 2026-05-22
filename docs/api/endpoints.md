@@ -100,7 +100,7 @@ validator + schema 同时接受 `camelCase`(新 wire format)和 `snake_case`。
 
 | Method | Path | 作用 |
 | ------ | ---- | ---- |
-| POST   | `/api/tagging/tag` | 启动一次异步 tagging session。默认模型:`wd-eva02-large-v3`。 |
+| POST   | `/api/tagging/tag` | 启动一次异步 tagging session。默认模型:`SmilingWolf/wd-eva02-large-tagger-v3`。 |
 | GET    | `/api/tagging/tag/{session_id}` | 轮询 session 状态。 |
 
 ## AI providers + routes

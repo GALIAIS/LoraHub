@@ -19,7 +19,7 @@ LoraHub 是一个自托管的 LoRA 训练工作台。它把三套训练栈
 ## 工作面板覆盖
 
 - **配置**：可视化编辑器，每个字段按 schema 与后端可见性过滤，锁定 / 警示字段有徽标提示。
-- **数据集与图像工作台**：导入、缩略图、AR-bucket 标注策略（style / character / general）、WD14（默认 `wd-eva02-large-v3`） 与 JoyTag 标注、WD14 + 视觉 LLM 的智能标注、感知哈希去重、批量画质评分、回收站。
+- **数据集与图像工作台**：导入、缩略图、AR-bucket 标注策略（style / character / general）、WD14（默认 `SmilingWolf/wd-eva02-large-tagger-v3`） 与 JoyTag 标注、WD14 + 视觉 LLM 的智能标注、感知哈希去重、批量画质评分、回收站。
 - **训练**：单 GPU 队列、断点续训、多 GPU 通过每槽位 `CUDA_VISIBLE_DEVICES` 切片。重启后非终止任务标记为 `interrupted`，残留训练子进程在新一轮 uvicorn 启动时自动回收。
 - **实时事件**：`/api/jobs/{id}/sse`、`/api/system/sse`、`/api/backend/bootstrap/sse`，断线后通过 `Last-Event-ID` 续传。WebSocket 端点保留为兜底。
 - **超参 sweep**：grid、random、Optuna TPE 三种模式，TPE 提供 Pareto 视图，进度跨重启恢复。

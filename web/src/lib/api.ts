@@ -1001,6 +1001,31 @@ export const api = {
     }),
   getTaggingSession: (sessionId: string) =>
     http<TaggingSession>(`/tagging/tag/${sessionId}`),
+  /**
+   * Curated SmilingWolf WD14 catalogue. Source of truth lives in
+   * ``lorahub/core/tagging/wd14.py`` — the UI dropdowns must NOT
+   * hard-code repo ids, or they go stale (and trip a HuggingFace
+   * 401/404 when an old short name like ``wd-eva02-large-v3`` is
+   * still in flight after the canonical name was tightened).
+   */
+  listWd14Models: () =>
+    http<{ default: string; models: { id: string; label: string }[] }>(
+      "/tagging/wd14/models",
+    ),
+  getTaggerDownloadStatus: () =>
+    http<{
+      jobs: {
+        repo_id: string
+        filename: string
+        status: "running" | "done" | "error"
+        downloaded: number
+        total: number | null
+        percent: number | null
+        started_at: number
+        finished_at: number | null
+        error: string | null
+      }[]
+    }>("/tagging/download-status"),
   // ----- AI subsystem (ShiroManager-shaped) -----
   aiListProviders: () =>
     http<{ providers: AIProviderRecord[] }>("/ai/providers"),
