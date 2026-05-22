@@ -9,10 +9,10 @@ schemaVersion: "1.0"
 
 baseModel:
   arch: anima
-  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
 
 dataset:
-  source: ./datasets/lx
+  source: ./datasets/your_style
   resolution: [1024, 1024]
   # Wider AR range than the character recipe — style datasets typically
   # mix portraits, landscapes, full scenes. Bucket step kept at 64 so
@@ -102,7 +102,7 @@ sampling:
   inferenceCfg: 5.0
 
 output:
-  name: lx_anima_style_lora
+  name: your_style_anima_lora
   # Save every 200 steps. At ~3.7s/step this is one checkpoint every
   # ~12 minutes — frequent enough to catch the sweet spot before the
   # LoRA over-fits, sparse enough to avoid filling disk. Pick the
@@ -154,6 +154,6 @@ backend:
     # TOML, so they keep upstream's literal snake_case names (transformer_path
     # / vae_path / llm_path). Don't camelCase these or dp won't recognise them.
     modelPaths:
-      transformer_path: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
-      vae_path: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-      llm_path: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
+      transformer_path: ./models/diffusion_models/anima-base-v1.0.safetensors
+      vae_path: ./models/vae/qwen_image_vae.safetensors
+      llm_path: ./models/text_encoders/qwen_3_06b_base.safetensors

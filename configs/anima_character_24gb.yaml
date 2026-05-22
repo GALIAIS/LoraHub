@@ -10,10 +10,10 @@ baseModel:
   arch: anima
   # The "checkpoint" anchor only marks the model identity for the UI;
   # actual per-component paths live under backend.diffusionPipe.modelPaths.
-  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
 
 dataset:
-  source: ./datasets/azurlane_char0
+  source: ./datasets/your_character
   # 1024 is the sweet spot: Qwen-Image was trained at 1024px, going lower
   # discards detail Anima leans on; going higher costs VRAM without real
   # win for character LoRA. Bucketing widened so portrait/landscape crops
@@ -103,7 +103,7 @@ sampling:
   inferenceCfg: 5.0
 
 output:
-  name: azurlane_char0_anima_lora
+  name: your_character_anima_lora
   saveEveryNSteps: 200
   saveDtype: bf16
 
@@ -140,6 +140,6 @@ backend:
     # TOML, so they keep upstream's literal snake_case names. Don't camelCase
     # these or dp won't recognise them.
     modelPaths:
-      transformer_path: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
-      vae_path: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-      llm_path: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
+      transformer_path: ./models/diffusion_models/anima-base-v1.0.safetensors
+      vae_path: ./models/vae/qwen_image_vae.safetensors
+      llm_path: ./models/text_encoders/qwen_3_06b_base.safetensors
