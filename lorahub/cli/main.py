@@ -170,6 +170,86 @@ def doctor() -> None:
 
     console.print(table)
 
+    # --- environment / encoding sanity ---------------------------------
+    # Things that don't fit the component table but which still cause
+    # opaque mid-training failures when wrong (path encoding, low disk,
+    # GPU not visible).
+    env_table = Table(title="environment", show_lines=False)
+    env_table.add_column("check")
+    env_table.add_column("detail")
+    env_table.add_column("status")
+
+    def env_row(label: str, detail: str, ok: bool, hint: str = "") -> None:
+        status = "[green]OK[/]" if ok else "[yellow]warn[/]"
+        if hint and not ok:
+            status += f"  [dim]{hint}[/]"
+        env_table.add_row(label, detail, status)
+
+    # mbcs path encoding (Windows only). Anything containing characters
+    # the active ANSI code page can't represent will eventually corrupt
+    # subprocess argv or sd-scripts log paths.
+    if _sys.platform == "win32":
+        path_str = str(root)
+        try:
+            path_str.encode("mbcs")
+            env_row(
+                "ANSI 路径编码",
+                path_str,
+                True,
+            )
+        except UnicodeEncodeError as exc:
+            env_row(
+                "ANSI 路径编码",
+                f"{path_str} (offending {exc.start}-{exc.end})",
+                False,
+                "把项目移到不含特殊字符的目录(emoji / 当前代码页未覆盖的字符)",
+            )
+
+    # Disk space on the workspace volume.
+    import shutil as _shutil  # noqa: PLC0415
+    try:
+        runs_root = root / "runs"
+        probe = runs_root if runs_root.exists() else root
+        usage = _shutil.disk_usage(probe)
+        free_gib = usage.free / 1024**3
+        ok = free_gib >= 5.0
+        env_row(
+            "磁盘空间",
+            f"{free_gib:.1f} GiB free at {probe}",
+            ok,
+            "训练 state 目录单次可达数 GiB,建议 ≥5 GiB",
+        )
+    except OSError:
+        pass
+
+    # GPU visibility via `nvidia-smi -L`. Best-effort; absence is a
+    # warn, not an error (CPU-only installs are valid).
+    import subprocess as _sp  # noqa: PLC0415
+    try:
+        out = _sp.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+        gpus = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        env_row(
+            "GPU 可见 (nvidia-smi)",
+            f"{len(gpus)} GPU(s)" if gpus else "no GPUs reported",
+            bool(gpus),
+            "若计划在 CPU 训练可忽略;否则检查驱动 / nvidia-smi 是否在 PATH",
+        )
+    except (FileNotFoundError, OSError, _sp.TimeoutExpired):
+        env_row(
+            "GPU 可见 (nvidia-smi)",
+            "nvidia-smi not found on PATH",
+            False,
+            "若计划在 GPU 训练,先安装 NVIDIA driver 并把 nvidia-smi 放进 PATH",
+        )
+
+    console.print(env_table)
+
     # Backend status — best-effort, only if the api extras imported.
     try:
         from lorahub.api import app as _app_mod  # noqa: PLC0415

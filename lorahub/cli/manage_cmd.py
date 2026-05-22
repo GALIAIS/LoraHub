@@ -116,16 +116,38 @@ def install() -> None:
     shim = _shim_path()
 
     if sys.platform == "win32":
-        shim.write_text(
-            "@echo off\r\n"
-            f"call \"{venv_entry}\" %*\r\n",
-            encoding="ascii",
-        )
+        # cmd.exe parses .cmd files using the active ANSI code page (mbcs),
+        # not ASCII or UTF-8. Using ascii here breaks any path containing
+        # non-ASCII characters (e.g. CJK folder names, accented usernames).
+        shim_body = "@echo off\r\n" f'call "{venv_entry}" %*\r\n'
+        try:
+            shim.write_bytes(shim_body.encode("mbcs"))
+        except UnicodeEncodeError as exc:
+            err_console.print(
+                t(
+                    "manage.install.path_unencodable",
+                    venv_entry=venv_entry,
+                    err=exc,
+                )
+            )
+            raise typer.Exit(code=3) from exc
         existing_user_path = _read_user_path_windows()
         if str(shim_dir) not in [p.strip() for p in existing_user_path.split(";") if p.strip()]:
             new_user_path = (
                 str(shim_dir) + (";" + existing_user_path if existing_user_path else "")
             )
+            # setx silently truncates user PATH at 1024 characters and
+            # returns 0, which used to leave users with a wrecked PATH.
+            # Refuse rather than corrupt and tell the caller to clean up
+            # their PATH first.
+            if len(new_user_path) > 1024:
+                err_console.print(
+                    f"[red]新 PATH 长度 {len(new_user_path)} 超过 setx 1024 字符上限,"
+                    "继续将截断你的用户 PATH。[/]\n"
+                    f"请先精简用户 PATH(在 设置 → 环境变量),再重试 "
+                    f"`lorahub manage install`,或手动把 {shim_dir} 加进去。"
+                )
+                raise typer.Exit(code=4)
             try:
                 subprocess.run(  # noqa: S603, S607
                     ["setx", "PATH", new_user_path],
