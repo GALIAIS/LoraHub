@@ -46,7 +46,17 @@ export function DatasetsPage() {
     queryFn: () => datasetList(),
     staleTime: 30_000,
   })
-  const knownDatasets = datasetsList.data?.datasets ?? []
+  // Keep the array reference stable across renders. Without this,
+  // ``datasetsList.data?.datasets ?? []`` produces a fresh ``[]``
+  // every render, and any useEffect that depends on ``knownDatasets``
+  // would re-fire forever — the symptom users hit was "Maximum
+  // update depth exceeded" the moment ``datasetsList`` settled with
+  // an empty list, which froze the route in place because the render
+  // loop starved navigation commits.
+  const knownDatasets = useMemo(
+    () => datasetsList.data?.datasets ?? [],
+    [datasetsList.data],
+  )
 
   // ``submitted`` is the actual scan target. ``path`` is the
   // free-form text input shown only when "高级模式" is on. The

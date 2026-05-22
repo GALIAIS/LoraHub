@@ -77,32 +77,63 @@ function Select<Value = string, Multiple extends boolean | undefined = false>({
     return out
   }, [children])
 
-  const [dynamicLabels, setDynamicLabels] = React.useState<
-    Record<string, React.ReactNode>
-  >({})
+  // Hold dynamic labels in a ref. Reading from a ref means the
+  // <SelectValue> consumer can ask for a label without re-subscribing
+  // to a state slice — and crucially, register/unregister no longer
+  // call setState on every JSX child re-render. The previous version
+  // dispatched one setState per <SelectItem> per render, and because
+  // the registry object lived in the closure of those callbacks the
+  // resulting commit would re-create the <Select> tree, which fired
+  // the effects again, which hit setState, which... that's the
+  // "Maximum update depth exceeded" loop datasets users were seeing.
+  const dynamicLabelsRef = React.useRef<Record<string, React.ReactNode>>({})
+  // Bumping this counter on each register / unregister forces a single
+  // re-render so <SelectValue> can re-read the ref. We coalesce all
+  // updates that happened within the same micro-task into one bump.
+  const [, setLabelsRev] = React.useState(0)
+  const pendingRevBumpRef = React.useRef(false)
+  const scheduleRevBump = React.useCallback(() => {
+    if (pendingRevBumpRef.current) return
+    pendingRevBumpRef.current = true
+    queueMicrotask(() => {
+      pendingRevBumpRef.current = false
+      setLabelsRev((r) => r + 1)
+    })
+  }, [])
 
-  const registry = React.useMemo<SelectLabelRegistry>(
-    () => ({
-      register: (value, node) =>
-        setDynamicLabels((prev) =>
-          prev[value] === node ? prev : { ...prev, [value]: node },
-        ),
-      unregister: (value) =>
-        setDynamicLabels((prev) => {
-          if (!(value in prev)) return prev
-          const next = { ...prev }
-          delete next[value]
-          return next
-        }),
-      // Dynamic registration wins (live label updates) but we always
-      // have a static fallback for the first paint.
-      lookup: (value) =>
-        value in dynamicLabels ? dynamicLabels[value] : staticLabels[value],
-    }),
-    [dynamicLabels, staticLabels],
-  )
+  // Keep static labels reachable via a ref so the registry's lookup
+  // doesn't have to participate in the registry's own identity.
+  const staticLabelsRef = React.useRef(staticLabels)
+  staticLabelsRef.current = staticLabels
+
+  // The registry object's identity is permanent. SelectItem's register
+  // effect therefore fires *exactly once* per (mount, value) pair and
+  // never again on a sibling re-render — this is what closes the
+  // infinite loop the previous version had.
+  const registryRef = React.useRef<SelectLabelRegistry | null>(null)
+  if (registryRef.current === null) {
+    registryRef.current = {
+      register: (value, node) => {
+        const map = dynamicLabelsRef.current
+        if (map[value] === node) return
+        map[value] = node
+        scheduleRevBump()
+      },
+      unregister: (value) => {
+        const map = dynamicLabelsRef.current
+        if (!(value in map)) return
+        delete map[value]
+        scheduleRevBump()
+      },
+      lookup: (value) => {
+        const dyn = dynamicLabelsRef.current
+        return value in dyn ? dyn[value] : staticLabelsRef.current[value]
+      },
+    }
+  }
+
   return (
-    <SelectLabelContext.Provider value={registry}>
+    <SelectLabelContext.Provider value={registryRef.current}>
       <SelectPrimitive.Root {...props}>{children}</SelectPrimitive.Root>
     </SelectLabelContext.Provider>
   )
@@ -249,13 +280,23 @@ function SelectItem({
   ...props
 }: SelectPrimitive.Item.Props) {
   const registry = React.useContext(SelectLabelContext)
+  // Keep the latest children in a ref so the registration effect
+  // doesn't fire on every parent render. JSX children are a fresh
+  // reference every render — making them part of the effect's
+  // dependency array used to fire register/unregister in a loop and
+  // thrash setState until React aborted with "Maximum update depth
+  // exceeded".
+  const childrenRef = React.useRef<React.ReactNode>(children)
+  childrenRef.current = children
+
   React.useEffect(() => {
     if (!registry) return undefined
     const key = _normalizeKey(value)
     if (key === "" || key === '""') return undefined
-    registry.register(key, children)
+    registry.register(key, childrenRef.current)
     return () => registry.unregister(key)
-  }, [registry, value, children])
+  }, [registry, value])
+
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
