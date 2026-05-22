@@ -24,15 +24,25 @@ Mirrors:
   the GitHub API itself (gh-proxy variants only forward release
   binaries / repo tarballs, not the JSON API). Only the ``git pull``
   step honours the proxy via the existing ``apply_github_proxy()``.
+
+Internals:
+  ``apply()`` is a thin orchestrator over five stage functions —
+  ``_pre_check``, ``_snapshot_configs``, ``_fetch``, ``_apply_ref``,
+  ``_install_deps``. The shared mutable state (stash flag, snapshot
+  archive path) lives in ``_UpdateContext``, whose ``__exit__``
+  guarantees stash-pop / snapshot-restore even when a stage raises.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
+import tarfile
+import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -277,6 +287,31 @@ def _git_root() -> Path | None:
     return None
 
 
+def _detect_detached_head(cwd: Path) -> str | None:
+    """Return the current commit SHA if HEAD is detached, else None.
+
+    A detached HEAD points at a commit (often a tag like ``v0.3.0``)
+    without an attached branch ref. ``git checkout origin/main`` or
+    ``git checkout v…`` from a detached state silently abandons the
+    current commit if the user had committed work on top of it; that's
+    exactly the failure mode self-update is supposed to prevent.
+
+    We use ``git symbolic-ref -q HEAD`` rather than parsing
+    ``HEAD`` ourselves so submodule / worktree / packed-refs setups
+    also resolve correctly.
+    """
+    sym = _git(["symbolic-ref", "-q", "HEAD"], cwd=cwd)
+    if sym.returncode == 0:
+        # ``symbolic-ref`` succeeded → HEAD points at a branch.
+        return None
+    # Non-zero exit means detached. Read the resolved SHA so the error
+    # message can show the user where they are.
+    rev = _git(["rev-parse", "--short", "HEAD"], cwd=cwd)
+    if rev.returncode == 0:
+        return rev.stdout.strip() or "(unknown)"
+    return "(unknown)"
+
+
 def _refresh_main(cwd: Path) -> dict[str, Any]:
     """Probe origin/main via the GitHub commits API (no auth, 60/hr)."""
     info = _fetch_json(COMMITS_API)
@@ -317,10 +352,17 @@ def _refresh_tag() -> dict[str, Any]:
 
 
 def _is_not_found(exc: BaseException) -> bool:
-    """``urlopen`` 4xx → ``HTTPError`` (which is an OSError). The
-    canonical message is ``HTTP Error 404: Not Found`` on the
-    HTTPError side and ``HTTP 404: ...`` on our manual raise. Match
-    both shapes so a future urllib refactor doesn't slip past."""
+    """Match the HTTPError-shaped 404 we get from urllib.
+
+    Prefers the structured ``.code`` attribute on
+    ``urllib.error.HTTPError`` (which subclasses ``OSError``); falls
+    back to substring matching only when the exception wasn't an
+    HTTPError (e.g. our own manual ``raise OSError("HTTP 404 …")``
+    above).
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code == 404
     msg = str(exc)
     return "404" in msg or "Not Found" in msg
 
@@ -450,6 +492,22 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     return info
 
 
+# --------------------------------------------------------------------- #
+# apply() — five-stage pipeline
+#
+#   1. _pre_check        — git root check, detached HEAD probe, dirty fence
+#   2. _snapshot_configs — tarfile-backed configs/ snapshot to a temp file
+#   3. _fetch            — git fetch --tags origin
+#   4. _apply_ref        — checkout the resolved ref (origin/main or v…)
+#   5. _install_deps     — pip install + optional npm run build
+#
+# Shared mutable state (stash flag, snapshot archive path) lives in
+# `_UpdateContext`. Its `__exit__` is the single rollback point: if
+# any stage raises, the archive is restored to disk and any active
+# stash is popped. Successful exits clean up the temp archive.
+# --------------------------------------------------------------------- #
+
+
 def apply(
     channel: ChannelName = "tag",
     *,
@@ -469,9 +527,10 @@ def apply(
 
     When ``force`` is True, local working-tree changes that would
     conflict with the upgrade are wiped via ``git reset --hard`` +
-    ``git clean -fd`` (untracked files included). Use only when the
-    user explicitly opted in via a confirmation dialog — this is
-    destructive and unrecoverable.
+    ``git clean -fd`` (untracked files included). ``force`` also
+    suppresses the detached-HEAD safety gate. Use only when the user
+    explicitly opted in via a confirmation dialog — this is destructive
+    and unrecoverable.
 
     Raises ``RuntimeError`` on any non-zero step. ``progress`` is invoked
     with ``(phase, level, message)`` for each line of subprocess output
@@ -482,80 +541,296 @@ def apply(
         msg = "this install is not a git checkout — `lorahub self update` is required."
         raise RuntimeError(msg)
 
-    def emit(phase: str, level: str, message: str) -> None:
-        if progress is not None:
-            progress(phase, level, message)
+    emit = progress if progress is not None else _NULL_EMIT
 
-    # Snapshot every file under ``configs/`` (tracked + untracked) so
-    # the upgrade leaves the user's training recipes untouched.  The
-    # repo still ships its own yaml here — they get overwritten in the
-    # working tree by the checkout, then we put the user's bytes back
-    # on top.  Net effect: ``git pull`` updates everything except
-    # configs/ (the user's slot).
-    configs_snapshot = _snapshot_dir(cwd, "configs", emit)
-    # If the user had local modifications to tracked configs/ files,
-    # git stash / git checkout would refuse with "your local changes
-    # would be overwritten by checkout".  Reset only configs/ to HEAD
-    # so the upcoming git ops see a clean tree there; the snapshot
-    # above already captured the user's bytes for restoration.
-    if configs_snapshot:
-        _stream_subprocess(
-            ["git", "checkout", "HEAD", "--", "configs"],
-            cwd=cwd, phase="git", emit=emit,
-        )
+    _pre_check(cwd, force=force, emit=emit)
 
-    # Force mode: nuke the working tree before doing anything else so
-    # the rest of the flow runs against a known-clean checkout.
-    # Destructive — only enter when the user explicitly opted in via
-    # the UI's "ignore conflicts" toggle.
-    stash_active = False
-    if force:
-        emit(
-            "git", "warn",
-            "force=True: discarding local changes (git reset --hard + clean -fd); "
-            "configs/ is preserved by the snapshot/restore step",
-        )
-        _stream_subprocess(
-            ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
-        )
-        _stream_subprocess(
-            ["git", "clean", "-fd", "-e", "configs"], cwd=cwd, phase="git", emit=emit,
-        )
-    elif _has_any_local_changes(cwd):
-        # Stash + pop to preserve local edits across checkout. Cheap
-        # no-op when the tree is already clean, so that any
-        # filtered-but-still-modified files (e.g. a user-edited
-        # training config under ``configs/``) survive the upgrade
-        # transparently. Conflicts on pop fall through to a clear
-        # warning so the user can resolve them rather than silently
-        # lose the change.
-        emit("git", "info", "git stash --include-untracked (preserving local edits)")
-        rc = _stream_subprocess(
-            ["git", "stash", "push", "--include-untracked",
-             "-m", "lorahub-self-update"],
-            cwd=cwd, phase="git", emit=emit,
-        )
-        if rc == 0:
-            stash_active = True
+    with _UpdateContext(cwd, emit) as ctx:
+        ctx.snapshot_path = _snapshot_configs(cwd, emit)
+        # configs/ may have local tracked-file modifications; reset to
+        # HEAD so the upcoming checkout sees a clean tree there. The
+        # snapshot we just took will overwrite it again at the end.
+        if ctx.snapshot_path is not None:
+            _stream_subprocess(
+                ["git", "checkout", "HEAD", "--", "configs"],
+                cwd=cwd, phase="git", emit=emit,
+            )
 
-    # 1. Fetch
+        if force:
+            emit(
+                "git", "warn",
+                "force=True: discarding local changes (git reset --hard + clean -fd); "
+                "configs/ is preserved by the snapshot/restore step",
+            )
+            _stream_subprocess(
+                ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
+            )
+            _stream_subprocess(
+                ["git", "clean", "-fd", "-e", "configs"], cwd=cwd, phase="git", emit=emit,
+            )
+        elif _has_any_local_changes(cwd):
+            # Stash + pop to preserve local edits across checkout.
+            # Cheap no-op when the tree is already clean. Conflicts on
+            # pop fall through to a clear warning so the user can
+            # resolve them rather than silently lose the change.
+            emit("git", "info", "git stash --include-untracked (preserving local edits)")
+            rc = _stream_subprocess(
+                ["git", "stash", "push", "--include-untracked",
+                 "-m", "lorahub-self-update"],
+                cwd=cwd, phase="git", emit=emit,
+            )
+            if rc == 0:
+                ctx.stash_active = True
+
+        _fetch(cwd, emit)
+        _apply_ref(cwd, channel=channel, force=force, emit=emit)
+        _restore_configs(cwd, ctx.snapshot_path, emit)
+        # The snapshot has been re-laid into the working tree; the
+        # context's __exit__ no longer needs to restore it on success.
+        ctx.snapshot_consumed = True
+
+        _install_deps(cwd, build=build, emit=emit)
+
+        if ctx.stash_active:
+            emit("git", "info", "git stash pop (restoring local edits)")
+            rc = _stream_subprocess(
+                ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
+            )
+            if rc != 0:
+                emit(
+                    "git", "warn",
+                    "stash pop reported conflicts — your local edits are still "
+                    "in `git stash list`; resolve manually after this update.",
+                )
+            ctx.stash_active = False
+
+    emit("done", "info", "update applied")
+
+
+def _NULL_EMIT(_phase: str, _level: str, _message: str) -> None:
+    pass
+
+
+@dataclass
+class _UpdateContext:
+    """Tracks the rollback state across the upgrade stages.
+
+    On a clean exit the snapshot tar is unlinked and any leftover
+    stash is left to the caller. On an exception:
+
+      * ``snapshot_path`` (if set and not yet consumed) is unpacked
+        back over ``configs/`` so the user's recipes survive even
+        when the upgrade aborted mid-flight.
+      * ``stash_active`` triggers a final ``git stash pop`` so the
+        user's other local edits aren't trapped in the stash list.
+
+    The context is intentionally narrow — failure handling for the
+    individual stages (reset --hard rollback, npm exit codes, …) lives
+    inside each stage function so the recovery logic stays close to
+    the code that knows what could fail.
+    """
+
+    cwd: Path
+    emit: ProgressCallback
+    snapshot_path: Path | None = None
+    snapshot_consumed: bool = False
+    stash_active: bool = False
+
+    def __enter__(self) -> _UpdateContext:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc_type is not None:
+            # Best-effort rollback. We don't re-raise from here; the
+            # original exception propagates out of the ``with`` block.
+            if self.snapshot_path is not None and not self.snapshot_consumed:
+                with contextlib.suppress(Exception):
+                    self.emit(
+                        "git", "warn",
+                        "upgrade failed; restoring configs/ from pre-flight snapshot",
+                    )
+                    _restore_configs(self.cwd, self.snapshot_path, self.emit)
+            if self.stash_active:
+                with contextlib.suppress(Exception):
+                    self.emit(
+                        "git", "warn",
+                        "upgrade failed; popping stash to restore local edits",
+                    )
+                    _stream_subprocess(
+                        ["git", "stash", "pop"], cwd=self.cwd, phase="git", emit=self.emit,
+                    )
+        # Always remove the temp archive — it's only useful as a
+        # rollback bridge and would otherwise accumulate in TMPDIR.
+        if self.snapshot_path is not None:
+            with contextlib.suppress(Exception):
+                self.snapshot_path.unlink(missing_ok=True)
+
+
+# --------------------------------------------------------------------- #
+# Stage 1 — pre-flight
+# --------------------------------------------------------------------- #
+
+
+def _pre_check(cwd: Path, *, force: bool, emit: ProgressCallback) -> None:
+    """Refuse upgrade in states the rest of the pipeline can't recover from.
+
+    Currently:
+      * detached HEAD (``force=False`` only) — checking out
+        ``origin/main`` from a detached state silently abandons any
+        commits the user made on top of the detached SHA.
+
+    ``force=True`` callers have already opted in to destructive
+    behaviour via the UI confirm dialog; we still emit a warning so
+    the SSE log shows the override happened.
+    """
+    head_sha = _detect_detached_head(cwd)
+    if head_sha is None:
+        return
+    if not force:
+        msg = (
+            f"HEAD is detached at {head_sha}. Self-update from a detached "
+            "state would silently abandon any commits made on top of it. "
+            "Either run `git checkout main` first, or pass --force to "
+            "discard the detached commits."
+        )
+        raise RuntimeError(msg)
+    emit(
+        "git", "warn",
+        f"force=True: HEAD detached at {head_sha}; commits on top of it "
+        "will be abandoned by the upcoming checkout",
+    )
+
+
+# --------------------------------------------------------------------- #
+# Stage 2 — configs/ snapshot
+# --------------------------------------------------------------------- #
+
+
+def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
+    """Capture every regular file under ``configs/`` into a tarball.
+
+    The archive lives in ``tempfile.gettempdir()`` so a multi-megabyte
+    yaml collection doesn't have to be held in memory while the
+    upgrade runs. Failure to add a single file logs a warning and
+    skips that file rather than aborting the upgrade — partial
+    coverage is better than refusing to update.
+
+    Returns ``None`` if ``configs/`` doesn't exist or is empty (no
+    snapshot needed).
+    """
+    root = cwd / "configs"
+    if not root.is_dir():
+        return None
+    files = [p for p in root.rglob("*") if p.is_file()]
+    if not files:
+        return None
+
+    fd, raw = tempfile.mkstemp(prefix="lorahub-configs-", suffix=".tar")
+    archive = Path(raw)
+    # mkstemp leaves the FD open; close it so tarfile can re-open by path.
+    import os as _os  # noqa: PLC0415
+    _os.close(fd)
+
+    written = 0
+    try:
+        with tarfile.open(archive, "w") as tar:
+            for full in files:
+                try:
+                    arcname = full.relative_to(cwd).as_posix()
+                    tar.add(full, arcname=arcname, recursive=False)
+                    written += 1
+                except OSError as exc:
+                    emit("git", "warn", f"could not snapshot {full}: {exc}")
+    except OSError as exc:
+        # Tar creation itself failed (disk full, perms). Discard the
+        # half-written archive and bail out without a snapshot — the
+        # caller's ``_UpdateContext`` will see ``snapshot_path is
+        # None`` and skip the restore branch.
+        emit("git", "warn", f"snapshot tar failed: {exc}; configs/ will not be protected")
+        archive.unlink(missing_ok=True)
+        return None
+
+    if written == 0:
+        archive.unlink(missing_ok=True)
+        return None
+    emit("git", "info", f"snapshotted {written} file(s) under configs/ to {archive.name}")
+    return archive
+
+
+def _restore_configs(
+    cwd: Path, snapshot: Path | None, emit: ProgressCallback,
+) -> None:
+    """Unpack the configs/ tar back over the working tree.
+
+    Idempotent and safe when ``snapshot`` is None. Members extracted
+    by name within ``cwd`` only — ``tarfile.extract`` resolves the
+    path so this is the same risk surface as ``tar xf`` (we trust
+    our own snapshot output).
+    """
+    if snapshot is None or not snapshot.is_file():
+        return
+    extracted = 0
+    try:
+        with tarfile.open(snapshot, "r") as tar:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                # Defence-in-depth: refuse absolute paths or "..".
+                # Our own snapshot writer never emits these, but a
+                # tampered file shouldn't escape cwd either.
+                arcname = member.name.replace("\\", "/")
+                if arcname.startswith("/") or ".." in arcname.split("/"):
+                    emit("git", "warn", f"skipping suspicious archive entry {arcname}")
+                    continue
+                target = cwd / arcname
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = tar.extractfile(member)
+                if source is None:
+                    continue
+                try:
+                    target.write_bytes(source.read())
+                    extracted += 1
+                except OSError as exc:
+                    emit("git", "warn", f"could not restore {arcname}: {exc}")
+    except (OSError, tarfile.TarError) as exc:
+        emit("git", "warn", f"restore from snapshot failed: {exc}")
+        return
+    if extracted:
+        emit("git", "info", f"restored {extracted} file(s) under configs/")
+
+
+# --------------------------------------------------------------------- #
+# Stage 3 — fetch
+# --------------------------------------------------------------------- #
+
+
+def _fetch(cwd: Path, emit: ProgressCallback) -> None:
     emit("git", "info", "git fetch --tags origin")
     rc = _stream_subprocess(
         ["git", "fetch", "--tags", "--prune", "origin"], cwd=cwd, phase="git", emit=emit,
     )
     if rc != 0:
-        if stash_active:
-            _stream_subprocess(["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit)
         msg = f"git fetch failed (exit {rc})"
         raise RuntimeError(msg)
 
-    # 2. Checkout target ref.
+
+# --------------------------------------------------------------------- #
+# Stage 4 — checkout
+# --------------------------------------------------------------------- #
+
+
+def _apply_ref(
+    cwd: Path,
+    *,
+    channel: ChannelName,
+    force: bool,
+    emit: ProgressCallback,
+) -> None:
     if channel == "tag":
-        target = _resolve_latest_tag(cwd)
-        if not target:
+        target_ref = _resolve_latest_tag(cwd)
+        if not target_ref:
             msg = "no v* tag reachable from origin; switch to channel=main."
             raise RuntimeError(msg)
-        target_ref = target
     else:
         target_ref = "origin/main"
     emit("git", "info", f"git checkout {target_ref}")
@@ -565,54 +840,33 @@ def apply(
     checkout_cmd.append(target_ref)
     rc = _stream_subprocess(checkout_cmd, cwd=cwd, phase="git", emit=emit)
     if rc != 0:
-        if stash_active:
-            _stream_subprocess(
-                ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
-            )
         msg = f"git checkout {target_ref} failed (exit {rc})"
         raise RuntimeError(msg)
 
-    # Restore the user's configs/ snapshot.  This overwrites whatever
-    # version of configs/ the new ref ships — the user's local copy
-    # always wins.  Idempotent / safe when the snapshot was empty.
-    _restore_dir(cwd, "configs", configs_snapshot, emit)
 
-    # 3. Reinstall Python deps.
+# --------------------------------------------------------------------- #
+# Stage 5 — install + build
+# --------------------------------------------------------------------- #
+
+
+def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     emit("deps", "info", "reinstalling Python dependencies")
     py_cmd = _build_pip_command(cwd)
     rc = _stream_subprocess(py_cmd, cwd=cwd, phase="deps", emit=emit)
     if rc != 0:
         msg = f"pip install failed (exit {rc})"
         raise RuntimeError(msg)
-
-    # 4. Optional rebuild of the SPA.
-    if build:
-        emit("build", "info", "npm run build (web/)")
-        npm = _find_npm(cwd)
-        if npm is None:
-            emit("build", "warn", "npm not found; skipping SPA rebuild.")
-        else:
-            rc = _stream_subprocess([npm, "run", "build"], cwd=cwd / "web", phase="build", emit=emit)
-            if rc != 0:
-                msg = f"npm run build failed (exit {rc})"
-                raise RuntimeError(msg)
-
-    # 5. Pop stash if we created one. Conflicts on pop are surfaced
-    # but don't abort — the user can resolve them after the daemon
-    # restarts; the stash entry is preserved for git stash list.
-    if stash_active:
-        emit("git", "info", "git stash pop (restoring local edits)")
-        rc = _stream_subprocess(
-            ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
-        )
-        if rc != 0:
-            emit(
-                "git", "warn",
-                "stash pop reported conflicts — your local edits are still "
-                "in `git stash list`; resolve manually after this update.",
-            )
-
-    emit("done", "info", "update applied")
+    if not build:
+        return
+    emit("build", "info", "npm run build (web/)")
+    npm = _find_npm(cwd)
+    if npm is None:
+        emit("build", "warn", "npm not found; skipping SPA rebuild.")
+        return
+    rc = _stream_subprocess([npm, "run", "build"], cwd=cwd / "web", phase="build", emit=emit)
+    if rc != 0:
+        msg = f"npm run build failed (exit {rc})"
+        raise RuntimeError(msg)
 
 
 def _has_any_local_changes(cwd: Path) -> bool:
@@ -620,61 +874,6 @@ def _has_any_local_changes(cwd: Path) -> bool:
     stash gate where we want to preserve *every* modified path."""
     out = _git(["status", "--porcelain"], cwd=cwd)
     return out.returncode == 0 and bool(out.stdout.strip())
-
-
-def _snapshot_dir(
-    cwd: Path, rel: str, emit: ProgressCallback,
-) -> dict[str, bytes]:
-    """Capture every regular file under ``cwd/rel`` (recursive) into
-    ``{relpath: bytes}``.  Used to protect ``configs/`` across an
-    upgrade — the user's recipes win regardless of whether origin's
-    ref happens to ship a different version of the same path.
-
-    Empty when the directory doesn't exist.  Best-effort: read errors
-    log a warning and skip the file rather than aborting the upgrade.
-    """
-    root = cwd / rel
-    if not root.is_dir():
-        return {}
-    snapshot: dict[str, bytes] = {}
-    for full in root.rglob("*"):
-        if not full.is_file():
-            continue
-        try:
-            key = full.relative_to(cwd).as_posix()
-            snapshot[key] = full.read_bytes()
-        except OSError as exc:
-            emit("git", "warn", f"could not snapshot {full}: {exc}")
-    if snapshot:
-        emit(
-            "git", "info",
-            f"snapshotted {len(snapshot)} file(s) under {rel}/ for restore",
-        )
-    return snapshot
-
-
-def _restore_dir(
-    cwd: Path, rel: str, snapshot: dict[str, bytes], emit: ProgressCallback,
-) -> None:
-    """Write the snapshot back, overwriting whatever the checkout left.
-
-    Files the user had locally win over the new ref's version.  Files
-    the user didn't have but the new ref ships (e.g. a freshly added
-    official preset) are left in place — that's how new defaults reach
-    users.
-
-    Idempotent and safe to call when the snapshot is empty.
-    """
-    if not snapshot:
-        return
-    for key, body in snapshot.items():
-        full = cwd / key
-        try:
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_bytes(body)
-        except OSError as exc:
-            emit("git", "warn", f"could not restore {key}: {exc}")
-    emit("git", "info", f"restored {len(snapshot)} file(s) under {rel}/")
 
 
 def _resolve_latest_tag(cwd: Path) -> str | None:
@@ -747,6 +946,16 @@ def _stream_subprocess(
         if line:
             emit(phase, "info", line)
     return proc.wait()
+
+
+# --------------------------------------------------------------------- #
+# Test seams
+# --------------------------------------------------------------------- #
+#
+# Public for tests: small surface so unit tests can call the stages
+# without a live network or git remote. Not exported via __all__.
+def _iter_user_owned_prefixes() -> Iterator[str]:
+    yield from _USER_OWNED_PREFIXES
 
 
 __all__ = [
