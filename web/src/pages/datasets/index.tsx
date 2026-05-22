@@ -1,15 +1,20 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
   Database,
   FileText,
   Image as ImageIcon,
+  Pencil,
   Play,
   Search,
   Sparkles,
 } from "lucide-react"
-import { api, type DatasetScanResponse } from "@/lib/api"
+import {
+  api,
+  datasetList,
+  type DatasetScanResponse,
+} from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -21,6 +26,13 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Pagination } from "@/components/ui/pagination"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { CaptionEditorModal } from "./components/caption-editor-modal"
 import { PathBar } from "./components/path-bar"
 import { SampleGallery } from "./components/sample-gallery"
@@ -31,14 +43,35 @@ type Sample = DatasetScanResponse["samples"][number]
 const PAGE_SIZE_OPTIONS = [24, 48, 96, 192]
 
 export function DatasetsPage() {
-  const [path, setPath] = useState("./datasets")
-  const [submitted, setSubmitted] = useState("./datasets")
+  const datasetsList = useQuery({
+    queryKey: ["image-studio-datasets"],
+    queryFn: () => datasetList(),
+  })
+  const knownDatasets = datasetsList.data?.datasets ?? []
+
+  // ``submitted`` is the actual scan target. ``path`` is the
+  // free-form text input shown only when "高级模式" is on. The
+  // dropdown writes directly to submitted so picking a dataset
+  // re-scans immediately (no extra "scan" button click needed for
+  // the common case).
+  const [advanced, setAdvanced] = useState(false)
+  const [path, setPath] = useState("")
+  const [submitted, setSubmitted] = useState("")
   const [recursive, setRecursive] = useState(false)
   const [tagOpen, setTagOpen] = useState(false)
   const [editor, setEditor] = useState<{ imagePath: string } | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(48)
   const navigate = useNavigate()
+
+  // Auto-select the first dataset on first load so the page isn't
+  // blank — same affordance the previous "./datasets" default gave.
+  useEffect(() => {
+    if (!submitted && knownDatasets.length > 0) {
+      setSubmitted(knownDatasets[0].path)
+      setPath(knownDatasets[0].path)
+    }
+  }, [knownDatasets, submitted])
 
   // Reset to page 1 whenever the scan target changes — otherwise the user
   // can land on an out-of-range page after switching directories.
@@ -57,6 +90,13 @@ export function DatasetsPage() {
   const canTrain = !!data && data.exists && data.image_files > 0
   const canTag = !!data && data.exists && data.image_files > 0
 
+  // Match-current-path so the dropdown's controlled value stays in
+  // sync after navigateTo() walks into a sub-folder via PathBar
+  // (sub-folder isn't in the registered-datasets list).
+  const dropdownValue = useMemo(() => {
+    return knownDatasets.some((d) => d.path === submitted) ? submitted : ""
+  }, [knownDatasets, submitted])
+
   const navigateTo = (next: string) => {
     setPath(next)
     setSubmitted(next)
@@ -71,43 +111,111 @@ export function DatasetsPage() {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">数据集</h1>
           <p className="text-sm text-muted-foreground">
-            扫描数据集目录、预览缩略图,点击「编辑」弹窗修改 caption。
+            从下拉中选择数据集,预览缩略图,点击「编辑」修改 caption。
           </p>
         </header>
 
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">扫描目录</CardTitle>
-            <CardDescription>
-              与 <code className="font-mono">dataset.source</code> 用同一路径。
-            </CardDescription>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <CardTitle className="text-base">选择数据集</CardTitle>
+                <CardDescription>
+                  从 <code className="font-mono">datasets/</code> 下的子目录里挑一个,
+                  或切到「高级」输入任意路径。
+                </CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setAdvanced((v) => !v)}
+                className="gap-1 text-[11px]"
+              >
+                <Pencil className="size-3" />
+                {advanced ? "切回下拉" : "高级 (输入路径)"}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <form
-              className="flex gap-2 flex-wrap"
-              onSubmit={(event) => {
-                event.preventDefault()
-                setSubmitted(path)
-              }}
-            >
-              <Input
-                value={path}
-                onChange={(event) => setPath(event.target.value)}
-                className="font-mono flex-1 min-w-[14rem]"
-                placeholder="./datasets/my_character"
-              />
-              <Button type="submit" disabled={scan.isFetching}>
-                <Search className="size-3.5" /> {scan.isFetching ? "扫描中" : "扫描"}
-              </Button>
-              <Button
-                type="button"
-                variant={recursive ? "default" : "outline"}
-                onClick={() => setRecursive((v) => !v)}
-                title="递归扫描所有子目录"
+            {!advanced && (
+              <div className="flex gap-2 flex-wrap items-center">
+                <Select
+                  value={dropdownValue}
+                  onValueChange={(v) => {
+                    if (v) {
+                      setPath(v)
+                      setSubmitted(v)
+                    }
+                  }}
+                >
+                  <SelectTrigger className="flex-1 min-w-[16rem] font-mono">
+                    <SelectValue
+                      placeholder={
+                        datasetsList.isLoading
+                          ? "加载数据集..."
+                          : knownDatasets.length === 0
+                            ? "datasets/ 下尚无数据集 — 切换高级模式输入路径"
+                            : "选择数据集..."
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {knownDatasets.map((d) => (
+                      <SelectItem key={d.path} value={d.path}>
+                        {d.name}{" "}
+                        <span className="text-muted-foreground text-[10px] ml-2">
+                          ({d.imageCount} 张)
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant={recursive ? "default" : "outline"}
+                  onClick={() => setRecursive((v) => !v)}
+                  title="递归扫描所有子目录"
+                >
+                  递归
+                </Button>
+                {!datasetsList.isLoading &&
+                  knownDatasets.length === 0 && (
+                    <Button size="sm" onClick={() => setAdvanced(true)}>
+                      去高级模式
+                    </Button>
+                  )}
+              </div>
+            )}
+
+            {advanced && (
+              <form
+                className="flex gap-2 flex-wrap"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  setSubmitted(path)
+                }}
               >
-                递归
-              </Button>
-            </form>
+                <Input
+                  value={path}
+                  onChange={(event) => setPath(event.target.value)}
+                  className="font-mono flex-1 min-w-[14rem]"
+                  placeholder="./datasets/my_character"
+                />
+                <Button type="submit" disabled={scan.isFetching}>
+                  <Search className="size-3.5" />{" "}
+                  {scan.isFetching ? "扫描中" : "扫描"}
+                </Button>
+                <Button
+                  type="button"
+                  variant={recursive ? "default" : "outline"}
+                  onClick={() => setRecursive((v) => !v)}
+                  title="递归扫描所有子目录"
+                >
+                  递归
+                </Button>
+              </form>
+            )}
+
             {data?.exists && (
               <PathBar path={data.path} onNavigate={navigateTo} />
             )}

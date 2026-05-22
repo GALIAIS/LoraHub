@@ -17,6 +17,7 @@ import {
   TextInput,
   ToggleSwitch,
 } from "../widgets"
+import { DatasetSourceSelect } from "../dataset-source-select"
 
 export const DatasetFields = memo(function DatasetFields({
   value,
@@ -32,8 +33,8 @@ export const DatasetFields = memo(function DatasetFields({
   const subsets = value.subsets ?? []
   return (
     <>
-      <Row label="数据集路径" required errors={errorMap.get("dataset.source")}>
-        <PathInput
+      <Row label="数据集" required errors={errorMap.get("dataset.source")}>
+        <DatasetSourceSelect
           value={value.source}
           onChange={(v) => set(["dataset", "source"], v)}
           placeholder="./datasets/my_character"
