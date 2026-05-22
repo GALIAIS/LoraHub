@@ -13,6 +13,7 @@ ALTER path before changing columns in a published release.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from lorahub.api.state import JobRecord, JobState
+
+log = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
 _SCHEMA = """
@@ -177,10 +180,10 @@ class JobStore:
                 else:
                     survivors.append(row["id"])
             if reaped_pids:
-                print(
-                    f"[store] reaped {len(reaped_pids)} orphan training "
-                    f"process(es) from a previous run: pids={reaped_pids}",
-                    flush=True,
+                log.info(
+                    "reaped %d orphan training process(es) from a previous run: pids=%s",
+                    len(reaped_pids),
+                    reaped_pids,
                 )
             if not stale_ids:
                 return 0
@@ -191,12 +194,11 @@ class JobStore:
             )
             if survivors:
                 # Best-effort log so operators can see why some interrupted
-                # jobs didn't get re-marked. Print rather than `log.info` to
-                # avoid coupling the store to a logger config.
-                print(
-                    f"[store] kept {len(survivors)} job(s) marked running because "
-                    f"their PID was still alive: {survivors}",
-                    flush=True,
+                # jobs didn't get re-marked.
+                log.info(
+                    "kept %d job(s) marked running because their PID was still alive: %s",
+                    len(survivors),
+                    survivors,
                 )
             return len(stale_ids)
 

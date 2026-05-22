@@ -15,7 +15,7 @@ LoraHub 需要 Python 3.11 或 3.12，配合一块显存 ≥ 8 GB 的 NVIDIA GPU
 
 ## 一键脚本（推荐）
 
-仓库根目录的 `scripts/install.{bat,sh}` 会从零搭好运行环境：通过 uv 安装 Python 3.12、创建 `.venv`、装 Python 依赖、装便携 Node.js、装前端依赖。所有产物都落在项目根目录的 `.tools/`、`.venv/`、`.node/` 下，整个项目目录可以打包搬到另一台同架构的机器直接运行。
+仓库根目录的 `scripts/install.{bat,sh}` 会从零搭好运行环境：通过 uv 安装 Python 3.12、创建 `.venv`、装 Python 依赖、装便携 Node.js、装前端依赖。所有产物都落在项目根目录的 `.lorahub/`、`.venv/`、`.node/` 下，整个项目目录可以打包搬到另一台同架构的机器直接运行。
 
 === "Windows"
 
