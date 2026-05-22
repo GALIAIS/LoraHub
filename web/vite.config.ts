@@ -75,6 +75,42 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: false,
+    // ``hidden`` keeps source maps next to the bundle (so a debugger
+    // can resolve frames if it picks them up) without referencing
+    // them from the ship-able .js — production stack traces stay
+    // unreadable to anyone poking at the network panel, but a
+    // developer with the dist tree on disk still gets pretty traces.
+    sourcemap: "hidden",
+    // Split the vendor stack into chunks roughly grouped by "owns its
+    // own update cadence". The default rollup chunking lumped every
+    // dependency into the entry chunk, which weighed in around 500 KB
+    // gzipped — every minor route change (the SPA does most rendering
+    // through lazy-loaded route chunks) re-shipped the whole vendor
+    // bundle to the browser.
+    //
+    // Grouping rules:
+    //   * react / router stay in their own chunk because they're on
+    //     every route.
+    //   * lucide-react ships ~1k icon paths; isolating it keeps an
+    //     icon-only edit (e.g. swapping ``Plus`` for ``X``) from
+    //     invalidating the rest of the vendor.
+    //   * markdown is only used by analysis / about pages — its own
+    //     chunk so the rest of the app can skip it on cold start.
+    //   * @base-ui, @radix, react-virtuoso are heavy headless UI
+    //     primitives; isolating them keeps a shadcn-component tweak
+    //     from re-shipping unrelated icon / markdown bytes.
+    //   * tanstack query is its own line so devtools (dev only) and
+    //     the runtime stay grouped.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          icons: ["lucide-react"],
+          markdown: ["react-markdown", "remark-gfm"],
+          ui: ["@base-ui/react", "@radix-ui/react-context-menu", "react-virtuoso"],
+          query: ["@tanstack/react-query"],
+        },
+      },
+    },
   },
 })
