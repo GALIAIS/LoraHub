@@ -771,6 +771,20 @@ export const api = {
     http<{ events: TrainingEvent[] }>(`/jobs/${id}/events?limit=${limit}`),
   cancelJob: (id: string) =>
     http<JobSummary>(`/jobs/${id}`, { method: "DELETE" }),
+  /** Bulk archive: every id is moved to ``_archive/`` if it's in a
+   *  terminal state. Server groups outcomes so the UI can render
+   *  "成功 N · 跳过 M · 失败 K" in one shot rather than retrying
+   *  per-id over the legacy DELETE endpoint. */
+  bulkArchiveJobs: (ids: string[]) =>
+    http<{
+      archived: { id: string; workspace_moved_to: string | null; warnings: string[] }[]
+      skipped: { id: string; reason: string }[]
+      failed: { id: string; reason: string }[]
+      not_found: string[]
+    }>("/jobs/archive", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
   /** Cancel + stamp ``metadata.paused=true`` so the UI swaps the next
    *  render to "恢复训练". The actual cancel mechanics are identical. */
   pauseJob: (id: string) =>
@@ -1201,8 +1215,7 @@ export const api = {
       `/sweeps/${encodeURIComponent(sweep_id)}/pareto`,
     ),
   // ── Artifacts ──────────────────────────────────────────────────
-  listArtifacts: () => http<{ jobs: ArtifactRow[] }>("/artifacts"),
-  /**
+  listArtifacts: () => http<{ jobs: ArtifactRow[] }>("/artifacts"),  /**
    * URL of the streaming-zip endpoint for a job's artifacts. Returned
    * as a string so the UI can drop it straight into ``window.open(...)``
    * — letting the browser save-as instead of buffering the whole

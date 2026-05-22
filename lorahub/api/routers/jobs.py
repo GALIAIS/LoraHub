@@ -857,3 +857,100 @@ def cancel_job(
     if job.handle is not None:
         job.handle.stop(graceful=True)
     return job.to_summary()
+
+
+class _BulkArchiveRequest(BaseModel):
+    """Body for ``POST /jobs/archive``."""
+
+    ids: list[str]
+
+
+@router.post("/jobs/archive")
+def bulk_archive_jobs(req: _BulkArchiveRequest) -> dict[str, Any]:
+    """Archive every terminal-state job in ``ids``.
+
+    Single-shot batch over the same path
+    ``DELETE /jobs/{id}?archive=true`` walks: each job is verified to
+    be in a terminal state, the workspace is checked against active
+    siblings, then the directory is moved under ``_archive/``. We
+    iterate sequentially — concurrent archives racing the registry
+    lock have caused split-brain rows in the past, and sequential
+    moves of a few dozen workspaces still finish in well under a
+    second on local disks.
+
+    The response groups outcomes so the UI can render
+    "成功 N · 跳过 M · 失败 K" without separate per-id error checks:
+
+      * ``archived``  — list of {id, workspace_moved_to, warnings}
+      * ``skipped``   — list of {id, reason}: non-terminal jobs, jobs
+        whose workspace was missing, jobs whose workspace was claimed
+        by an active sibling
+      * ``failed``    — list of {id, reason}: filesystem errors during
+        the actual move
+      * ``not_found`` — ids that didn't resolve to a row at all
+    """
+    archived: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    not_found: list[str] = []
+
+    for job_id in req.ids:
+        job = state.registry.get(job_id)
+        if job is None:
+            not_found.append(job_id)
+            continue
+        if job.state not in _TERMINAL_STATES:
+            skipped.append({"id": job_id, "reason": f"state={job.state.value}"})
+            continue
+        # Same active-sibling check the per-job archive path runs.
+        target_ws = job.workspace.resolve()
+        sibling_block: str | None = None
+        for other in state.registry.list():
+            if other.id == job.id:
+                continue
+            if other.state in _TERMINAL_STATES:
+                continue
+            try:
+                if other.workspace.resolve() == target_ws:
+                    sibling_block = (
+                        f"workspace shared with active job {other.id} "
+                        f"(state={other.state.value})"
+                    )
+                    break
+            except OSError:
+                continue
+        if sibling_block:
+            skipped.append({"id": job_id, "reason": sibling_block})
+            continue
+        if (
+            job.state is JobState.interrupted
+            and job.pid is not None
+            and _pid_alive(job.pid)
+        ):
+            skipped.append(
+                {
+                    "id": job_id,
+                    "reason": f"pid={job.pid} still alive — cancel explicitly first",
+                }
+            )
+            continue
+        try:
+            moved, warnings = _archive_workspace(job.workspace, job.id)
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"id": job_id, "reason": repr(exc)})
+            continue
+        state.registry.delete(job.id)
+        archived.append(
+            {
+                "id": job_id,
+                "workspace_moved_to": str(moved) if moved is not None else None,
+                "warnings": warnings,
+            }
+        )
+
+    return {
+        "archived": archived,
+        "skipped": skipped,
+        "failed": failed,
+        "not_found": not_found,
+    }

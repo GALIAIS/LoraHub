@@ -21,6 +21,8 @@ export function JobsToolbar({
   onHideCompletedChange,
   compareMode,
   onCompareModeChange,
+  selectMode,
+  onSelectModeChange,
 }: {
   total: number
   visibleCount: number
@@ -32,6 +34,8 @@ export function JobsToolbar({
   onHideCompletedChange: (next: boolean) => void
   compareMode: boolean
   onCompareModeChange: (next: boolean) => void
+  selectMode: boolean
+  onSelectModeChange: (next: boolean) => void
 }) {
   return (
     <header className="px-5 py-4 border-b border-border/60 space-y-3">
@@ -79,8 +83,18 @@ export function JobsToolbar({
             size="sm"
             checked={compareMode}
             onCheckedChange={onCompareModeChange}
+            disabled={selectMode}
           />
           对比模式
+        </label>
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+          <Switch
+            size="sm"
+            checked={selectMode}
+            onCheckedChange={onSelectModeChange}
+            disabled={compareMode}
+          />
+          选择模式
         </label>
       </div>
     </header>

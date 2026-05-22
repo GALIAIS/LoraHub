@@ -1264,6 +1264,65 @@ def test_archive_unknown_job_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_bulk_archive_groups_outcomes(client: TestClient, tmp_path: Path) -> None:
+    """``POST /jobs/archive`` runs every id through the archive path.
+
+    Mixes terminal / non-terminal / unknown ids and asserts each lands
+    in the right outcome bucket so the UI can render
+    "成功 N · 跳过 M · 失败 K" without per-id retries.
+    """
+    # 1. Terminal job — should archive cleanly.
+    ws_ok = tmp_path / "bulk-ok"
+    ws_ok.mkdir()
+    (ws_ok / "model.safetensors").write_bytes(b"w")
+    job_ok_id = _make_job_with_workspace(ws_ok)
+    job_ok = state.registry.get(job_ok_id)
+    assert job_ok is not None
+    job_ok.state = state.JobState.succeeded
+    state.registry.update(job_ok)
+
+    # 2. Non-terminal job — should land in skipped.
+    ws_running = tmp_path / "bulk-running"
+    ws_running.mkdir()
+    job_running_id = _make_job_with_workspace(ws_running)
+    job_running = state.registry.get(job_running_id)
+    assert job_running is not None
+    job_running.state = state.JobState.running
+    state.registry.update(job_running)
+
+    # 3. Unknown id — should land in not_found.
+    r = client.post(
+        "/api/jobs/archive",
+        json={"ids": [job_ok_id, job_running_id, "does-not-exist"]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    archived_ids = {row["id"] for row in body["archived"]}
+    skipped_ids = {row["id"] for row in body["skipped"]}
+    not_found_ids = set(body["not_found"])
+
+    assert archived_ids == {job_ok_id}
+    assert skipped_ids == {job_running_id}
+    assert not_found_ids == {"does-not-exist"}
+    # Terminal job's workspace was actually moved.
+    assert not ws_ok.exists()
+    # Running job's workspace is intact.
+    assert ws_running.exists()
+    # Registry: succeeded row dropped, running row preserved.
+    assert state.registry.get(job_ok_id) is None
+    assert state.registry.get(job_running_id) is not None
+
+
+def test_bulk_archive_empty_ids_returns_empty_groups(
+    client: TestClient,
+) -> None:
+    r = client.post("/api/jobs/archive", json={"ids": []})
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"archived": [], "skipped": [], "failed": [], "not_found": []}
+
+
 # --------------------------------------------------------------------------- #
 # Backend bootstrap (one-click kohya install)
 # --------------------------------------------------------------------------- #

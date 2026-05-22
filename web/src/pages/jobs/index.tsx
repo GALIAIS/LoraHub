@@ -1,9 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react"
-import { type JobSummary } from "@/lib/api"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Archive, ArrowRight, Loader2, PanelLeftClose, PanelLeftOpen } from "lucide-react"
+import { toast } from "sonner"
+import { api, type JobSummary } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { JobsToolbar } from "./components/jobs-toolbar"
@@ -46,7 +58,15 @@ export function JobsPage() {
   const [hideCompleted, setHideCompleted] = useState(false)
   const [compareMode, setCompareMode] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
+  // Independent of compareMode — same checkbox UI on the row, but the
+  // selected ids drive bulk-archive instead of /analysis/compare.
+  // Mutually exclusive at the toolbar level so the user only sees one
+  // batch action at a time.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false)
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
@@ -137,6 +157,11 @@ export function JobsPage() {
     if (!compareMode) setCompareIds([])
   }, [compareMode])
 
+  // Mirror the same lifecycle for select mode.
+  useEffect(() => {
+    if (!selectMode) setSelectedIds([])
+  }, [selectMode])
+
   // Prune compare ids that no longer exist (e.g. archived).
   useEffect(() => {
     if (compareIds.length === 0) return
@@ -144,6 +169,15 @@ export function JobsPage() {
     const pruned = compareIds.filter((id) => known.has(id))
     if (pruned.length !== compareIds.length) setCompareIds(pruned)
   }, [list, compareIds])
+
+  // Same prune for batch-selection ids — a successful bulk archive
+  // removes the rows, so the checkboxes need to drop along with them.
+  useEffect(() => {
+    if (selectedIds.length === 0) return
+    const known = new Set(list.map((j) => j.id))
+    const pruned = selectedIds.filter((id) => known.has(id))
+    if (pruned.length !== selectedIds.length) setSelectedIds(pruned)
+  }, [list, selectedIds])
 
   const selected = selectedId
     ? list.find((j) => j.id === selectedId) ?? null
@@ -156,6 +190,75 @@ export function JobsPage() {
       return [...prev, id]
     })
   }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }
+
+  // Selectable = visible jobs in a terminal state. The bulk-archive
+  // server-side check enforces this anyway, but pre-filtering on the
+  // client keeps the "全选" button honest about what will happen.
+  const selectableIds = useMemo(
+    () => visibleJobs.filter((j) => COMPLETED_STATES.has(j.state)).map((j) => j.id),
+    [visibleJobs],
+  )
+  const allSelectable = selectableIds.length > 0
+    && selectableIds.every((id) => selectedIds.includes(id))
+
+  function selectAllVisible() {
+    setSelectedIds((prev) => Array.from(new Set([...prev, ...selectableIds])))
+  }
+  function clearSelection() {
+    setSelectedIds([])
+  }
+
+  const bulkArchive = useMutation({
+    mutationFn: (ids: string[]) => api.bulkArchiveJobs(ids),
+    onSuccess: (data) => {
+      const a = data.archived.length
+      const s = data.skipped.length
+      const f = data.failed.length
+      const nf = data.not_found.length
+      // Build a single toast summary; details land in the
+      // description for skipped/failed reasons.
+      const parts: string[] = []
+      if (a) parts.push(`成功 ${a}`)
+      if (s) parts.push(`跳过 ${s}`)
+      if (f) parts.push(`失败 ${f}`)
+      if (nf) parts.push(`未找到 ${nf}`)
+      const headline = parts.join(" · ") || "无事可做"
+
+      const lines: string[] = []
+      for (const row of data.skipped.slice(0, 5)) {
+        lines.push(`${row.id.slice(-8)}: ${row.reason}`)
+      }
+      for (const row of data.failed.slice(0, 5)) {
+        lines.push(`${row.id.slice(-8)}: ${row.reason}`)
+      }
+      const description = lines.length ? lines.join("\n") : undefined
+
+      if (f > 0) {
+        toast.error(headline, { description })
+      } else if (s > 0 || nf > 0) {
+        toast.warning(headline, { description })
+      } else {
+        toast.success(headline)
+      }
+      qc.invalidateQueries({ queryKey: ["jobs"] })
+      qc.invalidateQueries({ queryKey: ["artifacts"] })
+      // Clear selection — successfully-archived ids were removed by the
+      // server; pruning effect catches the rest, but emptying here makes
+      // the toolbar feedback immediate.
+      setSelectedIds([])
+    },
+    onError: (e) => {
+      toast.error("批量归档失败", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    },
+  })
 
   return (
     <div
@@ -197,6 +300,8 @@ export function JobsPage() {
           onHideCompletedChange={setHideCompleted}
           compareMode={compareMode}
           onCompareModeChange={setCompareMode}
+          selectMode={selectMode}
+          onSelectModeChange={setSelectMode}
         />
         {compareMode && (
           <div className="px-5 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground flex items-center gap-2">
@@ -221,6 +326,43 @@ export function JobsPage() {
             )}
           </div>
         )}
+        {selectMode && (
+          <div className="px-5 py-2 border-b border-border/60 bg-muted/30 text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap">
+            <span className="flex-1 min-w-0">
+              已选 {selectedIds.length}
+              {selectedIds.length > 0 && " 个"}
+              {selectableIds.length > 0 && (
+                <span className="text-muted-foreground/70">
+                  {" "}/ 可选 {selectableIds.length}
+                </span>
+              )}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-[11px] px-2"
+              onClick={allSelectable ? clearSelection : selectAllVisible}
+              disabled={selectableIds.length === 0}
+              title="只能选择已完成 / 失败 / 取消 / 中断的任务"
+            >
+              {allSelectable ? "清空" : "全选可选"}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-6 text-[11px] px-2 gap-1"
+              disabled={selectedIds.length === 0 || bulkArchive.isPending}
+              onClick={() => setBulkArchiveOpen(true)}
+            >
+              {bulkArchive.isPending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Archive className="size-3" />
+              )}
+              批量归档
+            </Button>
+          </div>
+        )}
         <ScrollArea className="flex-1 min-h-0">
           <ul className="divide-y divide-border/40">
             {visibleJobs.length === 0 && (
@@ -229,19 +371,28 @@ export function JobsPage() {
               </li>
             )}
             {visibleJobs.map((j) => {
-              const checked = compareIds.includes(j.id)
-              const checkboxDisabled =
-                !checked && compareIds.length >= COMPARE_LIMIT
+              const isCompare = compareMode
+              const isSelect = selectMode
+              const checked = isCompare
+                ? compareIds.includes(j.id)
+                : selectedIds.includes(j.id)
+              const compareLimitHit =
+                isCompare && !checked && compareIds.length >= COMPARE_LIMIT
+              const notSelectable =
+                isSelect && !COMPLETED_STATES.has(j.state)
+              const checkboxDisabled = compareLimitHit || notSelectable
               return (
                 <JobRow
                   key={j.id}
                   job={j}
                   active={j.id === selectedId}
-                  compareMode={compareMode}
+                  compareMode={isCompare || isSelect}
                   checked={checked}
                   checkboxDisabled={checkboxDisabled}
                   onSelect={() => setSelectedId(j.id)}
-                  onToggleCompare={() => toggleCompare(j.id)}
+                  onToggleCompare={() =>
+                    isCompare ? toggleCompare(j.id) : toggleSelected(j.id)
+                  }
                 />
               )
             })}
@@ -275,6 +426,45 @@ export function JobsPage() {
           </div>
         )}
       </section>
+
+      <AlertDialog
+        open={bulkArchiveOpen}
+        onOpenChange={(open) => !open && setBulkArchiveOpen(false)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量归档 {selectedIds.length} 个任务</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                即将把所选任务的工作区移动到{" "}
+                <code className="font-mono text-xs">_archive/</code> 目录,
+                并从任务列表中移除这些记录。
+              </span>
+              <span className="block text-muted-foreground">
+                跟「删除」不同 —— 文件不会被销毁,日后可以从 _archive/ 找回;但
+                训练详情和 metrics 时间线不再可见。
+              </span>
+              <span className="block text-amber-700 dark:text-amber-400">
+                未完成 / 与活动任务共用工作区的任务会被自动跳过。
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkArchive.isPending}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                bulkArchive.mutate(selectedIds)
+                setBulkArchiveOpen(false)
+              }}
+              disabled={bulkArchive.isPending}
+            >
+              {bulkArchive.isPending ? "归档中…" : "确认归档"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
