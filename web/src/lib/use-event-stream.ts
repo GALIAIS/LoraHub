@@ -63,12 +63,19 @@ export interface UseEventStreamResult<TState> {
 
 /**
  * Connection lifecycle (SSE branch):
- *   - The browser auto-reconnects EventSource after `retry: <ms>`,
- *     so we just toggle status on `onerror`. The server emits
- *     `id: N` on every frame and the browser sends it back as
- *     `Last-Event-ID` on reconnect, so the resume layer is the
- *     server's job.
- *   - On unmount we `.close()` to stop reconnect attempts.
+ *   - The browser auto-reconnects EventSource when its ``readyState``
+ *     is ``CONNECTING``. After certain server failures (5xx, the
+ *     server explicitly closing the response stream) the
+ *     ``readyState`` flips to ``CLOSED`` and the browser stops
+ *     trying — silent permanent disconnect.
+ *   - We watch for that transition in ``onerror``: if the source
+ *     entered ``CLOSED`` we tear it down and schedule our own
+ *     reconnect with exponential backoff (500ms → 8s, capped).
+ *   - The server emits ``id: N`` on every frame; reconnects pass
+ *     it back as ``Last-Event-ID`` automatically so resume is
+ *     handled server-side.
+ *   - Tab visibility / online events shortcut the backoff so the
+ *     UI reconnects instantly when the user comes back to it.
  *
  * Connection lifecycle (WS branch):
  *   - Exponential backoff up to 3-5 s, mirroring the prior hand-
@@ -128,14 +135,75 @@ export function useEventStream<TState, TPayload = unknown>(
       }
     }
 
-    function connectSse(path: string) {
-      const es = new EventSource(path)
-      sourceRef.current = es
-      es.onopen = () => setStatus("open")
-      es.onerror = () => setStatus("closed")
-      es.onmessage = (msg) => {
-        const parsed = safeParse(msg.data)
-        if (parsed !== undefined) applyFrame(parsed)
+    function connectSse(path: string): () => void {
+      let es: EventSource | null = null
+      let backoff = 0
+      let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+      function open() {
+        if (cancelled) return
+        es = new EventSource(path)
+        sourceRef.current = es
+        es.onopen = () => {
+          backoff = 0
+          setStatus("open")
+        }
+        es.onmessage = (msg) => {
+          const parsed = safeParse(msg.data)
+          if (parsed !== undefined) applyFrame(parsed)
+        }
+        es.onerror = () => {
+          // ``readyState`` distinguishes:
+          //   CONNECTING (0) — browser is already retrying for us
+          //   OPEN       (1) — transient blip, browser handles it
+          //   CLOSED     (2) — browser gave up; permanent without
+          //                    our intervention.
+          // We only step in for the CLOSED case so well-behaved
+          // hiccups don't double-reconnect.
+          setStatus("closed")
+          if (es?.readyState !== EventSource.CLOSED) return
+          if (cancelled) return
+          es.close()
+          es = null
+          sourceRef.current = null
+          if (retryTimer !== null) clearTimeout(retryTimer)
+          retryTimer = setTimeout(open, backoff)
+          backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 8000)
+        }
+      }
+
+      function reconnectNow() {
+        if (cancelled) return
+        // If the connection is already healthy, don't churn it.
+        if (es && es.readyState === EventSource.OPEN) return
+        if (retryTimer !== null) clearTimeout(retryTimer)
+        retryTimer = null
+        if (es) {
+          es.close()
+          es = null
+          sourceRef.current = null
+        }
+        backoff = 0
+        open()
+      }
+
+      function onVis() {
+        if (document.visibilityState === "visible") reconnectNow()
+      }
+
+      // SSE always wants visibility / online recovery — the browser's
+      // built-in reconnect doesn't reach here for the CLOSED state,
+      // and a sleeping laptop loses the underlying TCP socket either
+      // way. Cheap to wire up unconditionally.
+      document.addEventListener("visibilitychange", onVis)
+      window.addEventListener("online", reconnectNow)
+
+      open()
+
+      return () => {
+        document.removeEventListener("visibilitychange", onVis)
+        window.removeEventListener("online", reconnectNow)
+        if (retryTimer !== null) clearTimeout(retryTimer)
       }
     }
 
@@ -200,13 +268,13 @@ export function useEventStream<TState, TPayload = unknown>(
       }
     }
 
-    let cleanupWs: (() => void) | undefined
-    if (useSse && ssePath) connectSse(ssePath)
-    else if (wsPath) cleanupWs = connectWs(wsPath)
+    let cleanup: (() => void) | undefined
+    if (useSse && ssePath) cleanup = connectSse(ssePath)
+    else if (wsPath) cleanup = connectWs(wsPath)
 
     return () => {
       cancelled = true
-      cleanupWs?.()
+      cleanup?.()
       const s = sourceRef.current
       if (s) {
         if (s instanceof WebSocket) {
