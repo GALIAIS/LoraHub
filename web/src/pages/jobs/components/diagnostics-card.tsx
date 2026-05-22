@@ -48,6 +48,21 @@ const CATEGORY_LABEL: Record<string, string> = {
   data_loader_corrupt: "数据集损坏",
   user_cancel: "用户中断",
   vram_pressure: "显存压力",
+  // ---- new categories from diagnosis_patterns.py ---- //
+  ansi_encode: "路径编码错误",
+  cjk_path_decode: "路径解码错误",
+  cuda_driver_mismatch: "CUDA 驱动不兼容",
+  accelerate_config_missing: "accelerate 未配置",
+  permission_denied_write: "写权限被拒绝",
+  disk_full: "磁盘已满",
+  bitsandbytes_missing: "bitsandbytes 未安装",
+  xformers_incompat: "xformers 不兼容",
+  safetensors_corrupt: "safetensors 损坏",
+  caption_missing: "标注缺失",
+  vram_startup: "启动显存不足",
+  deepspeed_nccl: "DeepSpeed/NCCL 错误",
+  distributed_timeout: "分布式超时",
+  subprocess_returncode: "子进程退出非零",
   unknown: "未知失败",
 }
 

@@ -21,6 +21,8 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
   log: "日志",
   start: "启动",
   cancel: "取消",
+  diagnostic_warning: "诊断告警",
+  preview_unavailable: "预览不可用",
 }
 
 export const STATE_LABELS: Record<string, string> = {

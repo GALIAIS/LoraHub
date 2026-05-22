@@ -28,16 +28,60 @@ export class ApiError extends Error {
   constructor(status: number, statusText: string, body: unknown, path: string) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
-        : typeof body === "string"
-          ? body
-          : ""
-    super(`${status} ${statusText}${detail ? `: ${detail}` : ""}`)
+        ? (body as { detail: unknown }).detail
+        : null
+    const detailString =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof detail === "object" && "message" in detail
+          ? String((detail as { message: unknown }).message)
+          : typeof body === "string"
+            ? body
+            : ""
+    super(`${status} ${statusText}${detailString ? `: ${detailString}` : ""}`)
     this.name = "ApiError"
     this.status = status
     this.body = body
     this.path = path
   }
+
+  /** Structured preflight blockers, when the server returned them.
+   *
+   * The 422 response from `POST /api/jobs` (and resume / rerun) has the
+   * shape `{detail: {message: "...", findings: [{...}]}}` when at least
+   * one preflight category fired. Returns `null` when no findings list
+   * is present so callers can fall through to plain `.message`.
+   */
+  get preflightFindings(): PreflightFinding[] | null {
+    const body = this.body
+    if (typeof body !== "object" || body === null) return null
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail !== "object" || detail === null) return null
+    const findings = (detail as { findings?: unknown }).findings
+    if (!Array.isArray(findings)) return null
+    return findings.filter(
+      (f): f is PreflightFinding =>
+        typeof f === "object" &&
+        f !== null &&
+        typeof (f as PreflightFinding).category === "string" &&
+        typeof (f as PreflightFinding).field === "string" &&
+        typeof (f as PreflightFinding).message === "string",
+    )
+  }
+}
+
+/** A blocker / warning emitted by the API's preflight layer.
+ *
+ * Mirrors `lorahub.api.preflight.PreflightFinding.to_dict()`. Carry the
+ * camelCase cfg path in `field` so the UI can highlight the input.
+ */
+export interface PreflightFinding {
+  category: string
+  severity: "info" | "warn" | "error"
+  field: string
+  message: string
+  remediation: string
+  extra?: Record<string, unknown>
 }
 
 export interface JobSummary {

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCheck, Play, Save, XCircle } from "lucide-react"
 import { api, type ValidationFieldError } from "@/lib/api"
+import { toastApiError } from "@/lib/toast-api-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
@@ -97,6 +98,9 @@ export function ConfigEditor({
       }
       setMode({ kind: "preview", name: cleanName })
       return { saved }
+    },
+    onError: (err) => {
+      toastApiError(err, { title: "保存或启动训练失败" })
     },
   })
 

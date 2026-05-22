@@ -2,7 +2,8 @@ import { useState, useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Download, Pencil, Play } from "lucide-react"
-import { api, type ConfigListEntry } from "@/lib/api"
+import { api, ApiError, type ConfigListEntry } from "@/lib/api"
+import { toastApiError } from "@/lib/toast-api-error"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
@@ -72,6 +73,13 @@ export function ConfigPreview({
       navigate("/jobs")
     },
     onError: (err) => {
+      // For preflight 422s, render the structured findings as a toast
+      // *and* keep the inline banner so the user can scroll back to the
+      // root cause after dismissing the toast. Other errors only get
+      // the banner — no point doubling generic "fetch failed" noise.
+      if (err instanceof ApiError && err.preflightFindings) {
+        toastApiError(err, { title: "训练前自检未通过" })
+      }
       setLaunchError(err instanceof Error ? err.message : String(err))
     },
   })

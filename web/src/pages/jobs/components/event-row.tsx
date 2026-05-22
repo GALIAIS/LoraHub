@@ -27,6 +27,14 @@ function renderPayload(e: TrainingEvent, fallbackTotalSteps: number | null): str
       }s`
     case "log":
       return String(p.message ?? "")
+    case "diagnostic_warning": {
+      // Emitted by SubprocessRunner's StreamingDiagnosticWatcher.
+      // Field shape mirrors PreflightFinding so the same label /
+      // remediation idiom works on both surfaces.
+      const cat = String(p.category ?? "")
+      const msg = String(p.message ?? "")
+      return cat ? `[${cat}] ${msg}` : msg
+    }
     default:
       return JSON.stringify(p)
   }
@@ -48,6 +56,7 @@ export function EventRow({
       checkpoint_saved: "text-cyan-700 dark:text-cyan-400",
       sample_ready: "text-fuchsia-700 dark:text-fuchsia-400",
       epoch_end: "text-primary",
+      diagnostic_warning: "text-amber-700 dark:text-amber-400",
     }[event.type] ?? "text-foreground"
   const label = EVENT_TYPE_LABELS[event.type] ?? event.type
 
