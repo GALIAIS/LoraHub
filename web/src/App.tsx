@@ -1,5 +1,5 @@
-import { Suspense, startTransition, useCallback, useEffect, useRef, useState } from "react"
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { Suspense, useCallback, useEffect, useRef, useState } from "react"
+import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 import { Toaster } from "sonner"
 import {
@@ -81,7 +81,6 @@ const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
 
 export default function App() {
   const location = useLocation()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system"
@@ -195,27 +194,6 @@ export default function App() {
     void preloadAppRoute(routeKey)
   }, [])
 
-  const handleNavClick = useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>, to: string) => {
-      // Skip modifier-key clicks (open in new tab, etc.)
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
-        return
-      }
-      event.preventDefault()
-      startTransition(() => {
-        navigate(to)
-      })
-    },
-    [navigate],
-  )
-
   // Theme-change handler. Uses the View Transitions API for a radial
   // reveal centered on the click, falling back to the css fade class
   // (see index.css) on browsers that don't support it.
@@ -296,7 +274,6 @@ export default function App() {
                           <NavLink
                             to={item.to}
                             end={item.to === "/"}
-                            onClick={(e) => handleNavClick(e, item.to)}
                             onPointerDown={() => prefetchRoute(item.routeKey)}
                           />
                         }

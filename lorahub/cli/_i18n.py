@@ -90,6 +90,10 @@ MESSAGES: dict[str, dict[Lang, str]] = {
         "zh": "[red]当前 venv 中没有 lorahub 入口[/]\n请先运行 scripts/install.{sh,bat} 让 .venv/bin/lorahub 存在。",
         "en": "[red]no lorahub entry in the active venv[/]\nRun scripts/install.{sh,bat} first so .venv/bin/lorahub exists.",
     },
+    "manage.install.path_unencodable": {
+        "zh": "[red]无法写入 lorahub 启动器:venv 入口路径含有当前 Windows ANSI 代码页(mbcs)无法编码的字符。[/]\n  venv 入口:{venv_entry}\n  编码错误:{err}\n请把项目移到只包含 ANSI 代码页可表示字符的目录(避免中文以外的特殊符号、表情或当前代码页未覆盖的字符)。",
+        "en": "[red]cannot write lorahub shim: the venv entry path contains characters the active Windows ANSI code page (mbcs) cannot encode.[/]\n  venv entry: {venv_entry}\n  encode error: {err}\nMove the project to a directory whose path only uses characters representable in your current ANSI code page.",
+    },
     "manage.install.setx_failed": {
         "zh": "[yellow]软链写入 {shim},但 setx PATH 失败:[/] {err}\n请手动把 {shim_dir} 加到用户 PATH。",
         "en": "[yellow]wrote shim {shim}, but setx PATH failed:[/] {err}\nAdd this to your user PATH manually: {shim_dir}",
