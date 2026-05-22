@@ -5,6 +5,10 @@ setlocal enabledelayedexpansion
 rem ----------------------------------------------------------------
 rem LoRaHub - One-click environment installer (Windows)
 rem
+rem !! Mirror script: scripts\install.sh (POSIX / Linux / WSL).
+rem !! The 6-step contract is documented in scripts\INSTALL_DESIGN.md
+rem !! every change here MUST land in install.sh in the same commit.
+rem
 rem Installs EVERYTHING into the project directory:
 rem   1. uv -> .lorahub\uv\
 rem   2. Python 3.12 -> .lorahub\python\

@@ -4,6 +4,10 @@ set -euo pipefail
 # ------------------------------------------------------------------
 # LoRaHub - Full environment installer (Linux)
 #
+# !! Mirror script: scripts/install.bat (Windows cmd).
+# !! The 6-step contract is documented in scripts/INSTALL_DESIGN.md —
+# !! every change here MUST land in install.bat in the same commit.
+#
 # Installs EVERYTHING into the project directory:
 #   1. uv -> .lorahub/uv/
 #   2. Python 3.12 -> .lorahub/python/
