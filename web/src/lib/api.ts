@@ -1200,6 +1200,45 @@ export const api = {
     http<SweepParetoResponse>(
       `/sweeps/${encodeURIComponent(sweep_id)}/pareto`,
     ),
+  // ── Artifacts ──────────────────────────────────────────────────
+  listArtifacts: () => http<{ jobs: ArtifactRow[] }>("/artifacts"),
+  /**
+   * URL of the streaming-zip endpoint for a job's artifacts. Returned
+   * as a string so the UI can drop it straight into ``window.open(...)``
+   * — letting the browser save-as instead of buffering the whole
+   * archive in memory.
+   */
+  artifactZipUrl: (job_id: string, include: string[] = ["checkpoints"]) =>
+    `/api/artifacts/${encodeURIComponent(job_id)}/zip?include=${encodeURIComponent(
+      include.join(","),
+    )}`,
+  artifactSingleUrl: (job_id: string, path: string) =>
+    `/api/jobs/${encodeURIComponent(job_id)}/files/raw?path=${encodeURIComponent(path)}`,
+  deleteArtifactFile: (job_id: string, path: string) =>
+    http<{ deleted: string; size_bytes: number }>(
+      `/artifacts/${encodeURIComponent(job_id)}/file?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ),
+  deleteArtifactWorkspace: (job_id: string) =>
+    http<{ deleted: boolean; workspace?: string; reason?: string }>(
+      `/artifacts/${encodeURIComponent(job_id)}/workspace`,
+      { method: "DELETE" },
+    ),
+}
+
+export interface ArtifactRow {
+  job_id: string
+  workspace: string
+  exists: boolean
+  state: string
+  created_at: string | null
+  finished_at: string | null
+  output_name?: string | null
+  checkpoints: JobFile[]
+  samples: JobFile[]
+  total_bytes: number
+  checkpoint_count: number
+  sample_count: number
 }
 
 /**

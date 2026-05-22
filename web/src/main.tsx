@@ -58,6 +58,10 @@ const TerminalPage = lazyWithRetry(
   () => import("./pages/terminal").then((m) => ({ default: m.TerminalPage })),
   "route:terminal",
 )
+const ArtifactsPage = lazyWithRetry(
+  () => import("./pages/artifacts").then((m) => ({ default: m.ArtifactsPage })),
+  "route:artifacts",
+)
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,6 +101,7 @@ createRoot(document.getElementById("root")!, {
             <Route path="image-studio" element={<ImageStudioPage />} />
             <Route path="gallery" element={<GalleryPage />} />
             <Route path="terminal" element={<TerminalPage />} />
+            <Route path="artifacts" element={<ArtifactsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="about" element={<AboutPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

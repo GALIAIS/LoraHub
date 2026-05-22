@@ -36,11 +36,12 @@ const ROUTES = [
   { label: "数据面板",     urlPath: "/" },
   { label: "训练任务",     urlPath: "/jobs" },
   { label: "训练分析",     urlPath: "/analysis" },
+  { label: "训练配置",     urlPath: "/configs" },
   { label: "超参 sweep",   urlPath: "/sweeps" },
   { label: "终端",        urlPath: "/terminal" },
-  { label: "训练配置",     urlPath: "/configs" },
   { label: "数据集",      urlPath: "/datasets" },
   { label: "样图画廊",     urlPath: "/gallery" },
+  { label: "产物管理",     urlPath: "/artifacts" },
   { label: "设置",        urlPath: "/settings" },
   { label: "关于",        urlPath: "/about" },
 ]

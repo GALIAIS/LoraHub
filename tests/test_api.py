@@ -3833,3 +3833,167 @@ def test_install_flash_attn_v2_requires_venv(
     assert r.status_code == 400
     assert "venv" in r.json()["detail"].lower()
 
+
+# --------------------------------------------------------------------------- #
+# /api/artifacts — training artifact manager
+# --------------------------------------------------------------------------- #
+
+
+def test_artifacts_list_aggregates_jobs(client: TestClient, tmp_path: Path) -> None:
+    """``GET /artifacts`` returns one row per registered job."""
+    ws = tmp_path / "ws-art-1"
+    ws.mkdir()
+    (ws / "model_step100.safetensors").write_bytes(b"\x00" * 64)
+    (ws / "events.jsonl").write_text("", encoding="utf-8")
+    out_dir = ws / "output"
+    out_dir.mkdir()
+    (out_dir / "sample.png").write_bytes(b"\x89PNG")
+
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get("/api/artifacts")
+    assert r.status_code == 200
+    body = r.json()
+    rows = body["jobs"]
+    matching = [r for r in rows if r["job_id"] == job_id]
+    assert len(matching) == 1
+    row = matching[0]
+    assert row["exists"] is True
+    assert row["checkpoint_count"] == 1
+    assert row["sample_count"] == 1
+    assert row["total_bytes"] >= 64
+    assert any(c["path"] == "model_step100.safetensors" for c in row["checkpoints"])
+
+
+def test_artifacts_zip_streams_checkpoints_by_default(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Default zip includes only checkpoints — samples / logs are opt-in."""
+    import io
+    import zipfile
+
+    ws = tmp_path / "ws-zip"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights-payload")
+    (ws / "events.jsonl").write_text("log entry\n", encoding="utf-8")
+    (ws / "output").mkdir()
+    (ws / "output" / "sample.png").write_bytes(b"\x89PNG")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    names = set(archive.namelist())
+    assert "model.safetensors" in names
+    assert "events.jsonl" not in names  # logs excluded by default
+    assert "output/sample.png" not in names  # samples excluded by default
+
+
+def test_artifacts_zip_honours_include_query(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import zipfile
+
+    ws = tmp_path / "ws-zip2"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"w")
+    (ws / "output").mkdir()
+    (ws / "output" / "sample.png").write_bytes(b"\x89PNG")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?include=checkpoints,samples")
+    assert r.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    names = set(archive.namelist())
+    assert names == {"model.safetensors", "output/sample.png"}
+
+
+def test_artifacts_zip_rejects_unknown_bucket(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-zip3"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"w")
+    job_id = _make_job_with_workspace(ws)
+    r = client.get(f"/api/artifacts/{job_id}/zip?include=bogus")
+    assert r.status_code == 422
+    assert "unknown" in r.json()["detail"].lower()
+
+
+def test_artifacts_delete_file_removes_one_artifact(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-del"
+    ws.mkdir()
+    target = ws / "model_old.safetensors"
+    target.write_bytes(b"\x00" * 16)
+    keep = ws / "model_new.safetensors"
+    keep.write_bytes(b"\x00" * 32)
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.request(
+        "DELETE",
+        f"/api/artifacts/{job_id}/file",
+        params={"path": "model_old.safetensors"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["size_bytes"] == 16
+    assert not target.exists()
+    assert keep.exists()
+
+
+def test_artifacts_delete_file_blocks_traversal(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-traverse"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"w")
+    job_id = _make_job_with_workspace(ws)
+    r = client.request(
+        "DELETE",
+        f"/api/artifacts/{job_id}/file",
+        params={"path": "../escape.safetensors"},
+    )
+    assert r.status_code == 400
+
+
+def test_artifacts_delete_workspace_refuses_nonterminal_jobs(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-running"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"w")
+    job_id = _make_job_with_workspace(ws)
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    r = client.delete(f"/api/artifacts/{job_id}/workspace")
+    assert r.status_code == 409
+    assert ws.exists()
+
+
+def test_artifacts_delete_workspace_terminal_clears_tree_and_record(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-clear"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"w")
+    (ws / "output").mkdir()
+    (ws / "output" / "sample.png").write_bytes(b"\x89PNG")
+    job_id = _make_job_with_workspace(ws)
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    r = client.delete(f"/api/artifacts/{job_id}/workspace")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] is True
+    assert not ws.exists()
+    assert state.registry.get(job_id) is None
+

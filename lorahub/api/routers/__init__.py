@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from .ai import router as ai_router
+from .artifacts import router as artifacts_router
 from .backends import router as backends_router
 from .bootstrap import router as bootstrap_router
-from .ai import router as ai_router
 from .captions import router as captions_router
 from .datasets import router as datasets_router
 from .health import router as health_router
@@ -37,6 +38,7 @@ all_routers: list[APIRouter] = [
     datasets_router,
     image_studio_router,
     jobs_router,
+    artifacts_router,
     backends_router,
     bootstrap_router,
     ai_router,
