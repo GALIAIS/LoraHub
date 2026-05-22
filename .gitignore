@@ -118,3 +118,12 @@ lorahub/_version.py
 .claude/
 *-local.err
 *-local.out
+
+# Vendored anima_lora — leftovers from upstream's own tooling that
+# shouldn't follow into our repo. The vendored source itself is
+# committed (see external/anima_lora/VENDORED.md for upstream sync
+# state); only Codex / build-product debris is excluded here.
+external/anima_lora/.codex
+external/anima_lora/anima_lora.egg-info/
+external/anima_lora/output/
+external/anima_lora/post_image_dataset/
