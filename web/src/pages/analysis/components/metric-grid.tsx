@@ -2,7 +2,7 @@
  * Metric grid — TensorBoard-style breakdown of every chartable scalar.
  *
  * Each metric lives in its own small card with:
- *   - A tiny path-style title (`loss/average`, `gpu/vram`, ...).
+ *   - A tiny path-style title (`loss/average`, `loss/ema`, ...).
  *   - One `<MultiLineChart>` (so the user gets the full
  *     wheel-zoom / pan / fullscreen / CSV stack we already built).
  *   - A single inline summary value (last point) on the header.
@@ -11,6 +11,10 @@
  * underlying series are empty are *omitted* — no "no data" placeholders
  * cluttering the page. The user can still see them once data starts
  * flowing.
+ *
+ * Hardware-side metrics (gpu util / vram / temperature) live on the
+ * dashboard's GPU page and the job-detail realtime tile; this grid is
+ * about *training effectiveness*, not host-load monitoring.
  */
 import { useMemo } from "react"
 import type { JobMetricsResponse } from "@/lib/api"
@@ -218,108 +222,6 @@ export function MetricGrid({
       })
     }
 
-    // ---------- gpu/util / vram / temp ----------
-    const samples = metrics?.gpu_samples ?? []
-    if (samples.length > 0) {
-      const t0 = samples[0].ts
-      const minutes = (s: { ts: number }) => (s.ts - t0) / 60
-
-      const utilPoints = samples
-        .filter(
-          (s) =>
-            typeof s.util_percent === "number" &&
-            Number.isFinite(s.util_percent),
-        )
-        .map((s) => ({ x: minutes(s), y: s.util_percent as number }))
-      if (utilPoints.length > 0) {
-        out.push({
-          id: "gpu-util",
-          title: "gpu/util_percent",
-          latest: `${fmtFloat(utilPoints[utilPoints.length - 1].y, 1)} %`,
-          xLabel: "min",
-          series: [
-            {
-              id: "util",
-              label: "GPU 利用率",
-              color: "var(--chart-1)",
-              unit: "%",
-              points: utilPoints,
-            },
-          ],
-        })
-      }
-
-      const vramPct = samples
-        .filter(
-          (s) =>
-            s.vram_used_mib != null &&
-            s.vram_total_mib &&
-            s.vram_total_mib > 0,
-        )
-        .map((s) => ({
-          x: minutes(s),
-          y:
-            ((s.vram_used_mib as number) / (s.vram_total_mib as number)) * 100,
-        }))
-      const vramMib = samples
-        .filter((s) => typeof s.vram_used_mib === "number")
-        .map((s) => ({ x: minutes(s), y: s.vram_used_mib as number }))
-      if (vramMib.length > 0) {
-        out.push({
-          id: "gpu-vram",
-          title: "gpu/vram_used_mib",
-          latest: `${fmtInt(vramMib[vramMib.length - 1].y)} MiB`,
-          xLabel: "min",
-          series: [
-            ...(vramPct.length > 0
-              ? [
-                  {
-                    id: "pct",
-                    label: "占比",
-                    unit: "%",
-                    color: "var(--chart-2)",
-                    axis: "right" as const,
-                    points: vramPct,
-                  },
-                ]
-              : []),
-            {
-              id: "mib",
-              label: "MiB",
-              color: "var(--chart-4)",
-              axis: "left" as const,
-              points: vramMib,
-            },
-          ],
-        })
-      }
-
-      const tempPoints = samples
-        .filter(
-          (s) =>
-            typeof s.temperature_c === "number" &&
-            Number.isFinite(s.temperature_c),
-        )
-        .map((s) => ({ x: minutes(s), y: s.temperature_c as number }))
-      if (tempPoints.length > 0) {
-        out.push({
-          id: "gpu-temp",
-          title: "gpu/temperature_c",
-          latest: `${fmtFloat(tempPoints[tempPoints.length - 1].y, 1)} °C`,
-          xLabel: "min",
-          series: [
-            {
-              id: "temp",
-              label: "温度",
-              color: "var(--chart-3)",
-              unit: "°C",
-              points: tempPoints,
-            },
-          ],
-        })
-      }
-    }
-
     return out
   }, [metrics])
 
@@ -367,11 +269,6 @@ function fmtFloat(v: number, digits: number): string {
   if (!Number.isFinite(v)) return "—"
   if (Math.abs(v) >= 100) return v.toFixed(1)
   return v.toFixed(digits)
-}
-
-function fmtInt(v: number): string {
-  if (!Number.isFinite(v)) return "—"
-  return Math.round(v).toString()
 }
 
 function fmtSci(v: number): string {

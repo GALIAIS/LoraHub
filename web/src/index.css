@@ -56,6 +56,64 @@
   &::-webkit-scrollbar { display: none; }
 }
 
+@utility analysis-fade-in {
+  animation: analysis-fade-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+@utility analysis-fade-in-stagger {
+  animation: analysis-fade-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--stagger-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+@utility analysis-bar-fill {
+  transform-origin: left center;
+  animation: analysis-bar-fill 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform;
+}
+
+@utility analysis-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(from var(--foreground) l c h / 0.06) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: analysis-shimmer 2.4s linear infinite;
+}
+
+@keyframes analysis-fade-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes analysis-bar-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes analysis-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analysis-fade-in,
+  .analysis-fade-in-stagger,
+  .analysis-bar-fill,
+  .analysis-shimmer {
+    animation: none !important;
+  }
+}
+
 :root {
   font-synthesis: none;
   text-rendering: optimizeLegibility;

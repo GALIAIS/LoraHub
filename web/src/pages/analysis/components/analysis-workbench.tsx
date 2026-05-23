@@ -23,6 +23,7 @@ import {
 } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
+import { EffectivenessPanel } from "./effectiveness-panel"
 import { MetricGrid } from "./metric-grid"
 import { AICard } from "../panels/ai-card"
 import { MetricsTable } from "../panels/metrics-table"
@@ -146,9 +147,17 @@ export function AnalysisWorkbench({
     <div className="flex flex-col min-h-0">
       <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
-      <div className="px-7 py-4 space-y-3">
+      <div className="px-7 py-4 space-y-4">
+        {/* Effectiveness insights — convergence / stability / overfit /
+            stage. Sits above the chart so users get the verdict before
+            squinting at the curve. */}
+        <EffectivenessPanel metrics={metrics.data ?? null} />
+
         {/* Loss panel — visual focus of the page (train + val + EMA). */}
-        <Card>
+        <Card
+          className="analysis-fade-in-stagger"
+          style={{ ["--stagger-delay" as string]: "320ms" }}
+        >
           <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
             <CardTitle className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
               损失曲线 · 综合视图
@@ -179,9 +188,12 @@ export function AnalysisWorkbench({
 
         {/* Detailed metrics — TensorBoard-style breakdown. One small
             card per scalar (loss/raw, loss/ema, loss/epoch_avg,
-            schedule/learning_rate, throughput.*, gpu.*) so the user
-            can isolate any signal without scanning a dense legend. */}
-        <div>
+            schedule/learning_rate, throughput.*) so the user can
+            isolate any signal without scanning a dense legend. */}
+        <div
+          className="analysis-fade-in-stagger"
+          style={{ ["--stagger-delay" as string]: "400ms" }}
+        >
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2 px-0.5">
             指标细分
           </div>
