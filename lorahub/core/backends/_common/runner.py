@@ -8,6 +8,13 @@ the terminal `done` event, and platform-aware graceful stop.
 Backends only differ in *how* a line gets translated into an event, so this
 module keeps the runner generic and takes a `parse_line` callable as a
 constructor argument.
+
+In addition to the structured event stream (``events.jsonl``), every line of
+trainer output is mirrored to ``workspace/training.log``. Without that file
+``training_assistant.diagnose_failure`` had nothing to grep over and the
+remediation hint "open training.log around the match" was a dead link.
+Disable with ``LORAHUB_DISABLE_TRAINING_LOG=1`` if disk pressure ever
+becomes a problem.
 """
 
 from __future__ import annotations
@@ -21,13 +28,18 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import IO
+from typing import IO, TextIO
 
 from lorahub.core.events import EventType, TrainingEvent
 
 EventListener = Callable[[TrainingEvent], None]
 LineParser = Callable[..., TrainingEvent | None]
+
+# Filename the diagnoser already looks for via _find_training_log; keep
+# them in sync if it ever moves.
+_TRAINING_LOG_FILENAME = "training.log"
 
 
 @dataclass(slots=True)
@@ -67,6 +79,14 @@ class SubprocessRunner:
         self._started_at: float | None = None
         self._lock = threading.RLock()
 
+        # ``training.log`` mirror. The file handle is opened in start()
+        # so workspace creation lives there alongside the other one-time
+        # setup; the lock serialises the two pump threads + the spawn
+        # banner so lines never interleave mid-token. Assigned to None
+        # when the env override disables the mirror entirely.
+        self._log_handle: TextIO | None = None
+        self._log_lock = threading.Lock()
+
         # Real-time pattern matcher. Imported lazily so this module
         # stays importable in environments where lorahub.api isn't on
         # the path (CLI-only invocations, doctor checks). The watcher
@@ -92,6 +112,7 @@ class SubprocessRunner:
                 raise RuntimeError(msg)
 
             self._workspace.mkdir(parents=True, exist_ok=True)
+            self._open_training_log()
             full_env = {**os.environ, **(self._env or {})}
             # Force the Python child to write stdout/stderr as UTF-8.
             #
@@ -202,6 +223,11 @@ class SubprocessRunner:
         rc = self._proc.wait()
         for t in self._pump_threads:
             t.join(timeout=5.0)
+        # Flush + close the training.log handle only after every pump
+        # thread has drained its pipe end. Closing earlier would
+        # truncate the tail of stderr, which is precisely the part the
+        # diagnoser cares about.
+        self._close_training_log(returncode=rc)
         with self._lock:
             if self._done_emitted:
                 return
@@ -218,7 +244,11 @@ class SubprocessRunner:
     def _pump(self, stream: IO[str], source: str) -> None:
         try:
             for raw in stream:
-                # Hand every raw line to the diagnostic watcher *first*
+                # Mirror the *raw* line (newline preserved when present)
+                # to training.log first so a crash in the parser or
+                # watcher can't lose user-visible trainer output.
+                self._write_training_log(raw, source=source)
+                # Hand every raw line to the diagnostic watcher *next*
                 # so that even lines the backend's parser would discard
                 # (Python tracebacks, library warnings) still get a
                 # shot at matching a failure-mode regex.
@@ -243,6 +273,110 @@ class SubprocessRunner:
                     job_id=self._job_id,
                 )
             )
+
+    # --------------------------------------------------------------- #
+    # training.log mirror
+    # --------------------------------------------------------------- #
+
+    def _open_training_log(self) -> None:
+        """Open ``workspace/training.log`` for append.
+
+        ``a`` mode preserves prior runs in the same workspace (resume,
+        rerun-in-place) so the diagnoser can still see what the *last*
+        crash printed even after a follow-up clean run. Failures here
+        are non-fatal — losing the mirror still leaves events.jsonl as
+        the source of truth, and any crash inside the trainer will
+        still surface via the structured event stream.
+        """
+        if os.environ.get("LORAHUB_DISABLE_TRAINING_LOG") == "1":
+            return
+        path = self._workspace / _TRAINING_LOG_FILENAME
+        try:
+            # Line-buffered text I/O so a SIGKILL doesn't strand a
+            # half-formed line of trainer output. utf-8 + replace
+            # mirrors the Popen pipe decode policy so a non-UTF-8 byte
+            # sequence in the trainer's locale can't blow up the
+            # mirror.
+            self._log_handle = path.open(
+                "a",
+                encoding="utf-8",
+                errors="replace",
+                buffering=1,
+            )
+        except OSError as exc:
+            # Surface the failure as an event so the user sees *why*
+            # the mirror is missing rather than silently degrading.
+            self._safe_emit(
+                TrainingEvent(
+                    type=EventType.log,
+                    payload={
+                        "level": "warning",
+                        "source": "runner",
+                        "message": f"could not open {path}: {exc!r}",
+                    },
+                    job_id=self._job_id,
+                )
+            )
+            self._log_handle = None
+            return
+        # Banner so multi-spawn workspaces (resume, retry) stay
+        # navigable when grepped by hand. Also helps diagnose_failure's
+        # tail-N look at the *current* run rather than blending in
+        # stale output from an earlier attempt.
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        argv_line = " ".join(self._argv)
+        with self._log_lock:
+            assert self._log_handle is not None
+            self._log_handle.write(
+                f"\n=== spawn {stamp} job_id={self._job_id} ===\n"
+                f"=== argv: {argv_line}\n"
+            )
+
+    def _write_training_log(self, raw: str, *, source: str) -> None:
+        """Append one trainer line to ``training.log``.
+
+        Lines that already end in a newline are written verbatim;
+        otherwise we add one so a partial final write (no terminating
+        \\n on the trainer side) doesn't fuse with the next pump line.
+        """
+        handle = self._log_handle
+        if handle is None or not raw:
+            return
+        # Many trainers prefix progress with \r for the same-line tqdm
+        # update trick. That collapses to nothing useful in a flat file
+        # and confuses ``grep`` / ``less``. Strip it once on the way in.
+        text = raw.lstrip("\r")
+        if not text:
+            return
+        if not text.endswith(("\n", "\r")):
+            text = text + "\n"
+        try:
+            with self._log_lock:
+                handle.write(text)
+        except (OSError, ValueError):
+            # ValueError fires when something else closed the handle
+            # between the None-check and the write (e.g. a kill timing
+            # out and racing _close). Swallow either case — the next
+            # write will see _log_handle=None.
+            self._log_handle = None
+
+    def _close_training_log(self, *, returncode: int | None) -> None:
+        handle = self._log_handle
+        if handle is None:
+            return
+        with self._log_lock:
+            if self._log_handle is None:
+                return
+            try:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                handle.write(f"=== exit {stamp} returncode={returncode} ===\n")
+            except (OSError, ValueError):
+                pass
+            with contextlib.suppress(OSError, ValueError):
+                handle.flush()
+            with contextlib.suppress(OSError, ValueError):
+                handle.close()
+            self._log_handle = None
 
     def wait(self, timeout: float | None = None) -> RunResult:
         if self._proc is None or self._started_at is None:
