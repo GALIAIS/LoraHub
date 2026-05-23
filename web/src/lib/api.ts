@@ -1,4 +1,5 @@
 import { useEventStream } from "./use-event-stream"
+import { reportError } from "./error-reporter"
 
 const API_BASE = "/api"
 
@@ -68,6 +69,45 @@ export class ApiError extends Error {
         typeof (f as PreflightFinding).message === "string",
     )
   }
+
+  /**
+   * Structured import-error detail, when the server returned one. The
+   * `/api/configs/import` endpoint emits `{type, message, line?, column?,
+   * snippet?, hint?, kind?}` so the UI can render the offending line and
+   * a Chinese-language remediation tip instead of the bare PyYAML
+   * scanner string. Null when the body doesn't have a recognisable
+   * detail object.
+   */
+  get importErrorDetail(): ImportErrorDetail | null {
+    const body = this.body
+    if (typeof body !== "object" || body === null) return null
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail !== "object" || detail === null) return null
+    const obj = detail as Record<string, unknown>
+    // Distinguish a real import-error envelope from any other random
+    // object body — the import endpoint always sets ``type``.
+    if (typeof obj.type !== "string") return null
+    return {
+      type: obj.type,
+      kind: typeof obj.kind === "string" ? obj.kind : undefined,
+      message: typeof obj.message === "string" ? obj.message : undefined,
+      line: typeof obj.line === "number" ? obj.line : undefined,
+      column: typeof obj.column === "number" ? obj.column : undefined,
+      snippet: typeof obj.snippet === "string" ? obj.snippet : undefined,
+      hint: typeof obj.hint === "string" ? obj.hint : undefined,
+    }
+  }
+}
+
+/** Server-emitted detail for a failed `/api/configs/import` request. */
+export interface ImportErrorDetail {
+  type: string
+  kind?: string
+  message?: string
+  line?: number
+  column?: number
+  snippet?: string
+  hint?: string
 }
 
 /** A blocker / warning emitted by the API's preflight layer.
@@ -1403,6 +1443,51 @@ export interface ArtifactRow {
   sample_count: number
 }
 
+function _reportTrainingEvent(ev: TrainingEvent, jobId: string | null): void {
+  const p = ev.payload ?? {}
+  const isOom = ev.type === "oom"
+  const isDiag = ev.type === "diagnostic_warning"
+  const isLog = ev.type === "log"
+  const logLevel = isLog ? String(p.level ?? "").toLowerCase() : ""
+  const category = isOom
+    ? "oom"
+    : isDiag
+      ? String(p.category ?? "diagnostic")
+      : isLog
+        ? "trainer_stderr"
+        : "runtime_error"
+  const title = isOom
+    ? "CUDA OOM"
+    : isDiag
+      ? String(p.message ?? "diagnostic warning")
+      : isLog
+        ? `${logLevel || "error"}: ${String(p.message ?? "").slice(0, 160)}`
+        : String(p.error ?? p.message ?? "training error")
+  const message = isOom
+    ? String(p.message ?? "CUDA out of memory")
+    : isDiag
+      ? String(p.remediation ?? "")
+      : isLog
+        ? String(p.message ?? "")
+        : String(p.error ?? p.message ?? p.traceback ?? "")
+  const severity =
+    isDiag
+      ? ((p.severity as "warn") ?? "warn")
+      : isLog && (logLevel === "warning" || logLevel === "warn")
+        ? "warn"
+        : "error"
+  void reportError({
+    severity,
+    source: "backend.job.stream",
+    category,
+    title: title.slice(0, 200),
+    message: message.slice(0, 5000),
+    stack: typeof p.traceback === "string" ? p.traceback : null,
+    jobId,
+    context: { event_type: ev.type, log_source: p.source, level: logLevel },
+  })
+}
+
 /**
  * Live event stream. Prefers SSE (browser-native reconnect + Last-Event-ID
  * resume) and falls back to WebSocket if EventSource isn't available or
@@ -1430,8 +1515,18 @@ export function useJobStream(jobId: string | null) {
     // browser memory. 500 entries comfortably covers the recent
     // window the events tab paints; older context lives in the
     // events.jsonl file on disk.
-    reduce: (prev, parsed) =>
-      [...prev, parsed as TrainingEvent].slice(-500),
+    reduce: (prev, parsed) => {
+      const ev = parsed as TrainingEvent
+      if (ev.type === "error" || ev.type === "oom" || ev.type === "diagnostic_warning") {
+        _reportTrainingEvent(ev, jobId)
+      } else if (ev.type === "log") {
+        const lvl = String((ev.payload as { level?: string })?.level ?? "").toLowerCase()
+        if (lvl === "error" || lvl === "critical" || lvl === "fatal" || lvl === "warning" || lvl === "warn") {
+          _reportTrainingEvent(ev, jobId)
+        }
+      }
+      return [...prev, ev].slice(-500)
+    },
     shouldDrop: (parsed) =>
       (parsed as { type?: string }).type === "ping",
   })
@@ -2104,6 +2199,8 @@ export async function imageStudioSmartCaption(params: {
   captionMode?: "general" | "style" | "character"
   triggerWord?: string
   stripStyleTags?: boolean
+  /** Skip images that already have a non-empty .txt sidecar. Default true. */
+  skipExisting?: boolean
   /** Optional progress callback. Fires after each poll with the latest snapshot. */
   onProgress?: (snap: {
     processed: number
@@ -2215,7 +2312,9 @@ export async function imageStudioBatchCaption(params: {
   recursive?: boolean
   task?: string
   mergeStrategy?: string
-}): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
+  /** Skip images that already have a non-empty .txt sidecar. Default true. */
+  skipAnnotated?: boolean
+}): Promise<{ processed: number; skipped?: number; results: unknown[]; errors: unknown[] }> {
   return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
     "/image-studio/ai/caption",
     {
@@ -2229,9 +2328,36 @@ export async function imageStudioBatchQuality(params: {
   path: string
   recursive?: boolean
   task?: string
-}): Promise<{ processed: number; results: unknown[]; errors: unknown[] }> {
-  return http<{ processed: number; results: unknown[]; errors: unknown[] }>(
+  /** Skip images that already have an AI quality score. Default true. */
+  skipScored?: boolean
+}): Promise<{ processed: number; skipped?: number; results: unknown[]; errors: unknown[] }> {
+  return http<{ processed: number; skipped?: number; results: unknown[]; errors: unknown[] }>(
     "/image-studio/ai/quality",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
+}
+
+export interface ImageStudioTriggerWordsResult {
+  processed: number
+  skipped?: number
+  results: { path: string; triggers: string[] }[]
+  errors: { path: string; error: string }[]
+  /** Top-8 trigger phrases across the entire dataset, ranked by occurrence. */
+  dataset_top: { trigger: string; count: number }[]
+}
+
+export async function imageStudioBatchTriggerWords(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+  /** Skip images that already have a stored trigger word suggestion. Default true. */
+  skipAnalyzed?: boolean
+}): Promise<ImageStudioTriggerWordsResult> {
+  return http<ImageStudioTriggerWordsResult>(
+    "/image-studio/ai/trigger-words",
     {
       method: "POST",
       body: JSON.stringify(params),
