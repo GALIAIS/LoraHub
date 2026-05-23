@@ -111,6 +111,137 @@ def validate_config(req: ValidateConfigRequest) -> dict[str, Any]:
     }
 
 
+# ----------------------------------------------------------------------- #
+# /configs/llm-advise — LLM-driven recommendation
+#
+# The user clicks "智能推荐", types their intent in a textarea (e.g.
+# "character LoRA, ~4h train budget"), and the backend hands the
+# already-configured AI provider a strict-format prompt that includes
+# hardware budget + dataset stats + the schema field catalogue. The
+# LLM returns a full config + per-field patches; the route validates
+# the proposal and returns it to the UI so the user can accept all /
+# accept-some / discard.
+# ----------------------------------------------------------------------- #
+
+
+class LlmAdviseRequest(BaseModel):
+    """User-facing request body for ``/api/configs/llm-advise``.
+
+    ``currentCfg`` mirrors the form state (camelCase, before
+    schema-validation) so the LLM can observe the user's starting
+    point. ``intent`` is a free-form text the user types in the UI's
+    textarea — the prompt template inlines it verbatim.
+
+    Hardware / dataset fields are optional: when omitted the route
+    probes nvidia-smi + ``count_images`` itself so the LLM still
+    sees real data without forcing the UI to plumb everything
+    through.
+    """
+
+    currentCfg: dict[str, Any]
+    intent: str = ""
+    vramMib: int | None = None
+    gpuName: str | None = None
+    datasetPath: str | None = None
+    datasetImageCount: int | None = None
+
+
+class LlmAdviseResponse(BaseModel):
+    rationale: str
+    patches: list[dict[str, Any]]
+    fullConfig: dict[str, Any]
+    validationIssues: list[dict[str, Any]]
+    providerId: str
+    modelId: str
+    elapsedMs: int
+
+
+@router.post("/configs/llm-advise", response_model=LlmAdviseResponse)
+def llm_advise_config(req: LlmAdviseRequest) -> LlmAdviseResponse:
+    """Generate a fresh training config via the configured LLM.
+
+    The actual prompt assembly + validate + parse pipeline lives in
+    ``lorahub.api.config_advisor_llm.run_advisor`` — this route is
+    just the HTTP-facing seam.
+    """
+    from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.config_advisor_llm import (  # noqa: PLC0415
+        AdvisorError,
+        AdvisorRequest,
+        DatasetContext,
+        HardwareContext,
+        run_advisor,
+    )
+
+    ai_store = getattr(app_module, "_ai_store", None)
+    if ai_store is None:
+        raise HTTPException(status_code=503, detail="AI store not initialised")
+
+    # Resolve hardware budget. Caller-supplied values win; otherwise
+    # probe nvidia-smi for VRAM. We never block the route on a slow
+    # probe — anything that takes longer than a few seconds short-
+    # circuits to None and lets the LLM mention "未提供" in its
+    # rationale rather than fabricate numbers.
+    vram_mib = req.vramMib
+    gpu_name = req.gpuName
+    if vram_mib is None or gpu_name is None:
+        try:
+            from lorahub.core.config.scaffold import (  # noqa: PLC0415
+                detect_gpu_vram_mib,
+            )
+
+            if vram_mib is None:
+                vram_mib = detect_gpu_vram_mib()
+        except Exception:  # noqa: BLE001
+            pass
+
+    hardware = HardwareContext(gpu_name=gpu_name, vram_mib=vram_mib)
+
+    # Dataset stats — count images on disk if a path was supplied.
+    dataset_ctx: DatasetContext | None = None
+    image_count = req.datasetImageCount
+    if req.datasetPath:
+        try:
+            from pathlib import Path as _Path  # noqa: PLC0415
+            from lorahub.core.config.scaffold import (  # noqa: PLC0415
+                count_images,
+            )
+
+            ds_path = _Path(req.datasetPath)
+            if image_count is None and ds_path.is_dir():
+                image_count = count_images(ds_path)
+        except Exception:  # noqa: BLE001
+            pass
+        dataset_ctx = DatasetContext(
+            path=req.datasetPath,
+            image_count=image_count,
+            caption_coverage=None,
+        )
+
+    advisor_req = AdvisorRequest(
+        current_config=req.currentCfg,
+        intent=req.intent or "",
+        hardware=hardware,
+        dataset=dataset_ctx,
+    )
+    try:
+        outcome = run_advisor(ai_store, advisor_req)
+    except AdvisorError as exc:
+        # User-actionable failure (route not configured, LLM returned
+        # garbage, etc.) — surface as a 422 with a descriptive detail
+        # so the UI can render the message verbatim in the dialog.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return LlmAdviseResponse(
+        rationale=outcome.rationale,
+        patches=outcome.patches,
+        fullConfig=outcome.full_config,
+        validationIssues=outcome.validation_issues,
+        providerId=outcome.provider_id,
+        modelId=outcome.model_id,
+        elapsedMs=outcome.elapsed_ms,
+    )
+
+
 @router.get("/configs")
 def list_configs() -> dict[str, Any]:
     """List YAML config templates discovered under the configs/ directory."""

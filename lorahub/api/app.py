@@ -217,6 +217,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
             ("error.diagnose", "训练或安装失败时给修复建议"),
             ("quality.score", "VLM 评估图片质量 (0-100 + 优/中/差)"),
             ("trigger.suggest", "根据数据集特征建议 trigger word"),
+            ("config.recommend", "智能推荐:LLM 根据硬件 / 数据集 / 用户意图给训练配置建议"),
         )
         for task_id, hint in _LORAHUB_TASKS:
             if _ai_store.get_route(task_id) is None:

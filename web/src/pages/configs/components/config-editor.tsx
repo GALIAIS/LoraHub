@@ -7,6 +7,8 @@ import { toastApiError } from "@/lib/toast-api-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
+import { LlmAdvisorButton } from "@/components/config-form/llm-advisor-button"
+import { setIn as setByPath } from "@/components/config-form/types"
 import type { Mode } from "../types"
 import { buildDefaults } from "../utils"
 import { ErrorBanner } from "./error-banner"
@@ -147,6 +149,22 @@ export function ConfigEditor({
         >
           <CheckCheck className="size-3" /> 校验
         </Button>
+        {draft && (
+          <LlmAdvisorButton
+            currentCfg={draft as unknown as Record<string, unknown>}
+            onPatch={(field, value) => {
+              setDraft((prev) => {
+                if (!prev) return prev
+                return setByPath(
+                  prev as unknown as Record<string, unknown>,
+                  field.split("."),
+                  value,
+                ) as ConfigFormValue
+              })
+            }}
+            onApply={(next) => setDraft(next as unknown as ConfigFormValue)}
+          />
+        )}
         <Button
           size="sm"
           variant="outline"

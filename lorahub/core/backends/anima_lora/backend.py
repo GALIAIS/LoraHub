@@ -100,6 +100,16 @@ class AnimaLoraBackend:
         except CompilationError as e:
             issues.append(ValidationIssue(Severity.error, "backend.animaLora", str(e)))
 
+        # Cross-field consistency rules — torch.compile vs offload, EMA vs
+        # cudagraph_trees, 8bit-optimizer requires bnb, network/alpha ratio,
+        # validation_split_num vs useCmmd, etc. See policies.py for the
+        # full catalogue and rationale per rule.
+        from lorahub.core.backends.anima_lora.policies import (  # noqa: PLC0415
+            check_cross_field_conflicts,
+        )
+
+        issues.extend(check_cross_field_conflicts(cfg))
+
         if not cfg.base_model.checkpoint.exists():
             issues.append(
                 ValidationIssue(

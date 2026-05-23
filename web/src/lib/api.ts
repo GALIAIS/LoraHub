@@ -877,6 +877,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ config }),
     }),
+  llmAdviseConfig: (body: {
+    currentCfg: Record<string, unknown>
+    intent?: string
+    vramMib?: number | null
+    gpuName?: string | null
+    datasetPath?: string | null
+    datasetImageCount?: number | null
+  }) =>
+    http<{
+      rationale: string
+      patches: Array<{ field: string; value: unknown; reason: string }>
+      fullConfig: Record<string, unknown>
+      validationIssues: Array<{
+        severity: "info" | "warning" | "error"
+        field: string
+        message: string
+      }>
+      providerId: string
+      modelId: string
+      elapsedMs: number
+    }>("/configs/llm-advise", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   saveConfig: (
     name: string,
     config: Record<string, unknown>,

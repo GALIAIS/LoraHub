@@ -85,6 +85,11 @@ schedule:
   gradAccum: 4
   seed: 42
 
+# 8GB 显式关 sampling — schema 默认是 enabled=true,默认值在 8GB 卡上
+# 训练+采样并行会 OOM。要看效果训练完单独跑 inference。
+sampling:
+  enabled: false
+
 output:
   name: anima_lora_8gb
 
