@@ -28,6 +28,98 @@ router = APIRouter(prefix="/api")
 _MAX_IMPORT_BYTES = 1 * 1024 * 1024
 
 
+# Heuristics for content the user likely pasted by accident. We surface a
+# targeted hint when the file looks like one of these instead of dumping
+# the raw PyYAML scanner error — the scanner message ("mapping values are
+# not allowed here") tells you nothing about *why* the file is wrong if
+# you didn't write it yourself.
+_NON_YAML_SIGNATURES: tuple[tuple[str, str, str], ...] = (
+    # (regex pattern, kind, friendly hint shown to the user)
+    (
+        r"^\s*<!doctype\s+html|^\s*<html|^\s*<head\b",
+        "html",
+        "文件看起来是 HTML 页面源码,而不是 YAML 配置。常见原因:从浏览器 "
+        "「另存为」保存了网页本体而不是 raw 文本,或复制粘贴时连同页面代码"
+        "一起拷贝了。请到 GitHub 上点 Raw 按钮后再保存,或确认文件首行是 "
+        "schemaVersion / baseModel 等 YAML 字段。",
+    ),
+    (
+        r"--[A-Za-z][\w-]*\s*:.*[,;]\s*$|^\s*:root\s*\{|^\s*\.[\w-]+\s*\{",
+        "css",
+        "文件中混入了 CSS 代码片段(如 `--fontStack-monospace: \"...\"` 或 "
+        "`:root { ... }`),YAML 解析器无法处理。这通常是从某个网页直接拷贝 "
+        "时连同样式表一起复制了。请重新打开**原始 YAML 文件**(通常在 "
+        "`configs/` 目录下,后缀 `.yaml`)再上传。",
+    ),
+    (
+        r"^\s*\{[\s\S]*\"[\w-]+\"\s*:\s*",
+        "json",
+        "文件内容是 JSON 而不是 YAML。LoraHub 的导入端点只接受 YAML(.yaml / .yml)。"
+        "如需从 JSON 转换,可在本地用 `python -c \"import json,yaml;"
+        "yaml.safe_dump(json.load(open('x.json')))\"` 转换后再上传。",
+    ),
+    (
+        r"^\s*#\s*!.*python|^\s*import\s+\w+|^\s*from\s+\w+\s+import\s",
+        "python",
+        "文件像是 Python 脚本(包含 import / from 等关键字)。你可能误选了 "
+        "scripts/ 目录下的训练脚本,而不是 configs/ 目录下的 YAML 配置。",
+    ),
+)
+
+
+def _detect_non_yaml_kind(text: str) -> tuple[str, str] | None:
+    """Identify common 'wrong file type' patterns.
+
+    Returns ``(kind, hint)`` if the head of the file matches one of the
+    known accidental-paste signatures, or ``None`` if nothing matches.
+    Only the first 4 KiB of the file is scanned — that's enough to spot
+    HTML doctypes / CSS rules / JSON braces while staying fast for the
+    legitimate-but-malformed case where the rest of the file might be
+    real YAML.
+    """
+    head = text[:4096]
+    for pattern, kind, hint in _NON_YAML_SIGNATURES:
+        if re.search(pattern, head, re.IGNORECASE | re.MULTILINE):
+            return kind, hint
+    return None
+
+
+def _yaml_error_detail(exc: yaml.YAMLError, text: str) -> dict[str, Any]:
+    """Build a structured error payload the frontend can render nicely.
+
+    Always includes the raw PyYAML message + line / column when present.
+    Adds a friendly ``hint`` field when the file looks like HTML / CSS /
+    JSON / Python — typical accidental-paste cases that a bare scanner
+    error doesn't hint at.
+    """
+    payload: dict[str, Any] = {
+        "type": "yaml_parse_error",
+        "message": str(exc),
+    }
+    mark = getattr(exc, "problem_mark", None)
+    if mark is not None:
+        # PyYAML uses 0-based line/column; humans expect 1-based.
+        payload["line"] = mark.line + 1
+        payload["column"] = mark.column + 1
+        # Pull the offending line so the frontend can render it inline
+        # without the user having to open the file.
+        try:
+            offending = text.splitlines()[mark.line]
+            # Clip absurdly long lines (minified HTML etc).
+            if len(offending) > 200:
+                offending = offending[:200] + "…"
+            payload["snippet"] = offending
+        except IndexError:
+            pass
+
+    detected = _detect_non_yaml_kind(text)
+    if detected is not None:
+        kind, hint = detected
+        payload["kind"] = kind
+        payload["hint"] = hint
+    return payload
+
+
 class ValidateConfigRequest(BaseModel):
     config: dict[str, Any]
 
@@ -331,15 +423,55 @@ async def import_config(
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=422, detail="config file must be UTF-8") from exc
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "encoding_error",
+                "message": "config file must be UTF-8",
+                "hint": (
+                    "文件不是 UTF-8 编码。Windows 记事本另存为时请选择 "
+                    "「UTF-8」(不要选「UTF-8 with BOM」或 ANSI)。"
+                ),
+            },
+        ) from exc
+
+    # Pre-flight check before YAML parsing: if the file looks like an
+    # entirely different format we can give a much more specific
+    # diagnostic than PyYAML's scanner ever will.
+    detected = _detect_non_yaml_kind(text)
+    if detected is not None:
+        kind, hint = detected
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "wrong_file_type",
+                "kind": kind,
+                "message": f"file does not look like YAML (detected: {kind})",
+                "hint": hint,
+            },
+        )
 
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise HTTPException(status_code=422, detail=f"invalid yaml: {exc}") from exc
+        raise HTTPException(
+            status_code=422,
+            detail=_yaml_error_detail(exc, text),
+        ) from exc
 
     if not isinstance(data, dict):
-        raise HTTPException(status_code=422, detail="config yaml must be a mapping")
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "not_a_mapping",
+                "message": "config yaml must be a mapping",
+                "hint": (
+                    "YAML 文件根节点必须是 key: value 形式的映射。"
+                    "如果你看到的是一个列表(以 - 开头)或纯标量字符串,"
+                    "说明文件格式不对。"
+                ),
+            },
+        )
 
     try:
         cfg = TrainingConfig.model_validate(data)

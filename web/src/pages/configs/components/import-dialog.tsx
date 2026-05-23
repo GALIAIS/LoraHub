@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Upload } from "lucide-react"
-import { api } from "@/lib/api"
+import { AlertTriangle, Upload } from "lucide-react"
+import { ApiError, api, type ImportErrorDetail } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -40,6 +40,11 @@ export function ImportDialog({
   const [name, setName] = useState("")
   const [overwrite, setOverwrite] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  // When the server returns a structured import-error detail (yaml
+  // parse failure with line / hint / etc.) we render it as a richer
+  // panel below the bare error text. Null = render the legacy single
+  // line view.
+  const [errorDetail, setErrorDetail] = useState<ImportErrorDetail | null>(null)
 
   useEffect(() => {
     if (!open) {
@@ -47,6 +52,7 @@ export function ImportDialog({
       setName("")
       setOverwrite(false)
       setErrorMsg(null)
+      setErrorDetail(null)
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }, [open])
@@ -64,6 +70,18 @@ export function ImportDialog({
       onImported(resp.name)
     },
     onError: (err) => {
+      if (err instanceof ApiError) {
+        const detail = err.importErrorDetail
+        if (detail) {
+          setErrorDetail(detail)
+          // Use the localized hint as the headline when present; the
+          // raw message becomes secondary detail rendered next to a
+          // line snippet.
+          setErrorMsg(detail.hint ?? detail.message ?? err.message)
+          return
+        }
+      }
+      setErrorDetail(null)
       setErrorMsg(err instanceof Error ? err.message : String(err))
     },
   })
@@ -122,8 +140,34 @@ export function ImportDialog({
         </div>
 
         {errorMsg && (
-          <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
-            {errorMsg}
+          <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive whitespace-pre-wrap break-words space-y-2">
+            <div className="flex items-start gap-1.5">
+              <AlertTriangle className="size-3.5 mt-[1px] shrink-0" />
+              <span className="font-medium leading-snug">{errorMsg}</span>
+            </div>
+            {errorDetail?.snippet && (
+              <div className="space-y-1 pl-5">
+                <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
+                  第 {errorDetail.line ?? "?"} 行
+                  {typeof errorDetail.column === "number"
+                    ? ` 第 ${errorDetail.column} 列`
+                    : ""}
+                </div>
+                <pre className="font-mono text-[11px] leading-relaxed bg-muted/40 border border-border/60 rounded-[3px] px-2 py-1 overflow-x-auto text-foreground/85">
+                  {errorDetail.snippet}
+                </pre>
+              </div>
+            )}
+            {errorDetail?.message && errorDetail.hint && (
+              <details className="pl-5 text-muted-foreground">
+                <summary className="cursor-pointer select-none text-[11px] hover:text-foreground">
+                  查看原始 YAML 解析器消息
+                </summary>
+                <pre className="font-mono text-[10.5px] leading-relaxed mt-1 whitespace-pre-wrap break-words">
+                  {errorDetail.message}
+                </pre>
+              </details>
+            )}
           </div>
         )}
 
