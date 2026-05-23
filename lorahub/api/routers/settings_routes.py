@@ -30,6 +30,11 @@ _SECRET_FIELDS: tuple[str, ...] = (
     "huggingface_token",
     "wandb_api_key",
     "modelscope_token",
+    # GitLab / Gitea / Webhook PAT for the error report fan-out.
+    # Same masking + "echo == keep prior" round-trip rules so an
+    # unchanged token survives the form even though we never expose
+    # it to the UI in plaintext after first save.
+    "error_upstream_gitlab_token",
 )
 
 # Path-shaped fields use ``_norm`` (empty string == clear).
@@ -48,6 +53,17 @@ _PATH_FIELDS: tuple[str, ...] = (
     "pypi_index_url",
     "torch_index_url",
     "download_proxy",
+)
+
+# Free-form text fields that aren't path-shaped but should still
+# round-trip as-is — empty string clears them, otherwise persist
+# verbatim. Used by the error-upstream config block so users can
+# blank a value to fall back to env vars.
+_FREEFORM_TEXT_FIELDS: tuple[str, ...] = (
+    "error_upstream_gitlab_base_url",
+    "error_upstream_gitlab_repo",
+    "error_upstream_webhook_url",
+    "error_upstream_webhook_auth_header",
 )
 
 
@@ -101,6 +117,16 @@ class UpdateSettingsRequest(BaseModel):
     auto_resume_max_attempts: int | None = None
     terminal_unrestricted: bool | None = None
     terminal_command_timeout_s: int | None = None
+    # Error report fan-out — see Settings.error_upstream_*.
+    # All but the channel + auto-severity are free-form strings.
+    # Empty string == clear (fall back to env var for the token).
+    error_upstream_channel: str | None = None
+    error_upstream_gitlab_base_url: str | None = None
+    error_upstream_gitlab_repo: str | None = None
+    error_upstream_gitlab_token: str | None = None
+    error_upstream_webhook_url: str | None = None
+    error_upstream_webhook_auth_header: str | None = None
+    error_upstream_auto_severity: str | None = None
 
 
 def _norm(v: str | None) -> str | None:
@@ -191,6 +217,34 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             continue
         if key in _PATH_FIELDS:
             updates[key] = _norm(raw)
+            continue
+        if key in _FREEFORM_TEXT_FIELDS:
+            # Strip whitespace; empty becomes "" so the user can
+            # explicitly clear a value (vs paths where empty -> None).
+            # The dataclass default is "" anyway, so writing "" is
+            # equivalent to "fall back to env var / channel default".
+            if raw is None:
+                # Pydantic's exclude_unset already filters "key not
+                # in payload" — a literal None means the user sent
+                # null, which we treat as "clear".
+                updates[key] = ""
+            else:
+                updates[key] = str(raw).strip()
+            continue
+        if key == "error_upstream_channel":
+            updates[key] = _validate_choice(
+                "error_upstream_channel",
+                (raw or current.error_upstream_channel or "off").strip() or "off",
+                {"off", "gitlab", "gitea", "webhook"},
+            )
+            continue
+        if key == "error_upstream_auto_severity":
+            updates[key] = _validate_choice(
+                "error_upstream_auto_severity",
+                (raw or current.error_upstream_auto_severity or "error").strip()
+                or "error",
+                {"off", "error", "all"},
+            )
             continue
         # Choice fields — validated then written verbatim. None means
         # "client sent null, treat as clear/default" except for booleans

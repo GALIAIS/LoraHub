@@ -2096,6 +2096,53 @@ def test_settings_persists_max_concurrent_jobs(client: TestClient) -> None:
     assert "max_concurrent_jobs" in r_bad.json()["detail"]
 
 
+def test_settings_persists_error_upstream_block(client: TestClient) -> None:
+    """The error-report fan-out block round-trips through PUT/GET.
+
+    Regression: ``UpdateSettingsRequest`` was missing every
+    ``error_upstream_*`` field, so pydantic silently dropped them and
+    the UI's "保存" looked successful while the disk file still held
+    ``channel='off'``. Validation tightening keeps the channel and
+    auto-severity selectors honest.
+    """
+    payload = {
+        "error_upstream_channel": "gitea",
+        "error_upstream_gitlab_base_url": "https://git.galiais.com",
+        "error_upstream_gitlab_repo": "Shiro/LoraHubReport",
+        "error_upstream_gitlab_token": "tok-1234567890abcdef",
+        "error_upstream_auto_severity": "all",
+    }
+    r = client.put("/api/settings", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()["settings"]
+    assert body["error_upstream_channel"] == "gitea"
+    assert body["error_upstream_gitlab_base_url"] == "https://git.galiais.com"
+    assert body["error_upstream_gitlab_repo"] == "Shiro/LoraHubReport"
+    # Token is masked in the GET-shaped response, but the boolean
+    # mirror confirms it landed.
+    assert body["has_error_upstream_gitlab_token"] is True
+    assert body["error_upstream_auto_severity"] == "all"
+
+    # Sending the masked echo back keeps the prior token (no clobber).
+    masked = body["error_upstream_gitlab_token"]
+    r2 = client.put(
+        "/api/settings",
+        json={"error_upstream_gitlab_token": masked},
+    )
+    assert r2.status_code == 200
+    # Empty string clears the token (falls back to env var at runtime).
+    r3 = client.put("/api/settings", json={"error_upstream_gitlab_token": ""})
+    assert r3.status_code == 200
+    assert r3.json()["settings"]["has_error_upstream_gitlab_token"] is False
+
+    # Unknown channel is rejected — the validator must catch typos.
+    r_bad = client.put(
+        "/api/settings", json={"error_upstream_channel": "github"},
+    )
+    assert r_bad.status_code == 422
+    assert "error_upstream_channel" in r_bad.json()["detail"]
+
+
 def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     from lorahub.api.settings import Settings, env_overrides
 
