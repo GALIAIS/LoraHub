@@ -119,6 +119,15 @@ lorahub/_version.py
 *-local.err
 *-local.out
 
+# One-off Playwright probe scripts and their captures. These are
+# debugging artefacts for transient UI issues; the fixes land in the
+# product code, the probes themselves never need to be archived.
+web/scripts/probe-*.mjs
+web/scripts/perf-route-*.mjs
+web/scripts/datasets-stuck.png
+web/scripts/probe-*.png
+web/datasets-probe-output.txt
+
 # Vendored anima_lora — leftovers from upstream's own tooling that
 # shouldn't follow into our repo. The vendored source itself is
 # committed (see external/anima_lora/VENDORED.md for upstream sync
