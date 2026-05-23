@@ -193,6 +193,10 @@ def _enqueue_launch(
             return
         sink(ev)
         state.registry.record_event(job.id, ev)
+        if ev.type in (EventType.error, EventType.oom, EventType.diagnostic_warning):
+            _report_live_event(job, ev)
+        elif ev.type is EventType.log and _is_error_log(ev):
+            _report_live_event(job, ev)
         if ev.type is EventType.checkpoint_saved:
             worker = preview_worker_ref.get("worker")
             if worker is not None:
@@ -581,6 +585,96 @@ def _report_job_failure(job: JobRecord, *, returncode: int | None) -> None:
         )
     except Exception:  # noqa: BLE001
         log.exception("failed to record job-failure error report for %s", job.id)
+
+
+_LOG_ERROR_LEVELS = frozenset({"error", "critical", "fatal", "warning", "warn"})
+
+
+def _is_error_log(ev: TrainingEvent) -> bool:
+    """Whether a ``log`` event from a backend parser should funnel into the error registry.
+
+    diffusion-pipe and anima_lora parsers don't aggregate tracebacks; they
+    emit single-line ``EventType.log`` events with ``payload.level="error"``
+    when ``_looks_like_error(line)`` matches. kohya does the same for any
+    error line that didn't match a traceback-start pattern. Without this
+    bridge those error lines never reach ``capture(...)``.
+    """
+    payload = ev.payload or {}
+    level = str(payload.get("level", "")).lower()
+    return level in _LOG_ERROR_LEVELS
+
+
+def _report_live_event(job: JobRecord, ev: TrainingEvent) -> None:
+    """Capture error/oom/diagnostic_warning/error-level-log events into the error registry in real time."""
+    try:
+        from lorahub.api.error_reporter import capture  # noqa: PLC0415
+
+        payload = ev.payload or {}
+        if ev.type is EventType.oom:
+            capture(
+                severity="error",
+                source="backend.job",
+                category="oom",
+                title=f"CUDA OOM during job {job.id[-12:]}",
+                message=str(payload.get("message", "CUDA out of memory")),
+                context={"event_payload": payload},
+                job_id=job.id,
+            )
+        elif ev.type is EventType.error:
+            msg = str(
+                payload.get("error")
+                or payload.get("message")
+                or payload.get("traceback")
+                or "training error"
+            )
+            capture(
+                severity="error",
+                source="backend.job",
+                category="runtime_error",
+                title=f"error event in job {job.id[-12:]}",
+                message=msg,
+                stack=str(payload.get("traceback")) if payload.get("traceback") else None,
+                context={"event_payload": payload},
+                job_id=job.id,
+            )
+        elif ev.type is EventType.diagnostic_warning:
+            sev = payload.get("severity", "warn")
+            capture(
+                severity=sev if sev in ("info", "warn", "error", "fatal") else "warn",
+                source="backend.job",
+                category=str(payload.get("category", "diagnostic")),
+                title=str(payload.get("message", "diagnostic warning")),
+                message=str(payload.get("remediation", "")),
+                context={
+                    "evidence": payload.get("evidence"),
+                    "source_pipe": payload.get("source"),
+                },
+                job_id=job.id,
+            )
+        elif ev.type is EventType.log:
+            level = str(payload.get("level", "")).lower()
+            severity = (
+                "error"
+                if level in ("error", "critical", "fatal")
+                else "warn"
+            )
+            message = str(payload.get("message", "")).strip()
+            if not message:
+                return
+            capture(
+                severity=severity,
+                source="backend.job",
+                category="trainer_stderr",
+                title=f"{level or 'error'}: {message[:160]}",
+                message=message,
+                context={
+                    "log_source": payload.get("source"),
+                    "level": level,
+                },
+                job_id=job.id,
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("failed to report live event for job %s", job.id)
 
 
 __all__ = [
