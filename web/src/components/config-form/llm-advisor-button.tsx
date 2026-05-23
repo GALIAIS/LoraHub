@@ -3,6 +3,7 @@ import { Sparkles, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { api } from "@/lib/api"
+import { fieldDisplay } from "@/lib/field-labels"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -228,13 +229,19 @@ function AdvisorResultPane({
             LLM 建议触发了以下校验提示
           </div>
           <ul className="space-y-0.5">
-            {result.validationIssues.map((iss, i) => (
-              <li key={i} className="text-[11px] font-mono">
-                <span className="opacity-60">[{iss.severity}]</span>{" "}
-                <span>{iss.field}</span>:{" "}
-                <span className="text-foreground/80">{iss.message}</span>
-              </li>
-            ))}
+            {result.validationIssues.map((iss, i) => {
+              const fd = fieldDisplay(iss.field)
+              return (
+                <li key={i} className="text-[11px]">
+                  <span className="opacity-60">[{iss.severity}]</span>{" "}
+                  <span className="font-medium">{fd.label}</span>
+                  {fd.hasLabel && (
+                    <span className="ml-1 font-mono text-[10px] opacity-60">{fd.raw}</span>
+                  )}
+                  <span className="text-foreground/80">: {iss.message}</span>
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}
@@ -259,9 +266,7 @@ function AdvisorResultPane({
                 >
                   <div className="flex items-start gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[11px] font-mono text-foreground/85 truncate">
-                        {p.field}
-                      </div>
+                      <PatchFieldHeader field={p.field} />
                       <div className="mt-0.5 text-[11px] flex items-center gap-1.5">
                         <span className="font-mono text-muted-foreground line-through">
                           {fmtValue(cur)}
@@ -335,4 +340,18 @@ function fmtValue(v: unknown): string {
   if (typeof v === "string") return v.length > 40 ? `${v.slice(0, 37)}…` : v
   if (typeof v === "number" || typeof v === "boolean") return String(v)
   return JSON.stringify(v)
+}
+
+function PatchFieldHeader({ field }: { field: string }) {
+  const fd = fieldDisplay(field)
+  return (
+    <div className="text-[11px] truncate">
+      <span className="text-foreground/85 font-medium">{fd.label}</span>
+      {fd.hasLabel && (
+        <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">
+          {fd.raw}
+        </span>
+      )}
+    </div>
+  )
 }

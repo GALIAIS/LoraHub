@@ -16,6 +16,7 @@
 import { toast } from "sonner"
 import { ApiError, type PreflightFinding } from "@/lib/api"
 import { reportError } from "@/lib/error-reporter"
+import { fieldLabelFor, prettifyFieldPath } from "@/lib/field-labels"
 
 export interface ToastApiErrorOptions {
   /** Headline shown as the toast title. */
@@ -75,12 +76,18 @@ export function toastApiError(
 
 function renderFindingsDescription(findings: PreflightFinding[]): string {
   // sonner accepts a string OR a ReactNode; we pick string to keep this
-  // helper framework-light. Each line carries the field + message;
-  // remediation goes on a follow-up indented line so the text stays
-  // scannable in the small toast viewport.
+  // helper framework-light. Each line carries the friendly Chinese
+  // label first (so first-time users can find the affected control),
+  // then the raw dotted path in parentheses for power users, then the
+  // message; remediation goes on a follow-up indented line so the
+  // text stays scannable in the small toast viewport.
   return findings
     .map((f) => {
-      const head = `[${f.severity}] ${f.field}: ${f.message}`
+      const friendly = fieldLabelFor(f.field) ?? prettifyFieldPath(f.field)
+      const showRaw = friendly !== f.field
+      const head = showRaw
+        ? `[${f.severity}] ${friendly} (${f.field}): ${f.message}`
+        : `[${f.severity}] ${friendly}: ${f.message}`
       return f.remediation ? `${head}\n  → ${f.remediation}` : head
     })
     .join("\n")

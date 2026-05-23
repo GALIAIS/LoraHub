@@ -1,5 +1,6 @@
 import { AlertTriangle, Gauge } from "lucide-react"
 import { api } from "@/lib/api"
+import { fieldDisplay } from "@/lib/field-labels"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 
@@ -53,14 +54,25 @@ export function PreflightPanel({
 
         {warnings.length > 0 && (
           <ul className="mt-3 space-y-1.5 text-xs">
-            {warnings.slice(0, 5).map((issue, i) => (
-              <li key={i} className="flex items-start gap-2 text-muted-foreground">
-                <AlertTriangle className="mt-0.5 size-3 text-amber-600 dark:text-amber-400" />
-                <span>
-                  <span className="font-mono text-foreground">{issue.field}</span>: {issue.message}
-                </span>
-              </li>
-            ))}
+            {warnings.slice(0, 5).map((issue, i) => {
+              const fd = fieldDisplay(issue.field)
+              return (
+                <li key={i} className="flex items-start gap-2 text-muted-foreground">
+                  <AlertTriangle className="mt-0.5 size-3 text-amber-600 dark:text-amber-400" />
+                  <span className="space-y-0.5">
+                    <span className="block">
+                      <span className="text-foreground font-medium">{fd.label}</span>
+                      {fd.hasLabel && (
+                        <span className="ml-1 font-mono text-[10px] text-muted-foreground/70">
+                          {fd.raw}
+                        </span>
+                      )}
+                    </span>
+                    <span className="block whitespace-pre-line">{issue.message}</span>
+                  </span>
+                </li>
+              )
+            })}
           </ul>
         )}
 

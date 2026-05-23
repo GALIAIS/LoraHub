@@ -877,30 +877,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ config }),
     }),
-  llmAdviseConfig: (body: {
+  /**
+   * LLM-driven config recommendation.
+   *
+   * **Temporarily disabled for stability.** The upstream proxy fronting
+   * the configured AI provider drops multi-thousand-token prompts at
+   * the 60-second mark with ``Server disconnected without sending a
+   * response``, surfacing as a 422 with a confusing error in the UI.
+   * Until the advisor is reworked onto a streaming code path, the
+   * client just throws so any stale caller surfaces the disabled
+   * state instead of silently spinning a 60-second request.
+   *
+   * The backend route ``/api/configs/llm-advise`` returns a 503 with
+   * the same rationale, so a direct curl from outside the app sees
+   * the same shutdown.
+   */
+  llmAdviseConfig: (_body: {
     currentCfg: Record<string, unknown>
     intent?: string
     vramMib?: number | null
     gpuName?: string | null
     datasetPath?: string | null
     datasetImageCount?: number | null
-  }) =>
-    http<{
-      rationale: string
-      patches: Array<{ field: string; value: unknown; reason: string }>
-      fullConfig: Record<string, unknown>
-      validationIssues: Array<{
-        severity: "info" | "warning" | "error"
-        field: string
-        message: string
-      }>
-      providerId: string
-      modelId: string
-      elapsedMs: number
-    }>("/configs/llm-advise", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+  }): never => {
+    throw new Error(
+      "智能推荐已暂时停用 (上游 LLM 流量层超时问题)。后续会切换到 streaming 路径再恢复。",
+    )
+  },
   saveConfig: (
     name: string,
     config: Record<string, unknown>,

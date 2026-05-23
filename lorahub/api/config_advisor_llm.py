@@ -419,7 +419,10 @@ def run_advisor(
     store: AIStore,
     request: AdvisorRequest,
     *,
-    timeout_s: float = 60.0,
+    # Reasoning models can take 60-120 s to emit a full JSON config.
+    # 180 s is generous enough for slow reasoning chains while still
+    # catching the upstream-stalled case eventually.
+    timeout_s: float = 180.0,
 ) -> AdvisorOutcome:
     """Full advisor pipeline:
 
@@ -480,6 +483,35 @@ def run_advisor(
                 {"role": "user", "content": user_prompt},
             ],
             route=route,
+            # Reasoning models (mimo, deepseek-r1, o1, qwen-thinking, …)
+            # spend a chunk of completion tokens on internal chain-of-
+            # thought before emitting the JSON. The advisor's response
+            # also has to fit a full TrainingConfig dump (~1k tokens)
+            # plus rationale + patches. Pin a generous upper bound so
+            # the JSON never gets truncated mid-string.
+            #
+            # ``reasoning_effort='low'`` cuts the chain-of-thought
+            # budget so the model emits the JSON sooner — many
+            # upstream proxies (notably middlemen between us and
+            # mimo / deepseek-r1) cap a single connection at ~60 s,
+            # and a high-effort reasoning trace plus prompt-cache
+            # hits can blow past that and get cut with
+            # ``Server disconnected`` mid-emission. Low effort still
+            # gets a useful proposal — config tuning isn't a
+            # mathematical proof — and costs far fewer tokens.
+            #
+            # ``thinking_budget_tokens=0`` is the deepseek-shaped
+            # equivalent for providers that gate on a separate budget
+            # parameter. Ignored by upstreams that don't recognise it.
+            #
+            # ``overrides`` win over the route's own ``max_output_tokens``
+            # so power users who configured a smaller cap on the global
+            # default don't accidentally cap the advisor.
+            overrides={
+                "max_output_tokens": 4096,
+                "reasoning_effort": "low",
+                "thinking_budget_tokens": 0,
+            },
             timeout=timeout_s,
         )
     except AIError as exc:

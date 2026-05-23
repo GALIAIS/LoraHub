@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCheck, Play, Save, XCircle } from "lucide-react"
 import { api, type ValidationFieldError } from "@/lib/api"
+import { fieldDisplay } from "@/lib/field-labels"
 import { toastApiError } from "@/lib/toast-api-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
-import { LlmAdvisorButton } from "@/components/config-form/llm-advisor-button"
-import { setIn as setByPath } from "@/components/config-form/types"
+// LLM advisor temporarily disabled for stability (see toolbar comment).
+// Imports kept commented so a one-line revert restores the entry point.
+// import { LlmAdvisorButton } from "@/components/config-form/llm-advisor-button"
+// import { setIn as setByPath } from "@/components/config-form/types"
 import type { Mode } from "../types"
 import { buildDefaults } from "../utils"
 import { ErrorBanner } from "./error-banner"
@@ -149,22 +152,17 @@ export function ConfigEditor({
         >
           <CheckCheck className="size-3" /> 校验
         </Button>
-        {draft && (
-          <LlmAdvisorButton
-            currentCfg={draft as unknown as Record<string, unknown>}
-            onPatch={(field, value) => {
-              setDraft((prev) => {
-                if (!prev) return prev
-                return setByPath(
-                  prev as unknown as Record<string, unknown>,
-                  field.split("."),
-                  value,
-                ) as ConfigFormValue
-              })
-            }}
-            onApply={(next) => setDraft(next as unknown as ConfigFormValue)}
-          />
-        )}
+        {/*
+          LLM-driven 智能推荐 entry — temporarily disabled for stability.
+          The upstream proxy fronting the configured AI provider was
+          dropping multi-thousand-token prompts at the 60s mark with
+          ``Server disconnected``, which surfaced as a 422 in the form
+          and confused users. Component + API + backend route still
+          exist but the button is hidden so nothing reaches that path
+          until we rework it onto the streaming code path. Re-enable
+          by uncommenting once /api/configs/llm-advise stops returning
+          503.
+        */}
         <Button
           size="sm"
           variant="outline"
@@ -197,12 +195,26 @@ export function ConfigEditor({
               <div className="text-[10px] uppercase tracking-[0.18em] text-destructive font-semibold flex items-center gap-1.5">
                 <XCircle className="size-3" /> 发现 {errors.length} 处校验错误
               </div>
-              <ul className="mt-2 text-xs font-mono text-destructive space-y-0.5">
-                {errors.slice(0, 8).map((e, i) => (
-                  <li key={i}>
-                    <span className="text-muted-foreground">{e.loc.join(".")}</span>: {e.msg}
-                  </li>
-                ))}
+              <ul className="mt-2 text-xs text-destructive space-y-1">
+                {errors.slice(0, 8).map((e, i) => {
+                  const raw = e.loc.join(".")
+                  const fd = fieldDisplay(raw)
+                  return (
+                    <li key={i} className="space-y-0.5">
+                      <div>
+                        <span className="font-medium">{fd.label}</span>
+                        {fd.hasLabel && (
+                          <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+                            {fd.raw}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-muted-foreground/90 whitespace-pre-line font-mono">
+                        {e.msg}
+                      </div>
+                    </li>
+                  )
+                })}
                 {errors.length > 8 && (
                   <li className="text-muted-foreground">…还有 {errors.length - 8} 处未列出</li>
                 )}

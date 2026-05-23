@@ -158,87 +158,27 @@ class LlmAdviseResponse(BaseModel):
 
 @router.post("/configs/llm-advise", response_model=LlmAdviseResponse)
 def llm_advise_config(req: LlmAdviseRequest) -> LlmAdviseResponse:
-    """Generate a fresh training config via the configured LLM.
+    """LLM-driven config recommendation — **temporarily disabled**.
 
-    The actual prompt assembly + validate + parse pipeline lives in
-    ``lorahub.api.config_advisor_llm.run_advisor`` — this route is
-    just the HTTP-facing seam.
+    The advisor was wired through ``lorahub.api.config_advisor_llm.
+    run_advisor`` but the upstream LLM proxy fronting our configured
+    AI provider drops multi-thousand-token prompts at the 60 s mark
+    with ``Server disconnected without sending a response``. Until
+    that's reworked onto a streaming code path, the route shorts out
+    with a 503 and refuses to invoke the upstream — that way no
+    confused user clicks the (now hidden) UI button and waits a full
+    minute to see a 422.
+
+    The implementation lives in ``config_advisor_llm.py`` and is left
+    intact so a one-line revert restores it once the upstream issue
+    is fixed.
     """
-    from lorahub.api import app as app_module  # noqa: PLC0415
-    from lorahub.api.config_advisor_llm import (  # noqa: PLC0415
-        AdvisorError,
-        AdvisorRequest,
-        DatasetContext,
-        HardwareContext,
-        run_advisor,
-    )
-
-    ai_store = getattr(app_module, "_ai_store", None)
-    if ai_store is None:
-        raise HTTPException(status_code=503, detail="AI store not initialised")
-
-    # Resolve hardware budget. Caller-supplied values win; otherwise
-    # probe nvidia-smi for VRAM. We never block the route on a slow
-    # probe — anything that takes longer than a few seconds short-
-    # circuits to None and lets the LLM mention "未提供" in its
-    # rationale rather than fabricate numbers.
-    vram_mib = req.vramMib
-    gpu_name = req.gpuName
-    if vram_mib is None or gpu_name is None:
-        try:
-            from lorahub.core.config.scaffold import (  # noqa: PLC0415
-                detect_gpu_vram_mib,
-            )
-
-            if vram_mib is None:
-                vram_mib = detect_gpu_vram_mib()
-        except Exception:  # noqa: BLE001
-            pass
-
-    hardware = HardwareContext(gpu_name=gpu_name, vram_mib=vram_mib)
-
-    # Dataset stats — count images on disk if a path was supplied.
-    dataset_ctx: DatasetContext | None = None
-    image_count = req.datasetImageCount
-    if req.datasetPath:
-        try:
-            from pathlib import Path as _Path  # noqa: PLC0415
-            from lorahub.core.config.scaffold import (  # noqa: PLC0415
-                count_images,
-            )
-
-            ds_path = _Path(req.datasetPath)
-            if image_count is None and ds_path.is_dir():
-                image_count = count_images(ds_path)
-        except Exception:  # noqa: BLE001
-            pass
-        dataset_ctx = DatasetContext(
-            path=req.datasetPath,
-            image_count=image_count,
-            caption_coverage=None,
-        )
-
-    advisor_req = AdvisorRequest(
-        current_config=req.currentCfg,
-        intent=req.intent or "",
-        hardware=hardware,
-        dataset=dataset_ctx,
-    )
-    try:
-        outcome = run_advisor(ai_store, advisor_req)
-    except AdvisorError as exc:
-        # User-actionable failure (route not configured, LLM returned
-        # garbage, etc.) — surface as a 422 with a descriptive detail
-        # so the UI can render the message verbatim in the dialog.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return LlmAdviseResponse(
-        rationale=outcome.rationale,
-        patches=outcome.patches,
-        fullConfig=outcome.full_config,
-        validationIssues=outcome.validation_issues,
-        providerId=outcome.provider_id,
-        modelId=outcome.model_id,
-        elapsedMs=outcome.elapsed_ms,
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "智能推荐已暂时停用 (上游 LLM 流量层在长 prompt 上 60s 断流问题)。"
+            "代码与路由仍在,等切换到 streaming 路径后会恢复。"
+        ),
     )
 
 
