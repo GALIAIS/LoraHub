@@ -28,6 +28,16 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Card,
   CardContent,
   CardDescription,
@@ -92,6 +102,11 @@ export function ErrorsTab() {
   const [q, setQ] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [enabled, setEnabledLocal] = useState(getReportingEnabled())
+  // Confirm-clear dialog state. We replaced the native ``window.confirm``
+  // with the project-wide AlertDialog so the destructive prompt picks
+  // up the same chrome and theming as `artifacts → 删除工作区`.
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const list = useQuery({
     queryKey: ["error-reports", severity, source, q],
@@ -115,7 +130,7 @@ export function ErrorsTab() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["error-reports"] })
 
   const handleClear = async () => {
-    if (!confirm(`确认清空 ${total} 条错误记录?此操作不可恢复。`)) return
+    setClearing(true)
     try {
       const { deleted } = await errorReportsApi.clear()
       toast.success(`已清空 ${deleted} 条错误记录`)
@@ -124,6 +139,9 @@ export function ErrorsTab() {
       toast.error("清空失败", {
         description: e instanceof Error ? e.message : String(e),
       })
+    } finally {
+      setClearing(false)
+      setConfirmingClear(false)
     }
   }
 
@@ -204,7 +222,7 @@ export function ErrorsTab() {
             <Button
               size="sm"
               variant="outline"
-              onClick={handleClear}
+              onClick={() => setConfirmingClear(true)}
               disabled={total === 0}
               className="gap-1.5 text-destructive hover:text-destructive"
             >
@@ -258,18 +276,18 @@ export function ErrorsTab() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[420px,1fr] gap-3">
-        <Card className="min-h-[400px]">
-          <CardHeader className="pb-2">
+      <div className="grid grid-cols-1 lg:grid-cols-[420px,1fr] gap-3 items-stretch">
+        <Card className="flex flex-col min-h-[420px] max-h-[calc(100vh-360px)]">
+          <CardHeader className="pb-2 shrink-0">
             <CardTitle className="text-sm">最近错误</CardTitle>
           </CardHeader>
-          <CardContent className="px-2 pb-2">
+          <CardContent className="px-2 pb-2 flex-1 min-h-0 overflow-hidden">
             {items.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs text-muted-foreground">
                 {list.isLoading ? "加载中..." : "暂无错误记录"}
               </div>
             ) : (
-              <ul className="space-y-1 max-h-[640px] overflow-y-auto pr-1">
+              <ul className="space-y-1 h-full overflow-y-auto pr-1">
                 {items.map((it) => (
                   <li key={it.id}>
                     <button
@@ -312,6 +330,39 @@ export function ErrorsTab() {
 
         <DetailPanel item={selected} onDelete={handleDelete} />
       </div>
+
+      <AlertDialog
+        open={confirmingClear}
+        onOpenChange={(open) => {
+          if (!clearing) setConfirmingClear(open)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>清空全部错误记录</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                即将永久删除本地的{" "}
+                <code className="font-mono text-xs">{total}</code> 条错误记录,
+                包括尚未发送到远端的条目。
+              </span>
+              <span className="block text-amber-700 dark:text-amber-400">
+                ⚠ 已发送到 GitLab / Gitea / Webhook 的远端 issue 不会被一并清理,需到对应仓库自行处理。
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={clearing}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClear}
+              disabled={clearing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {clearing ? "清空中..." : "确认清空"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -329,8 +380,8 @@ function DetailPanel({
 
   if (!item) {
     return (
-      <Card className="min-h-[400px]">
-        <CardContent className="h-full flex items-center justify-center">
+      <Card className="flex flex-col min-h-[420px] max-h-[calc(100vh-360px)]">
+        <CardContent className="flex-1 min-h-0 flex items-center justify-center">
           <div className="text-xs text-muted-foreground flex items-center gap-2">
             <AlertTriangle className="size-4" />
             选中左侧任意条目查看详情
@@ -377,8 +428,8 @@ function DetailPanel({
   }
 
   return (
-    <Card className="min-h-[400px]">
-      <CardHeader className="pb-2">
+    <Card className="flex flex-col min-h-[420px] max-h-[calc(100vh-360px)]">
+      <CardHeader className="pb-2 shrink-0">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <CardTitle className="text-sm truncate">{item.title}</CardTitle>
@@ -441,7 +492,7 @@ function DetailPanel({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-3 flex-1 min-h-0 overflow-y-auto">
         <div className="grid grid-cols-2 gap-3 text-[11px]">
           <Field label="严重程度" value={SEVERITY_LABEL[item.severity]} />
           <Field
