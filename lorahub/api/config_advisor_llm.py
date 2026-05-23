@@ -433,7 +433,16 @@ def run_advisor(
     """
     import time  # noqa: PLC0415
 
-    route = store.get_route(ADVISOR_TASK_ID) or store.get_route("global.default")
+    # Resolve which AIRoute to use. The seed list in app.py creates
+    # an empty ``config.recommend`` row (provider/model both null) on
+    # first boot, so ``store.get_route("config.recommend")`` returns
+    # a truthy stub even before the user binds it. Treat that stub as
+    # equivalent to "not configured" and fall back to the global
+    # default — which is a much more common thing for users to have
+    # already set up via tagging / caption flows.
+    route = store.get_route(ADVISOR_TASK_ID)
+    if route is None or not route.provider_id or not route.model_id:
+        route = store.get_route("global.default") or route
     if route is None:
         msg = (
             f"AI 路由 '{ADVISOR_TASK_ID}' 未配置,且 'global.default' 也没有。"
@@ -442,8 +451,8 @@ def run_advisor(
         raise AdvisorError(msg)
     if not route.provider_id or not route.model_id:
         msg = (
-            f"AI 路由 '{route.task_id}' 还没绑定 provider/model。"
-            "请到 设置 → AI 服务商 → 路由 完成绑定。"
+            f"AI 路由 '{ADVISOR_TASK_ID}' 未绑定 provider/model,且 'global.default' 也没绑。"
+            "请到 设置 → AI 服务商 → 路由 给其中一个完成绑定。"
         )
         raise AdvisorError(msg)
 

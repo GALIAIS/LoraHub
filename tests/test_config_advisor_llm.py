@@ -368,3 +368,53 @@ def test_run_advisor_raises_when_route_missing(
             _Empty(),  # type: ignore[arg-type]
             AdvisorRequest(current_config={}, intent=""),
         )
+
+
+def test_run_advisor_falls_back_to_global_default_when_task_route_unbound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: app.py's lifespan seeds an empty AIRoute for
+    ``config.recommend``, so ``store.get_route(...)`` returned a
+    truthy stub (provider/model both null) and the old ``or``-based
+    fallback path never triggered. Result: users with a fully-
+    configured ``global.default`` saw "未绑定" the first time they
+    clicked 智能推荐 even though they had a working LLM bound.
+
+    Verify the new resolution: stub config.recommend → fall back
+    to global.default which has the binding."""
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api import config_advisor_llm as advisor_mod
+
+    routes_by_id: dict[str, AIRoute] = {
+        "config.recommend": AIRoute(
+            task_id="config.recommend",
+            provider_id=None,
+            model_id=None,
+        ),
+        "global.default": AIRoute(
+            task_id="global.default",
+            provider_id="p",
+            model_id="m",
+        ),
+    }
+
+    class _Stub:
+        def get_route(self, task_id: str):  # type: ignore[no-untyped-def]
+            return routes_by_id.get(task_id)
+
+    class _R:
+        text = json.dumps(
+            {"rationale": "ok", "patches": [], "fullConfig": {}}
+        )
+        provider_id = "p"
+        model_id = "m"
+
+    monkeypatch.setattr(advisor_mod, "invoke", lambda *a, **kw: _R())
+
+    outcome = run_advisor(
+        _Stub(),  # type: ignore[arg-type]
+        AdvisorRequest(current_config={}, intent="x"),
+    )
+    # The fallback route's provider/model is what we actually used.
+    assert outcome.provider_id == "p"
+    assert outcome.model_id == "m"
