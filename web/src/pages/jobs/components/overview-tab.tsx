@@ -14,7 +14,6 @@ import {
   ThroughputTile,
 } from "./realtime-tile"
 import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
-import { DiagnosticsCard } from "./diagnostics-card"
 import { TrainingFeatureBadges } from "./training-feature-badges"
 
 const THROUGHPUT_WINDOW = 60
@@ -250,11 +249,6 @@ export function OverviewTab({
           </div>
         </div>
       ) : null}
-
-      {/* Heuristic failure-mode diagnosis. Only fetches when the job
-          actually finished — running jobs aren't interesting (they're
-          definitionally not failed yet) and noise the access log. */}
-      <DiagnosticsCard jobId={jobId} enabled={isTerminal} />
 
       <div>
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
