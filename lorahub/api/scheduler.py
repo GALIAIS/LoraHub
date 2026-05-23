@@ -106,7 +106,8 @@ class JobScheduler:
         with self._cv:
             self._queue.append(_PendingTask(job_id=job_id, fn=fn))
             self._cv.notify()
-        if not self._started:
+            needs_start = not self._started
+        if needs_start:
             self.start()
 
     def stop(self, *, timeout: float | None = 5.0) -> None:

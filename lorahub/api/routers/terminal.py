@@ -192,7 +192,7 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
     # opening the SSE stream (errors inside an SSE stream are awkward to
     # surface in DevTools).
     try:
-        argv = shlex.split(req.command, posix=True)
+        argv = shlex.split(req.command, posix=(os.name != "nt"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse command: {exc}") from exc
     if not argv:

@@ -876,7 +876,7 @@ if _WEB_DIST is not None:
         # fall back to index.html so React Router can take over.
         candidate = (_WEB_ROOT / full_path).resolve()
         try:
-            candidate.relative_to(_WEB_ROOT)
+            candidate.relative_to(_WEB_ROOT.resolve())
         except ValueError:
             raise HTTPException(status_code=404, detail="not found") from None
         if candidate.is_file():

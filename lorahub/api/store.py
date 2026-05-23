@@ -1,4 +1,4 @@
-﻿"""SQLite-backed persistence for the job registry.
+"""SQLite-backed persistence for the job registry.
 
 Holds job metadata so the API can survive a restart with history intact.
 The live `TrainingHandle` and the event ring buffer stay in memory only —
@@ -12,10 +12,12 @@ ALTER path before changing columns in a published release.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
 import threading
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -72,12 +74,19 @@ class JobStore:
     def path(self) -> Path:
         return self._path
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._path), isolation_level=None, timeout=10.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
+        """Return a context manager that commits+closes the connection on exit."""
+        @contextlib.contextmanager
+        def _managed() -> Generator[sqlite3.Connection, None, None]:
+            conn = sqlite3.connect(str(self._path), isolation_level=None, timeout=10.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
+        return _managed()
 
     def upsert(self, record: JobRecord) -> None:
         with self._lock, self._connect() as conn:

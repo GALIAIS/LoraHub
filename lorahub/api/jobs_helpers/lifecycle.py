@@ -181,8 +181,16 @@ def _enqueue_launch(
     # forwards `checkpoint_saved` events to it so the worker reacts in
     # < 1s instead of waiting for its polling tick.
     preview_worker_ref: dict[str, Any] = {}
+    # Guard against late events arriving after the sink is closed by the
+    # `done` handler. GPU sampler / diagnostic threads can still fire
+    # events after the subprocess exits; without this flag those calls
+    # would hit a closed sink and raise RuntimeError.
+    _sink_closed = False
 
     def on_event(ev: TrainingEvent) -> None:
+        nonlocal _sink_closed
+        if _sink_closed and ev.type is not EventType.done:
+            return
         sink(ev)
         state.registry.record_event(job.id, ev)
         if ev.type is EventType.checkpoint_saved:
@@ -223,6 +231,7 @@ def _enqueue_launch(
                 )
                 with contextlib.suppress(Exception):
                     report_terminal_job(j)
+            _sink_closed = True
             sink.__exit__(None, None, None)
 
     def task(slot: int) -> None:
@@ -282,6 +291,7 @@ def _enqueue_launch(
                 with contextlib.suppress(Exception):
                     report_terminal_job(j)
             with contextlib.suppress(Exception):
+                _sink_closed = True
                 sink.__exit__(None, None, None)
             return
         j = state.registry.get(job.id)
