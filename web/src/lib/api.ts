@@ -221,6 +221,17 @@ export interface BackendsResponse {
   default: BackendId
 }
 
+export interface BackendUpdateCheck {
+  backend_id: BackendId
+  repo_path: string
+  update_available: boolean
+  current_sha: string
+  remote_sha: string
+  commits_behind: number
+  branch: string
+  error: string | null
+}
+
 export interface AnimaModelDownloadEvent {
   message: string
   percent: number
@@ -970,6 +981,10 @@ export const api = {
     }),
   getBootstrapStatus: () => http<BootstrapStatus>("/backend/bootstrap/status"),
   listBackends: () => http<BackendsResponse>("/backends"),
+  checkBackendUpdate: (backendId: BackendId) =>
+    http<BackendUpdateCheck>(`/backends/${backendId}/check-update`),
+  updateBackend: (backendId: BackendId) =>
+    http<BackendUpdateCheck>(`/backends/${backendId}/update`, { method: "POST" }),
   startAnimaModelDownload: () =>
     http<AnimaModelDownloadStatus>("/backends/anima_lora/download-models", {
       method: "POST",

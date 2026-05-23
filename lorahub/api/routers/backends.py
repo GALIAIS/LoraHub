@@ -12,12 +12,14 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from lorahub.api import app as app_module
+from lorahub.api.backend_update import apply_update, check_update
 from lorahub.api.settings import probe_all_backends
 from lorahub.core.backends.anima_lora.models import (
     DownloadEvent,
@@ -25,6 +27,12 @@ from lorahub.core.backends.anima_lora.models import (
     missing_files as _anima_missing_models,
 )
 from lorahub.core.backends.anima_lora import msvc as _anima_msvc
+from lorahub.core.backends.diffusion_pipe.bootstrap import (
+    default_repo_path as _dp_default_repo,
+)
+from lorahub.core.backends.kohya.bootstrap import (
+    default_sd_scripts_path as _kohya_default_path,
+)
 from lorahub.core.backends.registry import list_backends
 
 router = APIRouter(prefix="/api")
@@ -64,6 +72,61 @@ def list_backend_catalog() -> BackendsResponse:
             )
         )
     return BackendsResponse(backends=entries, default=settings.default_backend)
+
+
+# --------------------------------------------------------------------------- #
+# Backend git update detection
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_backend_repo(backend_id: str) -> Path | None:
+    """Resolve the git repo path for a given backend id."""
+    settings = app_module._settings_store.load()
+    if backend_id == "kohya":
+        explicit = settings.sd_scripts_path
+        return Path(explicit) if explicit else _kohya_default_path()
+    elif backend_id == "diffusion-pipe":
+        explicit = settings.diffusion_pipe_repo_path
+        return Path(explicit) if explicit else _dp_default_repo()
+    return None
+
+
+@router.get("/backends/{backend_id}/check-update")
+def check_backend_update(backend_id: str) -> dict[str, Any]:
+    """Check if a backend repo has upstream updates available."""
+    if backend_id not in ("kohya", "diffusion-pipe"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"update check not supported for backend {backend_id!r}",
+        )
+    repo = _resolve_backend_repo(backend_id)
+    if repo is None or not repo.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"backend repo not found at {repo}",
+        )
+    result = check_update(repo)
+    return {"backend_id": backend_id, "repo_path": str(repo), **result.to_dict()}
+
+
+@router.post("/backends/{backend_id}/update")
+def update_backend(backend_id: str) -> dict[str, Any]:
+    """Pull the latest commits for a backend repo."""
+    if backend_id not in ("kohya", "diffusion-pipe"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"update not supported for backend {backend_id!r}",
+        )
+    repo = _resolve_backend_repo(backend_id)
+    if repo is None or not repo.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"backend repo not found at {repo}",
+        )
+    result = apply_update(repo)
+    if result.error:
+        raise HTTPException(status_code=500, detail=result.error)
+    return {"backend_id": backend_id, "repo_path": str(repo), **result.to_dict()}
 
 
 # --------------------------------------------------------------------------- #
