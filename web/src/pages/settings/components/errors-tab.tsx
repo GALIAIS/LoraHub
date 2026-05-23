@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
@@ -714,30 +714,56 @@ function UpstreamConfigCard() {
   })
   const [saving, setSaving] = useState(false)
   const [probing, setProbing] = useState(false)
+  // Hydrate exactly once per real config arrival. ``cfg`` is a fresh
+  // object on every react-query refetch even when nothing changed,
+  // so a naive ``[cfg]`` dependency would clobber in-flight edits
+  // every 30s. We keep a ref of the last-hydrated channel + repo
+  // and only reset the draft when those visibly changed (i.e. a
+  // different process saved a new config behind our back). The
+  // initial mount path is also covered: hydratedRef stays null until
+  // the first cfg shows up.
+  const hydratedRef = useRef<string | null>(null)
 
-  // Hydrate the draft once the settings query resolves; further user
-  // edits stay local until "保存" is pressed so partial typing doesn't
-  // clobber the live config.
   useEffect(() => {
     if (!cfg) return
+    // Cheap fingerprint so refetches that returned identical bytes
+    // don't reset the draft; only a real server-side change does.
+    const stamp = JSON.stringify({
+      ch: cfg.error_upstream_channel ?? "off",
+      base: cfg.error_upstream_gitlab_base_url ?? "",
+      repo: cfg.error_upstream_gitlab_repo ?? "",
+      tok: cfg.error_upstream_gitlab_token ?? "",
+      hook: cfg.error_upstream_webhook_url ?? "",
+      auth: cfg.error_upstream_webhook_auth_header ?? "",
+      sev: cfg.error_upstream_auto_severity ?? "error",
+    })
+    if (hydratedRef.current === stamp) return
+    hydratedRef.current = stamp
     setDraft({
-      error_upstream_channel: cfg.error_upstream_channel ?? "off",
+      error_upstream_channel: (cfg.error_upstream_channel ?? "off") as UpstreamChannel,
       error_upstream_gitlab_base_url: cfg.error_upstream_gitlab_base_url ?? "",
       error_upstream_gitlab_repo: cfg.error_upstream_gitlab_repo ?? "",
       error_upstream_gitlab_token: cfg.error_upstream_gitlab_token ?? "",
       error_upstream_webhook_url: cfg.error_upstream_webhook_url ?? "",
       error_upstream_webhook_auth_header:
         cfg.error_upstream_webhook_auth_header ?? "",
-      error_upstream_auto_severity: cfg.error_upstream_auto_severity ?? "error",
+      error_upstream_auto_severity:
+        (cfg.error_upstream_auto_severity ??
+          "error") as SettingsState["error_upstream_auto_severity"],
     })
   }, [cfg])
 
   const onSave = async () => {
     setSaving(true)
     try {
-      await api.updateSettings(draft as Partial<SettingsState>)
+      const fresh = await api.updateSettings(draft as Partial<SettingsState>)
+      // Prime react-query with the canonical server response so a
+      // subsequent refetch / route remount sees the saved values
+      // immediately, no race with stale cache. Also bump the
+      // hydratedRef stamp so our useEffect doesn't immediately
+      // re-trigger and clobber the in-memory draft we just sent.
+      qc.setQueryData(["settings"], fresh)
       toast.success("已保存远端上报配置")
-      qc.invalidateQueries({ queryKey: ["settings"] })
     } catch (e) {
       toast.error("保存失败", {
         description: e instanceof Error ? e.message : String(e),
