@@ -462,3 +462,43 @@ def test_check_marks_zip_install_as_non_git(
     assert info.git_checkout is False
     assert info.version_source == "changelog"
     assert info.current == "0.4.0"
+
+
+# --------------------------------------------------------------------- #
+# Encoding regression — _stream_subprocess on a zh-CN Windows host
+# --------------------------------------------------------------------- #
+
+
+def test_stream_subprocess_decodes_utf8_glyphs(tmp_path: Path) -> None:
+    """Vite/npm/pip emit UTF-8 status glyphs (✓, ▲, CJK boxed text).
+
+    On a zh-CN Windows host ``locale.getpreferredencoding()`` is
+    ``cp936``/``gbk``, which raises ``UnicodeDecodeError`` on the very
+    first byte of a multibyte UTF-8 sequence. The fix is to pin
+    ``encoding="utf-8", errors="replace"`` on the Popen so output is
+    decoded the same way regardless of host locale.
+    """
+    import sys
+
+    # Emit the exact byte that triggered the user's failure (0x93 — the
+    # tail byte of "✓") plus a CJK string, then exit. We encode at the
+    # bytes level inside the child so the parent's encoding choice is
+    # what's under test.
+    code = (
+        "import sys; "
+        "sys.stdout.buffer.write('vite v7.3.3 ✓ building\\n'.encode('utf-8')); "
+        "sys.stdout.buffer.write('构建前端\\n'.encode('utf-8')); "
+        "sys.stdout.flush()"
+    )
+    captured: list[tuple[str, str, str]] = []
+
+    rc = su._stream_subprocess(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        phase="build",
+        emit=lambda phase, level, msg: captured.append((phase, level, msg)),
+    )
+    assert rc == 0
+    body = "\n".join(msg for _, _, msg in captured)
+    assert "✓" in body, f"check mark lost in decode: {body!r}"
+    assert "构建前端" in body, f"CJK lost in decode: {body!r}"

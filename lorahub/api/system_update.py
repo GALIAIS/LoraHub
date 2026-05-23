@@ -307,12 +307,17 @@ def _fetch_json(url: str) -> dict[str, Any]:
 
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     """``git ...`` with stdout+stderr captured. Never raises on non-zero."""
+    # Same UTF-8 reasoning as _stream_subprocess: git on Windows emits
+    # UTF-8 by default for paths and commit messages, so we must avoid
+    # the locale-dependent fallback that gbk-defaults to on zh-CN hosts.
     return subprocess.run(  # noqa: S603, S607
         ["git", *args],
         cwd=cwd,
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -1072,12 +1077,19 @@ def _stream_subprocess(
     Buffered line-by-line so a long-running ``npm run build`` shows up
     in the UI as it progresses, not as a single 30-second freeze.
     """
+    # Force UTF-8 + replace on undecodable bytes. Without this, Python
+    # falls back to locale.getpreferredencoding() — which on a zh-CN
+    # Windows host is gbk/cp936. Vite, npm, and pip all emit UTF-8
+    # status glyphs ("✓", "▲", boxed CJK) and gbk chokes on the very
+    # first banner with UnicodeDecodeError, killing the whole upgrade.
     proc = subprocess.Popen(  # noqa: S603
         cmd,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     assert proc.stdout is not None  # noqa: S101
