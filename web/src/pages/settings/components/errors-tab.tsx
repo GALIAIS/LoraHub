@@ -699,7 +699,19 @@ function UpstreamConfigCard() {
   const onProbe = async () => {
     setProbing(true)
     try {
-      const res = await errorReportsApi.upstreamHealth()
+      // Probe the *current draft* — do not require the user to save
+      // first. The backend treats the body as an ad-hoc SinkConfig
+      // and falls back to env-var tokens when ``gitlab_token`` is
+      // empty, so the UI's blank password field still works against
+      // a LORAHUB_GITEA_TOKEN-seeded environment.
+      const res = await errorReportsApi.upstreamHealth({
+        channel: draft.error_upstream_channel,
+        gitlab_base_url: draft.error_upstream_gitlab_base_url,
+        gitlab_repo: draft.error_upstream_gitlab_repo,
+        gitlab_token: draft.error_upstream_gitlab_token,
+        webhook_url: draft.error_upstream_webhook_url,
+        webhook_auth_header: draft.error_upstream_webhook_auth_header,
+      })
       if (res.ok) {
         toast.success("远端连通正常", {
           description: res.url ?? `channel=${res.channel}`,

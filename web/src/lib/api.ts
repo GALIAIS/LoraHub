@@ -2942,9 +2942,20 @@ export const errorReportsApi = {
       `/error-reports/${encodeURIComponent(id)}/send`,
       { method: "POST" },
     ),
-  upstreamHealth: () =>
+  upstreamHealth: (
+    draft?: {
+      channel?: SettingsState["error_upstream_channel"]
+      gitlab_base_url?: string
+      gitlab_repo?: string
+      gitlab_token?: string
+      webhook_url?: string
+      webhook_auth_header?: string
+    },
+  ) =>
     http<UpstreamHealthResponse>(`/error-reports/upstream/health`, {
       method: "POST",
+      body: draft ? JSON.stringify(draft) : undefined,
+      headers: draft ? { "Content-Type": "application/json" } : {},
     }),
   upstreamPreview: (id: string) =>
     http<UpstreamPreviewResponse>(

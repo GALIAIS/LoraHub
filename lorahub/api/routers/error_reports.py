@@ -265,21 +265,72 @@ class _UpstreamHealthOut(BaseModel):
     error: str | None = None
 
 
+class _UpstreamHealthIn(BaseModel):
+    """Optional ad-hoc config the UI can probe before saving.
+
+    Empty body falls back to the persisted Settings — used by the
+    "test connection" button on a saved configuration. When the body
+    is populated, we build a one-off SinkConfig from the form draft
+    and probe with that, so the user can validate a token before
+    committing it to settings.json.
+    """
+    channel: str | None = None
+    gitlab_base_url: str | None = None
+    gitlab_repo: str | None = None
+    gitlab_token: str | None = None
+    webhook_url: str | None = None
+    webhook_auth_header: str | None = None
+
+
 @router.post("/error-reports/upstream/health", response_model=_UpstreamHealthOut)
-def upstream_health() -> _UpstreamHealthOut:
+def upstream_health(body: _UpstreamHealthIn | None = None) -> _UpstreamHealthOut:
     """Probe the configured sink end-to-end so the user can validate
     the token / repo path before accepting the settings.
 
-    The probe POSTs a ``ping`` for webhook sinks and a project-fetch
-    for the GitLab sink. Either way no real report content leaves the
-    box during the probe.
+    Two modes:
+
+    * ``body`` is empty → probe whatever ``Settings`` currently holds.
+      Used by a saved-config "re-check" button.
+    * ``body`` carries a non-null ``channel`` → build a one-off
+      ``SinkConfig`` from the form draft and probe that. Used by the
+      Settings page so users don't have to commit an unverified token
+      before testing it.
+
+    No real report content leaves the box during the probe.
     """
     from lorahub.api import app as app_module  # noqa: PLC0415
-    from lorahub.api.error_upstream import build_sink_from_settings
+    from lorahub.api.error_upstream import (  # noqa: PLC0415
+        SinkConfig,
+        build_sink_from_settings,
+    )
 
-    settings_store = app_module._settings_store  # type: ignore[attr-defined]
-    cfg = settings_store.load()
-    sink = build_sink_from_settings(app_module._sink_config_from_settings(cfg))
+    if body is not None and body.channel:
+        # Ad-hoc config from the form draft. Token still falls back to
+        # env vars when blank so users with LORAHUB_GITEA_TOKEN set can
+        # leave the UI field empty.
+        token = body.gitlab_token or ""
+        if not token:
+            import os  # noqa: PLC0415
+
+            if body.channel == "gitea":
+                token = os.environ.get("LORAHUB_GITEA_TOKEN", "")
+            elif body.channel == "gitlab":
+                token = os.environ.get("LORAHUB_GITLAB_TOKEN", "")
+            if not token:
+                token = os.environ.get("LORAHUB_REPORT_TOKEN", "")
+        cfg = SinkConfig(
+            channel=body.channel,  # type: ignore[arg-type]
+            gitlab_base_url=body.gitlab_base_url or "",
+            gitlab_repo=body.gitlab_repo or "",
+            gitlab_token=token,
+            webhook_url=body.webhook_url or "",
+            webhook_auth_header=body.webhook_auth_header or "",
+        )
+        sink = build_sink_from_settings(cfg)
+    else:
+        settings_store = app_module._settings_store  # type: ignore[attr-defined]
+        cfg = settings_store.load()
+        sink = build_sink_from_settings(app_module._sink_config_from_settings(cfg))
     if sink is None:
         return _UpstreamHealthOut(
             ok=False,

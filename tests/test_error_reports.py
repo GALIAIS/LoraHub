@@ -340,3 +340,50 @@ def test_store_migrates_v1_schema_to_v2(tmp_path: Path) -> None:
     assert rec2 is not None
     assert rec2.fingerprint == "abc123"
     assert rec2.upstream_status == "queued"
+
+
+def test_http_upstream_health_uses_draft_body_when_provided(
+    client_with_store: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe endpoint must accept an ad-hoc SinkConfig from the
+    request body so the Settings UI can validate a token before
+    persisting it to settings.json. Without this, the user sees
+    "upstream channel disabled" until they save first."""
+    from lorahub.api.error_upstream import sinks as sinks_module
+
+    captured: dict[str, str] = {}
+
+    def fake_http(url: str, **kw: Any) -> tuple[int, Any]:
+        captured["url"] = url
+        captured["auth"] = kw.get("headers", {}).get("Authorization", "")
+        return 200, []
+
+    monkeypatch.setattr(sinks_module, "_http", fake_http)
+    resp = client_with_store.post(
+        "/api/error-reports/upstream/health",
+        json={
+            "channel": "gitea",
+            "gitlab_base_url": "https://git.example.com",
+            "gitlab_repo": "space/proj",
+            "gitlab_token": "ad-hoc-token",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["channel"] == "gitea"
+    # Sink hit the issues endpoint with the draft's token, even though
+    # nothing was saved to Settings beforehand.
+    assert "/api/v1/repos/space/proj/issues" in captured["url"]
+    assert captured["auth"] == "token ad-hoc-token"
+
+
+def test_http_upstream_health_falls_back_to_settings_when_body_empty(
+    client_with_store: TestClient,
+) -> None:
+    """An empty body still works — used by post-save re-checks."""
+    resp = client_with_store.post("/api/error-reports/upstream/health")
+    # No settings configured in the test fixture, so it should report
+    # the disabled-channel branch rather than 500.
+    assert resp.status_code == 200
+    assert resp.json()["channel"] == "off"
