@@ -43,6 +43,18 @@ export interface ChartMarker {
   color?: string
 }
 
+// Optional confidence band drawn behind the primary series. Used by the
+// analysis workbench to render a rolling IQR (Q25..Q75) underneath the
+// median line so high-variance diffusion losses don't read as a single
+// line. The band itself isn't a series — it can't be toggled in the
+// legend and doesn't carry tooltip values.
+export interface ChartBand {
+  id: string
+  color: string
+  /** Same step axis as the series. lo/hi are absolute loss values. */
+  points: { step: number; lo: number; hi: number }[]
+}
+
 const VIEW_W = 800
 const VIEW_H = 300
 const PAD_LEFT = 52
@@ -80,6 +92,8 @@ interface LossChartProps {
   emptyHint?: string
   overfitSignal?: OverfitSignal | null
   markers?: ChartMarker[]
+  /** Optional confidence band(s) drawn behind the primary series. */
+  bands?: ChartBand[]
   /**
    * Stable key used to persist the user's view (zoom range, log toggle)
    * across re-renders within a session. Pass the active job id when the
@@ -119,6 +133,7 @@ function LossChartCore({
   emptyHint = "暂无损失数据。",
   overfitSignal,
   markers = [],
+  bands = [],
   persistKey,
   fullscreen,
   onFullscreen,
@@ -227,6 +242,16 @@ function LossChartCore({
         if (p.loss > hi) hi = p.loss
       }
     }
+    // Bands need to fit within the y-window too — otherwise an IQR
+    // drawn behind the series gets clipped at the top/bottom edge.
+    for (const b of bands) {
+      for (const p of b.points) {
+        if (p.step < xMin || p.step > xMax) continue
+        if (yLog && (p.lo <= 0 || p.hi <= 0)) continue
+        if (p.lo < lo) lo = p.lo
+        if (p.hi > hi) hi = p.hi
+      }
+    }
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
       return { lo: 0, hi: 1 }
     }
@@ -240,7 +265,7 @@ function LossChartCore({
     }
     const pad = (hi - lo) * 0.08
     return { lo: lo - pad, hi: hi + pad }
-  }, [visibleSeries, xMin, xMax, yLog])
+  }, [visibleSeries, bands, xMin, xMax, yLog])
 
   const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
   const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
@@ -626,6 +651,29 @@ function LossChartCore({
               </g>
             )
           })}
+          {/* Confidence bands (e.g. rolling IQR around the median) */}
+          {hasData &&
+            bands.map((b) => {
+              const pts = b.points.filter(
+                (p) => p.step >= xMin && p.step <= xMax,
+              )
+              if (pts.length < 2) return null
+              const polyPoints = [
+                ...pts.map((p) => `${xScale(p.step)},${yScale(p.hi)}`),
+                ...[...pts]
+                  .reverse()
+                  .map((p) => `${xScale(p.step)},${yScale(p.lo)}`),
+              ].join(" ")
+              return (
+                <polygon
+                  key={`band-${b.id}`}
+                  points={polyPoints}
+                  fill={b.color}
+                  stroke="none"
+                  pointerEvents="none"
+                />
+              )
+            })}
           {/* Gap band */}
           {hasData && gapBand && gapBand.length >= 2 && (
             <polygon

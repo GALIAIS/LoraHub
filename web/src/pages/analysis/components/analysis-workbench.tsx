@@ -18,13 +18,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type JobSummary } from "@/lib/api"
 import {
   LossChart,
+  type ChartBand,
   type ChartMarker,
   type LossSeries,
 } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
+import { CheckpointPlayback } from "./checkpoint-playback"
+import { DiagnosisBanner } from "./diagnosis-banner"
 import { EffectivenessPanel } from "./effectiveness-panel"
+import { rollingQuartiles, type BandPoint } from "./loss-stats"
 import { MetricGrid } from "./metric-grid"
+import { analyseChangepoints } from "./pelt"
+import { StageTimeline } from "./stage-timeline"
 import { AICard } from "../panels/ai-card"
 import { MetricsTable } from "../panels/metrics-table"
 import { SamplesGallery } from "../panels/samples-gallery"
@@ -69,12 +75,36 @@ export function AnalysisWorkbench({
     const trainPoints = points.map((p) => ({ step: p.step, loss: p.loss }))
     const out: LossSeries[] = []
     if (trainPoints.length > 0) {
-      out.push({
-        id: `${job.id}-train`,
-        label: "训练 loss",
-        color: "var(--chart-1)",
-        points: trainPoints,
-      })
+      // Use rolling median as the primary line — diffusion training loss
+      // is high-variance noise around a slowly-moving signal, so a
+      // single raw line over-emphasises step-to-step jitter. Raw stays
+      // visible as a faint dashed reference; the IQR band conveys
+      // dispersion without forcing the user to read variance from
+      // chart wiggle.
+      const robust =
+        trainPoints.length >= 8 ? rollingQuartiles(trainPoints) : null
+      if (robust) {
+        out.push({
+          id: `${job.id}-train-median`,
+          label: "训练 loss · 中位数",
+          color: "var(--chart-1)",
+          points: robust.median,
+        })
+        out.push({
+          id: `${job.id}-train-raw`,
+          label: "原始采样",
+          color: "var(--chart-1)",
+          dashed: true,
+          points: trainPoints,
+        })
+      } else {
+        out.push({
+          id: `${job.id}-train`,
+          label: "训练 loss",
+          color: "var(--chart-1)",
+          points: trainPoints,
+        })
+      }
       if (trainPoints.length >= 6) {
         let acc = trainPoints[0].loss
         const ema = trainPoints.map((p) => {
@@ -133,6 +163,47 @@ export function AnalysisWorkbench({
       }))
   }, [metrics.data])
 
+  // IQR band for the training loss — drawn behind the median line so
+  // users can read dispersion at a glance instead of guessing it from
+  // the noise envelope of the raw curve.
+  const lossBands: ChartBand[] = useMemo(() => {
+    const points = (metrics.data?.loss ?? []).filter(
+      (p): p is { step: number; loss: number; ts: number } =>
+        typeof p.loss === "number" && Number.isFinite(p.loss),
+    )
+    if (points.length < 8) return []
+    const series: BandPoint[] = rollingQuartiles(
+      points.map((p) => ({ step: p.step, loss: p.loss })),
+    ).band
+    return [
+      {
+        id: "train-iqr",
+        color: "color-mix(in oklch, var(--chart-1) 18%, transparent)",
+        points: series,
+      },
+    ]
+  }, [metrics.data])
+
+  // PELT changepoint analysis — used by the stage timeline below the
+  // KPI strip and also overlaid as cyan dashed lines on the loss chart.
+  const changepoints = useMemo(() => {
+    const points = (metrics.data?.loss ?? [])
+      .filter(
+        (p): p is { step: number; loss: number; ts: number } =>
+          typeof p.loss === "number" && Number.isFinite(p.loss),
+      )
+      .map((p) => ({ step: p.step, loss: p.loss }))
+    return analyseChangepoints(points)
+  }, [metrics.data])
+
+  const allMarkers: ChartMarker[] = useMemo(() => {
+    const out: ChartMarker[] = [...checkpointMarkers]
+    for (const s of changepoints.changepointSteps) {
+      out.push({ step: s, color: "var(--chart-2)" })
+    }
+    return out
+  }, [checkpointMarkers, changepoints.changepointSteps])
+
   const totalPoints = metrics.data?.loss?.length ?? 0
   const overfit = metrics.data?.overfit_signal
 
@@ -148,10 +219,26 @@ export function AnalysisWorkbench({
       <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
       <div className="px-7 py-4 space-y-4">
+        {/* Diagnosis banner — most urgent signal first. Auto-runs once
+            on mount; the backend route is read-only so re-running it
+            on demand is also safe. */}
+        <DiagnosisBanner jobId={job.id} />
+
         {/* Effectiveness insights — convergence / stability / overfit /
             stage. Sits above the chart so users get the verdict before
             squinting at the curve. */}
         <EffectivenessPanel metrics={metrics.data ?? null} />
+
+        {/* PELT-derived stage timeline — colour-coded segments + slope
+            annotation. Render only when at least one changepoint was
+            found, otherwise the user just sees a single bar that
+            contributes no information. */}
+        {changepoints.segments.length > 1 && (
+          <StageTimeline
+            segments={changepoints.segments}
+            changepointSteps={changepoints.changepointSteps}
+          />
+        )}
 
         {/* Loss panel — visual focus of the page (train + val + EMA). */}
         <Card
@@ -173,14 +260,19 @@ export function AnalysisWorkbench({
                       checkpointMarkers.length > 0
                         ? ` · ${checkpointMarkers.length} 个检查点`
                         : ""
+                    }${
+                      changepoints.changepointSteps.length > 0
+                        ? ` · ${changepoints.changepointSteps.length} 个变点`
+                        : ""
                     }`}
             </span>
           </CardHeader>
           <CardContent className="p-3.5">
             <LossChart
               series={lossSeries}
+              bands={lossBands}
               overfitSignal={overfit ?? null}
-              markers={checkpointMarkers}
+              markers={allMarkers}
               persistKey={job.id}
             />
           </CardContent>
@@ -199,6 +291,15 @@ export function AnalysisWorkbench({
           </div>
           <MetricGrid metrics={metrics.data ?? null} jobId={job.id} />
         </div>
+
+        {/* Checkpoint playback — same prompt × same seed across every
+            checkpoint. The single most reliable visual quality signal
+            for diffusion fine-tuning. */}
+        <CheckpointPlayback
+          jobId={job.id}
+          samples={files.data?.samples ?? []}
+          loading={files.isLoading}
+        />
 
         {/* Bottom tabs — stats / table / samples / AI. */}
         <Tabs
