@@ -14,13 +14,15 @@
  * The job picker on the left is shared across all sub-modes; switching
  * jobs preserves the active sub-tab where it makes sense.
  */
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeftRight,
   BarChart3,
   Inbox,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Sparkles,
   X,
@@ -52,6 +54,8 @@ const STATUS_GROUPS: Record<StatusFilter, (state: string) => boolean> = {
   canceled: (s) => s === "canceled" || s === "canceling" || s === "interrupted",
 }
 
+const SIDEBAR_KEY = "lorahub.analysis.sidebar"
+
 export function AnalysisPage() {
   const params = useParams<{ jobId?: string }>()
   const navigate = useNavigate()
@@ -81,6 +85,20 @@ export function AnalysisPage() {
 
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
+  // Sidebar collapsibility — mirrors jobs/configs/sweeps pages so a
+  // user with a wide loss chart can hide the picker. Persisted to
+  // localStorage so the choice survives reloads.
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
+  })
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(
+      SIDEBAR_KEY,
+      sidebarOpen ? "open" : "closed",
+    )
+  }, [sidebarOpen])
 
   const visibleJobs = useMemo(() => {
     const filtered = jobList.filter((j) => {
@@ -126,14 +144,38 @@ export function AnalysisPage() {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(260px,300px)_1fr] overflow-hidden">
-      <aside className="shiro-page-aside flex flex-col min-h-0">
+    <div
+      className={cn(
+        "grid h-full min-h-0 overflow-hidden transition-[grid-template-columns] duration-300 ease-out",
+        sidebarOpen
+          ? "grid-cols-[minmax(260px,300px)_1fr]"
+          : "grid-cols-[0px_1fr]",
+      )}
+    >
+      <aside
+        className={cn(
+          "shiro-page-aside flex flex-col min-h-0 overflow-hidden transition-opacity duration-200",
+          !sidebarOpen && "pointer-events-none opacity-0",
+        )}
+        aria-hidden={!sidebarOpen}
+      >
         <header className="px-4 pt-4 pb-2 space-y-2.5">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="size-4 text-primary" />
-            <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              分析工作台
-            </span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <BarChart3 className="size-4 text-primary shrink-0" />
+              <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 truncate">
+                分析工作台
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSidebarOpen(false)}
+              title="收起侧栏"
+              className="size-7 p-0 shrink-0"
+            >
+              <PanelLeftClose className="size-4" />
+            </Button>
           </div>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/70" />
@@ -206,7 +248,19 @@ export function AnalysisPage() {
         </ScrollArea>
       </aside>
 
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden">
+      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+        {!sidebarOpen && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSidebarOpen(true)}
+            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            title="展开侧栏"
+          >
+            <PanelLeftOpen className="size-4" />
+            <span className="ml-1 text-xs">{visibleJobs.length} 个任务</span>
+          </Button>
+        )}
         {!activeJob && !isCompareRoute && (
           <EmptyState
             jobList={jobList}
