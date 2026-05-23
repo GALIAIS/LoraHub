@@ -30,10 +30,18 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+# Pick up the project-root .env *before* any module-level code that
+# reads os.environ. Without this, ``lorahub serve`` / direct uvicorn
+# launches miss the .env that ``lorahub`` CLI loads in its own entry,
+# so token / proxy env vars never take effect for the API process.
+# Existing env vars win, matching dotenv defaults.
+load_dotenv()
 
 from lorahub import __version__
 from lorahub.api import scheduler as sched

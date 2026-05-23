@@ -396,17 +396,24 @@ def test_gitea_4xx_not_retryable_clears_token_path(
     assert res.retryable is False
 
 
-def test_gitea_health_check_hits_repo_endpoint(
+def test_gitea_health_check_hits_issues_endpoint(
     monkeypatch: pytest.MonkeyPatch, gitea_sink: GiteaIssueSink,
 ) -> None:
+    """Probe the issues endpoint, not the repo metadata one — the
+    repo route requires ``read:repository`` scope which we deliberately
+    don't ask users to grant.
+    """
+    captured: list[str] = []
+
     def fake_http(url: str, **kw: Any):
-        assert url == "https://git.example.com/api/v1/repos/space/proj"
-        return 200, {"id": 1, "html_url": "https://git.example.com/space/proj"}
+        captured.append(url)
+        return 200, []
 
     monkeypatch.setattr(sinks_module, "_http", fake_http)
     res = gitea_sink.health_check()
     assert res.ok is True
-    assert res.url.endswith("space/proj")
+    assert any("/issues?" in u for u in captured)
+    assert all("/api/v1/repos/space/proj" in u for u in captured)
 
 
 def test_gitea_repo_path_is_not_url_encoded(gitea_sink: GiteaIssueSink) -> None:

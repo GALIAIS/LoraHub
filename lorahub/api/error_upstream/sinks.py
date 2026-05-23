@@ -410,15 +410,25 @@ class GiteaIssueSink:
     def health_check(self) -> SendResult:
         if not self.base_url or not self.repo_path or not self.token:
             return SendResult(ok=False, error="gitea sink not configured", retryable=False)
-        url = self._repo_url()
+        # Probe the issues endpoint, not the repo metadata endpoint —
+        # the repo metadata route requires ``read:repository`` scope
+        # while users only need to grant ``read:issue`` + ``write:issue``
+        # for this sink to function. Asking for repo scope on top of
+        # those would be over-broad and would fail closed for tokens
+        # that follow the principle of least privilege.
+        url = f"{self._repo_url()}/issues?limit=1&state=open&type=issues"
         status, body = _http(
             url, headers=self._headers(), timeout_s=self.timeout_s,
         )
-        if status == 200 and isinstance(body, dict) and "id" in body:
+        if status == 200:
+            # We don't care about the issue list itself; a 200 with a
+            # JSON / list response means the token is valid + has
+            # ``read:issue`` against this repo, which is the precondition
+            # for ``send`` to work. We thread the repo HTML URL back
+            # for the UI even though the API didn't return it.
             return SendResult(
                 ok=True,
-                url=str(body.get("html_url") or url),
-                upstream_id=str(body.get("id") or ""),
+                url=f"{self.base_url.rstrip('/')}/{self.repo_path.strip().strip('/')}",
             )
         retryable = status >= 500 or status == -1
         return SendResult(
