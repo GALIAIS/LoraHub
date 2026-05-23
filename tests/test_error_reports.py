@@ -380,10 +380,78 @@ def test_http_upstream_health_uses_draft_body_when_provided(
 
 def test_http_upstream_health_falls_back_to_settings_when_body_empty(
     client_with_store: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """An empty body still works — used by post-save re-checks."""
+    """An empty body falls back to whatever Settings says.
+
+    We pin a per-test SettingsStore at a fresh path so the assertion
+    holds regardless of the real user-data settings.json the dev
+    machine happens to carry.
+    """
+    from lorahub.api.settings import SettingsStore
+
+    monkeypatch.setattr(
+        app_module,
+        "_settings_store",
+        SettingsStore(tmp_path / "settings-empty.json"),
+        raising=False,
+    )
     resp = client_with_store.post("/api/error-reports/upstream/health")
-    # No settings configured in the test fixture, so it should report
-    # the disabled-channel branch rather than 500.
     assert resp.status_code == 200
     assert resp.json()["channel"] == "off"
+
+
+def test_http_upstream_health_ignores_masked_token_echo(
+    client_with_store: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Settings GET masks tokens as ``abcd...wxyz``; the form draft
+    echoes that mask back when the user hasn't typed a fresh token.
+    The probe must detect the mask and fall back to the persisted
+    real token on disk, otherwise we ship the literal mask string to
+    Gitea / GitLab and get 401.
+    """
+    from lorahub.api import app as app_module
+    from lorahub.api.error_upstream import sinks as sinks_module
+    from lorahub.api.settings import Settings, SettingsStore
+
+    settings_path = tmp_path / "settings.json"
+    settings_store = SettingsStore(settings_path)
+    real_token = "thereal-7890abcdefghijklmnop"
+    settings_store.save(
+        Settings(
+            error_upstream_channel="gitea",
+            error_upstream_gitlab_base_url="https://git.example.com",
+            error_upstream_gitlab_repo="space/proj",
+            error_upstream_gitlab_token=real_token,
+        )
+    )
+    monkeypatch.setattr(app_module, "_settings_store", settings_store, raising=False)
+
+    captured: dict[str, str] = {}
+
+    def fake_http(url: str, **kw: Any) -> tuple[int, Any]:
+        captured["auth"] = kw.get("headers", {}).get("Authorization", "")
+        return 200, []
+
+    monkeypatch.setattr(sinks_module, "_http", fake_http)
+
+    # Send the masked echo (what the GET response showed for the same
+    # token: first 4 + "..." + last 4 → "ther...mnop").
+    masked = "ther...mnop"
+    resp = client_with_store.post(
+        "/api/error-reports/upstream/health",
+        json={
+            "channel": "gitea",
+            "gitlab_base_url": "https://git.example.com",
+            "gitlab_repo": "space/proj",
+            "gitlab_token": masked,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    # The sink saw the *real* token, not the mask.
+    assert captured["auth"] == f"token {real_token}"

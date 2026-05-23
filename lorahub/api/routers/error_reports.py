@@ -305,17 +305,40 @@ def upstream_health(body: _UpstreamHealthIn | None = None) -> _UpstreamHealthOut
     )
 
     if body is not None and body.channel:
-        # Ad-hoc config from the form draft. Token still falls back to
-        # env vars when blank so users with LORAHUB_GITEA_TOKEN set can
-        # leave the UI field empty.
-        token = body.gitlab_token or ""
-        if not token:
+        # Ad-hoc config from the form draft. Token resolution order:
+        #   1. ``body.gitlab_token`` if it's neither blank nor the
+        #      masked echo we serve in GET responses (``abcd...wxyz``).
+        #      Without this guard the Settings UI's hydrated draft
+        #      sends the masked preview straight back to us, we hand
+        #      that literal string to Gitea, and the server rejects
+        #      it with 401 even though the real token on disk is
+        #      perfectly valid.
+        #   2. Persisted ``Settings.error_upstream_gitlab_token`` —
+        #      what the user already saved.
+        #   3. Env vars (LORAHUB_GITEA_TOKEN / LORAHUB_GITLAB_TOKEN /
+        #      LORAHUB_REPORT_TOKEN) — last-resort fallback so a
+        #      first-time setup with token-via-env works.
+        from lorahub.api.routers.settings_routes import _mask_secret  # noqa: PLC0415
+
+        settings_store = app_module._settings_store  # type: ignore[attr-defined]
+        persisted = settings_store.load()
+        persisted_token = persisted.error_upstream_gitlab_token or ""
+        masked_persisted = _mask_secret(persisted_token) or ""
+
+        raw = (body.gitlab_token or "").strip()
+        if raw and raw != masked_persisted:
+            token = raw
+        elif persisted_token:
+            token = persisted_token
+        else:
             import os  # noqa: PLC0415
 
             if body.channel == "gitea":
                 token = os.environ.get("LORAHUB_GITEA_TOKEN", "")
             elif body.channel == "gitlab":
                 token = os.environ.get("LORAHUB_GITLAB_TOKEN", "")
+            else:
+                token = ""
             if not token:
                 token = os.environ.get("LORAHUB_REPORT_TOKEN", "")
         cfg = SinkConfig(
