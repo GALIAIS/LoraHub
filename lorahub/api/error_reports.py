@@ -45,7 +45,11 @@ Everything routine (job died, preflight blocked, 500 reply) is ``error``.
 
 # Bump together with a real ALTER path. Schema 1 = the columns below.
 _SCHEMA_VERSION = 2
-_SCHEMA = """
+# Tables-only DDL, run unconditionally on every open. ``CREATE TABLE IF
+# NOT EXISTS`` won't reshape an existing table, which is exactly what
+# we want — the ALTER pass below brings v1 stores up to v2 by adding
+# the missing columns.
+_SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS error_reports (
     id              TEXT PRIMARY KEY,
     timestamp       TEXT NOT NULL,
@@ -69,6 +73,16 @@ CREATE TABLE IF NOT EXISTS error_reports (
     sent_at         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS error_reports_schema_version (
+    version INTEGER PRIMARY KEY
+);
+"""
+
+# Indexes are split out so they can run *after* the v1 → v2 column-add
+# migration. Creating ``error_reports_fp ON (fingerprint)`` against a
+# v1 database would fail with ``no such column: fingerprint`` because
+# CREATE TABLE IF NOT EXISTS is a no-op on the existing legacy schema.
+_SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS error_reports_ts
     ON error_reports (timestamp DESC);
 CREATE INDEX IF NOT EXISTS error_reports_severity
@@ -79,10 +93,6 @@ CREATE INDEX IF NOT EXISTS error_reports_job_id
     ON error_reports (job_id);
 CREATE INDEX IF NOT EXISTS error_reports_fp
     ON error_reports (fingerprint);
-
-CREATE TABLE IF NOT EXISTS error_reports_schema_version (
-    version INTEGER PRIMARY KEY
-);
 """
 
 _UPSTREAM_COLUMNS = (
@@ -218,15 +228,18 @@ class ErrorReportStore:
         self._max_rows = max_rows
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(_SCHEMA)
+            # 1. Create the table if missing. CREATE TABLE IF NOT EXISTS
+            #    is a no-op on a legacy v1 store, leaving its column set
+            #    intact for the ALTER pass below.
+            conn.executescript(_SCHEMA_TABLES)
             conn.execute(
                 "INSERT OR IGNORE INTO error_reports_schema_version (version) "
                 "VALUES (?)",
                 (_SCHEMA_VERSION,),
             )
-            # Idempotent column-add migration for stores predating the
-            # upstream fan-out. SQLite ``ALTER TABLE … ADD COLUMN``
-            # doesn't support IF NOT EXISTS so we sniff PRAGMA first.
+            # 2. Idempotent column-add migration for stores predating the
+            #    upstream fan-out. SQLite ``ALTER TABLE … ADD COLUMN``
+            #    doesn't support IF NOT EXISTS so we sniff PRAGMA first.
             cur = conn.execute("PRAGMA table_info(error_reports)")
             cols = {row[1] for row in cur.fetchall()}
             for name, decl in _UPSTREAM_COLUMNS:
@@ -234,6 +247,12 @@ class ErrorReportStore:
                     conn.execute(
                         f"ALTER TABLE error_reports ADD COLUMN {name} {decl}",
                     )
+            # 3. Indexes go last so ``error_reports_fp ON (fingerprint)``
+            #    has a column to bind against. Creating these together
+            #    with the table caused ``no such column: fingerprint``
+            #    on legacy stores because CREATE TABLE IF NOT EXISTS
+            #    didn't actually add the column.
+            conn.executescript(_SCHEMA_INDEXES)
             conn.commit()
 
     @property

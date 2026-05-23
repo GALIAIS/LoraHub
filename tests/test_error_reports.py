@@ -268,3 +268,75 @@ def test_default_path_is_under_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     p = default_error_report_store_path()
     assert p.name == "error-reports.sqlite"
     assert p.parent.name == "runs"
+
+
+def test_store_migrates_v1_schema_to_v2(tmp_path: Path) -> None:
+    """A v1 (pre-upstream) database file gets the new columns + indexes
+    added on first open. Regression for ``no such column: fingerprint``,
+    which fired when CREATE INDEX ran before the v1 → v2 ALTER pass.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "v1.sqlite"
+    # Hand-construct the legacy schema so the test doesn't need a
+    # tagged build of lorahub. Mirrors what shipped before the
+    # ``fingerprint`` column was added.
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE error_reports (
+            id              TEXT PRIMARY KEY,
+            timestamp       TEXT NOT NULL,
+            severity        TEXT NOT NULL,
+            source          TEXT NOT NULL,
+            category        TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            message         TEXT NOT NULL,
+            stack           TEXT,
+            context         TEXT NOT NULL,
+            job_id          TEXT,
+            request_id      TEXT,
+            request_path    TEXT,
+            version         TEXT NOT NULL,
+            platform        TEXT NOT NULL
+        );
+        CREATE TABLE error_reports_schema_version (version INTEGER PRIMARY KEY);
+        INSERT INTO error_reports_schema_version VALUES (1);
+        """
+    )
+    conn.execute(
+        "INSERT INTO error_reports ("
+        "id, timestamp, severity, source, category, title, message, "
+        "stack, context, job_id, request_id, request_path, version, platform"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("legacy-1", "2026-01-01T00:00:00", "error", "backend.job",
+         "x", "legacy", "msg", None, "{}", None, None, None, "0.1", "linux"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Opening the v1 file with the modern store must not raise. The
+    # ALTER pass adds the missing columns; the index pass then runs
+    # safely on the populated schema. Existing rows survive intact.
+    store = ErrorReportStore(db_path)
+    rec = store.get("legacy-1")
+    assert rec is not None
+    assert rec.title == "legacy"
+    assert rec.fingerprint is None
+    assert rec.upstream_status is None
+
+    # New writes pick up the new columns end-to-end.
+    fresh = ErrorReport.create(
+        severity="error",
+        source="backend.job",
+        category="x",
+        title="post-migration",
+        message="m",
+    )
+    fresh.fingerprint = "abc123"
+    fresh.upstream_status = "queued"
+    store.insert(fresh)
+    rec2 = store.get(fresh.id)
+    assert rec2 is not None
+    assert rec2.fingerprint == "abc123"
+    assert rec2.upstream_status == "queued"
