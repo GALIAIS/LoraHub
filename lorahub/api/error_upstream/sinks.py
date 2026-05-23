@@ -528,18 +528,38 @@ class GiteaIssueSink:
         # Gitea's per-repo issue search accepts ``labels=<name>`` as a
         # CSV; ``state=open`` keeps a manually-closed dupe from
         # silently re-opening as a new issue.
+        #
+        # Defensive: Gitea was observed silently *ignoring* the
+        # ``labels`` filter when no issue carries the named label,
+        # returning the newest issue in the repo instead. So we don't
+        # trust the API to do the de-dupe for us — we re-verify the
+        # candidate's labels actually contain ``fp:<hash>`` before
+        # treating it as a hit.
+        wanted = self._fingerprint_label(fp)
         params = urllib.parse.urlencode(
             {
                 "type": "issues",
                 "state": "open",
-                "labels": self._fingerprint_label(fp),
-                "limit": "1",
+                "labels": wanted,
+                "limit": "10",
             },
         )
         url = f"{self._repo_url()}/issues?{params}"
         status, body = _http(url, headers=self._headers(), timeout_s=self.timeout_s)
-        if status == 200 and isinstance(body, list) and body:
-            return body[0]
+        if status != 200 or not isinstance(body, list):
+            return None
+        for entry in body:
+            if not isinstance(entry, dict):
+                continue
+            labels = entry.get("labels") or []
+            if not isinstance(labels, list):
+                continue
+            label_names = {
+                str(lbl.get("name") or "") for lbl in labels
+                if isinstance(lbl, dict)
+            }
+            if wanted in label_names:
+                return entry
         return None
 
     def _ensure_labels(self, names: list[str]) -> list[int]:

@@ -347,12 +347,19 @@ def test_gitea_open_new_issue_creates_labels_and_posts(
 def test_gitea_appends_comment_on_existing_issue(
     monkeypatch: pytest.MonkeyPatch, gitea_sink: GiteaIssueSink,
 ) -> None:
+    # Compute the same fingerprint the sink will so the mocked search
+    # response carries the matching ``fp:<hash>`` label and survives
+    # the post-search re-verification step.
+    sample = _make_report()
+    fp = compute_fingerprint(sample)
+
     def fake_http(url: str, **kw: Any):
         method = kw.get("method", "GET")
         if method == "GET" and "/issues?" in url:
             return 200, [{
                 "number": 17,
                 "comments": 3,
+                "labels": [{"name": f"fp:{fp}"}, {"name": "severity:error"}],
                 "html_url": "https://git.example.com/space/proj/issues/17",
             }]
         if method == "POST" and url.endswith("/issues/17/comments"):
@@ -360,10 +367,56 @@ def test_gitea_appends_comment_on_existing_issue(
         raise AssertionError(f"unexpected call: {method} {url}")
 
     monkeypatch.setattr(sinks_module, "_http", fake_http)
-    res = gitea_sink.send(_make_report())
+    res = gitea_sink.send(sample)
     assert res.ok
     assert res.upstream_id == "17"
     assert "issues/17" in res.url
+
+
+def test_gitea_ignores_unrelated_issue_when_label_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive: Gitea silently dropped the ``labels`` query parameter
+    when no issue had the requested label, returning the newest issue
+    instead. The sink must re-verify the matched issue actually
+    carries ``fp:<hash>`` before treating it as a duplicate.
+    """
+    sink = GiteaIssueSink(
+        base_url="https://git.example.com",
+        repo_path="space/proj",
+        token="tok",
+    )
+    sink._label_cache = {  # type: ignore[attr-defined]
+        "fp:dummy": 1,
+        "severity:error": 2,
+        "source:backend.job": 3,
+        "category:x": 4,
+    }
+
+    def fake_http(url: str, **kw: Any):
+        method = kw.get("method", "GET")
+        if method == "GET" and "/issues?" in url:
+            # Simulate Gitea's misbehaviour: we asked for fp:abc but
+            # got back an issue with totally different labels.
+            return 200, [{
+                "number": 99,
+                "labels": [{"name": "stale-issue"}],
+                "html_url": "https://git.example.com/space/proj/issues/99",
+            }]
+        if method == "POST" and url.endswith("/issues"):
+            # Sink should have rejected the search match and gone on
+            # to open a new issue instead.
+            return 201, {
+                "number": 100,
+                "html_url": "https://git.example.com/space/proj/issues/100",
+            }
+        return 404, "unexpected"
+
+    monkeypatch.setattr(sinks_module, "_http", fake_http)
+    res = sink.send(_make_report())
+    assert res.ok is True
+    assert res.upstream_id == "100"  # NOT 99
+    assert "issues/100" in res.url
 
 
 def test_gitea_5xx_is_retryable(
