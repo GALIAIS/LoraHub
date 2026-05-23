@@ -37,6 +37,12 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   const [captionMode, setCaptionMode] = useState<"general" | "style" | "character">("style")
   const [triggerWord, setTriggerWord] = useState("")
   const [stripStyleTags, setStripStyleTags] = useState(true)
+  // Shared "skip already-processed" toggle for the three tabs that
+  // don't have an explicit overwrite/skip control of their own
+  // (smart-caption, vlm-caption, quality-score, trigger-words). WD14
+  // already exposes this via its own ``overwrite`` checkbox below.
+  // Default ON so the common case ("don't redo work") just works.
+  const [skipDone, setSkipDone] = useState(true)
 
   // Pull the curated SmilingWolf catalogue from the server. The
   // dropdown was previously hard-coded to short names (e.g.
@@ -73,13 +79,22 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           captionMode,
           triggerWord: triggerWord.trim() || undefined,
           stripStyleTags,
+          skipExisting: skipDone,
         })
         break
       case "vlm-caption":
-        onStart(activeTab, { ...base, path: datasetPath })
+        onStart(activeTab, {
+          ...base,
+          path: datasetPath,
+          skipAnnotated: skipDone,
+        })
         break
       case "quality-score":
-        onStart(activeTab, { ...base, path: datasetPath })
+        onStart(activeTab, {
+          ...base,
+          path: datasetPath,
+          skipScored: skipDone,
+        })
         break
       case "wd14":
         onStart(activeTab, {
@@ -92,7 +107,11 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
         })
         break
       case "trigger-words":
-        onStart(activeTab, { ...base, path: datasetPath })
+        onStart(activeTab, {
+          ...base,
+          path: datasetPath,
+          skipAnalyzed: skipDone,
+        })
         break
     }
   }
@@ -147,6 +166,34 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
               <option value="cpu">CPU</option>
             </select>
           </label>
+
+          {/* Shared "skip done" toggle. WD14 has its own overwrite control
+              right inside the wd14 panel below, so we only show this for
+              the four non-WD14 tabs. */}
+          {activeTab !== "wd14" && (
+            <label className="flex items-center gap-1.5 text-xs mb-3">
+              <input
+                type="checkbox"
+                checked={skipDone}
+                onChange={(e) => setSkipDone(e.target.checked)}
+                className="size-3"
+              />
+              <span>
+                跳过已{
+                  activeTab === "quality-score" ? "评分" :
+                  activeTab === "trigger-words" ? "分析" :
+                  "标注"
+                }的图片
+              </span>
+              <span className="text-muted-foreground/70">
+                ({
+                  activeTab === "quality-score" ? "已有 AI 质量评分" :
+                  activeTab === "trigger-words" ? "已生成触发词建议" :
+                  "已有非空 .txt"
+                })
+              </span>
+            </label>
+          )}
 
           {activeTab === "smart-caption" && (
             <div className="flex flex-col gap-3">
@@ -269,9 +316,15 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           )}
 
           {activeTab === "trigger-words" && (
-            <p className="text-xs text-muted-foreground">
-              分析数据集图片，建议合适的触发词
-            </p>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                逐图分析视觉内容，给出 1-3 个适合作为 LoRA 触发词的短语。
+                批次完成后会在工具栏下方汇总数据集层面的高频候选词，可点击复制。
+              </p>
+              <p className="text-xs text-muted-foreground/70">
+                只写入 store（不修改 .txt），可在右侧检查器看到每张图的建议触发词。
+              </p>
+            </div>
           )}
         </div>
 

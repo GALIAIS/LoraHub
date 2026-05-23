@@ -129,6 +129,10 @@ class AIBatchCaptionInput(BaseModel):
     recursive: bool = False
     task: str = "tagging.assist"
     mergeStrategy: str = "replace"
+    # Skip images that already have a non-empty .txt sidecar. Empty /
+    # zero-byte sidecars are NOT skipped (they're usually crash-leftover
+    # half-writes that should be reprocessed).
+    skipAnnotated: bool = True
 
 
 @router.post("/ai/caption")
@@ -156,6 +160,15 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
         raise HTTPException(409, f"no AI route for task {body.task!r}")
 
     images = _scan_images(directory, body.recursive)
+    skipped = 0
+    if body.skipAnnotated:
+        before = len(images)
+        images = [
+            p for p in images
+            if not (p.with_suffix(".txt").is_file()
+                    and p.with_suffix(".txt").stat().st_size > 0)
+        ]
+        skipped = before - len(images)
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
@@ -216,13 +229,22 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             errors.append({"path": str(img_path), "error": str(exc)})
 
-    return {"processed": len(results), "results": results, "errors": errors}
+    return {
+        "processed": len(results),
+        "skipped": skipped,
+        "results": results,
+        "errors": errors,
+    }
 
 
 class AIBatchQualityInput(BaseModel):
     path: str
     recursive: bool = False
     task: str = "quality.score"
+    # Skip images that already have an AI quality score in the store.
+    # Quality scoring writes to the store (not to .txt), so the
+    # "completed" check is different from caption batches.
+    skipScored: bool = True
 
 
 @router.post("/ai/quality")
@@ -246,10 +268,21 @@ def ai_batch_quality(body: AIBatchQualityInput) -> dict[str, Any]:
         raise HTTPException(409, f"no AI route for task {body.task!r}")
 
     images = _scan_images(directory, body.recursive)
+    store = _store()
+    skipped = 0
+    if body.skipScored:
+        before = len(images)
+        images = [
+            p for p in images
+            if not (
+                (ann := store.get_annotation(str(p))) is not None
+                and ann.ai_quality_label is not None
+            )
+        ]
+        skipped = before - len(images)
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
-    store = _store()
     for img_path in images:
         try:
             import base64  # noqa: PLC0415
@@ -314,7 +347,12 @@ def ai_batch_quality(body: AIBatchQualityInput) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             errors.append({"path": str(img_path), "error": str(exc)})
 
-    return {"processed": len(results), "results": results, "errors": errors}
+    return {
+        "processed": len(results),
+        "skipped": skipped,
+        "results": results,
+        "errors": errors,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -529,7 +567,9 @@ class SmartCaptionBatchInput(BaseModel):
     # Skip images that already have a non-empty .txt sidecar. Useful
     # for re-running a batch that hit upstream rate-limits — the
     # second run only retries the images that failed the first time.
-    skipExisting: bool = False
+    # Defaults to true so the common case ("don't waste tokens
+    # re-captioning already-tagged images") just works.
+    skipExisting: bool = True
 
 
 @dataclass
@@ -1015,3 +1055,221 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"smart caption failed: {exc}") from exc
+
+
+# --------------------------------------------------------------------------- #
+# Trigger word suggestion
+# --------------------------------------------------------------------------- #
+#
+# A trigger word is the rare-token-grade label LoRA training relies on to
+# bind a learned concept ("blue-haired magical girl with a star wand")
+# without leaking into normal prompt vocabulary. The task here is "per
+# image, suggest 1-3 trigger word *candidates* that capture this image's
+# distinctive identity content" — what the user would later wrap into
+# the dataset's keepTokens prefix.
+#
+# Why per-image and not dataset-level: the user's existing inspector
+# panel already renders ann.aiTriggerWords as chips next to each image,
+# and the per-image signal is what makes "is this image off-distribution
+# for the chosen trigger?" auditable. A dataset-level top-k can be
+# computed cheaply over the per-image results (collections.Counter on
+# the union of all suggestions) — this endpoint returns the per-image
+# results plus that aggregation as a `dataset_top` field.
+
+_TRIGGER_WORD_PROMPT = (
+    "You are helping pick LoRA training trigger words for an image dataset. "
+    "Look at this single image and suggest 1-3 short, content-distinctive "
+    "phrases that uniquely identify what's in it — the character / concept / "
+    "object / scene specifics that this image is *about*. "
+    "\n"
+    "Strict rules:\n"
+    "- Phrases must be 1-3 words each, lowercase, English.\n"
+    "- Prefer concrete identity ('crimson robe', 'lop ears', 'glass dome city') "
+    "over generic descriptors ('cute', 'high quality', 'detailed').\n"
+    "- Skip art-style words ('anime', 'illustration', 'masterpiece') — they're "
+    "not trigger material.\n"
+    "- Skip rating tags (safe / nsfw / etc).\n"
+    "- If the image has a clear named character or franchise, lead with that.\n"
+    "\n"
+    "Output JSON only, no surrounding prose: "
+    '{"triggers": ["phrase one", "phrase two"]}'
+)
+
+
+class TriggerWordsBatchInput(BaseModel):
+    path: str
+    recursive: bool = False
+    task: str = "trigger.words"
+    # Skip images that already have a trigger word suggestion stored.
+    skipAnalyzed: bool = True
+
+
+def _parse_trigger_words(raw: str) -> list[str]:
+    """Best-effort parse of the VLM response into a clean trigger list.
+
+    Accepts either the JSON-only output the prompt asks for or a fallback
+    comma-separated string the model might emit when it ignores the JSON
+    instruction. Always returns at most 3 entries, deduped, lowercased.
+    """
+    import json as _json  # noqa: PLC0415
+    import re as _re  # noqa: PLC0415
+
+    text = raw.strip()
+    triggers: list[str] = []
+    # Most VLMs honour the JSON-only request, sometimes wrapping in ```json
+    # code fences. Strip those before parsing.
+    fenced = _re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        data = _json.loads(text)
+        candidate = data.get("triggers") if isinstance(data, dict) else None
+        if isinstance(candidate, list):
+            triggers = [str(t) for t in candidate]
+    except (_json.JSONDecodeError, AttributeError, TypeError):
+        # Fallback: comma / newline split.
+        parts = [p.strip().strip("\"'") for p in _re.split(r"[,\n]", text)]
+        triggers = [p for p in parts if p]
+
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for t in triggers:
+        norm = t.strip().lower()
+        # Drop punctuation-only or empty tokens, cap at 3 words, skip dups.
+        if not norm or not _re.search(r"[a-z]", norm):
+            continue
+        words = norm.split()
+        if len(words) > 3:
+            norm = " ".join(words[:3])
+        if norm in seen:
+            continue
+        seen.add(norm)
+        cleaned.append(norm)
+        if len(cleaned) >= 3:
+            break
+    return cleaned
+
+
+@router.post("/ai/trigger-words")
+def ai_batch_trigger_words(body: TriggerWordsBatchInput) -> dict[str, Any]:
+    """Suggest 1-3 LoRA-trigger-word candidates per image, then aggregate."""
+    from collections import Counter  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+    from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.task)
+    if route is None or not (route.provider_id and route.model_id):
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.task!r}")
+
+    images = _scan_images(directory, body.recursive)
+    store = _store()
+    skipped = 0
+    if body.skipAnalyzed:
+        before = len(images)
+        images = [
+            p for p in images
+            if not (
+                (ann := store.get_annotation(str(p))) is not None
+                and ann.ai_trigger_words is not None
+                and len(ann.ai_trigger_words) > 0
+            )
+        ]
+        skipped = before - len(images)
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    counter: Counter[str] = Counter()
+
+    # Pre-seed the counter with already-analysed images so the dataset_top
+    # aggregation reflects the whole dataset, not just this batch.
+    for p in _scan_images(directory, body.recursive):
+        ann_existing = store.get_annotation(str(p))
+        if ann_existing and ann_existing.ai_trigger_words:
+            counter.update(ann_existing.ai_trigger_words)
+
+    for img_path in images:
+        try:
+            import base64  # noqa: PLC0415
+            import mimetypes  # noqa: PLC0415
+
+            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
+            data = img_path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            data_url = f"data:{mime};base64,{b64}"
+
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": route.system_prompt or _TRIGGER_WORD_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]},
+            ]
+            # If the configured route override didn't mention triggers in
+            # the system prompt, re-state the JSON contract on the user
+            # turn so we still get parseable output.
+            if route.system_prompt and "trigger" not in route.system_prompt.lower():
+                messages[1]["content"].append({"type": "text", "text": _TRIGGER_WORD_PROMPT})
+
+            result = ai_client.invoke(
+                ai_store,
+                provider_id=route.provider_id,
+                model_id=route.model_id,
+                messages=messages,
+                route=route,
+            )
+
+            triggers = _parse_trigger_words(result.content)
+            if not triggers:
+                # Don't store an empty list — that would mark the image
+                # "analyzed but produced nothing", which the next run's
+                # skipAnalyzed would then skip forever. Treat empty as
+                # an error so the user can retry.
+                errors.append({
+                    "path": str(img_path),
+                    "error": "model returned no parseable triggers",
+                })
+                continue
+
+            counter.update(triggers)
+
+            ann = store.get_annotation(str(img_path))
+            if ann is None:
+                ann = ImageAnnotation(
+                    image_path=str(img_path),
+                    sha256=_file_sha256(img_path),
+                )
+            ann.ai_trigger_words = triggers
+            ann.ai_trigger_words_at = datetime.now(UTC).isoformat()
+            store.upsert_annotation(ann)
+
+            results.append({"path": str(img_path), "triggers": triggers})
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"path": str(img_path), "error": str(exc)})
+
+    # Top-N most common across the dataset. 8 is a sensible upper bound
+    # for a "pick your trigger word" picker — beyond that the tail is
+    # just noise.
+    dataset_top = [
+        {"trigger": t, "count": c}
+        for t, c in counter.most_common(8)
+    ]
+
+    return {
+        "processed": len(results),
+        "skipped": skipped,
+        "results": results,
+        "errors": errors,
+        "dataset_top": dataset_top,
+    }
+

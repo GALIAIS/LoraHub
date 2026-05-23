@@ -41,15 +41,20 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
   const [optimisticCaption, setOptimisticCaption] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  // Reset edit drafts whenever the inspector switches to a new image,
-  // otherwise the next image inherits the previous draft state.
+  // Reset edit drafts whenever the inspector switches to a new image.
+  // Deliberately keyed on `detail?.path` ALONE — not on caption /
+  // userNotes — so a query refetch mid-edit (e.g. favorite mutation
+  // invalidates the list) doesn't blow away the user's in-progress
+  // typing. The "new image arrives with fresh caption" case still
+  // works because path changes too.
   useEffect(() => {
     setEditingCaption(false)
     setEditingNotes(false)
     setOptimisticCaption(null)
     setCaptionDraft(detail?.caption ?? "")
     setNotesDraft(detail?.annotation?.userNotes ?? "")
-  }, [detail?.path, detail?.caption, detail?.annotation?.userNotes])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.path])
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["image-studio"] })
@@ -112,12 +117,17 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
     setEditingCaption(true)
   }
 
-  const saveCaption = () => {
+  const saveCaption = (committed?: string) => {
+    // TagChipEditor passes the freshly committed value in — prefer it
+    // over our local captionDraft because the user might have hit
+    // Save without first pressing Enter to flush the trailing input.
+    const next = committed ?? captionDraft
+    setCaptionDraft(next)
     // Show the new caption immediately so the textarea collapse doesn't
     // reveal the stale value while the op queue applies.
-    setOptimisticCaption(captionDraft)
+    setOptimisticCaption(next)
     setEditingCaption(false)
-    execMutation.mutate({ op: "replace_caption", payload: { caption: captionDraft } })
+    execMutation.mutate({ op: "replace_caption", payload: { caption: next } })
   }
 
   const handleDelete = () => {

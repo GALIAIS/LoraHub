@@ -18,8 +18,16 @@ import { cn } from "@/lib/utils"
 export interface TagChipEditorProps {
   value: string
   onChange: (next: string) => void
-  /** Save the edits, e.g. enqueue a replace_caption op. Optional. */
-  onSave?: () => void
+  /**
+   * Save the edits, e.g. enqueue a replace_caption op. Optional.
+   *
+   * Receives the just-committed value as an argument because React state
+   * updates are async — `onSave` cannot read the latest `captionDraft`
+   * from the parent's closure if the user hits Save without first
+   * pressing Enter / comma to flush the trailing input. Always trust
+   * the argument over any captured prop.
+   */
+  onSave?: (committed: string) => void
   /** Cancel editing without committing — drops local draft state. */
   onCancel?: () => void
   /** Inline-mode: hide the explicit Save / Cancel buttons. */
@@ -49,8 +57,10 @@ export function TagChipEditor({
   const tags = useMemo(() => splitTags(value), [value])
 
   // Re-emit a normalized join so trailing whitespace / stray commas
-  // stay out of the persisted caption file.
-  const commit = (nextTags: string[]) => {
+  // stay out of the persisted caption file. Returns the committed
+  // string so callers (e.g. addCurrentDraft) can hand it straight to
+  // onSave without waiting for the async setState round-trip.
+  const commit = (nextTags: string[]): string => {
     const seen = new Set<string>()
     const deduped: string[] = []
     for (const t of nextTags) {
@@ -60,17 +70,22 @@ export function TagChipEditor({
       seen.add(norm)
       deduped.push(norm)
     }
-    onChange(deduped.join(", "))
+    const joined = deduped.join(", ")
+    onChange(joined)
+    return joined
   }
 
-  const addCurrentDraft = () => {
+  // Returns the freshly-committed value so onSave can flush trailing
+  // input without depending on React state having already propagated.
+  const addCurrentDraft = (): string => {
     const candidates = splitTags(draftInput)
     if (candidates.length === 0) {
       setDraftInput("")
-      return
+      return value
     }
-    commit([...tags, ...candidates])
+    const next = commit([...tags, ...candidates])
     setDraftInput("")
+    return next
   }
 
   const removeAt = (index: number) => {
@@ -163,8 +178,13 @@ export function TagChipEditor({
               <Button
                 size="sm"
                 onClick={() => {
-                  addCurrentDraft()
-                  onSave()
+                  // Flush any pending input first, then hand the
+                  // committed string to onSave directly. We do NOT
+                  // rely on the parent re-rendering because state
+                  // updates are async and onSave's closure would still
+                  // see the stale captionDraft.
+                  const committed = addCurrentDraft()
+                  onSave(committed)
                 }}
                 className="h-7 text-[11px]"
                 disabled={disabled}

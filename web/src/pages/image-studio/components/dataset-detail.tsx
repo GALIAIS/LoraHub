@@ -22,6 +22,7 @@ import {
   imageStudioSmartCaption,
   imageStudioBatchCaption,
   imageStudioBatchQuality,
+  imageStudioBatchTriggerWords,
   startTaggingSession,
   getTaggingSession,
 } from "@/lib/api"
@@ -91,6 +92,13 @@ export function DatasetDetail() {
     total?: number
     error?: string
   } | null>(null)
+  // Dataset-level trigger word ranking surfaced after a trigger-words
+  // batch completes. Stays around so the user can copy a candidate into
+  // the smart-caption "trigger word" field on the next run without
+  // having to re-run analysis.
+  const [triggerWordTop, setTriggerWordTop] = useState<
+    { trigger: string; count: number }[] | null
+  >(null)
 
   const queryClient = useQueryClient()
   const datasetName = path.split(/[/\\]/).pop() || ""
@@ -310,6 +318,7 @@ export function DatasetDetail() {
             captionMode: params.captionMode as "general" | "style" | "character",
             triggerWord: params.triggerWord as string | undefined,
             stripStyleTags: params.stripStyleTags as boolean | undefined,
+            skipExisting: params.skipExisting as boolean | undefined,
             onProgress: (snap) => {
               const last = snap.last_image
                 ? snap.last_image.split(/[/\\]/).pop() ?? ""
@@ -333,14 +342,31 @@ export function DatasetDetail() {
             path: taskPath,
             recursive,
             mergeStrategy: (params.mergeStrategy as string) || "replace",
+            skipAnnotated: params.skipAnnotated as boolean | undefined,
           })
-          setAiProgress({ running: false, label: "VLM 标注完成", processed: res.processed })
+          setAiProgress({
+            running: false,
+            label: res.skipped
+              ? `VLM 标注完成 (跳过 ${res.skipped} 已标注)`
+              : "VLM 标注完成",
+            processed: res.processed,
+          })
           break
         }
         case "quality-score": {
           setAiProgress({ running: true, label: "质量评分中..." })
-          const res = await imageStudioBatchQuality({ path: taskPath, recursive })
-          setAiProgress({ running: false, label: "质量评分完成", processed: res.processed })
+          const res = await imageStudioBatchQuality({
+            path: taskPath,
+            recursive,
+            skipScored: params.skipScored as boolean | undefined,
+          })
+          setAiProgress({
+            running: false,
+            label: res.skipped
+              ? `质量评分完成 (跳过 ${res.skipped} 已评分)`
+              : "质量评分完成",
+            processed: res.processed,
+          })
           break
         }
         case "wd14": {
@@ -389,32 +415,27 @@ export function DatasetDetail() {
           }, 2000)
           return
         }
-        case "trigger-words":
-          // The "trigger words" tab repurposes smart-caption with a
-          // replace strategy. Surface that honestly in the progress
-          // label so the user isn't waiting for some separate trigger
-          // word feature that doesn't exist yet.
-          setAiProgress({ running: true, label: "重新生成描述 (替换合并)..." })
-          await imageStudioSmartCaption({
+        case "trigger-words": {
+          // Dedicated per-image trigger-word VLM analysis. Each image
+          // gets 1-3 candidate phrases stored on its annotation, and
+          // the response carries a dataset-level top-N ranking we
+          // surface once the batch finishes.
+          setAiProgress({ running: true, label: "分析触发词..." })
+          const res = await imageStudioBatchTriggerWords({
             path: taskPath,
             recursive,
-            mergeStrategy: "replace",
-            onProgress: (snap) => {
-              const last = snap.last_image
-                ? snap.last_image.split(/[/\\]/).pop() ?? ""
-                : ""
-              setAiProgress({
-                running: snap.status === "running" || snap.status === "pending",
-                label: snap.status === "running" || snap.status === "pending"
-                  ? `重新生成中… ${last ? `· ${last}` : ""}`
-                  : "重新生成完成",
-                processed: snap.processed,
-                total: snap.total,
-              })
-            },
+            skipAnalyzed: params.skipAnalyzed as boolean | undefined,
           })
-          setAiProgress({ running: false, label: "重新生成完成" })
+          setTriggerWordTop(res.dataset_top)
+          setAiProgress({
+            running: false,
+            label: res.skipped
+              ? `触发词分析完成 (跳过 ${res.skipped} 已分析)`
+              : "触发词分析完成",
+            processed: res.processed,
+          })
           break
+        }
       }
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })
     } catch (err: unknown) {
@@ -604,6 +625,37 @@ export function DatasetDetail() {
               关闭
             </button>
           )}
+        </div>
+      )}
+
+      {/* Trigger word top-N (dataset-level summary, shown after a
+          trigger-words batch finishes). Click a chip to copy it to
+          the clipboard so the user can paste it into the smart-caption
+          "trigger word" input on the next run. */}
+      {triggerWordTop && triggerWordTop.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 bg-muted/20">
+          <span className="text-xs text-muted-foreground">数据集触发词候选 (点击复制):</span>
+          {triggerWordTop.map((t) => (
+            <button
+              key={t.trigger}
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(t.trigger)
+              }}
+              className="inline-flex items-center gap-1 rounded border bg-background px-2 py-0.5 text-[11px] font-mono hover:bg-muted transition-colors"
+              title={`${t.count} 张图片含此触发词 — 点击复制`}
+            >
+              <span>{t.trigger}</span>
+              <span className="text-muted-foreground">·{t.count}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setTriggerWordTop(null)}
+            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+          >
+            关闭
+          </button>
         </div>
       )}
 
