@@ -40,7 +40,21 @@ _PATTERNS: list[tuple[str, str, Severity, str, str]] = [
     ),
     (
         "nan_loss",
-        r"(non-finite loss|NaN.*loss|Loss is NaN|loss became NaN|nan_skip)",
+        # Match the *narrative* a trainer prints when loss diverges, not the
+        # CLI flags that *configure* nan handling. Anchoring with word
+        # boundaries + a negative lookbehind/lookahead for argv noise (`-`,
+        # `_`, `'`) keeps a CalledProcessError repr that lists --nan_guard
+        # and --masked_loss in the same line from triggering this rule via
+        # the old greedy `NaN.*loss`. Real trainers print one of:
+        #   * "non-finite loss at global_step=…"           (anima_lora loop.py)
+        #   * "Loss is NaN, skipping update"               (sd-scripts)
+        #   * "loss became NaN"                            (kohya)
+        # All three forms stay covered.
+        r"(?:"
+        r"\bnon-finite\s+loss\b"
+        r"|(?<![\w'\"-])loss\s+(?:is|became)\s+nan\b"
+        r"|(?<![\w'\"-])\bnan\s+loss\b(?!_)"
+        r")",
         "error",
         "Loss became NaN — training is numerically unstable.",
         "Try --nan_guard --nan_guard_recover to skip bad steps + auto-recover. "

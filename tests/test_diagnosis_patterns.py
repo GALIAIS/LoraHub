@@ -136,3 +136,32 @@ def test_clean_exit_does_not_emit_findings(tmp_path: Path) -> None:
     _write_log(tmp_path, "Training finished cleanly. Saved model.safetensors.")
     result = diagnose_failure(tmp_path, returncode=0)
     assert result["findings"] == [], result
+
+
+def test_called_process_error_argv_does_not_misfire_nan_loss(tmp_path: Path) -> None:
+    """Regression: the anima_lora CalledProcessError repr listed both
+    --nan_guard and --masked_loss on the same line. The old
+    ``NaN.*loss`` regex greedily spanned them and labelled the run a
+    "Loss became NaN" failure, drowning the real subprocess_returncode
+    finding. The new pattern only fires on trainer narratives.
+    """
+    sample = (
+        "subprocess.CalledProcessError: Command '['F:\\\\D\\\\LoraHub\\\\external\\\\"
+        "anima_lora\\\\.venv\\\\Scripts\\\\python.exe', "
+        "'F:\\\\D\\\\LoraHub\\\\external\\\\anima_lora\\\\train.py', "
+        "'--method', 'lora', '--preset', 'low_vram', "
+        "'--nan_guard', '--nan_guard_recover', '--nan_guard_max_consecutive', '5', "
+        "'--cache_latents', '--cache_latents_to_disk', "
+        "'--max_train_epochs', '8', '--masked_loss', "
+        "'--save_every_n_epochs', '2', '--save_state']' "
+        "returned non-zero exit status 1."
+    )
+    _write_log(tmp_path, sample)
+    result = diagnose_failure(tmp_path, returncode=1)
+    cats = {f["category"] for f in result["findings"]}
+    assert "nan_loss" not in cats, (
+        f"nan_loss should not fire on argv reprs containing --nan_guard/--masked_loss; "
+        f"fired={cats!r}"
+    )
+    # The legitimate signal is still surfaced.
+    assert "subprocess_returncode" in cats, cats
