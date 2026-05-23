@@ -6,7 +6,9 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 
 import App from "./App"
 import "./index.css"
+import { ErrorBoundary } from "./components/error-boundary"
 import { installDynamicImportRecovery } from "./lib/dynamic-import-recovery"
+import { installGlobalErrorHandlers } from "./lib/install-global-error-handlers"
 import { clearChunkReloadGuard, lazyWithRetry } from "./lib/lazy-with-retry"
 
 // Code-split every page route. Suspense lives inside <App> so the
@@ -73,6 +75,7 @@ const queryClient = new QueryClient({
 })
 
 installDynamicImportRecovery()
+installGlobalErrorHandlers()
 
 createRoot(document.getElementById("root")!, {
   onUncaughtError(error, errorInfo) {
@@ -86,38 +89,40 @@ createRoot(document.getElementById("root")!, {
   },
 }).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<App />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="jobs" element={<JobsPage />} />
-            <Route path="analysis" element={<AnalysisPage />} />
-            <Route path="analysis/compare" element={<AnalysisPage />} />
-            <Route path="analysis/:jobId" element={<AnalysisPage />} />
-            <Route path="sweeps" element={<SweepsPage />} />
-            <Route path="configs" element={<ConfigsPage />} />
-            <Route path="datasets" element={<DatasetsPage />} />
-            <Route path="image-studio" element={<ImageStudioPage />} />
-            <Route path="gallery" element={<GalleryPage />} />
-            <Route path="terminal" element={<TerminalPage />} />
-            <Route path="artifacts" element={<ArtifactsPage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="about" element={<AboutPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-      {/* Tree-shaken in production: import.meta.env.DEV is statically
-          replaced with `false` at build time, so the devtools chunk
-          and its bundled deps drop out of the prod bundle entirely. */}
-      {import.meta.env.DEV && (
-        <ReactQueryDevtools
-          initialIsOpen={false}
-          buttonPosition="bottom-right"
-        />
-      )}
-    </QueryClientProvider>
+    <ErrorBoundary reporterSource="frontend.render">
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<App />}>
+              <Route index element={<DashboardPage />} />
+              <Route path="jobs" element={<JobsPage />} />
+              <Route path="analysis" element={<AnalysisPage />} />
+              <Route path="analysis/compare" element={<AnalysisPage />} />
+              <Route path="analysis/:jobId" element={<AnalysisPage />} />
+              <Route path="sweeps" element={<SweepsPage />} />
+              <Route path="configs" element={<ConfigsPage />} />
+              <Route path="datasets" element={<DatasetsPage />} />
+              <Route path="image-studio" element={<ImageStudioPage />} />
+              <Route path="gallery" element={<GalleryPage />} />
+              <Route path="terminal" element={<TerminalPage />} />
+              <Route path="artifacts" element={<ArtifactsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="about" element={<AboutPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+        {/* Tree-shaken in production: import.meta.env.DEV is statically
+            replaced with `false` at build time, so the devtools chunk
+            and its bundled deps drop out of the prod bundle entirely. */}
+        {import.meta.env.DEV && (
+          <ReactQueryDevtools
+            initialIsOpen={false}
+            buttonPosition="bottom-right"
+          />
+        )}
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )
 

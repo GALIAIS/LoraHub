@@ -46,6 +46,10 @@ from lorahub.api.ai_store import (
     AIStore,
     default_ai_store_path,
 )
+from lorahub.api.error_reports import (
+    ErrorReportStore,
+    default_error_report_store_path,
+)
 from lorahub.api.image_studio_store import (
     ImageStudioStore,
     default_image_studio_store_path,
@@ -78,6 +82,10 @@ _sweep_store: SweepStore | None = None
 _session_store: SessionStore | None = None
 _ai_store: AIStore | None = None
 _image_studio_store: ImageStudioStore | None = None
+# Error registry: every uncaught FastAPI exception, every job failure,
+# every preflight 422, every frontend POST /api/error-reports lands here.
+# See lorahub.api.error_reports + .error_reporter for the funnel.
+_error_report_store: ErrorReportStore | None = None
 
 
 @asynccontextmanager
@@ -138,13 +146,19 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_store, _image_studio_store  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store, _image_studio_store, _error_report_store  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
     if _ai_store is None:
         _ai_store = AIStore(default_ai_store_path())
+    if _error_report_store is None:
+        # The error registry must come up before anything else that can
+        # raise during lifespan, so the very first thing a broken boot
+        # would do — an exception in auto-resume, a sweep DB lock —
+        # has somewhere to land.
+        _error_report_store = ErrorReportStore(default_error_report_store_path())
     if _image_studio_store is None:
         _image_studio_store = ImageStudioStore(default_image_studio_store_path())
         # Seed empty routes for the LoraHub task ids so the Settings UI
@@ -220,8 +234,16 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         requeued = _requeue_pending_jobs()
         if requeued > 0:
             log.info("re-enqueued %d pending job(s) on startup", requeued)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         log.exception("auto-resume hook failed; continuing startup")
+        from lorahub.api.error_reporter import capture_exception  # noqa: PLC0415
+
+        capture_exception(
+            exc,
+            source="backend.lifespan",
+            category="auto_resume",
+            title="auto-resume hook failed during startup",
+        )
 
     # Sweep restart recovery: rebuild MaterialisedSweep instances for
     # any TPE sweep whose study sqlite file still exists. Without this,
@@ -233,8 +255,16 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         from lorahub.api import sweep_runtime  # noqa: PLC0415
 
         sweep_runtime.rebuild_active_sweeps(state, _sweep_store)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         log.exception("sweep rebuild hook failed; continuing startup")
+        from lorahub.api.error_reporter import capture_exception  # noqa: PLC0415
+
+        capture_exception(
+            exc,
+            source="backend.lifespan",
+            category="sweep_rebuild",
+            title="sweep rebuild hook failed during startup",
+        )
 
     # Resize the module-level scheduler from persisted Settings before
     # workers start. We reach for the *current* `_settings_store` symbol
@@ -354,6 +384,59 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Error capture middleware + handlers --------------------------------- #
+#
+# Every request gets a short request id (passed back in the `X-Request-ID`
+# response header). Uncaught Python exceptions and explicit 5xx HTTPException
+# responses are persisted into ``ErrorReportStore`` so the user can view
+# them later from Settings → 错误上报 without needing access to the server
+# console. The 4xx surface is intentionally left alone — a 404 isn't a
+# failure to report on. Preflight 422s are persisted by the route handlers
+# themselves so the structured findings are kept verbatim.
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next: Any) -> Any:
+    import uuid as _uuid  # noqa: PLC0415
+
+    rid = request.headers.get("x-request-id") or _uuid.uuid4().hex[:12]
+    request.state.request_id = rid
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> Response:
+    """Persist the failure, then re-raise behaviour matching FastAPI's default.
+
+    We don't want to swallow ``HTTPException`` here — Starlette already has
+    a handler for it that produces the right JSON/status. Only bare
+    ``Exception`` (uncaught traceback) flows through this hook. The
+    response carries the same ``request_id`` we logged so users can
+    quote it when filing an issue.
+    """
+    from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+    from lorahub.api.error_reporter import capture_exception  # noqa: PLC0415
+
+    rid = getattr(request.state, "request_id", None)
+    report = capture_exception(
+        exc,
+        source="backend.exception",
+        category="unhandled",
+        title=f"{request.method} {request.url.path}",
+        request_id=rid,
+        request_path=str(request.url.path),
+    )
+    body = {
+        "detail": {
+            "message": "internal server error — see Settings → 错误上报 for details.",
+            "request_id": rid,
+            "report_id": report.id if report is not None else None,
+        }
+    }
+    return JSONResponse(status_code=500, content=body)
 
 
 # Import routers AFTER the test-hook attributes above are bound, so the

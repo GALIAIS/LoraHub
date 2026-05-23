@@ -205,6 +205,15 @@ def _enqueue_launch(
                     j.state = JobState.succeeded if rc == 0 else JobState.failed
                 j.finished_at = datetime.now(UTC)
                 state.registry.update(j)
+                # Persist a structured failure report so the user can
+                # find this run in Settings → 错误上报 even after the
+                # job list is cleared. ``unknown`` covers the common
+                # "exit !=0 with no matched diagnosis pattern" path —
+                # the streaming watcher's diagnostic_warning events
+                # (matched on the regex catalogue) are still the
+                # primary signal during the run.
+                if j.state is JobState.failed:
+                    _report_job_failure(j, returncode=rc)
                 # Sweep feedback: pull the final loss/val_loss out of the
                 # workspace and push it into the parent sweep's sampler.
                 # No-op for non-sweep jobs and for sweeps that aren't
@@ -251,6 +260,22 @@ def _enqueue_launch(
                 j.error = repr(exc)
                 j.finished_at = datetime.now(UTC)
                 state.registry.update(j)
+                from lorahub.api.error_reporter import (  # noqa: PLC0415
+                    capture_exception,
+                )
+
+                with contextlib.suppress(Exception):
+                    capture_exception(
+                        exc,
+                        source="backend.job",
+                        category="launch_failed",
+                        title=f"backend.launch raised before training started: {job.id[-12:]}",
+                        job_id=job.id,
+                        context={
+                            "workspace": str(workspace),
+                            "stage": "launch",
+                        },
+                    )
                 from lorahub.api.sweep_runtime import (  # noqa: PLC0415
                     report_terminal_job,
                 )
@@ -361,6 +386,75 @@ def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[
         return None, warnings
 
     return final, warnings
+
+
+def _report_job_failure(job: JobRecord, *, returncode: int | None) -> None:
+    """Capture a structured failure report when a training job exits non-zero.
+
+    Pulls the same context the user would otherwise have to assemble by
+    hand: a small tail of ``events.jsonl`` (so the matching
+    ``diagnostic_warning`` events the streaming watcher emitted are
+    visible), the tail of ``training.log`` (so the trainer's own
+    stderr / traceback survives even if the diagnoser couldn't classify
+    it), and the diagnose_failure verdict (highest-severity matched
+    pattern + remediation).
+
+    Best-effort: any failure inside this helper is swallowed so the job
+    cleanup path keeps running.
+    """
+    try:
+        from lorahub.api.error_reporter import capture  # noqa: PLC0415
+        from lorahub.api.training_assistant import diagnose_failure  # noqa: PLC0415
+
+        workspace = Path(job.workspace) if job.workspace else None
+        diag: dict[str, Any] = {}
+        if workspace and workspace.is_dir():
+            with contextlib.suppress(Exception):
+                diag = diagnose_failure(workspace, returncode=returncode)
+        head = None
+        category = "exit_non_zero"
+        if isinstance(diag, dict):
+            findings = diag.get("findings") or []
+            if findings:
+                # findings is already severity-sorted in diagnose_failure;
+                # mirror its top pick as the category for the registry list
+                # so users can filter by ``oom`` / ``nan_loss`` / etc.
+                head = findings[0]
+                if isinstance(head, dict):
+                    category = str(head.get("category") or category)
+        title = (
+            f"job {job.id[-12:]} exited with {returncode}"
+            if returncode is not None
+            else f"job {job.id[-12:]} failed"
+        )
+        msg_parts: list[str] = []
+        if isinstance(diag, dict) and diag.get("summary"):
+            msg_parts.append(str(diag["summary"]))
+        if isinstance(head, dict) and head.get("remediation"):
+            msg_parts.append(f"remediation: {head['remediation']}")
+        message = "\n".join(msg_parts) or (
+            f"trainer exit code {returncode}; no log excerpt was reachable."
+        )
+        ctx: dict[str, Any] = {
+            "returncode": returncode,
+            "workspace": str(workspace) if workspace else None,
+            "log_path": diag.get("log_path") if isinstance(diag, dict) else None,
+            "log_excerpt": (
+                diag.get("log_excerpt") if isinstance(diag, dict) else ""
+            )[:8000],
+            "findings": diag.get("findings") if isinstance(diag, dict) else [],
+        }
+        capture(
+            severity="error",
+            source="backend.job",
+            category=category,
+            title=title,
+            message=message,
+            context=ctx,
+            job_id=job.id,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("failed to record job-failure error report for %s", job.id)
 
 
 __all__ = [

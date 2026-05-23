@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/tabs"
 import { OverviewTab } from "./components/overview-tab"
 import { EnvironmentTab } from "./components/environment-tab"
+import { ErrorsTab } from "./components/errors-tab"
 import { TaggingTab } from "./components/tagging-tab"
 import { NetworkTab } from "./components/network-tab"
 import { ModelsTab } from "./components/models-tab"
@@ -20,6 +21,7 @@ type TabKey =
   | "models"
   | "tagging"
   | "ai"
+  | "errors"
   | "maintenance"
 
 /**
@@ -55,6 +57,7 @@ export function SettingsPage() {
             <TabsTrigger value="models">模型下载</TabsTrigger>
             <TabsTrigger value="tagging">标注</TabsTrigger>
             <TabsTrigger value="ai">AI 服务商</TabsTrigger>
+            <TabsTrigger value="errors">错误上报</TabsTrigger>
             <TabsTrigger value="maintenance">维护</TabsTrigger>
           </TabsList>
         </div>
@@ -99,6 +102,13 @@ export function SettingsPage() {
             <div className="h-full overflow-y-auto">
               <div className="px-8 py-6 w-full">
                 {tab === "ai" && <AIProvidersTab />}
+              </div>
+            </div>
+          </TabsContent>
+          <TabsContent value="errors" className="h-full">
+            <div className="h-full overflow-y-auto">
+              <div className="px-8 py-6 w-full">
+                {tab === "errors" && <ErrorsTab />}
               </div>
             </div>
           </TabsContent>
