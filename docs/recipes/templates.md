@@ -11,11 +11,12 @@ LoraHub 自带几份 YAML 模板，放在 [`configs/`](https://github.com/GALIAI
 
 | 模板 | 架构 | Network | 备注 |
 | ---- | ---- | ------- | ---- |
-| `sdxl_character_8gb`   | SDXL       | LoRA, rank 32 / alpha 16 | 8 GB 显存友好，1024 px，10 epoch，只训 UNet。 |
-| `anima_style_24gb`     | Anima（dp）| LoRA, rank 16 / alpha 8  | 24 GB / 4090 上的风格 LoRA；200 步一次 checkpoint；开 live preview。 |
-| `anima_character_24gb` | Anima（dp）| LoRA, rank 32 / alpha 16 | 24 GB / 4090 上的角色 LoRA；200 步一次 checkpoint。 |
+| `anima_lora_default`        | Anima | LoRA + OrthoLoRA + T-LoRA, rank 16 / alpha 16 | 上游 anima_lora `make lora default` 的 100% 复刻基线;新手对照参考。 |
+| `anima_lora_8gb`            | Anima | LoRA + OrthoLoRA + T-LoRA, rank 8 / alpha 8   | 8GB 显存档:768²、AdamW8bit、blocks_to_swap=24、grad-ckpt 开;关 sampling/validation/torch.compile。 |
+| `anima_character_32gb_dora` | Anima | DoRA + T-LoRA, rank 32 / alpha 32             | 32GB 卡上的角色 LoRA:1024²、batchSize 2 + gradAccum 4、torch.compile cudagraph_trees、CMMD validation。 |
+| `anima_style_32gb_loha`     | Anima | LoHa + T-LoRA, rank 4 / alpha 4               | 32GB 卡上的画风 LoRA;LoHa 比同等表达的 LoRA 参数量减半,收敛更快。 |
 
-Anima 配置是 diffusion-pipe 路径的标准范例——把 transformer + Qwen-Image VAE + Qwen3-0.6B 文本编码器接好，并打开 LoraHub 的 live preview worker。
+Anima 配置走 LoraHub 的 anima_lora 后端 — 把 DiT + Qwen-Image VAE + Qwen3-0.6B 文本编码器接好,并自动调用上游 preprocess (resize_images / cache_latents / cache_text_embeddings)。
 
 ## 默认 sample prompt 集
 
@@ -60,10 +61,11 @@ _placeholders:
 `lorahub init <name>` 从磁盘复制其中一份模板：
 
 ```powershell
-lorahub init my_character                          # 默认：sdxl_character_8gb
-lorahub init my_style --template anima_style_24gb  # 选 configs/anima_style_24gb.yaml
+lorahub init my_character                            # 默认:anima_lora_default
+lorahub init my_8gb --template anima_lora_8gb        # 8GB 卡起步
+lorahub init my_char --template anima_character_32gb_dora  # 32GB 角色 DoRA
 lorahub init my_character --auto `
-    --checkpoint C:\models\sdxl_base.safetensors `
-    --dataset    .\datasets\my_character           # 按检测到的显存调参
+    --checkpoint .\models\circlestone-labs__Anima\split_files\diffusion_models\anima-base-v1.0.safetensors `
+    --dataset    .\datasets\my_character             # 按检测到的显存调参
 ```
 

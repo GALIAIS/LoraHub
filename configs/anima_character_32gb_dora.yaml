@@ -4,8 +4,7 @@
 # Expected throughput: ~1.0-1.5 s/step (vs ~6-12 s/step on the 8GB config).
 # Expected VRAM peak: ~22-25 GB (leaves ~7 GB headroom for sample / validation).
 #
-# Trade-offs vs anima_character_8gb_dora.yaml (the same algorithm tuned for
-# the opposite hardware budget):
+# Trade-offs vs anima_lora_8gb.yaml (同算法在 8GB 预算下的反向调参版):
 #   - resolution 1024² (full anima native; 4096 tokens) instead of 768²
 #   - blocks_to_swap = 0 (every DiT block on GPU; saves CPU↔GPU H2D bandwidth)
 #   - gradient_checkpointing OFF (activations stay resident, no recompute)

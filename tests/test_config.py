@@ -67,10 +67,19 @@ def test_json_schema_export() -> None:
 
 
 def test_example_recipe_loads() -> None:
-    config_path = Path(__file__).resolve().parent.parent / "recipes" / "sdxl_character_8gb.yaml"
+    """Smoke-load one of the bundled recipes via the schema loader.
+
+    Pinned to ``anima_lora_default.yaml`` because that's the canonical
+    upstream-default recipe — every other config is a delta on top of
+    it. The test is conditional on the file's existence so a checkout
+    that's pruned configs/ for a CI shard still passes.
+    """
+    config_path = (
+        Path(__file__).resolve().parent.parent / "configs" / "anima_lora_default.yaml"
+    )
     if config_path.exists():
         cfg = load_config(config_path)
-        assert cfg.base_model.arch == "sdxl"
+        assert cfg.base_model.arch == "anima"
         assert cfg.schedule.batch_size == 1
 
 

@@ -570,7 +570,7 @@ def init(
     name: Annotated[str, typer.Argument(help=t("init.name_help"))],
     template: Annotated[
         str, typer.Option(help=t("init.template_help"))
-    ] = "sdxl_character_8gb",
+    ] = "anima_lora_default",
     auto: Annotated[
         bool,
         typer.Option(

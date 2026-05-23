@@ -50,7 +50,7 @@ backend:
   type: kohya
 ```
 
-完整带注释的范例见 [`configs/sdxl_character_8gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/sdxl_character_8gb.yaml)；diffusion-pipe 路径上的 Anima 配置见 [`configs/anima_style_24gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_style_24gb.yaml) 和 `configs/anima_character_24gb.yaml`。
+完整带注释的范例见 [`configs/anima_lora_default.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_lora_default.yaml)(上游 `make lora default` 的 100% 复刻基线);8GB 显存档见 [`configs/anima_lora_8gb.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_lora_8gb.yaml),32GB 高吞吐档见 [`configs/anima_character_32gb_dora.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_character_32gb_dora.yaml) 和 [`configs/anima_style_32gb_loha.yaml`](https://github.com/GALIAIS/LoraHub/blob/main/configs/anima_style_32gb_loha.yaml)。
 
 ## 自动按机器调参
 

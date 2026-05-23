@@ -10,14 +10,15 @@
 #   python tasks.py lora    # Windows 等价
 #
 # 默认堆叠：LoRA + OrthoLoRA + T-LoRA (Hydra / FeRA / ReFT 等高级路由保持
-# 关闭,需要的话改 method 字段或者去 anima_lora_starter.yaml 看注释)。
+# 关闭,需要的话直接改 backend.animaLora.method 字段或参考
+# external/anima_lora/configs/methods/ 里的 toml)。
 
 schemaVersion: "1.0"
 
 baseModel:
   arch: anima
   # 与 kohya / diffusion-pipe 模板共用的 LoraHub 项目根 ./models/ 路径
-  # (与 anima_character_24gb.yaml / anima_character_8gb.yaml 同款)。
+  # (与 anima_lora_8gb.yaml / anima_character_32gb_dora.yaml 同款)。
   # 用户切后端不必重下模型 — 三个权重统一由项目根 ./models/ 提供。
   checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
   archPaths:
