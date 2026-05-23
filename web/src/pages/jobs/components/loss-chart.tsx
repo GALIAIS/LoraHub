@@ -95,6 +95,18 @@ interface LossChartProps {
   /** Optional confidence band(s) drawn behind the primary series. */
   bands?: ChartBand[]
   /**
+   * Label rendered next to the X-axis ticks. Defaults to "step" — the
+   * analysis workbench overrides this when the user toggles the X
+   * axis to epoch or wallclock-seconds.
+   */
+  xLabel?: string
+  /**
+   * Custom formatter for X-axis tick values. Defaults to integer
+   * rendering; the workbench passes a duration formatter when the
+   * X axis is wallclock-seconds.
+   */
+  xTickFormat?: (v: number) => string
+  /**
    * Stable key used to persist the user's view (zoom range, log toggle)
    * across re-renders within a session. Pass the active job id when the
    * chart shows one job's loss; pass `null` to skip persistence.
@@ -134,6 +146,8 @@ function LossChartCore({
   overfitSignal,
   markers = [],
   bands = [],
+  xLabel,
+  xTickFormat,
   persistKey,
   fullscreen,
   onFullscreen,
@@ -646,7 +660,7 @@ function LossChartCore({
                   fill="currentColor"
                   opacity={0.55}
                 >
-                  {Math.round(v)}
+                  {xTickFormat ? xTickFormat(v) : Math.round(v)}
                 </text>
               </g>
             )
@@ -843,6 +857,11 @@ function LossChartCore({
         {markers.length > 0 && (
           <span className="text-[10px] text-muted-foreground/70">
             · {markers.length} 个检查点标记
+          </span>
+        )}
+        {xLabel && (
+          <span className="text-[10px] text-muted-foreground/70">
+            · X: {xLabel}
           </span>
         )}
         {zoomedIn && (

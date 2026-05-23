@@ -20,6 +20,7 @@ import { useMemo } from "react"
 import type { JobMetricsResponse } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { MultiLineChart, type MultiLineSeries } from "./multi-line-chart"
+import { xMapper, xModeLabel, type XMode } from "./x-axis-mode"
 
 const EMA_ALPHA = 0.1
 
@@ -35,12 +36,16 @@ interface MetricCardSpec {
 export function MetricGrid({
   metrics,
   jobId,
+  xMode = "step",
 }: {
   metrics: JobMetricsResponse | null
   jobId: string
+  xMode?: XMode
 }) {
   const cards = useMemo<MetricCardSpec[]>(() => {
     const out: MetricCardSpec[] = []
+    const map = xMapper(xMode, metrics)
+    const xUnit = xModeLabel(xMode)
     const losses =
       metrics?.loss?.filter(
         (p) => typeof p.loss === "number" && Number.isFinite(p.loss),
@@ -52,14 +57,14 @@ export function MetricGrid({
         id: "loss-raw",
         title: "loss/raw",
         latest: fmtFloat(losses[losses.length - 1].loss as number, 4),
-        xLabel: "step",
+        xLabel: xUnit,
         series: [
           {
             id: "raw",
             label: "训练 loss",
             color: "var(--chart-1)",
             points: losses.map((p) => ({
-              x: p.step,
+              x: map(p),
               y: p.loss as number,
             })),
           },
@@ -72,13 +77,13 @@ export function MetricGrid({
       let acc = losses[0].loss as number
       const ema = losses.map((p) => {
         acc = EMA_ALPHA * (p.loss as number) + (1 - EMA_ALPHA) * acc
-        return { x: p.step, y: acc }
+        return { x: map(p), y: acc }
       })
       out.push({
         id: "loss-ema",
         title: `loss/ema · α=${EMA_ALPHA}`,
         latest: fmtFloat(ema[ema.length - 1].y, 4),
-        xLabel: "step",
+        xLabel: xUnit,
         series: [
           {
             id: "ema",
@@ -156,13 +161,13 @@ export function MetricGrid({
         id: "lr",
         title: "schedule/learning_rate",
         latest: fmtSci(last),
-        xLabel: "step",
+        xLabel: xUnit,
         series: [
           {
             id: "lr",
             label: "学习率",
             color: "var(--chart-1)",
-            points: lr.map((p) => ({ x: p.step, y: p.lr as number })),
+            points: lr.map((p) => ({ x: map(p), y: p.lr as number })),
           },
         ],
       })
@@ -179,7 +184,7 @@ export function MetricGrid({
         id: "iter-time",
         title: "throughput/iter_time_s",
         latest: `${fmtFloat(it[it.length - 1].iter_time_s as number, 2)} s`,
-        xLabel: "step",
+        xLabel: xUnit,
         series: [
           {
             id: "iter",
@@ -187,7 +192,7 @@ export function MetricGrid({
             color: "var(--chart-3)",
             unit: "s",
             points: it.map((p) => ({
-              x: p.step,
+              x: map(p),
               y: p.iter_time_s as number,
             })),
           },
@@ -207,14 +212,14 @@ export function MetricGrid({
         id: "sps",
         title: "throughput/samples_per_sec",
         latest: fmtFloat(sps[sps.length - 1].samples_per_sec as number, 2),
-        xLabel: "step",
+        xLabel: xUnit,
         series: [
           {
             id: "sps",
             label: "样本/秒",
             color: "var(--chart-4)",
             points: sps.map((p) => ({
-              x: p.step,
+              x: map(p),
               y: p.samples_per_sec as number,
             })),
           },
@@ -225,6 +230,10 @@ export function MetricGrid({
     // ---------- lora/effective_rank, top1_energy, fro_norm ----------
     const spectrum = metrics?.lora_spectrum ?? []
     if (spectrum.length > 0) {
+      const spectrumX = (s: {
+        step: number | null
+        ts: number
+      }) => map({ step: s.step ?? 0, ts: s.ts })
       const eff = spectrum
         .filter(
           (s) =>
@@ -232,13 +241,13 @@ export function MetricGrid({
             Number.isFinite(s.effective_rank) &&
             typeof s.step === "number",
         )
-        .map((s) => ({ x: s.step as number, y: s.effective_rank as number }))
+        .map((s) => ({ x: spectrumX(s), y: s.effective_rank as number }))
       if (eff.length > 0) {
         out.push({
           id: "lora-eff-rank",
           title: "lora/effective_rank",
           latest: fmtFloat(eff[eff.length - 1].y, 2),
-          xLabel: "step",
+          xLabel: xUnit,
           series: [
             {
               id: "eff",
@@ -256,13 +265,13 @@ export function MetricGrid({
             Number.isFinite(s.top1_energy) &&
             typeof s.step === "number",
         )
-        .map((s) => ({ x: s.step as number, y: (s.top1_energy as number) * 100 }))
+        .map((s) => ({ x: spectrumX(s), y: (s.top1_energy as number) * 100 }))
       if (top1.length > 0) {
         out.push({
           id: "lora-top1",
           title: "lora/top1_energy",
           latest: `${fmtFloat(top1[top1.length - 1].y, 1)} %`,
-          xLabel: "step",
+          xLabel: xUnit,
           series: [
             {
               id: "top1",
@@ -281,13 +290,13 @@ export function MetricGrid({
             Number.isFinite(s.fro_norm) &&
             typeof s.step === "number",
         )
-        .map((s) => ({ x: s.step as number, y: s.fro_norm as number }))
+        .map((s) => ({ x: spectrumX(s), y: s.fro_norm as number }))
       if (fro.length > 0) {
         out.push({
           id: "lora-fro",
           title: "lora/fro_norm",
           latest: fmtFloat(fro[fro.length - 1].y, 3),
-          xLabel: "step",
+          xLabel: xUnit,
           series: [
             {
               id: "fro",
@@ -301,7 +310,7 @@ export function MetricGrid({
     }
 
     return out
-  }, [metrics])
+  }, [metrics, xMode])
 
   if (cards.length === 0) {
     return (
