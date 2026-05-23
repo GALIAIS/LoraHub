@@ -151,7 +151,72 @@ def _current_version() -> str:
 
 # Source label so the UI can mark a version as "guessed" rather than
 # implying parity with hatch-vcs precision.
-_VERSION_SOURCES = ("hatch-vcs", "dist-metadata", "changelog", "fallback")
+_VERSION_SOURCES = ("git-describe", "hatch-vcs", "dist-metadata", "changelog", "fallback")
+
+
+def _git_describe_runtime() -> str | None:
+    """Resolve the version via runtime ``git describe`` against the repo.
+
+    Why this lives in front of ``hatch-vcs`` in the resolution chain:
+    ``_version.py`` is *generated at install time* — running
+    ``pip install -e .`` writes the current describe output, but git
+    advancing afterwards (the user committed, switched branch, or did
+    a force-push) leaves the file frozen on the older sha. The user
+    then sees ``Backend 1.0.3.dev85+g7ddfe78`` in the UI even though
+    the source tree is on a different commit, and the version chip's
+    sha-comparison flags it as a mismatch against the freshly-built
+    frontend bundle whose ``__APP_VERSION__`` came from running git
+    describe at vite build time.
+
+    This shells out to ``git describe --tags --dirty --always`` from
+    the project root, mirroring exactly what ``vite.config.ts`` does
+    on the frontend side. Same tool + same flags + same cwd → the two
+    halves agree without anyone having to re-run ``pip install``.
+
+    Returns ``None`` (so callers fall through) when:
+
+      * git isn't on PATH (CI containers without git, ZIP installs)
+      * ``project_root()`` isn't a git checkout
+      * the call times out (5s ceiling so a hung ``index.lock`` can't
+        wedge ``/api/health``)
+
+    The frontend's leading ``v`` from a tag is stripped here too, so
+    the two halves produce byte-identical strings on the same commit.
+    """
+    try:
+        from lorahub.core.paths import project_root  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        root = project_root()
+    except Exception:  # noqa: BLE001
+        return None
+
+    # Quick bail-out: if there's no .git directory we'd just spawn
+    # subprocess for nothing. ``Path.is_dir`` covers both the regular
+    # case and worktrees where ``.git`` is a file pointing elsewhere.
+    git_dir = root / ".git"
+    if not git_dir.exists():
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--dirty", "--always"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = result.stdout.strip()
+    if not raw:
+        return None
+    return raw[1:] if raw.startswith("v") else raw
 
 
 def _resolve_version() -> tuple[str, str]:
@@ -164,7 +229,16 @@ def _resolve_version() -> tuple[str, str]:
     """
     placeholders = {"", "0.0.0", "0.0.0+unknown"}
 
-    # 1. hatch-vcs (the canonical path).
+    # 1. Live ``git describe`` — preferred over the static hatch-vcs
+    # snapshot because ``_version.py`` only refreshes when pip runs.
+    # Same command + flags as the frontend's vite.config.ts so a
+    # commit that touches both halves yields identical strings on
+    # both sides.
+    git_v = _git_describe_runtime()
+    if git_v and git_v not in placeholders:
+        return git_v, "git-describe"
+
+    # 2. hatch-vcs (the canonical path).
     try:
         from lorahub import __version__  # noqa: PLC0415
 
@@ -174,7 +248,7 @@ def _resolve_version() -> tuple[str, str]:
     except Exception:  # noqa: BLE001
         pass
 
-    # 2. importlib.metadata — wheel / pip install / static metadata.
+    # 3. importlib.metadata — wheel / pip install / static metadata.
     try:
         from importlib.metadata import PackageNotFoundError, version as dist_version  # noqa: PLC0415
 
@@ -187,12 +261,12 @@ def _resolve_version() -> tuple[str, str]:
     except Exception:  # noqa: BLE001
         pass
 
-    # 3. CHANGELOG.md — read the latest non-Unreleased ``## [X.Y.Z]`` line.
+    # 4. CHANGELOG.md — read the latest non-Unreleased ``## [X.Y.Z]`` line.
     changelog_v = _read_changelog_version()
     if changelog_v:
         return changelog_v, "changelog"
 
-    # 4. Last-resort marker.
+    # 5. Last-resort marker.
     return "0.0.0+unknown", "fallback"
 
 

@@ -23,6 +23,7 @@ import { preloadAppRoute, type AppRouteModuleKey } from "@/app/route-modules"
 import { api } from "@/lib/api"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalStatusBar } from "@/components/global-status-bar"
+import { useVersionInfo } from "@/hooks/use-version-info"
 import {
   Sidebar,
   SidebarContent,
@@ -251,13 +252,11 @@ export default function App() {
       <Sidebar variant="inset">
         <SidebarHeader className="border-b border-sidebar-border/70 px-4 py-4">
           <div className="px-1">
-            <div className="flex items-center justify-between gap-2">
-              <div className="shiro-kicker">LoraHub</div>
-              <div className="shiro-microcopy">v{__APP_VERSION__}</div>
-            </div>
+            <div className="shiro-kicker">LoraHub</div>
             <div className="mt-1 text-xs leading-5 text-sidebar-foreground/66">
               LoRA 训练工作台
             </div>
+            <SidebarVersionStack />
           </div>
         </SidebarHeader>
 
@@ -393,5 +392,61 @@ export default function App() {
         </div>
       </SidebarInset>
     </SidebarProvider>
+  )
+}
+
+/**
+ * Version chips under the sidebar subtitle.
+ *
+ * Layout: two stacked rows — Frontend on top, Backend below — sitting
+ * under the "LoRA 训练工作台" tagline. The vertical stack reads cleanly
+ * even when the two version strings disagree by length, and keeps the
+ * existing kicker / subtitle / chips rhythm intact.
+ *
+ * Both rows turn amber together when frontend and backend resolve
+ * to *different commits*. We compare commit shas first (the canonical
+ * answer); when shas match we display the same canonical string on
+ * both sides, since git-describe ("last tag") and hatch-vcs ("next tag")
+ * disagree on the textual base of every untagged commit and showing
+ * both raw views would falsely suggest drift.
+ *
+ * Clicking jumps to the About page where the long-form mismatch card
+ * spells out the recovery commands (`lorahub manage build`, etc.).
+ */
+function SidebarVersionStack() {
+  const {
+    frontendDisplay,
+    backendDisplay,
+    mismatch,
+    loading,
+  } = useVersionInfo()
+  const tone = mismatch
+    ? "text-amber-700 dark:text-amber-400"
+    : "text-sidebar-foreground/55"
+  const title = mismatch
+    ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit — 多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
+    : loading
+      ? "正在读取后端版本…"
+      : `前端 ${frontendDisplay} · 后端 ${backendDisplay} (同一 commit)`
+  return (
+    <NavLink
+      to="/about"
+      title={title}
+      className={cn(
+        "mt-2 flex flex-col gap-0.5 font-mono tabular-nums tracking-tight transition-colors",
+        "text-[10px] leading-snug",
+        tone,
+        "hover:text-sidebar-accent-foreground",
+      )}
+    >
+      <span className="inline-flex items-center gap-1">
+        <span className="opacity-70 w-[3.5rem]">Frontend</span>
+        <span>{frontendDisplay}</span>
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="opacity-70 w-[3.5rem]">Backend</span>
+        <span>{loading && backendDisplay === "?" ? "…" : backendDisplay}</span>
+      </span>
+    </NavLink>
   )
 }

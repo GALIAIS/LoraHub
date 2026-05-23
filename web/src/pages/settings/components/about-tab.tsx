@@ -1,6 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
-import { ExternalLink, Github, Heart, Scale } from "lucide-react"
-import { api } from "@/lib/api"
+import { AlertTriangle, ExternalLink, Github, Heart, Scale } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -9,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { useVersionInfo } from "@/hooks/use-version-info"
 
 const REPO_URL = "https://github.com/GALIAIS/LoraHub"
 const ISSUES_URL = `${REPO_URL}/issues`
@@ -35,18 +34,22 @@ function ExternalAnchor({ href, children }: ExternalAnchorProps) {
 }
 
 /**
- * About tab — project metadata, links, and version pulled live from
- * `/api/health` so the user always sees the version they're actually
- * connected to (not whatever the SPA was built with).
+ * About tab — project metadata, links, and the *pair* of versions
+ * (frontend bundle vs backend service) so a stale `web/dist` after a
+ * `git pull` is immediately visible. The previous single-badge layout
+ * pulled only the backend version from `/api/health`, which masked the
+ * exact mismatch the install/update flow can leave behind when it
+ * skips a SPA rebuild.
  */
 export function AboutTab() {
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: api.health,
-    staleTime: 60_000,
-  })
-
-  const version = healthQuery.data?.version ?? "—"
+  const {
+    frontendDisplay,
+    backendDisplay,
+    frontend,
+    backend,
+    mismatch,
+    loading,
+  } = useVersionInfo()
 
   return (
     <div className="space-y-5 max-w-3xl">
@@ -59,12 +62,69 @@ export function AboutTab() {
                 面向扩散模型的 LoRA 训练工作台
               </CardDescription>
             </div>
-            <Badge variant="outline" className="font-mono text-[11px]">
-              v{version}
-            </Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className={
+                  mismatch
+                    ? "font-mono text-[11px] border-amber-500/60 text-amber-700 dark:text-amber-400"
+                    : "font-mono text-[11px]"
+                }
+                title={`前端构建版本 (git describe，编译期注入)\n原始: ${frontend}`}
+              >
+                Frontend {frontendDisplay}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={
+                  mismatch
+                    ? "font-mono text-[11px] border-amber-500/60 text-amber-700 dark:text-amber-400"
+                    : "font-mono text-[11px]"
+                }
+                title={`后端运行版本 (lorahub.__version__，hatch-vcs 解析 git tag)\n原始: ${backend ?? (loading ? "loading…" : "unknown")}`}
+              >
+                Backend {loading && backendDisplay === "?" ? "…" : backendDisplay}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3 text-sm leading-relaxed">
+          {mismatch && (
+            <div
+              className="flex items-start gap-2 rounded-[4px] border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] leading-relaxed"
+            >
+              <AlertTriangle className="size-4 mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" />
+              <div className="space-y-1">
+                <div className="font-medium text-amber-800 dark:text-amber-300">
+                  前后端 commit 不一致
+                </div>
+                <div className="text-amber-900/80 dark:text-amber-200/85">
+                  前端 bundle 内嵌的 git sha 与后端运行时的 sha 不同。
+                  通常是因为 <code className="font-mono">git pull</code> 后
+                  Python 依赖被自动重装,但 <code className="font-mono">web/dist/</code>{" "}
+                  没有重建,前端仍是旧 bundle。新的 API 形状可能让旧前端
+                  渲染失败,建议尽快重建前端。
+                </div>
+                <div className="text-amber-900/80 dark:text-amber-200/85 pt-1">
+                  重建命令:
+                </div>
+                <ul className="list-disc pl-5 space-y-0.5 font-mono text-[11px] text-amber-900/85 dark:text-amber-200/90">
+                  <li>
+                    <code>lorahub manage build</code>
+                    {" "}— 仅重建前端
+                  </li>
+                  <li>
+                    <code>lorahub manage update</code>
+                    {" "}— 拉新代码 + 重装依赖 + 重建前端
+                  </li>
+                  <li>
+                    <code>scripts\run.bat dev</code>
+                    {" "}— Vite 热更新（开发模式）
+                  </li>
+                </ul>
+              </div>
+            </div>
+          )}
           <p>
             LoraHub 把 kohya-ss/sd-scripts 与 tdrussell/diffusion-pipe
             两套训练后端、配方编辑器、数据集预处理、自动标注与作业调度统一在
