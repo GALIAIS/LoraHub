@@ -288,6 +288,14 @@ export interface SettingsState {
   wandb_api_key: string | null
   terminal_unrestricted: boolean
   terminal_command_timeout_s: number
+  // Error registry fan-out — see Settings.error_upstream_*
+  error_upstream_channel: "off" | "gitlab" | "webhook"
+  error_upstream_gitlab_base_url: string
+  error_upstream_gitlab_repo: string
+  error_upstream_gitlab_token: string
+  error_upstream_webhook_url: string
+  error_upstream_webhook_auth_header: string
+  error_upstream_auto_severity: "off" | "error" | "all"
   extra: Record<string, unknown>
 }
 
@@ -2867,6 +2875,12 @@ export interface ErrorReportItem {
   request_path: string | null
   version: string
   platform: string
+  fingerprint: string | null
+  upstream_status: string | null
+  upstream_url: string | null
+  upstream_id: string | null
+  upstream_error: string | null
+  sent_at: string | null
 }
 
 export interface ErrorReportListResponse {
@@ -2874,6 +2888,26 @@ export interface ErrorReportListResponse {
   total: number
   limit: number
   offset: number
+}
+
+export interface UpstreamSendResponse {
+  ok: boolean
+  status: string
+  url: string | null
+  upstream_id: string | null
+  error: string | null
+}
+
+export interface UpstreamHealthResponse {
+  ok: boolean
+  channel: string
+  url: string | null
+  error: string | null
+}
+
+export interface UpstreamPreviewResponse {
+  fingerprint: string
+  body: ErrorReportItem
 }
 
 export const errorReportsApi = {
@@ -2903,4 +2937,17 @@ export const errorReportsApi = {
   clear: () =>
     http<{ deleted: number }>(`/error-reports/clear`, { method: "POST" }),
   exportUrl: (): string => "/api/error-reports/export",
+  sendNow: (id: string) =>
+    http<UpstreamSendResponse>(
+      `/error-reports/${encodeURIComponent(id)}/send`,
+      { method: "POST" },
+    ),
+  upstreamHealth: () =>
+    http<UpstreamHealthResponse>(`/error-reports/upstream/health`, {
+      method: "POST",
+    }),
+  upstreamPreview: (id: string) =>
+    http<UpstreamPreviewResponse>(
+      `/error-reports/${encodeURIComponent(id)}/upstream-preview`,
+    ),
 }

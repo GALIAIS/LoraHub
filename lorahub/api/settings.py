@@ -115,6 +115,26 @@ class Settings:
     # it up locally if they're upgrading torch on a slow link.
     terminal_command_timeout_s: int = 600
 
+    # --- Error report fan-out ---
+    # Optional remote sink for the local error registry. Default
+    # ``off`` means *nothing* leaves the box; the user has to opt in
+    # explicitly from Settings → 错误上报. ``gitlab`` opens / appends
+    # GitLab issues with fingerprint-based de-dupe; ``webhook`` POSTs
+    # the redacted payload to an arbitrary URL.
+    error_upstream_channel: str = "off"  # "off" | "gitlab" | "webhook"
+    # GitLab fields (only meaningful when channel == "gitlab")
+    error_upstream_gitlab_base_url: str = ""
+    error_upstream_gitlab_repo: str = ""
+    error_upstream_gitlab_token: str = ""
+    # Webhook fields (only meaningful when channel == "webhook")
+    error_upstream_webhook_url: str = ""
+    error_upstream_webhook_auth_header: str = ""
+    # Auto-send threshold: ``off`` keeps every report queued for manual
+    # send; ``error`` auto-pushes severity ≥ error; ``all`` pushes
+    # everything (matches the user's earlier choice in the AskUser flow
+    # where the default was "error and above").
+    error_upstream_auto_severity: str = "error"  # "off" | "error" | "all"
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

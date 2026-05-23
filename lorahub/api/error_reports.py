@@ -44,23 +44,29 @@ Everything routine (job died, preflight blocked, 500 reply) is ``error``.
 """
 
 # Bump together with a real ALTER path. Schema 1 = the columns below.
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS error_reports (
-    id          TEXT PRIMARY KEY,
-    timestamp   TEXT NOT NULL,
-    severity    TEXT NOT NULL,
-    source      TEXT NOT NULL,
-    category    TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    message     TEXT NOT NULL,
-    stack       TEXT,
-    context     TEXT NOT NULL,
-    job_id      TEXT,
-    request_id  TEXT,
-    request_path TEXT,
-    version     TEXT NOT NULL,
-    platform    TEXT NOT NULL
+    id              TEXT PRIMARY KEY,
+    timestamp       TEXT NOT NULL,
+    severity        TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    message         TEXT NOT NULL,
+    stack           TEXT,
+    context         TEXT NOT NULL,
+    job_id          TEXT,
+    request_id      TEXT,
+    request_path    TEXT,
+    version         TEXT NOT NULL,
+    platform        TEXT NOT NULL,
+    fingerprint     TEXT,
+    upstream_status TEXT,
+    upstream_url    TEXT,
+    upstream_id     TEXT,
+    upstream_error  TEXT,
+    sent_at         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS error_reports_ts
@@ -71,11 +77,22 @@ CREATE INDEX IF NOT EXISTS error_reports_source
     ON error_reports (source);
 CREATE INDEX IF NOT EXISTS error_reports_job_id
     ON error_reports (job_id);
+CREATE INDEX IF NOT EXISTS error_reports_fp
+    ON error_reports (fingerprint);
 
 CREATE TABLE IF NOT EXISTS error_reports_schema_version (
     version INTEGER PRIMARY KEY
 );
 """
+
+_UPSTREAM_COLUMNS = (
+    ("fingerprint", "TEXT"),
+    ("upstream_status", "TEXT"),
+    ("upstream_url", "TEXT"),
+    ("upstream_id", "TEXT"),
+    ("upstream_error", "TEXT"),
+    ("sent_at", "TEXT"),
+)
 
 
 @dataclass(slots=True)
@@ -115,6 +132,17 @@ class ErrorReport:
     request_path: str | None = None
     version: str = ""
     platform: str = ""
+    # Upstream delivery state — populated lazily by the dispatcher.
+    # ``None`` everywhere means the report has never been considered for
+    # remote delivery (channel was off, or the report only ever lived
+    # locally). Status values: ``queued`` / ``retrying`` / ``sent`` /
+    # ``failed`` / ``skipped``.
+    fingerprint: str | None = None
+    upstream_status: str | None = None
+    upstream_url: str | None = None
+    upstream_id: str | None = None
+    upstream_error: str | None = None
+    sent_at: datetime | None = None
 
     @classmethod
     def create(
@@ -167,6 +195,12 @@ class ErrorReport:
             "request_path": self.request_path,
             "version": self.version,
             "platform": self.platform,
+            "fingerprint": self.fingerprint,
+            "upstream_status": self.upstream_status,
+            "upstream_url": self.upstream_url,
+            "upstream_id": self.upstream_id,
+            "upstream_error": self.upstream_error,
+            "sent_at": self.sent_at.isoformat() if self.sent_at else None,
         }
 
 
@@ -190,6 +224,16 @@ class ErrorReportStore:
                 "VALUES (?)",
                 (_SCHEMA_VERSION,),
             )
+            # Idempotent column-add migration for stores predating the
+            # upstream fan-out. SQLite ``ALTER TABLE … ADD COLUMN``
+            # doesn't support IF NOT EXISTS so we sniff PRAGMA first.
+            cur = conn.execute("PRAGMA table_info(error_reports)")
+            cols = {row[1] for row in cur.fetchall()}
+            for name, decl in _UPSTREAM_COLUMNS:
+                if name not in cols:
+                    conn.execute(
+                        f"ALTER TABLE error_reports ADD COLUMN {name} {decl}",
+                    )
             conn.commit()
 
     @property
@@ -227,14 +271,22 @@ class ErrorReportStore:
                 report.request_path,
                 report.version,
                 report.platform,
+                report.fingerprint,
+                report.upstream_status,
+                report.upstream_url,
+                report.upstream_id,
+                report.upstream_error,
+                report.sent_at.isoformat() if report.sent_at else None,
             )
             with self._lock, self._connect() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO error_reports ("
                     "id, timestamp, severity, source, category, title, "
                     "message, stack, context, job_id, request_id, "
-                    "request_path, version, platform"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "request_path, version, platform, "
+                    "fingerprint, upstream_status, upstream_url, "
+                    "upstream_id, upstream_error, sent_at"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     payload,
                 )
                 # Bound the table so a long-running install with a noisy
@@ -252,6 +304,42 @@ class ErrorReportStore:
                 conn.commit()
         except (sqlite3.Error, OSError, json.JSONDecodeError) as exc:
             log.warning("could not persist error report %s: %r", report.id, exc)
+
+    def update_upstream(
+        self,
+        report_id: str,
+        *,
+        status: str,
+        url: str | None = None,
+        upstream_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Stamp the upstream delivery state on an existing row.
+
+        ``status`` is one of ``queued`` / ``retrying`` / ``sent`` /
+        ``failed`` / ``skipped``. ``sent_at`` is auto-stamped when
+        status moves to ``sent`` so the UI can show "uploaded 14:32".
+        """
+        sent_at = (
+            datetime.now().isoformat() if status == "sent" else None
+        )
+        try:
+            with self._lock, self._connect() as conn:
+                conn.execute(
+                    "UPDATE error_reports SET "
+                    "  upstream_status = ?,"
+                    "  upstream_url = COALESCE(?, upstream_url),"
+                    "  upstream_id = COALESCE(?, upstream_id),"
+                    "  upstream_error = ?,"
+                    "  sent_at = COALESCE(?, sent_at) "
+                    "WHERE id = ?",
+                    (status, url, upstream_id, error, sent_at, report_id),
+                )
+                conn.commit()
+        except (sqlite3.Error, OSError) as exc:
+            log.warning(
+                "could not update upstream state for %s: %r", report_id, exc,
+            )
 
     def get(self, report_id: str) -> ErrorReport | None:
         with self._lock, self._connect() as conn:
@@ -334,6 +422,16 @@ def _row_to_report(row: sqlite3.Row) -> ErrorReport:
             ctx = {"_raw": raw_context}
     except json.JSONDecodeError:
         ctx = {"_raw": raw_context}
+    keys = row.keys()
+
+    def _opt(name: str) -> str | None:
+        # PRAGMA-driven fallback: an old DB that hasn't been ALTERed
+        # yet will be missing some columns; the migration in __init__
+        # handles that, but reads from a brand-new connection still
+        # need to tolerate the column not being present in the row.
+        return row[name] if name in keys else None
+
+    sent_at_raw = _opt("sent_at")
     return ErrorReport(
         id=row["id"],
         timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -349,6 +447,12 @@ def _row_to_report(row: sqlite3.Row) -> ErrorReport:
         request_path=row["request_path"],
         version=row["version"] or "",
         platform=row["platform"] or "",
+        fingerprint=_opt("fingerprint"),
+        upstream_status=_opt("upstream_status"),
+        upstream_url=_opt("upstream_url"),
+        upstream_id=_opt("upstream_id"),
+        upstream_error=_opt("upstream_error"),
+        sent_at=datetime.fromisoformat(sent_at_raw) if sent_at_raw else None,
     )
 
 

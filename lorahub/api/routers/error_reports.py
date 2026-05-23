@@ -203,4 +203,125 @@ def clear_reports() -> _ClearResponse:
     return _ClearResponse(deleted=store.clear())
 
 
+# ---------------------------------------------------------------------- #
+# Upstream fan-out (GitLab issues / webhook)
+# ---------------------------------------------------------------------- #
+
+
+class _UpstreamSendOut(BaseModel):
+    """Outcome of one ``send_now`` call surfaced to the UI.
+
+    ``status`` mirrors the ``upstream_status`` column the dispatcher
+    writes. Successful sends carry ``url`` so the UI can deep-link to
+    the GitLab issue / webhook receipt.
+    """
+    ok: bool
+    status: str
+    url: str | None = None
+    upstream_id: str | None = None
+    error: str | None = None
+
+
+def _dispatcher():
+    from lorahub.api import app as app_module  # noqa: PLC0415
+
+    dispatcher = getattr(app_module, "_error_upstream_dispatcher", None)
+    if dispatcher is None:
+        raise HTTPException(
+            status_code=503, detail="error-upstream dispatcher not ready",
+        )
+    return dispatcher
+
+
+@router.post("/error-reports/{report_id}/send", response_model=_UpstreamSendOut)
+def send_report_now(report_id: str) -> _UpstreamSendOut:
+    """Fire one report through the configured sink synchronously.
+
+    This bypasses the auto-send gate so the user can always push a
+    warn / info row from the UI even when auto-send is set to
+    error-only. Returns the resolved status so the caller can refresh
+    the list after a 2xx without an extra round-trip.
+    """
+    store = _store()
+    rec = store.get(report_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    dispatcher = _dispatcher()
+    res = dispatcher.send_now(rec)
+    status = "sent" if res.ok else "failed"
+    return _UpstreamSendOut(
+        ok=res.ok,
+        status=status,
+        url=res.url or None,
+        upstream_id=res.upstream_id or None,
+        error=res.error or None,
+    )
+
+
+class _UpstreamHealthOut(BaseModel):
+    ok: bool
+    channel: str
+    url: str | None = None
+    error: str | None = None
+
+
+@router.post("/error-reports/upstream/health", response_model=_UpstreamHealthOut)
+def upstream_health() -> _UpstreamHealthOut:
+    """Probe the configured sink end-to-end so the user can validate
+    the token / repo path before accepting the settings.
+
+    The probe POSTs a ``ping`` for webhook sinks and a project-fetch
+    for the GitLab sink. Either way no real report content leaves the
+    box during the probe.
+    """
+    from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.error_upstream import build_sink_from_settings
+
+    settings_store = app_module._settings_store  # type: ignore[attr-defined]
+    cfg = settings_store.load()
+    sink = build_sink_from_settings(app_module._sink_config_from_settings(cfg))
+    if sink is None:
+        return _UpstreamHealthOut(
+            ok=False,
+            channel="off",
+            error="upstream channel disabled — set Settings → 错误上报 first",
+        )
+    res = sink.health_check()
+    return _UpstreamHealthOut(
+        ok=res.ok,
+        channel=sink.channel,
+        url=res.url or None,
+        error=res.error or None,
+    )
+
+
+class _UpstreamPreviewOut(BaseModel):
+    """Redacted snapshot of what would be sent to the upstream sink.
+
+    The fingerprint is also returned so the UI can show "this row will
+    join issue #123 (12 prior occurrences)" before the user pushes
+    send.
+    """
+    fingerprint: str
+    body: dict[str, Any]
+
+
+@router.get(
+    "/error-reports/{report_id}/upstream-preview",
+    response_model=_UpstreamPreviewOut,
+)
+def upstream_preview(report_id: str) -> _UpstreamPreviewOut:
+    from lorahub.api.error_upstream import compute_fingerprint, redact_report
+
+    store = _store()
+    rec = store.get(report_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    redacted = redact_report(rec)
+    return _UpstreamPreviewOut(
+        fingerprint=compute_fingerprint(redacted),
+        body=redacted.to_dict(),
+    )
+
+
 __all__ = ["router"]

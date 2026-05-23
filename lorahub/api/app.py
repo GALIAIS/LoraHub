@@ -50,6 +50,11 @@ from lorahub.api.error_reports import (
     ErrorReportStore,
     default_error_report_store_path,
 )
+from lorahub.api.error_upstream import (
+    SinkConfig,
+    UpstreamDispatcher,
+    build_sink_from_settings,
+)
 from lorahub.api.image_studio_store import (
     ImageStudioStore,
     default_image_studio_store_path,
@@ -86,6 +91,13 @@ _image_studio_store: ImageStudioStore | None = None
 # every preflight 422, every frontend POST /api/error-reports lands here.
 # See lorahub.api.error_reports + .error_reporter for the funnel.
 _error_report_store: ErrorReportStore | None = None
+# Optional outbound dispatcher. ``None`` means the user has not opted
+# in to a remote sink (or the lifespan hasn't run yet); reporter
+# enqueue calls are no-ops until the dispatcher is constructed and
+# started below. The factory closure lets us hot-swap the sink when
+# the user updates Settings → 错误上报 without rebuilding the
+# dispatcher thread.
+_error_upstream_dispatcher: UpstreamDispatcher | None = None
 
 
 @asynccontextmanager
@@ -146,7 +158,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_store, _image_studio_store, _error_report_store  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store, _image_studio_store, _error_report_store, _error_upstream_dispatcher  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
@@ -159,6 +171,23 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         # would do — an exception in auto-resume, a sweep DB lock —
         # has somewhere to land.
         _error_report_store = ErrorReportStore(default_error_report_store_path())
+    if _error_upstream_dispatcher is None:
+        # Build a fresh sink each time the dispatcher asks via
+        # ``sink_factory``. That way settings changes (channel toggles,
+        # token rotation) take effect on the next attempt without
+        # tearing down the worker thread.
+        def _resolve_sink_factory() -> Any:
+            try:
+                cfg = _settings_store.load()
+            except Exception:  # noqa: BLE001
+                return None
+            return build_sink_from_settings(_sink_config_from_settings(cfg))
+
+        _error_upstream_dispatcher = UpstreamDispatcher(
+            store=_error_report_store,
+            sink_factory=_resolve_sink_factory,
+        )
+        _error_upstream_dispatcher.start()
     if _image_studio_store is None:
         _image_studio_store = ImageStudioStore(default_image_studio_store_path())
         # Seed empty routes for the LoraHub task ids so the Settings UI
@@ -298,7 +327,30 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     _update_check_task = asyncio.create_task(_update_check_loop())
     yield
     _update_check_task.cancel()
+    if _error_upstream_dispatcher is not None:
+        _error_upstream_dispatcher.stop(timeout=2.0)
     sched.scheduler.stop(timeout=2.0)
+
+
+def _sink_config_from_settings(settings: Any) -> SinkConfig:
+    """Translate ``Settings`` into the dataclass the sinks understand.
+
+    Lifted out of the lifespan body so the upstream router can call
+    it for ``health_check`` without duplicating the field plumbing.
+    """
+    return SinkConfig(
+        channel=getattr(settings, "error_upstream_channel", "off") or "off",
+        gitlab_base_url=getattr(settings, "error_upstream_gitlab_base_url", "") or "",
+        gitlab_repo=getattr(settings, "error_upstream_gitlab_repo", "") or "",
+        gitlab_token=getattr(settings, "error_upstream_gitlab_token", "") or "",
+        webhook_url=getattr(settings, "error_upstream_webhook_url", "") or "",
+        webhook_auth_header=getattr(
+            settings, "error_upstream_webhook_auth_header", "",
+        ) or "",
+        auto_send_severity=getattr(
+            settings, "error_upstream_auto_severity", "error",
+        ) or "error",
+    )
 
 
 async def _update_check_loop() -> None:

@@ -1,12 +1,16 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
   Bug,
   Copy,
   Download,
+  ExternalLink,
+  Eye,
+  Network,
   RefreshCw,
   Search,
+  Send,
   Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -14,6 +18,8 @@ import { toast } from "sonner"
 import {
   errorReportsApi,
   type ErrorReportItem,
+  type SettingsState,
+  api,
 } from "@/lib/api"
 import {
   getReportingEnabled,
@@ -136,6 +142,7 @@ export function ErrorsTab() {
 
   return (
     <div className="space-y-4 max-w-[1400px]">
+      <UpstreamConfigCard />
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -280,6 +287,9 @@ export function ErrorsTab() {
                         <span className="text-muted-foreground">
                           {SOURCE_LABEL[it.source] ?? it.source}
                         </span>
+                        {it.upstream_status && (
+                          <UpstreamStatusBadge status={it.upstream_status} />
+                        )}
                         <span className="ml-auto text-muted-foreground/60 font-mono">
                           {new Date(it.timestamp).toLocaleString()}
                         </span>
@@ -311,6 +321,10 @@ function DetailPanel({
   item: ErrorReportItem | null
   onDelete: (id: string) => void
 }) {
+  const qc = useQueryClient()
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [sending, setSending] = useState(false)
+
   if (!item) {
     return (
       <Card className="min-h-[400px]">
@@ -335,6 +349,30 @@ function DetailPanel({
       })
     }
   }
+  const handleSend = async () => {
+    setSending(true)
+    try {
+      const res = await errorReportsApi.sendNow(item.id)
+      if (res.ok) {
+        toast.success("已发送到远端", {
+          description: res.url ?? undefined,
+          duration: 8_000,
+        })
+      } else {
+        toast.error("发送失败", {
+          description: res.error ?? "(未提供详情)",
+          duration: 14_000,
+        })
+      }
+      qc.invalidateQueries({ queryKey: ["error-reports"] })
+    } catch (e) {
+      toast.error("发送出错", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setSending(false)
+    }
+  }
 
   return (
     <Card className="min-h-[400px]">
@@ -346,7 +384,7 @@ function DetailPanel({
               ID {item.id} · {new Date(item.timestamp).toLocaleString()}
             </CardDescription>
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 flex-wrap justify-end">
             <Button
               size="sm"
               variant="outline"
@@ -355,6 +393,37 @@ function DetailPanel({
             >
               <Copy className="size-3" />
               复制 Issue 模板
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPreviewOpen((v) => !v)}
+              className="gap-1.5"
+            >
+              <Eye className="size-3" />
+              {previewOpen ? "收起脱敏预览" : "预览将发送内容"}
+            </Button>
+            {item.upstream_url && (
+              <Button
+                size="sm"
+                variant="outline"
+                asChild
+                className="gap-1.5"
+              >
+                <a href={item.upstream_url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="size-3" />
+                  打开远端
+                </a>
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={handleSend}
+              disabled={sending}
+              className="gap-1.5"
+            >
+              <Send className="size-3" />
+              {sending ? "发送中..." : "发送到远端"}
             </Button>
             <Button
               size="sm"
@@ -385,6 +454,22 @@ function DetailPanel({
           {item.request_id && (
             <Field label="请求 ID" value={item.request_id} mono />
           )}
+          {item.fingerprint && (
+            <Field label="指纹" value={item.fingerprint} mono />
+          )}
+          {item.upstream_status && (
+            <Field
+              label="远端状态"
+              value={
+                item.sent_at
+                  ? `${item.upstream_status} · ${new Date(item.sent_at).toLocaleString()}`
+                  : item.upstream_status
+              }
+            />
+          )}
+          {item.upstream_error && (
+            <Field label="远端错误" value={item.upstream_error} />
+          )}
         </div>
 
         <Section title="错误消息">
@@ -408,8 +493,38 @@ function DetailPanel({
             </pre>
           </Section>
         )}
+
+        {previewOpen && <UpstreamPreviewPane reportId={item.id} />}
       </CardContent>
     </Card>
+  )
+}
+
+function UpstreamPreviewPane({ reportId }: { reportId: string }) {
+  const preview = useQuery({
+    queryKey: ["error-reports-preview", reportId],
+    queryFn: () => errorReportsApi.upstreamPreview(reportId),
+    staleTime: 30_000,
+  })
+  return (
+    <Section title="将发送到远端的内容(已脱敏)">
+      {preview.isLoading ? (
+        <div className="text-[11px] text-muted-foreground">生成预览中...</div>
+      ) : preview.isError ? (
+        <div className="text-[11px] text-destructive">
+          {(preview.error as Error).message}
+        </div>
+      ) : preview.data ? (
+        <>
+          <div className="text-[10px] text-muted-foreground mb-1">
+            指纹 <span className="font-mono">{preview.data.fingerprint}</span>(同指纹会聚合到同一个远端 issue)
+          </div>
+          <pre className="rounded-[4px] bg-muted/40 px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words max-h-[280px] overflow-auto">
+            {JSON.stringify(preview.data.body, null, 2)}
+          </pre>
+        </>
+      ) : null}
+    </Section>
   )
 }
 
@@ -490,4 +605,268 @@ function buildIssueTemplate(it: ErrorReportItem): string {
   lines.push("#### 期望行为")
   lines.push("")
   return lines.join("\n")
+}
+
+// ----------------------------------------------------------------------- //
+// Upstream sink config card
+//
+// All four channels (off / gitlab / webhook) plus the auto-send threshold
+// live here. Saving the form posts a settings patch — the backend's
+// dispatcher closure re-reads settings on the next attempt, so a token
+// rotation takes effect without restarting the daemon.
+// ----------------------------------------------------------------------- //
+
+type UpstreamChannel = SettingsState["error_upstream_channel"]
+
+function UpstreamStatusBadge({ status }: { status: string }) {
+  const tone =
+    status === "sent"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : status === "failed"
+        ? "text-destructive"
+        : "text-cyan-700 dark:text-cyan-400"
+  const labelMap: Record<string, string> = {
+    queued: "排队中",
+    retrying: "重试中",
+    sent: "已发送",
+    failed: "发送失败",
+    skipped: "已跳过",
+  }
+  return (
+    <Badge variant="outline" className={`rounded-[2px] ${tone}`}>
+      {labelMap[status] ?? status}
+    </Badge>
+  )
+}
+
+function UpstreamConfigCard() {
+  const qc = useQueryClient()
+  const settings = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+    staleTime: 30_000,
+  })
+  const cfg = settings.data?.settings
+
+  const [draft, setDraft] = useState({
+    error_upstream_channel: "off" as UpstreamChannel,
+    error_upstream_gitlab_base_url: "",
+    error_upstream_gitlab_repo: "",
+    error_upstream_gitlab_token: "",
+    error_upstream_webhook_url: "",
+    error_upstream_webhook_auth_header: "",
+    error_upstream_auto_severity: "error" as SettingsState["error_upstream_auto_severity"],
+  })
+  const [saving, setSaving] = useState(false)
+  const [probing, setProbing] = useState(false)
+
+  // Hydrate the draft once the settings query resolves; further user
+  // edits stay local until "保存" is pressed so partial typing doesn't
+  // clobber the live config.
+  useEffect(() => {
+    if (!cfg) return
+    setDraft({
+      error_upstream_channel: cfg.error_upstream_channel ?? "off",
+      error_upstream_gitlab_base_url: cfg.error_upstream_gitlab_base_url ?? "",
+      error_upstream_gitlab_repo: cfg.error_upstream_gitlab_repo ?? "",
+      error_upstream_gitlab_token: cfg.error_upstream_gitlab_token ?? "",
+      error_upstream_webhook_url: cfg.error_upstream_webhook_url ?? "",
+      error_upstream_webhook_auth_header:
+        cfg.error_upstream_webhook_auth_header ?? "",
+      error_upstream_auto_severity: cfg.error_upstream_auto_severity ?? "error",
+    })
+  }, [cfg])
+
+  const onSave = async () => {
+    setSaving(true)
+    try {
+      await api.updateSettings(draft as Partial<SettingsState>)
+      toast.success("已保存远端上报配置")
+      qc.invalidateQueries({ queryKey: ["settings"] })
+    } catch (e) {
+      toast.error("保存失败", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onProbe = async () => {
+    setProbing(true)
+    try {
+      const res = await errorReportsApi.upstreamHealth()
+      if (res.ok) {
+        toast.success("远端连通正常", {
+          description: res.url ?? `channel=${res.channel}`,
+        })
+      } else {
+        toast.error("远端连通失败", {
+          description: res.error ?? "(未提供详情)",
+          duration: 14_000,
+        })
+      }
+    } catch (e) {
+      toast.error("连通测试出错", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setProbing(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Network className="size-4" />
+          远端上报通道
+        </CardTitle>
+        <CardDescription>
+          可选,默认关闭。开启后,error 及以上的错误会自动推送到所选通道(warn/info 仍需要手动点「发送到远端」)。
+          上传前会脱敏:Authorization / API key、用户主目录与盘符、邮箱与 IP 地址都会被替换。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">
+              通道
+            </div>
+            <Select
+              value={draft.error_upstream_channel}
+              onValueChange={(v) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_channel: v as UpstreamChannel,
+                }))
+              }
+            >
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">关闭(仅本地)</SelectItem>
+                <SelectItem value="gitlab">GitLab Issues</SelectItem>
+                <SelectItem value="webhook">Webhook</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">
+              自动发送阈值
+            </div>
+            <Select
+              value={draft.error_upstream_auto_severity}
+              onValueChange={(v) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_auto_severity:
+                    v as SettingsState["error_upstream_auto_severity"],
+                }))
+              }
+            >
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">全部手动</SelectItem>
+                <SelectItem value="error">error 及以上自动发送</SelectItem>
+                <SelectItem value="all">全部自动发送</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {draft.error_upstream_channel === "gitlab" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Input
+              placeholder="GitLab Base URL  https://git.galiais.com"
+              value={draft.error_upstream_gitlab_base_url}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_gitlab_base_url: e.target.value,
+                }))
+              }
+            />
+            <Input
+              placeholder="项目路径  Shiro/LoraHubReport"
+              value={draft.error_upstream_gitlab_repo}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_gitlab_repo: e.target.value,
+                }))
+              }
+            />
+            <Input
+              type="password"
+              placeholder="Personal Access Token (api scope)"
+              value={draft.error_upstream_gitlab_token}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_gitlab_token: e.target.value,
+                }))
+              }
+              className="md:col-span-2"
+            />
+          </div>
+        )}
+        {draft.error_upstream_channel === "webhook" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Input
+              placeholder="Webhook URL  https://hooks.example.com/lorahub"
+              value={draft.error_upstream_webhook_url}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_webhook_url: e.target.value,
+                }))
+              }
+              className="md:col-span-2"
+            />
+            <Input
+              type="password"
+              placeholder="Authorization 头(可选,如 Bearer xxx)"
+              value={draft.error_upstream_webhook_auth_header}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  error_upstream_webhook_auth_header: e.target.value,
+                }))
+              }
+              className="md:col-span-2"
+            />
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onProbe}
+            disabled={
+              probing ||
+              draft.error_upstream_channel === "off" ||
+              !cfg
+            }
+            className="gap-1.5"
+          >
+            <Network className="size-3" />
+            {probing ? "测试中..." : "测试连通"}
+          </Button>
+          <Button
+            size="sm"
+            onClick={onSave}
+            disabled={saving || !cfg}
+            className="gap-1.5"
+          >
+            {saving ? "保存中..." : "保存"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }

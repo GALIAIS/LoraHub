@@ -33,6 +33,42 @@ def _active_store() -> ErrorReportStore | None:
     return getattr(app_module, "_error_report_store", None)
 
 
+def _active_dispatcher_and_threshold() -> tuple[Any, str]:
+    """Resolve the dispatcher + the auto-send threshold from settings.
+
+    Returns ``(None, "off")`` when either piece isn't available — the
+    caller treats that as "store-only, no fan-out".
+    """
+    try:
+        from lorahub.api import app as app_module  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None, "off"
+    dispatcher = getattr(app_module, "_error_upstream_dispatcher", None)
+    settings_store = getattr(app_module, "_settings_store", None)
+    if dispatcher is None or settings_store is None:
+        return None, "off"
+    try:
+        settings = settings_store.load()
+    except Exception:  # noqa: BLE001
+        return dispatcher, "off"
+    threshold = getattr(settings, "error_upstream_auto_severity", "off") or "off"
+    return dispatcher, threshold
+
+
+_SEVERITY_RANK = {"info": 1, "warn": 2, "error": 3, "fatal": 4}
+
+
+def _meets_threshold(report_severity: str, threshold: str) -> bool:
+    """``threshold`` of ``"error"`` means "auto-send severity ≥ error";
+    ``"all"`` is unconditional; ``"off"`` blocks everything."""
+    if threshold == "all":
+        return True
+    if threshold == "off":
+        return False
+    cutoff = _SEVERITY_RANK.get(threshold, _SEVERITY_RANK["error"])
+    return _SEVERITY_RANK.get(report_severity, 0) >= cutoff
+
+
 def capture(
     *,
     severity: Severity,
@@ -69,6 +105,15 @@ def capture(
         request_id=request_id,
         request_path=request_path,
     )
+    # Stamp the fingerprint up-front so both the local row and any
+    # outbound copy share the same hash. Cheap and pure — see
+    # error_upstream.fingerprint for the inputs it considers.
+    try:
+        from lorahub.api.error_upstream import compute_fingerprint  # noqa: PLC0415
+
+        report.fingerprint = compute_fingerprint(report)
+    except Exception:  # noqa: BLE001
+        report.fingerprint = None
     target: ErrorReportStore | None
     if store is ...:
         target = _active_store()
@@ -79,6 +124,20 @@ def capture(
         target = store
     if target is not None:
         target.insert(report)
+        # Auto-fan-out: only if the user has opted in via settings AND
+        # the severity meets their threshold. Manual ``send_now`` from
+        # the UI bypasses this gate so users can always force a single
+        # report through even when auto is off.
+        dispatcher, threshold = _active_dispatcher_and_threshold()
+        if dispatcher is not None and _meets_threshold(severity, threshold):
+            try:
+                target.update_upstream(report.id, status="queued")
+                report.upstream_status = "queued"
+                dispatcher.enqueue(report)
+            except Exception:  # noqa: BLE001
+                # Reporter must never raise back into the caller —
+                # store-only is still better than not logging at all.
+                log.exception("could not enqueue report %s for upstream", report.id)
     # Always also tee into stderr/log: even if persistence raced a boot
     # window or was disabled, the operator's terminal still surfaces the
     # signal. Severity → log level: fatal/error => error, warn => warn,
