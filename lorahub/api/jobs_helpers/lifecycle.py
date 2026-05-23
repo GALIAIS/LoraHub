@@ -202,6 +202,45 @@ def _enqueue_launch(
                         worker.notify_checkpoint(ckpt_name)
                     except Exception:  # noqa: BLE001
                         log.exception("preview worker notify failed")
+            # Side-band LoRA spectrum analysis. Runs on a daemon thread so
+            # the live training loop is never blocked; results land via
+            # ``on_event`` like every other training event.
+            if _jh._lora_spectrum_enabled(cfg):
+                ckpt_path = _resolve_checkpoint_path(ev, workspace)
+                if ckpt_path is not None:
+                    from lorahub.api.lora_analysis import (  # noqa: PLC0415
+                        is_lora_checkpoint,
+                        schedule_lora_spectrum,
+                    )
+
+                    if is_lora_checkpoint(ckpt_path):
+                        schedule_lora_spectrum(
+                            ckpt_path,
+                            step=_extract_step(ev),
+                            on_event=on_event,
+                            job_id=job.id,
+                        )
+        if ev.type is EventType.sample_ready:
+            # Catastrophic-forgetting probe: only flagged prompts (those
+            # whose filename matches forget/neutral/preserve markers in
+            # the user's sample_prompts file) are compared against their
+            # earliest-seen sample for this job.
+            sample_path = _resolve_sample_path(ev, workspace)
+            if sample_path is not None:
+                from lorahub.api.forgetting_probe import (  # noqa: PLC0415
+                    derive_prompt_key,
+                    is_neutral_prompt,
+                    schedule_forgetting_probe,
+                )
+
+                if is_neutral_prompt(sample_path):
+                    schedule_forgetting_probe(
+                        sample_path,
+                        prompt_key=derive_prompt_key(sample_path),
+                        step=_extract_step(ev),
+                        on_event=on_event,
+                        job_id=job.id,
+                    )
         if ev.type is EventType.done:
             j = state.registry.get(job.id)
             if j is not None:
@@ -358,6 +397,83 @@ def _extract_ckpt_name(ev: TrainingEvent) -> str | None:
         return None
     name = Path(raw.strip()).name
     return name or None
+
+
+def _resolve_checkpoint_path(
+    ev: TrainingEvent, workspace: Path
+) -> Path | None:
+    """Best-effort absolute path to the saved checkpoint file.
+
+    The training-side parsers emit the path verbatim from the trainer's
+    log. Most are absolute, some are workspace-relative. Anything that
+    points to a directory rather than a file is resolved to the most
+    recently modified ``.safetensors`` inside (dp's
+    ``output_dir/<run>/step<N>/`` layout).
+    """
+    payload = ev.payload or {}
+    raw = payload.get("path") or payload.get("checkpoint")
+    if not isinstance(raw, str) or not raw:
+        return None
+    candidate = Path(raw.strip())
+    if not candidate.is_absolute():
+        candidate = (workspace / candidate).resolve()
+    if candidate.is_file():
+        return candidate
+    if candidate.is_dir():
+        # Pick the newest .safetensors / .sft inside.
+        files = sorted(
+            (
+                p
+                for p in candidate.rglob("*")
+                if p.is_file() and p.suffix.lower() in {".safetensors", ".sft"}
+            ),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return files[0] if files else None
+    return None
+
+
+def _extract_step(ev: TrainingEvent) -> int | None:
+    payload = ev.payload or {}
+    raw = payload.get("step")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _resolve_sample_path(
+    ev: TrainingEvent, workspace: Path
+) -> Path | None:
+    """Absolute path to a sample-ready event's image file, if it exists."""
+    payload = ev.payload or {}
+    raw = payload.get("path") or payload.get("sample") or payload.get("file")
+    if not isinstance(raw, str) or not raw:
+        return None
+    candidate = Path(raw.strip())
+    if not candidate.is_absolute():
+        candidate = (workspace / candidate).resolve()
+    return candidate if candidate.is_file() else None
+
+
+def _lora_spectrum_enabled(cfg: Any) -> bool:
+    """Whether to run side-band SVD on every checkpoint.
+
+    Default-on; recipe sets ``sampling.spectrum_analysis = false`` to
+    opt out (e.g. air-gapped users with > 100-layer adapters where the
+    SVD wall time isn't trivial).
+    """
+    from lorahub.api.lora_analysis import is_enabled  # noqa: PLC0415
+
+    try:
+        return is_enabled(cfg)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[str]]:

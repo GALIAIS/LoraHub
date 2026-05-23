@@ -161,6 +161,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "checkpoints": [],
         "samples": [],
         "gpu_samples": [],
+        "lora_spectrum": [],
+        "forgetting_probe": [],
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
@@ -176,6 +178,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     checkpoints: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
     gpu_samples: list[dict[str, Any]] = []
+    lora_spectrum: list[dict[str, Any]] = []
+    forgetting_probe: list[dict[str, Any]] = []
     epoch_counter = 0
     # Trainer-reported total step count. We track the latest non-zero
     # value seen on a `step` event so the front-end has a single
@@ -262,6 +266,29 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                         "ts": ts,
                     }
                 )
+            elif etype == EventType.lora_spectrum.value:
+                lora_spectrum.append(
+                    {
+                        "step": payload.get("step"),
+                        "checkpoint": payload.get("checkpoint"),
+                        "layers": payload.get("layers"),
+                        "effective_rank": payload.get("effective_rank"),
+                        "top1_energy": payload.get("top1_energy"),
+                        "fro_norm": payload.get("fro_norm"),
+                        "ts": ts,
+                    }
+                )
+            elif etype == EventType.forgetting_probe.value:
+                forgetting_probe.append(
+                    {
+                        "step": payload.get("step"),
+                        "checkpoint": payload.get("checkpoint"),
+                        "preserved": payload.get("preserved"),
+                        "samples": payload.get("samples"),
+                        "image_path": payload.get("image_path"),
+                        "ts": ts,
+                    }
+                )
 
     first_ts = loss[0]["ts"] if loss else None
     last_ts = loss[-1]["ts"] if loss else None
@@ -285,6 +312,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "checkpoints": checkpoints,
         "samples": samples,
         "gpu_samples": gpu_samples,
+        "lora_spectrum": lora_spectrum,
+        "forgetting_probe": forgetting_probe,
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,

@@ -530,6 +530,14 @@ class SamplingConfig(BaseModel):
     inference_steps: int = Field(24, ge=1)
     inference_cfg: float = Field(5.0, gt=0)
 
+    # Side-band SVD over each saved LoRA checkpoint. Cheap (< 1 s on
+    # a typical adapter, runs on a daemon thread on the API host) and
+    # produces a useful "is the adapter actually learning anything"
+    # signal: effective_rank / top1_energy / fro_norm trends.
+    # Off-switch is here so air-gapped users with adapters that have
+    # several hundred LoRA pairs can opt out.
+    spectrum_analysis: bool = True
+
 
 class AttentionConfig(BaseModel):
     """Selects the attention kernel for the training forward+backward pass.

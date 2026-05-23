@@ -65,6 +65,31 @@ class EventType(StrEnum):
     #   - ``evidence`` (str): line that triggered the match
     #   - ``source`` (stdout / stderr): which pipe carried the line
     diagnostic_warning = "diagnostic_warning"
+    # Singular value decomposition summary of a LoRA adapter checkpoint.
+    # Computed on the API host (not the trainer) right after a
+    # ``checkpoint_saved`` event lands, so the live training loop is
+    # never blocked by the SVD. Payload keys:
+    #   - ``checkpoint`` (str): absolute path to the .safetensors file
+    #   - ``step`` (int): training step the checkpoint was saved at
+    #   - ``layers`` (int): number of LoRA matrices analysed
+    #   - ``effective_rank`` (float): geometric mean of per-layer
+    #     effective ranks (Σσ)² / Σσ²
+    #   - ``top1_energy`` (float): fraction of energy in the largest
+    #     singular value, averaged across layers (0..1)
+    #   - ``fro_norm`` (float): mean Frobenius norm of ΔW = α·B·A
+    #   - ``per_layer`` (list[dict] | None): up to 16 representative
+    #     layers' raw stats — surfaces in the AI analysis prompt.
+    lora_spectrum = "lora_spectrum"
+    # Catastrophic-forgetting probe result. Optional: only emitted when
+    # ``cfg.sampling.forgetting_probe.enable=True`` and the backend
+    # synthesised the comparison images. Payload keys:
+    #   - ``checkpoint`` (str), ``step`` (int)
+    #   - ``preserved`` (float): mean similarity vs the pristine base
+    #     model on a held-out neutral prompt set, in [0..1]
+    #   - ``samples`` (int): number of probe prompts used
+    #   - ``image_path`` (str | None): grid image laying out probe
+    #     prompts side-by-side for the UI lightbox
+    forgetting_probe = "forgetting_probe"
 
 
 @dataclass(frozen=True, slots=True)

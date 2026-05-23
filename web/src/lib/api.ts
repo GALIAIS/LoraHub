@@ -466,6 +466,36 @@ export interface JobMetricsResponse {
     temperature_c: number | null
     ts: number
   }>
+  /**
+   * Side-band SVD summary for every saved LoRA checkpoint. Empty for
+   * runs without LoRA adapters or with `sampling.spectrum_analysis=false`.
+   */
+  lora_spectrum: Array<{
+    step: number | null
+    checkpoint: string | null
+    layers: number | null
+    /** Geometric mean of per-layer (Σσ)² / Σσ². */
+    effective_rank: number | null
+    /** Mean fraction of energy in the top singular value, [0..1]. */
+    top1_energy: number | null
+    /** Mean Frobenius norm of ΔW = α·B·A. */
+    fro_norm: number | null
+    ts: number
+  }>
+  /**
+   * Catastrophic-forgetting probe — perceptual similarity of neutral-
+   * prompt samples against the earliest seen sample for that prompt.
+   * `preserved` is in [0..1]; 1 = identical to baseline, 0 = totally
+   * different.
+   */
+  forgetting_probe: Array<{
+    step: number | null
+    checkpoint: string | null
+    preserved: number | null
+    samples: number | null
+    image_path: string | null
+    ts: number
+  }>
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null

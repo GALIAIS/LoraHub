@@ -222,6 +222,84 @@ export function MetricGrid({
       })
     }
 
+    // ---------- lora/effective_rank, top1_energy, fro_norm ----------
+    const spectrum = metrics?.lora_spectrum ?? []
+    if (spectrum.length > 0) {
+      const eff = spectrum
+        .filter(
+          (s) =>
+            typeof s.effective_rank === "number" &&
+            Number.isFinite(s.effective_rank) &&
+            typeof s.step === "number",
+        )
+        .map((s) => ({ x: s.step as number, y: s.effective_rank as number }))
+      if (eff.length > 0) {
+        out.push({
+          id: "lora-eff-rank",
+          title: "lora/effective_rank",
+          latest: fmtFloat(eff[eff.length - 1].y, 2),
+          xLabel: "step",
+          series: [
+            {
+              id: "eff",
+              label: "有效秩",
+              color: "var(--chart-1)",
+              points: eff,
+            },
+          ],
+        })
+      }
+      const top1 = spectrum
+        .filter(
+          (s) =>
+            typeof s.top1_energy === "number" &&
+            Number.isFinite(s.top1_energy) &&
+            typeof s.step === "number",
+        )
+        .map((s) => ({ x: s.step as number, y: (s.top1_energy as number) * 100 }))
+      if (top1.length > 0) {
+        out.push({
+          id: "lora-top1",
+          title: "lora/top1_energy",
+          latest: `${fmtFloat(top1[top1.length - 1].y, 1)} %`,
+          xLabel: "step",
+          series: [
+            {
+              id: "top1",
+              label: "首奇异值能量占比",
+              color: "var(--chart-2)",
+              unit: "%",
+              points: top1,
+            },
+          ],
+        })
+      }
+      const fro = spectrum
+        .filter(
+          (s) =>
+            typeof s.fro_norm === "number" &&
+            Number.isFinite(s.fro_norm) &&
+            typeof s.step === "number",
+        )
+        .map((s) => ({ x: s.step as number, y: s.fro_norm as number }))
+      if (fro.length > 0) {
+        out.push({
+          id: "lora-fro",
+          title: "lora/fro_norm",
+          latest: fmtFloat(fro[fro.length - 1].y, 3),
+          xLabel: "step",
+          series: [
+            {
+              id: "fro",
+              label: "ΔW 弗罗贝尼乌斯范数",
+              color: "var(--chart-3)",
+              points: fro,
+            },
+          ],
+        })
+      }
+    }
+
     return out
   }, [metrics])
 

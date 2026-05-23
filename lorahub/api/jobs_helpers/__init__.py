@@ -22,6 +22,7 @@ from .lifecycle import (
     _enqueue_launch,
     _extract_ckpt_name,
     _launch_job,
+    _lora_spectrum_enabled,
     _relaunch_job_in_place,
     _select_backend,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "_enqueue_launch",
     "_extract_ckpt_name",
     "_launch_job",
+    "_lora_spectrum_enabled",
     "_relaunch_job_in_place",
     "_select_backend",
     # metrics

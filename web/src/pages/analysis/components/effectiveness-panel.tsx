@@ -27,6 +27,7 @@ import { useMemo } from "react"
 import {
   Activity,
   Gauge,
+  Layers,
   ShieldAlert,
   Sparkles,
   Zap,
@@ -116,6 +117,22 @@ interface LrResponseVerdict {
    * "no-events"   → LR series has no detected drop yet.
    */
   state: "responsive" | "weak" | "no-events"
+}
+
+interface ForgettingVerdict {
+  /** Latest preservation in [0..1] across every neutral prompt. */
+  latest: number | null
+  /** Slope of preserved over time (negative = drifting away from base). */
+  trend: number | null
+  /** Number of neutral-prompt samples observed so far. */
+  samples: number
+  /**
+   * "stable"     → latest >= 0.85, no significant negative trend;
+   * "drifting"   → latest 0.65–0.85 OR negative trend;
+   * "forgetting" → latest < 0.65;
+   * "no-data"    → no neutral prompts probed yet.
+   */
+  state: "stable" | "drifting" | "forgetting" | "no-data"
 }
 
 type StageKey = "warmup" | "converging" | "plateau" | "diverging" | "unknown"
@@ -305,6 +322,45 @@ function describeLrResponse(
   return { events, meanImprovementPct, responsiveEvents, state }
 }
 
+function describeForgetting(
+  m: JobMetricsResponse | null,
+): ForgettingVerdict {
+  const probe = (m?.forgetting_probe ?? []).filter(
+    (p): p is { step: number; preserved: number } & typeof p =>
+      typeof p.preserved === "number" &&
+      Number.isFinite(p.preserved) &&
+      typeof p.step === "number",
+  )
+  if (probe.length === 0) {
+    return { latest: null, trend: null, samples: 0, state: "no-data" }
+  }
+  const latest = probe[probe.length - 1].preserved as number
+  // Trend: OLS slope of preserved vs step over the entire history.
+  let trend: number | null = null
+  if (probe.length >= 3) {
+    const meanX = probe.reduce((a, p) => a + (p.step as number), 0) / probe.length
+    const meanY = probe.reduce((a, p) => a + (p.preserved as number), 0) / probe.length
+    let num = 0
+    let den = 0
+    for (const p of probe) {
+      const dx = (p.step as number) - meanX
+      num += dx * ((p.preserved as number) - meanY)
+      den += dx * dx
+    }
+    trend = den === 0 ? 0 : num / den
+  }
+  let state: ForgettingVerdict["state"]
+  if (latest < 0.65) state = "forgetting"
+  else if (latest < 0.85 || (trend != null && trend < -1e-5)) state = "drifting"
+  else state = "stable"
+  return {
+    latest,
+    trend,
+    samples: probe.length,
+    state,
+  }
+}
+
 function classifyStage(
   conv: ConvergenceVerdict | null,
   stab: StabilityVerdict | null,
@@ -367,6 +423,7 @@ export function EffectivenessPanel({ metrics }: Props) {
   const stability = useMemo(() => describeStability(points), [points])
   const overfit = useMemo(() => describeOverfit(metrics), [metrics])
   const lrResponse = useMemo(() => describeLrResponse(metrics), [metrics])
+  const forgetting = useMemo(() => describeForgetting(metrics), [metrics])
   const stage = useMemo(
     () => classifyStage(convergence, stability, losses),
     [convergence, stability, losses],
@@ -386,13 +443,15 @@ export function EffectivenessPanel({ metrics }: Props) {
     lrResponse.events.length === 0
       ? 0
       : clamp(lrResponse.meanImprovementPct / 10, 0, 1)
+  // Forgetting bar: preserved in [0..1] is itself the fill.
+  const forgetFill = forgetting.latest == null ? 0 : clamp(forgetting.latest, 0, 1)
 
   return (
     <div>
       <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2 px-0.5">
         训练有效性洞察
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <InsightCard
           icon={<Activity className="size-3.5" />}
           title="收敛趋势"
@@ -546,10 +605,58 @@ export function EffectivenessPanel({ metrics }: Props) {
                 ]
           }
         />
+        <InsightCard
+          icon={<Layers className="size-3.5" />}
+          title="基模型保留度"
+          tone={
+            forgetting.state === "stable"
+              ? "positive"
+              : forgetting.state === "forgetting"
+                ? "negative"
+                : forgetting.state === "drifting"
+                  ? "neutral"
+                  : "neutral"
+          }
+          headline={
+            forgetting.latest == null
+              ? "未配置"
+              : `${(forgetting.latest * 100).toFixed(0)}%`
+          }
+          caption={
+            forgetting.state === "no-data"
+              ? "在 sample_prompts 中给中性 prompt 加 forget/neutral/preserve 标记后启用"
+              : `${forgettingLabel(forgetting.state)} · 已采样 ${forgetting.samples} 次${
+                  forgetting.trend != null
+                    ? ` · 趋势 ${forgetting.trend >= 0 ? "+" : ""}${forgetting.trend.toExponential(1)}/step`
+                    : ""
+                }`
+          }
+          fill={forgetFill}
+          stagger={400}
+          lowConfidence={
+            forgetting.state !== "no-data" && forgetting.samples < 3
+          }
+          rationale={
+            forgetting.state === "no-data"
+              ? [
+                  "未识别到中性 prompt 样本",
+                  "在 sample_prompts.txt 中将提示词文件名/索引标记为 forget/neutral/preserve",
+                  "比较算法: 8x8 dHash + 64-bit Hamming 距离, 每张图 < 5ms",
+                ]
+              : [
+                  `已采样 ${forgetting.samples} 张中性 prompt 输出`,
+                  `相似度计算: 与该 prompt 最早一张样本的 dHash 比较`,
+                  `阈值: < 0.65 视为遗忘; 0.65-0.85 或趋势负 视为漂移; ≥ 0.85 稳定`,
+                  forgetting.trend != null
+                    ? `趋势 OLS 斜率: ${forgetting.trend.toExponential(2)}/step`
+                    : "样本不足以拟合趋势",
+                ]
+          }
+        />
         <StageCard
           stage={stage.key}
           reason={stage.reason}
-          stagger={320}
+          stagger={480}
           rationale={[
             `阶段判定参考: 收敛趋势 + 趋势进展`,
             convergence
@@ -623,11 +730,6 @@ function InsightCard({
           <span className={cn("opacity-80", TONE_TEXT[tone])}>{icon}</span>
           {title}
         </CardTitle>
-        {lowConfidence && (
-          <span className="rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9.5px] uppercase tracking-[0.14em] text-amber-700 dark:text-amber-300">
-            低置信
-          </span>
-        )}
       </CardHeader>
       <CardContent className="p-3.5 space-y-2">
         <div className={cn("text-[18px] font-semibold tracking-tight tabular-nums", TONE_TEXT[tone])}>
@@ -641,6 +743,11 @@ function InsightCard({
         </div>
         <div className="text-[11px] text-muted-foreground leading-relaxed">
           {caption}
+          {lowConfidence && (
+            <span className="ml-1.5 inline-flex items-center rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1 py-[1px] align-middle text-[9.5px] uppercase tracking-[0.14em] text-amber-700 dark:text-amber-300">
+              低置信
+            </span>
+          )}
         </div>
         {rationale && rationale.length > 0 && (
           <details className="group text-[10.5px] text-muted-foreground/85 mt-1.5">
@@ -782,6 +889,16 @@ function lrResponseLabel(s: LrResponseVerdict["state"]): string {
     : s === "weak"
       ? "对 LR 不敏感"
       : "暂无可分析事件"
+}
+
+function forgettingLabel(s: ForgettingVerdict["state"]): string {
+  return s === "stable"
+    ? "稳定"
+    : s === "drifting"
+      ? "漂移中"
+      : s === "forgetting"
+        ? "遗忘明显"
+        : "未配置"
 }
 
 function overfitTrendLabel(t: OverfitTrend): string {
