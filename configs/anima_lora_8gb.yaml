@@ -1,190 +1,225 @@
-# Anima LoRA — 8GB recipe.
-#
-# Target hardware: RTX 3060 8G / RTX 4060 8G / 笔记本 4070 8G / 老 RTX 2070 等
-# Expected throughput: ~6-12 s/step at 768²
-# Expected VRAM peak: ~7.0-7.5 GB,留 ~0.5 GB 给系统 / 浏览器
-#
-# 这份配置的设计哲学是:**先跑通,再调质量**。
-#
-# 与 anima_lora_default.yaml 的关键差异(逐项配 8GB 显存预算):
-#
-#   * resolution 768 (而不是 1024) — 4096 → 2304 token, 显存占用 ~55%
-#   * blocks_to_swap = 24 — 一半 DiT 块在 CPU 待命, H2D 拷贝换显存
-#   * gradient_checkpointing = true — 反向重算激活,牺牲 ~15% 步速换 ~30%
-#     峰值显存
-#   * AdamW8bit (bitsandbytes) — 8-bit 优化器状态,省 ~0.5 GB
-#   * batchSize 1 + gradAccum 4 — 每步只用 1 张图的显存,等效 batch = 4
-#   * networkDim 8 (default 是 16) — 一半权重存档大小
-#   * 不开 sampling / validation / torch.compile — 推理与编译各要 ~1-2 GB,
-#     8GB 没头部空间
-#
-# 与 anima_character_32gb_dora.yaml / anima_style_32gb_loha.yaml 的关键差异:
-#
-#   * 不开 torch_compile / compileMode — 在 8GB 预算下 cudagraph_trees 的内存
-#     成本(每个 graph 一份激活)会把空间挤光,直接爆 OOM。32G 配置敢开是因为有
-#     ~7GB 头部空间, 8G 没有。
-#   * 不开 sampling / validation — 推理也要显存,跟训练同步跑会触发 OOM。需要
-#     看效果就训练完手动跑一次 inference,或者训练完去 web UI 「Samples」页。
-#   * 算法保持上游默认的 LoRA + OrthoLoRA + T-LoRA(default 一致), 不切 DoRA /
-#     LoHa — 这两个算法在 rank=8 上收益小、显存贵,8GB 不划算。
-#
-# 调参建议:
-#
-#   * 训练崩在 OOM:试 blocksToSwap 提到 28, 或 networkDim 降到 4
-#   * 想要更细的 identity 表达 + 你的卡其实有 9-10GB 余量:看
-#     anima_character_32gb_dora.yaml 把 networkDim 提到 16
-#   * 训练时长太长(每个 epoch >2 小时):降 numRepeats 到 1, 或 dataset 砍半
-#   * 想看训练中样本:训练完单独跑一次 inference,或换 16GB+ 卡
-
-schemaVersion: "1.0"
-
+schemaVersion: '1.0'
 baseModel:
   arch: anima
-  # 与 default / 32gb 保持同一份 ./models/ 目录布局, 切配置不必移模型权重。
-  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+  archVariant: ''
+  checkpoint: models\circlestone-labs__Anima\anima-base-v1.0.safetensors
   archPaths:
-    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
-    ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-
+    ae: models\circlestone-labs__Anima\qwen_image_vae.safetensors
+    qwen3: models\circlestone-labs__Anima\qwen_3_06b_base.safetensors
+    applyT5AttnMask: false
+    applyLgAttnMask: false
+    t5DropoutRate: 0.0
+    clipLDropoutRate: 0.0
+    clipGDropoutRate: 0.0
+    posEmbRandomCropRate: 0.0
+    enableScaledPosEmbed: false
+    vaeDisableCache: false
+    textEncoderCpu: false
 dataset:
-  source: ./datasets/your_dataset
-  # 768² 是 anima_lora 8GB 的"安全档"。bucket 上下限随之收紧 —— 1024 长边
-  # 仍能放下,但极端比例(2:1 长图)在 8GB 上会把 cache 阶段顶到 OOM。
-  resolution: [768, 768]
+  source: datasets\your_dataset
+  resolution:
+  - 768
+  - 768
   bucket:
     enabled: true
     min: 256
     max: 1024
     step: 64
+    noUpscale: false
+    skipImageResolution: false
   caption:
     strategy: tag_file
     ext: .txt
     shuffle: true
     dropRate: 0.1
+    dropoutEveryNEpochs: 0
+    tagDropoutRate: 0.0
     keepTokens: 3
+    dropTokens: []
+    enableWildcard: false
+    weighted: false
+    shuffleTags: false
   numRepeats: 1
-
+  valSplit: 0.0
+  subsets: []
+  frameBuckets:
+  - 1
 network:
   type: lora
   rank: 8
   alpha: 8
-
+  targetUnet: true
+  targetTextEncoder: false
+  networkDropout: 0.0
+  rankDropout: 0.0
+  moduleDropout: 0.0
+  baseWeights: []
+  baseWeightsMultiplier: []
+  fuseAdapters: []
 optimizer:
-  # AdamW8bit 走 bitsandbytes 8-bit state,省 ~0.5 GB 优化器内存。
-  # 学习率与 default 持平 — 8-bit 数值噪声在 5e-5 这个量级影响可忽略。
   type: AdamW8bit
   lr:
-    unet: 5.0e-5
-    textEncoder: 5.0e-5
-  scheduler:
-    type: constant
-
+    unet: 5.0e-05
+    textEncoder: 5.0e-05
+  schedule: cosine_with_restarts
+  warmupSteps: 100
+  betas:
+  - 0.9
+  - 0.999
+  weightDecay: 0.0
+  eps: 1.0e-08
+  optimizerArgs: {}
+  maxGradNorm: 1.0
+  schedulerArgs: {}
+  schedulerNumCycles: 1
+  schedulerPower: 1.0
+  gradientRelease: false
+loss:
+  noiseOffset: 0.0
+  noiseOffsetRandomStrength: false
+  multiresNoiseDiscount: 0.3
+  ipNoiseGammaRandomStrength: false
+  zeroTerminalSnr: false
+  priorLossWeight: 1.0
+  lossType: l2
+  debiasedEstimation: false
+  maskedLoss: false
+  scaleVPredLossLikeNoisePred: false
+  vParameterization: false
+flowMatch: {}
 schedule:
   epochs: 8
   batchSize: 1
   gradAccum: 4
   seed: 42
-
-# 8GB 显式关 sampling — schema 默认是 enabled=true,默认值在 8GB 卡上
-# 训练+采样并行会 OOM。要看效果训练完单独跑 inference。
+precision: bf16
+gradientCheckpointing: true
+cacheLatents: true
+cacheLatentsToDisk: false
+skipCacheCheck: false
+cacheInfo: false
+trainInpainting: false
 sampling:
   enabled: false
-
+  everyNEpochs: 1
+  atFirst: false
+  resolution:
+  - 1024
+  - 1024
+  seed: 42
+  enableLiveInference: false
+  inferenceSteps: 24
+  inferenceCfg: 5.0
 output:
   name: anima_lora_8gb
-
+  saveEveryNEpochs: 1
+  saveDtype: fp16
+  noMetadata: false
+  metadata: {}
 backend:
   type: anima_lora
-
+  extraArgs: {}
   animaLora:
     method: lora
     preset: low_vram
     outputName: anima_lora_8gb
-
-    # 与 default 一致 — 上游堆叠 LoRA + OrthoLoRA + T-LoRA。
-    # 不切 DoRA / LoHa — 那两个在 rank=8 + 8GB 卡上收益微弱。
     networkModule: networks.lora_anima
-    networkTrainUnetOnly: true
     networkDim: 8
-    networkAlpha: 8
-
-    # === 8GB 关键调档 ===
-
-    # 优化器走 8-bit。default 用 AdamW(fp32),32gb_dora 也用 AdamW —
-    # 8GB 没有这个余裕。
+    networkAlpha: 8.0
+    networkTrainUnetOnly: true
     optimizerType: AdamW8bit
     lrScheduler: constant
-    learningRate: 5.0e-5
+    learningRate: 5.0e-05
     maxTrainEpochs: 8
     saveEveryNEpochs: 2
     checkpointingEpochs: 2
-
-    # 24 / 60 块 swap 到 CPU。anima 的 DiT 默认 60 个 transformer block,
-    # 一半留 GPU、一半 CPU,前向/反向时按 block 顺序 H2D 拷。
-    # ~30% 显存换 ~5-10% 步速 —— 8GB 卡上完全划算。
-    blocksToSwap: 24
-
-    # 反向重算激活,~30% 显存换 ~15% 步速。
-    # default 是 false(32GB 不需要),32gb_dora 也 false。
-    gradientCheckpointing: true
-
-    # mixedPrecision = bf16(default / 32gb 一致); 不开 fp8(8GB 卡的 fp8
-    # 算子覆盖率仍然不全, 退化到 fp16 反而显存暴涨)。
-    mixedPrecision: bf16
-
-    # === 关掉 8GB 装不下的特性 ===
-
-    # torch.compile 在 8GB 上不开。cudagraph_trees 给每个 graph 留一份激活
-    # buffer, 这正是 8GB 缺的那块空间。32GB 才有头部跑这个 trick。
-    attnMode: torch
-    # compileMode 留空 = 不开
-    # compileInductorMode 留 reduce-overhead 为 default 一致(被 compileMode 关掉就是死字段)
-
-    # === 跟 default 一致的字段(显式保留方便对照) ===
-
     captionDropoutRate: 0.1
-    useShuffledCaptionVariants: true
-    cacheLlmAdapterOutputs: true
-
     timestepSampling: sigmoid
     sigmoidScale: 1.0
     discreteFlowShift: 1.0
-
+    ema: false
+    emaDecay: 0.9999
+    emaUseNumUpdates: true
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+    sampleGrid: false
     cacheLatents: true
     cacheLatentsToDisk: true
     cacheTextEncoderOutputs: true
     cacheTextEncoderOutputsToDisk: true
-
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
     staticTokenCount: 4096
-    # 上游 base.toml 默认 64,LoraHub 标记为 locked_value(QwenImage VAE
-    # memory layout 锁死 64,改成别的值要么 OOM 要么无收益)。8GB 一样得 64。
     vaeChunkSize: 64
     vaeDisableCache: true
-
+    noHalfVae: false
+    attnMode: torch
+    xformers: false
+    splitAttn: false
     useCustomDownAutograd: true
-
-    # === 不开 sampling, 不开 validation ===
-    # 8GB 卡训练 + 推理同时跑 = OOM。需要看效果训练完单独跑或去 Web UI samples 页。
+    blocksToSwap: 24
+    gradientCheckpointing: true
+    unslothOffloadCheckpointing: false
+    cpuOffloadCheckpointing: false
+    mixedPrecision: bf16
     useCmmd: false
-
-    # LoRA 子配置 — 与 default 一致。
-    lora:
-      useOrtho: true
-      useTimestepMask: true
-      minRank: 8
-      alphaRankScale: 1.0
-
-    # 训练稳定器 —— 8GB 长时间训练遇 NaN 概率比 32G 高(swap + grad-ckpt
-    # 的数值边界更紧),所以默认开 nan_guard。
-    nanGuard: true
-    nanGuardRecover: true
-    nanGuardMaxConsecutive: 5
-
-    # 输出 / 保存(与 default 一致)
+    maskedLoss: true
+    torchCompile: true
+    skipCacheCheck: true
+    dataloaderPinMemory: true
+    persistentDataLoaderWorkers: false
+    trimCrossattnKv: false
     saveModelAs: safetensors
     savePrecision: bf16
     logEveryNSteps: 2
     keepTokens: 3
     captionExtension: .txt
+    validationSplitNum: 16
     enableBucket: true
     pathPattern: '*'
+    lora:
+      algorithm: ortho
+      useOrtho: true
+      lokrFactor: 8
+      boftFactors: 4
+      useTimestepMask: true
+      minRank: 8
+      alphaRankScale: 1.0
+resume:
+  saveState: true
+  saveStateAtEnd: true
+  skipUntilInitialStep: false
+validation:
+  everyNEpochs: 1
+attention:
+  training: auto
+  split: false
+optimization:
+  torchCompile: false
+  fusedBackwardPass: false
+  fullBf16: false
+  fullFp16: false
+  blocksToSwap: 0
+  fp8Base: false
+  fp8BaseUnet: false
+  fp8Scaled: false
+  fp8VlTextEncoder: false
+  lowram: false
+  highvram: false
+  noHalfVae: false
+  disableMmapLoadSafetensors: false
+  cpuOffloadCheckpointing: false
+  unslothOffloadCheckpointing: false
+  cacheTextEncoderOutputs: false
+  cacheTextEncoderOutputsToDisk: false
+dataloader:
+  numWorkers: 8
+  persistentWorkers: false
+  vaeBatchSize: 1
+  cacheShuffleNum: 0
+augmentation:
+  flip: false
+  color: false
+  randomCrop: false
+  alphaMask: false
