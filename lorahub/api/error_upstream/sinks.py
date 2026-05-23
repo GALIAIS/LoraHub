@@ -32,7 +32,7 @@ from .redaction import redact_dict, redact_report
 log = logging.getLogger(__name__)
 
 
-SinkChannel = Literal["off", "gitlab", "webhook"]
+SinkChannel = Literal["off", "gitlab", "gitea", "webhook"]
 
 
 @dataclass
@@ -42,13 +42,19 @@ class SinkConfig:
     Only fields the matching channel needs are required; the others
     are tolerated as empty strings so the same dataclass can be
     serialised straight from / to ``Settings``.
+
+    GitLab and Gitea share the ``gitlab_*`` field set because both
+    consume the same three values (base URL + ``owner/repo`` path +
+    personal access token). The channel discriminator picks the
+    matching sink class at construction time.
     """
 
     channel: SinkChannel = "off"
-    # GitLab fields
+    # GitLab / Gitea fields
     gitlab_base_url: str = ""        # e.g. ``https://git.galiais.com``
     gitlab_repo: str = ""            # e.g. ``Shiro/LoraHubReport``
-    gitlab_token: str = ""           # PAT with ``api`` scope
+    gitlab_token: str = ""           # PAT with ``api`` (gitlab) or
+                                     # ``write:issue`` (gitea) scope
     # Webhook fields
     webhook_url: str = ""
     webhook_auth_header: str = ""    # raw header value, e.g. ``Bearer abc``
@@ -342,6 +348,319 @@ class GitLabIssueSink:
 
 
 # ---------------------------------------------------------------------- #
+# Gitea Issues
+# ---------------------------------------------------------------------- #
+
+
+@dataclass
+class GiteaIssueSink:
+    """File reports as Gitea issues with the same fingerprint contract.
+
+    Gitea's issue API mirrors GitHub's, not GitLab's:
+
+    * Base path is ``/api/v1`` (vs GitLab's ``/api/v4``).
+    * Auth header is ``Authorization: token <pat>`` (vs GitLab's
+      ``PRIVATE-TOKEN``).
+    * Repo is ``{owner}/{repo}`` and **must not** be URL-encoded —
+      Gitea's router parses the slash directly.
+    * Issues key off ``number`` rather than GitLab's ``iid``.
+    * Labels are addressed by **integer id**, not by name. We
+      lazily ``GET /labels`` to discover existing ones, ``POST
+      /labels`` for the missing ones, and cache the resulting
+      name → id map per process so subsequent reports skip the
+      round-trip.
+    * Search by label uses ``GET /issues/search?type=issues
+      &state=open&labels=fp:<hash>`` — Gitea accepts label *names*
+      in the query string here even though attaching them needs
+      ids.
+    """
+
+    base_url: str
+    repo_path: str          # ``owner/repo``
+    token: str
+    timeout_s: float = 12.0
+    max_comments_per_issue: int = 50
+
+    channel: SinkChannel = field(default="gitea", init=False)
+    # Lazy cache of label name → numeric id. Populated by
+    # ``_ensure_labels`` on the first send; tests can pre-seed it via
+    # the public attribute to skip the discovery round-trips.
+    _label_cache: dict[str, int] = field(default_factory=dict, init=False)
+
+    # ------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------ #
+
+    def send(self, report: ErrorReport) -> SendResult:
+        if not self.base_url or not self.repo_path or not self.token:
+            return SendResult(ok=False, error="gitea sink not configured", retryable=False)
+        redacted = redact_report(report)
+        fp = compute_fingerprint(redacted)
+        existing = self._find_issue_by_fingerprint(fp)
+        if existing is not None:
+            number = int(existing["number"])
+            web_url = str(existing.get("html_url") or "")
+            comments_count = int(existing.get("comments") or 0)
+            if comments_count >= self.max_comments_per_issue:
+                cont_fp = f"{fp}-cont{(comments_count // self.max_comments_per_issue)}"
+                return self._open_new_issue(redacted, cont_fp)
+            return self._append_comment(number, redacted, web_url)
+        return self._open_new_issue(redacted, fp)
+
+    def health_check(self) -> SendResult:
+        if not self.base_url or not self.repo_path or not self.token:
+            return SendResult(ok=False, error="gitea sink not configured", retryable=False)
+        url = self._repo_url()
+        status, body = _http(
+            url, headers=self._headers(), timeout_s=self.timeout_s,
+        )
+        if status == 200 and isinstance(body, dict) and "id" in body:
+            return SendResult(
+                ok=True,
+                url=str(body.get("html_url") or url),
+                upstream_id=str(body.get("id") or ""),
+            )
+        retryable = status >= 500 or status == -1
+        return SendResult(
+            ok=False,
+            error=f"Gitea health probe failed ({status}): {body!r}"[:300],
+            retryable=retryable,
+        )
+
+    # ------------------------------------------------------------ #
+    # Internals
+    # ------------------------------------------------------------ #
+
+    def _repo_url(self) -> str:
+        # Gitea expects the slash to remain literal — quoting the
+        # whole ``owner/repo`` returns 404. We do strip leading /
+        # trailing whitespace defensively because users paste from
+        # the address bar.
+        return f"{self.base_url.rstrip('/')}/api/v1/repos/{self.repo_path.strip().strip('/')}"
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "lorahub-error-reporter",
+        }
+
+    def _fingerprint_label(self, fp: str) -> str:
+        return f"fp:{fp}"
+
+    def _find_issue_by_fingerprint(self, fp: str) -> dict[str, Any] | None:
+        # Gitea's per-repo issue search accepts ``labels=<name>`` as a
+        # CSV; ``state=open`` keeps a manually-closed dupe from
+        # silently re-opening as a new issue.
+        params = urllib.parse.urlencode(
+            {
+                "type": "issues",
+                "state": "open",
+                "labels": self._fingerprint_label(fp),
+                "limit": "1",
+            },
+        )
+        url = f"{self._repo_url()}/issues?{params}"
+        status, body = _http(url, headers=self._headers(), timeout_s=self.timeout_s)
+        if status == 200 and isinstance(body, list) and body:
+            return body[0]
+        return None
+
+    def _ensure_labels(self, names: list[str]) -> list[int]:
+        """Resolve label names to ids, creating any missing entries.
+
+        Cached at the instance level so a chatty run only pays the
+        discovery cost once. Failure to create a label is non-fatal —
+        we drop that label rather than fail the whole send.
+        """
+        result: list[int] = []
+        unresolved: list[str] = []
+        for name in names:
+            cached = self._label_cache.get(name)
+            if cached is not None:
+                result.append(cached)
+            else:
+                unresolved.append(name)
+        if not unresolved:
+            return result
+
+        # Pull the full label list once and refresh the cache.
+        list_url = f"{self._repo_url()}/labels?limit=200"
+        status, body = _http(list_url, headers=self._headers(), timeout_s=self.timeout_s)
+        if status == 200 and isinstance(body, list):
+            for entry in body:
+                if isinstance(entry, dict) and "name" in entry and "id" in entry:
+                    self._label_cache[str(entry["name"])] = int(entry["id"])
+        # Anything still missing — create. ``color`` is required by
+        # Gitea even if we don't care about it; pick a stable shade
+        # per severity / source rather than random so a manual review
+        # of the label list isn't visually noisy.
+        for name in unresolved:
+            if name in self._label_cache:
+                result.append(self._label_cache[name])
+                continue
+            create_body = json.dumps({
+                "name": name,
+                "color": _label_colour_for(name),
+            }).encode("utf-8")
+            create_status, create_body_resp = _http(
+                f"{self._repo_url()}/labels",
+                method="POST",
+                headers=self._headers(),
+                body=create_body,
+                timeout_s=self.timeout_s,
+            )
+            if create_status in (200, 201) and isinstance(create_body_resp, dict):
+                self._label_cache[name] = int(create_body_resp["id"])
+                result.append(self._label_cache[name])
+            else:
+                log.warning(
+                    "could not create gitea label %r (%s): %r",
+                    name, create_status, create_body_resp,
+                )
+        return result
+
+    def _open_new_issue(self, report: ErrorReport, fp: str) -> SendResult:
+        title = f"[{report.severity}] {report.title[:200]}"
+        label_names = sorted(
+            {
+                self._fingerprint_label(fp),
+                f"severity:{report.severity}",
+                f"source:{report.source}",
+                f"category:{report.category}",
+            }
+        )
+        label_ids = self._ensure_labels(label_names)
+        body = json.dumps(
+            {
+                "title": title,
+                "body": _render_markdown(report, fingerprint=fp),
+                "labels": label_ids,
+            }
+        ).encode("utf-8")
+        url = f"{self._repo_url()}/issues"
+        status, payload = _http(
+            url, method="POST", headers=self._headers(),
+            body=body, timeout_s=self.timeout_s,
+        )
+        if status in (200, 201) and isinstance(payload, dict):
+            return SendResult(
+                ok=True,
+                upstream_id=str(payload.get("number") or ""),
+                url=str(payload.get("html_url") or ""),
+            )
+        retryable = status >= 500 or status == -1 or status == 429
+        return SendResult(
+            ok=False,
+            error=f"Gitea create issue failed ({status}): {payload!r}"[:500],
+            retryable=retryable,
+        )
+
+    def _append_comment(
+        self, number: int, report: ErrorReport, issue_url: str,
+    ) -> SendResult:
+        body = json.dumps(
+            {"body": _render_markdown(report, fingerprint=None, head_level=4)}
+        ).encode("utf-8")
+        url = f"{self._repo_url()}/issues/{number}/comments"
+        status, payload = _http(
+            url, method="POST", headers=self._headers(),
+            body=body, timeout_s=self.timeout_s,
+        )
+        if status in (200, 201) and isinstance(payload, dict):
+            return SendResult(
+                ok=True,
+                upstream_id=str(number),
+                url=issue_url,
+            )
+        retryable = status >= 500 or status == -1 or status == 429
+        return SendResult(
+            ok=False,
+            error=f"Gitea append comment failed ({status}): {payload!r}"[:500],
+            retryable=retryable,
+        )
+
+
+_LABEL_COLOURS = {
+    "severity:fatal": "#7f1d1d",
+    "severity:error": "#b91c1c",
+    "severity:warn": "#b45309",
+    "severity:info": "#0e7490",
+    "source:backend.exception": "#374151",
+    "source:backend.job": "#1f2937",
+    "source:frontend.render": "#5b21b6",
+    "source:frontend.runtime": "#6d28d9",
+    "source:frontend.api": "#7c3aed",
+    "source:user.report": "#0f766e",
+}
+
+
+def _label_colour_for(label: str) -> str:
+    """Stable colour token so the Gitea issues list stays scannable.
+
+    Falls back to a neutral grey for the dynamic ``fp:<hash>`` and
+    ``category:<x>`` labels — those would generate noise if every new
+    one picked a fresh hue.
+    """
+    return _LABEL_COLOURS.get(label, "#64748b")
+
+
+def _render_markdown(
+    report: ErrorReport, fingerprint: str | None = None, *, head_level: int = 3,
+) -> str:
+    """Issue / comment body shared by GitLab and Gitea sinks.
+
+    Lifted out of ``GitLabIssueSink._render_body`` so a future
+    GitHub / Gitea-flavoured fork doesn't have to duplicate the
+    marker layout. Same fields, same headings.
+    """
+    h = "#" * head_level
+    out: list[str] = []
+    if fingerprint is not None:
+        out.append(f"{h} LoraHub error report")
+        out.append("")
+        out.append(f"- **fingerprint**: `{fingerprint}`")
+    else:
+        out.append(f"{h} 重新出现")
+        out.append("")
+    out.append(f"- **time**: {report.timestamp.isoformat()}")
+    out.append(f"- **severity**: {report.severity}")
+    out.append(f"- **source**: {report.source}")
+    out.append(f"- **category**: {report.category}")
+    out.append(f"- **version**: {report.version}")
+    out.append(f"- **platform**: {report.platform}")
+    if report.job_id:
+        out.append(f"- **job_id**: {report.job_id}")
+    if report.request_path:
+        out.append(f"- **request_path**: {report.request_path}")
+    if report.request_id:
+        out.append(f"- **request_id**: {report.request_id}")
+    out.append(f"- **report_id**: {report.id}")
+    out.append("")
+    out.append("**Message**")
+    out.append("```")
+    out.append(report.message)
+    out.append("```")
+    if report.stack:
+        out.append("")
+        out.append("**Stack**")
+        out.append("```")
+        out.append(report.stack[:8000])
+        out.append("```")
+    if report.context:
+        out.append("")
+        out.append("**Context**")
+        out.append("```json")
+        try:
+            out.append(json.dumps(report.context, ensure_ascii=False, indent=2)[:8000])
+        except (TypeError, ValueError):
+            out.append(str(report.context)[:8000])
+        out.append("```")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------- #
 # Webhook
 # ---------------------------------------------------------------------- #
 
@@ -431,6 +750,13 @@ def build_sink_from_settings(cfg: SinkConfig) -> UpstreamSink | None:
             token=cfg.gitlab_token,
             timeout_s=cfg.timeout_s,
         )
+    if cfg.channel == "gitea":
+        return GiteaIssueSink(
+            base_url=cfg.gitlab_base_url,
+            repo_path=cfg.gitlab_repo,
+            token=cfg.gitlab_token,
+            timeout_s=cfg.timeout_s,
+        )
     if cfg.channel == "webhook":
         return WebhookSink(
             url=cfg.webhook_url,
@@ -442,6 +768,7 @@ def build_sink_from_settings(cfg: SinkConfig) -> UpstreamSink | None:
 
 __all__ = [
     "GitLabIssueSink",
+    "GiteaIssueSink",
     "SendResult",
     "SinkChannel",
     "SinkConfig",

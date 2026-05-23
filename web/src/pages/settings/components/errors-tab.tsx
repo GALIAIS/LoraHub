@@ -747,6 +747,7 @@ function UpstreamConfigCard() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="off">关闭(仅本地)</SelectItem>
+                <SelectItem value="gitea">Gitea Issues (git.galiais.com 默认)</SelectItem>
                 <SelectItem value="gitlab">GitLab Issues</SelectItem>
                 <SelectItem value="webhook">Webhook</SelectItem>
               </SelectContent>
@@ -778,10 +779,15 @@ function UpstreamConfigCard() {
           </div>
         </div>
 
-        {draft.error_upstream_channel === "gitlab" && (
+        {(draft.error_upstream_channel === "gitlab" ||
+          draft.error_upstream_channel === "gitea") && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Input
-              placeholder="GitLab Base URL  https://git.galiais.com"
+              placeholder={
+                draft.error_upstream_channel === "gitea"
+                  ? "Gitea Base URL  https://git.galiais.com"
+                  : "GitLab Base URL  https://gitlab.example.com"
+              }
               value={draft.error_upstream_gitlab_base_url}
               onChange={(e) =>
                 setDraft((d) => ({
@@ -791,7 +797,11 @@ function UpstreamConfigCard() {
               }
             />
             <Input
-              placeholder="项目路径  Shiro/LoraHubReport"
+              placeholder={
+                draft.error_upstream_channel === "gitea"
+                  ? "项目路径  Shiro/LoraHubReport"
+                  : "项目路径  group/project"
+              }
               value={draft.error_upstream_gitlab_repo}
               onChange={(e) =>
                 setDraft((d) => ({
@@ -802,7 +812,11 @@ function UpstreamConfigCard() {
             />
             <Input
               type="password"
-              placeholder="Personal Access Token (api scope)"
+              placeholder={
+                draft.error_upstream_channel === "gitea"
+                  ? "Gitea Personal Access Token (write:issue scope)"
+                  : "GitLab Personal Access Token (api scope)"
+              }
               value={draft.error_upstream_gitlab_token}
               onChange={(e) =>
                 setDraft((d) => ({
@@ -812,6 +826,13 @@ function UpstreamConfigCard() {
               }
               className="md:col-span-2"
             />
+            <p className="md:col-span-2 text-[11px] text-muted-foreground">
+              提示:留空则回退到环境变量(
+              {draft.error_upstream_channel === "gitea"
+                ? "LORAHUB_GITEA_TOKEN"
+                : "LORAHUB_GITLAB_TOKEN"}
+              ,或通用 LORAHUB_REPORT_TOKEN)。这样 settings.json 不会留下明文 token。
+            </p>
           </div>
         )}
         {draft.error_upstream_channel === "webhook" && (

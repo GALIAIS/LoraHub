@@ -26,6 +26,7 @@ from .dispatcher import UpstreamDispatcher
 from .fingerprint import compute_fingerprint
 from .redaction import redact_report
 from .sinks import (
+    GiteaIssueSink,
     GitLabIssueSink,
     SendResult,
     SinkConfig,
@@ -35,6 +36,7 @@ from .sinks import (
 )
 
 __all__ = [
+    "GiteaIssueSink",
     "GitLabIssueSink",
     "SendResult",
     "SinkConfig",

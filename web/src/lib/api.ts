@@ -289,7 +289,7 @@ export interface SettingsState {
   terminal_unrestricted: boolean
   terminal_command_timeout_s: number
   // Error registry fan-out — see Settings.error_upstream_*
-  error_upstream_channel: "off" | "gitlab" | "webhook"
+  error_upstream_channel: "off" | "gitlab" | "gitea" | "webhook"
   error_upstream_gitlab_base_url: string
   error_upstream_gitlab_repo: string
   error_upstream_gitlab_token: string

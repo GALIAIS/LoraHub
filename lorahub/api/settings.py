@@ -119,12 +119,20 @@ class Settings:
     # Optional remote sink for the local error registry. Default
     # ``off`` means *nothing* leaves the box; the user has to opt in
     # explicitly from Settings → 错误上报. ``gitlab`` opens / appends
-    # GitLab issues with fingerprint-based de-dupe; ``webhook`` POSTs
-    # the redacted payload to an arbitrary URL.
-    error_upstream_channel: str = "off"  # "off" | "gitlab" | "webhook"
-    # GitLab fields (only meaningful when channel == "gitlab")
-    error_upstream_gitlab_base_url: str = ""
-    error_upstream_gitlab_repo: str = ""
+    # GitLab issues with fingerprint-based de-dupe; ``gitea`` is the
+    # same contract over Gitea's v1 API (git.galiais.com defaults to
+    # this); ``webhook`` POSTs the redacted payload to an arbitrary URL.
+    error_upstream_channel: str = "off"  # "off" | "gitlab" | "gitea" | "webhook"
+    # GitLab / Gitea share these three fields; the channel discriminator
+    # picks the matching API dialect at sink-construction time. Pre-fill
+    # the project-level defaults so a fresh install only needs the
+    # token before "测试连通" works.
+    error_upstream_gitlab_base_url: str = "https://git.galiais.com"
+    error_upstream_gitlab_repo: str = "Shiro/LoraHubReport"
+    # Token defaults to empty — the only acceptable place for a real
+    # token is the user's local settings.json or the LORAHUB_GITEA_TOKEN
+    # env var, never source code (it would leak via ``git push`` and
+    # never be revocable from a third-party fork).
     error_upstream_gitlab_token: str = ""
     # Webhook fields (only meaningful when channel == "webhook")
     error_upstream_webhook_url: str = ""

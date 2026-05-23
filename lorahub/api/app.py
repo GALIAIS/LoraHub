@@ -337,16 +337,40 @@ def _sink_config_from_settings(settings: Any) -> SinkConfig:
 
     Lifted out of the lifespan body so the upstream router can call
     it for ``health_check`` without duplicating the field plumbing.
+
+    The token field falls back to ``LORAHUB_GITEA_TOKEN`` (or
+    ``LORAHUB_GITLAB_TOKEN``, matching the channel) when the
+    settings-stored value is empty. That keeps real PATs out of any
+    settings.json that might live in a synced directory while still
+    letting users seed credentials at boot via env vars.
     """
+    channel = getattr(settings, "error_upstream_channel", "off") or "off"
+    token = getattr(settings, "error_upstream_gitlab_token", "") or ""
+    if not token:
+        env_keys = (
+            ("gitea", "LORAHUB_GITEA_TOKEN"),
+            ("gitlab", "LORAHUB_GITLAB_TOKEN"),
+        )
+        for ch, env_key in env_keys:
+            if channel == ch:
+                token = os.environ.get(env_key, "") or token
+                break
+        # Generic fallback last so users with a single env-var slot can
+        # keep one definition for both Gitea and GitLab installs.
+        if not token:
+            token = os.environ.get("LORAHUB_REPORT_TOKEN", "") or token
+    webhook_auth = (
+        getattr(settings, "error_upstream_webhook_auth_header", "") or ""
+    )
+    if not webhook_auth and channel == "webhook":
+        webhook_auth = os.environ.get("LORAHUB_REPORT_WEBHOOK_AUTH", "")
     return SinkConfig(
-        channel=getattr(settings, "error_upstream_channel", "off") or "off",
+        channel=channel,
         gitlab_base_url=getattr(settings, "error_upstream_gitlab_base_url", "") or "",
         gitlab_repo=getattr(settings, "error_upstream_gitlab_repo", "") or "",
-        gitlab_token=getattr(settings, "error_upstream_gitlab_token", "") or "",
+        gitlab_token=token,
         webhook_url=getattr(settings, "error_upstream_webhook_url", "") or "",
-        webhook_auth_header=getattr(
-            settings, "error_upstream_webhook_auth_header", "",
-        ) or "",
+        webhook_auth_header=webhook_auth,
         auto_send_severity=getattr(
             settings, "error_upstream_auto_severity", "error",
         ) or "error",
