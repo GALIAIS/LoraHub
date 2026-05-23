@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
+  ArrowDownToLine,
   Check,
   CircleDashed,
   Download,
   Loader2,
+  RefreshCw,
   XCircle,
 } from "lucide-react"
 import {
@@ -15,6 +17,7 @@ import {
   type AnimaModelDownloadStatus,
   type BackendDescriptor,
   type BackendId,
+  type BackendUpdateCheck,
   type BootstrapEvent,
   type MsvcInstallStatus,
 } from "@/lib/api"
@@ -655,6 +658,24 @@ export function InstallTab() {
     return backendsQuery.data.backends.find((b) => b.id === effective)
   }, [backendsQuery.data, effective])
 
+  // Backend git update detection — only for kohya and diffusion-pipe.
+  const updateCheckEnabled =
+    effective === "kohya" || effective === "diffusion-pipe"
+  const updateCheckQuery = useQuery({
+    queryKey: ["backend-update", effective],
+    queryFn: () => api.checkBackendUpdate(effective as BackendId),
+    enabled: updateCheckEnabled && !!descriptor?.ready,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const applyUpdate = useMutation({
+    mutationFn: () => api.updateBackend(effective as BackendId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["backend-update", effective] })
+      qc.invalidateQueries({ queryKey: ["backends"] })
+    },
+  })
+
   const isOtherSessionRunning =
     isRunning && sessionBackend !== undefined && sessionBackend !== selected
 
@@ -751,6 +772,17 @@ export function InstallTab() {
               </span>
             )}
           </div>
+
+          {updateCheckEnabled && descriptor?.ready && !isRunning && (
+            <BackendUpdateCard
+              data={updateCheckQuery.data}
+              isFetching={updateCheckQuery.isFetching}
+              isPending={applyUpdate.isPending}
+              onCheck={() => updateCheckQuery.refetch()}
+              onUpdate={() => applyUpdate.mutate()}
+              error={applyUpdate.error as Error | null}
+            />
+          )}
 
           {effective === "anima_lora" && !isRunning && (
             <div className="rounded-[4px] border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300 leading-relaxed">
@@ -881,6 +913,94 @@ export function InstallTab() {
           {events.length > 0 && <EventLog events={events} />}
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function BackendUpdateCard({
+  data,
+  isFetching,
+  isPending,
+  onCheck,
+  onUpdate,
+  error,
+}: {
+  data: BackendUpdateCheck | undefined
+  isFetching: boolean
+  isPending: boolean
+  onCheck: () => void
+  onUpdate: () => void
+  error: Error | null
+}) {
+  const hasUpdate = data?.update_available
+  const hasError = data?.error
+
+  return (
+    <div
+      className={cn(
+        "rounded-[4px] border px-3 py-2.5 flex items-center gap-3",
+        hasUpdate
+          ? "border-sky-600/30 bg-sky-600/5"
+          : hasError
+            ? "border-amber-600/30 bg-amber-600/5"
+            : "border-border/60 bg-muted/20",
+      )}
+    >
+      <div className="flex-1 min-w-0 text-xs">
+        {hasError && (
+          <span className="text-amber-700 dark:text-amber-400">{data.error}</span>
+        )}
+        {hasUpdate && data && (
+          <span className="text-sky-700 dark:text-sky-400">
+            有 <span className="font-semibold">{data.commits_behind}</span> 个新提交可用
+            <span className="ml-2 font-mono text-[10px] opacity-70">
+              {data.current_sha.slice(0, 7)} → {data.remote_sha.slice(0, 7)}
+            </span>
+          </span>
+        )}
+        {!hasUpdate && !hasError && data && (
+          <span className="text-muted-foreground">
+            已是最新
+            <span className="ml-2 font-mono text-[10px] opacity-70">
+              {data.current_sha.slice(0, 7)} ({data.branch})
+            </span>
+          </span>
+        )}
+        {!data && !isFetching && (
+          <span className="text-muted-foreground">点击检查仓库更新</span>
+        )}
+        {!data && isFetching && (
+          <span className="text-muted-foreground">正在检查更新…</span>
+        )}
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onCheck}
+        disabled={isFetching}
+        title="检查仓库更新"
+        aria-label="检查仓库更新"
+      >
+        <RefreshCw className={cn("size-3", isFetching && "animate-spin")} />
+        检查更新
+      </Button>
+      {hasUpdate && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onUpdate}
+          disabled={isPending}
+          className="shrink-0 gap-1.5 text-sky-700 dark:text-sky-400 border-sky-600/40 hover:bg-sky-600/10"
+        >
+          <ArrowDownToLine className="size-3" />
+          {isPending ? "更新中…" : "更新"}
+        </Button>
+      )}
+      {error && (
+        <span className="text-[10px] text-destructive font-mono truncate max-w-[200px]">
+          {error.message}
+        </span>
+      )}
     </div>
   )
 }

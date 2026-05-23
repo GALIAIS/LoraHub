@@ -1,11 +1,10 @@
 ﻿import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Save, RotateCcw, Wand2, RefreshCw, ArrowDownToLine } from "lucide-react"
+import { Save, RotateCcw, Wand2 } from "lucide-react"
 import {
   api,
   type AnimaLoraBackendStatus,
   type BackendId,
-  type BackendUpdateCheck,
   type DiffusionPipeBackendStatus,
   type KohyaBackendStatus,
   type SettingsState,
@@ -102,35 +101,6 @@ export function BackendsTab() {
     queryKey: ["backends"],
     queryFn: api.listBackends,
     staleTime: 10_000,
-  })
-
-  // Update detection for kohya and diffusion-pipe
-  const kohyaUpdateQuery = useQuery({
-    queryKey: ["backend-update", "kohya"],
-    queryFn: () => api.checkBackendUpdate("kohya"),
-    staleTime: 60_000,
-    retry: false,
-  })
-  const dpUpdateQuery = useQuery({
-    queryKey: ["backend-update", "diffusion-pipe"],
-    queryFn: () => api.checkBackendUpdate("diffusion-pipe"),
-    staleTime: 60_000,
-    retry: false,
-  })
-
-  const kohyaUpdate = useMutation({
-    mutationFn: () => api.updateBackend("kohya"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["backend-update", "kohya"] })
-      qc.invalidateQueries({ queryKey: ["backends"] })
-    },
-  })
-  const dpUpdate = useMutation({
-    mutationFn: () => api.updateBackend("diffusion-pipe"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["backend-update", "diffusion-pipe"] })
-      qc.invalidateQueries({ queryKey: ["backends"] })
-    },
   })
 
   const [draft, setDraft] = useState<SettingsState | null>(null)
@@ -263,36 +233,18 @@ export function BackendsTab() {
                 指定 kohya-ss/sd-scripts 检出目录与运行它的 Python 解释器。
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
-              {anyDetected && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={autofillAll}
-                  title="把后端探测到的路径一次性填入两个后端的所有字段" aria-label="把后端探测到的路径一次性填入两个后端的所有字段"
-                >
-                  <Wand2 className="size-3" />
-                  全部自动填入
-                </Button>
-              )}
+            {anyDetected && (
               <Button
                 size="sm"
-                variant="ghost"
-                onClick={() => kohyaUpdateQuery.refetch()}
-                disabled={kohyaUpdateQuery.isFetching}
-                title="检查 sd-scripts 仓库更新"
-                aria-label="检查 sd-scripts 仓库更新"
+                variant="outline"
+                onClick={autofillAll}
+                title="把后端探测到的路径一次性填入两个后端的所有字段" aria-label="把后端探测到的路径一次性填入两个后端的所有字段"
               >
-                <RefreshCw className={`size-3 ${kohyaUpdateQuery.isFetching ? "animate-spin" : ""}`} />
+                <Wand2 className="size-3" />
+                全部自动填入
               </Button>
-            </div>
+            )}
           </div>
-          <UpdateBanner
-            data={kohyaUpdateQuery.data}
-            isPending={kohyaUpdate.isPending}
-            onUpdate={() => kohyaUpdate.mutate()}
-            error={kohyaUpdate.error}
-          />
         </CardHeader>
         <CardContent className="space-y-4">
           <Field
@@ -318,30 +270,10 @@ export function BackendsTab() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">Diffusion-pipe 后端</CardTitle>
-              <CardDescription>
-                指定 tdrussell/diffusion-pipe 检出目录与其 DeepSpeed venv 的 Python。
-              </CardDescription>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => dpUpdateQuery.refetch()}
-              disabled={dpUpdateQuery.isFetching}
-              title="检查 diffusion-pipe 仓库更新"
-              aria-label="检查 diffusion-pipe 仓库更新"
-            >
-              <RefreshCw className={`size-3 ${dpUpdateQuery.isFetching ? "animate-spin" : ""}`} />
-            </Button>
-          </div>
-          <UpdateBanner
-            data={dpUpdateQuery.data}
-            isPending={dpUpdate.isPending}
-            onUpdate={() => dpUpdate.mutate()}
-            error={dpUpdate.error}
-          />
+          <CardTitle className="text-base">Diffusion-pipe 后端</CardTitle>
+          <CardDescription>
+            指定 tdrussell/diffusion-pipe 检出目录与其 DeepSpeed venv 的 Python。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Field
@@ -445,53 +377,6 @@ export function BackendsTab() {
           {settingsQuery.data.path}
         </span>
       </div>
-    </div>
-  )
-}
-
-function UpdateBanner({
-  data,
-  isPending,
-  onUpdate,
-  error,
-}: {
-  data: BackendUpdateCheck | undefined
-  isPending: boolean
-  onUpdate: () => void
-  error: Error | null
-}) {
-  if (!data) return null
-  if (data.error) {
-    return (
-      <div className="mt-2 rounded-[4px] border border-amber-600/30 bg-amber-600/5 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">
-        {data.error}
-      </div>
-    )
-  }
-  if (!data.update_available) return null
-  return (
-    <div className="mt-2 rounded-[4px] border border-sky-600/30 bg-sky-600/5 px-3 py-2 flex items-center gap-3">
-      <div className="flex-1 min-w-0 text-[11px] text-sky-700 dark:text-sky-400">
-        有 <span className="font-semibold">{data.commits_behind}</span> 个新提交可用
-        <span className="ml-2 font-mono text-[10px] opacity-70">
-          {data.current_sha.slice(0, 7)} → {data.remote_sha.slice(0, 7)}
-        </span>
-      </div>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={onUpdate}
-        disabled={isPending}
-        className="shrink-0 gap-1.5 text-sky-700 dark:text-sky-400 border-sky-600/40 hover:bg-sky-600/10"
-      >
-        <ArrowDownToLine className="size-3" />
-        {isPending ? "更新中…" : "更新"}
-      </Button>
-      {error && (
-        <span className="text-[10px] text-destructive font-mono truncate max-w-[200px]">
-          {error.message}
-        </span>
-      )}
     </div>
   )
 }
