@@ -31,7 +31,14 @@ def check_cross_field_conflicts(cfg: TrainingConfig) -> list[ValidationIssue]:
     Issues are emitted in priority order — errors first within each
     rule cluster — so a UI that only renders the first few still
     surfaces the most damaging combinations.
+
+    Skipped silently when ``cfg.backend.type`` isn't ``anima_lora``
+    — these rules assume the AnimaLoraOptions section is populated
+    and would be irrelevant on kohya / diffusion-pipe configs.
     """
+    if cfg.backend is not None and cfg.backend.type and cfg.backend.type != "anima_lora":
+        return []
+
     issues: list[ValidationIssue] = []
     opts = cfg.backend.anima_lora
     if opts is None:

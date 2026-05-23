@@ -66,9 +66,12 @@ log = logging.getLogger(__name__)
 ADVISOR_TASK_ID = "config.recommend"
 
 
-_SYSTEM_PROMPT = """\
-你是 LoraHub 的训练配置顾问。LoraHub 是一个基于 Anima(DiT + Qwen-Image VAE + Qwen3 文本编码器)
-的扩散模型 LoRA 训练工作台,你只需要为 anima_lora 后端给出建议(用户的所有输入都会以这个后端为前提)。
+_SYSTEM_PROMPT_HEAD = """\
+你是 LoraHub 的训练配置顾问。LoraHub 是一个扩散模型 LoRA 训练工作台,支持三个后端:
+``anima_lora`` (基于 Anima DiT + Qwen-Image VAE + Qwen3 文本编码器)、``kohya``
+(基于 kohya-ss/sd-scripts,涵盖 SDXL / SD1.5 / SD3 / FLUX / Lumina 等主流架构)、
+``diffusion-pipe`` (基于 tdrussell/diffusion-pipe,涵盖 Wan / HunyuanVideo / LTX
+等视频模型与多种图像架构)。
 
 ## 你的任务
 
@@ -99,13 +102,24 @@ _SYSTEM_PROMPT = """\
 
 1. **锁定字段(locked-value)绝不要改**:用户改了 train.py 也不会理会,只会 silently ignore。
    后面会用 `## Locked fields` 段列出。
-2. **架构 baseModel.arch 永远是 "anima"**——其他后端不在你的领域。
-3. 严格 JSON 输出,不带 ```json 围栏、不带任何前后说明文字。
-4. `fullConfig` 必须是完整的 TrainingConfig,可以被 schema 直接 validate。
+2. **不要改 baseModel.arch**:用户已经选好了底模架构,你的任务是基于该架构调参。
+3. **不要改 backend.type**:如果用户在 kohya 后端,你的建议必须是 kohya 字段;
+   不能因为某个超参跨后端而切换后端。
+4. 严格 JSON 输出,不带 ```json 围栏、不带任何前后说明文字。
+5. `fullConfig` 必须是完整的 TrainingConfig,可以被 schema 直接 validate。
    保留 baseModel / dataset / output 这些不可省略的顶层段。
-5. 不要发明 schema 未定义的字段。
+6. 不要发明 schema 未定义的字段。
+"""
 
-## 已知的字段间冲突 (必须避开)
+
+# Per-backend "field cheat sheet" inserted into the system prompt.
+# Each entry covers the cross-field gotchas the backend's
+# policies.py also enforces, so the LLM has the same heuristics the
+# validator uses and won't propose a config that immediately fails
+# downstream.
+_BACKEND_GUIDES: dict[str, str] = {
+    "anima_lora": """\
+## anima_lora 后端 — 已知字段冲突
 
 * `backend.animaLora.compileMode = "full"` 与下列任一互斥:
   - `gradientCheckpointing = true`
@@ -118,21 +132,101 @@ _SYSTEM_PROMPT = """\
 * `validationSplitNum > 0` 但 `useCmmd = false` 是 wasted holdout
 * `keepTokens > 0` 但 `useShuffledCaptionVariants = false` 是死字段
 * `networkAlpha / networkDim` 的比值偏离 [0.25, 4.0] 会数值不稳
+* `lora.minRank > networkDim` 会让 T-LoRA route layer 构造失败
 
-## 推荐选型的常识
+## anima_lora 后端 — Locked fields(用户改了也不会生效)
 
-* 8GB 卡常用:resolution 768,blocksToSwap≈24,gradientCheckpointing=true,
-  AdamW8bit,batchSize 1 + gradAccum 4,关 sampling/validation/torch.compile
-* 16GB 卡常用:resolution 1024,blocksToSwap≈12,gradientCheckpointing=true,
-  AdamW,batchSize 1 + gradAccum 4,可开 sampling
-* 24GB 卡常用:blocksToSwap=0,gradientCheckpointing=false,batchSize 2,
+* `staticTokenCount`: 4096 — Anima DiT torch.compile 锁死 4096-token bucket map
+* `vaeChunkSize`: 64 — QwenImage VAE memory layout 锁死 64
+* `captionExtension`: ".txt"
+* `saveModelAs`: "safetensors"
+* `pathPattern`: "*"
+* `networkModule`: "networks.lora_anima"
+
+## anima_lora 后端 — 推荐选型常识
+
+* 8GB:resolution 768,blocksToSwap≈24,gradientCheckpointing=true,AdamW8bit,
+  batchSize 1 + gradAccum 4,关 sampling/validation/torch.compile
+* 16GB:resolution 1024,blocksToSwap≈12,gradientCheckpointing=true,AdamW,
+  可开 sampling
+* 24GB:blocksToSwap=0,gradientCheckpointing=false,batchSize 2,
   可开 compileMode="blocks" + reduce-overhead
-* 32GB+ 卡:都开,可上 networkDim 32 + LoHa rank 4 / DoRA + CMMD validation
+* 32GB+:都开,可上 networkDim 32 + LoHa rank 4 / DoRA + CMMD validation
 * 字符 LoRA 通常 networkDim 16-32,style LoRA 4-16(LoHa rank=4 等效 dim=16)
-* numRepeats × imageCount × epochs / (batch×accum) 应在 200-1000 步区间
-* captionDropoutRate 常用 0.05-0.15,过高会忘 trigger,过低则不正则化
-* keepTokens=1 锁定第一个 trigger token 不被 shuffle 抹掉,新手友好
-"""
+""",
+    "kohya": """\
+## kohya 后端 — 已知字段冲突
+
+* `network.alpha / network.rank` 比值偏离 [0.25, 4.0] 会数值不稳;推荐 alpha == rank
+* `network.rank < 4` 几乎学不到内容
+* AdamW8bit / Lion8bit 需要 bitsandbytes (kohya sd-scripts 子环境里通常自带)
+* fused 优化器(AdamWFused 等)需要 bf16/fp16,fp32 + fused 不会更快也不省显存
+* `dataset.bucket.min > max` 会让 kohya 启动 assert 'bucket reso list is empty'
+* `dataset.bucket.max` 比 resolution 长边大 2× 以上,极端长宽比图片显存暴涨
+* `dataset.caption.keepTokens > 0` 但 shuffle=false → keepTokens 不起作用
+* `dataset.caption.dropRate >= 0.5` 模型会忘记 trigger word
+* `output.saveEveryNEpochs > schedule.epochs` 整次训练只在最后落一次盘
+* `backend.extraArgs` 同时开 xformers / sdpa / flash 多个 attention 实现,kohya 只取
+  最先识别的那个
+
+## kohya 后端 — 推荐选型常识
+
+* SDXL 8GB:resolution 1024,gradientCheckpointing=true,AdamW8bit,
+  batchSize 1 + gradAccum 4,fp8 te,xformers
+* SDXL 12GB:加大 networkDim 16 → 32,可关 grad-ckpt
+* SDXL 24GB:batchSize 2-4,关 grad-ckpt,fp32 te
+* FLUX/SD3 上 t5xxl_dtype=fp8 是标准搭配,不与 fp32 训练混用
+* character LoRA 通常 rank 16-32,style 4-16
+* mixed_precision 与 cfg.precision 必须一致(bf16 / fp16 二选一,fp32 不省显存)
+""",
+    "diffusion-pipe": """\
+## diffusion-pipe 后端 — 已知字段冲突
+
+* `pipelineStages > 1` 启用 pipeline parallel 时必须 `reentrantActivationCheckpointing = true`
+  (DeepSpeed PP 调度器要求)
+* `blocksToSwap > 0` 与 `compile = true` 互斥(cudagraph 与 swap 进出冲突)
+* `partitionSplit` 长度必须等于 `pipelineStages - 1`,否则 DeepSpeed 启动 assert
+* `evalEveryNEpochs / evalEveryNSteps / evalEveryNExamples` 只能取一个,
+  其余被忽略
+* `transformerDtype` 是 fp8 系列时不应配 fp32 全局精度
+* `transformerDtype` 与 `diffusionModelDtype` 同时设且不同时,后者会被忽略
+* `cachingBatchSize > 8` 在 8GB 卡上 VAE/TE encode 阶段会爆显存
+* `cacheShuffleNum` 在 (0, 8) 区间形同不开,要么 0 要么 ≥16
+* `dataset.bucket.maxAr < minAr` 数据集会被全丢弃
+* `uncondFraction >= 0.5` 模型会大幅偏向无条件分布
+
+## diffusion-pipe 后端 — 推荐选型常识
+
+* HunyuanVideo / Wan 等视频模型常用:transformerDtype=float8_e4m3fn,
+  pipelineStages=2 (~24GB 卡), reentrantActivationCheckpointing=true
+* Flux / SDXL 等图像模型常用:transformerDtype=bfloat16,blocksToSwap=0
+* video 上 imageMicroBatchSizePerGpu 与 evalMicroBatchSizePerGpu 要分别设
+* uncondFraction 0.05-0.15 是标准 CFG 训练区间
+* min_ar / max_ar 通常 0.5 / 2.0,极端比例数据集再放宽
+""",
+}
+
+
+# Default fallback when ``cfg.backend.type`` is unrecognised.
+_BACKEND_GUIDES["__default__"] = _BACKEND_GUIDES["anima_lora"]
+
+
+def _system_prompt_for_backend(backend_type: str | None) -> str:
+    """Compose the full system prompt by appending the backend-specific
+    cheat sheet to the shared head. Falls back to anima_lora's sheet
+    when the backend type is missing or unrecognised."""
+    key = (backend_type or "").strip()
+    # Tolerate both schema key spellings.
+    if key == "diffusion_pipe":
+        key = "diffusion-pipe"
+    guide = _BACKEND_GUIDES.get(key) or _BACKEND_GUIDES["__default__"]
+    return _SYSTEM_PROMPT_HEAD + "\n" + guide
+
+
+# Legacy alias kept so a custom system_prompt the user already typed
+# in Settings → AI providers continues to work as before — those
+# settings stored a string verbatim under the route, not a closure.
+_SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + "\n" + _BACKEND_GUIDES["anima_lora"]
 
 
 @dataclass(slots=True)
@@ -175,16 +269,9 @@ class AdvisorRequest:
 # ---------------------------------------------------------------------- #
 
 
-_LOCKED_FIELDS_NOTE = """\
-## Locked fields(用户改了也不会生效,请保留默认值)
-
-* `staticTokenCount`: 4096 — Anima DiT torch.compile 锁死 4096-token bucket map
-* `vaeChunkSize`: 64 — QwenImage VAE memory layout 锁死 64
-* `captionExtension`: ".txt" — 数据 pipeline 写死 .txt 后缀
-* `saveModelAs`: "safetensors" — Anima 只能加载 safetensors
-* `pathPattern`: "*" — 数据 pipeline 默认通配
-* `networkModule`: "networks.lora_anima" — 唯一可用的 LoRA module
-"""
+# (Locked-field rationale moved into ``_BACKEND_GUIDES`` above so the
+# system prompt picks up the right list per backend. The legacy
+# ``_LOCKED_FIELDS_NOTE`` constant was deleted.)
 
 
 def build_user_prompt(req: AdvisorRequest) -> str:
@@ -197,6 +284,27 @@ def build_user_prompt(req: AdvisorRequest) -> str:
     lines: list[str] = []
     lines.append("# 输入")
     lines.append("")
+
+    # Backend the user is currently on; the LLM is told not to switch.
+    backend_type: str = ""
+    cfg_backend = req.current_config.get("backend") if isinstance(req.current_config, dict) else None
+    if isinstance(cfg_backend, dict):
+        backend_type = str(cfg_backend.get("type") or "")
+    arch = ""
+    cfg_basemodel = req.current_config.get("baseModel") if isinstance(req.current_config, dict) else None
+    if isinstance(cfg_basemodel, dict):
+        arch = str(cfg_basemodel.get("arch") or "")
+    if backend_type or arch:
+        lines.append("## 目标后端 / 架构")
+        if backend_type:
+            lines.append(f"- backend.type: {backend_type}")
+        if arch:
+            lines.append(f"- baseModel.arch: {arch}")
+        lines.append(
+            "- 你的建议必须停留在该后端 + 架构组合下,不要跨后端切换。"
+        )
+        lines.append("")
+
     if req.hardware is not None:
         lines.append("## 硬件")
         lines.append(
@@ -228,8 +336,6 @@ def build_user_prompt(req: AdvisorRequest) -> str:
     lines.append("```json")
     lines.append(json.dumps(req.current_config, ensure_ascii=False, indent=2))
     lines.append("```")
-    lines.append("")
-    lines.append(_LOCKED_FIELDS_NOTE)
     lines.append("")
     lines.append("# 输出")
     lines.append("")
@@ -341,7 +447,17 @@ def run_advisor(
         )
         raise AdvisorError(msg)
 
-    system_prompt = _system_prompt_for_route(route)
+    # Pick the system prompt that matches the user's current backend
+    # — anima_lora / kohya / diffusion-pipe each get their own field
+    # cheat sheet so the LLM doesn't hallucinate cross-backend knobs.
+    backend_type: str | None = None
+    cfg_backend = (
+        request.current_config.get("backend")
+        if isinstance(request.current_config, dict) else None
+    )
+    if isinstance(cfg_backend, dict):
+        backend_type = (cfg_backend.get("type") or None)  # type: ignore[assignment]
+    system_prompt = _system_prompt_for_route(route, backend_type)
     user_prompt = build_user_prompt(request)
 
     started = time.monotonic()
@@ -367,15 +483,19 @@ def run_advisor(
     # Round-trip the proposed full config through schema + cross-field
     # rule set. The route handler / UI surfaces these as warnings
     # alongside the patches so users see "applied, but heads-up: …".
+    # We pick the policies module that matches the backend the LLM was
+    # told to stay within — running anima rules on a kohya proposal
+    # would emit nonsense.
     validation_issues: list[dict[str, Any]] = []
     if response.fullConfig:
         try:
             cfg = TrainingConfig.model_validate(response.fullConfig)
-            from lorahub.core.backends.anima_lora.policies import (  # noqa: PLC0415
-                check_cross_field_conflicts,
+            proposal_backend = (
+                cfg.backend.type if cfg.backend and cfg.backend.type else (backend_type or "")
             )
+            check = _resolve_policy_check(proposal_backend)
 
-            for iss in check_cross_field_conflicts(cfg):
+            for iss in check(cfg):
                 validation_issues.append(
                     {
                         "severity": iss.severity.value,
@@ -407,15 +527,44 @@ def run_advisor(
     )
 
 
-def _system_prompt_for_route(route: Any) -> str:
+def _system_prompt_for_route(route: Any, backend_type: str | None = None) -> str:
     """Use the user-customised system_prompt if they've written one,
-    else fall back to the curated default. This matches how the rest
-    of the AI surface (caption / diagnose) behaves so power users can
-    tune wording without forking the codebase."""
+    else fall back to the curated default for the matching backend.
+    Matches how the rest of the AI surface (caption / diagnose) behaves
+    so power users can tune wording without forking the codebase."""
     custom = (getattr(route, "system_prompt", None) or "").strip()
     if custom:
         return custom
-    return _SYSTEM_PROMPT
+    return _system_prompt_for_backend(backend_type)
+
+
+def _resolve_policy_check(backend_type: str):
+    """Pick the cross-field rule set that matches ``backend_type``.
+
+    Each backend module owns its own policies and gates them on
+    ``cfg.backend.type`` so this lookup is mostly redundant — but
+    selecting the right module up-front keeps imports targeted (no
+    sense paying the kohya-policies import cost on an anima route).
+    """
+    from typing import Callable  # noqa: PLC0415
+
+    key = (backend_type or "anima_lora").strip()
+    if key == "diffusion_pipe":
+        key = "diffusion-pipe"
+    if key == "kohya":
+        from lorahub.core.backends.kohya.policies import (  # noqa: PLC0415
+            check_cross_field_conflicts as _check,
+        )
+        return _check
+    if key == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe.policies import (  # noqa: PLC0415
+            check_cross_field_conflicts as _check,
+        )
+        return _check
+    from lorahub.core.backends.anima_lora.policies import (  # noqa: PLC0415
+        check_cross_field_conflicts as _check,
+    )
+    return _check
 
 
 __all__ = [

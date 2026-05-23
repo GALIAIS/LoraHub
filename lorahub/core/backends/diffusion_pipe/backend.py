@@ -86,6 +86,14 @@ class DiffusionPipeBackend:
         except CompilationError as e:
             issues.append(ValidationIssue(Severity.error, "recipe", str(e)))
 
+        # Cross-field consistency rules — pipeline parallel constraints,
+        # eval cadence overlap, dtype combos, etc. See policies.py.
+        from lorahub.core.backends.diffusion_pipe.policies import (  # noqa: PLC0415
+            check_cross_field_conflicts,
+        )
+
+        issues.extend(check_cross_field_conflicts(cfg))
+
         if not cfg.base_model.checkpoint.exists():
             issues.append(
                 ValidationIssue(
