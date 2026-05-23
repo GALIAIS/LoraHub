@@ -6,12 +6,29 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
 from lorahub.cli.main import app
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _force_english_locale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the CLI display language to English for these tests.
+
+    The user-facing default is Simplified Chinese, but these test
+    assertions match against the English wording (``"valid"``,
+    ``"no jobs"``, ``"host:"`` …). Setting ``LORAHUB_LANG=en`` covers
+    both the import-time language pin (``_pre_parse_lang``) and any
+    subsequent ``set_lang`` calls.
+    """
+    monkeypatch.setenv("LORAHUB_LANG", "en")
+    from lorahub.cli._i18n import set_lang  # noqa: PLC0415
+
+    set_lang("en")
 
 
 def _make_stub_sd_scripts(root: Path) -> Path:
@@ -191,3 +208,55 @@ def test_system_info_runs() -> None:
     assert result.exit_code == 0, result.stdout
     assert "host:" in result.stdout
     assert "CPU:" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Localisation — verify zh mode actually swaps the strings.
+# --------------------------------------------------------------------------- #
+
+
+def test_zh_locale_renders_chinese_help(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``LORAHUB_LANG=zh`` must produce the Simplified Chinese help text.
+
+    Re-invokes the CLI in a fresh subprocess-style runner — the autouse
+    fixture above pins ``LORAHUB_LANG=en``, so we override it here and
+    re-pin via ``set_lang('zh')`` to flip the dictionary back to zh
+    for this single test. Sanity-check by asserting both a Commands-
+    header phrase ("自检") and a sub-command phrase ("校验 config").
+    """
+    monkeypatch.setenv("LORAHUB_LANG", "zh")
+    from lorahub.cli._i18n import set_lang  # noqa: PLC0415
+
+    set_lang("zh")
+    try:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0, result.stdout
+        # Top-level description (rendered via t("app.help")).
+        assert "LoRA 训练工作台" in result.stdout
+        # Sub-command short helps (rendered via t("validate.help") etc.).
+        assert "校验 config" in result.stdout
+        assert "守护进程" in result.stdout
+    finally:
+        # Don't leak the locale flip into other tests in the module.
+        set_lang("en")
+
+
+def test_zh_locale_renders_chinese_jobs_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``jobs ls`` against an empty store says "暂无任务" in zh mode."""
+    monkeypatch.setenv("LORAHUB_HOME", str(tmp_path))
+    monkeypatch.setenv("LORAHUB_LANG", "zh")
+    monkeypatch.chdir(tmp_path)
+    from lorahub.api import paths as paths_module  # noqa: PLC0415
+    from lorahub.cli._i18n import set_lang  # noqa: PLC0415
+
+    set_lang("zh")
+    paths_module._resolved = None  # type: ignore[attr-defined]
+    try:
+        result = runner.invoke(app, ["jobs", "ls"])
+    finally:
+        paths_module._resolved = None  # type: ignore[attr-defined]
+        set_lang("en")
+    assert result.exit_code == 0, result.stdout
+    assert "暂无任务" in result.stdout

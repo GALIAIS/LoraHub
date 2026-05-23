@@ -37,10 +37,11 @@ from rich.table import Table
 
 from lorahub.api.state import JobState
 from lorahub.api.store import JobStore, default_store_path
+from lorahub.cli._i18n import t
 
 console = Console()
 jobs_app = typer.Typer(
-    help="Inspect and manage training jobs without opening the web UI.",
+    help=t("jobs.help"),
     no_args_is_help=True,
 )
 
@@ -70,13 +71,10 @@ def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_txt = exc.read().decode("utf-8", errors="replace")
-        console.print(f"[red]HTTP {exc.code}[/red] {url}: {body_txt}")
+        console.print(t("jobs.http_error", code=exc.code, url=url, body=body_txt))
         raise typer.Exit(code=1) from exc
     except urllib.error.URLError as exc:
-        console.print(
-            f"[red]could not reach[/red] {url}: {exc.reason}\n"
-            "[yellow]is `lorahub serve` running on this host?[/yellow]"
-        )
+        console.print(t("jobs.unreachable", url=url, reason=exc.reason))
         raise typer.Exit(code=1) from exc
 
 
@@ -92,7 +90,7 @@ def _state_color(state: JobState) -> str:
     }.get(state, "white")
 
 
-@jobs_app.command("ls")
+@jobs_app.command("ls", help=t("jobs.ls.help"))
 def jobs_ls(
     state: Annotated[
         str | None,
@@ -111,7 +109,7 @@ def jobs_ls(
         try:
             target = JobState(state)
         except ValueError as exc:
-            console.print(f"[red]unknown state {state!r}[/red]")
+            console.print(t("jobs.unknown_state", state=state))
             raise typer.Exit(code=2) from exc
         records = [r for r in records if r.state is target]
     records.sort(key=lambda r: r.created_at, reverse=True)
@@ -121,15 +119,15 @@ def jobs_ls(
         # Skip the empty table header so Windows cp936 consoles don't
         # mojibake the box-drawing chars and so test runners can match
         # the literal "no jobs" line cleanly.
-        console.print("[dim]no jobs[/dim]")
+        console.print(t("jobs.ls.empty"))
         return
 
     table = Table(show_lines=False, padding=(0, 1))
-    table.add_column("id", style="dim", no_wrap=True)
-    table.add_column("state")
-    table.add_column("name")
-    table.add_column("workspace", style="dim")
-    table.add_column("created", style="dim")
+    table.add_column(t("jobs.ls.col_id"), style="dim", no_wrap=True)
+    table.add_column(t("jobs.ls.col_state"))
+    table.add_column(t("jobs.ls.col_name"))
+    table.add_column(t("jobs.ls.col_workspace"), style="dim")
+    table.add_column(t("jobs.ls.col_created"), style="dim")
     for r in records:
         snap = r.config_snapshot or {}
         out = snap.get("output") if isinstance(snap, dict) else None
@@ -147,7 +145,7 @@ def jobs_ls(
     console.print(table)
 
 
-@jobs_app.command("show")
+@jobs_app.command("show", help=t("jobs.show.help"))
 def jobs_show(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
 ) -> None:
@@ -171,7 +169,7 @@ def jobs_show(
     console.print_json(data=payload)
 
 
-@jobs_app.command("cancel")
+@jobs_app.command("cancel", help=t("jobs.cancel.help"))
 def jobs_cancel(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
 ) -> None:
@@ -180,16 +178,19 @@ def jobs_cancel(
     rec = _resolve_record(store, job_id)
     if rec.state is not JobState.queued:
         console.print(
-            f"[yellow]job {rec.id[-12:]} is {rec.state.value}, not queued — "
-            f"use `lorahub jobs kill` to terminate a running job.[/yellow]"
+            t(
+                "jobs.cancel.not_queued",
+                id=rec.id[-12:],
+                state=rec.state.value,
+            )
         )
         raise typer.Exit(code=1)
     rec.state = JobState.canceled
     store.upsert(rec)
-    console.print(f"[green]canceled[/green] {rec.id[-12:]}")
+    console.print(t("jobs.cancel.ok", id=rec.id[-12:]))
 
 
-@jobs_app.command("kill")
+@jobs_app.command("kill", help=t("jobs.kill.help"))
 def jobs_kill(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
     force: Annotated[bool, typer.Option("--force", "-9", help="SIGKILL immediately.")] = False,
@@ -198,22 +199,20 @@ def jobs_kill(
     store = JobStore(_store_path())
     rec = _resolve_record(store, job_id)
     if rec.pid is None:
-        console.print(
-            f"[yellow]job {rec.id[-12:]} has no recorded pid (state={rec.state.value})[/yellow]"
-        )
+        console.print(t("jobs.kill.no_pid", id=rec.id[-12:], state=rec.state.value))
         rec.state = JobState.canceled
         store.upsert(rec)
-        console.print("[green]marked canceled[/green]")
+        console.print(t("jobs.kill.marked"))
         return
     pid = rec.pid
     sig = signal.SIGKILL if force else signal.SIGTERM
     try:
         os.kill(pid, sig)
-        console.print(f"[dim]sent {sig.name} to pid {pid}[/dim]")
+        console.print(t("jobs.kill.sent", sig=sig.name, pid=pid))
     except ProcessLookupError:
-        console.print(f"[yellow]pid {pid} no longer alive[/yellow]")
+        console.print(t("jobs.kill.gone", pid=pid))
     except PermissionError as exc:
-        console.print(f"[red]cannot signal pid {pid}: {exc}[/red]")
+        console.print(t("jobs.kill.no_perm", pid=pid, err=exc))
         raise typer.Exit(code=1) from exc
 
     if not force:
@@ -225,16 +224,16 @@ def jobs_kill(
                 break
             time.sleep(0.1)
         else:
-            console.print("[yellow]worker didn't exit; escalating to SIGKILL[/yellow]")
+            console.print(t("jobs.kill.escalating"))
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
 
     rec.state = JobState.canceled
     store.upsert(rec)
-    console.print(f"[green]killed[/green] {rec.id[-12:]}")
+    console.print(t("jobs.kill.ok", id=rec.id[-12:]))
 
 
-@jobs_app.command("resume")
+@jobs_app.command("resume", help=t("jobs.resume.help"))
 def jobs_resume(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
 ) -> None:
@@ -248,10 +247,10 @@ def jobs_resume(
     rec = _resolve_record(store, job_id)
     body = _post(f"/api/jobs/{rec.id}/resume")
     new_id = body.get("id") or body.get("job_id")
-    console.print(f"[green]resumed[/green] → new job {new_id}")
+    console.print(t("jobs.resume.ok", id=new_id))
 
 
-@jobs_app.command("rerun")
+@jobs_app.command("rerun", help=t("jobs.rerun.help"))
 def jobs_rerun(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
 ) -> None:
@@ -263,7 +262,7 @@ def jobs_rerun(
     rec = _resolve_record(store, job_id)
     body = _post(f"/api/jobs/{rec.id}/rerun")
     new_id = body.get("id") or body.get("job_id")
-    console.print(f"[green]rerun[/green] → new job {new_id}")
+    console.print(t("jobs.rerun.ok", id=new_id))
 
 
 def _resolve_record(store: JobStore, job_id: str) -> Any:
@@ -274,12 +273,10 @@ def _resolve_record(store: JobStore, job_id: str) -> Any:
         return rec
     candidates = [r for r in store.list() if r.id.endswith(job_id)]
     if not candidates:
-        console.print(f"[red]no job matches {job_id!r}[/red]")
+        console.print(t("jobs.no_match", id=job_id))
         raise typer.Exit(code=1)
     if len(candidates) > 1:
-        console.print(
-            f"[red]ambiguous suffix {job_id!r} matches {len(candidates)} jobs:[/red]"
-        )
+        console.print(t("jobs.ambiguous", id=job_id, n=len(candidates)))
         for c in candidates:
             console.print(f"  {c.id} ({c.state.value})")
         raise typer.Exit(code=1)

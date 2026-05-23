@@ -14,15 +14,16 @@ from rich.console import Console
 from rich.table import Table
 
 from lorahub.api.system_stats import collect_snapshot
+from lorahub.cli._i18n import t
 
 console = Console()
 system_app = typer.Typer(
-    help="Inspect local CPU / GPU / memory state.",
+    help=t("system.help"),
     no_args_is_help=True,
 )
 
 
-@system_app.command("gpu")
+@system_app.command("gpu", help=t("system.gpu.help"))
 def system_gpu(
     raw: Annotated[
         bool,
@@ -36,20 +37,18 @@ def system_gpu(
         return
 
     if not snap.gpus:
-        console.print("[yellow]no GPUs detected[/yellow]")
+        console.print(t("system.gpu.no_gpus"))
         if not snap.has_nvidia_smi:
-            console.print(
-                "[dim]nvidia-smi not on PATH; only CPU stats are available.[/dim]"
-            )
+            console.print(t("system.gpu.no_smi"))
         return
 
     table = Table(show_lines=False, padding=(0, 1))
-    table.add_column("idx", style="dim")
-    table.add_column("name")
-    table.add_column("mem")
-    table.add_column("util")
-    table.add_column("temp")
-    table.add_column("driver", style="dim")
+    table.add_column(t("system.col.idx"), style="dim")
+    table.add_column(t("system.col.name"))
+    table.add_column(t("system.col.mem"))
+    table.add_column(t("system.col.util"))
+    table.add_column(t("system.col.temp"))
+    table.add_column(t("system.col.driver"), style="dim")
     for g in snap.gpus:
         mem = (
             f"{g.memory_used_bytes / 1024**3:.1f} / "
@@ -69,25 +68,47 @@ def system_gpu(
     console.print(table)
 
 
-@system_app.command("info")
+@system_app.command("info", help=t("system.info.help"))
 def system_info() -> None:
     """Print the full host snapshot (CPU + memory + disks + network)."""
     snap = collect_snapshot()
-    console.print(f"[bold]host:[/bold] {snap.host.hostname}  ({snap.host.system} {snap.host.release})")
-    console.print(f"  python: {snap.host.python}")
     console.print(
-        f"  CPU: {snap.cpu.cores_logical} logical / {snap.cpu.cores_physical} physical "
-        f"@ {snap.cpu.usage_percent:.1f}% load"
+        t(
+            "system.info.host",
+            hostname=snap.host.hostname,
+            system=snap.host.system,
+            release=snap.host.release,
+        )
+    )
+    console.print(t("system.info.python", version=snap.host.python))
+    console.print(
+        t(
+            "system.info.cpu",
+            logical=snap.cpu.cores_logical,
+            physical=snap.cpu.cores_physical,
+            usage=snap.cpu.usage_percent,
+        )
     )
     used = snap.memory.used_bytes / 1024**3
     total = snap.memory.total_bytes / 1024**3
     console.print(
-        f"  RAM: {used:.1f} / {total:.1f} GiB ({snap.memory.percent:.1f}%)"
+        t(
+            "system.info.ram",
+            used=used,
+            total=total,
+            percent=snap.memory.percent,
+        )
     )
     if snap.gpus:
-        console.print(f"  GPUs: {len(snap.gpus)} ({', '.join(g.name or '?' for g in snap.gpus)})")
+        console.print(
+            t(
+                "system.info.gpus",
+                n=len(snap.gpus),
+                names=", ".join(g.name or "?" for g in snap.gpus),
+            )
+        )
     if snap.disks:
-        console.print(f"  Disks: {len(snap.disks)} mount points")
+        console.print(t("system.info.disks", n=len(snap.disks)))
 
 
 __all__ = ["system_app"]

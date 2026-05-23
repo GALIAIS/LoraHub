@@ -44,12 +44,14 @@ import typer
 from platformdirs import user_state_path
 from rich.console import Console
 
+from lorahub.cli._i18n import t
+
 console = Console()
 err_console = Console(stderr=True)
 
 service_app = typer.Typer(
     name="service",
-    help="Manage the LoraHub API daemon (start/stop/status/logs/enable).",
+    help=t("service.help"),
     no_args_is_help=True,
     add_completion=False,
 )
@@ -168,13 +170,13 @@ def _wait_for_health(port: int, *, timeout_s: float = 30.0) -> bool:
     return False
 
 
-@service_app.command()
+@service_app.command(help=t("service.start.help"))
 def start(
-    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
+    host: Annotated[str, typer.Option(help=t("service.start.host_help"))] = "127.0.0.1",
     port: Annotated[
         int,
         typer.Option(
-            help="Port to listen on. 0 picks a free port (default).",
+            help=t("service.start.port_help"),
         ),
     ] = 0,
     foreground: Annotated[
@@ -182,7 +184,7 @@ def start(
         typer.Option(
             "--foreground",
             "-f",
-            help="Run uvicorn in this terminal instead of detached.",
+            help=t("service.start.foreground_help"),
         ),
     ] = False,
 ) -> None:
@@ -195,8 +197,11 @@ def start(
     if existing is not None:
         port_existing = _read_port()
         err_console.print(
-            f"[yellow]already running[/] pid={existing}"
-            + (f" port={port_existing}" if port_existing else "")
+            t(
+                "service.already_running",
+                pid=existing,
+                port=(f" port={port_existing}" if port_existing else ""),
+            )
         )
         raise typer.Exit(code=2)
 
@@ -211,11 +216,9 @@ def start(
         try:
             import uvicorn  # noqa: PLC0415
         except ImportError as exc:
-            err_console.print(
-                "[red]API extras not installed.[/red] Run: pip install lorahub[api]"
-            )
+            err_console.print(t("serve.api_extras_missing"))
             raise typer.Exit(code=1) from exc
-        console.print(f"[bold]LoraHub[/bold] foreground http://{host}:{port}")
+        console.print(t("service.foreground_banner", host=host, port=port))
         uvicorn.run(
             "lorahub.api.app:app",
             host=host,
@@ -269,16 +272,13 @@ def start(
     _pid_file().write_text(f"{proc.pid}\n")
     _port_file().write_text(f"{port}\n")
 
-    console.print(f"started pid={proc.pid} port={port}")
-    console.print(f"log: {log}")
+    console.print(t("service.started", pid=proc.pid, port=port))
+    console.print(t("service.log_path", path=log))
 
     if _wait_for_health(port, timeout_s=30.0):
-        console.print(f"[green]healthy[/] http://{host}:{port}")
+        console.print(t("service.healthy", host=host, port=port))
     else:
-        err_console.print(
-            f"[yellow]daemon launched but /api/health did not answer "
-            f"within 30s. Check {log}[/]"
-        )
+        err_console.print(t("service.health_timeout", log=log))
         raise typer.Exit(code=3)
 
 
@@ -292,11 +292,11 @@ def _read_port() -> int | None:
         return None
 
 
-@service_app.command()
+@service_app.command(help=t("service.stop.help"))
 def stop(
     timeout: Annotated[
         float,
-        typer.Option(help="Seconds to wait for graceful shutdown before SIGKILL."),
+        typer.Option(help=t("service.stop.timeout_help")),
     ] = 5.0,
 ) -> None:
     """Stop the API daemon.
@@ -306,7 +306,7 @@ def stop(
     """
     pid = _read_pid()
     if pid is None:
-        console.print("not running")
+        console.print(t("service.stop.not_running"))
         return
 
     if sys.platform == "win32":
@@ -320,7 +320,7 @@ def stop(
             except psutil.TimeoutExpired:
                 proc.kill()
         except Exception as exc:  # noqa: BLE001
-            err_console.print(f"[red]failed to stop pid {pid}:[/] {exc}")
+            err_console.print(t("service.stop.failed", pid=pid, err=exc))
             raise typer.Exit(code=1) from exc
     else:
         try:
@@ -337,15 +337,15 @@ def stop(
 
     _pid_file().unlink(missing_ok=True)
     _port_file().unlink(missing_ok=True)
-    console.print(f"stopped pid={pid}")
+    console.print(t("service.stopped", pid=pid))
 
 
-@service_app.command()
+@service_app.command(help=t("service.restart.help"))
 def restart(
-    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
+    host: Annotated[str, typer.Option(help=t("service.start.host_help"))] = "127.0.0.1",
     port: Annotated[
         int,
-        typer.Option(help="Port. 0 = pick free port (default)."),
+        typer.Option(help=t("service.start.port_help")),
     ] = 0,
 ) -> None:
     """Stop the daemon (if running) and start a fresh one."""
@@ -355,22 +355,31 @@ def restart(
     start(host=host, port=port, foreground=False)
 
 
-@service_app.command()
+@service_app.command(help=t("service.status.help"))
 def status() -> None:
     """Show whether the daemon is running and on which port."""
     pid = _read_pid()
     if pid is None:
-        console.print("[dim]stopped[/]")
+        console.print(t("service.status.stopped"))
         raise typer.Exit(code=3)
     port = _read_port()
     healthy = _wait_for_health(port, timeout_s=2.0) if port else False
-    health_label = "[green]healthy[/]" if healthy else "[yellow]starting/unhealthy[/]"
+    health_label = (
+        t("service.status.healthy") if healthy else t("service.status.unhealthy")
+    )
     port_label = f"port={port}" if port else "port=?"
-    console.print(f"[green]running[/] pid={pid} {port_label} {health_label}")
-    console.print(f"log: {_log_file()}")
+    console.print(
+        t(
+            "service.status.running",
+            pid=pid,
+            port_label=port_label,
+            health_label=health_label,
+        )
+    )
+    console.print(t("service.log_path", path=_log_file()))
 
 
-@service_app.command()
+@service_app.command(help=t("service.logs.help"))
 def logs(
     follow: Annotated[
         bool,
@@ -381,7 +390,7 @@ def logs(
     """Print the daemon's log file."""
     log = _log_file()
     if not log.is_file():
-        console.print(f"[dim]no log yet:[/] {log}")
+        console.print(t("service.logs.empty", path=log))
         return
     if follow:
         # Hand off to the platform's tail tool — re-implementing tail-f
@@ -418,7 +427,7 @@ def logs(
     sys.stdout.buffer.write(tail + b"\n")
 
 
-@service_app.command()
+@service_app.command(help=t("service.enable.help"))
 def enable(
     host: Annotated[str, typer.Option(help="Bind address for the unit.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Fixed port for the unit.")] = 18765,
@@ -438,10 +447,12 @@ def enable(
     """
     if sys.platform == "win32":
         err_console.print(
-            "[red]Windows isn't supported by `service enable`.[/]\n"
-            "Use Task Scheduler. Sample invocation:\n"
-            f"  schtasks /Create /SC ONLOGON /TN LoraHub /TR \"{sys.executable} "
-            f"-m uvicorn lorahub.api.app:app --host {host} --port {port}\""
+            t(
+                "service.enable.windows",
+                exe=sys.executable,
+                host=host,
+                port=port,
+            )
         )
         raise typer.Exit(code=1)
 
@@ -454,13 +465,10 @@ def enable(
         try:
             plist_path.write_text(plist)
         except PermissionError as exc:
-            err_console.print(
-                f"[red]permission denied writing {plist_path}.[/]\n"
-                "Re-run with sudo: sudo lorahub service enable"
-            )
+            err_console.print(t("service.enable.perm", path=plist_path))
             raise typer.Exit(code=1) from exc
         subprocess.run(["launchctl", "load", "-w", str(plist_path)], check=False)  # noqa: S603, S607
-        console.print(f"[green]enabled[/] {plist_path}")
+        console.print(t("service.enable.ok", path=plist_path))
         return
 
     # Linux: system systemd unit (matches Q3 = system, not user).
@@ -469,25 +477,19 @@ def enable(
     try:
         unit_path.write_text(unit)
     except PermissionError as exc:
-        err_console.print(
-            f"[red]permission denied writing {unit_path}.[/]\n"
-            "Re-run with sudo: sudo lorahub service enable"
-        )
+        err_console.print(t("service.enable.perm", path=unit_path))
         raise typer.Exit(code=1) from exc
     subprocess.run(["systemctl", "daemon-reload"], check=False)  # noqa: S603, S607
     subprocess.run(["systemctl", "enable", "--now", "lorahub"], check=False)  # noqa: S603, S607
-    console.print(f"[green]enabled[/] {unit_path}")
-    console.print("status: systemctl status lorahub")
-    console.print("logs:   journalctl -u lorahub -f")
+    console.print(t("service.enable.ok", path=unit_path))
+    console.print(t("service.enable.systemd_hint"))
 
 
-@service_app.command()
+@service_app.command(help=t("service.disable.help"))
 def disable() -> None:
     """Remove the registered system service."""
     if sys.platform == "win32":
-        err_console.print(
-            "[yellow]Windows: remove the task with[/] schtasks /Delete /TN LoraHub /F"
-        )
+        err_console.print(t("service.disable.windows"))
         raise typer.Exit(code=1)
     if sys.platform == "darwin":
         plist = Path("/Library/LaunchDaemons/com.lorahub.plist")
@@ -496,9 +498,9 @@ def disable() -> None:
             try:
                 plist.unlink()
             except PermissionError as exc:
-                err_console.print(f"[red]sudo required to remove {plist}[/]")
+                err_console.print(t("service.disable.sudo", path=plist))
                 raise typer.Exit(code=1) from exc
-        console.print("[green]disabled[/]")
+        console.print(t("service.disable.ok"))
         return
     # Linux
     subprocess.run(["systemctl", "disable", "--now", "lorahub"], check=False)  # noqa: S603, S607
@@ -507,13 +509,13 @@ def disable() -> None:
         try:
             unit.unlink()
         except PermissionError as exc:
-            err_console.print(f"[red]sudo required to remove {unit}[/]")
+            err_console.print(t("service.disable.sudo", path=unit))
             raise typer.Exit(code=1) from exc
     subprocess.run(["systemctl", "daemon-reload"], check=False)  # noqa: S603, S607
-    console.print("[green]disabled[/]")
+    console.print(t("service.disable.ok"))
 
 
-@service_app.command("install-unit")
+@service_app.command("install-unit", help=t("service.install_unit.help"))
 def install_unit(
     print_only: Annotated[
         bool,

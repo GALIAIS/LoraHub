@@ -119,13 +119,13 @@ def _root(
         set_lang(lang)
 
 
-@app.command()
+@app.command(help=t("app.version.help"))
 def version() -> None:
     """Print the installed lorahub version."""
     console.print(f"lorahub {__version__}")
 
 
-@app.command()
+@app.command(help=t("app.doctor.help"))
 def doctor() -> None:
     """Inspect the local install — venv, Python, Node, web/dist, backends.
 
@@ -150,23 +150,26 @@ def doctor() -> None:
     uv_bin = uv_dir / ("uv.exe" if _sys.platform == "win32" else "uv")
     py_dir = lorahub_dir() / "python"
 
-    table = Table(title=f"lorahub doctor — {root}", show_lines=False)
-    table.add_column("component")
-    table.add_column("location")
-    table.add_column("status")
+    table = Table(title=t("doctor.title", root=root), show_lines=False)
+    table.add_column(t("doctor.col.component"))
+    table.add_column(t("doctor.col.location"))
+    table.add_column(t("doctor.col.status"))
+
+    install_hint = t("doctor.hint.install")
+    build_hint = t("doctor.hint.build")
 
     def row(label: str, path: Path, present: bool, hint: str = "") -> None:
-        status = "[green]OK[/]" if present else "[red]missing[/]"
+        status = t("doctor.status.ok") if present else t("doctor.status.missing")
         if hint and not present:
             status += f"  [dim]{hint}[/]"
         table.add_row(label, str(path), status)
 
     row("interpreter", Path(_sys.executable), Path(_sys.executable).is_file())
-    row(".venv", venv_py, venv_py.is_file(), "run scripts/install.{sh,bat}")
-    row(".lorahub/uv", uv_bin, uv_bin.is_file(), "run scripts/install.{sh,bat}")
-    row(".lorahub/python", py_dir, py_dir.is_dir() and any(py_dir.iterdir()) if py_dir.is_dir() else False, "run scripts/install.{sh,bat}")
-    row(".node", node_bin, node_bin.is_file(), "run scripts/install.{sh,bat}")
-    row("web/dist", web_dist, web_dist.is_file(), "run `lorahub manage build`")
+    row(".venv", venv_py, venv_py.is_file(), install_hint)
+    row(".lorahub/uv", uv_bin, uv_bin.is_file(), install_hint)
+    row(".lorahub/python", py_dir, py_dir.is_dir() and any(py_dir.iterdir()) if py_dir.is_dir() else False, install_hint)
+    row(".node", node_bin, node_bin.is_file(), install_hint)
+    row("web/dist", web_dist, web_dist.is_file(), build_hint)
 
     console.print(table)
 
@@ -174,13 +177,13 @@ def doctor() -> None:
     # Things that don't fit the component table but which still cause
     # opaque mid-training failures when wrong (path encoding, low disk,
     # GPU not visible).
-    env_table = Table(title="environment", show_lines=False)
-    env_table.add_column("check")
-    env_table.add_column("detail")
-    env_table.add_column("status")
+    env_table = Table(title=t("doctor.env.title"), show_lines=False)
+    env_table.add_column(t("doctor.env.col.check"))
+    env_table.add_column(t("doctor.env.col.detail"))
+    env_table.add_column(t("doctor.col.status"))
 
     def env_row(label: str, detail: str, ok: bool, hint: str = "") -> None:
-        status = "[green]OK[/]" if ok else "[yellow]warn[/]"
+        status = t("doctor.status.ok") if ok else t("doctor.status.warn")
         if hint and not ok:
             status += f"  [dim]{hint}[/]"
         env_table.add_row(label, detail, status)
@@ -192,17 +195,18 @@ def doctor() -> None:
         path_str = str(root)
         try:
             path_str.encode("mbcs")
-            env_row(
-                "ANSI 路径编码",
-                path_str,
-                True,
-            )
+            env_row(t("doctor.env.path_encoding"), path_str, True)
         except UnicodeEncodeError as exc:
             env_row(
-                "ANSI 路径编码",
-                f"{path_str} (offending {exc.start}-{exc.end})",
+                t("doctor.env.path_encoding"),
+                t(
+                    "doctor.env.path_offending",
+                    path=path_str,
+                    start=exc.start,
+                    end=exc.end,
+                ),
                 False,
-                "把项目移到不含特殊字符的目录(emoji / 当前代码页未覆盖的字符)",
+                t("doctor.env.path_hint"),
             )
 
     # Disk space on the workspace volume.
@@ -214,10 +218,10 @@ def doctor() -> None:
         free_gib = usage.free / 1024**3
         ok = free_gib >= 5.0
         env_row(
-            "磁盘空间",
-            f"{free_gib:.1f} GiB free at {probe}",
+            t("doctor.env.disk"),
+            t("doctor.env.disk_detail", free_gib=free_gib, probe=probe),
             ok,
-            "训练 state 目录单次可达数 GiB,建议 ≥5 GiB",
+            t("doctor.env.disk_hint"),
         )
     except OSError:
         pass
@@ -235,17 +239,17 @@ def doctor() -> None:
         )
         gpus = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
         env_row(
-            "GPU 可见 (nvidia-smi)",
-            f"{len(gpus)} GPU(s)" if gpus else "no GPUs reported",
+            t("doctor.env.gpu"),
+            t("doctor.env.gpu_count", n=len(gpus)) if gpus else t("doctor.env.gpu_none"),
             bool(gpus),
-            "若计划在 CPU 训练可忽略;否则检查驱动 / nvidia-smi 是否在 PATH",
+            t("doctor.env.gpu_hint_cpu"),
         )
     except (FileNotFoundError, OSError, _sp.TimeoutExpired):
         env_row(
-            "GPU 可见 (nvidia-smi)",
-            "nvidia-smi not found on PATH",
+            t("doctor.env.gpu"),
+            t("doctor.env.gpu_missing"),
             False,
-            "若计划在 GPU 训练,先安装 NVIDIA driver 并把 nvidia-smi 放进 PATH",
+            t("doctor.env.gpu_missing_hint"),
         )
 
     console.print(env_table)
@@ -259,21 +263,29 @@ def doctor() -> None:
         if store is not None:
             settings = store.load()
             backends = probe_all_backends(settings)
-            be_table = Table(title="backends", show_lines=False)
-            be_table.add_column("id")
-            be_table.add_column("ready")
-            be_table.add_column("python")
-            be_table.add_column("notes")
+            be_table = Table(title=t("doctor.backends.title"), show_lines=False)
+            be_table.add_column(t("doctor.backends.col.id"))
+            be_table.add_column(t("doctor.backends.col.ready"))
+            be_table.add_column(t("doctor.backends.col.python"))
+            be_table.add_column(t("doctor.backends.col.notes"))
             for bid, info in backends.items():
-                ready = "[green]yes[/]" if info.get("ready") else "[yellow]no[/]"
+                ready = (
+                    t("doctor.backends.ready_yes")
+                    if info.get("ready")
+                    else t("doctor.backends.ready_no")
+                )
                 py = info.get("python") or "-"
                 notes: list[str] = []
                 if info.get("missing_scripts"):
-                    notes.append(f"missing scripts: {len(info['missing_scripts'])}")
+                    notes.append(
+                        t("doctor.backends.note_missing_scripts", n=len(info["missing_scripts"]))
+                    )
                 if info.get("missing_models"):
-                    notes.append(f"missing models: {len(info['missing_models'])}")
+                    notes.append(
+                        t("doctor.backends.note_missing_models", n=len(info["missing_models"]))
+                    )
                 if not info.get("venv_detected"):
-                    notes.append("no venv")
+                    notes.append(t("doctor.backends.note_no_venv"))
                 be_table.add_row(bid, ready, str(py), ", ".join(notes) or "—")
             console.print(be_table)
     except Exception:  # noqa: BLE001
@@ -282,9 +294,9 @@ def doctor() -> None:
         pass
 
 
-@app.command()
+@app.command(help=t("validate.help"))
 def validate(
-    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help=t("cli.config_arg_help"))],
 ) -> None:
     """Validate a config without running training."""
     cfg = load_config(config)
@@ -293,12 +305,12 @@ def validate(
     _render_issues(issues)
     if any(i.severity is Severity.error for i in issues):
         raise typer.Exit(code=1)
-    console.print("[green]OK[/] config valid")
+    console.print(t("validate.ok"))
 
 
-@app.command()
+@app.command(help=t("info.help"))
 def info(
-    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help=t("cli.config_arg_help"))],
 ) -> None:
     """Show what a config would compile to, plus VRAM estimate (no training)."""
     cfg = load_config(config)
@@ -307,7 +319,7 @@ def info(
     script, argv, _files, _env = compile_config(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
-    table = Table(title="Config summary", show_header=False, expand=False)
+    table = Table(title=t("info.title"), show_header=False, expand=False)
     table.add_row("config", str(config))
     table.add_row("arch", cfg.base_model.arch)
     table.add_row("network", f"{cfg.network.type} rank={cfg.network.rank} alpha={cfg.network.alpha}")
@@ -317,17 +329,17 @@ def info(
     table.add_row("estimated VRAM", f"{est.total_gib:.1f} GiB")
     console.print(table)
 
-    console.print("\n[bold]Compiled argv:[/bold]")
+    console.print("\n" + t("info.compiled_argv"))
     for a in argv:
         console.print(f"  {a}")
 
 
-@app.command()
+@app.command(help=t("train.help"))
 def train(
-    config: Annotated[Path, typer.Argument(help="Path to a config YAML file.")],
+    config: Annotated[Path, typer.Argument(help=t("cli.config_arg_help"))],
     workspace: Annotated[
         Path | None,
-        typer.Option(help="Where to write logs/checkpoints/samples."),
+        typer.Option(help=t("cli.workspace_help")),
     ] = None,
 ) -> None:
     """Run training to completion. Press Ctrl+C to stop gracefully."""
@@ -341,7 +353,7 @@ def train(
 
     ws = (workspace or (Path.cwd() / "runs" / cfg.output.name)).resolve()
     ws.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]workspace:[/dim] {ws}")
+    console.print(t("train.workspace_label", ws=ws))
 
     events_log = ws / "events.jsonl"
     with JsonlEventSink(events_log) as sink:
@@ -351,21 +363,21 @@ def train(
             _render_event(ev)
 
         handle = backend.launch(cfg, workspace=ws, on_event=on_event)
-        console.print(f"[dim]pid:[/dim] {handle.pid}  [dim]job:[/dim] {handle.job_id}")
+        console.print(t("train.process_label", pid=handle.pid, job=handle.job_id))
         try:
             rc = handle.wait()
         except KeyboardInterrupt:
-            console.print("\n[yellow]Ctrl+C - stopping training gracefully...[/yellow]")
+            console.print(t("train.interrupt"))
             handle.stop(graceful=True)
             rc = handle.wait()
 
     if rc != 0:
-        err_console.print(f"[red]training failed (rc={rc})[/red]")
+        err_console.print(t("train.failed", rc=rc))
         raise typer.Exit(code=rc)
-    console.print("[green]OK[/] training complete")
+    console.print(t("train.ok"))
 
 
-@app.command()
+@app.command(help=t("sweep.help"))
 def sweep(
     config: Annotated[Path, typer.Argument(help="Path to the base config YAML file.")],
     axis: Annotated[
@@ -429,7 +441,7 @@ def sweep(
     )
 
     if not axis:
-        err_console.print("[red]at least one --axis is required[/red]")
+        err_console.print(t("sweep.need_axis"))
         raise typer.Exit(code=1)
 
     # Validate the base config up front so the user sees schema errors before
@@ -440,18 +452,16 @@ def sweep(
     axes: list[SweepAxis] = []
     for spec in axis:
         if "=" not in spec:
-            err_console.print(
-                f"[red]bad --axis spec {spec!r}; expected 'dotted.path=v1,v2,...'[/red]"
-            )
+            err_console.print(t("sweep.bad_axis", spec=spec))
             raise typer.Exit(code=1)
         path, _, raw_values = spec.partition("=")
         path = path.strip()
         if not path:
-            err_console.print(f"[red]empty axis path in {spec!r}[/red]")
+            err_console.print(t("sweep.empty_axis_path", spec=spec))
             raise typer.Exit(code=1)
         values = [_coerce_axis_value(tok) for tok in raw_values.split(",") if tok.strip()]
         if not values:
-            err_console.print(f"[red]axis {path!r} has no values[/red]")
+            err_console.print(t("sweep.no_values", path=path))
             raise typer.Exit(code=1)
         axes.append(SweepAxis(path=path, values=values))
 
@@ -466,7 +476,7 @@ def sweep(
     sweep_dir_name = f"sweep-{base_name}"
 
     if dry_run:
-        console.print(f"[bold]sweep[/bold] {len(variants)} variant(s) [dim](dry run)[/dim]")
+        console.print(t("sweep.dry_run_header", n=len(variants)))
         for i, (variant_name, _variant_config) in enumerate(variants, start=1):
             diff = plan.axis_values_for(i)
             console.print(f"[cyan]{variant_name}[/cyan]  {diff}")
@@ -478,9 +488,7 @@ def sweep(
         try:
             TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
-            err_console.print(
-                f"[red]variant {variant_name!r} fails schema validation: {exc}[/red]"
-            )
+            err_console.print(t("sweep.variant_invalid", name=variant_name, err=exc))
             raise typer.Exit(code=1) from exc
 
     target_dir = (output_dir / sweep_dir_name).resolve()
@@ -512,10 +520,8 @@ def sweep(
         json.dumps(manifest, indent=2, default=str, ensure_ascii=False),
         encoding="utf-8",
     )
-    console.print(
-        f"[green]OK[/] wrote {len(variants)} variant(s) to {target_dir}"
-    )
-    console.print(f"[dim]manifest:[/dim] {manifest_path}")
+    console.print(t("sweep.ok", n=len(variants), dir=target_dir))
+    console.print(t("sweep.manifest", path=manifest_path))
 
 
 def _coerce_axis_value(token: str) -> Any:
@@ -534,25 +540,23 @@ def _coerce_axis_value(token: str) -> Any:
         return text
 
 
-@app.command()
+@app.command(help=t("serve.help"))
 def serve(
-    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8000,
+    host: Annotated[str, typer.Option(help=t("serve.host_help"))] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help=t("serve.port_help"))] = 8000,
     reload: Annotated[
         bool,
-        typer.Option("--reload", help="Auto-reload on code change (dev only)."),
+        typer.Option("--reload", help=t("serve.reload_help")),
     ] = False,
 ) -> None:
     """Run the LoraHub HTTP API server (REST + WebSocket)."""
     try:
         import uvicorn  # noqa: PLC0415
     except ImportError as exc:
-        err_console.print(
-            "[red]API extras not installed.[/red] Run: pip install lorahub[api]"
-        )
+        err_console.print(t("serve.api_extras_missing"))
         raise typer.Exit(code=1) from exc
 
-    console.print(f"[bold]LoraHub API[/bold] http://{host}:{port}  (Ctrl+C to stop)")
+    console.print(t("serve.banner", host=host, port=port))
     uvicorn.run(
         "lorahub.api.app:app",
         host=host,
@@ -561,46 +565,44 @@ def serve(
     )
 
 
-@app.command()
+@app.command(help=t("init.help"))
 def init(
-    name: Annotated[str, typer.Argument(help="Name for the new config (no extension).")],
+    name: Annotated[str, typer.Argument(help=t("init.name_help"))],
     template: Annotated[
-        str, typer.Option(help="Built-in template to copy. Ignored when --auto is used.")
+        str, typer.Option(help=t("init.template_help"))
     ] = "sdxl_character_8gb",
     auto: Annotated[
         bool,
         typer.Option(
             "--auto",
-            help="Probe the GPU + dataset and write a config tuned to this machine.",
+            help=t("init.auto_help"),
         ),
     ] = False,
     checkpoint: Annotated[
         Path | None,
-        typer.Option("--checkpoint", help="Base model .safetensors (required for --auto)."),
+        typer.Option("--checkpoint", help=t("init.checkpoint_help")),
     ] = None,
     dataset: Annotated[
         Path | None,
-        typer.Option("--dataset", help="Dataset directory (required for --auto)."),
+        typer.Option("--dataset", help=t("init.dataset_help")),
     ] = None,
     vram_mib: Annotated[
         int | None,
         typer.Option(
             "--vram-mib",
-            help="Override detected VRAM in MiB (e.g. 8192). Skips nvidia-smi.",
+            help=t("init.vram_help"),
         ),
     ] = None,
 ) -> None:
     """Scaffold a starter config in the current directory."""
     dst = Path.cwd() / f"{name}.yaml"
     if dst.exists():
-        err_console.print(f"[red]{dst} already exists[/red]")
+        err_console.print(t("init.exists", path=dst))
         raise typer.Exit(code=1)
 
     if auto:
         if checkpoint is None or dataset is None:
-            err_console.print(
-                "[red]--auto requires --checkpoint and --dataset[/red]"
-            )
+            err_console.print(t("init.auto_requires"))
             raise typer.Exit(code=1)
         from lorahub.core.config import scaffold
         from lorahub.core.config.loader import dump_config
@@ -614,45 +616,49 @@ def init(
         dump_config(cfg, dst)
         images = scaffold.count_images(dataset.resolve())
         console.print(
-            f"[green]created[/green] {dst}\n"
-            f"[dim]arch[/dim] {cfg.base_model.arch}  "
-            f"[dim]rank[/dim] {cfg.network.rank}  "
-            f"[dim]batch[/dim] {cfg.schedule.batch_size}x{cfg.schedule.grad_accum}  "
-            f"[dim]images[/dim] {images}  "
-            f"[dim]repeats[/dim] {cfg.dataset.num_repeats}"
+            t(
+                "init.created",
+                dst=dst,
+                arch=cfg.base_model.arch,
+                rank=cfg.network.rank,
+                batch=cfg.schedule.batch_size,
+                accum=cfg.schedule.grad_accum,
+                images=images,
+                repeats=cfg.dataset.num_repeats,
+            )
         )
         return
 
     src = _builtin_config(template)
     if not src.exists():
-        err_console.print(f"[red]unknown template: {template}[/red]")
+        err_console.print(t("init.unknown_template", name=template))
         raise typer.Exit(code=1)
     shutil.copy2(src, dst)
-    console.print(f"[green]created[/green] {dst}")
+    console.print(t("init.copied", dst=dst))
 
 
-@app.command("bootstrap-kohya")
+@app.command("bootstrap-kohya", help=t("bootstrap.help"))
 def bootstrap_kohya(
     target: Annotated[
         Path,
-        typer.Option(help="Where to clone sd-scripts and create its venv."),
+        typer.Option(help=t("bootstrap.target_help")),
     ] = Path("./sd-scripts"),
     cuda: Annotated[
-        str, typer.Option("--cuda", help="CUDA wheel suffix (cu118 / cu121 / cu124 / cu128).")
+        str, typer.Option("--cuda", help=t("bootstrap.cuda_help"))
     ] = "cu124",
     torch_version: Annotated[
-        str, typer.Option("--torch", help="PyTorch version to install.")
+        str, typer.Option("--torch", help=t("bootstrap.torch_help"))
     ] = "2.6.0",
     torchvision_version: Annotated[
-        str, typer.Option("--torchvision", help="torchvision version to install.")
+        str, typer.Option("--torchvision", help=t("bootstrap.torchvision_help"))
     ] = "0.21.0",
     no_xformers: Annotated[
         bool,
-        typer.Option("--no-xformers", help="Skip the optional xformers install."),
+        typer.Option("--no-xformers", help=t("bootstrap.no_xformers_help")),
     ] = False,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Wipe target if it already exists."),
+        typer.Option("--force", help=t("bootstrap.force_help")),
     ] = False,
 ) -> None:
     """One-shot install of kohya-ss/sd-scripts (clone + venv + PyTorch + deps + xformers)."""
@@ -669,79 +675,75 @@ def bootstrap_kohya(
 
     if plan.target.exists() and any(plan.target.iterdir()):
         if not force:
-            err_console.print(
-                f"[red]target {plan.target} is not empty.[/red] "
-                "Pass --force to wipe it first, or pick another path with --target."
-            )
+            err_console.print(t("bootstrap.target_busy", target=plan.target))
             raise typer.Exit(code=1)
         installer.cleanup_partial(plan)
 
     console.print(
-        f"[bold]Installing kohya into[/bold] {plan.target}\n"
-        f"[dim]CUDA[/dim] {plan.cuda_version}  "
-        f"[dim]torch[/dim] {plan.torch_version}  "
-        f"[dim]xformers[/dim] {plan.install_xformers}"
+        t(
+            "bootstrap.banner",
+            target=plan.target,
+            cuda=plan.cuda_version,
+            torch=plan.torch_version,
+            xformers=plan.install_xformers,
+        )
     )
 
     try:
         installer.bootstrap(
             plan,
-            progress=lambda step: console.print(f"[cyan]>[/cyan] {step}"),
+            progress=lambda step: console.print(t("bootstrap.step", step=step)),
         )
     except BootstrapError as e:
-        err_console.print(
-            f"[red]bootstrap failed at step:[/red] {e.step} "
-            f"[dim](exit {e.returncode})[/dim]\n"
-            f"Run [bold]lorahub bootstrap-kohya --force[/bold] to retry from scratch."
-        )
+        err_console.print(t("bootstrap.failed", step=e.step, rc=e.returncode))
         raise typer.Exit(code=1) from e
 
-    console.print(f"[green]OK[/] kohya installed at {plan.target}")
-    console.print(
-        f"[dim]Set LORAHUB_KOHYA_SD_SCRIPTS={plan.target} (or copy .env.example to .env).[/dim]"
-    )
+    console.print(t("bootstrap.ok", target=plan.target))
+    console.print(t("bootstrap.env_hint", target=plan.target))
 
 
-@app.command("fetch-bangumi")
+@app.command("fetch-bangumi", help=t("bangumi.help"))
 def fetch_bangumi(
     repo: Annotated[
         str,
-        typer.Argument(help="BangumiBase repo, e.g. 'azurlaneanime' or 'BangumiBase/azurlaneanime'."),
+        typer.Argument(help=t("bangumi.repo_help")),
     ],
     character: Annotated[
         str | None,
-        typer.Argument(help="Numeric character id (e.g. '3'). Omit to list characters."),
+        typer.Argument(help=t("bangumi.character_help")),
     ] = None,
     output: Annotated[
         Path,
-        typer.Option(help="Where to unpack images and caption files."),
+        typer.Option(help=t("bangumi.output_help")),
     ] = Path("./datasets/bangumi"),
     limit: Annotated[
         int | None,
-        typer.Option(help="Cap on number of images. Useful for smoke testing."),
+        typer.Option(help=t("bangumi.limit_help")),
     ] = None,
     preview: Annotated[
         bool,
-        typer.Option(help="Download preview thumbnails 1-8 instead of dataset.zip."),
+        typer.Option(help=t("bangumi.preview_help")),
     ] = False,
     seed_captions: Annotated[
         bool,
         typer.Option(
             "--seed-captions/--no-seed-captions",
-            help="Seed empty .txt caption files next to each image. Default on.",
+            help=t("bangumi.seed_help"),
         ),
     ] = True,
 ) -> None:
     """Download a single character's images from a BangumiBase HF dataset."""
     if character is None:
         chars = bangumi_base.list_characters(repo)
-        console.print(f"[bold]{len(chars)} characters[/] in {repo}: {', '.join(chars)}")
+        console.print(
+            t("bangumi.list", n=len(chars), repo=repo, names=", ".join(chars))
+        )
         return
 
     if preview:
         for i in range(1, 9):
             path = bangumi_base.download_preview(repo, character, output / character, index=i)
-            console.print(f"[dim]preview {i}[/dim]  {path}")
+            console.print(t("bangumi.preview_line", i=i, path=path))
         return
 
     result = bangumi_base.fetch_character(
@@ -752,67 +754,63 @@ def fetch_bangumi(
         seed_captions=seed_captions,
         on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
     )
-    console.print(
-        f"[green]OK[/] {result.image_count} images -> {result.output_dir}"
-    )
+    console.print(t("bangumi.fetched", n=result.image_count, dir=result.output_dir))
     if result.license:
-        console.print(f"[dim]license: {result.license}[/dim]")
+        console.print(t("bangumi.license", license=result.license))
     if result.image_count and seed_captions:
-        console.print(
-            "[yellow]Seeded empty .txt captions - fill them in before training.[/yellow]"
-        )
+        console.print(t("bangumi.seed_warn"))
 
 
-@app.command()
+@app.command(help=t("tag.help"))
 def tag(
     directory: Annotated[
-        Path, typer.Argument(help="Directory of images to tag in place.")
+        Path, typer.Argument(help=t("tag.dir_help"))
     ],
     tagger: Annotated[
         str,
         typer.Option(
             "--tagger",
-            help="Which auto-tagger to use: 'wd14' (default) or 'joytag'.",
+            help=t("tag.tagger_help"),
         ),
     ] = "wd14",
     model: Annotated[
-        str, typer.Option(help="Hugging Face model id of the WD tagger (ignored for joytag).")
+        str, typer.Option(help=t("tag.model_help"))
     ] = "SmilingWolf/wd-eva02-large-tagger-v3",
     general_threshold: Annotated[
-        float, typer.Option("--general", help="WD14 general-tag score threshold.")
+        float, typer.Option("--general", help=t("tag.general_help"))
     ] = 0.35,
     character_threshold: Annotated[
-        float, typer.Option("--character", help="WD14 character-tag score threshold.")
+        float, typer.Option("--character", help=t("tag.character_help"))
     ] = 0.85,
     joytag_threshold: Annotated[
         float,
         typer.Option(
             "--joytag-threshold",
-            help="JoyTag predict threshold (single value across all tags).",
+            help=t("tag.joytag_help"),
         ),
     ] = 0.4,
     recursive: Annotated[
         bool,
-        typer.Option("--recursive", "-r", help="Recurse into subdirectories."),
+        typer.Option("--recursive", "-r", help=t("tag.recursive_help")),
     ] = False,
     overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Re-tag images that already have a non-empty caption.")
+        bool, typer.Option("--overwrite", help=t("tag.overwrite_help"))
     ] = False,
     underscores: Annotated[
-        bool, typer.Option("--underscores", help="Keep underscores in tag names instead of spaces.")
+        bool, typer.Option("--underscores", help=t("tag.underscores_help"))
     ] = False,
     include_character: Annotated[
         bool,
         typer.Option(
             "--include-character/--no-include-character",
-            help="Include character tags in the caption (WD14 only). Default on.",
+            help=t("tag.include_character_help"),
         ),
     ] = True,
     device: Annotated[
         str,
         typer.Option(
             "--device",
-            help="Runtime: 'auto' (CUDA if available), 'cuda' (force GPU), or 'cpu'.",
+            help=t("tag.device_help"),
         ),
     ] = "auto",
 ) -> None:
@@ -823,12 +821,12 @@ def tag(
     from lorahub.core.tagging.base import BaseTagger  # noqa: PLC0415
 
     if not directory.is_dir():
-        err_console.print(f"[red]not a directory: {directory}[/red]")
+        err_console.print(t("tag.not_a_dir", path=directory))
         raise typer.Exit(code=1)
 
     kind = tagger.lower()
     if kind not in {"wd14", "joytag"}:
-        err_console.print(f"[red]unknown tagger {tagger!r}; expected wd14 or joytag[/red]")
+        err_console.print(t("tag.unknown_tagger", name=tagger))
         raise typer.Exit(code=1)
 
     instance: BaseTagger
@@ -836,7 +834,7 @@ def tag(
         from lorahub.core.tagging.joytag import JoyTagger, JoyTagModelError  # noqa: PLC0415
 
         instance = JoyTagger(predict_threshold=joytag_threshold, device=device)
-        console.print("[dim]loading fancyfeast/joytag (first run downloads ~1.2GB)...[/dim]")
+        console.print(t("tag.loading_joytag"))
         try:
             instance.load()
         except JoyTagModelError as exc:
@@ -851,17 +849,17 @@ def tag(
             character_threshold=character_threshold,
             device=device,
         )
-        console.print(f"[dim]loading {model} (first run downloads ~400MB)...[/dim]")
+        console.print(t("tag.loading_wd", model=model))
         try:
             instance.load()
         except CudaUnavailableError as e:
             err_console.print(f"[red]{e}[/red]")
             raise typer.Exit(code=1) from e
 
-    console.print(f"[dim]running on {instance.active_provider}[/dim]")
+    console.print(t("tag.running_on", provider=instance.active_provider))
 
     def _on_progress(path: Path, _result: object) -> None:
-        console.print(f"[dim]tagged[/dim] {path.name}")
+        console.print(t("tag.tagged_one", name=path.name))
 
     results = instance.tag_directory(
         directory,
@@ -873,12 +871,12 @@ def tag(
         on_progress=_on_progress,
     )
 
-    console.print(f"[green]OK[/] tagged {len(results)} images")
+    console.print(t("tag.ok", n=len(results)))
 
 
 
 
-@app.command("anima-caption")
+@app.command("anima-caption", help=t("anima.help"))
 def anima_caption(
     directory: Annotated[
         Path,
@@ -933,13 +931,13 @@ def anima_caption(
     from lorahub.core.dataset.anima import AnimaDatasetTransformer  # noqa: PLC0415
 
     if not directory.is_dir():
-        err_console.print(f"[red]not a directory: {directory}[/red]")
+        err_console.print(t("tag.not_a_dir", path=directory))
         raise typer.Exit(code=1)
 
     def _split(value: str | None) -> list[str] | None:
         if value is None:
             return None
-        items = [t.strip() for t in value.split(",") if t.strip()]
+        items = [tok.strip() for tok in value.split(",") if tok.strip()]
         return items or None
 
     transformer = AnimaDatasetTransformer(
@@ -951,7 +949,7 @@ def anima_caption(
     )
 
     def _on_progress(path: Path) -> None:
-        console.print(f"[dim]rewrote[/dim] {path.name}")
+        console.print(t("anima.rewrote_one", name=path.name))
 
     written = transformer.transform_directory(
         directory,
@@ -960,13 +958,11 @@ def anima_caption(
         progress=_on_progress,
     )
     if not overwrite:
-        console.print(
-            "[yellow]dry run[/yellow] (pass --overwrite to actually rewrite captions)"
-        )
-    console.print(f"[green]OK[/] rewrote {written} caption(s)")
+        console.print(t("anima.dry_run"))
+    console.print(t("anima.ok", n=written))
 
 
-@app.command()
+@app.command(help=t("caption.help"))
 def caption(
     action: Annotated[
         str,
@@ -1069,10 +1065,10 @@ def caption(
     from lorahub.core.dataset.captions import CaptionPipeline  # noqa: PLC0415
 
     if action != "normalize":
-        err_console.print(f"[red]unknown caption action: {action}[/red]")
+        err_console.print(t("caption.unknown_action", action=action))
         raise typer.Exit(code=1)
     if not directory.is_dir():
-        err_console.print(f"[red]not a directory: {directory}[/red]")
+        err_console.print(t("tag.not_a_dir", path=directory))
         raise typer.Exit(code=1)
 
     pipeline = CaptionPipeline(
@@ -1090,7 +1086,7 @@ def caption(
     )
 
     def _on_progress(p: Path, done: int, total: int) -> None:
-        console.print(f"[dim]{done}/{total}[/dim] {p.name}")
+        console.print(t("caption.progress", done=done, total=total, name=p.name))
 
     written = pipeline.transform_directory(
         directory,
@@ -1098,7 +1094,7 @@ def caption(
         overwrite=overwrite,
         progress=_on_progress,
     )
-    console.print(f"[green]OK[/] rewrote {written} caption(s)")
+    console.print(t("caption.ok", n=written))
 
 
 def _parse_csv_list(raw: str) -> list[str]:

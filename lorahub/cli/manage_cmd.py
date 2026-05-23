@@ -142,10 +142,11 @@ def install() -> None:
             # their PATH first.
             if len(new_user_path) > 1024:
                 err_console.print(
-                    f"[red]新 PATH 长度 {len(new_user_path)} 超过 setx 1024 字符上限,"
-                    "继续将截断你的用户 PATH。[/]\n"
-                    f"请先精简用户 PATH(在 设置 → 环境变量),再重试 "
-                    f"`lorahub manage install`,或手动把 {shim_dir} 加进去。"
+                    t(
+                        "manage.install.path_too_long",
+                        length=len(new_user_path),
+                        shim_dir=shim_dir,
+                    )
                 )
                 raise typer.Exit(code=4)
             try:
