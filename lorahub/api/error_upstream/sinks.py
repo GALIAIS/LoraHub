@@ -420,22 +420,87 @@ class GiteaIssueSink:
         status, body = _http(
             url, headers=self._headers(), timeout_s=self.timeout_s,
         )
-        if status == 200:
-            # We don't care about the issue list itself; a 200 with a
-            # JSON / list response means the token is valid + has
-            # ``read:issue`` against this repo, which is the precondition
-            # for ``send`` to work. We thread the repo HTML URL back
-            # for the UI even though the API didn't return it.
+        if status != 200:
+            retryable = status >= 500 or status == -1
+            return SendResult(
+                ok=False,
+                error=f"Gitea health probe failed ({status}): {body!r}"[:300],
+                retryable=retryable,
+            )
+        # Bonus check: ``git.galiais.com`` was observed running on a
+        # database whose column charset isn't utf8mb4 — any non-ASCII
+        # text gets silently rewritten to ``?`` server-side. The probe
+        # uploads a *throwaway* issue with a CJK marker, reads it back,
+        # and warns when the marker survived as question marks. We
+        # delete the probe issue regardless of outcome so it doesn't
+        # pollute the registry. The check is best-effort: if any of
+        # these calls fails (token cannot create / read / delete) the
+        # connectivity result is still ``ok`` — only the encoding hint
+        # is dropped.
+        encoding_hint = self._probe_unicode_round_trip()
+        repo_html_url = (
+            f"{self.base_url.rstrip('/')}/{self.repo_path.strip().strip('/')}"
+        )
+        if encoding_hint:
             return SendResult(
                 ok=True,
-                url=f"{self.base_url.rstrip('/')}/{self.repo_path.strip().strip('/')}",
+                url=repo_html_url,
+                error=encoding_hint,  # surface as a warning in the UI
             )
-        retryable = status >= 500 or status == -1
-        return SendResult(
-            ok=False,
-            error=f"Gitea health probe failed ({status}): {body!r}"[:300],
-            retryable=retryable,
+        return SendResult(ok=True, url=repo_html_url)
+
+    def _probe_unicode_round_trip(self) -> str:
+        """Round-trip a CJK marker through the issues API.
+
+        Returns an explanation string when the round-trip is lossy —
+        i.e. the database column can't hold non-ASCII text and the
+        marker comes back as ``?`` characters. Empty string means
+        either the round-trip survived intact or the probe couldn't
+        complete (network blip / quota / lack of delete permission)
+        and we'd rather stay quiet than false-alarm.
+        """
+        marker = "你好-Unicode-Probe"
+        body = json.dumps(
+            {
+                "title": "lorahub-encoding-probe (auto-delete)",
+                "body": marker,
+            }
+        ).encode("utf-8")
+        post_status, post_body = _http(
+            f"{self._repo_url()}/issues",
+            method="POST",
+            headers=self._headers(),
+            body=body,
+            timeout_s=self.timeout_s,
         )
+        if post_status not in (200, 201) or not isinstance(post_body, dict):
+            return ""
+        number = post_body.get("number")
+        stored_body = str(post_body.get("body") or "")
+        # Cleanup first (best-effort) so an exception in the assertion
+        # doesn't leave the probe issue dangling.
+        if isinstance(number, int):
+            close_payload = json.dumps({"state": "closed"}).encode("utf-8")
+            _http(
+                f"{self._repo_url()}/issues/{number}",
+                method="PATCH",
+                headers=self._headers(),
+                body=close_payload,
+                timeout_s=self.timeout_s,
+            )
+            _http(
+                f"{self._repo_url()}/issues/{number}",
+                method="DELETE",
+                headers=self._headers(),
+                timeout_s=self.timeout_s,
+            )
+        if marker not in stored_body:
+            return (
+                "连通正常,但服务端把非 ASCII 字符替换为 '?'(可能数据库未配置 "
+                "utf8mb4 / 列编码不支持中文)。issue 标题与正文中的中文与符号会丢失。"
+                "请联系 Gitea 管理员升级数据库编码。"
+            )
+        return ""
 
     # ------------------------------------------------------------ #
     # Internals
@@ -554,11 +619,29 @@ class GiteaIssueSink:
             url, method="POST", headers=self._headers(),
             body=body, timeout_s=self.timeout_s,
         )
+        # Defensive validation. Gitea has been observed to return 200
+        # with a stub body when the token lacks the right scopes —
+        # in that case ``number`` is still echoed but no issue lands
+        # in the repo. We treat a missing ``html_url`` as a hard
+        # failure so the dispatcher records ``failed`` instead of a
+        # silent ``sent``.
         if status in (200, 201) and isinstance(payload, dict):
+            number = payload.get("number")
+            html_url = payload.get("html_url")
+            if number is None or not html_url:
+                return SendResult(
+                    ok=False,
+                    error=(
+                        f"Gitea accepted POST but did not echo a usable "
+                        f"issue body — token may lack ``read:issue`` "
+                        f"scope. Response: {payload!r}"
+                    )[:500],
+                    retryable=False,
+                )
             return SendResult(
                 ok=True,
-                upstream_id=str(payload.get("number") or ""),
-                url=str(payload.get("html_url") or ""),
+                upstream_id=str(number),
+                url=str(html_url),
             )
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(

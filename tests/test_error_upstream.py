@@ -407,13 +407,47 @@ def test_gitea_health_check_hits_issues_endpoint(
 
     def fake_http(url: str, **kw: Any):
         captured.append(url)
-        return 200, []
+        method = kw.get("method", "GET")
+        if "/issues?" in url and method == "GET":
+            return 200, []
+        # Encoding probe round-trip: pretend the marker survives so
+        # this test only exercises the "all good" branch.
+        if "/issues" in url and method == "POST":
+            return 201, {"number": 9999, "body": "你好-Unicode-Probe"}
+        if "/issues/9999" in url and method in ("PATCH", "DELETE"):
+            return 200, {}
+        return 404, "unexpected"
 
     monkeypatch.setattr(sinks_module, "_http", fake_http)
     res = gitea_sink.health_check()
     assert res.ok is True
     assert any("/issues?" in u for u in captured)
     assert all("/api/v1/repos/space/proj" in u for u in captured)
+
+
+def test_gitea_health_check_warns_on_lossy_encoding(
+    monkeypatch: pytest.MonkeyPatch, gitea_sink: GiteaIssueSink,
+) -> None:
+    """When the server replaces non-ASCII with ``?`` (database not on
+    utf8mb4) the probe should still report ``ok=True`` (connectivity
+    works) but tag a warning so the UI can surface the limitation.
+    """
+    def fake_http(url: str, **kw: Any):
+        method = kw.get("method", "GET")
+        if "/issues?" in url and method == "GET":
+            return 200, []
+        if url.endswith("/issues") and method == "POST":
+            # Server returned the issue but mangled the body — the
+            # exact shape git.galiais.com was observed to produce.
+            return 201, {"number": 9999, "body": "????-Unicode-Probe"}
+        if "/issues/9999" in url:
+            return 200, {}
+        return 404, "unexpected"
+
+    monkeypatch.setattr(sinks_module, "_http", fake_http)
+    res = gitea_sink.health_check()
+    assert res.ok is True
+    assert "?" in (res.error or "") or "utf8" in (res.error or "")
 
 
 def test_gitea_repo_path_is_not_url_encoded(gitea_sink: GiteaIssueSink) -> None:
