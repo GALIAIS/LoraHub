@@ -40,9 +40,19 @@ import {
   rollingQuartiles,
   trailingSlope,
 } from "./loss-stats"
+import { useAnimatedNumber } from "./use-animated-number"
 
 interface Props {
   metrics: JobMetricsResponse | null
+  /**
+   * Estimated training progress in [0..1]. Used to make the
+   * convergence + stage tones context-aware: a plateau in the last
+   * 30% of a run is a good thing (the model has settled); a plateau
+   * in the first 30% is bad (nothing is being learned). Pass null
+   * when total steps is unknown — colours fall back to a neutral
+   * baseline.
+   */
+  progress?: number | null
 }
 
 interface ConvergenceVerdict {
@@ -408,7 +418,7 @@ function classifyStage(
 /* component                                                              */
 /* ---------------------------------------------------------------------- */
 
-export function EffectivenessPanel({ metrics }: Props) {
+export function EffectivenessPanel({ metrics, progress }: Props) {
   const points = useMemo<{ step: number; loss: number }[]>(() => {
     return (metrics?.loss ?? [])
       .filter(
@@ -446,6 +456,31 @@ export function EffectivenessPanel({ metrics }: Props) {
   // Forgetting bar: preserved in [0..1] is itself the fill.
   const forgetFill = forgetting.latest == null ? 0 : clamp(forgetting.latest, 0, 1)
 
+  // Context-aware tones for convergence + stage. A plateau in the
+  // last 30% of a run is a *positive* signal (the model converged);
+  // the same plateau in the first 30% is a *warning* (nothing is
+  // being learned). When progress is unknown, fall back to the
+  // state-machine defaults.
+  const convergenceTone: Tone = (() => {
+    if (!convergence) return "neutral"
+    if (convergence.state === "improving") return "positive"
+    if (convergence.state === "diverging") return "negative"
+    // plateau
+    if (progress != null && progress >= 0.7) return "positive"
+    if (progress != null && progress < 0.3) return "negative"
+    return "neutral"
+  })()
+  const stageTone: Tone = (() => {
+    if (stage.key === "diverging") return "negative"
+    if (stage.key === "warmup" || stage.key === "converging") return "positive"
+    if (stage.key === "plateau") {
+      if (progress != null && progress >= 0.7) return "positive"
+      if (progress != null && progress < 0.3) return "negative"
+      return "neutral"
+    }
+    return "neutral"
+  })()
+
   return (
     <div>
       <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2 px-0.5">
@@ -455,19 +490,17 @@ export function EffectivenessPanel({ metrics }: Props) {
         <InsightCard
           icon={<Activity className="size-3.5" />}
           title="收敛趋势"
-          tone={
-            convergence?.state === "improving"
-              ? "positive"
-              : convergence?.state === "diverging"
-                ? "negative"
-                : "neutral"
-          }
+          tone={convergenceTone}
           headline={
             convergence
               ? `${convergence.state === "diverging" ? "+" : "−"}${Math.abs(
                   convergence.dropPct,
                 ).toFixed(1)}%`
               : "—"
+          }
+          headlineNumber={convergence?.dropPct ?? null}
+          formatHeadline={(v) =>
+            `${v < 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}%`
           }
           caption={
             convergence
@@ -503,6 +536,8 @@ export function EffectivenessPanel({ metrics }: Props) {
               ? `SNR ${stability.snr >= 0 ? "+" : ""}${stability.snr.toFixed(2)}`
               : "—"
           }
+          headlineNumber={stability?.snr ?? null}
+          formatHeadline={(v) => `SNR ${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
           caption={
             stability
               ? `${stabilityLabel(stability.state)} · 斜率 ${stability.slope.toExponential(1)} · IQR ${fmtFloat(stability.iqr)} · 近 ${stability.windowSamples} 步 · CoV ${stability.cov.toFixed(2)}`
@@ -537,6 +572,10 @@ export function EffectivenessPanel({ metrics }: Props) {
             overfit.gap != null
               ? `gap ${overfit.gap >= 0 ? "+" : ""}${overfit.gap.toFixed(4)}`
               : "—"
+          }
+          headlineNumber={overfit.gap ?? null}
+          formatHeadline={(v) =>
+            `gap ${v >= 0 ? "+" : ""}${v.toFixed(4)}`
           }
           caption={
             overfit.trainLatest != null && overfit.valLatest != null
@@ -579,6 +618,12 @@ export function EffectivenessPanel({ metrics }: Props) {
               ? "无下降事件"
               : `${lrResponse.meanImprovementPct >= 0 ? "+" : ""}${lrResponse.meanImprovementPct.toFixed(1)}%`
           }
+          headlineNumber={
+            lrResponse.events.length === 0
+              ? null
+              : lrResponse.meanImprovementPct
+          }
+          formatHeadline={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`}
           caption={
             lrResponse.events.length === 0
               ? "学习率尚未发生显著下降, 或后端未上报 lr"
@@ -622,6 +667,10 @@ export function EffectivenessPanel({ metrics }: Props) {
               ? "未配置"
               : `${(forgetting.latest * 100).toFixed(0)}%`
           }
+          headlineNumber={
+            forgetting.latest == null ? null : forgetting.latest * 100
+          }
+          formatHeadline={(v) => `${v.toFixed(0)}%`}
           caption={
             forgetting.state === "no-data"
               ? "在 sample_prompts 中给中性 prompt 加 forget/neutral/preserve 标记后启用"
@@ -655,6 +704,7 @@ export function EffectivenessPanel({ metrics }: Props) {
         />
         <StageCard
           stage={stage.key}
+          stageTone={stageTone}
           reason={stage.reason}
           stagger={480}
           rationale={[
@@ -668,6 +718,9 @@ export function EffectivenessPanel({ metrics }: Props) {
             losses.length < 32
               ? `当前样本 ${losses.length} 点 (< 32) 时下降态默认为热身阶段`
               : `当前样本 ${losses.length} 点`,
+            progress != null
+              ? `训练进度: ${(progress * 100).toFixed(0)}%, 用于上下文感知配色`
+              : "训练进度未知, 颜色按状态默认值",
           ]}
         />
       </div>
@@ -693,11 +746,19 @@ const TONE_TEXT: Record<Tone, string> = {
   negative: "text-red-600 dark:text-red-400",
 }
 
+const STAGE_BG_FROM_TONE: Record<Tone, string> = {
+  positive: "from-emerald-500/15 to-emerald-500/0",
+  neutral: "from-amber-500/15 to-amber-500/0",
+  negative: "from-red-500/15 to-red-500/0",
+}
+
 function InsightCard({
   icon,
   title,
   tone,
   headline,
+  headlineNumber,
+  formatHeadline,
   caption,
   fill,
   stagger,
@@ -708,6 +769,15 @@ function InsightCard({
   title: string
   tone: Tone
   headline: string
+  /**
+   * Optional numeric value driving the headline. When supplied, the
+   * card tweens this number on update with `useAnimatedNumber` and
+   * uses ``formatHeadline`` to render the current frame. Falls back
+   * to the static ``headline`` string when null/undefined or when
+   * the format function isn't provided.
+   */
+  headlineNumber?: number | null
+  formatHeadline?: (v: number) => string
   caption: string
   fill: number
   stagger: number
@@ -720,6 +790,18 @@ function InsightCard({
    */
   lowConfidence?: boolean
 }) {
+  const animated = useAnimatedNumber(
+    typeof headlineNumber === "number" && Number.isFinite(headlineNumber)
+      ? headlineNumber
+      : 0,
+  )
+  const animatedFill = useAnimatedNumber(fill, 280)
+  const renderHeadline =
+    typeof headlineNumber === "number" &&
+    Number.isFinite(headlineNumber) &&
+    formatHeadline
+      ? formatHeadline(animated)
+      : headline
   return (
     <Card
       className="analysis-fade-in-stagger overflow-hidden"
@@ -733,12 +815,12 @@ function InsightCard({
       </CardHeader>
       <CardContent className="p-3.5 space-y-2">
         <div className={cn("text-[18px] font-semibold tracking-tight tabular-nums", TONE_TEXT[tone])}>
-          {headline}
+          {renderHeadline}
         </div>
         <div className="h-1.5 rounded-full bg-muted/60 overflow-hidden">
           <div
-            className={cn("analysis-bar-fill h-full rounded-full", TONE_FILL[tone])}
-            style={{ width: `${(fill * 100).toFixed(1)}%` }}
+            className={cn("analysis-bar-fill h-full rounded-full transition-[background-color] duration-300", TONE_FILL[tone])}
+            style={{ width: `${(animatedFill * 100).toFixed(1)}%` }}
           />
         </div>
         <div className="text-[11px] text-muted-foreground leading-relaxed">
@@ -773,15 +855,30 @@ function InsightCard({
 
 function StageCard({
   stage,
+  stageTone,
   reason,
   stagger,
   rationale,
 }: {
   stage: StageKey
+  /**
+   * Optional tone override that lets the parent inject context-aware
+   * colour (e.g. plateau in the late phase = positive, plateau in
+   * the early phase = negative). Falls back to the per-stage default.
+   */
+  stageTone?: Tone
   reason: string
   stagger: number
   rationale?: string[]
 }) {
+  // Translate the tone override into stage-styled text + bg classes.
+  // Without an override we keep the per-stage palette unchanged.
+  const textCls = stageTone
+    ? TONE_TEXT[stageTone]
+    : STAGE_TONES[stage]
+  const bgCls = stageTone
+    ? STAGE_BG_FROM_TONE[stageTone]
+    : STAGE_BG[stage]
   return (
     <Card
       className="analysis-fade-in-stagger overflow-hidden relative"
@@ -790,20 +887,20 @@ function StageCard({
       <div
         className={cn(
           "pointer-events-none absolute inset-0 bg-gradient-to-br opacity-70",
-          STAGE_BG[stage],
+          bgCls,
         )}
         aria-hidden
       />
       <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2 relative">
         <CardTitle className="text-[10.5px] tracking-[0.16em] text-foreground/85 font-mono inline-flex items-center gap-1.5">
-          <span className={cn("opacity-80", STAGE_TONES[stage])}>
+          <span className={cn("opacity-80", textCls)}>
             <Sparkles className="size-3.5" />
           </span>
           训练阶段
         </CardTitle>
       </CardHeader>
       <CardContent className="p-3.5 space-y-2 relative">
-        <div className={cn("text-[18px] font-semibold tracking-tight", STAGE_TONES[stage])}>
+        <div className={cn("text-[18px] font-semibold tracking-tight", textCls)}>
           {STAGE_LABELS[stage]}
         </div>
         <StageDots stage={stage} />

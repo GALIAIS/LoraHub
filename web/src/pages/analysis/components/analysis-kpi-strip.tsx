@@ -52,10 +52,22 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
     <div className="px-7 py-2.5 border-b border-border/60 bg-muted/25">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] tabular-nums text-foreground/85">
         <Stat icon={<Hourglass className="size-3" />} label="进度">
-          <span className="font-semibold">{summary.step ?? "—"}</span>
+          {summary.step != null ? (
+            <span className="font-semibold">{summary.step}</span>
+          ) : (
+            <Missing reason="尚未收到 step 事件" label="—" />
+          )}
           <span className="text-muted-foreground/80">
             {" "}
-            / {summary.totalSteps ?? "?"}
+            /{" "}
+            {summary.totalSteps != null ? (
+              summary.totalSteps
+            ) : (
+              <Missing
+                reason="后端未上报 total_steps, 配置中也无法推导"
+                label="?"
+              />
+            )}
             {summary.percent != null && (
               <span className="ml-1 text-foreground/70">
                 {summary.percent.toFixed(0)}%
@@ -84,29 +96,36 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
               )}
             </>
           ) : (
-            "—"
+            <Missing reason="尚未收到任何 loss 采样" label="—" />
           )}
         </Stat>
-        {summary.valLatest != null && (
-          <Stat icon={<ArrowDownRight className="size-3" />} label="验证">
-            <span className="font-semibold">
-              {summary.valLatest.toFixed(4)}
-            </span>
-            {summary.valGap != null && (
-              <span
-                className={cn(
-                  "ml-1.5",
-                  overfitWarn
-                    ? "text-red-600 dark:text-red-400"
-                    : "text-muted-foreground",
-                )}
-              >
-                Δ {summary.valGap > 0 ? "+" : ""}
-                {summary.valGap.toFixed(4)}
+        <Stat icon={<ArrowDownRight className="size-3" />} label="验证">
+          {summary.valLatest != null ? (
+            <>
+              <span className="font-semibold">
+                {summary.valLatest.toFixed(4)}
               </span>
-            )}
-          </Stat>
-        )}
+              {summary.valGap != null && (
+                <span
+                  className={cn(
+                    "ml-1.5",
+                    overfitWarn
+                      ? "text-red-600 dark:text-red-400"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  Δ {summary.valGap > 0 ? "+" : ""}
+                  {summary.valGap.toFixed(4)}
+                </span>
+              )}
+            </>
+          ) : (
+            <Missing
+              reason="未配置验证集 (在 schedule 中开启 validate_every_n_epochs)"
+              label="未启用"
+            />
+          )}
+        </Stat>
         <Stat icon={<Save className="size-3" />} label="检查点">
           {summary.checkpoints}
         </Stat>
@@ -114,7 +133,11 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
           {summary.samples}
         </Stat>
         <Stat icon={<ListChecks className="size-3" />} label="用时">
-          {fmtDuration(summary.wallSec)}
+          {summary.wallSec != null ? (
+            fmtDuration(summary.wallSec)
+          ) : (
+            <Missing reason="任务尚未产生第一步, 无法计算用时" label="—" />
+          )}
           {summary.etaSec != null && summary.etaSec > 0 && (
             <span className="text-muted-foreground/80">
               {" "}
@@ -151,6 +174,29 @@ function Stat({
         {label}
       </span>
       <span className="text-foreground/90">{children}</span>
+    </span>
+  )
+}
+
+/**
+ * Compact placeholder for missing values. Carries a `title` tooltip
+ * with the reason so the user knows whether the data is genuinely
+ * absent (not yet sampled), unsupported (backend doesn't emit it) or
+ * filtered out.
+ */
+function Missing({
+  reason,
+  label = "—",
+}: {
+  reason: string
+  label?: string
+}) {
+  return (
+    <span
+      className="cursor-help text-muted-foreground/70 underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
+      title={reason}
+    >
+      {label}
     </span>
   )
 }

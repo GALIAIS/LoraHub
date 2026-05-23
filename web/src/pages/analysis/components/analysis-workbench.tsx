@@ -377,6 +377,30 @@ export function AnalysisWorkbench({
   }, [checkpointMarkers, changepoints.changepointSteps, metrics.data, xMode])
 
   const totalPoints = metrics.data?.loss?.length ?? 0
+  // Estimated training progress in [0..1] for context-aware tone
+  // selection in the effectiveness panel. Prefers the trainer-reported
+  // total_steps over the config-derived fallback.
+  const progress: number | null = useMemo(() => {
+    const lossArr = metrics.data?.loss ?? []
+    const lastStep = lossArr.length
+      ? lossArr[lossArr.length - 1].step
+      : null
+    const totalSteps =
+      typeof metrics.data?.total_steps === "number" &&
+      metrics.data.total_steps > 0
+        ? metrics.data.total_steps
+        : (fallbackTotalSteps ?? null)
+    if (
+      lastStep == null ||
+      totalSteps == null ||
+      totalSteps <= 0 ||
+      !Number.isFinite(lastStep) ||
+      !Number.isFinite(totalSteps)
+    ) {
+      return null
+    }
+    return Math.max(0, Math.min(1, lastStep / totalSteps))
+  }, [metrics.data, fallbackTotalSteps])
   const overfit = metrics.data?.overfit_signal
 
   // Bottom tabs default + counts (used in tab labels).
@@ -416,7 +440,10 @@ export function AnalysisWorkbench({
         {/* Effectiveness insights — convergence / stability / overfit /
             stage. Sits above the chart so users get the verdict before
             squinting at the curve. */}
-        <EffectivenessPanel metrics={metrics.data ?? null} />
+        <EffectivenessPanel
+          metrics={metrics.data ?? null}
+          progress={progress}
+        />
 
         {/* PELT-derived stage timeline — colour-coded segments + slope
             annotation. Render only when at least one changepoint was
