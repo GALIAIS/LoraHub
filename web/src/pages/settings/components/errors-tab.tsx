@@ -26,7 +26,7 @@ import {
   setReportingEnabled,
 } from "@/lib/error-reporter"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -189,16 +189,18 @@ export function ErrorsTab() {
               <RefreshCw className={`size-3 ${list.isFetching ? "animate-spin" : ""}`} />
               刷新
             </Button>
-            <Button size="sm" variant="outline" asChild>
-              <a
-                href={errorReportsApi.exportUrl()}
-                download
-                className="gap-1.5 inline-flex items-center"
-              >
-                <Download className="size-3" />
-                导出 NDJSON
-              </a>
-            </Button>
+            <a
+              href={errorReportsApi.exportUrl()}
+              download
+              className={buttonVariants({
+                size: "sm",
+                variant: "outline",
+                className: "gap-1.5 inline-flex items-center",
+              })}
+            >
+              <Download className="size-3" />
+              导出 NDJSON
+            </a>
             <Button
               size="sm"
               variant="outline"
@@ -404,17 +406,19 @@ function DetailPanel({
               {previewOpen ? "收起脱敏预览" : "预览将发送内容"}
             </Button>
             {item.upstream_url && (
-              <Button
-                size="sm"
-                variant="outline"
-                asChild
-                className="gap-1.5"
+              <a
+                href={item.upstream_url}
+                target="_blank"
+                rel="noreferrer"
+                className={buttonVariants({
+                  size: "sm",
+                  variant: "outline",
+                  className: "gap-1.5",
+                })}
               >
-                <a href={item.upstream_url} target="_blank" rel="noreferrer">
-                  <ExternalLink className="size-3" />
-                  打开远端
-                </a>
-              </Button>
+                <ExternalLink className="size-3" />
+                打开远端
+              </a>
             )}
             <Button
               size="sm"
