@@ -347,6 +347,39 @@ def test_apply_with_force_passes_through_detached_head(
     assert any(c == ["git", "checkout", "--force", "origin/main"] for c in calls), calls
 
 
+def test_apply_force_clean_excludes_user_owned_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``--force`` must never wipe untracked datasets/, runs/, models/, etc.
+
+    Regression for the case where ``git clean -fd`` only had ``-e configs``.
+    Untracked user artefacts living under the other user-owned prefixes
+    (datasets/, runs/, models/, output/, .env*, external/anima_lora/output)
+    must all be passed through as ``-e <prefix>`` so a forced upgrade
+    can't rm them.
+    """
+    repo = _make_repo(tmp_path)
+    calls = _stub_apply(monkeypatch, repo)
+    events, emit = _capturing_emit()
+
+    su.apply(channel="main", build=False, force=True, progress=emit)
+
+    clean_calls = [c for c in calls if c[:3] == ["git", "clean", "-fd"]]
+    assert clean_calls, calls
+    clean_argv = clean_calls[0]
+    excludes = {
+        clean_argv[i + 1]
+        for i, tok in enumerate(clean_argv[:-1])
+        if tok == "-e"
+    }
+    expected = {
+        prefix.rstrip("/").replace("\\", "/")
+        for prefix in su._USER_OWNED_PREFIXES
+    }
+    missing = expected - excludes
+    assert not missing, f"clean -fd missing user-owned excludes: {missing}"
+
+
 def test_apply_restores_configs_when_pip_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

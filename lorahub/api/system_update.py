@@ -705,13 +705,30 @@ def apply(
             emit(
                 "git", "warn",
                 "force=True: discarding local changes (git reset --hard + clean -fd); "
-                "configs/ is preserved by the snapshot/restore step",
+                "user-owned paths (configs/, runs/, models/, output/, datasets/, "
+                ".env*, external/anima_lora/{output,post_image_dataset}) are "
+                "preserved via -e excludes",
             )
             _stream_subprocess(
                 ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
             )
+            # ``git clean -fd`` only deletes *untracked* files, so a tracked
+            # path that lives behind a user-owned prefix (e.g. configs/*.yaml)
+            # is already safe — we still pass it as an exclude so a future
+            # ``.gitignore`` change that un-tracks the directory doesn't
+            # silently turn the upgrade into ``rm -rf``. The big risk paths
+            # are the ones a user creates fresh: datasets/, models/, output/,
+            # runs/ — those *aren't* in every .gitignore at every commit, so
+            # we need explicit excludes here to keep ``force`` from wiping
+            # local artefacts the user has produced since the last sync.
+            clean_cmd: list[str] = ["git", "clean", "-fd"]
+            for prefix in _USER_OWNED_PREFIXES:
+                # Pathspec form: drop the trailing slash, use forward slashes.
+                spec = prefix.rstrip("/").replace("\\", "/")
+                if spec:
+                    clean_cmd.extend(["-e", spec])
             _stream_subprocess(
-                ["git", "clean", "-fd", "-e", "configs"], cwd=cwd, phase="git", emit=emit,
+                clean_cmd, cwd=cwd, phase="git", emit=emit,
             )
         elif _has_any_local_changes(cwd):
             # Stash + pop to preserve local edits across checkout.
