@@ -235,6 +235,7 @@ export interface ConfigFormValue {
     prompts?: SamplingPromptValue[]
     resolution?: [number, number] | number[]
     seed?: number
+    triggerWord?: string | null
     outputs?: SamplingOutputsValue
   }
   output?: {

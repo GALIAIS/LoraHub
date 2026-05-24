@@ -8,6 +8,7 @@ import {
   ResolutionInput,
   Row,
   SeedInput,
+  TextInput,
   ToggleSwitch,
 } from "../widgets"
 import { PromptsDialog } from "./prompts-dialog"
@@ -118,6 +119,18 @@ export const SamplingFields = memo(function SamplingFields({
             <SeedInput
               value={v.seed ?? -1}
               onChange={(n) => set(["sampling", "seed"], n)}
+            />
+          </Row>
+
+          <Row
+            label="触发词"
+            description="提示词里写 ${TRIGGER} 占位符，启动训练时自动替换为此值。留空 → 自动从 dataset 的 .txt caption 推断（取第一个 token 的众数，过滤 1girl/masterpiece 等通用标签）；都拿不到 → 占位符与邻接的逗号一起去掉。"
+          >
+            <TextInput
+              value={v.triggerWord ?? ""}
+              onChange={(s) => set(["sampling", "triggerWord"], s || null)}
+              placeholder="例如 thornsdance（留空自动推断）"
+              className="w-72"
             />
           </Row>
 
