@@ -144,12 +144,25 @@ def _unpad_static_shape(x, pad_info):
     the returned tensor's shape as the only signal crossing back into the
     compile zone — downstream ops (final_layer, unpatchify) then pick up
     symbolic T/H/W from the tensor itself, not from Python ints.
+
+    Same kernel is used by the native-flatten path
+    (:func:`_unflatten_native_shape`), aliased below — both modes flatten
+    the patch grid into a fake-5D ``(B, 1, seq_len, 1, D)`` tensor; only
+    the *padding* differs (static_pad rounds seq_len up to 4096, native
+    leaves it at the bucket's exact token count).
     """
     T_s, H_s, W_s, seq_len = pad_info
     x = x.squeeze(3).squeeze(1)
     x = x[:, :seq_len, :]
     x = x.unflatten(1, (T_s, H_s, W_s))
     return x
+
+
+# Native-flatten reuses the same unflatten kernel — semantically identical
+# to the static_pad path's unpad (see :func:`_unpad_static_shape` for why).
+# Aliased rather than defined twice so a future fix to one tracks the
+# other automatically.
+_unflatten_native_shape = _unpad_static_shape
 
 
 from library.log import setup_logging  # noqa: E402
@@ -1232,6 +1245,21 @@ class Anima(nn.Module):
         # Set via set_static_token_count(). None = disabled (original behavior).
         self.static_token_count: Optional[int] = None
 
+        # Native-flatten mode (alternative to static_token_count). Flipped
+        # True by ``compile_blocks(native_flatten=True)``: the forward
+        # flattens each bucket's patch sequence to a fake-5D
+        # ``(B, 1, seq_len, 1, D)`` shape *without* padding, so dynamo
+        # keys the block graph on token count alone. Combined with the
+        # 4032+4200 two-family bucket table, the block stack compiles to
+        # exactly two graphs with zero padding — flash attention sees no
+        # padded tokens, no waste, no pad-leak risk.
+        #
+        # ``static_token_count`` and ``_native_flatten`` are mutually
+        # exclusive in practice — both flatten to fake-5D, but the
+        # padding strategy differs (4096-pad vs none). compile_blocks()
+        # asserts at most one is enabled.
+        self._native_flatten: bool = False
+
         self.build_patch_embed()
         self.build_pos_embed()
         self.use_adaln_lora = use_adaln_lora
@@ -1346,7 +1374,12 @@ class Anima(nn.Module):
         """
         self.static_token_count = count
 
-    def compile_blocks(self, backend: str = "inductor", mode: Optional[str] = None):
+    def compile_blocks(
+        self,
+        backend: str = "inductor",
+        mode: Optional[str] = None,
+        native_flatten: bool = False,
+    ):
         """torch.compile each block's _forward individually.
 
         Compiles _forward (the actual attention/MLP computation) rather than
@@ -1357,7 +1390,46 @@ class Anima(nn.Module):
 
         ``mode`` maps to torch.compile's inductor preset (e.g. ``reduce-overhead``
         to enable per-block CUDAGraphs). ``None`` leaves it unset (inductor default).
+
+        ``native_flatten=True`` enables the native-shape flattening path
+        ported from upstream commit 75e121d. The forward flattens each
+        bucket's patch sequence to a fake-5D ``(B, 1, seq_len, 1, D)``
+        shape **without padding**, so dynamo keys the block graph on
+        token count alone. Combined with the 4032+4200 two-family bucket
+        table this compiles to exactly two block graphs (vs ~24 graphs
+        per resolution in the non-flattened path), giving ~2x training
+        throughput on RTX Pro 6000 / 4090 class GPUs that bottleneck on
+        compile guard checks rather than raw FLOPs.
+
+        Mutually exclusive with ``set_static_token_count`` (both flatten
+        to fake-5D — the difference is just whether seq_len is padded or
+        native). Asserts here so the misuse fails loudly at compile time
+        rather than silently double-flattening at every forward.
         """
+        if native_flatten and self.static_token_count is not None:
+            raise RuntimeError(
+                "compile_blocks(native_flatten=True) is mutually exclusive with "
+                f"set_static_token_count({self.static_token_count}). Pick one: "
+                "either drop the static_token_count to use native shapes "
+                "(faster on high-throughput GPUs, requires the 4032+4200 "
+                "bucket table) or keep static_token_count and call "
+                "compile_blocks() without native_flatten=True."
+            )
+        if native_flatten:
+            self._native_flatten = True
+            # Bump dynamo cache size so per-token-count + per-requires_grad
+            # specializations all fit. Two token-count families × ~2 req-grad
+            # × ~5 specialization slop ≈ 20; floor at the existing limit so a
+            # caller that pre-bumped (e.g. SPD distill, multi-resolution)
+            # isn't clobbered back down.
+            try:
+                import torch._dynamo as _dynamo  # noqa: PLC0415
+
+                _dynamo.config.cache_size_limit = max(
+                    _dynamo.config.cache_size_limit, 24
+                )
+            except ImportError:
+                pass
         compile_kwargs = {"backend": backend, "dynamic": False}
         if mode is not None:
             compile_kwargs["mode"] = mode
@@ -1365,7 +1437,7 @@ class Anima(nn.Module):
             block._forward = torch.compile(block._forward, **compile_kwargs)
         print(
             f"Anima: compiled {len(self.blocks)} block._forward with "
-            f"backend={backend}, mode={mode}"
+            f"backend={backend}, mode={mode}, native_flatten={self._native_flatten}"
         )
 
     def compile_core(self, backend: str = "inductor", mode: Optional[str] = None):
@@ -1663,13 +1735,37 @@ class Anima(nn.Module):
             w_offset=w_offset,
         )
 
-        # --- Static-shape padding: flatten, pad to fixed token count, reshape to fake-5D ---
-        # This makes ALL block inputs shape-identical across buckets, eliminating
-        # torch.compile recompilation.  The fake-5D shape (B, 1, target, 1, D) is
-        # compatible with existing Block code because rearrange("b t h w d -> b (t h w) d")
-        # with t=1, w=1 produces the same flat sequential order as the original.
+        # --- Shape-collapse to fake-5D ---
+        # The block stack always sees a flat (B, 1, seq_len, 1, D) tensor;
+        # ``rearrange("b t h w d -> b (t h w) d")`` with t=1, w=1 produces
+        # the same sequential order as the original 5D grid. Two paths
+        # converge here:
+        #
+        #   * static_token_count: pad seq_len up to a fixed target (4096
+        #     by default) so every bucket compiles to ONE block graph at
+        #     the cost of always running 4096 tokens through attention
+        #     even on smaller buckets, plus pad-mask gymnastics in flex.
+        #
+        #   * native_flatten (compile_blocks(native_flatten=True)): flatten
+        #     to the bucket's *exact* token count, no padding. With the
+        #     4032+4200 two-family bucket table this still compiles to
+        #     just two block graphs (one per token-count family) but
+        #     attention only sees real tokens — no pad leak, ~2x faster
+        #     guard checks on high-throughput GPUs.
+        #
+        # Both modes use the same _unflatten kernel post-blocks. They
+        # are mutually exclusive (compile_blocks asserts).
         _static_pad_info = None
-        if self.static_token_count is not None:
+        _native_flatten_info = None
+        if self._native_flatten:
+            B_s, T_s, H_s, W_s, D_s = x_B_T_H_W_D.shape
+            seq_len = T_s * H_s * W_s
+            _native_flatten_info = (T_s, H_s, W_s, seq_len)
+            # Flatten 5D → 2D, then reshape to fake-5D: (B, 1, seq_len, 1, D).
+            # No padding — bucket's native token count is what compiles.
+            x_B_T_H_W_D = x_B_T_H_W_D.flatten(1, 3)
+            x_B_T_H_W_D = x_B_T_H_W_D.unsqueeze(1).unsqueeze(3)
+        elif self.static_token_count is not None:
             target = self.static_token_count
             B_s, T_s, H_s, W_s, D_s = x_B_T_H_W_D.shape
             seq_len = T_s * H_s * W_s
@@ -1825,11 +1921,15 @@ class Anima(nn.Module):
             **block_kwargs,
         )
 
-        # --- Static-shape: strip padding and restore original 5D shape ---
+        # --- Restore original 5D shape after the block stack ---
+        # Both flatten paths (static_pad and native) use the same kernel
+        # (``_unflatten_native_shape`` is an alias of ``_unpad_static_shape``).
         # Delegated to a @torch.compiler.disable'd helper so the bucket-
         # dependent tuple (T_s, H_s, W_s, seq_len) never enters the compile
-        # zone. See _unpad_static_shape for rationale.
-        if _static_pad_info is not None:
+        # zone. See ``_unpad_static_shape`` for rationale.
+        if _native_flatten_info is not None:
+            x_B_T_H_W_D = _unflatten_native_shape(x_B_T_H_W_D, _native_flatten_info)
+        elif _static_pad_info is not None:
             x_B_T_H_W_D = _unpad_static_shape(x_B_T_H_W_D, _static_pad_info)
 
         # Unconditional: zero buffers collapse to identity when guidance is off.

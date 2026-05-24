@@ -28,6 +28,52 @@ CONSTANT_TOKEN_BUCKETS = [
     (2048, 512),
 ]
 
+# Native-flatten bucket table — paired with compile_blocks(native_flatten=True)
+# (see :func:`Anima.compile_blocks`). Two token-count families: 4032 (=63*64)
+# and 4200 (=60*70). Both are highly composite, so each factors into many
+# near-square→elongated patch grids — and crucially every bucket *exactly*
+# fills its token count, so there is zero intra-bucket padding by construction.
+#
+# Two families instead of one because a single token count's divisors near √N
+# are sparse (4032 alone jumps aspect 1.29→1.75); interleaving 4032 and 4200
+# densely covers aspect space at the cost of one extra graph. Landscape mirrors
+# (swap W, H) are included explicitly. Token count = (W//16)*(H//16). The rope
+# per-axis cap is 256 patches; the largest dim here is 2016px → 126.
+#
+# Use this with ``BucketManager.make_buckets(native_token_buckets=True)`` (or
+# pass ``CONSTANT_TOKEN_BUCKETS_NATIVE`` to ``set_predefined_resos`` directly)
+# and ``compile_blocks(native_flatten=True)`` together. Without
+# native_flatten, the 4200-token rows would overflow ``static_token_count=4096``;
+# use the legacy 4096-cap table above for the static-pad path.
+CONSTANT_TOKEN_BUCKETS_NATIVE = [
+    # ---- 4032-token family (63*64) ----
+    (1008, 1024),  # 63 x 64, ar 0.98 (nearest to square)
+    (1024, 1008),  #          ar 1.02
+    (896, 1152),  # 56 x 72, ar 0.78
+    (1152, 896),  #          ar 1.29
+    (768, 1344),  # 48 x 84, ar 0.57
+    (1344, 768),  #          ar 1.75
+    (672, 1536),  # 42 x 96, ar 0.44
+    (1536, 672),  #          ar 2.29
+    (576, 1792),  # 36 x 112, ar 0.32
+    (1792, 576),  #           ar 3.11
+    (512, 2016),  # 32 x 126, ar 0.25
+    (2016, 512),  #           ar 3.94
+    # ---- 4200-token family (60*70) ----
+    (960, 1120),  # 60 x 70, ar 0.86
+    (1120, 960),  #          ar 1.17
+    (896, 1200),  # 56 x 75, ar 0.75
+    (1200, 896),  #          ar 1.34
+    (800, 1344),  # 50 x 84, ar 0.60
+    (1344, 800),  #          ar 1.68
+    (672, 1600),  # 42 x 100, ar 0.42
+    (1600, 672),  #           ar 2.38
+    (640, 1680),  # 40 x 105, ar 0.38
+    (1680, 640),  #           ar 2.62
+    (560, 1920),  # 35 x 120, ar 0.29
+    (1920, 560),  #           ar 3.43
+]
+
 # DCW v4 calibration aspect-bucket set.
 #
 # Top 5 (H, W) resolutions by frequency in post_image_dataset/lora/. List
@@ -132,8 +178,14 @@ class BucketManager:
         self.buckets = sorted_buckets
         self.reso_to_id = sorted_reso_to_id
 
-    def make_buckets(self, constant_token_buckets: bool = False):
-        if constant_token_buckets:
+    def make_buckets(
+        self,
+        constant_token_buckets: bool = False,
+        native_token_buckets: bool = False,
+    ):
+        if native_token_buckets:
+            resos = list(CONSTANT_TOKEN_BUCKETS_NATIVE)
+        elif constant_token_buckets:
             resos = list(CONSTANT_TOKEN_BUCKETS)
         else:
             resos = make_bucket_resolutions(

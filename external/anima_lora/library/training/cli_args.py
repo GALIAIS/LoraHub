@@ -366,6 +366,19 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "--compile_mode=blocks and --compile_mode=full (per-block graph vs one graph).",
     )
     parser.add_argument(
+        "--enable_native_flatten",
+        action="store_true",
+        help="Use the native-shape flattening path (compile_blocks(native_flatten=True)). "
+        "When set, the block stack flattens each bucket's patch sequence to a "
+        "fake-5D (B, 1, seq_len, 1, D) tensor *without* padding — combined with "
+        "the 4032+4200 two-family bucket table, this compiles to exactly two "
+        "block graphs (vs ~24 per-resolution graphs in the legacy path) and "
+        "gives ~2x training throughput on RTX Pro 6000 / 4090 class GPUs that "
+        "bottleneck on dynamo guard checks. Mutually exclusive with "
+        "--static_token_count; the trainer will switch the bucket table to "
+        "the native-token version automatically.",
+    )
+    parser.add_argument(
         "--xformers", action="store_true", help="use xformers for CrossAttention"
     )
     parser.add_argument(

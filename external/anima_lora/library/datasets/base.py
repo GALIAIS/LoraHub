@@ -452,7 +452,11 @@ class BaseDataset(torch.utils.data.Dataset):
         self.image_data[info.image_key] = info
         self.image_to_subset[info.image_key] = subset
 
-    def make_buckets(self, constant_token_buckets: bool = False):
+    def make_buckets(
+        self,
+        constant_token_buckets: bool = False,
+        native_token_buckets: bool = False,
+    ):
         """
         bucketingbucket
         min_size and max_size are ignored when enable_bucket is False
@@ -478,7 +482,8 @@ class BaseDataset(torch.utils.data.Dataset):
                 )
                 if not self.bucket_no_upscale:
                     self.bucket_manager.make_buckets(
-                        constant_token_buckets=constant_token_buckets
+                        constant_token_buckets=constant_token_buckets,
+                        native_token_buckets=native_token_buckets,
                     )
                 else:
                     logger.warning(

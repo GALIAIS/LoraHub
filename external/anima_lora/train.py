@@ -492,8 +492,32 @@ class AnimaTrainer:
         # Bucketed KV trimming for cross-attention
         model.trim_crossattn_kv = getattr(args, "trim_crossattn_kv", False)
 
-        # Static token count (constant-shape padding for torch.compile)
-        if getattr(args, "static_token_count", None) is not None:
+        # Compile path A: native-flatten (the upstream-75e121d hot path).
+        # Block stack compiles to two graphs (4032 + 4200 token-count
+        # families) with zero padding — flash attention sees only real
+        # tokens. Mutually exclusive with static_token_count, asserted
+        # in compile_blocks() itself.
+        if getattr(args, "enable_native_flatten", False):
+            if args.torch_compile:
+                model.compile_blocks(
+                    args.dynamo_backend,
+                    mode=getattr(args, "compile_inductor_mode", None),
+                    native_flatten=True,
+                )
+                logger.info(
+                    "native-flatten compile_blocks ON — block stack keys "
+                    "graphs on token count alone (4032 + 4200 families)"
+                )
+            else:
+                logger.warning(
+                    "enable_native_flatten=true but torch_compile=false — "
+                    "the flag is a no-op without compile."
+                )
+
+        # Compile path B: static_token_count (legacy 4096-pad path).
+        # Compile-mode == 'blocks' wraps each block, == 'full' wraps the
+        # entire DiT below (see compile_core call site further down).
+        elif getattr(args, "static_token_count", None) is not None:
             model.set_static_token_count(args.static_token_count)
             if (
                 args.torch_compile
@@ -1440,6 +1464,7 @@ class AnimaTrainer:
                     blueprint.dataset_group,
                     constant_token_buckets=getattr(args, "static_token_count", None)
                     is not None,
+                    native_token_buckets=getattr(args, "enable_native_flatten", False),
                 )
             )
 
