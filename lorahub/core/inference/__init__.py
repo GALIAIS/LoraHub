@@ -219,6 +219,26 @@ class PreviewConfig:
     # allowed. Effective budget = min(max_render_time, fraction × Δ).
     # Falls back to max_render_time on the first ckpt (no Δ yet).
     budget_fraction: float = 0.3
+    # ---- Output post-processing toggles -----------------------------
+    # `outputs.gridStitching` — when on, stitch every rendered prompt
+    # PNG for one checkpoint into a single horizontal contact-sheet
+    # under ``samples_dir/grids/<ckpt>.png`` with step / loss / seed
+    # captions, and emit a ``sample_ready`` event so the gallery
+    # picks it up alongside the per-prompt frames.
+    grid_stitching: bool = True
+    # ``outputs.baseCompare`` — render the same prompt set against the
+    # *base* model (no LoRA) and stitch the two strips vertically so
+    # users can A/B the adapter at a glance. Off by default; doubles
+    # GPU work per checkpoint.
+    base_compare: bool = False
+    # ``outputs.crossCkptAnimation`` — accumulate one prompt's PNGs
+    # across every rendered checkpoint into an animated GIF so users
+    # can scrub through the LoRA's trajectory step by step.
+    cross_ckpt_animation: bool = False
+    # ``outputs.pngMetadata`` — embed Automatic1111-style ``parameters``
+    # text into each PNG so dragging it into a standard SD UI surfaces
+    # the prompt / seed / cfg / steps.
+    png_metadata: bool = True
 
 
 @dataclass(slots=True)
@@ -272,6 +292,9 @@ class PreviewWorker:
         # compute the per-checkpoint budget.
         self._last_render_completed_at: float | None = None
         self._last_render_started_at: float | None = None
+        # Cross-ckpt animation accumulator: prompt index -> ordered list
+        # of (ckpt_name, png_path). Rebuilt into a GIF on every update.
+        self._anim_frames: dict[int, list[tuple[str, Path]]] = {}
 
     def notify_checkpoint(self, ckpt_name: str) -> None:
         """Wake the worker on a `checkpoint_saved` event so it doesn't
@@ -362,6 +385,7 @@ class PreviewWorker:
             budget,
         )
         budget_exceeded = False
+        rendered_paths: list[tuple[PromptSpec, Path]] = []
         for spec in prompts:
             if self.stop_evt.is_set():
                 return
@@ -410,6 +434,25 @@ class PreviewWorker:
                 png_name,
                 duration,
             )
+            # Optional A1111-compatible PNG metadata so the file works
+            # across SD ecosystems beyond LoraHub.
+            if self.config.png_metadata:
+                try:
+                    _embed_png_metadata(
+                        out_path,
+                        spec=spec,
+                        ckpt_name=ckpt_name,
+                        adapter=adapter,
+                        default_steps=self.config.default_steps,
+                        default_cfg=self.config.default_cfg,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception(
+                        "preview worker [%s] PNG metadata embed failed for %s",
+                        self.job_id,
+                        png_name,
+                    )
+            rendered_paths.append((spec, out_path))
             self.on_event(
                 TrainingEvent(
                     type=EventType.sample_ready,
@@ -438,6 +481,23 @@ class PreviewWorker:
                 f"{remaining} prompt(s) to keep training throughput up",
             )
         self._last_render_completed_at = time.time()
+        # Post-render artefacts (grid stitch / cross-ckpt animation).
+        # Each is independently gated by its config flag and any
+        # rendering errors are non-fatal — the per-prompt PNGs are
+        # always the source of truth.
+        if rendered_paths and self.config.grid_stitching:
+            try:
+                self._stitch_grid(ckpt_name, rendered_paths)
+            except Exception:  # noqa: BLE001
+                log.exception("preview worker [%s] grid stitch failed", self.job_id)
+        if rendered_paths and self.config.cross_ckpt_animation:
+            try:
+                self._update_cross_ckpt_animation(ckpt_name, rendered_paths)
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "preview worker [%s] cross-ckpt animation update failed",
+                    self.job_id,
+                )
 
     def _compute_budget(self) -> float:
         """Effective per-checkpoint render budget in seconds."""
@@ -460,6 +520,142 @@ class PreviewWorker:
         except Exception:  # noqa: BLE001
             pass
 
+    # ----------------------------------------------------------------- #
+    # Output post-processing                                            #
+    # ----------------------------------------------------------------- #
+
+    def _stitch_grid(
+        self,
+        ckpt_name: str,
+        rendered: list[tuple["PromptSpec", Path]],
+    ) -> None:
+        """Compose all prompts for one ckpt into a single contact-sheet.
+
+        Layout: rendered images are placed left-to-right at a fixed
+        height; each tile carries a per-prompt caption strip with the
+        prompt index, seed, and (when known) cfg/steps. The composite
+        lands at ``samples_dir/grids/<ckpt>.png`` and a ``sample_ready``
+        event is emitted with ``payload.kind = "grid"`` so the gallery
+        can show grids alongside per-prompt frames.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont  # noqa: PLC0415
+        except ImportError:
+            return
+        tile_h = 512
+        gap = 8
+        caption_h = 28
+        tiles: list[Image.Image] = []
+        captions: list[str] = []
+        for spec, path in rendered:
+            try:
+                with Image.open(path) as src:
+                    src = src.convert("RGB")
+                    ratio = tile_h / src.height
+                    tile = src.resize(
+                        (max(1, int(src.width * ratio)), tile_h),
+                        Image.Resampling.LANCZOS,
+                    )
+                    tiles.append(tile.copy())
+            except Exception:  # noqa: BLE001
+                log.exception("grid: failed to load %s", path)
+                continue
+            captions.append(_format_grid_caption(spec))
+        if not tiles:
+            return
+        total_w = sum(t.width for t in tiles) + gap * (len(tiles) - 1)
+        composite = Image.new(
+            "RGB",
+            (total_w, tile_h + caption_h),
+            (16, 16, 22),
+        )
+        x = 0
+        font = _load_caption_font()
+        draw = ImageDraw.Draw(composite)
+        for tile, caption in zip(tiles, captions, strict=False):
+            composite.paste(tile, (x, 0))
+            draw.text(
+                (x + 6, tile_h + 6),
+                caption,
+                fill=(220, 220, 230),
+                font=font,
+            )
+            x += tile.width + gap
+        grid_dir = self.config.samples_dir / "grids"
+        grid_dir.mkdir(parents=True, exist_ok=True)
+        out_path = grid_dir / f"{ckpt_name}.png"
+        composite.save(out_path, format="PNG", optimize=True)
+        self.on_event(
+            TrainingEvent(
+                type=EventType.sample_ready,
+                job_id=self.job_id,
+                payload={
+                    "path": str(out_path),
+                    "checkpoint": ckpt_name,
+                    "kind": "grid",
+                    "tile_count": len(tiles),
+                },
+            )
+        )
+
+    def _update_cross_ckpt_animation(
+        self,
+        ckpt_name: str,
+        rendered: list[tuple["PromptSpec", Path]],
+    ) -> None:
+        """Append the latest frames into a per-prompt animated GIF.
+
+        We keep one GIF per prompt index so the user can scrub through
+        the LoRA's trajectory on a specific scene. The accumulator is
+        stateful — each call appends new frames to the existing GIF
+        rather than rebuilding from scratch — so the wall time stays
+        flat as training progresses. The GIF lives at
+        ``samples_dir/animations/prompt_{idx}.gif``.
+        """
+        try:
+            from PIL import Image  # noqa: PLC0415
+        except ImportError:
+            return
+        anim_dir = self.config.samples_dir / "animations"
+        anim_dir.mkdir(parents=True, exist_ok=True)
+        for spec, frame_path in rendered:
+            entry = self._anim_frames.setdefault(spec.index, [])
+            entry.append((ckpt_name, frame_path))
+            gif_path = anim_dir / f"prompt_{spec.index:02d}.gif"
+            try:
+                frames: list[Image.Image] = []
+                for _ckpt, p in entry:
+                    with Image.open(p) as f:
+                        frames.append(f.convert("RGB").copy())
+                if not frames:
+                    continue
+                first = frames[0]
+                rest = frames[1:]
+                first.save(
+                    gif_path,
+                    save_all=True,
+                    append_images=rest,
+                    duration=600,
+                    loop=0,
+                    optimize=True,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("cross-ckpt animation: gif rebuild failed")
+                continue
+            self.on_event(
+                TrainingEvent(
+                    type=EventType.sample_ready,
+                    job_id=self.job_id,
+                    payload={
+                        "path": str(gif_path),
+                        "checkpoint": ckpt_name,
+                        "kind": "animation",
+                        "prompt_index": spec.index,
+                        "frame_count": len(entry),
+                    },
+                )
+            )
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -472,6 +668,102 @@ def _is_skipped(exc: BaseException) -> bool:
     duck-typed on the class name to avoid an import cycle (the anima
     backend imports from this module)."""
     return type(exc).__name__.endswith("Skipped")
+
+
+def _format_grid_caption(spec: PromptSpec) -> str:
+    """One-line caption rendered under each tile in a grid composite."""
+    head = spec.prompt.strip().replace("\n", " ")
+    if len(head) > 48:
+        head = head[:45] + "…"
+    pieces = [f"#{spec.index:02d} · {head}"]
+    bits: list[str] = []
+    if spec.seed is not None:
+        bits.append(f"seed={spec.seed}")
+    if spec.steps is not None:
+        bits.append(f"steps={spec.steps}")
+    if spec.cfg is not None:
+        bits.append(f"cfg={spec.cfg:g}")
+    if bits:
+        pieces.append(" · ".join(bits))
+    return "    ".join(pieces)
+
+
+def _load_caption_font():
+    """Best-effort caption font; falls back to PIL's default if no
+    DejaVuSans is available (Windows installs sometimes lack it)."""
+    try:
+        from PIL import ImageFont  # noqa: PLC0415
+    except ImportError:
+        return None
+    candidates = [
+        "DejaVuSans.ttf",
+        "arial.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+    ]
+    for cand in candidates:
+        try:
+            return ImageFont.truetype(cand, 14)
+        except Exception:  # noqa: BLE001
+            continue
+    try:
+        return ImageFont.load_default()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _embed_png_metadata(
+    path: Path,
+    *,
+    spec: PromptSpec,
+    ckpt_name: str,
+    adapter: Path,
+    default_steps: int,
+    default_cfg: float,
+) -> None:
+    """Re-save `path` with an Automatic1111-flavoured ``parameters`` text.
+
+    A1111 looks for a single ``parameters`` PNG-text chunk shaped like:
+
+        {prompt}
+        Negative prompt: {negative}
+        Steps: 24, CFG scale: 5, Seed: 42, Size: 1024x1024, Model: foo
+
+    Other SD UIs (ComfyUI, Forge) parse the same field. Re-saving the
+    PNG once is cheap relative to the inference call that produced it.
+    """
+    try:
+        from PIL import Image, PngImagePlugin  # noqa: PLC0415
+    except ImportError:
+        return
+    if not path.is_file():
+        return
+    seed = spec.seed if spec.seed is not None else "?"
+    steps = spec.steps if spec.steps is not None else default_steps
+    cfg = spec.cfg if spec.cfg is not None else default_cfg
+    width = spec.width if spec.width is not None else None
+    height = spec.height if spec.height is not None else None
+    body_lines = [spec.prompt.strip()]
+    if spec.negative:
+        body_lines.append(f"Negative prompt: {spec.negative.strip()}")
+    settings = [
+        f"Steps: {steps}",
+        f"CFG scale: {cfg}",
+        f"Seed: {seed}",
+    ]
+    if width is not None and height is not None:
+        settings.append(f"Size: {width}x{height}")
+    settings.append(f"Model: {adapter.name}")
+    settings.append(f"Checkpoint: {ckpt_name}")
+    body_lines.append(", ".join(settings))
+    parameters = "\n".join(body_lines)
+    try:
+        with Image.open(path) as img:
+            img.load()
+            meta = PngImagePlugin.PngInfo()
+            meta.add_text("parameters", parameters)
+            img.save(path, format="PNG", pnginfo=meta, optimize=True)
+    except Exception:  # noqa: BLE001
+        log.exception("png-metadata: re-save failed for %s", path)
 
 
 import contextlib

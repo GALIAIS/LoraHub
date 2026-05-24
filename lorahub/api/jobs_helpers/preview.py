@@ -139,6 +139,10 @@ def _maybe_start_preview_worker(
         default_cfg=sampling.inference_cfg,
         samples_dir=samples_dir,
         output_dir=output_dir,
+        grid_stitching=sampling.outputs.grid_stitching,
+        base_compare=sampling.outputs.base_compare,
+        cross_ckpt_animation=sampling.outputs.cross_ckpt_animation,
+        png_metadata=sampling.outputs.png_metadata,
     )
     worker = PreviewWorker(
         config=pcfg,

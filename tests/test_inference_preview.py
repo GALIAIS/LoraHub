@@ -128,6 +128,13 @@ def _make_worker(
         samples_dir=samples_dir,
         output_dir=output_dir,
         poll_interval_s=0.1,
+        # These tests assert the legacy "one sample_ready per prompt"
+        # contract; the post-render artefacts (grid / animation /
+        # png-metadata re-save) are exercised in their own dedicated
+        # tests below. Pin them off so the assertions stay tight.
+        grid_stitching=False,
+        cross_ckpt_animation=False,
+        png_metadata=False,
     )
     events: list[TrainingEvent] = []
     stop = threading.Event()
@@ -343,6 +350,9 @@ def test_budget_drops_remaining_prompts(tmp_path: Path) -> None:
         # not three.
         max_render_time_per_ckpt_s=0.5,
         budget_fraction=1.0,
+        grid_stitching=False,
+        cross_ckpt_animation=False,
+        png_metadata=False,
     )
     events: list[TrainingEvent] = []
     stop = threading.Event()
