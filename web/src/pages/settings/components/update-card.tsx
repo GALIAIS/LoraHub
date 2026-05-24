@@ -187,8 +187,8 @@ export function UpdateCard() {
             <TabsTrigger value="tag" className="text-xs">
               发布版（tag）
             </TabsTrigger>
-            <TabsTrigger value="main" className="text-xs">
-              开发版（main）
+            <TabsTrigger value="dev" className="text-xs">
+              开发版（dev）
             </TabsTrigger>
           </TabsList>
         </Tabs>

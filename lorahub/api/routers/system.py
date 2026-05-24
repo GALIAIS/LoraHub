@@ -134,12 +134,16 @@ def system_cluster() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-_VALID_CHANNELS = ("main", "tag")
+# ``main`` is accepted alongside the canonical ``dev`` so old API
+# clients (and any cached UpdateInfo blob persisted before the
+# v1.0.4 rename) keep working — system_update.check rewrites it
+# through ``_LEGACY_CHANNEL_ALIASES``.
+_VALID_CHANNELS = ("dev", "tag", "main")
 
 
 @router.get("/system/version")
 def system_version(
-    channel: Literal["main", "tag"] = "tag",
+    channel: Literal["dev", "tag", "main"] = "tag",
     force: bool = False,
 ) -> dict[str, Any]:
     """Resolve current vs remote for the given channel.
@@ -154,7 +158,7 @@ def system_version(
 
 
 class _UpdateRequest(BaseModel):
-    channel: Literal["main", "tag"] = "tag"
+    channel: Literal["dev", "tag", "main"] = "tag"
     build: bool = True
     restart: bool = True
     # Destructive: when True, ``git reset --hard`` + ``git clean -fd``

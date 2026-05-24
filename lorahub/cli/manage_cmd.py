@@ -222,16 +222,16 @@ def update(
         typer.Option("--force", help=t("manage.update.force_help")),
     ] = False,
 ) -> None:
-    """Pull origin/main, reinstall deps, rebuild SPA.
+    """Pull origin/dev, reinstall deps, rebuild SPA.
 
-    Goes through ``lorahub.api.system_update.apply(channel='main')``
+    Goes through ``lorahub.api.system_update.apply(channel='dev')``
     so the CLI behaves identically to Settings → Update.
     """
     from lorahub.api import system_update  # noqa: PLC0415
 
     try:
         system_update.apply(
-            channel="main",
+            channel="dev",
             build=not skip_build,
             progress=_emit,
             force=force,

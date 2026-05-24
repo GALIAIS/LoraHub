@@ -7,7 +7,7 @@ running ``git pull`` (or ``git checkout v…``) inside the working tree.
 
 Public surface:
 
-* ``check(channel="main")`` — return ``UpdateInfo`` for the resolved
+* ``check(channel="dev")`` — return ``UpdateInfo`` for the resolved
   channel. Uses a 5-minute on-disk cache so opening the Settings page
   doesn't re-hit the GitHub API every refresh.
 * ``apply(channel, *, restart, build, progress)`` — perform the upgrade,
@@ -15,8 +15,10 @@ Public surface:
 * ``last_check()`` — return the cached payload if any.
 
 Channels:
-  ``main`` — checkout origin/main (rolling release).
-  ``tag``  — checkout the highest semver ``v*`` tag.
+  ``dev`` — checkout origin/dev (rolling pre-release; was named
+            "main" through v1.0.3 — see ``_LEGACY_CHANNEL_ALIASES``
+            for the back-compat shim).
+  ``tag`` — checkout the highest semver ``v*`` tag.
 
 Mirrors:
   Read from ``Settings.github_proxy``; if empty, the request goes to
@@ -51,16 +53,21 @@ from typing import Any, Literal
 from packaging.version import InvalidVersion, Version
 from platformdirs import user_state_path
 
-ChannelName = Literal["main", "tag"]
+ChannelName = Literal["dev", "tag"]
+
+# Pre-v1.0.4 the rolling channel was called "main". Old on-disk
+# update-cache.json files and any client that hard-coded the name
+# get translated transparently in :func:`check`.
+_LEGACY_CHANNEL_ALIASES: dict[str, ChannelName] = {"main": "dev"}
 ProgressCallback = Callable[[str, str, str], None]
 
 GITHUB_OWNER = "GALIAIS"
 GITHUB_REPO = "LoraHub"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 TAGS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
-COMMITS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
+COMMITS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/dev"
 WEB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
-WEB_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
+WEB_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits/dev"
 
 CACHE_TTL_SECONDS = 5 * 60
 HTTP_TIMEOUT_S = 12.0
@@ -89,7 +96,7 @@ class UpdateInfo:
     checked_at: str = ""
     is_dirty: bool = False
     error: str | None = None
-    # Optional metadata: tag-only (None for "main" channel).
+    # Optional metadata: tag-only (None for "dev" channel).
     tag_name: str | None = None
     published_at: str | None = None
     # Where the ``current`` string was sourced from. ``hatch-vcs``
@@ -473,7 +480,7 @@ def _detect_detached_head(cwd: Path) -> str | None:
     """Return the current commit SHA if HEAD is detached, else None.
 
     A detached HEAD points at a commit (often a tag like ``v0.3.0``)
-    without an attached branch ref. ``git checkout origin/main`` or
+    without an attached branch ref. ``git checkout origin/dev`` or
     ``git checkout v…`` from a detached state silently abandons the
     current commit if the user had committed work on top of it; that's
     exactly the failure mode self-update is supposed to prevent.
@@ -494,15 +501,15 @@ def _detect_detached_head(cwd: Path) -> str | None:
     return "(unknown)"
 
 
-def _refresh_main(cwd: Path) -> dict[str, Any]:
-    """Probe origin/main via the GitHub commits API (no auth, 60/hr)."""
+def _refresh_dev(cwd: Path) -> dict[str, Any]:
+    """Probe origin/dev via the GitHub commits API (no auth, 60/hr)."""
     info = _fetch_json(COMMITS_API)
     sha = str(info.get("sha") or "")
     short_sha = sha[:7] if sha else ""
     msg = (info.get("commit") or {}).get("message") or ""
     return {
         "tag_name": None,
-        "version_str": short_sha or "main",
+        "version_str": short_sha or "dev",
         "release_notes": msg.split("\n", 1)[0][:300],
         "published_at": (info.get("commit") or {}).get("committer", {}).get("date") or None,
     }
@@ -606,6 +613,10 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     failure message so the UI can render the cached state plus an
     "offline" hint.
     """
+    # Old clients / cached payloads still carry the pre-v1.0.4
+    # ``main`` channel name. Translate so they keep working without
+    # forcing the user to clear the on-disk cache.
+    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
     cwd = _git_root()
     is_dirty = _detect_dirty(cwd) if cwd else False
     current, version_source = _resolve_version()
@@ -632,8 +643,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         return info
 
     try:
-        if channel == "main":
-            remote = _refresh_main(cwd or Path.cwd())
+        if channel == "dev":
+            remote = _refresh_dev(cwd or Path.cwd())
         else:
             remote = _refresh_tag()
     except (OSError, ValueError) as exc:
@@ -667,8 +678,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     update_available = False
     if channel == "tag" and latest:
         update_available = _compare_versions(latest, current) > 0
-    elif channel == "main" and latest and cwd:
-        # For main, "update available" means HEAD is not on the
+    elif channel == "dev" and latest and cwd:
+        # For dev, "update available" means HEAD is not on the
         # remote sha. We compare short SHA prefixes via git
         # rev-parse so a forced reset still counts as up-to-date.
         head = _git(["rev-parse", "HEAD"], cwd=cwd).stdout.strip()
@@ -701,7 +712,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
 #   1. _pre_check        — git root check, detached HEAD probe, dirty fence
 #   2. _snapshot_configs — tarfile-backed configs/ snapshot to a temp file
 #   3. _fetch            — git fetch --tags origin
-#   4. _apply_ref        — checkout the resolved ref (origin/main or v…)
+#   4. _apply_ref        — checkout the resolved ref (origin/dev or v…)
 #   5. _install_deps     — pip install + optional npm run build
 #
 # Shared mutable state (stash flag, snapshot archive path) lives in
@@ -722,7 +733,7 @@ def apply(
 
     Steps:
       1. ``git fetch --tags origin``
-      2. ``git checkout origin/main`` (channel=main) or
+      2. ``git checkout origin/dev`` (channel=dev) or
          ``git checkout v<latest>`` (channel=tag)
       3. ``uv pip install -e .[api,dev]`` if the project has uv on PATH,
          else ``pip install -e .[api,dev]``
@@ -739,6 +750,10 @@ def apply(
     with ``(phase, level, message)`` for each line of subprocess output
     so the API can stream the update to the UI like the bootstrap flow.
     """
+    # Translate legacy ``main`` channel name (pre-v1.0.4 callers) so
+    # tests / old scripts / cached UI state keep working without a
+    # forced rename pass.
+    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
     cwd = _git_root()
     if cwd is None:
         # This is the path ZIP-extracted users hit. The check() endpoint
@@ -754,7 +769,7 @@ def apply(
             "搬过去即可继承数据。\n"
             "  2) 在当前目录 `git init && git remote add origin "
             "https://github.com/GALIAIS/LoraHub.git && git fetch && git reset "
-            "--hard origin/main`,然后重跑 `pip install -e .` 让 hatch-vcs "
+            "--hard origin/dev`,然后重跑 `pip install -e .` 让 hatch-vcs "
             "重写 _version.py。\n"
             "完成任一步骤后,Web 设置页 → 软件更新 即可正常使用。"
         )
@@ -912,7 +927,7 @@ def _pre_check(cwd: Path, *, force: bool, emit: ProgressCallback) -> None:
 
     Currently:
       * detached HEAD (``force=False`` only) — checking out
-        ``origin/main`` from a detached state silently abandons any
+        ``origin/dev`` from a detached state silently abandons any
         commits the user made on top of the detached SHA.
 
     ``force=True`` callers have already opted in to destructive
@@ -1065,10 +1080,10 @@ def _apply_ref(
     if channel == "tag":
         target_ref = _resolve_latest_tag(cwd)
         if not target_ref:
-            msg = "no v* tag reachable from origin; switch to channel=main."
+            msg = "no v* tag reachable from origin; switch to channel=dev."
             raise RuntimeError(msg)
     else:
-        target_ref = "origin/main"
+        target_ref = "origin/dev"
     emit("git", "info", f"git checkout {target_ref}")
     checkout_cmd = ["git", "checkout"]
     if force:

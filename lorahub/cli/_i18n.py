@@ -137,8 +137,8 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     },
 
     "manage.update.help": {
-        "zh": "拉取 origin/main 最新代码、重装 Python 依赖、重建前端。",
-        "en": "Pull the latest commits from origin/main, reinstall deps, rebuild SPA.",
+        "zh": "拉取 origin/dev 最新代码、重装 Python 依赖、重建前端。",
+        "en": "Pull the latest commits from origin/dev, reinstall deps, rebuild SPA.",
     },
     "manage.update.skip_build_help": {
         "zh": "跳过前端重建(更快;只更新后端)。",

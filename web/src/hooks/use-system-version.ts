@@ -18,7 +18,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { api, type UpdateInfo } from "@/lib/api"
 
-export type UpdateChannel = "main" | "tag"
+export type UpdateChannel = "dev" | "tag"
 
 const FIVE_MINUTES = 5 * 60 * 1000
 const SIX_HOURS = 6 * 60 * 60 * 1000
@@ -44,9 +44,9 @@ export function useSystemVersion(
  */
 export function useHasUpdate(): boolean {
   const tag = useSystemVersion("tag")
-  // We deliberately don't fetch ``main`` by default — most users want
-  // tag-cut releases, not rolling-main commits. Components that want
-  // to flag main-channel ahead-ness can call ``useSystemVersion("main")``
+  // We deliberately don't fetch ``dev`` by default — most users want
+  // tag-cut releases, not rolling-dev commits. Components that want
+  // to flag dev-channel ahead-ness can call ``useSystemVersion("dev")``
   // explicitly.
   return Boolean(tag.data?.update_available && !tag.data?.is_dirty)
 }

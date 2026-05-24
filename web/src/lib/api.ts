@@ -1269,7 +1269,7 @@ export const api = {
     ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   getSystemVersion: (
-    channel: "main" | "tag" = "tag",
+    channel: "dev" | "tag" = "tag",
     force = false,
   ) =>
     http<UpdateInfo>(
@@ -1283,7 +1283,7 @@ export const api = {
    */
   applySystemUpdate: async (
     body: {
-      channel: "main" | "tag"
+      channel: "dev" | "tag"
       build: boolean
       restart: boolean
       force?: boolean
@@ -2601,7 +2601,7 @@ export async function terminalExec(
 // --- Self-update -----------------------------------------------------
 
 export interface UpdateInfo {
-  channel: "main" | "tag"
+  channel: "dev" | "tag"
   current: string
   latest: string | null
   update_available: boolean
