@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Upload } from "lucide-react"
 
 interface UploadTask {
@@ -20,6 +20,16 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
   const [queue, setQueue] = useState<UploadTask[]>([])
   const processingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Debounced onComplete: batch rapid completions into a single refresh
+  const debouncedComplete = useCallback(() => {
+    if (completeTimerRef.current) clearTimeout(completeTimerRef.current)
+    completeTimerRef.current = setTimeout(() => {
+      onComplete()
+      completeTimerRef.current = null
+    }, 300)
+  }, [onComplete])
 
   const isArchive = (name: string) =>
     /\.(zip|tar|tar\.gz|tgz|7z|rar|gz)$/i.test(name)
@@ -39,7 +49,18 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
   useEffect(() => {
     if (processingRef.current) return
     const pending = queue.find((t) => t.status === "pending")
-    if (!pending) return
+    if (!pending) {
+      // Auto-trim: keep at most 10 completed/errored tasks visible
+      const terminal = queue.filter((t) => t.status === "done" || t.status === "error")
+      if (terminal.length > 10) {
+        setQueue((prev) => {
+          const keep = prev.filter((t) => t.status === "pending" || t.status === "uploading" || t.status === "extracting")
+          const done = prev.filter((t) => t.status === "done" || t.status === "error")
+          return [...keep, ...done.slice(-10)]
+        })
+      }
+      return
+    }
     processingRef.current = true
 
     const updateTask = (id: string, patch: Partial<UploadTask>) => {
@@ -94,7 +115,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
             updateTask(task.id, { status: "error", error: `HTTP ${xhr.status}` })
           }
           processingRef.current = false
-          onComplete()
+          debouncedComplete()
         }
       }
 
@@ -107,7 +128,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
     }
 
     processTask(pending)
-  }, [queue, datasetName, onComplete])
+  }, [queue, datasetName, debouncedComplete])
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
@@ -128,7 +149,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
       onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
-      className={`mx-4 mt-2 rounded-lg border-2 border-dashed transition-colors ${
+      className={`mx-4 mt-2 shrink-0 rounded-lg border-2 border-dashed transition-colors ${
         dragging
           ? "border-primary bg-primary/5"
           : "border-muted-foreground/20 hover:border-muted-foreground/40"

@@ -22,7 +22,7 @@ export function ImageGrid({
   onDoubleSelect,
   onContextAction,
 }: ImageGridProps) {
-  const gridRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const renderItem = useCallback(
     (index: number) => {
@@ -51,25 +51,29 @@ export function ImageGrid({
     )
   }
 
-  // For smaller datasets, use a simple CSS grid (avoids virtualization overhead)
-  if (items.length <= 200) {
+  if (items.length <= 500) {
     return (
-      <div ref={gridRef} className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
+      <div
+        ref={containerRef}
+        className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2"
+      >
         {items.map((item, idx) => (
-          <div key={item.path}>{renderItem(idx)}</div>
+          <div key={item.path} className="min-w-0">
+            {renderItem(idx)}
+          </div>
         ))}
       </div>
     )
   }
 
-  // For large datasets, use virtualized grid
   return (
     <VirtuosoGrid
       totalCount={items.length}
       overscan={200}
       listClassName="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2"
+      itemClassName="min-w-0"
       itemContent={renderItem}
-      style={{ height: "100%", width: "100%" }}
+      useWindowScroll
     />
   )
 }
