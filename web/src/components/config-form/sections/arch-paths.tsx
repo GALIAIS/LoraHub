@@ -14,11 +14,11 @@ import {
   EnumSelect,
   FloatInput,
   IntInput,
-  PathInput,
   Row,
   TextInput,
   ToggleSwitch,
 } from "../widgets"
+import { ModelPathPicker } from "../widgets-model-picker"
 
 export const ArchPathsFields = memo(function ArchPathsFields({
   value,
@@ -59,28 +59,28 @@ export const ArchPathsFields = memo(function ArchPathsFields({
 
       <SubGroup label="FLUX / SD3 组件">
         <Row label="clipL" errors={errorMap.get(p("clipL"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.clipL ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "clipL"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="clipG" errors={errorMap.get(p("clipG"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.clipG ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "clipG"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="t5xxl" errors={errorMap.get(p("t5xxl"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.t5xxl ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "t5xxl"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="ae" description="FLUX autoencoder。" errors={errorMap.get(p("ae"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.ae ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "ae"], s || null)}
             placeholder="（可选）"
@@ -90,14 +90,14 @@ export const ArchPathsFields = memo(function ArchPathsFields({
 
       <SubGroup label="Anima 组件">
         <Row label="qwen3" errors={errorMap.get(p("qwen3"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.qwen3 ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "qwen3"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="llmAdapter" errors={errorMap.get(p("llmAdapter"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.llmAdapter ?? ""}
             onChange={(s) =>
               set(["baseModel", "archPaths", "llmAdapter"], s || null)
@@ -106,7 +106,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
           />
         </Row>
         <Row label="t5Tokenizer" errors={errorMap.get(p("t5Tokenizer"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.t5Tokenizer ?? ""}
             onChange={(s) =>
               set(["baseModel", "archPaths", "t5Tokenizer"], s || null)
@@ -118,7 +118,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
 
       <SubGroup label="通用组件（Anima / Wan / HunyuanImage / chroma）">
         <Row label="transformer" errors={errorMap.get(p("transformer"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.transformer ?? ""}
             onChange={(s) =>
               set(["baseModel", "archPaths", "transformer"], s || null)
@@ -127,7 +127,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
           />
         </Row>
         <Row label="textEncoder" errors={errorMap.get(p("textEncoder"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.textEncoder ?? ""}
             onChange={(s) =>
               set(["baseModel", "archPaths", "textEncoder"], s || null)
@@ -136,14 +136,14 @@ export const ArchPathsFields = memo(function ArchPathsFields({
           />
         </Row>
         <Row label="llm" description="Anima Qwen3 / HunyuanVideo LLM。" errors={errorMap.get(p("llm"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.llm ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "llm"], s || null)}
             placeholder="（可选）"
           />
         </Row>
         <Row label="byt5" description="HunyuanImage byT5。" errors={errorMap.get(p("byt5"))}>
-          <PathInput
+          <ModelPathPicker
             value={v.byt5 ?? ""}
             onChange={(s) => set(["baseModel", "archPaths", "byt5"], s || null)}
             placeholder="（可选）"

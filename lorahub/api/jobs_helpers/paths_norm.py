@@ -16,13 +16,28 @@ from lorahub.core.config.schema import TrainingConfig
 
 
 def _absolutise(p: Path | str | None, base: Path) -> Path | None:
-    """Resolve a recipe-relative path against the project root."""
+    """Resolve a recipe-relative path against the project root.
+
+    When the literal resolved path doesn't exist on disk but the
+    same path under ``base/models/`` does, prefer the latter — this
+    rescues recipe yamls that store bare relative paths like
+    ``circlestone-labs__Anima/foo.safetensors`` (the old picker
+    output before the prefix fix) without forcing every user to
+    re-save.
+    """
     if p is None:
         return None
     path = Path(str(p)).expanduser()
     if path.is_absolute():
         return path
-    return (base / path).resolve()
+    resolved = (base / path).resolve()
+    if not resolved.exists():
+        # Try the models/ fallback. Only kicks in when the literal
+        # path is missing — never overrides an existing file.
+        models_fallback = (base / "models" / path).resolve()
+        if models_fallback.exists():
+            return models_fallback
+    return resolved
 
 
 def _normalize_recipe_paths(cfg: TrainingConfig, base: Path | None = None) -> TrainingConfig:

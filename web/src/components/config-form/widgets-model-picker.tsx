@@ -168,15 +168,25 @@ export function ModelPathPicker({
             ) : (
               <ul>
                 {filtered.map((f) => {
-                  const active = value === f.relative_path || value === f.path
+                  // Backend ``GET /api/models/scan`` returns paths
+                  // relative to the resolved scan root (always
+                  // ``<project>/models``). The recipe yaml needs the
+                  // ``models/`` prefix because lifecycle resolves
+                  // recipe paths against ``Path.cwd()`` (the project
+                  // root), not against ``<project>/models``. Without
+                  // the prefix the path resolves to the wrong place
+                  // and training fails with "checkpoint not found".
+                  const pickedPath = `models/${f.relative_path}`
+                  const active =
+                    value === pickedPath ||
+                    value === f.path ||
+                    value === f.relative_path
                   return (
                     <li key={f.path}>
                       <button
                         type="button"
                         onClick={() => {
-                          // Save the relative path; the backend resolves it
-                          // against the workspace's models/ at job-launch.
-                          onChange(f.relative_path)
+                          onChange(pickedPath)
                           setOpen(false)
                         }}
                         className={cn(
