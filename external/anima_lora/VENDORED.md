@@ -70,6 +70,20 @@ Applied piecewise from upstream commits past the 2026-05-22 base import:
   bumped from `0.05` to `0.1` to reduce identity drift on
   strong-text prompts at converged-token training.
 
+* **Sample-time CUDAGraphs step boundary** (LoraHub-side patch,
+  no upstream PR yet — 2026-05-24): inserted
+  `torch.compiler.cudagraph_mark_step_begin()` at the top of each
+  iteration in `library/anima/training.py::do_sample`. Without
+  this, recipes that combine `--torch_compile` +
+  `--compile_mode blocks` + `--compile_inductor_mode reduce-overhead`
+  hit a RuntimeError on the first sample-image step ("accessing
+  tensor output of CUDAGraphs that has been overwritten by a
+  subsequent run") because the training loop's last compiled
+  forward left the reused activation buffers populated. Marking
+  the step boundary lets the runtime reclaim the slots safely.
+  Wrapped in try/except so older torch builds without the helper
+  silently skip (those builds default to no cudagraphs anyway).
+
 ### Intentionally deferred upstream changes
 
 These were reviewed and held back because they would break the

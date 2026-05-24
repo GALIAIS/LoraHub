@@ -908,6 +908,28 @@ def do_sample(
     use_cfg = guidance_scale > 1.0 and neg_crossattn_emb is not None
 
     for i in tqdm(range(steps), desc="Sampling", disable=not show_progress):
+        # ``compile_inductor_mode="reduce-overhead"`` (the default for
+        # the Anima training recipe) wraps the DiT in CUDAGraphs that
+        # reuse a fixed set of activation buffers across calls. The
+        # training loop's last forward leaves those buffers populated;
+        # when we now invoke the same compiled DiT for sampling, the
+        # next call writes into the same slot and PyTorch raises:
+        #
+        #   RuntimeError: accessing tensor output of CUDAGraphs that
+        #   has been overwritten by a subsequent run.
+        #
+        # ``cudagraph_mark_step_begin()`` declares "I'm done reading
+        # the previous run's outputs" so the runtime can safely reuse
+        # the slots. Calling it once per sampling step covers both the
+        # CFG pos/neg pair (their outputs are consumed by the Euler
+        # combine in the same iteration before we loop). Cheap no-op
+        # on uncompiled / non-cudagraph runs.
+        try:
+            torch.compiler.cudagraph_mark_step_begin()
+        except (AttributeError, RuntimeError):
+            # Older torch (< 2.4) lacks the helper; reduce-overhead
+            # also off in that case so the original race doesn't fire.
+            pass
         sigma = sigmas[i]
         t = sigma.unsqueeze(0)  # (1,)
 
