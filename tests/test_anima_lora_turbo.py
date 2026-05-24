@@ -87,7 +87,8 @@ def test_turbo_defaults_match_upstream() -> None:
     t = AnimaLoraTurboConfig()
     assert t.iterations == 1000
     assert t.batch_size == 1
-    assert t.seed == 42
+    # ComfyUI-style sentinel: -1 = pick a fresh random seed at job start.
+    assert t.seed == -1
     assert t.student_rank == 48
     assert t.fake_rank == 64
     assert t.student_steps == 4
