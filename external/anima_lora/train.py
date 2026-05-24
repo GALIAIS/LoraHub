@@ -1465,6 +1465,7 @@ class AnimaTrainer:
                     constant_token_buckets=getattr(args, "static_token_count", None)
                     is not None,
                     native_token_buckets=getattr(args, "enable_native_flatten", False),
+                    bucket_table=getattr(args, "bucket_table", None),
                 )
             )
 

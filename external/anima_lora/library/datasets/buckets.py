@@ -1,6 +1,6 @@
 import math
 import random
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 import numpy as np
 
@@ -72,6 +72,43 @@ CONSTANT_TOKEN_BUCKETS_NATIVE = [
     (1680, 640),  #           ar 2.62
     (560, 1920),  # 35 x 120, ar 0.29
     (1920, 560),  #           ar 3.43
+]
+
+# 1536-resolution bucket table — paired with compile_blocks(native_flatten=True)
+# to train a LoRA at Anima v1.0's native 1536x1536 inference resolution.
+# 9216 (=96*96) is the load-bearing token count for square 1536; we add 9240
+# (=66*140, 70*132, 77*120, 84*110, 88*105 …) as the second family because
+# 9216's near-square divisors are sparse (jumps 0.56→1.00 with nothing in
+# between), and 9240 fills the 0.53-0.84 aspect range that real datasets
+# usually live in. Both families compile to ONE block graph each (two graphs
+# total, same overhead as the 4032+4200 NATIVE table).
+#
+# Pair this with ``BucketManager.make_buckets(table_name="1536")`` and
+# ``compile_blocks(native_flatten=True)``. Static-pad mode requires
+# ``static_token_count >= 9240`` to fit the largest entry; native-flatten
+# is the recommended path because the rope per-axis cap of 256 patches is
+# fully exercised here (the 2304x1024 entry runs into 144 patches on the
+# long axis — well within rope's 256 ceiling).
+#
+# Throughput note: 1536² training is ~2.25x the per-step compute of 1024²
+# (token count 9216 vs 4096) and the rope/attention sequence length scales
+# linearly; budget for it accordingly. On RTX Pro 6000 / 4090 with
+# native_flatten + reduce-overhead this still trains comfortably.
+CONSTANT_TOKEN_BUCKETS_1536 = [
+    # ---- 9216-token family (96*96) — square + landscape mirrors ----
+    (1536, 1536),  # 96 x 96,   ar 1.00 (square — Anima v1.0 native)
+    (1152, 2048),  # 72 x 128,  ar 0.56
+    (2048, 1152),  #            ar 1.78
+    (1024, 2304),  # 64 x 144,  ar 0.44
+    (2304, 1024),  #            ar 2.25
+    # ---- 9240-token family — fills the 0.53-0.84 aspect gap ----
+    (1408, 1680),  # 88 x 105,  ar 0.84
+    (1680, 1408),  #            ar 1.19
+    (1344, 1760),  # 84 x 110,  ar 0.76
+    (1760, 1344),  #            ar 1.31
+    (1232, 1920),  # 77 x 120,  ar 0.64
+    (1920, 1232),  #            ar 1.56
+    (1120, 2112),  # 70 x 132,  ar 0.53
 ]
 
 # DCW v4 calibration aspect-bucket set.
@@ -182,8 +219,27 @@ class BucketManager:
         self,
         constant_token_buckets: bool = False,
         native_token_buckets: bool = False,
+        bucket_table: Optional[str] = None,
     ):
-        if native_token_buckets:
+        """Pick the resolution table that drives bucketing.
+
+        Selection priority (later args win):
+          1. ``bucket_table="1536"`` → ``CONSTANT_TOKEN_BUCKETS_1536``
+             (9216-token square + 9240 fill — for Anima v1.0 native
+             1536² training; pair with ``compile_blocks(native_flatten=True)``).
+          2. ``native_token_buckets=True`` → ``CONSTANT_TOKEN_BUCKETS_NATIVE``
+             (4032+4200 two-family table for native_flatten path).
+          3. ``constant_token_buckets=True`` → ``CONSTANT_TOKEN_BUCKETS``
+             (legacy 4096-pad table, paired with ``static_token_count=4096``).
+          4. Default → ``make_bucket_resolutions`` (multi-AR fallback).
+        """
+        if bucket_table == "1536":
+            resos = list(CONSTANT_TOKEN_BUCKETS_1536)
+        elif bucket_table is not None and bucket_table != "default":
+            raise ValueError(
+                f"unknown bucket_table {bucket_table!r}; expected '1536' or None"
+            )
+        elif native_token_buckets:
             resos = list(CONSTANT_TOKEN_BUCKETS_NATIVE)
         elif constant_token_buckets:
             resos = list(CONSTANT_TOKEN_BUCKETS)

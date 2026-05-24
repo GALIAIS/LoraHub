@@ -371,6 +371,7 @@ export interface ConfigFormValue {
         | "max-autotune"
         | null
       enableNativeFlatten?: boolean
+      bucketTable?: "default" | "1536" | null
       useCustomDownAutograd?: boolean
       blocksToSwap?: number
       gradientCheckpointing?: boolean

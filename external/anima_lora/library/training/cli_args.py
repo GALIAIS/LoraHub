@@ -379,6 +379,18 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "the native-token version automatically.",
     )
     parser.add_argument(
+        "--bucket_table",
+        type=str,
+        default=None,
+        choices=[None, "default", "1536"],
+        help="Override the bucketing resolution table. ``1536`` selects the "
+        "9216+9240 two-family table for Anima v1.0's native 1536x1536 "
+        "training (12 entries covering ar 0.44-2.25). Pair with "
+        "--enable_native_flatten or --static_token_count >= 9240. "
+        "``default`` / unset uses the table chosen by the *_token_buckets "
+        "flags (4032+4200 native, 4096-pad, or auto-multi-AR).",
+    )
+    parser.add_argument(
         "--xformers", action="store_true", help="use xformers for CrossAttention"
     )
     parser.add_argument(

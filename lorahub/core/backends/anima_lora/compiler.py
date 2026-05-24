@@ -541,6 +541,11 @@ def _shared_overrides(
         # side (compile_blocks asserts). LoraHub policies will reject
         # the combo at validate-time so we don't need a guard here.
         out += ["--enable_native_flatten"]
+    if opts.bucket_table is not None and opts.bucket_table != "default":
+        # ``1536`` switches the bucket table to the 9216+9240 two-family
+        # set for Anima v1.0 native 1536x1536 training. Vendored
+        # buckets.py whitelists the values; an unknown table raises.
+        out += ["--bucket_table", opts.bucket_table]
     if opts.use_custom_down_autograd:
         # Upstream consumes this as a network kwarg, not an argparse flag.
         # See ``networks/lora_anima/factory.py`` line 120 — the value

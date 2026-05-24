@@ -428,6 +428,7 @@ def generate_dataset_group_by_blueprint(
     dataset_group_blueprint: DatasetGroupBlueprint,
     constant_token_buckets: bool = False,
     native_token_buckets: bool = False,
+    bucket_table: Optional[str] = None,
 ) -> Tuple[DatasetGroup, Optional[DatasetGroup]]:
     datasets: List[DreamBoothDataset] = []
 
@@ -573,6 +574,7 @@ def generate_dataset_group_by_blueprint(
         dataset.make_buckets(
             constant_token_buckets=constant_token_buckets,
             native_token_buckets=native_token_buckets,
+            bucket_table=bucket_table,
         )
         dataset.set_seed(seed)
 
@@ -581,6 +583,7 @@ def generate_dataset_group_by_blueprint(
         dataset.make_buckets(
             constant_token_buckets=constant_token_buckets,
             native_token_buckets=native_token_buckets,
+            bucket_table=bucket_table,
         )
         dataset.set_seed(seed)
 

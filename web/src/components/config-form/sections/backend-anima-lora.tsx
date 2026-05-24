@@ -599,6 +599,21 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             }
           />
         </Row>
+        <Row
+          label="Bucket 表"
+          description="默认 = 按 native-flatten / staticTokenCount 自动选(4032+4200 或 4096)。1536 = 9216+9240 双家族,Anima v1.0 native 1536² 训练用,12 个 entry 覆盖 ar 0.44-2.25。选 1536 必须同时开 native-flatten(或把 staticTokenCount 提到 9240)。"
+        >
+          <EnumSelect
+            value={v.bucketTable ?? ""}
+            onChange={(s) =>
+              set(["backend", "animaLora", "bucketTable"], s ? s : null)
+            }
+            options={[
+              { value: "", label: "默认" },
+              { value: "1536", label: "1536² native (9216+9240)" },
+            ]}
+          />
+        </Row>
         <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd,默认开。">
           <ToggleSwitch
             checked={v.useCustomDownAutograd ?? true}

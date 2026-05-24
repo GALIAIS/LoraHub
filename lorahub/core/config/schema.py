@@ -1277,6 +1277,13 @@ class AnimaLoraOptions(BaseModel):
     # Off by default so existing recipes keep their behaviour. Switching
     # ON requires re-caching the dataset (the bucket table changes).
     enable_native_flatten: bool = False
+    # Bucket-resolution table override. ``"1536"`` selects the
+    # 9216+9240 two-family table for Anima v1.0's native 1536x1536
+    # training (12 entries covering ar 0.44-2.25). Pair with
+    # ``enable_native_flatten=true`` (recommended) or
+    # ``static_token_count >= 9240``. ``None`` / "default" uses the
+    # table the legacy / native-flatten flags would otherwise pick.
+    bucket_table: Literal["default", "1536"] | None = None
     use_custom_down_autograd: bool = True
 
     # ---- Memory / offload ----

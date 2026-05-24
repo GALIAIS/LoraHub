@@ -456,6 +456,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self,
         constant_token_buckets: bool = False,
         native_token_buckets: bool = False,
+        bucket_table: Optional[str] = None,
     ):
         """
         bucketingbucket
@@ -484,6 +485,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     self.bucket_manager.make_buckets(
                         constant_token_buckets=constant_token_buckets,
                         native_token_buckets=native_token_buckets,
+                        bucket_table=bucket_table,
                     )
                 else:
                     logger.warning(

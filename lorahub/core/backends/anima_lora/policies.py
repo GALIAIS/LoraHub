@@ -127,6 +127,22 @@ def _compile_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
             "把 compileInductorMode 改成 'default' 让意图清晰。",
         )
 
+    # bucket_table='1536' 与 static_token_count<9240 不兼容
+    # 9216+9240 双族,4096 cap 装不下任何 1536 entry。
+    if (
+        opts.bucket_table == "1536"
+        and not opts.enable_native_flatten
+        and (opts.static_token_count or 0) < 9240
+    ):
+        yield ValidationIssue(
+            Severity.error,
+            "backend.animaLora.bucketTable",
+            f"bucketTable='1536' 配合 staticTokenCount={opts.static_token_count} 装不下 9240 token 的最大 entry。"
+            "推荐方案:开启 enableNativeFlatten=true(zero-pad 训练 1536²);"
+            "或保持静态 padding 但把 staticTokenCount 提到 9240 及以上"
+            "(显存占用接近翻倍,不建议)。",
+        )
+
     # native_flatten 与 static_token_count 互斥
     # vendored 的 compile_blocks 在两者都设置时会 raise,这里前置校验。
     if opts.enable_native_flatten and (opts.static_token_count or 0) > 0:
