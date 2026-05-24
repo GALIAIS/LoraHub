@@ -1238,7 +1238,11 @@ class AnimaLoraOptions(BaseModel):
     use_shuffled_caption_variants: bool = True
     # Subset sampling — per-preset override (debug=0.001, tenth=0.1 etc).
     sample_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
-    static_token_count: int = Field(4096, ge=1)
+    # Pad sequence length to this token count (legacy 4096-pad path).
+    # Set to ``None`` (or omit) when ``enable_native_flatten=true`` —
+    # the two paths are mutually exclusive (vendored ``compile_blocks``
+    # asserts) and policies.py rejects the combo at validate-time.
+    static_token_count: int | None = Field(default=4096, ge=1)
     vae_chunk_size: int = Field(64, ge=1)
     vae_disable_cache: bool = False
     no_half_vae: bool = False
@@ -1260,6 +1264,19 @@ class AnimaLoraOptions(BaseModel):
     compile_inductor_mode: Literal[
         "default", "reduce-overhead", "max-autotune"
     ] | None = None
+    # Native-shape flattening (compile_blocks(native_flatten=True) on the
+    # vendored DiT). When True the trainer:
+    #   * switches to the 4032+4200 two-family bucket table (every bucket
+    #     exactly fills its token count, zero intra-bucket padding)
+    #   * compiles the block stack to TWO graphs keyed on token count
+    #     alone (vs ~24 graphs per resolution in the legacy static_pad
+    #     path) — ~2x training throughput on RTX Pro 6000 / 4090 class
+    #     GPUs that bottleneck on dynamo guard checks rather than FLOPs
+    #   * is mutually exclusive with non-zero static_token_count; the
+    #     vendored ``compile_blocks`` raises if both are set
+    # Off by default so existing recipes keep their behaviour. Switching
+    # ON requires re-caching the dataset (the bucket table changes).
+    enable_native_flatten: bool = False
     use_custom_down_autograd: bool = True
 
     # ---- Memory / offload ----

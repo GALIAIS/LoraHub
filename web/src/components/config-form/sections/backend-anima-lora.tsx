@@ -588,6 +588,17 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={COMPILE_INDUCTOR_OPTIONS}
           />
         </Row>
+        <Row
+          label="启用 native-flatten"
+          description="走 4032+4200 双家族 bucket 表 + 不 padding 的 fake-5D 展平,block 栈编译为 2 张图(vs 现状 ~24 张)。在 RTX Pro 6000 / 4090 类卡上 ~2x 训练加速。与 staticTokenCount 互斥;切换后需要重做 dataset 缓存。"
+        >
+          <ToggleSwitch
+            checked={v.enableNativeFlatten ?? false}
+            onCheckedChange={(c) =>
+              set(["backend", "animaLora", "enableNativeFlatten"], c)
+            }
+          />
+        </Row>
         <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd,默认开。">
           <ToggleSwitch
             checked={v.useCustomDownAutograd ?? true}

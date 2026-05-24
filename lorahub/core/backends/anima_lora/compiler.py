@@ -372,6 +372,14 @@ def _warn_locked_fields_changed(opts: AnimaLoraOptions) -> None:
         if not hasattr(opts, field):
             continue
         actual = getattr(opts, field)
+        # ``static_token_count`` is intentionally None on the
+        # native-flatten path (mutually exclusive with the static-pad
+        # 4096 path), so don't warn when the user opted into that.
+        if (
+            field == "static_token_count"
+            and getattr(opts, "enable_native_flatten", False)
+        ):
+            continue
         if actual != default:
             meta = LOCKED_FIELDS.get(field, {})
             kind = meta.get("kind", "locked")
@@ -510,7 +518,8 @@ def _shared_overrides(
         out += ["--use_shuffled_caption_variants"]
     if opts.sample_ratio is not None:
         out += ["--sample_ratio", _fmt_float(opts.sample_ratio)]
-    out += ["--static_token_count", str(opts.static_token_count)]
+    if opts.static_token_count is not None:
+        out += ["--static_token_count", str(opts.static_token_count)]
     out += ["--vae_chunk_size", str(opts.vae_chunk_size)]
     if opts.vae_disable_cache:
         out += ["--vae_disable_cache"]
@@ -527,6 +536,11 @@ def _shared_overrides(
         out += ["--compile_mode", opts.compile_mode]
     if opts.compile_inductor_mode is not None:
         out += ["--compile_inductor_mode", opts.compile_inductor_mode]
+    if opts.enable_native_flatten:
+        # Mutually exclusive with --static_token_count on the vendored
+        # side (compile_blocks asserts). LoraHub policies will reject
+        # the combo at validate-time so we don't need a guard here.
+        out += ["--enable_native_flatten"]
     if opts.use_custom_down_autograd:
         # Upstream consumes this as a network kwarg, not an argparse flag.
         # See ``networks/lora_anima/factory.py`` line 120 — the value

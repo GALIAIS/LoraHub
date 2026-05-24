@@ -370,6 +370,7 @@ export interface ConfigFormValue {
         | "reduce-overhead"
         | "max-autotune"
         | null
+      enableNativeFlatten?: boolean
       useCustomDownAutograd?: boolean
       blocksToSwap?: number
       gradientCheckpointing?: boolean

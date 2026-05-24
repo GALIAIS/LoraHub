@@ -127,6 +127,50 @@ def _compile_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
             "把 compileInductorMode 改成 'default' 让意图清晰。",
         )
 
+    # native_flatten 与 static_token_count 互斥
+    # vendored 的 compile_blocks 在两者都设置时会 raise,这里前置校验。
+    if opts.enable_native_flatten and (opts.static_token_count or 0) > 0:
+        yield ValidationIssue(
+            Severity.error,
+            "backend.animaLora.enableNativeFlatten",
+            "enableNativeFlatten=true 与 staticTokenCount 互斥。"
+            "native-flatten 走 4032+4200 双家族 bucket 表(每个 bucket 精确"
+            "填满 token count、零 padding),staticTokenCount 走 4096 padding "
+            "路径。请把 staticTokenCount 删掉(或设为 0),或关掉 native-flatten。",
+        )
+
+    # native_flatten + reduce-overhead + 显存 swap/grad-ckpt 不兼容
+    # cudagraph_trees 不能跨 block swap 边界稳定捕获,且 grad ckpt 重新 forward
+    # 会撞上 cudagraph slot 复用问题(我们已有 do_sample 修复)。
+    if (
+        opts.enable_native_flatten
+        and inductor_mode == "reduce-overhead"
+        and (
+            opts.gradient_checkpointing
+            or opts.unsloth_offload_checkpointing
+            or opts.cpu_offload_checkpointing
+            or opts.blocks_to_swap > 0
+        )
+    ):
+        offenders: list[str] = []
+        if opts.gradient_checkpointing:
+            offenders.append("gradient_checkpointing")
+        if opts.unsloth_offload_checkpointing:
+            offenders.append("unsloth_offload_checkpointing")
+        if opts.cpu_offload_checkpointing:
+            offenders.append("cpu_offload_checkpointing")
+        if opts.blocks_to_swap > 0:
+            offenders.append(f"blocks_to_swap={opts.blocks_to_swap}")
+        yield ValidationIssue(
+            Severity.warning,
+            "backend.animaLora.enableNativeFlatten",
+            "enableNativeFlatten=true + compileInductorMode='reduce-overhead' + "
+            + ", ".join(offenders)
+            + " — CUDA Graphs 与 block swap / grad ckpt 互斥(cudagraph slot "
+            "无法跨 swap 边界稳定捕获)。建议把 compileInductorMode 改为 "
+            "'default',或关掉 swap / 显存优化字段以拿回完整 reduce-overhead 加速。",
+        )
+
 
 # ----------------------------------------------------------------------- #
 # offload conflicts

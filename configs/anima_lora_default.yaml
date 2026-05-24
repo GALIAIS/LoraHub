@@ -119,6 +119,17 @@ backend:
     vaeChunkSize: 64
     vaeDisableCache: true   # 上游 base.toml 默认 true
 
+    # native-flatten 模式开关(LoraHub 侧迁移自上游 75e121d).打开后:
+    #   * 走 4032+4200 双家族 bucket 表(每个 bucket 精确填满 token count
+    #     、零 padding;flash-attn 不再看到 pad token)
+    #   * block 栈编译为 2 张图(vs staticTokenCount 路径 ~24 张)
+    #   * 在 RTX Pro 6000 / 4090 类卡上获得 ~2x 训练加速
+    # 与 staticTokenCount 互斥(开启后必须把 staticTokenCount 删掉/置 0,
+    # 同时重做 dataset 缓存因为 bucket 表不同)。本默认配方保持向后兼容
+    # 走 staticTokenCount 路径;追求最高吞吐时改成 enableNativeFlatten: true
+    # 并删掉 staticTokenCount 字段。
+    enableNativeFlatten: false
+
     # base.toml: 注意力 / 编译
     # torch (PyTorch SDPA) 默认:始终可用,Ampere+ 跑到 flash-attn 的 85-95% 吞吐。
     # 装了 flash-attn 的环境改成 flash 拿额外 5-15%。
