@@ -309,13 +309,20 @@ export function DatasetDetail() {
     try {
       switch (tab) {
         case "smart-caption": {
-          setAiProgress({ running: true, label: "智能标注 (WD14 + VLM)..." })
+          const captionSource = (params.captionSource as "vlm" | "tags" | undefined) ?? "vlm"
+          setAiProgress({
+            running: true,
+            label: captionSource === "tags"
+              ? "智能标注 (WD14 + LLM 文本模式)…"
+              : "智能标注 (WD14 + VLM 视觉模式)…",
+          })
           const res = await imageStudioSmartCaption({
             path: taskPath,
             recursive,
             device: params.device as string,
             mergeStrategy: params.mergeStrategy as string,
             captionMode: params.captionMode as "general" | "style" | "character",
+            captionSource,
             triggerWord: params.triggerWord as string | undefined,
             stripStyleTags: params.stripStyleTags as boolean | undefined,
             skipExisting: params.skipExisting as boolean | undefined,

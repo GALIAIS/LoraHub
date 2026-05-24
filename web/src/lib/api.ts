@@ -2215,6 +2215,13 @@ export async function imageStudioSmartCaption(params: {
   device?: string
   mergeStrategy?: string
   captionMode?: "general" | "style" | "character"
+  /**
+   * "vlm"  — multimodal LLM sees the image directly (default).
+   * "tags" — LLM only sees the WD14 tag list, never the image. Use
+   *          when the configured VLM is rate-limited / quota-exhausted
+   *          or when a cheaper text-only LLM is preferred.
+   */
+  captionSource?: "vlm" | "tags"
   triggerWord?: string
   stripStyleTags?: boolean
   /** Skip images that already have a non-empty .txt sidecar. Default true. */
@@ -2290,6 +2297,7 @@ export async function imageStudioSmartCaptionSingle(params: {
   path: string
   device?: string
   captionMode?: "general" | "style" | "character"
+  captionSource?: "vlm" | "tags"
   triggerWord?: string
   stripStyleTags?: boolean
   mergeStrategy?: string

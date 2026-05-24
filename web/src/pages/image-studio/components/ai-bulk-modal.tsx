@@ -35,6 +35,11 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   const [characterThreshold, setCharacterThreshold] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
   const [captionMode, setCaptionMode] = useState<"general" | "style" | "character">("style")
+  // "vlm" — multimodal model sees the image (best quality, more
+  // expensive, requires a vision-capable model + quota).
+  // "tags" — text-only LLM composes from the WD14 tag list. Useful
+  // when the configured VLM is rate-limited / quota-exhausted.
+  const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
   const [triggerWord, setTriggerWord] = useState("")
   const [stripStyleTags, setStripStyleTags] = useState(true)
   // Shared "skip already-processed" toggle for the three tabs that
@@ -77,6 +82,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           mergeStrategy,
           path: datasetPath,
           captionMode,
+          captionSource,
           triggerWord: triggerWord.trim() || undefined,
           stripStyleTags,
           skipExisting: skipDone,
@@ -198,7 +204,23 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           {activeTab === "smart-caption" && (
             <div className="flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
-                WD14 标签 + VLM 视觉模型综合标注，按训练用途自动调整 prompt
+                WD14 标签 + LLM 综合标注，按训练用途自动调整 prompt
+              </p>
+              <label className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-16">LLM 输入</span>
+                <select
+                  value={captionSource}
+                  onChange={(e) => setCaptionSource(e.target.value as typeof captionSource)}
+                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                >
+                  <option value="vlm">视觉模型（看图）— 质量最高</option>
+                  <option value="tags">仅 WD14 标签 — 不上传图片，省额度/兼容文本模型</option>
+                </select>
+              </label>
+              <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
+                {captionSource === "tags"
+                  ? "LLM 不会看到图片，仅根据 WD14 给出的 tag 列表撰写描述。提示词已针对此场景优化，避免凭空虚构。"
+                  : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>

@@ -448,6 +448,67 @@ _SMART_CAPTION_PROMPT_GENERAL = (
 )
 
 
+# -- Tags-only mode (no VLM, LLM composes from WD14 tags alone) --------------
+#
+# Used when ``captionSource == "tags"`` — the LLM never sees the image,
+# only the WD14 tag list. The prompts are explicit about that constraint
+# so the model doesn't hallucinate details that aren't in the tags
+# (a generic VLM prompt would casually invent "soft blue lighting" out
+# of nothing). Each variant mirrors the VLM-mode counterpart so the
+# downstream caption assembly (`_build_anima_caption`) can stay
+# agnostic to which path produced ``nl_text``.
+
+_TAGS_ONLY_PROMPT_STYLE = (
+    "You are writing the natural-language sentence that will sit inside an Anima training "
+    "caption for a STYLE LoRA. You DO NOT have access to the image — only the WD14 tagger's "
+    "output for it. Treat the tag list as the ground truth and do NOT invent visual details "
+    "that aren't supported by at least one tag.\n\n"
+    "From the tags, infer the high-level visual style: artistic medium and rendering hint "
+    "(lineart, screentone, painterly, cel-shaded, monochrome, watercolor, ...), the overall "
+    "lighting and color mood when the tags imply one (warm/cool/neon/golden hour/...), and "
+    "the composition / framing (close-up, low angle, full body, dynamic pose, ...). When a "
+    "tag like ``looking at viewer`` / ``from above`` / ``from behind`` is present, treat it "
+    "as a hint about framing.\n\n"
+    "Write 2-3 sentences in plain English. Mention the subject ONLY at a high level (one "
+    "girl in a dynamic pose, a group on a ship deck) — do NOT enumerate clothing items, "
+    "accessories, or hair details that the tag list happens to contain.\n\n"
+    "If the tags are too sparse or ambiguous to support a confident sentence about a given "
+    "axis (e.g. lighting), simply omit that axis. Do NOT write vague praise (beautiful, "
+    "stunning, gorgeous, amazing). Do NOT begin with a trigger word, header, or label.\n\n"
+    "WD14 tags: {tags}"
+)
+
+_TAGS_ONLY_PROMPT_CHARACTER = (
+    "You are writing the natural-language sentences that will sit inside an Anima training "
+    "caption for a CHARACTER LoRA. You DO NOT have access to the image — only the WD14 "
+    "tagger's output for it. Treat the tag list as the ground truth and do NOT invent "
+    "details unsupported by the tags.\n\n"
+    "The model must learn the character's FIXED identity from the latent, so your sentences "
+    "describe what VARIES across images. Pull these from the tag list when present:\n"
+    "  - pose / action verbs (sitting, running, holding, looking back over shoulder, ...)\n"
+    "  - expression (smiling, blushing, crying, sweating, ...)\n"
+    "  - position / direction inside the frame (looking at viewer, from above, from behind, "
+    "    profile view)\n"
+    "  - background / setting tags (outdoors, indoors, classroom, beach, night, ...)\n"
+    "  - framing tags (close-up, upper body, full body, cowboy shot, ...)\n"
+    "  - lighting / mood tags (sunlight, moonlight, dim lighting, ...)\n\n"
+    "Do NOT describe: hair color, eye color, hair style or length, signature outfit pieces, "
+    "or any other fixed identity feature — even if those tags are present, the redundant "
+    "ones get stripped from the final caption later.\n\n"
+    "Write 2-3 sentences in plain English. If the tags are too sparse to support a given "
+    "axis, omit it. Do NOT begin with a trigger word, header, or label.\n\n"
+    "WD14 tags: {tags}"
+)
+
+_TAGS_ONLY_PROMPT_GENERAL = (
+    "Write a 2-3 sentence natural-language description for an Anima LoRA training caption. "
+    "You do NOT have the image — only the WD14 tagger's output for it. Compose the sentences "
+    "strictly from what the tags support: subject, pose, framing, background, lighting, "
+    "composition. If a given axis isn't supported by any tag, omit it instead of inventing. "
+    "Plain English, no headers or labels.\n\nWD14 tags: {tags}"
+)
+
+
 def _drop_tags(tags: list[str], drop: set[str]) -> list[str]:
     """Case-insensitive filter — keep order, drop matches."""
     return [t for t in tags if t.lower() not in drop]
@@ -537,6 +598,14 @@ class SmartCaptionBatchInput(BaseModel):
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
     captionMode: str = "style"  # general | style | character
+    # "vlm" — multimodal LLM sees the image directly (default behaviour
+    #         since the feature shipped). Best caption quality but
+    #         requires a vision-capable model and burns image tokens.
+    # "tags" — LLM only sees the WD14 tag list, never the image. Cheap
+    #          and works against text-only models; useful when the
+    #          configured VLM is rate-limited / quota-exhausted, or the
+    #          user wants a faster cheaper pass.
+    captionSource: str = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True  # accepted for compat; cleanup is built-in
     # Parallelism + reliability knobs.
@@ -582,12 +651,20 @@ class _StageOneResult:
     character_tags: list[str]
     prompt_text: str
     data_url: str
+    # "vlm" → stage two sends an image_url + text content list.
+    # "tags" → stage two sends a single text message; the LLM never
+    # sees the picture and composes the natural-language sentence
+    # from ``prompt_text`` (which already has the WD14 tag list
+    # baked in via the tags-only prompt template).
+    caption_source: str = "vlm"
 
 
 def _smart_caption_stage_one(
     img_path: Path,
     tagger: WD14Tagger,
     caption_mode: str,
+    *,
+    caption_source: str = "vlm",
 ) -> _StageOneResult:
     """Run WD14 tagging + image prep — everything that doesn't need the VLM.
 
@@ -608,17 +685,27 @@ def _smart_caption_stage_one(
     rating_name = tag_result.rating.name if tag_result.rating else None
     tags_for_prompt = ", ".join(_drop_tags(general_tags, _QUALITY_NOISE_TAGS))
 
-    mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
-    data = img_path.read_bytes()
-    b64 = base64.b64encode(data).decode("ascii")
-    data_url = f"data:{mime};base64,{b64}"
-
-    if caption_mode == "style":
-        prompt_template = _SMART_CAPTION_PROMPT_STYLE
-    elif caption_mode == "character":
-        prompt_template = _SMART_CAPTION_PROMPT_CHARACTER
+    if caption_source == "tags":
+        # Tags-only path — skip the base64 encode entirely; stage two
+        # sends a plain text completion request.
+        data_url = ""
+        if caption_mode == "style":
+            prompt_template = _TAGS_ONLY_PROMPT_STYLE
+        elif caption_mode == "character":
+            prompt_template = _TAGS_ONLY_PROMPT_CHARACTER
+        else:
+            prompt_template = _TAGS_ONLY_PROMPT_GENERAL
     else:
-        prompt_template = _SMART_CAPTION_PROMPT_GENERAL
+        mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
+        data = img_path.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        data_url = f"data:{mime};base64,{b64}"
+        if caption_mode == "style":
+            prompt_template = _SMART_CAPTION_PROMPT_STYLE
+        elif caption_mode == "character":
+            prompt_template = _SMART_CAPTION_PROMPT_CHARACTER
+        else:
+            prompt_template = _SMART_CAPTION_PROMPT_GENERAL
     prompt_text = prompt_template.format(tags=tags_for_prompt)
 
     return _StageOneResult(
@@ -628,6 +715,7 @@ def _smart_caption_stage_one(
         character_tags=character_tags,
         prompt_text=prompt_text,
         data_url=data_url,
+        caption_source=caption_source,
     )
 
 
@@ -640,7 +728,7 @@ def _smart_caption_stage_two(
     caption_mode: str,
     trigger_word: str | None,
 ) -> dict[str, Any]:
-    """Network-bound VLM call + caption assembly + disk + store write."""
+    """Network-bound VLM (or text-only LLM) call + caption assembly + disk + store write."""
     from datetime import UTC, datetime  # noqa: PLC0415
 
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
@@ -648,13 +736,20 @@ def _smart_caption_stage_two(
     messages: list[dict[str, Any]] = []
     if route.system_prompt:
         messages.append({"role": "system", "content": route.system_prompt})
-    messages.append({
-        "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": s1.data_url}},
-            {"type": "text", "text": s1.prompt_text},
-        ],
-    })
+    if s1.caption_source == "tags":
+        # Text-only path — many cheap / non-vision LLMs reject the
+        # multimodal content list with a 400 ("invalid content type:
+        # image_url") so we send a plain string. The prompt template
+        # already contains the WD14 tag list inline.
+        messages.append({"role": "user", "content": s1.prompt_text})
+    else:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": s1.data_url}},
+                {"type": "text", "text": s1.prompt_text},
+            ],
+        })
 
     result = ai_client.invoke(
         ai_store,
@@ -712,6 +807,8 @@ def _smart_caption_single_image(
     caption_mode: str = "general",
     trigger_word: str | None = None,
     strip_style_tags: bool = True,
+    *,
+    caption_source: str = "vlm",
 ) -> dict[str, Any]:
     """Single-image pipeline kept for the /single endpoint and tests.
 
@@ -721,7 +818,9 @@ def _smart_caption_single_image(
     network pool).
     """
     del strip_style_tags  # kept for API compat; cleanup is built into stage1
-    s1 = _smart_caption_stage_one(img_path, tagger, caption_mode)
+    s1 = _smart_caption_stage_one(
+        img_path, tagger, caption_mode, caption_source=caption_source,
+    )
     return _smart_caption_stage_two(
         s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
     )
@@ -830,7 +929,12 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
             if session.should_stop():
                 return
             try:
-                s1 = _smart_caption_stage_one(img_path, tagger, body.captionMode)
+                s1 = _smart_caption_stage_one(
+                    img_path,
+                    tagger,
+                    body.captionMode,
+                    caption_source=body.captionSource,
+                )
             except Exception as exc:  # noqa: BLE001
                 err_msg = f"WD14: {type(exc).__name__}: {exc}"
                 session.add_error(str(img_path), err_msg, img_path.name)
@@ -1014,6 +1118,7 @@ class SmartCaptionSingleInput(BaseModel):
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
     captionMode: str = "style"
+    captionSource: str = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
 
@@ -1051,6 +1156,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
             caption_mode=body.captionMode,
             trigger_word=body.triggerWord,
             strip_style_tags=body.stripStyleTags,
+            caption_source=body.captionSource,
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001
