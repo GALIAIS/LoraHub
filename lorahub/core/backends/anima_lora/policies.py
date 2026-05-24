@@ -101,6 +101,32 @@ def _compile_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
             "显式把 compileInductorMode 设成 'default' 让意图清晰。",
         )
 
+    # 退化路径检测:torch_compile=true + reduce-overhead 但 compile_mode 留空
+    # → train.py 走的是普通 inductor (每个 bucket 形状一份 graph、无 cudagraph
+    # replay),并不会用上 ``compile_blocks`` 那条 CUDA Graphs 快路径。这就是
+    # 上游 fork 文章描述的 "2x 速度差距" 的诱因。仅当显存路径关掉(没 grad
+    # ckpt / 没 blocks_to_swap)时才提醒,避免 8gb 这类必须走显存路径的配置
+    # 被误警告。
+    if (
+        opts.torch_compile
+        and inductor_mode == "reduce-overhead"
+        and opts.compile_mode is None
+        and not opts.gradient_checkpointing
+        and not opts.unsloth_offload_checkpointing
+        and not opts.cpu_offload_checkpointing
+        and opts.blocks_to_swap == 0
+    ):
+        yield ValidationIssue(
+            Severity.warning,
+            "backend.animaLora.compileMode",
+            "compileInductorMode='reduce-overhead' 但 compileMode 留空 — "
+            "train.py 不会调用 compile_blocks 快路径,等价于普通 inductor + "
+            "每形状一份 graph、无 CUDA Graph replay。在高吞吐 GPU(RTX Pro "
+            "6000 / 4090 等)上会损失约 2x 训练速度。建议显式设置 "
+            "compileMode='blocks' 拿回 CUDA Graphs 加速;若是显存吃紧场景请"
+            "把 compileInductorMode 改成 'default' 让意图清晰。",
+        )
+
 
 # ----------------------------------------------------------------------- #
 # offload conflicts

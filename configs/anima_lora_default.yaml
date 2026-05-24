@@ -124,8 +124,14 @@ backend:
     # 装了 flash-attn 的环境改成 flash 拿额外 5-15%。
     attnMode: torch
     useCustomDownAutograd: true
-    # 上游 lora.toml: compile_inductor_mode = "reduce-overhead"
-    # compile_mode 在上游 lora.toml 里被注释掉(默认不开),与 LoraHub 一致
+    # 编译路径双开: compileMode=blocks 让 train.py 走 ``compile_blocks``
+    # 路径,把 DiT 块栈编译成 reduce-overhead 模式下的 CUDA Graphs。
+    # 仅设 compileInductorMode 而不设 compileMode 时,train.py 会落到
+    # 普通 inductor 编译(每个 bucket 形状一份图、无 graph replay),
+    # 在 RTX Pro 6000 / 4090 这类高吞吐卡上有显著 (~2x) 速度差距。
+    # compileMode = full 会再升一档(整模型 cudagraph),但与
+    # gradient_checkpointing / blocks_to_swap 互斥,默认 blocks 最稳妥。
+    compileMode: blocks
     compileInductorMode: reduce-overhead
 
     # base.toml: mixed_precision = "bf16"
