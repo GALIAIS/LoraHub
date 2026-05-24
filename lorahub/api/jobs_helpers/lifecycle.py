@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import secrets
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,6 +81,8 @@ def _launch_job(
     workspace.mkdir(parents=True, exist_ok=True)
 
     _normalize_recipe_paths(cfg)
+    _resolve_runtime_seeds(cfg)
+    _materialise_prompts_file(cfg, workspace)
 
     snapshot = cfg.model_dump(mode="json", by_alias=True)
     job = state.registry.create(workspace=workspace, config_snapshot=snapshot)
@@ -125,6 +128,8 @@ def _relaunch_job_in_place(
     workspace.mkdir(parents=True, exist_ok=True)
 
     _normalize_recipe_paths(cfg)
+    _resolve_runtime_seeds(cfg)
+    _materialise_prompts_file(cfg, workspace)
 
     if not extra_argv:
         job.events.clear()
@@ -585,6 +590,84 @@ def _report_job_failure(job: JobRecord, *, returncode: int | None) -> None:
         )
     except Exception:  # noqa: BLE001
         log.exception("failed to record job-failure error report for %s", job.id)
+
+
+# Maximum value for randomly-drawn seeds. ComfyUI uses 2**50; mirroring
+# that keeps copy-pasting workflow seeds across the two tools sensible.
+_RANDOM_SEED_MAX = 1_125_899_906_842_624
+
+
+def _draw_random_seed() -> int:
+    """Cryptographically-strong random seed in [0, _RANDOM_SEED_MAX)."""
+    return secrets.randbelow(_RANDOM_SEED_MAX)
+
+
+def _resolve_runtime_seeds(cfg: TrainingConfig) -> None:
+    """Replace ``-1`` sentinels in seed fields with a fresh draw.
+
+    The ComfyUI workflow uses ``-1`` to mean "draw a seed at run time so
+    every queue press is novel". The same convention applies here: a
+    yaml saved with ``seed: -1`` reproduces the spirit of the user's
+    choice (always-new) without forcing them to bump the number by hand
+    between runs. The drawn value is written back into the config so
+    downstream consumers (compilers, prompt-file materialiser, snapshot)
+    all see the same concrete integer, and the value also lands in the
+    job's config snapshot — copy that into a fresh recipe to reproduce.
+    """
+    sampling = cfg.sampling
+    if sampling.seed == -1:
+        sampling.seed = _draw_random_seed()
+        log.info("sampling.seed: drew runtime random %d", sampling.seed)
+    for ps in sampling.prompts:
+        if ps.seed == -1:
+            ps.seed = _draw_random_seed()
+            log.info("sampling.prompts seed: drew runtime random %d", ps.seed)
+
+
+def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
+    """Render ``cfg.sampling.prompts`` into ``workspace/prompts.txt``.
+
+    The kohya/anima trainers and the in-process preview worker both
+    consume a kohya-style prompts.txt (one prompt per line, optional
+    ``--w / --h / --d / --s / --l / --n`` flags). When the user has
+    populated the structured ``prompts`` list in yaml we materialise
+    that here so no upstream tooling has to learn about the new
+    schema. ``promptsFile`` (legacy) takes precedence when set, so
+    older recipes keep working unchanged.
+    """
+    sampling = cfg.sampling
+    if not sampling.prompts:
+        return
+    if sampling.prompts_file is not None:
+        return
+    target = workspace / "prompts.txt"
+    lines: list[str] = []
+    for spec in sampling.prompts:
+        body = spec.prompt.strip()
+        if not body:
+            continue
+        flags: list[str] = []
+        if spec.width is not None:
+            flags.append(f"--w {spec.width}")
+        if spec.height is not None:
+            flags.append(f"--h {spec.height}")
+        if spec.seed is not None:
+            flags.append(f"--d {spec.seed}")
+        if spec.steps is not None:
+            flags.append(f"--s {spec.steps}")
+        if spec.cfg is not None:
+            flags.append(f"--l {spec.cfg}")
+        if spec.negative:
+            flags.append(f"--n {spec.negative}")
+        line = body
+        if flags:
+            line = f"{body} {' '.join(flags)}"
+        lines.append(line)
+    if not lines:
+        return
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    sampling.prompts_file = target
+    log.info("prompts.txt materialised at %s (%d prompts)", target, len(lines))
 
 
 _LOG_ERROR_LEVELS = frozenset({"error", "critical", "fatal", "warning", "warn"})

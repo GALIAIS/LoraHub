@@ -496,6 +496,50 @@ class ScheduleConfig(BaseModel):
     lr_decay_steps: int | None = Field(default=None, ge=1)
 
 
+class PromptSpec(BaseModel):
+    """One sampling prompt persisted in yaml.
+
+    The trainer-side prompts file (kohya `--sample_prompts`) is a plain
+    text format with `--w` / `--h` / `--d` / `--s` / `--l` / `--n`
+    flags. We let users author prompts directly in the recipe instead
+    of pointing at a sibling .txt — the launcher materialises the
+    kohya-style file under workspace/prompts.txt at job-start time so
+    no upstream tooling has to change.
+
+    Per-row seed semantics mirror SamplingConfig.seed: -1 means
+    "random per run", drawn at runtime; any other int is honoured
+    verbatim. Width/height fall back to the ambient SamplingConfig
+    resolution.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    prompt: str
+    negative: str | None = None
+    cfg: float | None = Field(default=None, gt=0)
+    steps: int | None = Field(default=None, ge=1)
+    seed: int | None = None
+    width: int | None = Field(default=None, ge=64)
+    height: int | None = Field(default=None, ge=64)
+
+
+class SamplingOutputs(BaseModel):
+    """Toggles for the four preview-output features.
+
+    Each is independent; users mix and match. Defaults reflect "useful
+    but cheap" — grid stitching + PNG metadata are on; base-compare
+    and cross-ckpt animation are off because both spend extra GPU /
+    disk for richer artefacts that not every run needs.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    grid_stitching: bool = True
+    base_compare: bool = False
+    cross_ckpt_animation: bool = False
+    png_metadata: bool = True
+
+
 class SamplingConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
@@ -505,9 +549,19 @@ class SamplingConfig(BaseModel):
     every_n_steps: int | None = Field(default=None, ge=1)
     # Generate a baseline before training starts (kohya: --sample_at_first).
     at_first: bool = False
+    # Legacy: external prompts.txt path. New configs should populate
+    # ``prompts`` instead — the launcher materialises a prompts.txt
+    # under workspace/ from that list at job-start. We keep the
+    # field for back-compat: when set and ``prompts`` is empty the
+    # legacy path is used unchanged.
     prompts_file: Path | None = None
+    prompts: list[PromptSpec] = Field(default_factory=list)
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
-    seed: int = 42
+    # ComfyUI-style sentinel: -1 means "draw a fresh random integer at
+    # job-start". Anything else is honoured verbatim. The launcher logs
+    # the resolved seed so reproducing a run is still possible.
+    seed: int = -1
+    outputs: SamplingOutputs = Field(default_factory=SamplingOutputs)
     # NOTE: ``sampling.attention`` was removed — sample-stage attention
     # backend selection was schema-only (no compiler ever wired it
     # through to the trainer). Existing YAML files carrying it load
@@ -1029,7 +1083,8 @@ class AnimaLoraTurboConfig(BaseModel):
     # Top-level
     iterations: int = Field(1000, ge=1)
     batch_size: int = Field(1, ge=1)
-    seed: int = 42
+    # ComfyUI-style sentinel: -1 picks a fresh random seed at run start.
+    seed: int = -1
     use_custom_down_autograd: bool = True
 
     # Network — student + fake LoRA capacities.
