@@ -777,7 +777,7 @@ def apply(
 
     emit = progress if progress is not None else _NULL_EMIT
 
-    _pre_check(cwd, force=force, emit=emit)
+    _pre_check(cwd, channel=channel, force=force, emit=emit)
 
     with _UpdateContext(cwd, emit) as ctx:
         ctx.snapshot_path = _snapshot_configs(cwd, emit)
@@ -922,34 +922,101 @@ class _UpdateContext:
 # --------------------------------------------------------------------- #
 
 
-def _pre_check(cwd: Path, *, force: bool, emit: ProgressCallback) -> None:
+def _pre_check(
+    cwd: Path,
+    *,
+    channel: ChannelName,
+    force: bool,
+    emit: ProgressCallback,
+) -> None:
     """Refuse upgrade in states the rest of the pipeline can't recover from.
 
     Currently:
-      * detached HEAD (``force=False`` only) — checking out
-        ``origin/dev`` from a detached state silently abandons any
-        commits the user made on top of the detached SHA.
+      * detached HEAD when the SHA isn't reachable from
+        ``origin/<channel>`` (``force=False`` only) — checking out
+        ``origin/dev`` from a detached state with local commits ahead
+        of the channel would silently abandon them.
 
-    ``force=True`` callers have already opted in to destructive
-    behaviour via the UI confirm dialog; we still emit a warning so
-    the SSE log shows the override happened.
+    When the detached SHA IS reachable from the channel head — the
+    common "I checked out v1.0.4 by tag and now want to track ``dev``
+    again" case — we auto-attach by ``git checkout <channel>`` instead
+    of refusing. No commits are lost because everything we have is
+    already in the remote channel's history. ``force=True`` short-
+    circuits the safety gate entirely.
     """
     head_sha = _detect_detached_head(cwd)
     if head_sha is None:
         return
-    if not force:
+    if force:
+        emit(
+            "git", "warn",
+            f"force=True: ignoring detached HEAD at {head_sha}; the upcoming "
+            "checkout would discard any commits made on top of the detached SHA",
+        )
+        return
+    # Try the friendly path first: fetch the remote channel and see if
+    # our SHA is in its history. If so, the detached state is just
+    # "I checked out a tag" rather than "I committed local work" —
+    # safe to auto-attach. We do an explicit fetch here even though
+    # ``apply()`` will fetch again later: ``_pre_check`` runs before
+    # the snapshot stage, so without this the reachable check works
+    # off whatever stale ``origin/<channel>`` ref the local repo last
+    # synced. The duplicate fetch is cheap (a few hundred KB of refs)
+    # and idempotent.
+    target_branch = "main" if channel == "tag" else channel
+    target_remote = f"origin/{target_branch}"
+    fetch = _git(
+        ["fetch", "--quiet", "origin", target_branch],
+        cwd=cwd,
+    )
+    if fetch.returncode != 0:
+        # Network failure — fall through to the abandon-commits error
+        # rather than silently mis-classifying the detached state.
         msg = (
-            f"HEAD is detached at {head_sha}. Self-update from a detached "
-            "state would silently abandon any commits made on top of it. "
-            "Either run `git checkout main` first, or pass --force to "
+            f"HEAD is detached at {head_sha} and `git fetch origin "
+            f"{target_branch}` failed ({fetch.stderr.strip() or 'unknown'}). "
+            f"Run `git checkout {target_branch}` first, or pass --force to "
             "discard the detached commits."
         )
         raise RuntimeError(msg)
-    emit(
-        "git", "warn",
-        f"force=True: HEAD detached at {head_sha}; commits on top of it "
-        "will be abandoned by the upcoming checkout",
+    reachable = _git(
+        ["merge-base", "--is-ancestor", "HEAD", target_remote],
+        cwd=cwd,
     )
+    if reachable.returncode == 0:
+        # Detached SHA is on the remote channel's first-parent line —
+        # safe to attach without losing anything.
+        emit(
+            "git", "info",
+            f"detached at {head_sha} (reachable from {target_remote}); "
+            f"auto-attaching to local branch `{target_branch}`",
+        )
+        # Create or fast-forward the local branch to whatever HEAD is
+        # pointing at. ``git checkout -B`` resets the branch ref if it
+        # exists and creates it otherwise; using ``HEAD`` as the
+        # explicit start-point avoids accidentally fast-forwarding
+        # past our current SHA when the remote moved on between the
+        # fetch above and this checkout.
+        switch = _git(
+            ["checkout", "-B", target_branch, "HEAD"],
+            cwd=cwd,
+        )
+        if switch.returncode != 0:
+            msg = (
+                f"detected reachable detached HEAD at {head_sha} but "
+                f"`git checkout -B {target_branch}` failed: "
+                f"{switch.stderr.strip() or 'unknown'}"
+            )
+            raise RuntimeError(msg)
+        return
+    # Not reachable — preserve the original safety gate.
+    msg = (
+        f"HEAD is detached at {head_sha} with commits not reachable from "
+        f"{target_remote}. Self-update from this state would silently "
+        f"abandon them. Run `git checkout {target_branch}` and merge / "
+        f"cherry-pick first, or pass --force to discard the detached commits."
+    )
+    raise RuntimeError(msg)
 
 
 # --------------------------------------------------------------------- #

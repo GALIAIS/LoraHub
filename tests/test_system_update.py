@@ -110,7 +110,7 @@ def test_detached_head_returns_sha_when_detached(tmp_path: Path) -> None:
 def test_pre_check_passes_on_attached_branch(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     events, emit = _capturing_emit()
-    su._pre_check(repo, force=False, emit=emit)
+    su._pre_check(repo, channel="dev", force=False, emit=emit)
     # Nothing emitted when there's nothing to warn about.
     assert events == []
 
@@ -119,16 +119,57 @@ def test_pre_check_refuses_detached_head_without_force(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _run_git(["checkout", "-q", "--detach", "HEAD"], cwd=repo)
     events, emit = _capturing_emit()
+    # No ``origin/dev`` here so the auto-attach reachable check
+    # short-circuits via the fetch-failed branch and we still raise.
     with pytest.raises(RuntimeError, match="HEAD is detached"):
-        su._pre_check(repo, force=False, emit=emit)
+        su._pre_check(repo, channel="dev", force=False, emit=emit)
 
 
 def test_pre_check_warns_on_detached_head_with_force(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _run_git(["checkout", "-q", "--detach", "HEAD"], cwd=repo)
     events, emit = _capturing_emit()
-    su._pre_check(repo, force=True, emit=emit)
-    assert any("HEAD detached" in m for _phase, level, m in events if level == "warn"), events
+    su._pre_check(repo, channel="dev", force=True, emit=emit)
+    assert any(
+        "detached" in m.lower()
+        for _phase, level, m in events
+        if level == "warn"
+    ), events
+
+
+def test_pre_check_auto_attaches_when_detached_sha_in_remote(tmp_path: Path) -> None:
+    """When the detached SHA is reachable from origin/<channel>, the
+    pre-check switches to the channel branch instead of refusing."""
+    upstream_root = tmp_path / "upstream"
+    upstream_root.mkdir()
+    upstream = _make_repo(upstream_root)
+    # Rename upstream's default branch to ``dev`` so the channel name
+    # we pass into _pre_check lines up with what the remote serves.
+    _run_git(["branch", "-m", "main", "dev"], cwd=upstream)
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+    repo = clone_root / "repo"
+    _run_git(["clone", "-q", str(upstream), str(repo)], cwd=clone_root)
+    # Detach HEAD onto the same SHA the remote dev branch points at —
+    # auto-attach should kick in and put us back on `dev`.
+    _run_git(["checkout", "-q", "--detach", "HEAD"], cwd=repo)
+    # Make sure the local ``dev`` branch ref doesn't exist before the
+    # auto-attach so we exercise the branch-creation path (--checkout -B
+    # creates if missing). ``git branch -D dev`` would fail with the
+    # branch checked out, but we're already detached so it's safe.
+    _run_git(["branch", "-D", "dev"], cwd=repo)
+    events, emit = _capturing_emit()
+    su._pre_check(repo, channel="dev", force=False, emit=emit)
+    branch = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    assert branch == "dev"
+    assert any(
+        "auto-attaching" in m
+        for _phase, level, m in events
+        if level == "info"
+    ), events
 
 
 # --------------------------------------------------------------------- #
