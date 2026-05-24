@@ -93,7 +93,11 @@ ip_diagnostics_epochs = 999
 # Read by train.py when use_ip_adapter is on.
 use_ip_adapter = true
 ip_image_drop_p = 0.05
-caption_dropout_rate = 0.05
+# Bumped 0.05 -> 0.1 by upstream b277443 — heavier caption dropout
+# pushed the resampler to lean less on text and more on the image
+# tower at converged-token training, reducing identity drift on
+# strong-text prompts.
+caption_dropout_rate = 0.1
 # gradient_accumulation_steps = 4
 
 # DiT is frozen; resampler + KV proj + PE-LoRA + live PE encoder all sit on

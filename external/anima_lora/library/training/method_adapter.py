@@ -131,6 +131,16 @@ class MethodAdapter:
         when inactive for this step."""
         return None
 
+    def after_backward(self, ctx: StepCtx) -> None:
+        """Called once per train micro-step, AFTER ``accelerator.backward`` and
+        BEFORE gradient clipping / the optimizer step.
+
+        Lets an adapter inject extra gradient contributions that can't share the
+        primary forward/backward (e.g. soft-tokens gradient-cached contrastive
+        negatives, which can't reuse the anchor's block-swap cycle). Manual
+        backwards here accumulate into the trainable params' ``.grad`` alongside
+        the primary loss and are clipped/stepped with it. No-op by default."""
+
     def validation_baselines(self) -> list[ValidationBaseline]:
         """Return baselines to evaluate alongside the primary validation
         forward. For each baseline, the trainer re-runs ``process_batch`` on

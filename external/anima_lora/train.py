@@ -1199,6 +1199,20 @@ class AnimaTrainer:
         for adapter in self._adapters:
             adapter.on_step_start(step_ctx, batch, is_train=is_train)
 
+    def run_after_backward(self, ctx: TrainCtx):
+        """Dispatch the post-backward hook to adapters (between
+        ``accelerator.backward`` and gradient clipping)."""
+        if not self._adapters:
+            return
+        step_ctx = StepCtx(
+            args=ctx.args,
+            accelerator=ctx.accelerator,
+            network=ctx.network,
+            weight_dtype=ctx.weight_dtype,
+        )
+        for adapter in self._adapters:
+            adapter.after_backward(step_ctx)
+
     def is_train_text_encoder(self, args):
         return not args.network_train_unet_only
 

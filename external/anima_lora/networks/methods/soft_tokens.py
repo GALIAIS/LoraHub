@@ -23,9 +23,11 @@
 # block via monkey-patched Block.forward (ReFT-pattern), a fundamentally
 # different surface.
 #
-# v1: training only. Inference would require the per-step splice to be re-run
-# inside the denoising loop; until that's wired up, save_weights still emits a
-# usable file but inference.py will refuse to load it.
+# Inference path: the per-step splice runs from inside the denoising loop —
+# library/inference/generation.py + networks/spectrum.py call append_postfix(...,
+# timesteps=t) per CFG branch before each forward, mirroring the training-side
+# trainer hook. On Spectrum cached steps the blocks don't fire, so soft tokens
+# silently no-op for those steps (composes freely with --spectrum).
 
 import os
 from typing import Optional
@@ -34,6 +36,11 @@ import torch
 import torch.nn as nn
 
 from library.log import setup_logging
+from library.training.method_adapter import (
+    ForwardArtifacts,
+    MethodAdapter,
+    StepCtx,
+)
 from networks.methods.base import AdapterNetworkBase
 
 import logging
@@ -43,6 +50,13 @@ logger = logging.getLogger(__name__)
 
 # Anima cached crossattn_emb dimension (Qwen3 hidden size, post LLM-adapter).
 DEFAULT_EMBED_DIM = 1024
+
+# Contrastive negative-sourcing modes (docs/proposal/soft_tokens_contrastive.md).
+# ``shuffled`` draws an unrelated cached-TE negative; ``jaccard`` keeps shuffled
+# sourcing but down-weights each negative's logit by its caption tag-overlap;
+# ``hard`` draws a same-artist / different-character sibling (falls back to
+# shuffled for orphan artists).
+CONTRASTIVE_MODES = ("shuffled", "jaccard", "hard")
 
 
 def create_network(
@@ -63,7 +77,10 @@ def create_network(
     splice_position = kwargs.get("splice_position", "end_of_sequence")
     contrastive_weight = float(kwargs.get("contrastive_weight", 0.0))
     contrastive_k = int(kwargs.get("contrastive_k", 1))
-    contrastive_tau = float(kwargs.get("contrastive_tau", 1.0))
+    contrastive_negative_mode = str(kwargs.get("contrastive_negative_mode", "shuffled"))
+    contrastive_tau = float(kwargs.get("contrastive_tau", 0.5))
+    contrastive_warmup_ratio = float(kwargs.get("contrastive_warmup_ratio", 0.1))
+    contrastive_jaccard_alpha = float(kwargs.get("contrastive_jaccard_alpha", 1.0))
     network = SoftTokensNetwork(
         num_tokens=num_tokens,
         embed_dim=embed_dim,
@@ -73,7 +90,10 @@ def create_network(
         splice_position=splice_position,
         contrastive_weight=contrastive_weight,
         contrastive_k=contrastive_k,
+        contrastive_negative_mode=contrastive_negative_mode,
         contrastive_tau=contrastive_tau,
+        contrastive_warmup_ratio=contrastive_warmup_ratio,
+        contrastive_jaccard_alpha=contrastive_jaccard_alpha,
         multiplier=multiplier,
     )
     return network
@@ -89,11 +109,6 @@ def create_network_from_weights(
     for_inference=False,
     **kwargs,
 ):
-    if for_inference:
-        raise NotImplementedError(
-            "soft_tokens v1 is training-only. Inference plumbing (per-step "
-            "block hooks inside the denoising loop) is not wired up yet."
-        )
     if weights_sd is None:
         if os.path.splitext(file)[1] == ".safetensors":
             from safetensors.torch import load_file
@@ -123,9 +138,6 @@ def create_network_from_weights(
     splice_position = kwargs.get(
         "splice_position", metadata_splice or "end_of_sequence"
     )
-    contrastive_weight = float(kwargs.get("contrastive_weight", 0.0))
-    contrastive_k = int(kwargs.get("contrastive_k", 1))
-    contrastive_tau = float(kwargs.get("contrastive_tau", 1.0))
     network = SoftTokensNetwork(
         num_tokens=num_tokens,
         embed_dim=embed_dim,
@@ -133,9 +145,10 @@ def create_network_from_weights(
         n_t_buckets=n_t_buckets,
         init_std=0.0,  # weights are loaded; init_std doesn't matter
         splice_position=splice_position,
-        contrastive_weight=contrastive_weight,
-        contrastive_k=contrastive_k,
-        contrastive_tau=contrastive_tau,
+        # Contrastive is a training-only objective (extra forwards) — it leaves
+        # no learned parameters, so the loaded checkpoint is bit-identical
+        # whether or not it trained. Keep it off on the inference path.
+        contrastive_weight=0.0,
         multiplier=multiplier,
     )
     return network, weights_sd
@@ -167,7 +180,10 @@ class SoftTokensNetwork(AdapterNetworkBase):
         splice_position: str = "end_of_sequence",
         contrastive_weight: float = 0.0,
         contrastive_k: int = 1,
-        contrastive_tau: float = 1.0,
+        contrastive_negative_mode: str = "shuffled",
+        contrastive_tau: float = 0.5,
+        contrastive_warmup_ratio: float = 0.1,
+        contrastive_jaccard_alpha: float = 1.0,
         multiplier: float = 1.0,
     ):
         super().__init__()
@@ -183,24 +199,45 @@ class SoftTokensNetwork(AdapterNetworkBase):
                 f"splice_position must be 'front_of_padding' or 'end_of_sequence', "
                 f"got {splice_position!r}"
             )
+        if contrastive_negative_mode not in CONTRASTIVE_MODES:
+            raise ValueError(
+                f"contrastive_negative_mode must be one of {CONTRASTIVE_MODES}, "
+                f"got {contrastive_negative_mode!r}"
+            )
+        if contrastive_weight > 0.0:
+            if contrastive_k < 1:
+                raise ValueError(f"contrastive_k must be >= 1, got {contrastive_k}")
+            if contrastive_tau <= 0.0:
+                raise ValueError(
+                    f"contrastive_tau must be positive, got {contrastive_tau}"
+                )
 
         self.num_tokens = num_tokens
         self.embed_dim = embed_dim
         self.n_layers = n_layers
         self.n_t_buckets = n_t_buckets
         self.splice_position = splice_position
-        # Paper's InfoNCE objective. ``contrastive_k`` is the number of
-        # in-batch negatives per anchor (paper had N-1 = full batch; we use a
-        # tunable subset since each negative costs one extra DiT forward).
-        # ``contrastive_tau`` constrains the unbounded MSE-as-similarity per
-        # paper §3.1 ("exponential function to constrain the logit values").
-        self.contrastive_weight = contrastive_weight
-        self.contrastive_k = max(int(contrastive_k), 0)
-        self.contrastive_tau = float(contrastive_tau)
-        # Latest contrastive value cached by SoftTokensMethodAdapter for
-        # logging via metrics(); ``_last_*`` mirrors the postfix pattern.
-        self._last_contrastive_value: Optional[float] = None
         self.multiplier = multiplier
+
+        # Contrastive objective (SoftREPA-style InfoNCE, B=1-adapted via
+        # cached-TE hard negatives — docs/proposal/soft_tokens_contrastive.md).
+        # Pure training-time objective: the extra forwards live in
+        # ``SoftTokensMethodAdapter.extra_forwards`` and the warmup-gated weight
+        # is applied composer-side. ``_contrastive_target_weight`` gates composer
+        # activation,
+        # ``_contrastive_weight`` is the live (warmup-held) value the loss
+        # handler multiplies by.
+        self._contrastive_target_weight = float(contrastive_weight)
+        self._contrastive_warmup_ratio = float(contrastive_warmup_ratio)
+        self._contrastive_tau = float(contrastive_tau)
+        self.contrastive_k = int(contrastive_k)
+        self.contrastive_negative_mode = str(contrastive_negative_mode)
+        self.contrastive_jaccard_alpha = float(contrastive_jaccard_alpha)
+        self._contrastive_weight = (
+            0.0
+            if self._contrastive_warmup_ratio > 0.0
+            else self._contrastive_target_weight
+        )
 
         self.tokens = nn.Parameter(
             torch.randn(n_layers, num_tokens, embed_dim) * init_std
@@ -226,15 +263,9 @@ class SoftTokensNetwork(AdapterNetworkBase):
 
         n_token_params = self.tokens.numel()
         n_offset_params = self.t_offsets.weight.numel()
-        cs_note = (
-            f", contrastive(λ={contrastive_weight}, k={contrastive_k}, "
-            f"τ={contrastive_tau})"
-            if contrastive_weight > 0.0
-            else ""
-        )
         logger.info(
             f"SoftTokensNetwork: {n_layers} layers × {num_tokens} tokens × dim {embed_dim}, "
-            f"{n_t_buckets} t-buckets, splice={splice_position}{cs_note} → "
+            f"{n_t_buckets} t-buckets, splice={splice_position} → "
             f"{n_token_params + n_offset_params} params "
             f"({n_token_params} base + {n_offset_params} t-offset)"
         )
@@ -413,9 +444,13 @@ class SoftTokensNetwork(AdapterNetworkBase):
             "ss_n_layers": str(self.n_layers),
             "ss_n_t_buckets": str(self.n_t_buckets),
             "ss_splice_position": self.splice_position,
-            "ss_contrastive_weight": str(self.contrastive_weight),
+            # Contrastive objective is training-only (no learned params), but
+            # stamp the config for run provenance.
+            "ss_contrastive_weight": str(self._contrastive_target_weight),
             "ss_contrastive_k": str(self.contrastive_k),
-            "ss_contrastive_tau": str(self.contrastive_tau),
+            "ss_contrastive_negative_mode": self.contrastive_negative_mode,
+            "ss_contrastive_tau": str(self._contrastive_tau),
+            "ss_contrastive_warmup_ratio": str(self._contrastive_warmup_ratio),
         }
 
     def load_weights(self, file):
@@ -438,182 +473,423 @@ class SoftTokensNetwork(AdapterNetworkBase):
         )
 
     def metrics(self, ctx) -> dict[str, float]:
+        """TensorBoard bank-state diagnostics.
+
+        ``soft_tokens/*`` — bank-state diagnostics, computed on the K base
+        tokens averaged over layers. Read these as a collapse / divergence
+        detector:
+          - ``tokens_mean_cos`` near 0  → bank is orthogonal-ish (good).
+          - ``tokens_mean_cos`` near 1  → slot collapse (slots redundant).
+          - ``tokens_mean_norm`` blowing up → bank magnitude diverging.
+          - ``offset_mean_norm`` staying ~0 → t-offset buckets aren't training
+            (FM gradient isn't reaching them; check LR).
+        """
+        del ctx
         out: dict[str, float] = {}
-        if self.contrastive_weight > 0.0 and self._last_contrastive_value is not None:
-            v = float(self._last_contrastive_value)
-            out["reg/soft_tokens_contrastive"] = v
-            out["reg/soft_tokens_contrastive_weighted"] = self.contrastive_weight * v
+
+        # Bank-state diagnostics always logged when there are ≥ 2 tokens per
+        # layer to take pairs from — cheap collapse/divergence signal.
+        if self.num_tokens >= 2 and self.n_layers > 0:
+            tokens = self.tokens.detach()
+            # Pairwise cos / d² per layer, averaged across layers.
+            cos_sum = 0.0
+            d_min = float("inf")
+            for k in range(self.n_layers):
+                z = tokens[k]
+                zn = torch.nn.functional.normalize(z, dim=-1, eps=1e-8)
+                gram = zn @ zn.t()
+                n = gram.shape[0]
+                iu = torch.triu_indices(n, n, offset=1, device=gram.device)
+                cos_sum += float(gram[iu[0], iu[1]].mean().item())
+                d_sq = torch.pdist(z, p=2).pow(2)
+                if d_sq.numel():
+                    d_min = min(d_min, float(d_sq.min().item()))
+            out["soft_tokens/tokens_mean_cos"] = cos_sum / self.n_layers
+            out["soft_tokens/tokens_min_d_sq"] = d_min if d_min != float("inf") else 0.0
+            out["soft_tokens/tokens_mean_norm"] = float(
+                tokens.flatten(1).norm(dim=-1).mean().item()
+            )
+        out["soft_tokens/offset_mean_norm"] = float(
+            self.t_offsets.weight.detach()
+            .view(self.n_t_buckets, self.n_layers, self.embed_dim)
+            .permute(1, 0, 2)
+            .flatten(1)
+            .norm(dim=-1)
+            .mean()
+            .item()
+        )
         return out
 
+    def step_contrastive_warmup(self, global_step: int, max_train_steps: int) -> None:
+        """Activate the contrastive objective once training crosses its warmup
+        window. Step function: ``_contrastive_weight`` holds at 0 for the first
+        ``_contrastive_warmup_ratio`` of steps, then flips to
+        ``_contrastive_target_weight``. No-op when target is 0.
 
-# ───────────────────────────────────────────────── trainer integration
+        Rationale: let plain FM gradient shape a non-degenerate bank before the
+        contrastive term starts pulling the soft tokens toward text
+        discrimination, so the contrast sharpens an existing signal rather than
+        fighting a near-random init.
+        """
+        target = float(self._contrastive_target_weight)
+        ratio = float(self._contrastive_warmup_ratio)
+        if target <= 0.0:
+            return
+        if ratio <= 0.0 or max_train_steps <= 0:
+            self._contrastive_weight = target
+            return
+        warmup_steps = int(max_train_steps * ratio)
+        self._contrastive_weight = 0.0 if global_step < warmup_steps else target
+
+    def contrastive_loss(
+        self,
+        v_pos: torch.Tensor,
+        v_neg: torch.Tensor,
+        v_target: torch.Tensor,
+        neg_penalty: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """SoftREPA-style InfoNCE over cached-TE negatives (B=1-adapted).
+
+        Each forward shares the same ``(x_t, ε, t)`` and spliced soft tokens;
+        only ``crossattn_emb`` differs (matched vs. mismatched text). The logit
+        for a forward is the negative flow-matching error against the shared
+        velocity target, scaled by τ::
+
+            ℓ_* = -‖v_* − v_target‖² / τ            (mean over C·H·W per sample)
+            L   = -log( exp(ℓ_pos) / Σ_{pos,neg} exp(ℓ_*) )
+
+        Gradient flows to the soft tokens (via every ``v_*``) to make the
+        matched text explain the anchor's latent better than mismatched text —
+        i.e. to sharpen the cross-attention's text discrimination.
+
+        ``neg_penalty`` (the ``jaccard`` mode's ``α·s``, shape ``(B, k)``) is
+        subtracted from each negative logit before the softmax — a negative that
+        shares tags with the anchor becomes a less-surprising mismatch and pulls
+        less gradient. ``None`` ⇒ plain InfoNCE (``shuffled`` / ``hard``).
+
+        Shapes
+        ------
+        v_pos, v_target : ``(B, C, H, W)``
+        v_neg           : ``(B, k, C, H, W)``
+        neg_penalty     : ``(B, k)`` or None
+
+        Returns
+        -------
+        (loss_scalar, diagnostics) where diagnostics carries the contrastive
+        accuracy (pos beats every negative) and the mean pos−neg logit gap for
+        TensorBoard.
+        """
+        logit_pos, logits_neg = self._velocities_to_logits(
+            v_pos, v_neg, v_target, neg_penalty
+        )
+        loss = self._infonce_from_logits(logit_pos, logits_neg)
+        return loss, self._contrastive_diagnostics(logit_pos, logits_neg)
+
+    def _velocities_to_logits(
+        self,
+        v_pos: torch.Tensor,
+        v_neg: torch.Tensor,
+        v_target: torch.Tensor,
+        neg_penalty: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-sample FM-error logits for the InfoNCE softmax.
+
+        Shared by the monolithic ``contrastive_loss`` and the grad-cached
+        block-swap path (``SoftTokensMethodAdapter``). Differentiable in every
+        velocity argument, so the caller can ``.detach()`` whichever branch it
+        wants to drop from the returned logits' graph — this is what lets the
+        grad-cache path compute ``∂L/∂v_pos`` and ``∂L/∂v_neg`` as separate
+        partials without duplicating the τ / penalty math.
+
+        Returns ``(logit_pos (B,), logits_neg (B, k))``.
+        """
+        tau = float(self._contrastive_tau)
+        vp = v_pos.float()
+        vt = v_target.float()
+        vn = v_neg.float()
+        B = vp.shape[0]
+        k = vn.shape[1]
+        # Per-sample mean-squared FM error → logit. Reduce over all non-batch
+        # dims so τ has a stable scale across resolutions.
+        pos_err = (vp - vt).pow(2).reshape(B, -1).mean(dim=1)  # (B,)
+        logit_pos = -pos_err / tau  # (B,)
+        vt_exp = vt.unsqueeze(1)  # (B, 1, C, H, W)
+        neg_err = (vn - vt_exp).pow(2).reshape(B, k, -1).mean(dim=2)  # (B, k)
+        logits_neg = -neg_err / tau  # (B, k)
+        if neg_penalty is not None:
+            # jaccard mode: down-weight tag-overlapping negatives.
+            logits_neg = logits_neg - neg_penalty.to(logits_neg.dtype)
+        return logit_pos, logits_neg
+
+    @staticmethod
+    def _infonce_from_logits(
+        logit_pos: torch.Tensor, logits_neg: torch.Tensor
+    ) -> torch.Tensor:
+        # InfoNCE: -log softmax of the positive over {pos, neg_1..k}.
+        all_logits = torch.cat([logit_pos.unsqueeze(1), logits_neg], dim=1)  # (B, 1+k)
+        return (-logit_pos + torch.logsumexp(all_logits, dim=1)).mean()
+
+    @staticmethod
+    def _contrastive_diagnostics(
+        logit_pos: torch.Tensor, logits_neg: torch.Tensor
+    ) -> dict[str, float]:
+        with torch.no_grad():
+            acc = (logit_pos.unsqueeze(1) > logits_neg).all(dim=1).float().mean()
+            gap = (logit_pos - logits_neg.mean(dim=1)).mean()
+        return {
+            "contrastive_acc": float(acc.item()),
+            "contrastive_logit_gap": float(gap.item()),
+        }
 
 
-class SoftTokensMethodAdapter:
-    """Trainer adapter: paper §3.1 InfoNCE forwards on top of plain FM.
+class SoftTokensMethodAdapter(MethodAdapter):
+    """Runs the contrastive negative forwards for soft tokens.
 
-    For each anchor i, run k extra DiT forwards with the *same* (x_t, ε, t)
-    but with text features rolled by j ∈ {1, …, k} along the batch axis —
-    giving k mismatched (x_i, y_{(i+j) mod B}) pairs. Build the (1+k)-way
-    InfoNCE softmax over the negative diffusion-loss logits (paper eq. 13–14)
-    with a constant temperature τ. The matched FM loss is unchanged — this
-    adds a contrastive *regularizer* to the existing per-sample FM, not a
-    replacement (the paper had FID regress under the contrastive weight on
-    SD3 and Anima's narrower caption distribution likely needs a softer
-    blend).
+    The contrastive objective (docs/proposal/soft_tokens_contrastive.md) needs
+    one extra DiT forward per negative, sharing the anchor's ``(x_t, ε, t)`` and
+    spliced soft tokens but swapping ``crossattn_emb`` for a cached negative
+    text embedding. This is exactly the ``extra_forwards`` contract.
 
-    The soft tokens themselves don't depend on text content, so the cached
-    ``_step_layer_tokens`` from the matched forward is reused across negative
-    forwards (the per-block hook re-splices into the *rolled* crossattn).
-    Per-sample seqlens, however, do roll with the text — for FOP splice we
-    refresh ``_step_seqlens`` before each negative forward.
+    Wiring:
+      - ``prime_for_forward`` stashes ``batch["neg_crossattn_emb"]`` (the
+        dataset surfaces ``(B, k, S, D)`` on train steps only).
+      - ``extra_forwards`` runs the ``k`` negative forwards and returns the raw
+        InfoNCE scalar under ``"soft_tokens_contrastive"``; the composer applies
+        the warmup-gated ``_contrastive_weight``.
+      - ``metrics`` surfaces the term + accuracy + logit gap each log step.
 
-    No-op when ``network.contrastive_weight <= 0``, in validation, when
-    ``crossattn_emb`` is None (uncached path), or when batch size < 2 (no
-    in-batch negatives possible).
+    Training-only: the negatives are absent (and forwards skipped) outside
+    training, so validation FM-MSE stays a clean per-token regression metric.
     """
 
-    name = "soft_tokens"
+    name = "soft_tokens_contrastive"
 
     def __init__(self) -> None:
-        self._last_contrastive_value: Optional[float] = None
+        self._neg_crossattn: Optional[torch.Tensor] = None
+        self._neg_jaccard: Optional[torch.Tensor] = None
+        self._last_metrics: dict[str, float] = {}
+        # Block-swap grad-cache state: when block swapping is active the
+        # negative backward can't share the anchor's forward/backward cycle, so
+        # it's deferred to ``after_backward``. ``None`` when no replay is queued.
+        self._pending_gradcache: Optional[dict] = None
 
-    def on_network_built(self, ctx) -> None:
-        # Surface the adapter back to the network so its ``metrics()`` can
-        # mirror our last contrastive value (mirroring postfix's pattern).
-        if ctx.network is not None and not hasattr(ctx.network, "_soft_tokens_adapter"):
-            ctx.network._soft_tokens_adapter = self
+    def prime_for_forward(
+        self, ctx: StepCtx, batch, latents: torch.Tensor, *, is_train: bool
+    ) -> None:
+        del ctx, latents
+        if not is_train or not isinstance(batch, dict):
+            self._neg_crossattn = None
+            self._neg_jaccard = None
+            return
+        self._neg_crossattn = batch.get("neg_crossattn_emb")
+        # Per-negative tag-overlap Jaccard (B, k), present only in jaccard mode.
+        self._neg_jaccard = batch.get("neg_jaccard")
 
-    def on_step_start(self, ctx, batch, *, is_train: bool) -> None:
-        pass
-
-    def prime_for_forward(self, ctx, batch, latents, *, is_train: bool) -> None:
-        pass
-
-    def validation_baselines(self):
-        return []
-
-    def on_epoch_end(self, ctx) -> None:
-        pass
-
-    def metrics(self, ctx) -> dict:
-        return {}
-
-    def extra_forwards(self, ctx, primary) -> Optional[dict]:
+    def extra_forwards(self, ctx: StepCtx, primary: ForwardArtifacts) -> Optional[dict]:
         if not primary.is_train:
             return None
-        network = ctx.network
-        weight = float(getattr(network, "contrastive_weight", 0.0) or 0.0)
-        k = int(getattr(network, "contrastive_k", 0) or 0)
-        if weight <= 0.0 or k <= 0:
+        neg = self._neg_crossattn
+        if neg is None:
             return None
-        if primary.crossattn_emb is None:
-            # Uncached text path — the rolled-text trick needs the (B, S, D)
-            # tensor pre-splice. Fail loudly so users notice the gate.
-            raise RuntimeError(
-                "soft_tokens contrastive requires cached crossattn (set "
-                "cache_llm_adapter_outputs=true in the method config)"
-            )
+        net = ctx.accelerator.unwrap_model(ctx.network)
+        if float(getattr(net, "_contrastive_target_weight", 0.0) or 0.0) <= 0.0:
+            return None
 
-        anima = primary.anima_call
-        noisy = primary.noisy_model_input  # 5D
+        device = primary.noisy_model_input.device
+        ce_dtype = primary.crossattn_emb.dtype
+        neg = neg.to(device)  # (B, k, S, D)
+        k = neg.shape[1]
+
+        v_pos = primary.model_pred.squeeze(2)  # (B, C, H, W) — live anchor graph
+        # Rectified-flow velocity target — same as train.py's primary target.
+        v_target = primary.noise - primary.latents  # (B, C, H, W)
         timesteps = primary.timesteps
-        target = primary.noise - primary.latents  # [B, C, H, W]
-        padding_mask = primary.padding_mask
-        kw = primary.forward_kwargs
+        base_kw = dict(primary.forward_kwargs)
+        neg_penalty = self._neg_penalty(net, device)
 
-        # The block hook inside Block.forward consumes whatever the most
-        # recent ``append_postfix`` call cached on the network. The hook
-        # re-runs in this scope when we call anima(...) with rolled text, so
-        # the same per-(layer, t) tokens splice into the rolled crossattn —
-        # exactly the paper's "shared (x_t, t, ε), varying y" setup. The
-        # primary forward already wrote crossattn_emb that has the spliced
-        # tokens at the splice position; we need the PRE-splice tensor to
-        # roll. Recover it by undoing the splice on the cached tokens, then
-        # roll, then let the block hook re-splice.
-        spliced = primary.crossattn_emb  # post-splice from primary call
-        B = spliced.shape[0]
-        if B < 2:
-            return None  # batchsize 1: no in-batch negatives
+        # Snapshot the anchor's per-step splice state. The negative value passes
+        # below mutate the per-step buffers, so we restore the anchor's
+        # afterwards. (The anchor's own autograd graph holds tensor *references*,
+        # so it is unaffected by these attribute writes — this restore just keeps
+        # the live network state coherent.)
+        anchor_tokens = net._step_layer_tokens
+        anchor_seqlens = net._step_seqlens
 
-        K = network.num_tokens
-        S = spliced.shape[1]
-        # Reverse the EOS splice so we have the original (zero-padded) text;
-        # for FOP we just trust the original cached path holds (the splice
-        # writes K tokens at variable per-sample offsets, scatter is not
-        # trivially invertible — gate FOP+contrastive off for now).
-        if network.splice_position != "end_of_sequence":
-            raise RuntimeError(
-                "soft_tokens contrastive currently requires "
-                "splice_position='end_of_sequence' (FOP scatter is not "
-                "trivially invertible). Switch the config or set "
-                "contrastive_weight=0."
-            )
-        # The K tail slots were originally zero-padding; restore that for
-        # rolling so the rolled negative isn't contaminated by the matched
-        # anchor's spliced tokens.
-        zero_tail = torch.zeros(
-            B, K, spliced.shape[2], dtype=spliced.dtype, device=spliced.device
-        )
-        original_text = torch.cat([spliced[:, : S - K, :], zero_tail], dim=1)
+        dit = ctx.accelerator.unwrap_model(primary.anima_call)
 
-        # Per-sample MSE for matched (already computed by the trainer): same
-        # functional form as paper eq. 13's logit numerator. We recompute on
-        # the primary model_pred to avoid re-running the matched forward.
-        # primary.model_pred is 5D; squeeze to 4D for per-sample MSE.
-        v_match = primary.model_pred.squeeze(2)  # [B, C, H, W]
-        per_sample_mse_list = [((v_match - target) ** 2).mean(dim=(1, 2, 3))]
+        # ── Gradient caching, split so the negative DiT forward NEVER overlaps
+        # the anchor backward. The naive approach (wrap each negative in
+        # ``checkpoint`` and let the single fused backward recompute it) OOMs:
+        # the recompute fires *during* ``accelerator.backward`` while the anchor's
+        # un-checkpointed activation graph is still live, so two full forwards'
+        # activations are resident at once. And under block swap it also crashes —
+        # the recompute re-enters ``_run_blocks`` against the offloader's
+        # end-of-forward layout (block 0 parked on CPU → cuda/cpu mm mismatch).
+        #
+        # Instead we split ∂L_con/∂θ into two partials that each run as their own
+        # clean forward/backward:
+        #   • ∂L/∂v_pos — rides the anchor's FM backward. The returned loss is
+        #     built from ``logit_pos`` (live anchor graph) + *detached* negative
+        #     logits, so ``accelerator.backward`` pushes it into the soft tokens.
+        #   • ∂L/∂v_neg — deferred to ``after_backward`` (post-anchor-backward,
+        #     when the anchor activations are freed and, under swap, the offloader
+        #     is head-resident). We forward the negatives once here under no_grad
+        #     just for their velocity *values* + the cached ``g_neg``, then replay
+        #     each as an isolated forward+backward in ``after_backward``.
+        #
+        # ``prepare_block_swap_before_forward`` is a no-op at ``blocks_to_swap=0``,
+        # so this single path serves both the swap and no-swap cases; the no-swap
+        # case still wins on peak memory (one forward graph, never two).
 
-        # k extra forwards with rolled text. Cyclic shifts ensure each anchor
-        # sees k distinct negatives (provided B > k). When B <= k we run only
-        # B-1 shifts (still informative).
-        k_eff = min(k, B - 1)
-        for j in range(1, k_eff + 1):
-            rolled_text = torch.roll(original_text, shifts=j, dims=0)
-            # Re-call append_postfix to refresh cached state (timesteps and
-            # — for FOP — seqlens). The cached tokens are the same since
-            # timesteps haven't changed, but this is the contract.
-            seqlens_kwarg = (
-                kw.get("crossattn_seqlens") if isinstance(kw, dict) else None
-            )
-            if seqlens_kwarg is None:
-                seqlens_kwarg = torch.full(
-                    (B,), S - K, dtype=torch.int32, device=rolled_text.device
+        # Negative velocity *values* under no_grad — no activation graph retained,
+        # so this adds only a transient working set on top of the live anchor
+        # activations. Each forward is bracketed by a block-swap reset (no-op when
+        # not swapping); under swap this leaves the offloader in the same
+        # end-of-forward state the anchor left, so the FM backward is unaffected.
+        v_neg_vals = []
+        with torch.no_grad():
+            for j in range(k):
+                dit.prepare_block_swap_before_forward(free_cache=False)
+                v_neg_vals.append(
+                    self._neg_forward(
+                        net, primary.anima_call,
+                        primary.noisy_model_input, primary.padding_mask,
+                        base_kw, timesteps, ce_dtype, neg[:, j],
+                    )
                 )
-            rolled_seqlens = torch.roll(seqlens_kwarg, shifts=j, dims=0)
-            network.append_postfix(rolled_text, rolled_seqlens, timesteps=timesteps)
-            v_neg = anima(
-                noisy,
-                timesteps,
-                rolled_text,
-                padding_mask=padding_mask,
-                **kw,
-            ).squeeze(2)  # [B, C, H, W]
-            per_sample_mse_list.append(((v_neg - target) ** 2).mean(dim=(1, 2, 3)))
+        net._step_layer_tokens = anchor_tokens
+        net._step_seqlens = anchor_seqlens
+        v_neg = torch.stack(v_neg_vals, dim=1)  # (B, k, C, H, W), detached values
 
-        # Restore the primary's cached state so any downstream code that
-        # peeks at network._step_layer_tokens / _step_seqlens sees the
-        # matched-anchor view (the loss-side reads target=ε−x and won't
-        # trigger another splice, but be defensive).
-        primary_seqlens = (
-            kw.get("crossattn_seqlens") if isinstance(kw, dict) else None
+        # Composer-side loss: grad only via v_pos (negatives are constants).
+        logit_pos, logits_neg = net._velocities_to_logits(
+            v_pos, v_neg, v_target, neg_penalty
         )
-        if primary_seqlens is None:
-            primary_seqlens = torch.full(
-                (B,), S - K, dtype=torch.int32, device=spliced.device
+        loss = net._infonce_from_logits(logit_pos, logits_neg)
+        diag = net._contrastive_diagnostics(logit_pos.detach(), logits_neg.detach())
+        self._record_metrics(net, loss, diag)
+
+        live = float(getattr(net, "_contrastive_weight", 0.0) or 0.0)
+        if live > 0.0:
+            # Cache ∂L/∂v_neg with v_pos held constant (the matching partial to
+            # the v_pos branch above). Tiny head — no DiT forward here.
+            v_neg_leaf = v_neg.detach().requires_grad_(True)
+            lp_d, ln_leaf = net._velocities_to_logits(
+                v_pos.detach(), v_neg_leaf, v_target, neg_penalty
             )
-        network.append_postfix(original_text, primary_seqlens, timesteps=timesteps)
+            g_loss = net._infonce_from_logits(lp_d, ln_leaf)
+            (g_neg,) = torch.autograd.grad(g_loss, v_neg_leaf)
+            self._pending_gradcache = {
+                "net": net,
+                "dit": dit,
+                "anima_call": primary.anima_call,
+                "noisy_model_input": primary.noisy_model_input,
+                "padding_mask": primary.padding_mask,
+                "timesteps": timesteps,
+                "base_kw": base_kw,
+                "neg": neg,
+                "ce_dtype": ce_dtype,
+                "g_neg": g_neg.detach(),
+                "weight": live,
+                "anchor_tokens": anchor_tokens,
+                "anchor_seqlens": anchor_seqlens,
+            }
+        else:
+            self._pending_gradcache = None
+        return {"soft_tokens_contrastive": loss}
 
-        # InfoNCE: -log( exp(-mse_match/τ) / Σ_j exp(-mse_j/τ) )
-        # Equivalent to log_softmax over (1+k_eff) candidates at index 0.
-        mse_stack = torch.stack(per_sample_mse_list, dim=0)  # [(1+k_eff), B]
-        logits = -mse_stack / max(network.contrastive_tau, 1e-6)
-        log_probs = torch.nn.functional.log_softmax(logits, dim=0)
-        contrastive_per_sample = -log_probs[0]  # [B]
-        contrastive_loss = contrastive_per_sample.mean()
+    def after_backward(self, ctx: StepCtx) -> None:
+        """Replay the cached contrastive negatives after the FM backward.
 
-        # Cache scalar value for metrics().
-        network._last_contrastive_value = float(contrastive_loss.detach().item())
-        self._last_contrastive_value = network._last_contrastive_value
+        The anchor's FM backward has finished, so its activation graph is freed
+        and (under block swap) the offloader is head-resident — each negative
+        re-forward + immediate backward is then a clean, isolated forward/backward
+        whose peak is a single forward graph, never stacked on the anchor's. The
+        cached ``weight·g_neg`` gradient is pushed back through ``self.tokens``,
+        accumulating onto the FM backward's grads on the same params (no
+        ``zero_grad`` runs between here and the optimizer step). Single-process
+        (the project's 16GB target) — a manual backward inside
+        ``accelerator.accumulate`` would need DDP no-sync handling under multi-GPU.
+        """
+        pend = self._pending_gradcache
+        if pend is None:
+            return
+        self._pending_gradcache = None
 
-        return {"soft_tokens": {"contrastive_loss": contrastive_loss}}
+        net = pend["net"]
+        dit = pend["dit"]
+        accel = ctx.accelerator
+        # Match accelerate's 1/N loss scaling so contrastive grads land on the
+        # same scale as the FM grads it accumulates alongside.
+        accum = max(1, int(getattr(accel, "gradient_accumulation_steps", 1) or 1))
+        scale = pend["weight"] / accum
+        neg = pend["neg"]
+        k = neg.shape[1]
+        ts = pend["timesteps"]
+        ce_dtype = pend["ce_dtype"]
+        g_neg = pend["g_neg"]
+
+        with accel.autocast(), torch.enable_grad():
+            for j in range(k):
+                dit.prepare_block_swap_before_forward(free_cache=False)
+                v_neg_j = self._neg_forward(
+                    net, pend["anima_call"],
+                    pend["noisy_model_input"], pend["padding_mask"],
+                    pend["base_kw"], ts, ce_dtype, neg[:, j],
+                )
+                grad_j = (scale * g_neg[:, j]).to(v_neg_j.dtype)
+                torch.autograd.backward(v_neg_j, grad_tensors=grad_j)
+        net._step_layer_tokens = pend["anchor_tokens"]
+        net._step_seqlens = pend["anchor_seqlens"]
+
+    @staticmethod
+    def _neg_forward(
+        net, anima_call, noisy_model_input, padding_mask,
+        base_kw, timesteps, ce_dtype, neg_emb,
+    ) -> torch.Tensor:
+        """One negative DiT forward → velocity (B, C, H, W).
+
+        Re-primes the per-block soft-token splice for this negative's text and
+        runs the frozen DiT with the anchor's (x_t, ε, t). Returns the squeezed
+        4D velocity.
+        """
+        neg_emb = neg_emb.to(dtype=ce_dtype)
+        # Cached crossattn_emb is zero-padded past the real text length (the LLM
+        # adapter zeroes padding positions), so non-zero rows give the per-sample
+        # seqlen the front_of_padding splice needs.
+        seqlens = (neg_emb.abs().sum(dim=-1) > 0).sum(dim=-1).to(torch.int32)
+        # Returns crossattn_emb unchanged — the per-block hooks splice during the
+        # forward off the buffer this call primes.
+        ce = net.append_postfix(neg_emb, seqlens, timesteps=timesteps)
+        kw_j = dict(base_kw)
+        if "pooled_text_override" in kw_j:
+            kw_j["pooled_text_override"] = neg_emb.max(dim=1).values
+        return anima_call(
+            noisy_model_input, timesteps, ce, padding_mask=padding_mask, **kw_j
+        ).squeeze(2)
+
+    def _neg_penalty(self, net, device) -> Optional[torch.Tensor]:
+        """jaccard mode: α·s subtracted from each negative logit (s = caption
+        tag-overlap surfaced by the dataset). ``None`` for shuffled / hard."""
+        if (
+            getattr(net, "contrastive_negative_mode", "shuffled") == "jaccard"
+            and self._neg_jaccard is not None
+        ):
+            alpha = float(getattr(net, "contrastive_jaccard_alpha", 1.0) or 0.0)
+            return alpha * self._neg_jaccard.to(device).float()
+        return None
+
+    def _record_metrics(self, net, loss, diag) -> None:
+        live = float(getattr(net, "_contrastive_weight", 0.0) or 0.0)
+        loss_val = float(loss.detach().item())
+        self._last_metrics = {
+            "reg/soft_tokens_contrastive": loss_val,
+            "reg/soft_tokens_contrastive_weighted": live * loss_val,
+            "reg/soft_tokens_contrastive_lambda_live": live,
+            "soft_tokens/contrastive_acc": diag["contrastive_acc"],
+            "soft_tokens/contrastive_logit_gap": diag["contrastive_logit_gap"],
+        }
+
+    def metrics(self, ctx) -> dict:
+        del ctx
+        return dict(self._last_metrics)

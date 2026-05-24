@@ -563,6 +563,13 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
         if state.profile_started:
             torch.cuda.nvtx.range_pop()
 
+        # Adapters that defer part of their backward (e.g. soft-tokens
+        # gradient-cached contrastive negatives) run here. Manual
+        # backwards inside accumulate into the trainable params'
+        # ``.grad`` alongside the primary loss and get clipped/stepped
+        # with it.
+        trainer.run_after_backward(state.train_ctx)
+
         if accelerator.sync_gradients:
             net_unwrapped = accelerator.unwrap_model(network)
             # Snapshot Hydra up-weight grad norms before zero_grad wipes them.
