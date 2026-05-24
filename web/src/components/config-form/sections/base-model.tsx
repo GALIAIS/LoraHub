@@ -3,7 +3,8 @@ import type { BackendId } from "@/lib/api"
 import { ARCH_OPTIONS, ARCH_VARIANT_OPTIONS } from "../options"
 import { SUPPORTED_ARCHS_BY_BACKEND } from "../backend-meta"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { EnumSelect, PathInput, Row } from "../widgets"
+import { EnumSelect, Row } from "../widgets"
+import { ModelPathPicker } from "../widgets-model-picker"
 
 export const BaseModelFields = memo(function BaseModelFields({
   value,
@@ -78,10 +79,10 @@ export const BaseModelFields = memo(function BaseModelFields({
       <Row
         label="基础模型"
         required
-        description="基础模型 .safetensors 文件的绝对路径。"
+        description="基础模型 .safetensors 文件路径。可从 models/ 目录扫描结果下拉选择，或手动输入绝对/相对路径。"
         errors={errorMap.get("baseModel.checkpoint")}
       >
-        <PathInput
+        <ModelPathPicker
           value={value.checkpoint}
           onChange={(v) => set(["baseModel", "checkpoint"], v)}
           placeholder="./models/sdxl_base_1.0.safetensors"
@@ -92,7 +93,7 @@ export const BaseModelFields = memo(function BaseModelFields({
         description="可选。使用自定义 VAE 替代基础模型自带的。"
         errors={errorMap.get("baseModel.vae")}
       >
-        <PathInput
+        <ModelPathPicker
           value={value.vae ?? ""}
           onChange={(v) => set(["baseModel", "vae"], v || null)}
           placeholder="./models/sdxl_vae.safetensors（可选）"

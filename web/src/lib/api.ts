@@ -663,6 +663,20 @@ export interface ModelDownloadSession {
   finished_at: number | null
 }
 
+export interface ScannedModel {
+  path: string
+  relative_path: string
+  name: string
+  size_bytes: number
+  mtime: number
+}
+
+export interface ScannedModelsResponse {
+  root: string
+  files: ScannedModel[]
+  elapsed_s: number
+}
+
 export interface DatasetCaptionResponse {
   path: string
   caption: string | null
@@ -1158,6 +1172,10 @@ export const api = {
     }),
   getModelDownload: (sessionId: string) =>
     http<ModelDownloadSession>(`/models/download/${sessionId}`),
+  scanModels: (root?: string) => {
+    const qs = root ? `?root=${encodeURIComponent(root)}` : ""
+    return http<ScannedModelsResponse>(`/models/scan${qs}`)
+  },
   tagDataset: (body: TagDatasetRequest) =>
     http<TaggingSession>("/tagging/tag", {
       method: "POST",
