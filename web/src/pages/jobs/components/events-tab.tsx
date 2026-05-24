@@ -18,7 +18,7 @@ export function EventsTab({
   jobId: string | null
   fallbackTotalSteps?: number | null
 }) {
-  const [sub, setSub] = useState<SubView>("timeline")
+  const [sub, setSub] = useState<SubView>("raw")
   return (
     <Card className="overflow-hidden flex flex-col h-full min-h-0">
       <CardHeader className="py-3 px-4 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
@@ -29,8 +29,8 @@ export function EventsTab({
           <div className="inline-flex rounded-[4px] border border-border/60 bg-background/60 p-[2px]">
             {(
               [
-                { value: "timeline", label: "时间轴" },
                 { value: "raw", label: "原始日志" },
+                { value: "timeline", label: "时间轴" },
               ] as { value: SubView; label: string }[]
             ).map((opt) => (
               <button
