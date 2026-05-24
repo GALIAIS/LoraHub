@@ -26,7 +26,6 @@ Routes:
 
 from __future__ import annotations
 
-import io
 import logging
 import shutil
 import zipfile
@@ -43,6 +42,7 @@ from lorahub.api.jobs_helpers import (
     _resolve_workspace_file,
 )
 from lorahub.api.state import JobState
+from lorahub.api.zip_stream import ZipStream
 
 log = logging.getLogger(__name__)
 
@@ -118,14 +118,13 @@ def _iter_zip_chunks(
 ) -> Iterable[bytes]:
     """Stream a ZIP archive of the listed files chunk-by-chunk.
 
-    Goes through an in-memory ``BytesIO`` buffer that we drain on
-    every yield — ``zipfile`` doesn't have a streaming API, but with
-    ``ZIP_STORED`` (no compression — the .safetensors are already
-    binary, gzip wouldn't shrink them anyway) we can append + flush
-    one file at a time without needing the full archive resident.
+    Uses a non-seekable stream wrapper so ZipFile emits data
+    descriptors instead of seeking back to patch local headers —
+    this lets us drain the buffer between files without corrupting
+    offsets.
     """
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as zf:
+    stream = ZipStream()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as zf:
         for rel in relpaths:
             full = (workspace / rel).resolve()
             try:
@@ -136,24 +135,14 @@ def _iter_zip_chunks(
                 continue
             arcname = rel.as_posix()
             try:
-                with full.open("rb") as src:
-                    with zf.open(zipfile.ZipInfo(arcname), mode="w") as dst:
-                        while True:
-                            chunk = src.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            dst.write(chunk)
+                zf.write(full, arcname=arcname)
             except OSError as exc:
                 log.warning("artifacts zip: skipping %s — %s", full, exc)
                 continue
-            # Drain the buffer between files so the caller doesn't
-            # accumulate the whole archive in memory.
-            data = buffer.getvalue()
-            if data:
-                yield data
-                buffer.seek(0)
-                buffer.truncate(0)
-    tail = buffer.getvalue()
+            chunk = stream.drain()
+            if chunk:
+                yield chunk
+    tail = stream.drain()
     if tail:
         yield tail
 

@@ -26,7 +26,6 @@ Warnings are non-blocking; users override at their own risk.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
@@ -40,6 +39,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.zip_stream import ZipStream
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
@@ -279,20 +279,14 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
         only = {str(Path(p).resolve()) for p in req.paths}
 
     def gen() -> Any:
-        # ZipFile + BytesIO ring: write to an in-memory buffer, yield
-        # whatever's accumulated, truncate, repeat. This lets us flush
-        # frequently so the HTTP client gets bytes early.
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        stream = ZipStream()
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as zf:
             files_seen = 0
             for full, arc in _walk_dataset_files(
                 root,
                 include_backups=req.include_backups,
                 include_quarantine=req.include_quarantine,
             ):
-                # Filter for path-list mode: keep image only if its
-                # path is in the set OR it's the matching .txt
-                # sidecar of one that is.
                 if only is not None:
                     abs_full = str(full.resolve())
                     keep = abs_full in only
@@ -303,7 +297,6 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
                                 break
                     if not keep:
                         continue
-                # Skip dataset_meta unless explicitly included.
                 if not req.include_meta and full.name == ".dataset_meta.json":
                     continue
                 try:
@@ -312,21 +305,14 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
                 except OSError:
                     continue
 
-                # Flush every 50 files or 4MB of buffered data.
-                if files_seen % 50 == 0 or buf.tell() > 4 * 1024 * 1024:
-                    pos = buf.tell()
-                    if pos > 0:
-                        buf.seek(0)
-                        chunk = buf.read(pos)
-                        buf.seek(0)
-                        buf.truncate()
+                if files_seen % 50 == 0:
+                    chunk = stream.drain()
+                    if chunk:
                         yield chunk
 
-        # Finalise — yield the closing central directory + EOCD.
-        pos = buf.tell()
-        if pos > 0:
-            buf.seek(0)
-            yield buf.read(pos)
+        tail = stream.drain()
+        if tail:
+            yield tail
 
     return StreamingResponse(
         gen(),
