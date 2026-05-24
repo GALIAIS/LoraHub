@@ -1268,13 +1268,33 @@ export const api = {
       { method: "POST" },
     ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
-  getSystemVersion: (
+  getSystemVersion: async (
     channel: "dev" | "tag" = "tag",
     force = false,
-  ) =>
-    http<UpdateInfo>(
-      `/system/version?channel=${channel}${force ? "&force=true" : ""}`,
-    ),
+  ): Promise<UpdateInfo> => {
+    const qs = `?channel=${channel}${force ? "&force=true" : ""}`
+    try {
+      return await http<UpdateInfo>(`/system/version${qs}`)
+    } catch (err) {
+      // Backend rolled out the channel rename in v1.0.4 (Literal
+      // "main" → "dev"). Older deployments still validate the
+      // request body against the original Literal and reject "dev"
+      // with a FastAPI 422. Fall back to the pre-rename name and
+      // patch the response so the UI's ``channel === "dev"`` checks
+      // keep working — the user shouldn't have to upgrade their
+      // backend just to see the maintenance card.
+      const isLegacyChannelRejection =
+        channel === "dev" &&
+        err instanceof ApiError &&
+        err.status === 422
+      if (!isLegacyChannelRejection) {
+        throw err
+      }
+      const legacyQs = `?channel=main${force ? "&force=true" : ""}`
+      const legacy = await http<UpdateInfo>(`/system/version${legacyQs}`)
+      return { ...legacy, channel: "dev" }
+    }
+  },
   /**
    * Run a self-update via the SSE stream endpoint. ``onEvent`` fires
    * for every progress line; the returned promise resolves when the
