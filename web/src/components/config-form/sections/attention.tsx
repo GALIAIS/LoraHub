@@ -28,44 +28,44 @@ const BACKEND_LABELS: Record<
   { label: string; hint: string; requirement: string }
 > = {
   auto: {
-    label: "auto · 自动选择",
-    hint: "由 kohya / dp 自行决定（多数情况下为 sdpa）",
+    label: "Auto · 自动选择",
+    hint: "由 kohya / dp 自行决定（多数情况下为 SDPA）",
     requirement: "",
   },
   torch: {
-    label: "torch · 朴素 PyTorch",
+    label: "Torch · 朴素 PyTorch",
     hint: "诊断用，速度最慢",
     requirement: "",
   },
   sdpa: {
-    label: "sdpa · F.scaled_dot_product_attention",
+    label: "SDPA · F.scaled_dot_product_attention",
     hint: "PyTorch 原生算子，兼容性最好",
     requirement: "",
   },
   flex: {
-    label: "flex · torch.nn.attention.flex_attention",
+    label: "FlexAttention · torch.nn.attention.flex_attention",
     hint: "PyTorch 2.5+ 实验性算子",
     requirement: "",
   },
   xformers: {
-    label: "xformers",
+    label: "xFormers",
     hint: "Meta 的内核库，需要单独 wheel",
     requirement: "需要 sm_70+",
   },
   flash: {
-    label: "flash · FlashAttention 2",
-    hint: "Ampere/Ada/Hopper 通用",
-    requirement: "需要 sm_80+ (Ampere/Ada/Hopper)",
+    label: "FlashAttention 2",
+    hint: "Ampere / Ada / Hopper 通用",
+    requirement: "需要 sm_80+（Ampere / Ada / Hopper）",
   },
   flash3: {
-    label: "flash3 · FlashAttention 3",
+    label: "FlashAttention 3",
     hint: "Hopper 专属新内核，速度最快",
-    requirement: "需要 sm_90 (Hopper, H100/H200)",
+    requirement: "需要 sm_90（Hopper · H100 / H200）",
   },
   flash4: {
-    label: "flash4 · FlashAttention 4 (beta)",
-    hint: "Hopper / Blackwell beta 内核",
-    requirement: "需要 sm_90 或 sm_100+ (Hopper/Blackwell)",
+    label: "FlashAttention 4 · Beta",
+    hint: "Hopper / Blackwell Beta 内核",
+    requirement: "需要 sm_90 或 sm_100+（Hopper / Blackwell）",
   },
 }
 

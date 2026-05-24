@@ -49,7 +49,7 @@ export const AdvancedLossFields = memo(function AdvancedLossFields({
       </Row>
       <Row
         label="multiresNoiseDiscount"
-        description="多分辨率噪声衰减系数（0..1）。"
+        description="多分辨率噪声衰减系数 · 取值 0..1。"
         errors={errorMap.get(k("multiresNoiseDiscount"))}
       >
         <FloatInput

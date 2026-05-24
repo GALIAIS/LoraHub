@@ -37,98 +37,98 @@ function lockBadgeFor(field: string) {
 }
 
 const METHOD_OPTIONS = [
-  { value: "lora", label: "lora — LoRA + OrthoLoRA + T-LoRA(默认堆叠)" },
-  { value: "postfix", label: "postfix — 自由参数 / 条件正交后缀" },
-  { value: "chimera", label: "chimera — 双池路由 MoE" },
-  { value: "easycontrol", label: "easycontrol — 自注意力图像条件" },
+  { value: "lora", label: "LoRA · 默认堆叠 (LoRA + OrthoLoRA + T-LoRA)" },
+  { value: "postfix", label: "Postfix · 自由参数 / 条件正交后缀" },
+  { value: "chimera", label: "ChimeraHydra · 双池路由 MoE" },
+  { value: "easycontrol", label: "EasyControl · 自注意力图像条件" },
   {
     value: "ip_adapter",
-    label: "ip_adapter — 图像交叉注意力(PE-Core encoder)",
+    label: "IP-Adapter · 图像交叉注意力 (PE-Core encoder)",
   },
 ] as const
 
 const PRESET_OPTIONS = [
-  { value: "default", label: "default — 标准 24GB" },
-  { value: "low_vram", label: "low_vram — 8GB(grad ckpt + unsloth offload)" },
-  { value: "graft", label: "graft — blocks_to_swap=20" },
-  { value: "half", label: "half — 50% 数据(实验)" },
-  { value: "quarter", label: "quarter — 25% 数据" },
-  { value: "tenth", label: "tenth — 10% 数据" },
-  { value: "debug", label: "debug — 0.1% 数据(打通管线)" },
+  { value: "default", label: "default · 标准 24 GB" },
+  { value: "low_vram", label: "low_vram · 8 GB (grad ckpt + unsloth offload)" },
+  { value: "graft", label: "graft · blocks_to_swap = 20" },
+  { value: "half", label: "half · 50 % 数据 (实验)" },
+  { value: "quarter", label: "quarter · 25 % 数据" },
+  { value: "tenth", label: "tenth · 10 % 数据" },
+  { value: "debug", label: "debug · 0.1 % 数据 (管线打通)" },
 ] as const
 
 const TIMESTEP_OPTIONS = [
-  { value: "sigmoid", label: "sigmoid(默认)" },
+  { value: "sigmoid", label: "sigmoid · 默认" },
   { value: "uniform", label: "uniform" },
-  { value: "logit_normal", label: "logit_normal" },
+  { value: "logit_normal", label: "logit-normal" },
 ] as const
 
 const LORA_ALGORITHM_OPTIONS = [
-  { value: "ortho", label: "ortho — OrthoLoRA(默认)" },
-  { value: "lora", label: "lora — 经典低秩 ΔW = BA" },
-  { value: "dora", label: "dora — 方向/幅度分离" },
-  { value: "dylora", label: "dylora — 训练随机 rank 截断" },
-  { value: "glora", label: "glora — LoRA + 每秩对角 gate" },
-  { value: "ia3", label: "ia3 — 每输出通道缩放,极小参数" },
-  { value: "lokr", label: "lokr — Kronecker 积分解" },
-  { value: "loha", label: "loha — Hadamard 积,r² 表达力" },
-  { value: "diag_oft", label: "diag_oft — 块对角正交(保 hyperspherical)" },
-  { value: "boft", label: "boft — 蝴蝶级联正交" },
-  { value: "vera", label: "vera — 冻结随机投影 + 缩放向量" },
-  { value: "full", label: "full — 自由 ΔW Parameter(baseline)" },
+  { value: "ortho", label: "OrthoLoRA · 默认" },
+  { value: "lora", label: "LoRA · 经典低秩 ΔW = BA" },
+  { value: "dora", label: "DoRA · 方向 / 幅度分离" },
+  { value: "dylora", label: "DyLoRA · 训练随机 rank 截断" },
+  { value: "glora", label: "GLoRA · LoRA + 每秩对角 gate" },
+  { value: "ia3", label: "IA³ · 每输出通道缩放" },
+  { value: "lokr", label: "LoKr · Kronecker 积分解" },
+  { value: "loha", label: "LoHA · Hadamard 积, r² 表达力" },
+  { value: "diag_oft", label: "Diag-OFT · 块对角正交 (保 hyperspherical)" },
+  { value: "boft", label: "BOFT · 蝴蝶级联正交" },
+  { value: "vera", label: "VeRA · 冻结随机投影 + 缩放向量" },
+  { value: "full", label: "Full · 自由 ΔW Parameter (baseline)" },
 ] as const
 
 const WEIGHTING_SCHEME_OPTIONS = [
-  { value: "", label: "（关闭 - 等权 RF 损失,默认)" },
+  { value: "", label: "关闭 · 等权 RF 损失 (默认)" },
   {
     value: "min_snr_rf",
-    label: "min_snr_rf — Min-SNR-γ(整流流变体,需配合 min_snr_gamma)",
+    label: "Min-SNR-γ · 整流流变体 (需 min_snr_gamma)",
   },
-  { value: "sigma_sqrt", label: "sigma_sqrt" },
-  { value: "logit_normal", label: "logit_normal" },
-  { value: "mode", label: "mode" },
-  { value: "cosmap", label: "cosmap" },
+  { value: "sigma_sqrt", label: "Sigma-Sqrt" },
+  { value: "logit_normal", label: "Logit-Normal" },
+  { value: "mode", label: "Mode" },
+  { value: "cosmap", label: "CosMap" },
 ] as const
 
 const ATTN_OPTIONS = [
-  { value: "flash", label: "flash(默认,需装 flash-attn)" },
-  { value: "torch", label: "torch — SDPA(无 flash-attn 时选这个)" },
-  { value: "flex", label: "flex — FlexAttention" },
-  { value: "sageattn", label: "sageattn(仅推理)" },
-  { value: "xformers", label: "xformers" },
+  { value: "flash", label: "FlashAttention · 默认 (需 flash-attn)" },
+  { value: "torch", label: "Torch SDPA · 无 flash-attn 时备选" },
+  { value: "flex", label: "FlexAttention" },
+  { value: "sageattn", label: "SageAttention · 仅推理" },
+  { value: "xformers", label: "xFormers" },
 ] as const
 
 const COMPILE_MODE_OPTIONS = [
-  { value: "", label: "（关闭,默认)" },
-  { value: "blocks", label: "blocks — 分块编译(可与 grad ckpt 共存)" },
+  { value: "", label: "关闭 · 默认" },
+  { value: "blocks", label: "blocks · 分块编译 (可与 grad ckpt 共存)" },
   {
     value: "full",
-    label: "full — 全图编译(与 grad ckpt / blocks_to_swap 互斥)",
+    label: "full · 全图编译 (与 grad ckpt / blocks_to_swap 互斥)",
   },
 ] as const
 
 const COMPILE_INDUCTOR_OPTIONS = [
-  { value: "", label: "（默认)" },
+  { value: "", label: "默认" },
   { value: "default", label: "default" },
-  { value: "reduce-overhead", label: "reduce-overhead(推荐)" },
+  { value: "reduce-overhead", label: "reduce-overhead · 推荐" },
   { value: "max-autotune", label: "max-autotune" },
 ] as const
 
 const MIXED_PRECISION_OPTIONS = [
-  { value: "bf16", label: "bf16(默认)" },
+  { value: "bf16", label: "bf16 · 默认" },
   { value: "fp16", label: "fp16" },
   { value: "fp32", label: "fp32" },
 ] as const
 
 const OPTIMIZER_OPTIONS = [
-  { value: "AdamW", label: "AdamW(默认)" },
+  { value: "AdamW", label: "AdamW · 默认" },
   { value: "AdamW8bit", label: "AdamW8bit" },
   { value: "Lion", label: "Lion" },
   { value: "Prodigy", label: "Prodigy" },
 ] as const
 
 const LR_SCHEDULER_OPTIONS = [
-  { value: "constant", label: "constant(默认)" },
+  { value: "constant", label: "constant · 默认" },
   { value: "cosine", label: "cosine" },
   { value: "cosine_with_restarts", label: "cosine_with_restarts" },
   { value: "linear", label: "linear" },
@@ -165,14 +165,14 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       <Row
         label="训练方法"
         required
-        description="lora 是默认堆叠 LoRA+OrthoLoRA+T-LoRA;其他四种是上游论文级算法,选了对应方法后下方会展开它的子配置。"
+        description="LoRA 为默认堆叠（LoRA + OrthoLoRA + T-LoRA）；其余四种为上游论文级算法。选定后下方将展开其子配置。"
         errors={errorMap.get("backend.animaLora.method")}
       >
         <EnumSelect value={method} onChange={onMethodChange} options={METHOD_OPTIONS} />
       </Row>
       <Row
         label="硬件预设"
-        description="对应 anima_lora/configs/presets.toml 的 section。debug 预设只取 0.1% 数据,适合打通管线。"
+        description="对应 anima_lora/configs/presets.toml 中的 section。debug 预设仅取 0.1 % 数据，用于打通管线。"
         errors={errorMap.get("backend.animaLora.preset")}
       >
         <EnumSelect
@@ -263,7 +263,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="检查点保存频率" description="保存 optimizer state 的频率（用于断点续训）。">
+        <Row label="检查点保存频率" description="保存 optimizer state 的频率，用于断点续训。">
           <FloatInput
             value={v.checkpointingEpochs}
             onChange={(n) => set(["backend", "animaLora", "checkpointingEpochs"], n)}
@@ -271,7 +271,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="caption 丢弃率" description="训练时随机丢弃 caption 的概率,增强泛化。">
+        <Row label="caption 丢弃率" description="训练时随机丢弃 caption 的概率，用于增强泛化。">
           <FloatInput
             value={v.captionDropoutRate}
             onChange={(n) => set(["backend", "animaLora", "captionDropoutRate"], n)}
@@ -322,7 +322,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="min_snr_gamma"
-          description="Min-SNR-γ 整流流加权的 γ 阈值;推荐 5.0。仅当加权方案 = min_snr_rf 时生效。留空则该方案退化为等权。"
+          description="Min-SNR-γ 整流流加权的 γ 阈值，推荐 5.0；仅当加权方案 = min_snr_rf 时生效。留空则该方案退化为等权。"
         >
           <FloatInput
             value={v.minSnrGamma ?? undefined}
@@ -357,7 +357,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       >
         <Row
           label="启用 EMA"
-          description="对 LoRA 可训练参数维护一份指数移动平均影子;每个 ckpt 旁会写出 {name}_ema.safetensors,推理常优于在线权重。约 2× LoRA 显存占用。"
+          description="对 LoRA 可训练参数维护一份指数移动平均影子；每个 ckpt 旁会同步写出 {name}_ema.safetensors，推理质量通常优于在线权重。约 2× LoRA 显存占用。"
         >
           <ToggleSwitch
             checked={!!v.ema}
@@ -368,7 +368,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           <>
             <Row
               label="EMA decay"
-              description="衰减系数;0.9999 适合常规 LoRA(~1 万步半衰期),短训(< 2k step)可降到 0.999 / 0.99。"
+              description="衰减系数。0.9999 适合常规 LoRA · 半衰期约 1 万步；短训（< 2k step）建议降至 0.999 / 0.99。"
             >
               <FloatInput
                 value={v.emaDecay ?? 0.9999}
@@ -383,7 +383,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="warmup decay"
-              description="开启后前几百步用 min(decay, (1+t)/(10+t)) 缩放衰减,避免影子吃进噪声。"
+              description="开启后前几百步用 min(decay, (1+t)/(10+t)) 缩放衰减，避免影子吸入早期噪声。"
             >
               <ToggleSwitch
                 checked={v.emaUseNumUpdates ?? true}
@@ -394,7 +394,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="自动护栏"
-              description="开启 EMA 时,LoraHub 会强制 compile_inductor_mode = default 以避开 cudagraph_trees 与 EMA 的不兼容(否则会在 step 2 抛 RuntimeError)。无需手动设置。"
+              description="开启 EMA 时，LoraHub 强制 compile_inductor_mode = default，以避开 cudagraph_trees 与 EMA 的不兼容（否则会在 step 2 抛 RuntimeError）。无需手动设置。"
             >
               <span className="text-xs text-muted-foreground">已启用</span>
             </Row>
@@ -402,7 +402,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         )}
         <Row
           label="启用 NaN guard"
-          description="在反向前 + 梯度裁剪后检查 loss / 梯度的 NaN/Inf。当连续超过阈值时按下方策略恢复或中止训练。"
+          description="在反向传播前与梯度裁剪后检查 loss / 梯度的 NaN / Inf。当连续超过阈值时按下方策略恢复或中止训练。"
         >
           <ToggleSwitch
             checked={!!v.nanGuard}
@@ -413,7 +413,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           <>
             <Row
               label="自动恢复"
-              description="超阈值时:把每个参数组的 LR 减半,并(若 EMA 已启用)用影子权重还原在线参数;关闭则直接中止训练。"
+              description="超阈值时：将每个参数组的 LR 减半，并（若 EMA 已启用）用影子权重还原在线参数；关闭则直接中止训练。"
             >
               <ToggleSwitch
                 checked={!!v.nanGuardRecover}
@@ -424,7 +424,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="连续异常上限"
-              description="连续多少步出现 NaN / Inf 后才触发恢复或中止;偶发尖峰会被吸收。默认 5。"
+              description="连续多少步出现 NaN / Inf 后才触发恢复或中止；偶发尖峰将被吸收。默认 5。"
             >
               <IntInput
                 value={v.nanGuardMaxConsecutive ?? 5}
@@ -439,7 +439,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         )}
         <Row
           label="采样网格图"
-          description="每轮采样后额外合成一张 contact-sheet PNG(单图依然各自落盘),便于一眼看进度。"
+          description="每轮采样后额外合成一张 contact-sheet PNG（单图仍各自落盘），便于一眼看进度。"
         >
           <ToggleSwitch
             checked={!!v.sampleGrid}
@@ -453,7 +453,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="缓存潜变量"
           labelBadge={lockBadgeFor("cacheLatents")}
-          description="提前用 VAE 编码图片并存盘,大幅提速但占额外硬盘。"
+          description="提前用 VAE 编码图片并存盘，大幅提速但占用额外硬盘空间。"
         >
           <ToggleSwitch
             checked={v.cacheLatents ?? true}
@@ -463,7 +463,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="潜变量缓存写盘"
           labelBadge={lockBadgeFor("cacheLatentsToDisk")}
-          description="把潜变量缓存写到磁盘（释放内存）。"
+          description="将潜变量缓存写到磁盘，释放内存。"
         >
           <ToggleSwitch
             checked={v.cacheLatentsToDisk ?? true}
@@ -487,7 +487,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="TE 缓存写盘"
           labelBadge={lockBadgeFor("cacheTextEncoderOutputsToDisk")}
-          description="把文本编码器缓存写到磁盘（释放内存）。"
+          description="将文本编码器缓存写到磁盘，释放内存。"
         >
           <ToggleSwitch
             checked={v.cacheTextEncoderOutputsToDisk ?? true}
@@ -566,7 +566,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="编译模式"
-          description="full 与 gradient_checkpointing / blocks_to_swap 互斥（LoraHub 编译期会校验）。"
+          description="full 与 gradient_checkpointing / blocks_to_swap 互斥，LoraHub 在编译期会校验。"
         >
           <EnumSelect
             value={v.compileMode ?? ""}
@@ -590,7 +590,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="启用 native-flatten"
-          description="走 4032+4200 双家族 bucket 表 + 不 padding 的 fake-5D 展平,block 栈编译为 2 张图(vs 现状 ~24 张)。在 RTX Pro 6000 / 4090 类卡上 ~2x 训练加速。与 staticTokenCount 互斥;切换后需要重做 dataset 缓存。"
+          description="走 4032+4200 双家族 bucket 表 + 不 padding 的 fake-5D 展平，block 栈编译为 2 张图（vs 现状 ~24 张）。在 RTX Pro 6000 / 4090 类卡上提速约 2×。与 staticTokenCount 互斥；切换后需要重做 dataset 缓存。"
         >
           <ToggleSwitch
             checked={v.enableNativeFlatten ?? false}
@@ -601,7 +601,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="Bucket 表"
-          description="默认 = 按 native-flatten / staticTokenCount 自动选(4032+4200 或 4096)。1536 = 9216+9240 双家族,Anima v1.0 native 1536² 训练用,12 个 entry 覆盖 ar 0.44-2.25。选 1536 必须同时开 native-flatten(或把 staticTokenCount 提到 9240)。"
+          description="默认 · 按 native-flatten / staticTokenCount 自动选择（4032+4200 或 4096）。1536 · 9216+9240 双家族，用于 Anima v1.0 native 1536² 训练，12 个 entry 覆盖 ar 0.44–2.25。选 1536 时必须同时启用 native-flatten，或将 staticTokenCount 提至 9240 及以上。"
         >
           <EnumSelect
             value={v.bucketTable ?? ""}
@@ -614,7 +614,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             ]}
           />
         </Row>
-        <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd,默认开。">
+        <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd · 默认开。">
           <ToggleSwitch
             checked={v.useCustomDownAutograd ?? true}
             onCheckedChange={(c) =>
@@ -680,7 +680,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         >
           <Row
             label="算法"
-            description="决定如何参数化 ΔW。LoRA 是经典低秩,Ortho 在 LoRA 上叠 SVD+Cayley 正交,DoRA 加方向/幅度分离;原子分解类(IA3/LoKr/LoHA/Full/OFT/BOFT/GLoRA/VeRA)各自独占一种 ΔW 写法。"
+            description="决定如何参数化 ΔW。LoRA 为经典低秩；OrthoLoRA 在 LoRA 上叠加 SVD + Cayley 正交；DoRA 引入方向 / 幅度分离；其余原子分解类（IA³ / LoKr / LoHA / Full / OFT / BOFT / GLoRA / VeRA）各自采用独立的 ΔW 参数化。"
           >
             <EnumSelect
               value={v.lora?.algorithm ?? "ortho"}
@@ -694,7 +694,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           {v.lora?.algorithm === "lokr" && (
             <Row
               label="LoKr factor"
-              description="把 (out, in) 拆成 (a×c, b×d) 的最大块大小。8 是 LyCORIS 默认;越大 W₁ 越表达,LoRA 腿越小。"
+              description="将 (out, in) 拆为 (a×c, b×d) 的最大块大小。8 是 LyCORIS 默认；越大 W₁ 表达力越强，LoRA 边项越小。"
             >
               <IntInput
                 value={v.lora?.lokrFactor ?? 8}
@@ -709,7 +709,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           {v.lora?.algorithm === "boft" && (
             <Row
               label="BOFT 蝴蝶层数"
-              description="蝴蝶旋转的级联深度;m ≥ log₂(out_dim) 即可张满 SO(out_dim)。默认 4 够用。"
+              description="蝴蝶旋转的级联深度；m ≥ log₂(out_dim) 即可张满 SO(out_dim)。默认 4 已足够。"
             >
               <IntInput
                 value={v.lora?.boftFactors ?? 4}
@@ -781,8 +781,8 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               value={v.postfix?.mode ?? "cond"}
               onChange={(s) => set(["backend", "animaLora", "postfix", "mode"], s)}
               options={[
-                { value: "cond", label: "cond — caption-conditional" },
-                { value: "postfix", label: "postfix — 自由 K×D 张量" },
+                { value: "cond", label: "Conditional · 受 caption 调制" },
+                { value: "postfix", label: "Postfix · 自由 K×D 张量" },
               ]}
             />
           </Row>
@@ -865,7 +865,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === Method = easycontrol 子配置 === */}
       {method === "easycontrol" && (
         <Section title="method=easycontrol 子配置" defaultOpen>
-          <Row label="条件门初始值" description="softmax gate 初始值,-10 让 step 0 等同 baseline DiT。">
+          <Row label="条件门初始值" description="softmax gate 初始值 · -10 让 step 0 等同 baseline DiT。">
             <FloatInput
               value={v.easycontrol?.bCondInit}
               onChange={(n) =>
@@ -924,7 +924,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
                 set(["backend", "animaLora", "ipAdapter", "encoder"], s)
               }
               options={[
-                { value: "PE-Core-L14-336", label: "PE-Core-L14-336(默认)" },
+                { value: "PE-Core-L14-336", label: "PE-Core-L14-336 · 默认" },
                 { value: "PE-Core-G14-448", label: "PE-Core-G14-448" },
               ]}
             />
@@ -1027,7 +1027,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="裁剪交叉注意力 KV"
           labelBadge={lockBadgeFor("trimCrossattnKv")}
-          description="启用 KV trimming（短 caption 加速 ~10-15%）。"
+          description="启用 KV trimming · 短 caption 加速约 10–15 %。"
         >
           <ToggleSwitch
             checked={v.trimCrossattnKv ?? false}
@@ -1055,9 +1055,9 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             value={v.savePrecision ?? "bf16"}
             onChange={(s) => set(["backend", "animaLora", "savePrecision"], s)}
             options={[
-              { value: "bf16", label: "bf16(默认)" },
+              { value: "bf16", label: "bf16 · 默认" },
               { value: "fp16", label: "fp16" },
-              { value: "fp32", label: "fp32(2× 体积无质量收益)" },
+              { value: "fp32", label: "fp32 · 2× 体积，无质量收益" },
             ]}
           />
         </Row>
@@ -1069,7 +1069,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           <EnumSelect
             value={v.saveModelAs ?? "safetensors"}
             onChange={(s) => set(["backend", "animaLora", "saveModelAs"], s)}
-            options={[{ value: "safetensors", label: "safetensors(锁定)" }]}
+            options={[{ value: "safetensors", label: "safetensors · 锁定" }]}
           />
         </Row>
         <Row label="日志记录步数" description="每 N 步记录一次训练日志。">

@@ -285,7 +285,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
         </Row>
         <Row
           label="vaeChunkSize"
-          description="Anima / HunyuanImage / Wan VAE 分块大小（节省显存）。"
+          description="Anima / HunyuanImage / Wan VAE 分块大小，调小可节省显存。"
           errors={errorMap.get(p("vaeChunkSize"))}
         >
           <IntInput

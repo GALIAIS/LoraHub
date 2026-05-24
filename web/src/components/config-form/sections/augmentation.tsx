@@ -20,7 +20,7 @@ export const AugmentationFields = memo(function AugmentationFields({
   const v = value ?? {}
   return (
     <>
-      <Row label="水平翻转" description="随机水平翻转图像（人物角色慎用）。">
+      <Row label="水平翻转" description="随机水平翻转图像 · 角色训练慎用。">
         <ToggleSwitch
           checked={v.flip ?? false}
           onCheckedChange={(b) => set(["augmentation", "flip"], b)}
@@ -32,7 +32,7 @@ export const AugmentationFields = memo(function AugmentationFields({
           onCheckedChange={(b) => set(["augmentation", "color"], b)}
         />
       </Row>
-      <Row label="随机裁剪" description="启用随机裁剪。">
+      <Row label="随机裁剪" description="启用随机裁剪增强。">
         <ToggleSwitch
           checked={v.randomCrop ?? false}
           onCheckedChange={(b) => set(["augmentation", "randomCrop"], b)}

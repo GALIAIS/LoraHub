@@ -40,7 +40,7 @@ export const ARCH_OPTIONS = [
 // SDXL sub-architectures sharing the SDXL backbone but trained on different
 // finetune lineages. Empty string == 「无」(plain SDXL, no variant).
 export const ARCH_VARIANT_OPTIONS = [
-  { value: "", label: "无（标准 SDXL）" },
+  { value: "", label: "无 · 标准 SDXL" },
   { value: "pony", label: "Pony Diffusion v6" },
   { value: "illustrious", label: "Illustrious XL" },
   { value: "noobai", label: "NoobAI XL" },
@@ -55,10 +55,10 @@ export const NETWORK_TYPE_OPTIONS = [
 ] as const
 
 export const OPTIMIZER_OPTIONS = [
-  { value: "adamw8bit", label: "AdamW 8bit (bitsandbytes)" },
+  { value: "adamw8bit", label: "AdamW8bit · bitsandbytes" },
   { value: "adamw", label: "AdamW" },
   { value: "lion", label: "Lion" },
-  { value: "lion8bit", label: "Lion 8bit" },
+  { value: "lion8bit", label: "Lion8bit" },
   { value: "prodigy", label: "Prodigy" },
   { value: "dadaptation", label: "D-Adaptation" },
 ] as const
@@ -73,7 +73,7 @@ export const LR_SCHEDULE_OPTIONS = [
 ] as const
 
 export const PRECISION_OPTIONS = [
-  { value: "bf16", label: "bf16 (Ampere+)" },
+  { value: "bf16", label: "bf16 · Ampere+" },
   { value: "fp16", label: "fp16" },
   { value: "fp32", label: "fp32" },
 ] as const
@@ -85,32 +85,32 @@ export const SAVE_DTYPE_OPTIONS = [
 ] as const
 
 export const CAPTION_STRATEGY_OPTIONS = [
-  { value: "tag_file", label: "tag_file (.txt next to images)" },
-  { value: "filename", label: "filename" },
-  { value: "none", label: "none" },
+  { value: "tag_file", label: "tag_file · 同名 .txt 描述文件" },
+  { value: "filename", label: "filename · 文件名作为描述" },
+  { value: "none", label: "none · 不使用描述" },
 ] as const
 
 export const BACKEND_OPTIONS = [
-  { value: "kohya", label: "kohya-ss/sd-scripts" },
-  { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe" },
-  { value: "anima_lora", label: "sorryhyun/anima_lora (vendored)" },
+  { value: "kohya", label: "kohya-ss / sd-scripts" },
+  { value: "diffusion-pipe", label: "tdrussell / diffusion-pipe" },
+  { value: "anima_lora", label: "sorryhyun / anima_lora · vendored" },
 ] as const
 
 export const LOSS_TYPE_OPTIONS = [
-  { value: "l2", label: "l2 (默认 MSE)" },
-  { value: "huber", label: "huber (鲁棒)" },
-  { value: "smooth_l1", label: "smooth_l1" },
+  { value: "l2", label: "L2 · MSE 默认" },
+  { value: "huber", label: "Huber · 鲁棒" },
+  { value: "smooth_l1", label: "Smooth L1" },
 ] as const
 
 export const PARTITION_METHOD_OPTIONS = [
-  { value: "parameters", label: "parameters (按参数数均分)" },
-  { value: "uniform", label: "uniform (按层数均分)" },
+  { value: "parameters", label: "parameters · 按参数数均分" },
+  { value: "uniform", label: "uniform · 按层数均分" },
   { value: "type:transformer_layer", label: "type:transformer_layer" },
 ] as const
 
 // FlowMatchConfig.timestep_sampling
 export const FLOW_MATCH_TIMESTEP_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "logit_normal", label: "logit_normal" },
   { value: "uniform", label: "uniform" },
   { value: "sigma_uniform", label: "sigma_uniform" },
@@ -119,14 +119,14 @@ export const FLOW_MATCH_TIMESTEP_OPTIONS = [
 ] as const
 
 export const FLOW_MATCH_PRED_TYPE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "raw", label: "raw" },
   { value: "additive", label: "additive" },
   { value: "sigma_scaled", label: "sigma_scaled" },
 ] as const
 
 export const FLOW_MATCH_WEIGHTING_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "sigma_sqrt", label: "sigma_sqrt" },
   { value: "logit_normal", label: "logit_normal" },
   { value: "mode", label: "mode" },
@@ -136,7 +136,7 @@ export const FLOW_MATCH_WEIGHTING_OPTIONS = [
 
 // LossConfig.huber_schedule
 export const HUBER_SCHEDULE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "constant", label: "constant" },
   { value: "exponential", label: "exponential" },
   { value: "snr", label: "snr" },
@@ -144,18 +144,18 @@ export const HUBER_SCHEDULE_OPTIONS = [
 
 // BucketConfig.resize_interpolation
 export const RESIZE_INTERPOLATION_OPTIONS = [
-  { value: "", label: "（默认 / 由训练器决定）" },
-  { value: "lanczos", label: "lanczos" },
-  { value: "bicubic", label: "bicubic" },
-  { value: "bilinear", label: "bilinear" },
-  { value: "box", label: "box" },
-  { value: "nearest", label: "nearest" },
-  { value: "hamming", label: "hamming" },
+  { value: "", label: "默认 · 由训练器决定" },
+  { value: "lanczos", label: "Lanczos" },
+  { value: "bicubic", label: "Bicubic" },
+  { value: "bilinear", label: "Bilinear" },
+  { value: "box", label: "Box" },
+  { value: "nearest", label: "Nearest" },
+  { value: "hamming", label: "Hamming" },
 ] as const
 
 // CaptionConfig.max_token_length
 export const MAX_TOKEN_LENGTH_OPTIONS = [
-  { value: "", label: "（默认 75）" },
+  { value: "", label: "默认 · 75" },
   { value: "75", label: "75" },
   { value: "150", label: "150" },
   { value: "225", label: "225" },
@@ -163,7 +163,7 @@ export const MAX_TOKEN_LENGTH_OPTIONS = [
 
 // NetworkConfig.dtype (LoRA training dtype on dp)
 export const NETWORK_DTYPE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "fp16", label: "fp16" },
   { value: "bf16", label: "bf16" },
   { value: "fp32", label: "fp32" },
@@ -171,7 +171,7 @@ export const NETWORK_DTYPE_OPTIONS = [
 
 // ArchPathsConfig.t5xxl_dtype
 export const T5_DTYPE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "fp16", label: "fp16" },
   { value: "bf16", label: "bf16" },
   { value: "fp32", label: "fp32" },
@@ -180,7 +180,7 @@ export const T5_DTYPE_OPTIONS = [
 
 // DiffusionPipeOptions.transformer_dtype
 export const DP_TRANSFORMER_DTYPE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "bfloat16", label: "bfloat16" },
   { value: "float16", label: "float16" },
   { value: "float8_e4m3fn", label: "float8_e4m3fn" },
@@ -189,7 +189,7 @@ export const DP_TRANSFORMER_DTYPE_OPTIONS = [
 
 // DiffusionPipeOptions.diffusion_model_dtype
 export const DP_DIFFUSION_DTYPE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "bfloat16", label: "bfloat16" },
   { value: "float16", label: "float16" },
   { value: "float8_e4m3fn", label: "float8_e4m3fn" },
@@ -197,7 +197,7 @@ export const DP_DIFFUSION_DTYPE_OPTIONS = [
 
 // DiffusionPipeOptions.timestep_sample_method
 export const DP_TIMESTEP_SAMPLE_OPTIONS = [
-  { value: "", label: "（默认）" },
+  { value: "", label: "默认" },
   { value: "logit_normal", label: "logit_normal" },
   { value: "uniform", label: "uniform" },
 ] as const

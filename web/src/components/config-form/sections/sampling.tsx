@@ -55,19 +55,19 @@ export const SamplingFields = memo(function SamplingFields({
           </Row>
           <Row
             label="每 N 步一次"
-            description="kohya `--sample_every_n_steps`；与 everyNEpochs 互不冲突。留空仅按回合采样。"
+            description="对应 kohya 的 --sample_every_n_steps；与 everyNEpochs 不冲突。留空则仅按回合采样。"
             errors={errorMap.get("sampling.everyNSteps")}
           >
             <IntInput
               min={1}
               value={v.everyNSteps ?? null}
               onChange={(n) => set(["sampling", "everyNSteps"], n)}
-              placeholder="（默认）"
+              placeholder="默认"
             />
           </Row>
           <Row
             label="训练前先采样"
-            description="kohya `--sample_at_first`：第 0 步生成一组基线样图。"
+            description="对应 kohya 的 --sample_at_first：第 0 步即生成一组基线样图。"
           >
             <ToggleSwitch
               checked={v.atFirst ?? false}
@@ -78,8 +78,8 @@ export const SamplingFields = memo(function SamplingFields({
             label="提示词"
             description={
               prompts.length > 0
-                ? `已定义 ${prompts.length} 条提示词，全部保存在 yaml 中，启动时自动写出 prompts.txt。`
-                : "通过对话框逐条编辑提示词；保存到 yaml 后启动训练时会自动生成 prompts.txt。"
+                ? `已定义 ${prompts.length} 条提示词，全部存于 yaml；启动时自动写出 prompts.txt。`
+                : "通过对话框逐条编辑提示词；保存至 yaml 后，启动训练时自动生成 prompts.txt。"
             }
           >
             <Button
@@ -90,20 +90,20 @@ export const SamplingFields = memo(function SamplingFields({
               className="gap-1.5"
             >
               <Pencil className="size-3.5" />
-              {prompts.length > 0 ? `编辑（${prompts.length}）` : "编辑提示词"}
+              {prompts.length > 0 ? `编辑 · ${prompts.length}` : "编辑提示词"}
             </Button>
           </Row>
           {/* Legacy field — kept visible in case the user wants to point
               at an existing prompts.txt instead of authoring inline. */}
           <Row
-            label="提示词文件（可选）"
-            description="指向外部 prompts.txt；留空则使用上方对话框中的列表。"
+            label="提示词文件"
+            description="可选 · 指向外部 prompts.txt；留空则使用上方对话框中的列表。"
             errors={errorMap.get("sampling.promptsFile")}
           >
             <PathInput
               value={v.promptsFile ?? ""}
               onChange={(s) => set(["sampling", "promptsFile"], s || null)}
-              placeholder="（可选）./prompts.txt"
+              placeholder="可选 · ./prompts.txt"
             />
           </Row>
           <Row label="分辨率">
@@ -114,7 +114,7 @@ export const SamplingFields = memo(function SamplingFields({
           </Row>
           <Row
             label="随机种子"
-            description="-1 = 每次训练随机抽取（与 ComfyUI 相同语义）；填具体数字即固定种子；🎲 立刻生成新值并固定。"
+            description="-1 = 每次训练随机抽取（与 ComfyUI 同义）；填具体数字即固定种子；🎲 立刻生成新值并固定。"
           >
             <SeedInput
               value={v.seed ?? -1}
@@ -124,24 +124,24 @@ export const SamplingFields = memo(function SamplingFields({
 
           <Row
             label="触发词"
-            description="提示词里写 ${TRIGGER} 占位符，启动训练时自动替换为此值。留空 → 自动从 dataset 的 .txt caption 推断（取第一个 token 的众数，过滤 1girl/masterpiece 等通用标签）；都拿不到 → 占位符与邻接的逗号一起去掉。"
+            description="提示词中的 ${TRIGGER} 占位符将在训练启动时替换为此值。留空时，自动从数据集 .txt 描述文件推断（取第一个 token 的众数，过滤 1girl / masterpiece 等通用标签）；推断失败则连同相邻逗号一并删除占位符。"
           >
             <TextInput
               value={v.triggerWord ?? ""}
               onChange={(s) => set(["sampling", "triggerWord"], s || null)}
-              placeholder="例如 thornsdance（留空自动推断）"
+              placeholder="例如 thornsdance · 留空自动推断"
               className="w-72"
             />
           </Row>
 
           <Row
             label="预览输出"
-            description="训练时附加生成的预览图产物，按需勾选。"
+            description="训练过程中附加生成的预览图产物，按需勾选。"
           >
             <div className="flex flex-col gap-1.5 text-[12px]">
               <OutputToggle
-                label="多 prompt 网格图"
-                description="每个 ckpt 把所有提示词的产出横向拼接成一张总览图。"
+                label="多 Prompt 网格图"
+                description="每个 ckpt 将所有提示词的产出横向拼接成一张总览图。"
                 checked={outputs.gridStitching ?? true}
                 onCheckedChange={(b) =>
                   set(["sampling", "outputs", "gridStitching"], b)
@@ -149,15 +149,15 @@ export const SamplingFields = memo(function SamplingFields({
               />
               <OutputToggle
                 label="基模对比"
-                description="同提示词额外渲染一份不挂载 LoRA 的基模产出，便于一眼看出 LoRA 的影响。会双倍 GPU 时间。"
+                description="同一提示词额外渲染一份不挂 LoRA 的基模产出，便于直观对比 LoRA 学习效果。GPU 耗时翻倍。"
                 checked={outputs.baseCompare ?? false}
                 onCheckedChange={(b) =>
                   set(["sampling", "outputs", "baseCompare"], b)
                 }
               />
               <OutputToggle
-                label="跨 ckpt 动画"
-                description="把同一条提示词在所有 ckpt 上的产出累成 gif，可滑动查看训练过程的演变。"
+                label="跨 Ckpt 动画"
+                description="将同一提示词在各 ckpt 上的产出合成 GIF，可视化训练过程演变。"
                 checked={outputs.crossCkptAnimation ?? false}
                 onCheckedChange={(b) =>
                   set(["sampling", "outputs", "crossCkptAnimation"], b)
@@ -165,7 +165,7 @@ export const SamplingFields = memo(function SamplingFields({
               />
               <OutputToggle
                 label="PNG 元数据"
-                description="把 prompt / 种子 / step / cfg 写进 PNG 的 parameters 区，与 A1111 / ComfyUI 兼容。"
+                description="将 prompt / seed / step / cfg 写入 PNG parameters 区，兼容 A1111 / ComfyUI。"
                 checked={outputs.pngMetadata ?? true}
                 onCheckedChange={(b) =>
                   set(["sampling", "outputs", "pngMetadata"], b)
