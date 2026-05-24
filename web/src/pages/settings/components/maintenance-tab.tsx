@@ -81,7 +81,7 @@ export function MaintenanceTab() {
             磁盘占用
           </CardTitle>
           <CardDescription>
-            当前工作目录所在文件系统的可用空间,与 lorahub 管理的几个常占空间目录。
+            当前工作目录所在文件系统的可用空间，与 LoraHub 管理的几个常占空间目录。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -125,7 +125,7 @@ export function MaintenanceTab() {
           </CardTitle>
           <CardDescription>
             归档的训练任务工作区位于 <code>runs/_archive/</code>。
-            训练历史会保留在数据库,删除仅清空工作区文件(checkpoint、events.jsonl 等)。
+            训练历史会保留在数据库，删除仅清空工作区文件（checkpoint、events.jsonl 等）。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

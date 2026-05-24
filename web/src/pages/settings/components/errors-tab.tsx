@@ -168,8 +168,8 @@ export function ErrorsTab() {
             错误上报
           </CardTitle>
           <CardDescription>
-            本地保存的错误事件清单(共 {total} 条)。包含训练失败、预检查阻断、
-            前端渲染异常、未捕获异常等。所有数据仅保存在本机,导出 / 复制需要
+            本地保存的错误事件清单（共 {total} 条）。包含训练失败、预检查阻断、
+            前端渲染异常、未捕获异常等。所有数据仅保存在本机，导出 / 复制需要
             你主动操作。
           </CardDescription>
         </CardHeader>
@@ -564,7 +564,7 @@ function UpstreamPreviewPane({ reportId }: { reportId: string }) {
   return (
     <Section title="将发送到远端的内容(已脱敏)">
       {preview.isLoading ? (
-        <div className="text-[11px] text-muted-foreground">生成预览中...</div>
+        <div className="text-[11px] text-muted-foreground">生成预览中…</div>
       ) : preview.isError ? (
         <div className="text-[11px] text-destructive">
           {(preview.error as Error).message}
@@ -816,8 +816,8 @@ function UpstreamConfigCard() {
           远端上报通道
         </CardTitle>
         <CardDescription>
-          可选,默认关闭。开启后,error 及以上的错误会自动推送到所选通道(warn/info 仍需要手动点「发送到远端」)。
-          上传前会脱敏:Authorization / API key、用户主目录与盘符、邮箱与 IP 地址都会被替换。
+          可选，默认关闭。开启后，error 及以上的错误会自动推送到所选通道（warn/info 仍需要手动点「发送到远端」）。
+          上传前会脱敏：Authorization / API key、用户主目录与盘符、邮箱与 IP 地址都会被替换。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -943,7 +943,7 @@ function UpstreamConfigCard() {
             />
             <Input
               type="password"
-              placeholder="Authorization 头(可选,如 Bearer xxx)"
+              placeholder="Authorization 头（可选，如 Bearer xxx）"
               value={draft.error_upstream_webhook_auth_header}
               onChange={(e) =>
                 setDraft((d) => ({

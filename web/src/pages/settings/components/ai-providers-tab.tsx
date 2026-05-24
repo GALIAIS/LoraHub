@@ -162,7 +162,7 @@ function ProvidersPanel() {
         )}
         {list.length === 0 && !providers.isLoading && (
           <div className="rounded-[4px] border border-dashed border-border/60 px-3 py-4 text-[11px] text-muted-foreground/85">
-            尚未配置服务商。点「新增」开始,可任意添加 OpenAI 兼容端点。
+            尚未配置服务商。点「新增」开始，可任意添加 OpenAI 兼容端点。
           </div>
         )}
         <div className="space-y-1">
@@ -197,7 +197,7 @@ function ProvidersPanel() {
       <div className="min-w-0">
         {editing == null ? (
           <div className="rounded-[6px] border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
-            选一个服务商开始编辑,或点上方「新增」添加。
+            选一个服务商开始编辑，或点上方「新增」添加。
           </div>
         ) : (
           <ProviderForm
@@ -776,7 +776,7 @@ function ModelsPanel() {
     return (
       <Card className="rounded-[6px] border-dashed border-border/60">
         <CardContent className="px-6 py-12 text-center text-sm text-muted-foreground">
-          先到「服务商」面板添加至少一个服务商,再来管理模型。
+          先到「服务商」面板添加至少一个服务商，再来管理模型。
         </CardContent>
       </Card>
     )
@@ -939,7 +939,7 @@ function ModelsPanel() {
         <Card className="rounded-[6px] border-dashed border-border/60">
           <CardContent className="px-6 py-10 text-center text-[12px] text-muted-foreground">
             {providerFilter === "all"
-              ? "尚无任何模型。选一个服务商点「发现模型」自动拉取,或手工添加。"
+              ? "尚无任何模型。选一个服务商点「发现模型」自动拉取，或手工添加。"
               : "此服务商尚未导入模型。点「发现模型」从 /v1/models 拉取。"}
           </CardContent>
         </Card>
