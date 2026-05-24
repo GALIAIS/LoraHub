@@ -77,33 +77,26 @@ function SampleCard({
           </div>
         )}
       </button>
-      <div className="flex-1 min-w-0 px-2 py-2 space-y-1.5">
-        <div className="flex items-center gap-2">
-          <div
-            className="font-mono text-[11px] truncate flex-1"
-            title={sample.relative_path}
-          >
-            {sample.relative_path}
-          </div>
-          <Badge
-            variant={sample.caption_exists ? "secondary" : "outline"}
-            className="rounded-[2px] text-[10px] py-0 px-1.5"
-          >
-            {sample.caption_exists ? "已标注" : "缺 .txt"}
-          </Badge>
+      <div className="min-w-0 px-2 py-1.5 flex items-center gap-1.5">
+        <div
+          className="font-mono text-[11px] truncate flex-1"
+          title={sample.relative_path}
+        >
+          {sample.relative_path}
         </div>
-        <div className="flex items-start gap-2">
-          <p className="text-[11px] text-muted-foreground line-clamp-2 flex-1">
-            {sample.caption ?? "暂无标注"}
-          </p>
-          <button
-            type="button"
-            onClick={onEdit}
-            className="text-[11px] text-primary hover:underline shrink-0 inline-flex items-center gap-1"
-          >
-            <Pencil className="size-3" /> 编辑
-          </button>
-        </div>
+        <Badge
+          variant={sample.caption_exists ? "secondary" : "outline"}
+          className="rounded-[2px] text-[10px] py-0 px-1.5 shrink-0"
+        >
+          {sample.caption_exists ? "已标注" : "缺 .txt"}
+        </Badge>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="text-[11px] text-primary hover:underline shrink-0 inline-flex items-center gap-0.5"
+        >
+          <Pencil className="size-3" />
+        </button>
       </div>
     </div>
   )
