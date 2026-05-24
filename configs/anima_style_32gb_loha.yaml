@@ -68,9 +68,66 @@ skipCacheCheck: true
 sampling:
   enabled: true
   everyNEpochs: 2
-  atFirst: false
+  atFirst: true
   resolution: [1024, 1024]
-  seed: 42
+  seed: -1
+  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: true        # 风格 LoRA 必看:基模对比能立刻发现是否真学到风格
+    crossCkptAnimation: false
+  # 风格 LoRA 验证:覆盖单人/群像/全身/风景/静物/夜景共 6 个场景,跨主体+复杂度
+  # 检查风格是否稳定迁移而不退到基模 prior。${TRIGGER} 占位符在启动时用
+  # triggerWord 字段(优先)或 dataset captions 推断(回退)统一注入。
+  prompts:
+    - prompt: "${TRIGGER}, 1girl, solo, portrait, looking at viewer, soft expression, simple background, even lighting"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 28
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 2girls, multiple girls, friends, sitting together, talking, indoor, daytime, casual atmosphere"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 28
+      seed: 256
+      width: 1216
+      height: 832
+
+    - prompt: "${TRIGGER}, 1girl, solo, full body, fantasy outfit, intricate details, dynamic pose, magic effects, sparkles"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic"
+      cfg: 5.5
+      steps: 30
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "${TRIGGER}, scenery, no humans, landscape, mountains, forest, river, dramatic clouds, golden hour, cinematic"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
+      cfg: 5.0
+      steps: 28
+      seed: 8888
+      width: 1344
+      height: 768
+
+    - prompt: "${TRIGGER}, still life, table with cup of coffee, open book, soft window light, cozy atmosphere, no humans"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
+      cfg: 5.0
+      steps: 28
+      seed: 7777
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 1boy, solo, urban night, neon signs, rain, reflective wet ground, cyberpunk atmosphere, dramatic lighting"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d, daytime, sunny"
+      cfg: 6.0
+      steps: 32
+      seed: 31415
+      width: 896
+      height: 1152
 
 output:
   name: style_anima_32gb

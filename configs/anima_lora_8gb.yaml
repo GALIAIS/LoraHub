@@ -100,16 +100,49 @@ skipCacheCheck: false
 cacheInfo: false
 trainInpainting: false
 sampling:
-  enabled: false
-  everyNEpochs: 1
+  enabled: true
+  everyNEpochs: 2
   atFirst: false
   resolution:
   - 1024
   - 1024
-  seed: 42
+  seed: -1
   enableLiveInference: false
   inferenceSteps: 24
   inferenceCfg: 5.0
+  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: false
+    crossCkptAnimation: false
+  # 8GB 卡 GPU 内存紧张,采样数压到 3 张 + 24 step,跨 epoch 频率减半。需要更
+  # 详细的演变追踪请参考 configs/anima_lora_default.yaml 的 6 张采样集。
+  # ${TRIGGER} 的解析逻辑同 default 配方:triggerWord 优先 → dataset 推断 → 占位符清除
+  prompts:
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body, looking at viewer, neutral expression, simple background, soft natural lighting"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
+      cfg: 5.0
+      steps: 24
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body, standing, outdoors, daytime, soft sunlight"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
+      cfg: 5.0
+      steps: 24
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain landscape, golden hour, cinematic"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, watermark, text, person, character, human"
+      cfg: 5.0
+      steps: 24
+      seed: 8888
+      width: 1344
+      height: 768
 output:
   name: anima_lora_8gb
   saveEveryNEpochs: 1

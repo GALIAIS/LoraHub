@@ -561,6 +561,15 @@ class SamplingConfig(BaseModel):
     # job-start". Anything else is honoured verbatim. The launcher logs
     # the resolved seed so reproducing a run is still possible.
     seed: int = -1
+    # Optional trigger word substituted into every ``prompts[].prompt``
+    # in place of the literal ``${TRIGGER}`` placeholder at job-start.
+    # Empty / unset → the launcher tries to recover one by reading the
+    # first comma-separated token of the dataset's .txt captions and
+    # picking the most common value. Failing both paths the placeholder
+    # (and any trailing ", ") is stripped, leaving a generic prompt.
+    # Lets the same default recipe template adapt to character / style
+    # LoRAs without hand-editing every prompt row.
+    trigger_word: str | None = None
     outputs: SamplingOutputs = Field(default_factory=SamplingOutputs)
     # NOTE: ``sampling.attention`` was removed — sample-stage attention
     # backend selection was schema-only (no compiler ever wired it

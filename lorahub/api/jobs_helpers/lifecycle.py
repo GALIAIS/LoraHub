@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import secrets
 import threading
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,7 @@ def _launch_job(
 
     _normalize_recipe_paths(cfg)
     _resolve_runtime_seeds(cfg)
+    _resolve_trigger_word(cfg)
     _materialise_prompts_file(cfg, workspace)
 
     snapshot = cfg.model_dump(mode="json", by_alias=True)
@@ -129,6 +132,7 @@ def _relaunch_job_in_place(
 
     _normalize_recipe_paths(cfg)
     _resolve_runtime_seeds(cfg)
+    _resolve_trigger_word(cfg)
     _materialise_prompts_file(cfg, workspace)
 
     if not extra_argv:
@@ -622,6 +626,124 @@ def _resolve_runtime_seeds(cfg: TrainingConfig) -> None:
         if ps.seed == -1:
             ps.seed = _draw_random_seed()
             log.info("sampling.prompts seed: drew runtime random %d", ps.seed)
+
+
+# Match ``${TRIGGER}`` / ``${trigger}`` plus an optional trailing ``,``
+# and one or more spaces so we can wipe both the placeholder and the
+# comma-glue around it cleanly when no trigger word is available.
+_TRIGGER_PLACEHOLDER_WITH_GLUE_RE = re.compile(
+    r"\$\{trigger\}\s*,?\s*", flags=re.IGNORECASE
+)
+_TRIGGER_PLACEHOLDER_BARE_RE = re.compile(
+    r"\$\{trigger\}", flags=re.IGNORECASE
+)
+# Sample a small head of the dataset rather than every caption — the
+# point is the *most common* first token, and the cheap N=64 head is
+# robust to a few outliers.
+_TRIGGER_SCAN_LIMIT = 64
+# Tags rejected as "obviously not a trigger" when scanning captions —
+# these are the universal anime-style quality / character-count tokens
+# that virtually every caption opens with.
+_NON_TRIGGER_TOKENS = frozenset({
+    "1girl", "1boy", "2girls", "2boys", "3girls", "3boys",
+    "multiple girls", "multiple boys", "multiple_girls", "multiple_boys",
+    "no humans", "no_humans", "solo", "duo", "trio",
+    "masterpiece", "best quality", "best_quality", "score_7",
+    "score_8", "score_9", "score_8_up", "score_9_up",
+    "highres", "absurdres", "ultra-detailed", "ultra_detailed",
+    "general", "sensitive", "questionable", "explicit",
+})
+
+
+def _scan_dataset_for_trigger(dataset_dir: Path) -> str | None:
+    """Best-effort recovery of a trigger word from caption .txt files.
+
+    Reads up to ``_TRIGGER_SCAN_LIMIT`` ``.txt`` siblings in the
+    dataset directory, takes each file's first comma-separated token,
+    and returns the most common value that isn't in
+    ``_NON_TRIGGER_TOKENS``. Returns ``None`` when:
+
+      * the dataset path doesn't exist
+      * no ``.txt`` captions are found
+      * every first-token is a generic anime-style quality tag
+
+    Cheap enough to run unconditionally on every job-launch (≤ 64
+    file reads, < 50ms even on a cold disk).
+    """
+    if not dataset_dir.is_dir():
+        return None
+    counter: Counter[str] = Counter()
+    seen = 0
+    for txt in dataset_dir.rglob("*.txt"):
+        if seen >= _TRIGGER_SCAN_LIMIT:
+            break
+        try:
+            raw = txt.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        head = raw.split(",", 1)[0].strip().lower()
+        if not head or head in _NON_TRIGGER_TOKENS:
+            continue
+        # WD14 underscores → human-readable spaces, matching the
+        # dataset prep we already do elsewhere.
+        head = head.replace("_", " ")
+        counter[head] += 1
+        seen += 1
+    if not counter:
+        return None
+    pick, _ = counter.most_common(1)[0]
+    return pick
+
+
+def _resolve_trigger_word(cfg: TrainingConfig) -> None:
+    """Resolve ``sampling.trigger_word`` and substitute the ${TRIGGER}
+    placeholder in every prompt body.
+
+    Resolution order:
+      1. ``sampling.trigger_word`` set explicitly in the recipe
+      2. Most common first comma-separated token across the dataset's
+         caption ``.txt`` files (excluding generic quality tags)
+      3. None — placeholders are then stripped along with their
+         comma-glue so the prompt stays well-formed
+
+    The resolved value is written back into the config so the snapshot
+    + prompts.txt materialiser see the same concrete string.
+    """
+    sampling = cfg.sampling
+    if not sampling.prompts:
+        return
+    trigger = (sampling.trigger_word or "").strip()
+    if not trigger:
+        # Try dataset recovery. ``cfg.dataset.source`` can be missing
+        # / a non-existent path during preflight; ``_scan_dataset_for_trigger``
+        # tolerates both.
+        try:
+            ds_path = Path(str(cfg.dataset.source)).expanduser()
+        except (TypeError, AttributeError):
+            ds_path = None
+        if ds_path is not None:
+            trigger = _scan_dataset_for_trigger(ds_path) or ""
+        if trigger:
+            log.info(
+                "sampling.trigger_word: recovered %r from dataset %s",
+                trigger, ds_path,
+            )
+            sampling.trigger_word = trigger
+    if not trigger:
+        log.info("sampling.trigger_word: unset and unrecovered — stripping placeholders")
+    for ps in sampling.prompts:
+        if "${" not in ps.prompt and "${" not in (ps.negative or ""):
+            continue
+        if trigger:
+            ps.prompt = _TRIGGER_PLACEHOLDER_BARE_RE.sub(trigger, ps.prompt)
+            if ps.negative:
+                ps.negative = _TRIGGER_PLACEHOLDER_BARE_RE.sub(trigger, ps.negative)
+        else:
+            ps.prompt = _TRIGGER_PLACEHOLDER_WITH_GLUE_RE.sub("", ps.prompt).strip(", ")
+            if ps.negative:
+                ps.negative = _TRIGGER_PLACEHOLDER_WITH_GLUE_RE.sub(
+                    "", ps.negative
+                ).strip(", ")
 
 
 def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:

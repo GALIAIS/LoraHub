@@ -148,6 +148,79 @@ backend:
       minRank: 8                  # lora.toml: min_rank = 8
       alphaRankScale: 1.0         # lora.toml: alpha_rank_scale = 1.0
 
+# === 训练采样 ===
+# 默认 6 张图覆盖单角色/群像/风景/静物/光照/构图各一种典型退化模式,跨 ckpt
+# 用同一组 seed 比较权重演变。
+#
+# ${TRIGGER} 占位符:
+#   - sampling.triggerWord 显式填了 → 启动时替换为该值
+#   - 留空 → 启动时扫 dataset/*.txt 第一个 token 取众数(剔除 1girl /
+#     masterpiece 这类通用 quality 标签),拿到就替换
+#   - 都拿不到 → 占位符 + 邻接的 ", " 一起删除,保证 prompt 仍然合法
+#
+# 角色 / 风格 LoRA 用户在表单里填上 triggerWord 即可让所有采样图统一注入,
+# 不需要逐条改 prompt。atFirst=true 在第 0 步先采一组基线,日后回看更直观。
+sampling:
+  enabled: true
+  everyNEpochs: 1
+  atFirst: true
+  resolution: [1024, 1024]
+  seed: -1
+  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: false
+    crossCkptAnimation: false
+  prompts:
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body, looking at viewer, neutral expression, simple background, soft natural lighting"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, mutated, watermark, signature, text"
+      cfg: 5.0
+      steps: 28
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body, standing, dynamic pose, looking at viewer, outdoors, daytime, soft sunlight"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, extra fingers, blurry, jpeg artifacts, deformed, mutated, watermark, text"
+      cfg: 5.0
+      steps: 28
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, close-up, smiling, blush, looking at viewer, indoor warm lighting, bokeh background"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, mutated, watermark, text, sad, angry"
+      cfg: 5.0
+      steps: 28
+      seed: 7777
+      width: 896
+      height: 1152
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 2girls, multiple girls, sitting together, casual conversation, indoor, daytime"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
+      cfg: 5.0
+      steps: 28
+      seed: 256
+      width: 1024
+      height: 1024
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain landscape, river, autumn forest, dramatic clouds, golden hour, cinematic"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, watermark, text, signature, person, character, human"
+      cfg: 5.0
+      steps: 28
+      seed: 8888
+      width: 1344
+      height: 768
+
+    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, urban night, neon signs, rain, reflective wet ground, dramatic rim light, looking back over shoulder"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, daytime, sunny, grayscale"
+      cfg: 5.5
+      steps: 30
+      seed: 31415
+      width: 1216
+      height: 832
+
 # === 上游字段未在 LoraHub schema 暴露的清单(均为默认值,运行时由上游
 # train.py 自己应用) ===
 #
