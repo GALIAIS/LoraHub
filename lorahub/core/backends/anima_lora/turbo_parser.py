@@ -109,10 +109,18 @@ _CANCEL_HINTS = (
     "exits with return code = -15",
 )
 
+# Substrings that contain "error" but are benign informational output.
+_ERROR_FALSE_POSITIVES = (
+    "mean ar error",
+    "forrtl: error (200): program aborting due to control-break event",
+)
+
 
 def _looks_like_error(line: str) -> bool:
     lowered = line.lower()
     if any(h in lowered for h in _CANCEL_HINTS):
+        return False
+    if any(fp in lowered for fp in _ERROR_FALSE_POSITIVES):
         return False
     return (
         "error" in lowered

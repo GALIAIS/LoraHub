@@ -109,6 +109,12 @@ _CANCEL_HINTS = (
     "process group received signal",
 )
 
+# Substrings that contain "error" but are benign informational output.
+_ERROR_FALSE_POSITIVES = (
+    "mean ar error",
+    "forrtl: error (200): program aborting due to control-break event",
+)
+
 # Cache-latents / cache-text-encoder progress lines (tqdm). We accept both
 # phases and capture done/total so listeners can show a real percentage.
 _CACHE_RE = re.compile(
@@ -394,6 +400,9 @@ def _looks_like_error(line: str) -> bool:
     # User-cancel artefacts override the red flag — Ctrl-C / SIGKILL
     # phrasings should never render as failures.
     if any(h in lowered for h in _CANCEL_HINTS):
+        return False
+    # Benign INFO lines that happen to contain "error" as a metric name.
+    if any(fp in lowered for fp in _ERROR_FALSE_POSITIVES):
         return False
     # A bare `Traceback ...` banner shows up for clean cancels too, so
     # we no longer auto-redden it. The exception-summary line that
