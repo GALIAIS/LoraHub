@@ -859,7 +859,7 @@ function renderInlineSummary(
       const arch = String(p.arch ?? "?")
       const reason = String(p.reason ?? "")
       const tail = reason ? ` · ${reason}` : ""
-      return `预览暂不可用(arch=${arch})${tail} — 训练继续,但不会生成预览图。`
+      return `预览暂不可用（arch=${arch}）${tail} · 训练继续，但不会生成预览图。`
     }
     case "oom":
       return String(p.message ?? "CUDA out of memory")

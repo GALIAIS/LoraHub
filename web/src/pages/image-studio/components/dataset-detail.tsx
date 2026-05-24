@@ -313,8 +313,8 @@ export function DatasetDetail() {
           setAiProgress({
             running: true,
             label: captionSource === "tags"
-              ? "智能标注 (WD14 + LLM 文本模式)…"
-              : "智能标注 (WD14 + VLM 视觉模式)…",
+              ? "智能标注（WD14 + LLM 文本模式）…"
+              : "智能标注（WD14 + VLM 视觉模式）…",
           })
           const res = await imageStudioSmartCaption({
             path: taskPath,
@@ -344,7 +344,7 @@ export function DatasetDetail() {
           break
         }
         case "vlm-caption": {
-          setAiProgress({ running: true, label: "VLM 标注中..." })
+          setAiProgress({ running: true, label: "VLM 标注中…" })
           const res = await imageStudioBatchCaption({
             path: taskPath,
             recursive,
@@ -354,14 +354,14 @@ export function DatasetDetail() {
           setAiProgress({
             running: false,
             label: res.skipped
-              ? `VLM 标注完成 (跳过 ${res.skipped} 已标注)`
+              ? `VLM 标注完成（跳过 ${res.skipped} 已标注）`
               : "VLM 标注完成",
             processed: res.processed,
           })
           break
         }
         case "quality-score": {
-          setAiProgress({ running: true, label: "质量评分中..." })
+          setAiProgress({ running: true, label: "质量评分中…" })
           const res = await imageStudioBatchQuality({
             path: taskPath,
             recursive,
@@ -370,14 +370,14 @@ export function DatasetDetail() {
           setAiProgress({
             running: false,
             label: res.skipped
-              ? `质量评分完成 (跳过 ${res.skipped} 已评分)`
+              ? `质量评分完成（跳过 ${res.skipped} 已评分）`
               : "质量评分完成",
             processed: res.processed,
           })
           break
         }
         case "wd14": {
-          setAiProgress({ running: true, label: "WD14 标注中..." })
+          setAiProgress({ running: true, label: "WD14 标注中…" })
           const session = await startTaggingSession({
             path: taskPath,
             tagger: (params.model_id as string)?.startsWith("joy") ? "joytag" : "wd14",
@@ -400,7 +400,7 @@ export function DatasetDetail() {
               setAiProgress({
                 running: snap.status === "running",
                 label: snap.status === "running"
-                  ? `WD14 标注中... ${snap.written}/${snap.total ?? "?"}`
+                  ? `WD14 标注中… ${snap.written}/${snap.total ?? "?"}`
                   : snap.status === "succeeded" ? "WD14 标注完成" : "WD14 标注失败",
                 processed: snap.written,
                 total: snap.total ?? undefined,
@@ -427,7 +427,7 @@ export function DatasetDetail() {
           // gets 1-3 candidate phrases stored on its annotation, and
           // the response carries a dataset-level top-N ranking we
           // surface once the batch finishes.
-          setAiProgress({ running: true, label: "分析触发词..." })
+          setAiProgress({ running: true, label: "分析触发词…" })
           const res = await imageStudioBatchTriggerWords({
             path: taskPath,
             recursive,
@@ -437,7 +437,7 @@ export function DatasetDetail() {
           setAiProgress({
             running: false,
             label: res.skipped
-              ? `触发词分析完成 (跳过 ${res.skipped} 已分析)`
+              ? `触发词分析完成（跳过 ${res.skipped} 已分析）`
               : "触发词分析完成",
             processed: res.processed,
           })
@@ -641,7 +641,7 @@ export function DatasetDetail() {
           "trigger word" input on the next run. */}
       {triggerWordTop && triggerWordTop.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 bg-muted/20">
-          <span className="text-xs text-muted-foreground">数据集触发词候选 (点击复制):</span>
+          <span className="text-xs text-muted-foreground">数据集触发词候选（点击复制）：</span>
           {triggerWordTop.map((t) => (
             <button
               key={t.trigger}
@@ -650,7 +650,7 @@ export function DatasetDetail() {
                 void navigator.clipboard.writeText(t.trigger)
               }}
               className="inline-flex items-center gap-1 rounded border bg-background px-2 py-0.5 text-[11px] font-mono hover:bg-muted transition-colors"
-              title={`${t.count} 张图片含此触发词 — 点击复制`}
+              title={`${t.count} 张图片含此触发词 · 点击复制`}
             >
               <span>{t.trigger}</span>
               <span className="text-muted-foreground">·{t.count}</span>
@@ -684,7 +684,7 @@ export function DatasetDetail() {
           <div className="flex-1 overflow-y-auto p-3">
             {listQuery.isLoading && (
               <div className="flex items-center justify-center h-32 text-muted-foreground">
-                加载中...
+                加载中…
               </div>
             )}
             {data && filteredItems.length === 0 && !listQuery.isLoading && (
@@ -816,9 +816,9 @@ export function DatasetDetail() {
           <AlertDialogHeader>
             <AlertDialogTitle>批量删除图片</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除选中的 {multiSelected.size} 张图片及其标注,移动到
+              将删除选中的 {multiSelected.size} 张图片及其标注，移动到
               <code className="font-mono mx-1">_image_studio_trash/</code>
-              ,可在文件管理器中找回。
+              ，可在文件管理器中找回。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

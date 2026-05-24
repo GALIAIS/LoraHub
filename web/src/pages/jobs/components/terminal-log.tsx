@@ -394,10 +394,10 @@ export function TerminalLog({
         {filteredLines.length === 0 ? (
           <div className={placeholderClass}>
             {events.length === 0
-              ? "尚未收到任何日志……"
+              ? "尚未收到任何日志…"
               : query
                 ? "没有匹配的行。"
-                : "屏幕已清空，等待新日志……"}
+                : "屏幕已清空，等待新日志…"}
           </div>
         ) : (
           <Virtuoso

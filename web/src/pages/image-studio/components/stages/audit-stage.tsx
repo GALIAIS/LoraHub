@@ -32,11 +32,11 @@ interface Props {
 
 const ISSUE_KIND_META: Record<AuditIssueKind, { label: string; tone: string }> = {
   corrupt:         { label: "损坏 / 无法读取",       tone: "error" },
-  tiny:            { label: "短边过小(<512)",        tone: "warn" },
+  tiny:            { label: "短边过小（<512）",        tone: "warn" },
   exif_rotation:   { label: "EXIF 旋转未应用",       tone: "warn" },
   no_caption:      { label: "缺 caption",            tone: "warn" },
   missing_trigger: { label: "缺触发词",              tone: "warn" },
-  blurry:          { label: "可能模糊(Laplacian 低)", tone: "warn" },
+  blurry:          { label: "可能模糊（Laplacian 低）", tone: "warn" },
 }
 
 export function AuditStage({ datasetPath }: Props) {
@@ -61,7 +61,7 @@ export function AuditStage({ datasetPath }: Props) {
       }),
     onSuccess: (data) => {
       toast.success(
-        `审计完成 — 扫描 ${data.image_count} 张, ${data.issues.length} 项异常`,
+        `审计完成 · 扫描 ${data.image_count} 张，${data.issues.length} 项异常`,
         { description: `用时 ${data.duration_s.toFixed(1)}s` },
       )
       qc.setQueryData(["image-studio-audit-report", datasetPath], data)
@@ -81,11 +81,11 @@ export function AuditStage({ datasetPath }: Props) {
       {/* Top bar — scan controls */}
       <div className="flex items-center gap-3 border-b border-border/60 bg-background px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">触发词:</span>
+          <span className="text-xs text-muted-foreground">触发词：</span>
           <Input
             value={triggerWord}
             onChange={(e) => setTriggerWord(e.target.value)}
-            placeholder="@thornsdance(可选)"
+            placeholder="@thornsdance（可选）"
             className="h-7 w-44 text-xs"
             disabled={isScanning}
           />
@@ -104,12 +104,12 @@ export function AuditStage({ datasetPath }: Props) {
             onCheckedChange={setBlurCheck}
             disabled={isScanning}
           />
-          模糊检测(慢)
+          模糊检测（慢）
         </label>
         <div className="ml-auto flex items-center gap-2">
           {report && (
             <span className="text-[11px] text-muted-foreground">
-              上次扫描: {new Date(report.scanned_at).toLocaleString()}
+              上次扫描：{new Date(report.scanned_at).toLocaleString()}
             </span>
           )}
           <Button
@@ -136,7 +136,7 @@ export function AuditStage({ datasetPath }: Props) {
         {reportQuery.isLoading && (
           <div className="flex items-center justify-center h-32 text-muted-foreground">
             <Loader2 className="size-4 animate-spin mr-2" />
-            加载缓存的审计报告...
+            加载缓存的审计报告…
           </div>
         )}
         {report && (
@@ -154,7 +154,7 @@ export function AuditStage({ datasetPath }: Props) {
               className="lg:row-span-2"
             />
             <MiniHistogram
-              title="分辨率分布(长边像素)"
+              title="分辨率分布（长边像素）"
               buckets={report.resolution_histogram}
             />
             <MiniHistogram
@@ -166,7 +166,7 @@ export function AuditStage({ datasetPath }: Props) {
               buckets={report.filesize_histogram}
             />
             <MiniHistogram
-              title="Caption 长度分布(字符)"
+              title="Caption 长度分布（字符）"
               buckets={report.caption_length_histogram}
             />
             <TagVocabPanel report={report} className="lg:col-span-2" />
@@ -288,10 +288,10 @@ function IssuesPanel({
     onSuccess: (data, issueKind) => {
       const moved = data.result?.moved_count ?? 0
       toast.success(
-        `已隔离 ${moved} 张 (${ISSUE_KIND_META[issueKind]?.label ?? issueKind})`,
+        `已隔离 ${moved} 张（${ISSUE_KIND_META[issueKind]?.label ?? issueKind}）`,
         {
           description:
-            "图与 caption 已移到 .workbench/quarantine/,可在 整理 阶段恢复",
+            "图与 caption 已移到 .workbench/quarantine/，可在 整理 阶段恢复",
         },
       )
       qc.invalidateQueries({ queryKey: ["image-studio"] })
@@ -310,7 +310,7 @@ function IssuesPanel({
         paths,
       }),
     onSuccess: (data) => {
-      toast.success(`已应用 EXIF 旋转: ${data.rotated_count} 张`)
+      toast.success(`已应用 EXIF 旋转：${data.rotated_count} 张`)
       qc.invalidateQueries({ queryKey: ["image-studio"] })
       onMutated()
     },
@@ -325,11 +325,11 @@ function IssuesPanel({
       <div className={cn("rounded-md border border-emerald-600/30 bg-emerald-50 dark:bg-emerald-950/20 p-4", className)}>
         <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 text-sm font-medium">
           <CheckCircle2 className="size-4" />
-          数据集干净 — 未发现异常
+          数据集干净 · 未发现异常
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           此次扫描覆盖损坏文件 / 极小分辨率 / EXIF 旋转 / 缺 caption /
-          缺触发词 / 模糊度六个维度,均未触发。
+          缺触发词 / 模糊度六个维度，均未触发。
         </p>
       </div>
     )
@@ -337,7 +337,7 @@ function IssuesPanel({
   return (
     <div className={cn("rounded-md border border-border/60 bg-card p-4 overflow-hidden flex flex-col", className)}>
       <div className="text-xs font-medium text-foreground mb-3">
-        异常列表({report.issues.length})
+        异常列表（{report.issues.length}）
       </div>
       <div className="space-y-3 overflow-y-auto flex-1 min-h-0">
         {Object.entries(issuesByKind).map(([kind, items]) => {
@@ -403,8 +403,8 @@ function IssuesPanel({
                       e.preventDefault()
                       if (
                         !window.confirm(
-                          `把这 ${items.length} 张「${meta.label}」图移到隔离区?\n` +
-                            `(图与 caption 移到 .workbench/quarantine/,可恢复)`,
+                          `把这 ${items.length} 张「${meta.label}」图移到隔离区？\n` +
+                            `（图与 caption 移到 .workbench/quarantine/，可恢复）`,
                         )
                       )
                         return

@@ -875,7 +875,7 @@ function LossChartCore({
             type="button"
             onClick={reset}
             className="inline-flex items-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
-            title="新数据已超出视图,点击跟随到最新"
+            title="新数据已超出视图，点击跟随到最新"
           >
             <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
             +{Math.round(fullExtent.xMax - xMax)} 步未显示 · 跟随

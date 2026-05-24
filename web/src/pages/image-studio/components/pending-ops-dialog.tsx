@@ -114,7 +114,7 @@ export function PendingOpsDialog({ open, onOpenChange, path }: PendingOpsDialogP
             <Play className="size-4" /> 待应用的操作
           </DialogTitle>
           <DialogDescription>
-            旋转 / 翻转 / 替换 / 删除等修改会先写入队列，点&quot;应用全部&quot;
+            旋转 / 翻转 / 替换 / 删除等修改会先写入队列，点「应用全部」
             才会落到磁盘。在这里可以看到队列状态并撤销单条。
           </DialogDescription>
         </DialogHeader>

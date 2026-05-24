@@ -89,7 +89,7 @@ export function QuarantinePanel({ datasetPath }: Props) {
           {visible.length === 0 ? (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {active.length === 0
-                ? "隔离区为空 — 在审计列表点「隔离」可批量移入。"
+                ? "隔离区为空 · 在审计列表点「隔离」可批量移入。"
                 : "无符合条件的条目"}
             </div>
           ) : (

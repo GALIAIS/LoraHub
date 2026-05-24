@@ -123,10 +123,10 @@ export function DuplicatesView({ path, recursive }: DuplicatesViewProps) {
       <div className="text-xs text-muted-foreground space-y-0.5">
         <div>
           <span className="font-medium text-foreground">L1 pHash</span> 感知哈希 ·
-          阈值 10 (Hamming 距离 ≤ 10 视为相似)
+          阈值 10（Hamming 距离 ≤ 10 视为相似）
         </div>
         <div className="text-muted-foreground/70">
-          每张缩略图右下角显示与&quot;保留&quot;张图的 Hamming 距离 — 越小越相似
+          每张缩略图右下角显示与「保留」张图的 Hamming 距离 · 越小越相似
         </div>
       </div>
 

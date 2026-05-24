@@ -176,12 +176,12 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
 
       <div className="flex-1 overflow-y-auto p-4">
         {datasetsQuery.isLoading && (
-          <p className="text-sm text-muted-foreground">加载中...</p>
+          <p className="text-sm text-muted-foreground">加载中…</p>
         )}
         {datasets.length === 0 && !datasetsQuery.isLoading && (
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
             <FolderOpen className="size-10 opacity-40" />
-            <p className="text-sm">暂无数据集，点击&quot;新建&quot;创建第一个</p>
+            <p className="text-sm">暂无数据集，点击「新建」创建第一个</p>
           </div>
         )}
 

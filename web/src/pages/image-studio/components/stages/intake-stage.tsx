@@ -58,12 +58,12 @@ function BrowserUploadHint({ datasetPath }: { datasetPath: string }) {
       </div>
       <div className="p-3 space-y-2 text-xs text-muted-foreground flex-1 flex flex-col">
         <p>
-          单文件 / zip / 文件夹的拖拽上传保留在 整理 阶段顶部 — 那里有原生的
+          单文件 / zip / 文件夹的拖拽上传保留在 整理 阶段顶部 · 那里有原生的
           <code className="text-[11px]"> &lt;DropZone /&gt; </code>。
         </p>
         <p className="opacity-80">
-          这里的两个面板针对的是另外两类场景:服务器上已有文件
-          (无法走浏览器),以及跨数据集复制。
+          这里的两个面板针对的是另外两类场景：服务器上已有文件
+          （无法走浏览器），以及跨数据集复制。
         </p>
         <Button
           size="sm"
@@ -129,7 +129,7 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
       }),
     onSuccess: (data) => {
       toast.success(
-        `导入完成: ${data.imported_count} 新 / ${data.skipped_count} 跳过 / ${data.failed_count} 失败`,
+        `导入完成：${data.imported_count} 新 / ${data.skipped_count} 跳过 / ${data.failed_count} 失败`,
       )
       setPreflight(null)
       qc.invalidateQueries({ queryKey: ["image-studio"] })
@@ -148,7 +148,7 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
       </div>
       <div className="p-3 space-y-2 text-xs">
         <p className="text-muted-foreground">
-          指定服务器上的目录或单个文件,自动批量拷入数据集。
+          指定服务器上的目录或单个文件，自动批量拷入数据集。
           数据集自带 <code className="text-[11px]">.txt</code> caption 也会一起带过来。
         </p>
         <Input
@@ -164,7 +164,7 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
           </label>
           <label className="inline-flex items-center gap-1.5 select-none">
             <Switch checked={skipDups} onCheckedChange={setSkipDups} />
-            跳过重复 (phash)
+            跳过重复（phash）
           </label>
           <label className="inline-flex items-center gap-1.5 select-none">
             <Switch checked={movInstead} onCheckedChange={setMoveInstead} />
@@ -173,7 +173,7 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
         </div>
         {skipDups && (
           <div className="flex items-center gap-2">
-            <span className="text-muted-foreground">phash 阈值:</span>
+            <span className="text-muted-foreground">phash 阈值：</span>
             <Select
               value={phashThreshold}
               onValueChange={(v) => v != null && setPhashThreshold(v)}
@@ -182,10 +182,10 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="0">0 (完全相同)</SelectItem>
-                <SelectItem value="2">2 (轻微改动)</SelectItem>
-                <SelectItem value="4">4 (近似 / 重编码)</SelectItem>
-                <SelectItem value="8">8 (相似 / 同场景)</SelectItem>
+                <SelectItem value="0">0（完全相同）</SelectItem>
+                <SelectItem value="2">2（轻微改动）</SelectItem>
+                <SelectItem value="4">4（近似 / 重编码）</SelectItem>
+                <SelectItem value="8">8（相似 / 同场景）</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -212,7 +212,7 @@ function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
               if (movInstead) {
                 if (
                   !window.confirm(
-                    "移动模式: 源文件会从原位置消失。确定继续?",
+                    "移动模式：源文件会从原位置消失。确定继续？",
                   )
                 )
                   return
@@ -295,14 +295,14 @@ function FromDatasetPanel({ datasetPath }: { datasetPath: string }) {
       </div>
       <div className="p-3 space-y-2 text-xs">
         <p className="text-muted-foreground">
-          从其它数据集挑一部分图(支持 fnmatch glob)拷入当前数据集。源数据集不动。
+          从其它数据集挑一部分图（支持 fnmatch glob）拷入当前数据集。源数据集不动。
         </p>
         <Select
           value={sourceDataset}
           onValueChange={(v) => v != null && setSourceDataset(v)}
         >
           <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="选择源数据集..." />
+            <SelectValue placeholder="选择源数据集…" />
           </SelectTrigger>
           <SelectContent>
             {candidates.length === 0 ? (
@@ -322,7 +322,7 @@ function FromDatasetPanel({ datasetPath }: { datasetPath: string }) {
           </SelectContent>
         </Select>
         <Input
-          placeholder="过滤(fnmatch 例: portrait* / char_a/*)"
+          placeholder="过滤（fnmatch 例：portrait* / char_a/*）"
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
           className="h-8 text-xs font-mono"

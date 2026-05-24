@@ -234,7 +234,7 @@ function _ThroughputClickable({
       title={interactive ? "点击切换吞吐单位" : undefined}
       aria-label={
         interactive
-          ? `吞吐 ${_formatThroughput(itPerSec, unit)},点击切换单位`
+          ? `吞吐 ${_formatThroughput(itPerSec, unit)}，点击切换单位`
           : undefined
       }
     >
@@ -311,7 +311,7 @@ export function ThroughputTile({
           title={interactive ? "点击切换吞吐单位" : undefined}
           aria-label={
             interactive
-              ? `吞吐 ${_formatThroughput(itPerSecRecent, unit)},点击切换单位`
+              ? `吞吐 ${_formatThroughput(itPerSecRecent, unit)}，点击切换单位`
               : undefined
           }
         >

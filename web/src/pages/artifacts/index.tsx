@@ -142,7 +142,7 @@ export function ArtifactsPage() {
       <div className="px-8 py-7 space-y-5 w-full">
         <header className="space-y-1">
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            产物管理
+            产物归档
           </div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Package className="size-5 text-muted-foreground" />

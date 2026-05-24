@@ -207,7 +207,7 @@ export function FilterPanel({
         )}
         {presets.length === 0 ? (
           <p className="text-[10.5px] text-muted-foreground/70 italic">
-            尚无预设。先调好筛选后&quot;保存当前&quot;。
+            尚无预设。先调好筛选后「保存当前」。
           </p>
         ) : (
           <ul className="space-y-0.5">

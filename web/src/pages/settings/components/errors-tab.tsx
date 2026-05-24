@@ -268,7 +268,7 @@ export function ErrorsTab() {
               <Input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="按标题或消息搜索..."
+                placeholder="按标题或消息搜索…"
                 className="pl-8"
               />
             </div>
@@ -284,7 +284,7 @@ export function ErrorsTab() {
           <CardContent className="px-2 pb-2 flex-1 min-h-0 overflow-hidden">
             {items.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                {list.isLoading ? "加载中..." : "暂无错误记录"}
+                {list.isLoading ? "加载中…" : "暂无错误记录"}
               </div>
             ) : (
               <ul className="space-y-1 h-full overflow-y-auto pr-1">
@@ -358,7 +358,7 @@ export function ErrorsTab() {
               disabled={clearing}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {clearing ? "清空中..." : "确认清空"}
+              {clearing ? "清空中…" : "确认清空"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -478,7 +478,7 @@ function DetailPanel({
               className="gap-1.5"
             >
               <Send className="size-3" />
-              {sending ? "发送中..." : "发送到远端"}
+              {sending ? "发送中…" : "发送到远端"}
             </Button>
             <Button
               size="sm"
@@ -969,7 +969,7 @@ function UpstreamConfigCard() {
             className="gap-1.5"
           >
             <Network className="size-3" />
-            {probing ? "测试中..." : "测试连通"}
+            {probing ? "测试中…" : "测试连通"}
           </Button>
           <Button
             size="sm"
@@ -977,7 +977,7 @@ function UpstreamConfigCard() {
             disabled={saving || !cfg}
             className="gap-1.5"
           >
-            {saving ? "保存中..." : "保存"}
+            {saving ? "保存中…" : "保存"}
           </Button>
         </div>
       </CardContent>

@@ -110,8 +110,8 @@ function VocabPanel({
       }),
     onSuccess: (data) => {
       toast.success(
-        `已删除 ${data.removed_count} 处 tag(${data.edited_count} 个文件)`,
-        { description: `黑名单: ${data.blacklisted_tags.join(", ")}` },
+        `已删除 ${data.removed_count} 处 tag（${data.edited_count} 个文件）`,
+        { description: `黑名单：${data.blacklisted_tags.join(", ")}` },
       )
       onClearSelection()
       onMutated()
@@ -166,8 +166,8 @@ function VocabPanel({
             onClick={() => {
               if (
                 !window.confirm(
-                  `确认从全部 caption 中删除这 ${selectedTags.size} 个 tag?\n` +
-                    `(原文件备份到 .workbench/backups/, 可恢复)`,
+                  `确认从全部 caption 中删除这 ${selectedTags.size} 个 tag？\n` +
+                    `（原文件备份到 .workbench/backups/，可恢复）`,
                 )
               )
                 return
@@ -187,7 +187,7 @@ function VocabPanel({
         {loading && (
           <div className="flex items-center justify-center h-32 text-muted-foreground">
             <Loader2 className="size-4 animate-spin mr-2" />
-            扫描标签...
+            扫描标签…
           </div>
         )}
         {!loading && vocab.length === 0 && (
@@ -295,7 +295,7 @@ function FindReplacePanel({
         dry_run: false,
       }),
     onSuccess: (data) => {
-      toast.success(`已应用替换: ${data.matched_count} 处 / ${data.matched_files} 文件`)
+      toast.success(`已应用替换：${data.matched_count} 处 / ${data.matched_files} 文件`)
       setDryRunResult(null)
       onMutated()
     },
@@ -313,13 +313,13 @@ function FindReplacePanel({
       </div>
       <div className="p-3 space-y-2 text-xs">
         <Input
-          placeholder="查找(默认整个 tag 精确匹配)"
+          placeholder="查找（默认整个 tag 精确匹配）"
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
           className="h-8 text-xs font-mono"
         />
         <Input
-          placeholder="替换(留空 = 删除该 tag)"
+          placeholder="替换（留空 = 删除该 tag）"
           value={replacement}
           onChange={(e) => setReplacement(e.target.value)}
           className="h-8 text-xs font-mono"
@@ -362,7 +362,7 @@ function FindReplacePanel({
               if (!dryRunResult) return
               if (
                 !window.confirm(
-                  `确认应用替换 ${dryRunResult.matched_count} 处?(${dryRunResult.matched_files} 个文件)`,
+                  `确认应用替换 ${dryRunResult.matched_count} 处？（${dryRunResult.matched_files} 个文件）`,
                 )
               )
                 return
@@ -403,7 +403,7 @@ function FindReplacePanel({
           ))}
           {dryRunResult.diffs_truncated && (
             <div className="px-3 py-1 text-[10px] text-muted-foreground border-t border-border/30">
-              ...(diff 仅展示前 100 项,实际匹配更多)
+              …（diff 仅展示前 100 项，实际匹配更多）
             </div>
           )}
         </div>
@@ -456,7 +456,7 @@ function TriggerInjectPanel({
       </div>
       <div className="p-3 space-y-2 text-xs">
         <Input
-          placeholder="触发词,如 @charA"
+          placeholder="触发词，如 @charA"
           value={trigger}
           onChange={(e) => setTrigger(e.target.value)}
           className="h-8 text-xs font-mono"

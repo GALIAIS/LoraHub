@@ -149,7 +149,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
           )}
           {hasActive && (
             <span className="text-xs text-muted-foreground flex-1">
-              队列: {activeTasks.length} 个任务等待处理
+              队列：{activeTasks.length} 个任务等待处理
             </span>
           )}
           <div className="flex items-center gap-2">

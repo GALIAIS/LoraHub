@@ -210,7 +210,7 @@ export function LightboxModal({
               )}
               <span className="tabular-nums">{formatBytes(item.bytes)}</span>
               {item.annotation?.aiQualityLabel && (
-                <span>· 质量: {item.annotation.aiQualityLabel}</span>
+                <span>· 质量：{item.annotation.aiQualityLabel}</span>
               )}
               {item.captionExists ? (
                 <span className="ml-auto truncate flex-1 max-w-[60%] text-right">

@@ -164,7 +164,7 @@ export function AnalysisPage() {
             <div className="flex items-center gap-2 min-w-0">
               <BarChart3 className="size-4 text-primary shrink-0" />
               <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 truncate">
-                分析工作台
+                训练分析
               </span>
             </div>
             <Button
@@ -466,10 +466,10 @@ function EmptyState({
       <div className="max-w-3xl mx-auto px-7 py-8 space-y-6">
         <div className="space-y-1">
           <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            分析工作台
+            训练分析
           </div>
           <h2 className="text-[18px] font-semibold tracking-tight">
-            选一个任务开始分析
+            选择任务开始分析
           </h2>
           <p className="text-sm text-muted-foreground">
             最近的 6 个任务已列在下方；勾选两个或更多进入对比模式。也可以直接在左侧搜索具体的 ID。

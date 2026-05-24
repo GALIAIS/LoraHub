@@ -156,7 +156,7 @@ export function SweepsPage() {
       >
         <div className="flex items-center justify-between px-4 pt-3">
           <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            超参 sweep
+            参数搜索
           </span>
           <Button
             size="sm"

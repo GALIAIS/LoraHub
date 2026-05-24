@@ -166,7 +166,7 @@ export function JobDetail({
     try {
       await api.pauseJob(data.id)
       await job.refetch()
-      toast.success("已请求暂停,等待训练写出最新 state...", {
+      toast.success("已请求暂停，等待训练写出最新 state…", {
         description: "随后点「恢复训练」从此处继续",
       })
     } catch (e) {
@@ -261,12 +261,12 @@ export function JobDetail({
         try {
           await navigator.clipboard.writeText(ws)
           toast.info("服务器无桌面环境", {
-            description: `工作区路径已复制到剪贴板: ${ws}`,
+            description: `工作区路径已复制到剪贴板：${ws}`,
             duration: 8000,
           })
         } catch {
           toast.warning("服务器无桌面环境", {
-            description: `工作区路径: ${ws}`,
+            description: `工作区路径：${ws}`,
             duration: 8000,
           })
         }
@@ -286,7 +286,7 @@ export function JobDetail({
     try {
       const result = await api.archiveJob(data.id)
       if (result.warnings.length > 0) {
-        toast.warning("归档完成,有警告", {
+        toast.warning("归档完成，有警告", {
           description: result.warnings.join("；"),
           duration: 8000,
         })
@@ -403,7 +403,7 @@ export function JobDetail({
                 size="sm"
                 onClick={onResume}
                 disabled={busy !== null}
-                title="从最新 state + safetensors 续训(保留 optimizer / lr 进度)"
+                title="从最新 state + safetensors 续训（保留 optimizer / lr 进度）"
               >
                 {busy === "resume" ? (
                   <Spinner className="size-3" />
@@ -417,7 +417,7 @@ export function JobDetail({
                 size="sm"
                 onClick={() => setResumeEditOpen(true)}
                 disabled={busy !== null || !data?.config_snapshot}
-                title="先编辑 lr / dropTokens / 数据集等再续训(权重相关字段会被锁)"
+                title="先编辑 lr / dropTokens / 数据集等再续训（权重相关字段会被锁）"
               >
                 <Pencil className="size-3" /> 编辑
               </Button>
@@ -438,7 +438,7 @@ export function JobDetail({
                   size="sm"
                   onClick={onPause}
                   disabled={busy !== null}
-                  title="发送 SIGINT,等待训练写出最新 state 后停止;之后点「继续训练」从此处续"
+                  title="发送 SIGINT，等待训练写出最新 state 后停止；之后点「继续训练」从此处续"
                 >
                   {busy === "pause" ? (
                     <Spinner className="size-3" />
@@ -455,7 +455,7 @@ export function JobDetail({
                 variant="destructive"
                 size="sm"
                 onClick={() => setKillOpen(true)}
-                title="强制 SIGKILL 进程组(用于卡死的训练任务)"
+                title="强制 SIGKILL 进程组（用于卡死的训练任务）"
                 disabled={busy !== null || !data?.pid}
               >
                 {busy === "kill" ? (
@@ -472,7 +472,7 @@ export function JobDetail({
               variant="outline"
               size="sm"
               onClick={() => setKillOpen(true)}
-              title="任务标记为 interrupted 但 PID 仍可能存活,可强制清理"
+              title="任务标记为 interrupted 但 PID 仍可能存活，可强制清理"
               disabled={busy !== null}
             >
               <Skull className="size-3" /> 强制终止
@@ -569,7 +569,7 @@ export function JobDetail({
             <AlertDialogDescription>
               将向 PID <code className="font-mono">{data?.pid ?? "—"}</code> 及其
               进程组发送 SIGKILL。常用于训练僵死、取消按钮无响应的场景。
-              任务状态会被标记为 <code className="font-mono">interrupted</code>,
+              任务状态会被标记为 <code className="font-mono">interrupted</code>，
               checkpoint 不受影响。
             </AlertDialogDescription>
           </AlertDialogHeader>

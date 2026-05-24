@@ -213,8 +213,8 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setCaptionSource(e.target.value as typeof captionSource)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
-                  <option value="vlm">视觉模型（看图）— 质量最高</option>
-                  <option value="tags">仅 WD14 标签 — 不上传图片，省额度/兼容文本模型</option>
+                  <option value="vlm">视觉模型（看图）· 质量最高</option>
+                  <option value="tags">仅 WD14 标签 · 不上传图片，省额度/兼容文本模型</option>
                 </select>
               </label>
               <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
@@ -278,7 +278,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
 
           {activeTab === "quality-score" && (
             <p className="text-xs text-muted-foreground">
-              使用 AI 模型对图片质量进行评分 (优/中/差)
+              使用 AI 模型对图片质量进行评分（优 / 中 / 差）
             </p>
           )}
 

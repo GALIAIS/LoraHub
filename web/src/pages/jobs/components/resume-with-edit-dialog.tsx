@@ -69,7 +69,7 @@ export function ResumeWithEditDialog({
       qc.invalidateQueries({ queryKey: ["jobs"] })
       qc.invalidateQueries({ queryKey: ["job", job.id] })
       toast.success("已用新配置恢复训练", {
-        description: "保持任务 ID,从最新 state 续",
+        description: "保持任务 ID，从最新 state 续",
       })
       onResumed()
     },
@@ -94,7 +94,7 @@ export function ResumeWithEditDialog({
             </div>
             <div className="text-sm font-mono">{job.id.slice(-8)}</div>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              改 lr / dropTokens / 数据集等字段会在续训中生效;改 rank / arch / checkpoint 等会被拒绝(那些会让权重不兼容)。
+              改 lr / dropTokens / 数据集等字段会在续训中生效；改 rank / arch / checkpoint 等会被拒绝（那些会让权重不兼容）。
             </p>
           </div>
           <Button

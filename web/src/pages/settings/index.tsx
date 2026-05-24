@@ -39,8 +39,8 @@ export function SettingsPage() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">设置</h1>
         <p className="text-sm text-muted-foreground">
-          工作区级别的默认值。配置文件中的同名字段会按任务覆盖;环境变量
-          (LORAHUB_*) 优先级最高。
+          工作区级别的默认值。配置文件中的同名字段会按任务覆盖；环境变量
+          （LORAHUB_*）优先级最高。
         </p>
       </header>
 
@@ -55,7 +55,7 @@ export function SettingsPage() {
             <TabsTrigger value="environment">环境</TabsTrigger>
             <TabsTrigger value="network">网络加速</TabsTrigger>
             <TabsTrigger value="models">模型下载</TabsTrigger>
-            <TabsTrigger value="tagging">标注</TabsTrigger>
+            <TabsTrigger value="tagging">数据标注</TabsTrigger>
             <TabsTrigger value="ai">AI 服务商</TabsTrigger>
             <TabsTrigger value="errors">错误上报</TabsTrigger>
             <TabsTrigger value="maintenance">维护</TabsTrigger>

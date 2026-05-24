@@ -437,11 +437,11 @@ export function JobsPage() {
             <AlertDialogDescription className="space-y-2">
               <span className="block">
                 即将把所选任务的工作区移动到{" "}
-                <code className="font-mono text-xs">_archive/</code> 目录,
+                <code className="font-mono text-xs">_archive/</code> 目录，
                 并从任务列表中移除这些记录。
               </span>
               <span className="block text-muted-foreground">
-                跟「删除」不同 —— 文件不会被销毁,日后可以从 _archive/ 找回;但
+                跟「删除」不同 · 文件不会被销毁，日后可以从 _archive/ 找回；但
                 训练详情和 metrics 时间线不再可见。
               </span>
               <span className="block text-amber-700 dark:text-amber-400">

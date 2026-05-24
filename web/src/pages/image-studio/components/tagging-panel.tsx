@@ -155,14 +155,14 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
         disabled={startMutation.isPending || (session?.status === "running")}
         className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
       >
-        {startMutation.isPending ? "启动中..." : "开始标注"}
+        {startMutation.isPending ? "启动中…" : "开始标注"}
       </button>
 
       {session && (
         <div className="rounded border p-2 text-xs">
           <div className="flex items-center justify-between mb-1">
             <span className="font-medium">
-              {session.status === "running" && "标注进行中..."}
+              {session.status === "running" && "标注进行中…"}
               {session.status === "succeeded" && "标注完成"}
               {session.status === "failed" && "标注失败"}
             </span>

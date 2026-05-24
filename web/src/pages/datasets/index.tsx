@@ -121,7 +121,7 @@ export function DatasetsPage() {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">数据集</h1>
           <p className="text-sm text-muted-foreground">
-            从下拉中选择数据集,预览缩略图,点击「编辑」修改 caption。
+            从下拉中选择数据集，预览缩略图，点击「编辑」修改 caption。
           </p>
         </header>
 
@@ -131,7 +131,7 @@ export function DatasetsPage() {
               <div>
                 <CardTitle className="text-base">选择数据集</CardTitle>
                 <CardDescription>
-                  从 <code className="font-mono">datasets/</code> 下的子目录里挑一个,
+                  从 <code className="font-mono">datasets/</code> 下的子目录里挑一个，
                   或切到「高级」输入任意路径。
                 </CardDescription>
               </div>
@@ -142,7 +142,7 @@ export function DatasetsPage() {
                 className="gap-1 text-[11px]"
               >
                 <Pencil className="size-3" />
-                {advanced ? "切回下拉" : "高级 (输入路径)"}
+                {advanced ? "切回下拉" : "高级（输入路径）"}
               </Button>
             </div>
           </CardHeader>
@@ -162,10 +162,10 @@ export function DatasetsPage() {
                     <SelectValue
                       placeholder={
                         datasetsList.isLoading
-                          ? "加载数据集..."
+                          ? "加载数据集…"
                           : knownDatasets.length === 0
-                            ? "datasets/ 下尚无数据集 — 切换高级模式输入路径"
-                            : "选择数据集..."
+                            ? "datasets/ 下尚无数据集 · 切换高级模式输入路径"
+                            : "选择数据集…"
                       }
                     />
                   </SelectTrigger>
@@ -295,7 +295,7 @@ export function DatasetsPage() {
                 {data.samples.length === 0 ? (
                   <div className="rounded-[4px] border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
                     {data.image_files > 0
-                      ? "本页没有样本(可能在其它分页)。"
+                      ? "本页没有样本（可能在其它分页）。"
                       : "此目录下未发现图片样本。"}
                   </div>
                 ) : (
@@ -330,7 +330,7 @@ export function DatasetsPage() {
                 <div className="min-w-0">
                   <div className="text-sm font-medium">用此数据集训练</div>
                   <div className="text-xs text-muted-foreground">
-                    跳转到训练配置页,自动预填{" "}
+                    跳转到训练配置页，自动预填{" "}
                     <code className="font-mono text-foreground">dataset.source</code>。
                   </div>
                 </div>

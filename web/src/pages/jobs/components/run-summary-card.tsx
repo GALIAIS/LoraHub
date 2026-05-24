@@ -91,7 +91,7 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
                 e.stopPropagation()
                 navigate(`/analysis/${job.id}`)
               }}
-              title="在分析工作台打开 (loss / AI 分析)"
+              title="在训练分析中打开（loss / AI 分析）"
               className="inline-flex items-center gap-1 rounded-[3px] border border-transparent px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-border/60 hover:bg-background/60 hover:text-foreground"
             >
               <BarChart3 className="size-3" /> 分析

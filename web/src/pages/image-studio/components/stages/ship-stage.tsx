@@ -107,7 +107,7 @@ function LintCard({
     if (report.warnings > 0 && report.ready) {
       return {
         state: "warn" as const,
-        label: "可训练 (有警告)",
+        label: "可训练（有警告）",
         tone: "amber",
         icon: CircleAlert,
       }
@@ -333,7 +333,7 @@ function ExportPanel({ datasetPath }: { datasetPath: string }) {
       </div>
       <div className="p-3 space-y-2 text-xs">
         <p className="text-muted-foreground">
-          打包数据集为 zip,默认排除 <code>.workbench/</code>(隔离区 / 备份)。
+          打包数据集为 zip，默认排除 <code>.workbench/</code>（隔离区 / 备份）。
         </p>
         <label className="inline-flex items-center gap-1.5 select-none">
           <Switch checked={includeBackups} onCheckedChange={setIncludeBackups} />
@@ -403,17 +403,17 @@ function SaveAsPanel({ datasetPath }: { datasetPath: string }) {
       <div className="p-3 space-y-2 text-xs">
         <p className="text-muted-foreground">
           复制当前数据集到 <code>datasets/&lt;新名&gt;/</code>。
-          实验性变体常用 — 改一份不影响原数据集。
+          实验性变体常用 · 改一份不影响原数据集。
         </p>
         <Input
-          placeholder="新数据集名(只能字母数字+下划线/连字符)"
+          placeholder="新数据集名（只能字母数字+下划线/连字符）"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           className="h-8 text-xs"
         />
         <label className="inline-flex items-center gap-1.5 select-none">
           <Switch checked={includeBackups} onCheckedChange={setIncludeBackups} />
-          包含 backups/(用于回滚链)
+          包含 backups/（用于回滚链）
         </label>
         <Button
           size="sm"
