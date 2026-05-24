@@ -11,6 +11,7 @@ import {
   EtaTile,
   GpuLiveTile,
   LossTrendTile,
+  ThroughputSwitcher,
   ThroughputTile,
 } from "./realtime-tile"
 import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
@@ -235,9 +236,11 @@ export function OverviewTab({
             <Stat
               label="平均吞吐"
               value={
-                finalThroughput !== null && finalThroughput > 0
-                  ? `${finalThroughput.toFixed(2)} it/s · ${(1 / finalThroughput).toFixed(2)} s/step`
-                  : "—"
+                finalThroughput !== null && finalThroughput > 0 ? (
+                  <ThroughputSwitcher itPerSec={finalThroughput} />
+                ) : (
+                  "—"
+                )
               }
             />
             <Stat

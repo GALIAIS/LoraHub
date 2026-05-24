@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { useState } from "react"
 import { cn } from "@/lib/utils"
 import type { SystemGpu } from "@/lib/api"
 import { Sparkline } from "./sparkline"
@@ -167,18 +168,96 @@ export function GpuLiveTile({
 
 // =================================================== Throughput tile ========
 
-/** Format an it/s rate as ``X.XX it/s · Y.YY s/step``.
- *
- * The two are mathematical inverses (s/step = 1 / it/s), but having
- * both visible at a glance is useful: it/s scales linearly with
- * batch size so quick comparisons across runs lean on it, while
- * s/step matches the unit users see in the trainer's tqdm bar and
- * gives an intuitive feel for per-step wall time.
+type ThroughputUnit = "it_per_sec" | "s_per_step"
+
+/** Format an it/s rate in the chosen display unit. The two are
+ * mathematical inverses (s/step = 1 / it/s); we show one at a time
+ * and let the user click the headline to flip — keeps the tile
+ * compact while still surfacing both perspectives on demand.
  */
-function _formatItPerSec(v: number | null): string {
+function _formatThroughput(v: number | null, unit: ThroughputUnit): string {
   if (v === null || !Number.isFinite(v) || v <= 0) return "—"
-  const sPerStep = 1 / v
-  return `${v.toFixed(2)} it/s · ${sPerStep.toFixed(2)} s/step`
+  if (unit === "it_per_sec") return `${v.toFixed(2)} it/s`
+  return `${(1 / v).toFixed(2)} s/step`
+}
+
+// Two-phase fade-swap for unit toggling. We keep the value visually
+// looking like plain text — no border / no chip — but on click we:
+//   1. fade-out + slide up the current value (160ms)
+//   2. swap the unit + reset transform
+//   3. fade-in + slide down to original position (160ms via CSS transition)
+// Total ~320ms; long enough to feel intentional, short enough not to
+// block reading the new number.
+const _FADE_MS = 160
+
+interface ThroughputClickableProps {
+  itPerSec: number | null
+  className?: string
+}
+
+function _ThroughputClickable({
+  itPerSec,
+  className,
+}: ThroughputClickableProps) {
+  const [unit, setUnit] = useState<ThroughputUnit>("it_per_sec")
+  const [fading, setFading] = useState(false)
+  const interactive =
+    itPerSec !== null && Number.isFinite(itPerSec) && itPerSec > 0
+
+  function toggle() {
+    if (!interactive || fading) return
+    setFading(true)
+    window.setTimeout(() => {
+      setUnit((u) => (u === "it_per_sec" ? "s_per_step" : "it_per_sec"))
+      setFading(false)
+    }, _FADE_MS)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      // Strip every default button look — preflight already drops
+      // border / bg, but a few user agents still paint focus rings
+      // that read as "this is a button". We want a plain text feel
+      // with the cursor as the only affordance.
+      className={cn(
+        "appearance-none bg-transparent p-0 m-0 border-0 outline-none",
+        "tabular-nums truncate text-left",
+        "transition duration-[160ms] ease-out",
+        interactive
+          ? "cursor-pointer hover:text-primary focus-visible:text-primary"
+          : "cursor-default",
+        fading && "opacity-0 -translate-y-0.5",
+        className,
+      )}
+      title={interactive ? "点击切换吞吐单位" : undefined}
+      aria-label={
+        interactive
+          ? `吞吐 ${_formatThroughput(itPerSec, unit)},点击切换单位`
+          : undefined
+      }
+    >
+      {_formatThroughput(itPerSec, unit)}
+    </button>
+  )
+}
+
+/**
+ * Click-to-toggle throughput display with a fade-swap animation.
+ * Looks like plain text; click anywhere on the value flips between
+ * ``X.XX it/s`` and ``Y.YY s/step``. Used by the post-run "最终统计"
+ * Stat. The runtime tile uses the same animation directly inline so
+ * the avg-hint can stay in sync.
+ */
+export function ThroughputSwitcher({
+  itPerSec,
+  className,
+}: {
+  itPerSec: number | null
+  className?: string
+}) {
+  return <_ThroughputClickable itPerSec={itPerSec} className={className} />
 }
 
 export function ThroughputTile({
@@ -190,21 +269,54 @@ export function ThroughputTile({
   itPerSecAvg: number | null
   history: number[]
 }) {
-  const headline = _formatItPerSec(itPerSecRecent)
+  const [unit, setUnit] = useState<ThroughputUnit>("it_per_sec")
+  const [fading, setFading] = useState(false)
+  const interactive =
+    itPerSecRecent !== null &&
+    Number.isFinite(itPerSecRecent) &&
+    itPerSecRecent > 0
+
+  function toggle() {
+    if (!interactive || fading) return
+    setFading(true)
+    window.setTimeout(() => {
+      setUnit((u) => (u === "it_per_sec" ? "s_per_step" : "it_per_sec"))
+      setFading(false)
+    }, _FADE_MS)
+  }
+
   return (
     <TileShell
       label="训练吞吐"
       state={itPerSecRecent === null ? "idle" : "live"}
       hint={
         itPerSecAvg !== null && Number.isFinite(itPerSecAvg) && itPerSecAvg > 0
-          ? `均值 ${_formatItPerSec(itPerSecAvg)}`
+          ? `均值 ${_formatThroughput(itPerSecAvg, unit)}`
           : undefined
       }
     >
       <div className="flex items-end justify-between gap-3">
-        <div className="text-base font-semibold tabular-nums truncate">
-          {headline}
-        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          className={cn(
+            "appearance-none bg-transparent p-0 m-0 border-0 outline-none",
+            "text-base font-semibold tabular-nums truncate text-left",
+            "transition duration-[160ms] ease-out",
+            interactive
+              ? "cursor-pointer hover:text-primary focus-visible:text-primary"
+              : "cursor-default",
+            fading && "opacity-0 -translate-y-0.5",
+          )}
+          title={interactive ? "点击切换吞吐单位" : undefined}
+          aria-label={
+            interactive
+              ? `吞吐 ${_formatThroughput(itPerSecRecent, unit)},点击切换单位`
+              : undefined
+          }
+        >
+          {_formatThroughput(itPerSecRecent, unit)}
+        </button>
         <Sparkline
           values={history}
           width={120}
