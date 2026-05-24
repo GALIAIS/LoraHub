@@ -235,8 +235,8 @@ export function OverviewTab({
             <Stat
               label="平均吞吐"
               value={
-                finalThroughput !== null
-                  ? `${finalThroughput.toFixed(2)} it/s`
+                finalThroughput !== null && finalThroughput > 0
+                  ? `${finalThroughput.toFixed(2)} it/s · ${(1 / finalThroughput).toFixed(2)} s/step`
                   : "—"
               }
             />

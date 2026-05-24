@@ -167,6 +167,20 @@ export function GpuLiveTile({
 
 // =================================================== Throughput tile ========
 
+/** Format an it/s rate as ``X.XX it/s · Y.YY s/step``.
+ *
+ * The two are mathematical inverses (s/step = 1 / it/s), but having
+ * both visible at a glance is useful: it/s scales linearly with
+ * batch size so quick comparisons across runs lean on it, while
+ * s/step matches the unit users see in the trainer's tqdm bar and
+ * gives an intuitive feel for per-step wall time.
+ */
+function _formatItPerSec(v: number | null): string {
+  if (v === null || !Number.isFinite(v) || v <= 0) return "—"
+  const sPerStep = 1 / v
+  return `${v.toFixed(2)} it/s · ${sPerStep.toFixed(2)} s/step`
+}
+
 export function ThroughputTile({
   itPerSecRecent,
   itPerSecAvg,
@@ -176,20 +190,19 @@ export function ThroughputTile({
   itPerSecAvg: number | null
   history: number[]
 }) {
-  const value = itPerSecRecent
-  const headline = value === null ? "—" : `${value.toFixed(2)} it/s`
+  const headline = _formatItPerSec(itPerSecRecent)
   return (
     <TileShell
       label="训练吞吐"
-      state={value === null ? "idle" : "live"}
+      state={itPerSecRecent === null ? "idle" : "live"}
       hint={
-        itPerSecAvg !== null && Number.isFinite(itPerSecAvg)
-          ? `均值 ${itPerSecAvg.toFixed(2)}/s`
+        itPerSecAvg !== null && Number.isFinite(itPerSecAvg) && itPerSecAvg > 0
+          ? `均值 ${_formatItPerSec(itPerSecAvg)}`
           : undefined
       }
     >
       <div className="flex items-end justify-between gap-3">
-        <div className="text-xl font-semibold tabular-nums truncate">
+        <div className="text-base font-semibold tabular-nums truncate">
           {headline}
         </div>
         <Sparkline
