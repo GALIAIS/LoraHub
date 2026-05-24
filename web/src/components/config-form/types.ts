@@ -59,6 +59,23 @@ export interface PerModuleLRValue {
   mod?: number | null
 }
 
+export interface SamplingPromptValue {
+  prompt: string
+  negative?: string | null
+  cfg?: number | null
+  steps?: number | null
+  seed?: number | null
+  width?: number | null
+  height?: number | null
+}
+
+export interface SamplingOutputsValue {
+  gridStitching?: boolean
+  baseCompare?: boolean
+  crossCkptAnimation?: boolean
+  pngMetadata?: boolean
+}
+
 export interface DatasetSubsetValue {
   path?: string
   numRepeats?: number
@@ -215,8 +232,10 @@ export interface ConfigFormValue {
     everyNSteps?: number | null
     atFirst?: boolean
     promptsFile?: string | null
+    prompts?: SamplingPromptValue[]
     resolution?: [number, number] | number[]
     seed?: number
+    outputs?: SamplingOutputsValue
   }
   output?: {
     name?: string

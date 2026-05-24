@@ -213,6 +213,104 @@ export const FloatInput = memo(function FloatInput({
   )
 })
 
+// Upper bound for randomly-drawn seeds — matches ComfyUI / rgthree's
+// 2^50 cap so a workflow seed stays interchangeable between the two
+// tools.
+const SEED_MAX = 1_125_899_906_842_624
+
+interface SeedInputProps {
+  /** Current seed. -1 is the ComfyUI sentinel: "draw a fresh seed at run time". */
+  value: number | null | undefined
+  onChange: (v: number) => void
+  className?: string
+}
+
+/**
+ * Numeric input + "🎲" button + "随机" toggle.
+ *
+ * - Typing a number locks that exact seed for every run.
+ * - Clicking 🎲 drops a fresh random integer into the field; the YAML
+ *   then records that specific value (great for "I liked the 9th
+ *   roll, freeze it").
+ * - The randomize pill flips the value to ``-1`` — the launcher draws
+ *   a fresh seed at run-start so each queue press differs.
+ *
+ * The widget treats ``null`` / ``undefined`` as "default to randomise"
+ * so importing an old yaml that never set a seed gets the new
+ * behaviour automatically.
+ */
+export const SeedInput = memo(function SeedInput({
+  value,
+  onChange,
+  className,
+}: SeedInputProps) {
+  const readOnly = useReadOnly()
+  const isRandom = value === -1 || value === null || value === undefined
+  const display = isRandom ? "" : String(value)
+
+  function rollNew() {
+    if (readOnly) return
+    onChange(Math.floor(Math.random() * SEED_MAX))
+  }
+  function setRandomSentinel() {
+    if (readOnly) return
+    onChange(-1)
+  }
+
+  return (
+    <div className={cn("flex items-center gap-1.5", className)}>
+      <Input
+        type="number"
+        min={-1}
+        max={SEED_MAX}
+        step={1}
+        disabled={readOnly}
+        value={display}
+        placeholder={isRandom ? "运行时随机 (-1)" : ""}
+        className="font-mono w-56 tabular-nums"
+        onChange={(e) => {
+          const raw = e.target.value.trim()
+          if (raw === "" || raw === "-1") {
+            onChange(-1)
+            return
+          }
+          const n = parseInt(raw, 10)
+          if (Number.isNaN(n)) return
+          onChange(Math.max(-1, Math.min(SEED_MAX, n)))
+        }}
+      />
+      <button
+        type="button"
+        onClick={rollNew}
+        disabled={readOnly}
+        title="掷骰子（生成新种子并固定）"
+        aria-label="生成新种子"
+        className={cn(
+          "inline-flex h-9 w-9 items-center justify-center rounded-[4px] border border-border/50",
+          "bg-background hover:bg-muted/40 text-base disabled:opacity-50",
+        )}
+      >
+        🎲
+      </button>
+      <button
+        type="button"
+        onClick={setRandomSentinel}
+        disabled={readOnly}
+        title="每次运行时由后端随机抽取（写入 -1）"
+        className={cn(
+          "h-9 px-2 rounded-[4px] border text-[11px] font-medium",
+          isRandom
+            ? "border-primary/40 bg-primary/15 text-foreground"
+            : "border-border/50 bg-background hover:bg-muted/40 text-muted-foreground",
+          readOnly && "opacity-50 cursor-not-allowed",
+        )}
+      >
+        随机
+      </button>
+    </div>
+  )
+})
+
 interface PathInputProps {
   id?: string
   value: string | undefined | null
