@@ -88,7 +88,25 @@ export function StudioSidebar({
         )}
       >
         {/* Header */}
-        <div className="flex items-center gap-1 border-b px-2 py-2">
+        <div
+          className={cn(
+            "flex border-b px-2 py-2",
+            collapsed ? "flex-col items-center gap-2" : "items-center gap-1",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => setCollapsed(!collapsed)}
+            className="rounded-md p-1.5 hover:bg-accent shrink-0"
+            title={collapsed ? "展开侧边栏" : "折叠侧边栏"}
+          >
+            <ChevronLeft
+              className={cn(
+                "size-3.5 transition-transform",
+                collapsed && "rotate-180",
+              )}
+            />
+          </button>
           {!collapsed && (
             <button
               type="button"
@@ -103,26 +121,13 @@ export function StudioSidebar({
             <Tooltip>
               <TooltipTrigger
                 onClick={onCreateDataset}
-                className="mx-auto flex items-center justify-center rounded-md p-1.5 hover:bg-accent"
+                className="flex items-center justify-center rounded-md p-1.5 hover:bg-accent"
               >
                 <FolderPlus className="size-4" />
               </TooltipTrigger>
               <TooltipContent side="right">新建数据集</TooltipContent>
             </Tooltip>
           )}
-          <button
-            type="button"
-            onClick={() => setCollapsed(!collapsed)}
-            className="rounded-md p-1 hover:bg-accent"
-            title={collapsed ? "展开侧边栏" : "折叠侧边栏"}
-          >
-            <ChevronLeft
-              className={cn(
-                "size-3.5 transition-transform",
-                collapsed && "rotate-180",
-              )}
-            />
-          </button>
         </div>
 
         {/* Scrollable content */}
