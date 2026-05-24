@@ -155,3 +155,80 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
 @router.get("/models/download/{session_id}")
 def download_model_status(session_id: str) -> dict[str, Any]:
     return _get_session(session_id).snapshot()
+
+
+# ---- model scan -----------------------------------------------------
+
+class ScannedModel(BaseModel):
+    """One entry in a /models/scan response."""
+
+    path: str
+    relative_path: str
+    name: str
+    size_bytes: int
+    mtime: float
+
+
+class ScannedModelsResponse(BaseModel):
+    root: str
+    files: list[ScannedModel]
+    elapsed_s: float
+
+
+_MODEL_EXTS = (".safetensors", ".sft", ".ckpt", ".pt", ".bin", ".gguf")
+
+
+def _scan_models_dir(root: Path) -> list[ScannedModel]:
+    if not root.is_dir():
+        return []
+    out: list[ScannedModel] = []
+    # ``rglob`` walks the entire tree which is what users want (they
+    # often nest models under ``models/<vendor>/<arch>/``). Hidden
+    # dotfiles are skipped because some platforms drop ``.DS_Store`` /
+    # ``._foo`` siblings that aren't real model files.
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.startswith("."):
+            continue
+        if path.suffix.lower() not in _MODEL_EXTS:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        try:
+            relative = str(path.relative_to(root)).replace("\\", "/")
+        except ValueError:
+            relative = str(path)
+        out.append(
+            ScannedModel(
+                path=str(path),
+                relative_path=relative,
+                name=path.name,
+                size_bytes=stat.st_size,
+                mtime=stat.st_mtime,
+            )
+        )
+    out.sort(key=lambda m: m.relative_path.lower())
+    return out
+
+
+@router.get("/models/scan", response_model=ScannedModelsResponse)
+def scan_models(root: str | None = None) -> ScannedModelsResponse:
+    """Walk the configured models folder and return discovered weights.
+
+    Triggered manually from the UI's model picker. Response is built
+    on each request — caching it would race with users dropping new
+    files into the directory between calls. With a typical ``models/``
+    of < 1k files the walk completes in < 100ms even on Windows.
+    """
+    started = time.monotonic()
+    base = Path(root).expanduser() if root else (Path.cwd() / "models")
+    base = base.resolve()
+    files = _scan_models_dir(base)
+    return ScannedModelsResponse(
+        root=str(base),
+        files=files,
+        elapsed_s=round(time.monotonic() - started, 3),
+    )
