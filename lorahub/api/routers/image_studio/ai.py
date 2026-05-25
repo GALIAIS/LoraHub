@@ -369,6 +369,57 @@ _QUALITY_NOISE_TAGS = {
     "dated", "twitter username", "patreon username", "artist logo",
 }
 
+# Style / medium / rendering descriptors. Stripped when the user asks for
+# "auto-strip style tags" — the whole point of training a style LoRA is
+# that the trigger word (or @artist tag) carries the style; baking
+# explicit medium descriptors into every caption teaches the model that
+# the style is "anime + illustration + cel shading", which the bare
+# trigger then has to compete with.  Covers the WD14 vocabulary's most
+# common medium / aesthetic / palette / line-style buckets.
+_STYLE_NOISE_TAGS = {
+    # Medium / format
+    "anime", "anime coloring", "anime screencap", "anime style",
+    "manga", "comic", "western comics (style)", "amerimanga",
+    "illustration", "digital illustration", "traditional media",
+    "digital media", "concept art", "fan art", "fanart",
+    # Realism axis
+    "realistic", "photorealistic", "semi-realistic", "hyperrealistic",
+    "photo (medium)", "photograph", "rendered",
+    # Stylisation
+    "chibi", "deformed", "super deformed", "cartoon", "cartoonish",
+    "kawaii", "moe (style)", "ligne claire",
+    # Rendering / shading
+    "cel shading", "cel-shaded", "soft shading", "flat color",
+    "flat colors", "flat shading", "no shading",
+    "lineart", "line art", "sketch", "rough sketch",
+    "outline", "thick outlines", "thin outlines", "no outlines",
+    "painterly", "painting (medium)", "oil painting (medium)",
+    "watercolor (medium)", "watercolor", "acrylic paint (medium)",
+    "ink (medium)", "marker (medium)", "pastel (medium)",
+    "colored pencil (medium)", "graphite (medium)",
+    "screentone", "halftone", "halftone background",
+    # Palette / mood
+    "monochrome", "greyscale", "grayscale", "limited palette",
+    "pastel colors", "vivid colors", "muted colors", "saturated",
+    "high contrast",
+    # Era / movement
+    "1980s (style)", "1990s (style)", "2000s (style)", "retro artstyle",
+    "ukiyo-e", "art nouveau", "minimalism", "surreal", "abstract",
+    # Dimensionality
+    "3d", "2d", "3dcg", "2.5d",
+}
+
+
+_STYLE_DROP_INSTRUCTION = (
+    "STRICT: do NOT use the words anime, manga, illustration, cartoon, chibi, "
+    "realistic, photorealistic, lineart, sketch, painterly, watercolor, "
+    "monochrome, cel-shaded, flat color, screentone, 2d, 3d (or any close "
+    "synonym) anywhere in your output. Those describe the medium and would "
+    "compete with the trigger word's job of owning the style. Describe the "
+    "specific visible craft (brush economy, edge softness, palette warmth, "
+    "shading contrast) instead of naming a genre.\n\n"
+)
+
 # Map WD14 rating tag -> Anima rating keyword for the header line.
 _RATING_MAP = {
     "general": "safe",
@@ -533,6 +584,7 @@ def _build_anima_caption(
     nl_text: str,
     caption_mode: str,
     trigger_word: str | None,
+    strip_style_tags: bool = True,
 ) -> str:
     """Assemble an Anima-format caption.
 
@@ -575,7 +627,10 @@ def _build_anima_caption(
     line2 = ", ".join([*subject_tags, *trigger_part])
 
     # Clean general tag tail: drop quality noise (header already covers it).
-    tail = _drop_tags(rest_general, _QUALITY_NOISE_TAGS)
+    drop_for_tail = set(_QUALITY_NOISE_TAGS)
+    if strip_style_tags and caption_mode == "style":
+        drop_for_tail = drop_for_tail | _STYLE_NOISE_TAGS
+    tail = _drop_tags(rest_general, drop_for_tail)
     tail_str = ", ".join(tail)
 
     parts = [header]
@@ -607,7 +662,12 @@ class SmartCaptionBatchInput(BaseModel):
     #          user wants a faster cheaper pass.
     captionSource: str = "vlm"
     triggerWord: str | None = None
-    stripStyleTags: bool = True  # accepted for compat; cleanup is built-in
+    # Style/medium descriptors (anime, illustration, lineart, monochrome, ...)
+    # are stripped from both the WD14 reference list shown to the LLM and
+    # the final caption tail when this is True AND captionMode == "style".
+    # Off by default for character / general modes since "anime" anchors
+    # rendering for those.
+    stripStyleTags: bool = True
     # Parallelism + reliability knobs.
     #
     # Pipeline shape:
@@ -657,6 +717,10 @@ class _StageOneResult:
     # from ``prompt_text`` (which already has the WD14 tag list
     # baked in via the tags-only prompt template).
     caption_source: str = "vlm"
+    # Mirrors the SmartCaptionBatchInput flag so stage two can decide
+    # whether to also strip style tags from the final assembled tail
+    # (in addition to the already-filtered tags_for_prompt).
+    strip_style_tags: bool = True
 
 
 def _smart_caption_stage_one(
@@ -665,6 +729,7 @@ def _smart_caption_stage_one(
     caption_mode: str,
     *,
     caption_source: str = "vlm",
+    strip_style_tags: bool = True,
 ) -> _StageOneResult:
     """Run WD14 tagging + image prep — everything that doesn't need the VLM.
 
@@ -683,7 +748,15 @@ def _smart_caption_stage_one(
         t.name.replace("_", " ").lower() for t in tag_result.character
     ]
     rating_name = tag_result.rating.name if tag_result.rating else None
-    tags_for_prompt = ", ".join(_drop_tags(general_tags, _QUALITY_NOISE_TAGS))
+
+    # Build the LLM-facing reference tags. Always strip the quality-noise
+    # set; additionally strip the style/medium set when requested AND the
+    # caption mode is "style" (other modes leave them in — character LoRAs
+    # legitimately benefit from "anime" anchoring the rendering).
+    drop_for_prompt = set(_QUALITY_NOISE_TAGS)
+    if strip_style_tags and caption_mode == "style":
+        drop_for_prompt = drop_for_prompt | _STYLE_NOISE_TAGS
+    tags_for_prompt = ", ".join(_drop_tags(general_tags, drop_for_prompt))
 
     if caption_source == "tags":
         # Tags-only path — skip the base64 encode entirely; stage two
@@ -707,6 +780,10 @@ def _smart_caption_stage_one(
         else:
             prompt_template = _SMART_CAPTION_PROMPT_GENERAL
     prompt_text = prompt_template.format(tags=tags_for_prompt)
+    if strip_style_tags and caption_mode == "style":
+        # Front-load the strict no-style-words clause so the LLM sees it
+        # before the per-mode body — easier to obey than a trailing rule.
+        prompt_text = _STYLE_DROP_INSTRUCTION + prompt_text
 
     return _StageOneResult(
         img_path=img_path,
@@ -716,6 +793,7 @@ def _smart_caption_stage_one(
         prompt_text=prompt_text,
         data_url=data_url,
         caption_source=caption_source,
+        strip_style_tags=strip_style_tags,
     )
 
 
@@ -767,6 +845,7 @@ def _smart_caption_stage_two(
         nl_text=nl_text,
         caption_mode=caption_mode,
         trigger_word=trigger_word,
+        strip_style_tags=s1.strip_style_tags,
     )
 
     caption_path = s1.img_path.with_suffix(".txt")
@@ -817,9 +896,12 @@ def _smart_caption_single_image(
     on separate thread pools (WD14 on a small GPU pool, VLM on a wide
     network pool).
     """
-    del strip_style_tags  # kept for API compat; cleanup is built into stage1
     s1 = _smart_caption_stage_one(
-        img_path, tagger, caption_mode, caption_source=caption_source,
+        img_path,
+        tagger,
+        caption_mode,
+        caption_source=caption_source,
+        strip_style_tags=strip_style_tags,
     )
     return _smart_caption_stage_two(
         s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
@@ -934,6 +1016,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     tagger,
                     body.captionMode,
                     caption_source=body.captionSource,
+                    strip_style_tags=body.stripStyleTags,
                 )
             except Exception as exc:  # noqa: BLE001
                 err_msg = f"WD14: {type(exc).__name__}: {exc}"
