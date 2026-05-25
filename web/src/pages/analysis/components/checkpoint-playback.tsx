@@ -204,9 +204,12 @@ export function CheckpointPlayback({
                   {totalSteps.map((s) => (
                     <th
                       key={s}
-                      className="border-b border-border/60 px-1.5 py-1.5 text-center font-mono text-[10px] font-normal"
+                      className={cn(
+                        "border-b border-border/60 px-1.5 py-1.5 text-center font-mono text-[10px] font-normal",
+                        s === 0 && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+                      )}
                     >
-                      {Number.isInteger(s) ? `s${s}` : `e${s}`}
+                      {s === 0 ? "基模" : Number.isInteger(s) ? `s${s}` : `e${s}`}
                     </th>
                   ))}
                 </tr>
@@ -282,13 +285,17 @@ function PlaybackRowView({
         return (
           <td
             key={col}
-            className="border-b border-border/30 p-1 align-middle"
+            className={cn(
+              "border-b border-border/30 p-1 align-middle",
+              col === 0 && "bg-sky-500/5",
+            )}
           >
             {cell ? (
               <PlaybackCell
                 jobId={jobId}
                 sample={cell}
                 onOpen={onOpen}
+                isBaseline={col === 0}
               />
             ) : (
               <div className="size-16 rounded-[3px] border border-dashed border-border/40 bg-muted/20" />
@@ -304,10 +311,12 @@ function PlaybackCell({
   jobId,
   sample,
   onOpen,
+  isBaseline,
 }: {
   jobId: string
   sample: ParsedSample
   onOpen: (src: string) => void
+  isBaseline?: boolean
 }) {
   const url = api.jobFileUrl(jobId, sample.file.path)
   const name = sample.file.path.split(/[\\/]/).pop() ?? sample.file.path
@@ -316,11 +325,13 @@ function PlaybackCell({
       type="button"
       onClick={() => onOpen(url)}
       className={cn(
-        "group relative size-16 overflow-hidden rounded-[3px] border border-border/60",
-        "bg-muted/20 transition hover:border-primary/60 focus-visible:border-primary/70",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        "group relative size-16 overflow-hidden rounded-[3px] border",
+        "bg-muted/20 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        isBaseline
+          ? "border-sky-400/70 ring-1 ring-sky-400/30 hover:border-sky-500"
+          : "border-border/60 hover:border-primary/60 focus-visible:border-primary/70",
       )}
-      title={name}
+      title={isBaseline ? `[基模] ${name}` : name}
     >
       <img
         src={url}
@@ -328,6 +339,11 @@ function PlaybackCell({
         loading="lazy"
         className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.06]"
       />
+      {isBaseline && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 bg-sky-500/80 px-1 py-px text-center text-[8px] font-medium text-white leading-tight">
+          BASE
+        </div>
+      )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-1 py-0.5 text-[9px] font-mono text-white opacity-0 transition group-hover:opacity-100">
         {sample.step != null
           ? `s${sample.step}`

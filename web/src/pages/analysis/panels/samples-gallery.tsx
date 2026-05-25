@@ -8,6 +8,7 @@ import { ImageIcon, X } from "lucide-react"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 
 interface SampleEntry extends JobFile {
   epoch: number | null
@@ -81,13 +82,19 @@ export function SamplesGallery({
             {enriched.map((s) => {
               const url = api.jobFileUrl(jobId, s.path)
               const name = s.path.split(/[\\/]/).pop() ?? s.path
+              const isBaseline = s.step === 0 || (s.step == null && s.epoch === 0)
               return (
                 <button
                   key={s.path}
                   type="button"
                   onClick={() => setOpenSrc(url)}
-                  className="group relative aspect-square overflow-hidden rounded-[4px] border border-border/60 bg-muted/20 transition hover:border-primary/60"
-                  title={name}
+                  className={cn(
+                    "group relative aspect-square overflow-hidden rounded-[4px] border bg-muted/20 transition",
+                    isBaseline
+                      ? "border-sky-400/70 ring-1 ring-sky-400/30 hover:border-sky-500"
+                      : "border-border/60 hover:border-primary/60",
+                  )}
+                  title={isBaseline ? `[基模] ${name}` : name}
                 >
                   <img
                     src={url}
@@ -95,6 +102,11 @@ export function SamplesGallery({
                     loading="lazy"
                     className="h-full w-full object-cover transition group-hover:scale-105"
                   />
+                  {isBaseline && (
+                    <div className="pointer-events-none absolute inset-x-0 top-0 bg-sky-500/80 px-1 py-px text-center text-[9px] font-medium text-white leading-tight">
+                      BASE
+                    </div>
+                  )}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
                     {s.epoch != null && <span className="mr-2">e{s.epoch}</span>}
                     {s.step != null && <span>s{s.step}</span>}
