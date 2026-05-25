@@ -1,4 +1,5 @@
-import { Heart, Trash2 } from "lucide-react"
+import { useState } from "react"
+import { Heart, ImageOff, Trash2 } from "lucide-react"
 import type { ImageStudioItem } from "@/lib/api"
 import {
   ContextMenu,
@@ -27,6 +28,7 @@ export function ImageTile({
   onDoubleClick,
   onContextAction,
 }: ImageTileProps) {
+  const [broken, setBroken] = useState(false)
   const handleClick = (e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
@@ -51,13 +53,22 @@ export function ImageTile({
                 : "border-border hover:border-muted-foreground/40"
           }`}
         >
-          <div className="aspect-square w-full overflow-hidden bg-muted">
-            <img
-              src={item.thumbUrl}
-              alt={item.name}
-              loading="lazy"
-              className="h-full w-full object-cover"
-            />
+          <div className="aspect-square w-full overflow-hidden bg-muted shrink-0">
+            {broken ? (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground/70">
+                <ImageOff className="size-5" />
+                <span className="text-[10px]">缩略图未生成</span>
+              </div>
+            ) : (
+              <img
+                src={item.thumbUrl}
+                alt={item.name}
+                loading="lazy"
+                draggable={false}
+                onError={() => setBroken(true)}
+                className="block h-full w-full object-cover"
+              />
+            )}
           </div>
           <div className="flex items-center gap-1 px-1.5 py-1">
             {multiSelected && (

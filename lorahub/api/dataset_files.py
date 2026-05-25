@@ -27,6 +27,14 @@ from PIL import Image, UnidentifiedImageError
 
 from lorahub.api import state
 
+# Lift Pillow's "decompression bomb" guard. A modern phone shoots ~8000×6000
+# (~48MP) which is already above Pillow's default 89MP cap once you stitch a
+# panorama. Training datasets routinely include 8K / 12K renders. We trust
+# our local-only filesystem source, so cap at 1Gpx (more than enough for
+# anything realistic, still far below memory blow-up territory once the
+# JPEG draft below kicks in).
+Image.MAX_IMAGE_PIXELS = 1_000_000_000
+
 # Suffixes we are willing to thumbnail / treat as dataset images. Mirrors the
 # set used by `_scan_dataset_path` so the UI sees a consistent surface.
 IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
@@ -163,6 +171,13 @@ def get_or_build_thumbnail(image: Path, size: int) -> Path:
 
     try:
         with Image.open(image) as im:
+            # Fast path for JPEG: ``draft`` instructs libjpeg to return a
+            # pre-scaled DCT-aware downsample (1/2, 1/4, or 1/8 of the
+            # original). Skipping full-resolution decode is the difference
+            # between thumbing a 12K landscape in 60ms vs 4s. Safe no-op
+            # on formats that don't support it.
+            with contextlib.suppress(Exception):
+                im.draft("RGB", (size * 2, size * 2))
             # Convert away from palette / grayscale modes so WEBP encoding
             # stays predictable; we deliberately drop alpha to keep thumbs
             # compact and consistent across sources.
@@ -171,7 +186,7 @@ def get_or_build_thumbnail(image: Path, size: int) -> Path:
             im.thumbnail((size, size))
             cache.parent.mkdir(parents=True, exist_ok=True)
             im.save(cache, format="WEBP", quality=82, method=4)
-    except (OSError, UnidentifiedImageError, ValueError) as exc:
+    except (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError) as exc:
         raise OSError(f"could not generate thumbnail: {exc}") from exc
     return cache
 

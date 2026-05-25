@@ -10,6 +10,7 @@ import {
   Scissors,
   Tags,
   PackageCheck,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { datasetList, datasetDelete } from "@/lib/api"
@@ -159,25 +160,45 @@ export function StudioSidebar({
                   </TooltipContent>
                 </Tooltip>
               ) : (
-                <button
+                <div
                   key={ds.name}
-                  type="button"
-                  onClick={() => onSelectDataset(ds.path)}
                   className={cn(
-                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                    "group/ds relative flex items-center rounded-md text-sm",
                     ds.path === datasetPath
-                      ? "bg-accent text-accent-foreground font-medium"
+                      ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
-                  <FolderOpen className="size-3.5 shrink-0" />
-                  <span className="truncate flex-1">{ds.name}</span>
-                  {ds.imageCount > 0 && (
-                    <span className="text-[10px] tabular-nums opacity-60">
-                      {ds.imageCount}
-                    </span>
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectDataset(ds.path)}
+                    className={cn(
+                      "flex flex-1 min-w-0 items-center gap-2 px-2 py-1.5 text-left",
+                      ds.path === datasetPath && "font-medium",
+                    )}
+                  >
+                    <FolderOpen className="size-3.5 shrink-0" />
+                    <span className="truncate flex-1">{ds.name}</span>
+                    {ds.imageCount > 0 && (
+                      <span className="text-[10px] tabular-nums opacity-60 shrink-0">
+                        {ds.imageCount}
+                      </span>
+                    )}
+                  </button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setPendingDelete(ds)
+                      }}
+                      className="hidden group-hover/ds:flex items-center justify-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive shrink-0"
+                      aria-label={`删除数据集 ${ds.name}`}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipContent side="right">删除数据集</TooltipContent>
+                  </Tooltip>
+                </div>
               ),
             )}
             {datasets.length === 0 && !datasetsQuery.isLoading && !collapsed && (
