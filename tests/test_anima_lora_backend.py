@@ -299,5 +299,7 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
         i for i, x in enumerate(argv) if x.endswith("train.py")
     )
     assert train_py_idx > 4
-    # --method comes from the compiler payload, after train.py.
-    assert "--method" in argv[train_py_idx + 1 :]
+    # --config_file comes from the compiler payload after train.py
+    # (LoraHub now drives every training knob through the generated
+    # _lorahub_anima_config.toml; --method/--preset are gone).
+    assert "--config_file" in argv[train_py_idx + 1 :]

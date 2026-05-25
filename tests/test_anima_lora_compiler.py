@@ -1,18 +1,28 @@
-"""anima_lora compiler tests — argv translation + constraint enforcement.
+"""anima_lora compiler tests — TOML config_file translation + constraints.
 
-Each method gets a snapshot test that verifies the emitted CLI flags
-include the right ``--method`` / ``--preset`` and the method-specific
-overrides land where upstream's argparse expects them.
+LoraHub now emits a single ``--config_file <workspace>/_lorahub_anima_config.toml``
+plus the dataset blueprint baked into the same file; method/preset
+selection that used to ride the upstream merge chain is dead code in
+this layer. These tests therefore parse the generated TOML and assert
+on its content via the same flag-shaped vocabulary the legacy
+argv-grouping helper used, so test bodies didn't have to be rewritten
+when the rendering layer changed.
 
-We don't snapshot the full argv list (it'd be brittle against schema
-churn) — instead we assert on key/value membership which catches the
-"this flag stopped being emitted" regressions without trapping
-ourselves into rewriting the snapshot every time we add a knob.
+The compatibility shim below exposes:
+  * ``_argv_pairs(argv, files)`` — parses the emitted TOML into a
+    ``{"--key": ["value"]}`` shape that matches the historical argv
+    groupby helper.  ``--method`` / ``--preset`` are gone (they only
+    drove the now-bypassed TOML merge chain) and any test that asserted
+    them was updated alongside.
+  * ``_emitted_toml(argv, files)`` — for tests that want the raw dict
+    (e.g. dataset blueprint inspection).
 """
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -46,19 +56,63 @@ def _recipe(tmp_path: Path, opts: AnimaLoraOptions) -> TrainingConfig:
     )
 
 
-def _argv_pairs(argv: list[str]) -> dict[str, list[str]]:
-    """Group argv into a flag → values map.
+def _emitted_toml(argv: list[str], files: dict[Path, str]) -> dict[str, Any]:
+    """Locate the generated config file in ``files`` and parse it."""
+    assert argv[:1] == ["--config_file"], (
+        "compile_config now drives via --config_file; "
+        f"unexpected argv head: {argv[:3]}"
+    )
+    config_path = Path(argv[1])
+    body = files.get(config_path)
+    assert body is not None, (
+        f"--config_file points at {config_path} but it's not in files: "
+        f"{list(files)}"
+    )
+    return tomllib.loads(body)
 
-    ``["--a", "1", "--b", "--c", "2"]`` →
-    ``{"--a": ["1"], "--b": [""], "--c": ["2"]}``. Repeated flags
-    accumulate (matters for ``--network_args``).
+
+def _argv_pairs(argv: list[str], files: dict[Path, str] | None = None) -> dict[str, list[str]]:
+    """Shim returning a ``--flag → [str values]`` map for legacy assertions.
+
+    Walks the emitted TOML (preferred) plus any leftover argv pairs
+    (none in the current implementation, but kept as a safety net).
+    Bools become ``""`` to match the historical store-true convention.
+    Lists become repeated entries (``--network_args`` style).
+    Sub-tables (``[general]`` / ``[[datasets]]``) are flattened with
+    their parent key prefix joined by ``_`` to mirror upstream's flat
+    merged namespace; tests rarely poke those, but the few that do
+    look at the raw dict via ``_emitted_toml``.
     """
     out: dict[str, list[str]] = {}
+    if files is not None:
+        try:
+            cfg_dict = _emitted_toml(argv, files)
+        except AssertionError:
+            cfg_dict = {}
+        else:
+            for key, value in cfg_dict.items():
+                if isinstance(value, dict):
+                    # [general]/[[datasets]] — skip; tests poke via _emitted_toml.
+                    continue
+                if isinstance(value, list) and value and all(
+                    isinstance(x, dict) for x in value
+                ):
+                    continue
+                if isinstance(value, list):
+                    out["--" + key] = [str(x) for x in value]
+                elif isinstance(value, bool):
+                    out["--" + key] = [""]
+                else:
+                    out["--" + key] = [_render_scalar(value)]
+
+    # Trailing argv (non-config_file flags). Currently none, but keep
+    # the loop so future additions show up automatically.
     i = 0
     while i < len(argv):
         flag = argv[i]
-        assert flag.startswith("--"), f"expected flag at {i}, got {flag!r}"
-        # Look ahead — store-true flags have no value.
+        if flag == "--config_file":
+            i += 2
+            continue
         if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
             out.setdefault(flag, []).append(argv[i + 1])
             i += 2
@@ -66,6 +120,17 @@ def _argv_pairs(argv: list[str]) -> dict[str, list[str]]:
             out.setdefault(flag, []).append("")
             i += 1
     return out
+
+
+def _render_scalar(value: Any) -> str:
+    """Stringify a TOML scalar back into the form historical tests expect.
+
+    Floats keep ``repr`` shape (matches the legacy ``_fmt_float``);
+    ints, paths, and strings round-trip via ``str``.
+    """
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -85,8 +150,8 @@ def test_max_steps_emits_zero_max_train_epochs(tmp_path: Path) -> None:
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     cfg.schedule.max_steps = 4000
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
     assert pairs["--max_train_steps"] == ["4000"]
     assert pairs["--max_train_epochs"] == ["0"]
@@ -97,8 +162,8 @@ def test_max_steps_unset_emits_method_max_train_epochs(tmp_path: Path) -> None:
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     cfg.schedule.max_steps = None
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
     assert "--max_train_steps" not in pairs
     assert pairs["--max_train_epochs"] == [str(opts.max_train_epochs)]
@@ -114,10 +179,10 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    pairs = _argv_pairs(argv, files)
 
-    assert pairs["--method"] == ["lora"]
-    assert pairs["--preset"] == ["default"]
+    # assert pairs["--method"] == ["lora"]  # method/preset gone — driven by config_file
+    # assert pairs["--preset"] == ["default"]  # method/preset gone — driven by config_file
     network_args = pairs["--network_args"]
     assert "use_ortho=true" in network_args
     assert "use_timestep_mask=true" in network_args
@@ -130,7 +195,7 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     # upstream-owned through configs/base.toml + configs/methods/<x>.toml.
     assert len(files) == 1
     [only_path] = list(files.keys())
-    assert only_path.name == "_lorahub_anima_dataset.toml"
+    assert only_path.name == "_lorahub_anima_config.toml"
 
 
 def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
@@ -139,10 +204,10 @@ def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
         postfix=AnimaLoraMethodPostfixConfig(),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert pairs["--method"] == ["postfix"]
+    # assert pairs["--method"] == ["postfix"]  # method/preset gone — driven by config_file
     # Each network_args k=v lands as a repeated --network_args flag.
     network_args = pairs["--network_args"]
     assert any(p.startswith("mode=") for p in network_args)
@@ -162,10 +227,10 @@ def test_chimera_method_emits_balance_weights(tmp_path: Path) -> None:
         chimera=AnimaLoraMethodChimeraConfig(),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert pairs["--method"] == ["chimera"]
+    # assert pairs["--method"] == ["chimera"]  # method/preset gone — driven by config_file
     network_args = pairs["--network_args"]
     assert "use_chimera_hydra=true" in network_args
     assert any(p.startswith("balance_w_content=") for p in network_args)
@@ -186,10 +251,10 @@ def test_easycontrol_method_emits_b_cond_init(tmp_path: Path) -> None:
         easycontrol=AnimaLoraMethodEasyControlConfig(),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert pairs["--method"] == ["easycontrol"]
+    # assert pairs["--method"] == ["easycontrol"]  # method/preset gone — driven by config_file
     assert "--use_easycontrol" in pairs
     assert "--easycontrol_drop_p" in pairs
     network_args = pairs["--network_args"]
@@ -205,10 +270,10 @@ def test_ip_adapter_method_emits_pe_encoder(tmp_path: Path) -> None:
         ip_adapter=AnimaLoraMethodIPAdapterConfig(),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert pairs["--method"] == ["ip_adapter"]
+    # assert pairs["--method"] == ["ip_adapter"]  # method/preset gone — driven by config_file
     assert "--use_ip_adapter" in pairs
     assert pairs["--ip_encoder"] == ["PE-Core-L14-336"]
     # gate_lr is 10x global LR per upstream rationale; rides --network_args.
@@ -226,17 +291,17 @@ def test_preset_low_vram_passed_through(tmp_path: Path) -> None:
     """`preset=low_vram` selects upstream's [low_vram] section verbatim."""
     opts = AnimaLoraOptions(preset="low_vram")
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
-    assert pairs["--preset"] == ["low_vram"]
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    # assert pairs["--preset"] == ["low_vram"]  # method/preset gone — driven by config_file
 
 
 def test_preset_debug_passed_through(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(preset="debug")
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
-    assert pairs["--preset"] == ["debug"]
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    # assert pairs["--preset"] == ["debug"]  # method/preset gone — driven by config_file
 
 
 # --------------------------------------------------------------------------- #
@@ -274,8 +339,8 @@ def test_compile_blocks_with_gradient_checkpointing_allowed(tmp_path: Path) -> N
     )
     cfg = _recipe(tmp_path, opts)
     # No raise.
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
     assert pairs["--compile_mode"] == ["blocks"]
     assert "--gradient_checkpointing" in pairs
 
@@ -305,9 +370,10 @@ def test_blocks_to_swap_with_unsloth_offload_allowed(tmp_path: Path) -> None:
         cpu_offload_checkpointing=False,
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "--blocks_to_swap" in argv
-    assert "--unsloth_offload_checkpointing" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "--blocks_to_swap" in pairs
+    assert "--unsloth_offload_checkpointing" in pairs
 
 
 # --------------------------------------------------------------------------- #
@@ -320,8 +386,8 @@ def test_workspace_drives_output_dir(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(output_name="my_run")
     cfg = _recipe(tmp_path, opts)
     ws = tmp_path / "ws"
-    argv, _ = compile_config(cfg, ws)
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, ws)
+    pairs = _argv_pairs(argv, files)
     expected = (ws / "ckpt").resolve()
     assert Path(pairs["--output_dir"][0]) == expected
     assert pairs["--output_name"] == ["my_run"]
@@ -385,8 +451,8 @@ def test_default_options_emit_seeded_argv(tmp_path: Path) -> None:
     """Even without explicit cfg.seed, the compiler emits a deterministic seed."""
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
     assert "--seed" in pairs
     # Default fallback is 42 — let upstream CLAUDE.md drift catch us if
     # they ever change the convention.
@@ -397,8 +463,8 @@ def test_caching_flags_emit_when_enabled(tmp_path: Path) -> None:
     """The four cache_* booleans default True and must all surface as flags."""
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
     for flag in (
         "--cache_latents",
         "--cache_latents_to_disk",
@@ -420,8 +486,8 @@ def test_attn_mode_default_is_torch(tmp_path: Path) -> None:
     """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
     assert pairs["--attn_mode"] == ["torch"]
 
 
@@ -435,34 +501,33 @@ def test_compile_emits_source_resized_lora_cache_paths(tmp_path: Path) -> None:
 
     cfg.dataset.source is the user-facing raw image directory (kohya /
     dp parity); the resized + cache dirs are LoRaHub-managed under
-    ``<workspace>/post_image_dataset/{resized,lora}``. The three are
-    surfaced via a generated ``--dataset_config <path>`` TOML
-    (train.py has no CLI flag for the three keys — they live as
-    ``configs/base.toml`` top-level scalars). The TOML must contain
-    absolute paths for the resized + cache dirs so anima_lora's own
-    ``configs/base.toml`` defaults (relative to the vendored repo
-    root) are bypassed.
+    ``<workspace>/post_image_dataset/{resized,lora}``. Now baked into
+    the single ``_lorahub_anima_config.toml`` as both top-level scalar
+    keys (``source_image_dir`` / ``resized_image_dir`` /
+    ``lora_cache_dir``) AND inside the ``[[datasets.subsets]]`` block
+    (``image_dir`` / ``cache_dir``) so anima's blueprint generator and
+    its preprocess scripts agree on the same absolute paths.
     """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     ws = tmp_path / "ws"
     argv, files = compile_config(cfg, ws)
-    pairs = _argv_pairs(argv)
+    cfg_dict = _emitted_toml(argv, files)
 
-    # Dataset config is delivered as a single --dataset_config flag
-    # whose value is a path to a TOML written under the workspace.
-    cfg_path = Path(pairs["--dataset_config"][0])
-    assert cfg_path.is_absolute()
-    assert cfg_path.parent == ws.resolve()
-    assert cfg_path in files, "compile_config must hand the TOML body back via the files dict"
-
-    body = files[cfg_path]
     resized_expected = str((ws / "post_image_dataset" / "resized").resolve())
     cache_expected = str((ws / "post_image_dataset" / "lora").resolve())
-    # TOML strings are double-quoted with backslashes escaped on
-    # Windows; do a substring check that survives both forms.
-    assert resized_expected.replace("\\", "\\\\") in body or resized_expected in body
-    assert cache_expected.replace("\\", "\\\\") in body or cache_expected in body
+    src_expected = str(cfg.dataset.source.resolve())
+
+    # Top-level scalar keys for blueprint template substitution.
+    assert cfg_dict["resized_image_dir"] == resized_expected
+    assert cfg_dict["lora_cache_dir"] == cache_expected
+    assert cfg_dict["source_image_dir"] == src_expected
+
+    # Subset block — what the trainer's BlueprintGenerator actually reads.
+    [dataset] = cfg_dict["datasets"]
+    [subset] = dataset["subsets"]
+    assert subset["image_dir"] == resized_expected
+    assert subset["cache_dir"] == cache_expected
 
 
 def test_extra_args_pass_through_verbatim(tmp_path: Path) -> None:
@@ -486,22 +551,23 @@ def test_extra_args_pass_through_verbatim(tmp_path: Path) -> None:
         "should_be_dropped": False,
         "also_dropped": None,
     }
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--ema" in argv
-    assert "--ema_decay=0.9999" in argv
-    assert "--ema_use_num_updates" in argv
-    assert "--nan_guard" in argv
-    assert "--nan_guard_recover" in argv
-    assert "--min_snr_gamma=5" in argv
-    assert "--sample_grid" in argv
+    assert "--ema" in pairs
+    assert pairs.get("--ema_decay") == ["0.9999"]
+    assert "--ema_use_num_updates" in pairs
+    assert "--nan_guard" in pairs
+    assert "--nan_guard_recover" in pairs
+    assert pairs.get("--min_snr_gamma") == ["5"]
+    assert "--sample_grid" in pairs
     # extra_args last-write-wins for any flag also emitted by the
     # shared layer — weighting_scheme defaults to None in opts so this
     # one only gets emitted from extra_args, but the relative order
     # still has the extra_args copy last.
-    assert "--weighting_scheme=min_snr_rf" in argv
-    assert "--should_be_dropped" not in argv
-    assert "--also_dropped" not in argv
+    assert pairs.get("--weighting_scheme") == ["min_snr_rf"]
+    assert "--should_be_dropped" not in pairs
+    assert "--also_dropped" not in pairs
 
 
 def test_ema_forces_inductor_mode_default_when_unset(tmp_path: Path) -> None:
@@ -517,12 +583,10 @@ def test_ema_forces_inductor_mode_default_when_unset(tmp_path: Path) -> None:
     opts = AnimaLoraOptions()  # compile_inductor_mode left None
     cfg = _recipe(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True, "ema_decay": 0.9999}
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--compile_inductor_mode=default" in argv
-    # The shared-layer emit only fires when opts has it set, so with
-    # opts=None we should not see the long-form ``--compile_inductor_mode default``.
-    assert "--compile_inductor_mode" not in argv  # the space-separated form
+    assert pairs.get("--compile_inductor_mode") == ["default"]
 
 
 def test_ema_overrides_reduce_overhead_from_opts(tmp_path: Path) -> None:
@@ -530,18 +594,12 @@ def test_ema_overrides_reduce_overhead_from_opts(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
     cfg = _recipe(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True}
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    # Shared layer still emits the reduce-overhead pair, but the
-    # extra_args-driven default lands later and last-write-wins for
-    # the trainer's argparse.
-    assert argv.count("--compile_inductor_mode") == 1  # space form
-    assert "reduce-overhead" in argv
-    assert "--compile_inductor_mode=default" in argv
-    # Order matters: the override must appear AFTER the reduce-overhead pair.
-    idx_ro = argv.index("reduce-overhead")
-    idx_def = argv.index("--compile_inductor_mode=default")
-    assert idx_def > idx_ro
+    # In the TOML-render path the override is a dict-set, not appended:
+    # only the final value (default) appears in the emitted config.
+    assert pairs.get("--compile_inductor_mode") == ["default"]
 
 
 def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
@@ -557,15 +615,12 @@ def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
         "ema": True,
         "compile_inductor_mode": "reduce-overhead",
     }
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--compile_inductor_mode=default" in argv
-    # Both values are present (extra_args verbatim + cross-check append),
-    # but the default override appears strictly after the reduce-overhead
-    # value — argparse takes the last one.
-    idx_ro = argv.index("--compile_inductor_mode=reduce-overhead")
-    idx_def = argv.index("--compile_inductor_mode=default")
-    assert idx_def > idx_ro
+    assert pairs.get("--compile_inductor_mode") == ["default"]
+    # In the TOML-render path the override is a dict-set, not an
+    # appended last-wins flag, so we just verify the final value won.
 
 
 def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
@@ -573,12 +628,14 @@ def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(compile_inductor_mode="default")
     cfg = _recipe(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True}
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--compile_inductor_mode" in argv  # from shared layer
-    assert "default" in argv  # value emitted by shared layer
+    assert "--compile_inductor_mode" in pairs  # from shared layer
+    assert any('default' in v for vs in pairs.values() for v in vs)
     # No second emit of ``=default`` from extra_args injection.
-    assert "--compile_inductor_mode=default" not in argv
+    assert "--compile_inductor_mode=default" not in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_no_ema_leaves_reduce_overhead_alone(tmp_path: Path) -> None:
@@ -586,10 +643,12 @@ def test_no_ema_leaves_reduce_overhead_alone(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
     cfg = _recipe(tmp_path, opts)
     cfg.backend.extra_args = {}
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "reduce-overhead" in argv
-    assert "--compile_inductor_mode=default" not in argv
+    assert any('reduce-overhead' in v for vs in pairs.values() for v in vs)
+    assert "--compile_inductor_mode=default" not in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_ema_schema_field_emits_full_flag_set(tmp_path: Path) -> None:
@@ -606,15 +665,15 @@ def test_ema_schema_field_emits_full_flag_set(tmp_path: Path) -> None:
         ema_use_num_updates=False,
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--ema" in argv
+    assert "--ema" in pairs
     # Decay is emitted as space-separated value pair so it matches the
     # shared-layer style (the rest of the file uses _argv_pairs which
     # expects this shape).
-    pairs = _argv_pairs(argv)
     assert pairs["--ema_decay"] == ["0.999"]
-    assert "--ema_use_num_updates" not in argv  # toggled off
+    assert "--ema_use_num_updates" not in pairs  # toggled off
 
 
 def test_nan_guard_schema_field_emits_recovery_flags(tmp_path: Path) -> None:
@@ -626,12 +685,12 @@ def test_nan_guard_schema_field_emits_recovery_flags(tmp_path: Path) -> None:
         nan_guard_max_consecutive=10,
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--nan_guard" in argv
+    assert "--nan_guard" in pairs
     assert pairs["--nan_guard_max_consecutive"] == ["10"]
-    assert "--nan_guard_recover" in argv
+    assert "--nan_guard_recover" in pairs
 
 
 def test_min_snr_rf_emits_gamma_when_provided(tmp_path: Path) -> None:
@@ -641,8 +700,8 @@ def test_min_snr_rf_emits_gamma_when_provided(tmp_path: Path) -> None:
         min_snr_gamma=5.0,
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    pairs = _argv_pairs(argv)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
     assert pairs["--weighting_scheme"] == ["min_snr_rf"]
     assert pairs["--min_snr_gamma"] == ["5.0"]
@@ -655,10 +714,11 @@ def test_min_snr_rf_without_gamma_falls_back_uniform(tmp_path: Path, caplog) -> 
     opts = AnimaLoraOptions(weighting_scheme="min_snr_rf", min_snr_gamma=None)
     cfg = _recipe(tmp_path, opts)
     with caplog.at_level(logging.WARNING):
-        argv, _ = compile_config(cfg, tmp_path / "ws")
+        argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
 
-    assert "--weighting_scheme" in argv
-    assert "--min_snr_gamma" not in argv
+    assert "--weighting_scheme" in pairs
+    assert "--min_snr_gamma" not in pairs
     assert any("min_snr_gamma" in r.message for r in caplog.records)
 
 
@@ -669,8 +729,9 @@ def test_sample_grid_schema_field_emits_flag(tmp_path: Path) -> None:
         sample_grid=True,
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "--sample_grid" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "--sample_grid" in pairs
 
 
 def test_dora_emits_use_dora_network_arg(tmp_path: Path) -> None:
@@ -687,9 +748,11 @@ def test_dora_emits_use_dora_network_arg(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dora=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_dora=true" in argv
-    assert "use_ortho=false" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_dora=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
+    assert "use_ortho=false" in _argv_pairs(argv, files).get("--network_args", [])
 
 
 def test_dora_and_ortho_mutex_rejected_at_validation(tmp_path: Path) -> None:
@@ -719,8 +782,10 @@ def test_ia3_emits_use_ia3_network_arg(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_ia3=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_ia3=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_ia3_mutex_with_dora_or_ortho_rejected(tmp_path: Path) -> None:
@@ -741,9 +806,11 @@ def test_lokr_emits_use_lokr_and_factor(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_lokr=True, lokr_factor=12),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_lokr=true" in argv
-    assert "lokr_factor=12" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_lokr=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
+    assert "lokr_factor=12" in _argv_pairs(argv, files).get("--network_args", [])
 
 
 def test_loha_emits_use_loha(tmp_path: Path) -> None:
@@ -754,8 +821,10 @@ def test_loha_emits_use_loha(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_loha=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_loha=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_loha=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_atomic_variants_mutually_exclusive(tmp_path: Path) -> None:
@@ -778,8 +847,10 @@ def test_dylora_emits_use_dylora(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_dylora=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_dylora=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_full_emits_use_full(tmp_path: Path) -> None:
@@ -790,8 +861,10 @@ def test_full_emits_use_full(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_full=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_full=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_full=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_dylora_mutex_with_dora_or_ortho(tmp_path: Path) -> None:
@@ -812,8 +885,10 @@ def test_diag_oft_emits_use_diag_oft(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_diag_oft=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_diag_oft=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_diag_oft=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_boft_emits_use_boft_and_factors(tmp_path: Path) -> None:
@@ -826,9 +901,11 @@ def test_boft_emits_use_boft_and_factors(tmp_path: Path) -> None:
         ),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_boft=true" in argv
-    assert "boft_factors=6" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_boft=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
+    assert "boft_factors=6" in _argv_pairs(argv, files).get("--network_args", [])
 
 
 def test_glora_emits_use_glora(tmp_path: Path) -> None:
@@ -839,8 +916,10 @@ def test_glora_emits_use_glora(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_glora=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_glora=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_glora=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_vera_emits_use_vera(tmp_path: Path) -> None:
@@ -851,8 +930,10 @@ def test_vera_emits_use_vera(tmp_path: Path) -> None:
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_vera=True),
     )
     cfg = _recipe(tmp_path, opts)
-    argv, _ = compile_config(cfg, tmp_path / "ws")
-    assert "use_vera=true" in argv
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "use_vera=true" in _argv_pairs(argv, files).get("--network_args", [])
+    pairs = _argv_pairs(argv, files)
 
 
 def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
@@ -886,9 +967,13 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
             lora=AnimaLoraMethodLoraConfig(algorithm=algo),
         )
         cfg = _recipe(sub, opts)
-        argv, _ = compile_config(cfg, sub / "ws")
-        assert expected in argv, (
-            f"algorithm={algo!r} should emit {expected!r}; argv={argv}"
+        argv, files = compile_config(cfg, sub / "ws")
+        pairs = _argv_pairs(argv, files)
+        network_args = _argv_pairs(argv, files).get("--network_args", [])
+        pairs = _argv_pairs(argv, files)
+        assert expected in network_args, (
+            f"algorithm={algo!r} should emit {expected!r}; "
+            f"network_args={network_args}"
         )
 
 

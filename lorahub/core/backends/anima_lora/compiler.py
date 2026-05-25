@@ -1,38 +1,41 @@
-"""Compile a TrainingConfig into anima_lora CLI argv.
+"""Compile a TrainingConfig into anima_lora launch argv.
 
-anima_lora is config-driven via a four-layer chain:
+LoraHub now bypasses the upstream four-layer TOML chain
+(``base.toml -> presets.toml -> methods/<method>.toml -> CLI``)
+entirely. We materialise a single ``_lorahub_anima_config.toml`` under
+the workspace containing every key LoraHub knows about, then launch
+``train.py --config_file <path>``.  Upstream's ``read_config_from_file``
+takes that branch and skips ``--method/--preset`` merging, so:
 
-    base.toml -> presets.toml[<preset>] -> methods/<method>.toml -> CLI
+  * Every value the user sees in the LoraHub UI is the value the
+    trainer will actually use — no more "I changed the LR but the
+    method TOML still wins because CLI is parsed before TOML merge".
+  * The vendored ``configs/`` tree becomes a documentation reference,
+    not load-bearing: nothing in there is read at training time.
 
-Upstream owns the first three layers (vendored under `external/anima_lora/`).
-LoraHub contributes only the CLI override layer — translating
-:class:`AnimaLoraOptions` into ``--key value`` pairs that ``train.py``
-re-parses on top of the merged TOML chain.
+This module is a pure function: callers pass the recipe and a workspace,
+and get back ``(argv, files_to_write)``. ``files_to_write`` carries the
+generated TOML keyed by absolute path; ``backend.launch`` writes them
+to disk before spawning ``train.py``.
 
-This module is a pure function: callers pass in the recipe and a
-workspace, and get back ``(argv, files_to_write)``. We do not emit a
-TOML file — keeping the upstream merge chain intact is the whole
-point of the vendored layout. The `files_to_write` dict is always
-empty; the contract matches kohya / dp compiler return shape so the
-launcher dispatch is uniform.
+Constraints we still enforce at compile time (vs letting upstream
+crash mid-launch):
 
-Method routing: the value of ``opts.method`` becomes ``--method <X>``
-plus the matching sub-config's fields are mapped to upstream's CLI
-flag names. Sub-configs whose method isn't selected are silently
-ignored (callers might keep them around for fast switching).
+  * ``compile_mode='full'`` is incompatible with grad checkpointing /
+    unsloth offload / ``blocks_to_swap > 0``.
+  * ``blocks_to_swap > 0`` is incompatible with
+    ``cpu_offload_checkpointing=true``.
 
-Compile-mode constraint: ``compile_mode = "full"`` is incompatible
-with ``gradient_checkpointing`` and ``blocks_to_swap > 0`` per
-upstream `CLAUDE.md` ("compile_mode = 'full' is incompatible with
-gradient_checkpointing / blocks_to_swap"). We catch this at compile
-time so the user gets a clear error before launch instead of an
-opaque torch.compile traceback.
+Locked fields (``LOCKED_FIELDS``) are still surfaced as warnings rather
+than hard errors — most are advisory now that LoraHub owns the entire
+config; we keep them for the UI's 🔒 badges.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from lorahub.core.config.schema import (
     AnimaLoraOptions,
@@ -145,6 +148,13 @@ LOCKED_FIELDS: dict[str, dict[str, str]] = {
 _log = logging.getLogger(__name__)
 
 
+# Filename used when LoraHub auto-generates a fallback prompts file
+# under the job workspace because the user enabled sampling but didn't
+# point at one. backend.launch materialises the file before spawning
+# train.py — see ``_ensure_sample_prompts_file`` in backend.py.
+DEFAULT_SAMPLE_PROMPTS_FILENAME = "_lorahub_sample_prompts.txt"
+
+
 class CompilationError(ValueError):
     """Raised when an AnimaLoraOptions config can't be compiled."""
 
@@ -155,10 +165,14 @@ def compile_config(
 ) -> tuple[list[str], dict[Path, str]]:
     """Translate a recipe into ``(argv, files_to_write)`` for anima_lora.
 
-    ``argv`` is what to append after ``python <repo>/train.py`` (or after
-    ``accelerate launch`` if cut2 wraps it). ``files_to_write`` is always
-    empty — upstream owns its own config layout under
-    ``external/anima_lora/configs/`` and we don't emit anything.
+    Returns the argv to append after ``python <repo>/train.py``
+    (or after ``accelerate launch``) plus a ``files_to_write`` dict
+    the launcher writes to disk before spawn.
+
+    The argv is intentionally short — every training knob lives in the
+    generated ``_lorahub_anima_config.toml`` under the workspace.
+    Only ``--config_file`` plus a tiny wrapper for ``cfg.backend.extra_args``
+    (last-write-wins escape hatch) goes on the command line.
     """
     if cfg.backend.type != "anima_lora":
         msg = (
@@ -189,110 +203,632 @@ def compile_config(
     workspace = workspace.resolve()
     output_dir = workspace / "ckpt"
 
-    argv: list[str] = []
-    # Layer 1: method + preset selection. anima_lora reads these first
-    # to drive its TOML merge chain before any CLI override applies.
-    argv += ["--method", opts.method, "--preset", opts.preset]
+    config_dict = _render_full_config(cfg, opts, workspace, output_dir)
 
-    # Layer 2: shared overrides (apply to every method).
-    argv += _shared_overrides(cfg, opts, output_dir)
+    # Last-write-wins extra_args overlay: lets a recipe poke any
+    # train.py CLI flag without forcing every new knob into
+    # AnimaLoraOptions before it stabilises. Keys may include the
+    # leading ``--``; both forms work. ``False`` / ``None`` removes.
+    # We overlay BEFORE the EMA cross-check so the override stays
+    # on top.
+    extra_args_dict = dict(cfg.backend.extra_args)
+    _overlay_extra_args(extra_args_dict, config_dict)
 
-    # Layer 3: dataset path overrides — pin source / resized / cache to
-    # absolute paths under the LoRaHub workspace so anima_lora's own
-    # ``base.toml`` defaults (which are relative to the vendored repo
-    # root) are bypassed. ``cfg.dataset.source`` is the user-facing
-    # raw image dir (same shape kohya / dp use), and the resized + cache
-    # dirs are LoRaHub-managed under the workspace. This is delivered
-    # as a generated ``--dataset_config <path>`` TOML because train.py
-    # has no CLI flag for the three path keys (they live as
-    # ``configs/base.toml`` top-level scalars, not argparse).
-    ds_argv, ds_files = _dataset_config_override(cfg, workspace)
-    argv += ds_argv
+    # cudagraph_trees × EMA cross-check — applies whether the user set
+    # compile_inductor_mode explicitly in opts, in TOML render, or via
+    # the extra_args escape hatch. When EMA is on we force ``default``
+    # so the trainer doesn't crash mid-step.
+    _apply_ema_compile_override(opts, config_dict, extra_args_dict)
 
-    # Layer 4: method-specific sub-config overrides.
-    argv += _method_overrides(opts)
+    config_path = workspace / "_lorahub_anima_config.toml"
+    files: dict[Path, str] = {config_path: _dump_toml(config_dict)}
 
-    # Layer 5: sampling — translate cfg.sampling into anima train.py's
-    # ``--sample_*`` argv. anima writes generated PNGs to
-    # ``<output_dir>/sample/`` natively; LoraHub's sample router picks
-    # them up via rglob without any extra plumbing.
-    argv += _sampling_overrides(cfg, workspace)
-
-    # Layer 6: escape hatch — pass cfg.backend.extra_args through verbatim
-    # so experimental train.py flags can be set from a recipe without
-    # forcing every new knob into AnimaLoraOptions before it stabilises.
-    # Last write wins, mirroring kohya's _emit_extra_args.
-    _emit_extra_args(cfg, argv)
-
-    # Layer 7: cross-check EMA × cudagraph_trees. Runs after every other
-    # emit so the ``--compile_inductor_mode=default`` override lands last
-    # and wins argparse parsing.
-    _check_ema_compile_conflict(opts, argv, dict(cfg.backend.extra_args))
-
-    # Files: a single dataset_config TOML that pins the three data
-    # paths. Written under the workspace by ``backend.launch`` before
-    # spawning train.py.
-    files: dict[Path, str] = dict(ds_files)
+    argv: list[str] = ["--config_file", str(config_path)]
     return argv, files
 
 
-def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
-    """Append ``cfg.backend.extra_args`` verbatim, last-write-wins.
-
-    Same shape as kohya's escape hatch: ``True`` becomes a bare flag,
-    ``False`` / ``None`` is dropped, anything else is ``--key=value``.
-    Keys may include the leading ``--`` already; both forms work.
-    """
-    for key, value in cfg.backend.extra_args.items():
-        flag = f"--{key}" if not key.startswith("--") else key
-        if value is True:
-            args.append(flag)
-        elif value is False or value is None:
-            continue
-        else:
-            args.append(f"{flag}={value}")
+# --------------------------------------------------------------------------- #
+# Config rendering
+# --------------------------------------------------------------------------- #
 
 
-def _check_ema_compile_conflict(
+def _render_full_config(
+    cfg: TrainingConfig,
     opts: AnimaLoraOptions,
-    args: list[str],
-    extra_args: dict[str, object] | None = None,
-) -> None:
-    """When EMA is on, force ``--compile_inductor_mode default``.
+    workspace: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Build the complete TOML config tree.
 
-    Background: ``compile_inductor_mode='reduce-overhead'`` enables
-    cudagraph_trees, which checks input-tensor liveness across
-    capture/replay. EMA's per-step ``shadow.copy_(live.detach()...)``
-    violates that contract and crashes at step 2 with
-    ``RuntimeError: graph recording observed an input tensor
-    deallocate during graph recording that did not occur during
-    replay``. anima base.toml ships ``reduce-overhead`` by default,
-    so a silent override beats a confusing crash mid-training.
-
-    Backward compat: also reads ``ema`` from ``cfg.backend.extra_args``
-    (legacy path before EMA became an AnimaLoraOptions field).
+    Returns a dict shaped like upstream's flattened argparse namespace
+    plus the dataset blueprint sections (``[general]`` /
+    ``[[datasets]]`` / ``[[datasets.subsets]]``) that the
+    ``BlueprintGenerator`` consumes. Keys are upstream's snake_case
+    flag names; values are TOML-native scalars / arrays / tables.
     """
-    ema_on = bool(opts.ema)
-    if not ema_on and extra_args is not None and extra_args.get("ema") is True:
-        ema_on = True
+    cfg_dict: dict[str, Any] = {}
+
+    # ---- Output ----
+    cfg_dict["output_dir"] = str(output_dir)
+    cfg_dict["output_name"] = opts.output_name
+
+    # ---- Model paths ----
+    bm = cfg.base_model
+    if bm.checkpoint:
+        cfg_dict["pretrained_model_name_or_path"] = str(bm.checkpoint)
+    if bm.arch_paths.qwen3 is not None:
+        cfg_dict["qwen3"] = str(bm.arch_paths.qwen3)
+    if bm.arch_paths.ae is not None:
+        # anima_lora calls the VAE flag --vae upstream
+        cfg_dict["vae"] = str(bm.arch_paths.ae)
+
+    # ---- Network ----
+    cfg_dict["network_module"] = opts.network_module
+    cfg_dict["network_dim"] = int(opts.network_dim)
+    cfg_dict["network_alpha"] = float(opts.network_alpha)
+    if opts.network_train_unet_only:
+        cfg_dict["network_train_unet_only"] = True
+
+    # ---- Optimizer / schedule ----
+    cfg_dict["optimizer_type"] = opts.optimizer_type
+    cfg_dict["lr_scheduler"] = opts.lr_scheduler
+    cfg_dict["learning_rate"] = float(opts.learning_rate)
+
+    if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
+        # See compiler history for the long version: train.py
+        # unconditionally recomputes max_train_steps when
+        # max_train_epochs is non-zero, so we pin epochs to 0 to make
+        # the user's explicit step cap stick.
+        cfg_dict["max_train_steps"] = int(cfg.schedule.max_steps)
+        cfg_dict["max_train_epochs"] = 0
+    else:
+        cfg_dict["max_train_epochs"] = int(opts.max_train_epochs)
+    cfg_dict["save_every_n_epochs"] = int(opts.save_every_n_epochs)
+    if opts.save_every_n_steps is not None and opts.save_every_n_steps > 0:
+        cfg_dict["save_every_n_steps"] = int(opts.save_every_n_steps)
+    cfg_dict["checkpointing_epochs"] = int(opts.checkpointing_epochs)
+    if opts.caption_dropout_rate > 0:
+        cfg_dict["caption_dropout_rate"] = float(opts.caption_dropout_rate)
+
+    # ---- Sampling / loss (flow-matching) ----
+    cfg_dict["timestep_sampling"] = opts.timestep_sampling
+    cfg_dict["sigmoid_scale"] = float(opts.sigmoid_scale)
+    cfg_dict["discrete_flow_shift"] = float(opts.discrete_flow_shift)
+    if opts.weighting_scheme is not None:
+        cfg_dict["weighting_scheme"] = opts.weighting_scheme
+    if opts.min_snr_gamma is not None:
+        cfg_dict["min_snr_gamma"] = float(opts.min_snr_gamma)
+    elif opts.weighting_scheme == "min_snr_rf":
+        _log.warning(
+            "anima_lora: weighting_scheme='min_snr_rf' set without "
+            "min_snr_gamma — the trainer falls back to uniform "
+            "weighting; set min_snr_gamma (recommended 5.0) to enable.",
+        )
+    if opts.logit_mean is not None:
+        cfg_dict["logit_mean"] = float(opts.logit_mean)
+    if opts.logit_std is not None:
+        cfg_dict["logit_std"] = float(opts.logit_std)
+    if opts.mode_scale is not None:
+        cfg_dict["mode_scale"] = float(opts.mode_scale)
+    if opts.vr_loss_weight is not None:
+        cfg_dict["vr_loss_weight"] = float(opts.vr_loss_weight)
+
+    # ---- EMA / NaN guard / sample grid ----
+    if opts.ema:
+        cfg_dict["ema"] = True
+        cfg_dict["ema_decay"] = float(opts.ema_decay)
+        if opts.ema_use_num_updates:
+            cfg_dict["ema_use_num_updates"] = True
+    if opts.nan_guard:
+        cfg_dict["nan_guard"] = True
+        cfg_dict["nan_guard_max_consecutive"] = int(opts.nan_guard_max_consecutive)
+        if opts.nan_guard_recover:
+            cfg_dict["nan_guard_recover"] = True
+    if opts.sample_grid:
+        cfg_dict["sample_grid"] = True
+
+    # ---- Caching / data ----
+    if opts.cache_latents:
+        cfg_dict["cache_latents"] = True
+    if opts.cache_latents_to_disk:
+        cfg_dict["cache_latents_to_disk"] = True
+    if opts.cache_text_encoder_outputs:
+        cfg_dict["cache_text_encoder_outputs"] = True
+    if opts.cache_text_encoder_outputs_to_disk:
+        cfg_dict["cache_text_encoder_outputs_to_disk"] = True
+    if opts.cache_llm_adapter_outputs:
+        cfg_dict["cache_llm_adapter_outputs"] = True
+    if opts.use_shuffled_caption_variants:
+        cfg_dict["use_shuffled_caption_variants"] = True
+    if opts.sample_ratio is not None:
+        cfg_dict["sample_ratio"] = float(opts.sample_ratio)
+    if opts.static_token_count is not None:
+        cfg_dict["static_token_count"] = int(opts.static_token_count)
+    cfg_dict["vae_chunk_size"] = int(opts.vae_chunk_size)
+    if opts.vae_disable_cache:
+        cfg_dict["vae_disable_cache"] = True
+    if opts.no_half_vae:
+        cfg_dict["no_half_vae"] = True
+
+    # ---- Attention / compile ----
+    cfg_dict["attn_mode"] = opts.attn_mode
+    if opts.xformers:
+        cfg_dict["xformers"] = True
+    if opts.split_attn:
+        cfg_dict["split_attn"] = True
+    if opts.compile_mode is not None:
+        cfg_dict["compile_mode"] = opts.compile_mode
+    if opts.compile_inductor_mode is not None:
+        cfg_dict["compile_inductor_mode"] = opts.compile_inductor_mode
+    if opts.enable_native_flatten:
+        cfg_dict["enable_native_flatten"] = True
+    if opts.bucket_table is not None and opts.bucket_table != "default":
+        cfg_dict["bucket_table"] = opts.bucket_table
+
+    # ---- Memory / offload ----
+    if opts.blocks_to_swap > 0:
+        cfg_dict["blocks_to_swap"] = int(opts.blocks_to_swap)
+    if opts.gradient_checkpointing:
+        cfg_dict["gradient_checkpointing"] = True
+    if opts.unsloth_offload_checkpointing:
+        cfg_dict["unsloth_offload_checkpointing"] = True
+    if opts.cpu_offload_checkpointing:
+        cfg_dict["cpu_offload_checkpointing"] = True
+    cfg_dict["mixed_precision"] = opts.mixed_precision
+
+    # ---- Validation ----
+    if opts.use_cmmd:
+        cfg_dict["use_cmmd"] = True
+    if opts.validation_seed is not None:
+        cfg_dict["validation_seed"] = int(opts.validation_seed)
+    if opts.validation_sample_steps is not None:
+        cfg_dict["validation_sample_steps"] = int(opts.validation_sample_steps)
+    if opts.validation_cfg_scale is not None:
+        cfg_dict["validation_cfg_scale"] = float(opts.validation_cfg_scale)
+
+    # ---- Locked / risky cluster ----
+    if opts.masked_loss:
+        cfg_dict["masked_loss"] = True
+    if opts.torch_compile:
+        cfg_dict["torch_compile"] = True
+    if opts.skip_cache_check:
+        cfg_dict["skip_cache_check"] = True
+    if opts.dataloader_pin_memory:
+        cfg_dict["dataloader_pin_memory"] = True
+    if opts.persistent_data_loader_workers:
+        cfg_dict["persistent_data_loader_workers"] = True
+    if opts.trim_crossattn_kv:
+        cfg_dict["trim_crossattn_kv"] = True
+    cfg_dict["save_model_as"] = opts.save_model_as
+    cfg_dict["save_precision"] = opts.save_precision
+    cfg_dict["log_every_n_steps"] = int(opts.log_every_n_steps)
+
+    # ---- Seed ----
+    seed = cfg.schedule.seed if cfg.schedule.seed is not None else 42
+    cfg_dict["seed"] = int(seed)
+
+    # ---- Resume / state writing ----
+    if cfg.resume.save_state:
+        cfg_dict["save_state"] = True
+    if cfg.resume.save_state_at_end:
+        cfg_dict["save_state_on_train_end"] = True
+    if cfg.resume.save_last_n_epochs_state is not None:
+        cfg_dict["save_last_n_epochs_state"] = int(
+            cfg.resume.save_last_n_epochs_state,
+        )
+    if cfg.resume.save_last_n_steps_state is not None:
+        cfg_dict["save_last_n_steps_state"] = int(
+            cfg.resume.save_last_n_steps_state,
+        )
+
+    # ---- Sampling preview ----
+    _render_sampling(cfg, workspace, cfg_dict)
+
+    # ---- Method-specific (network_args + named flags) ----
+    _render_method(opts, cfg_dict)
+
+    # ---- Dataset blueprint ([general] / [[datasets]] / subsets) ----
+    _render_dataset(cfg, opts, workspace, cfg_dict)
+
+    return cfg_dict
+
+
+def _render_sampling(
+    cfg: TrainingConfig,
+    workspace: Path,
+    cfg_dict: dict[str, Any],
+) -> None:
+    """Translate ``cfg.sampling`` into upstream's ``--sample_*`` keys.
+
+    Behaviour mirrors the historical CLI emitter: when sampling is
+    disabled we emit nothing; otherwise we forward at_first / cadence /
+    prompts_file as TOML scalars. The fallback prompts file under the
+    workspace is materialised by ``backend.launch`` just before spawn.
+    """
+    sampling = cfg.sampling
+    if not sampling.enabled:
+        return
+    if sampling.at_first:
+        cfg_dict["sample_at_first"] = True
+    if sampling.every_n_epochs and sampling.every_n_epochs > 0:
+        cfg_dict["sample_every_n_epochs"] = int(sampling.every_n_epochs)
+    if sampling.every_n_steps and sampling.every_n_steps > 0:
+        cfg_dict["sample_every_n_steps"] = int(sampling.every_n_steps)
+    if sampling.prompts_file is not None:
+        prompts_path = Path(str(sampling.prompts_file))
+    else:
+        prompts_path = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
+    cfg_dict["sample_prompts"] = str(prompts_path)
+
+
+def _render_method(opts: AnimaLoraOptions, cfg_dict: dict[str, Any]) -> None:
+    """Add method-specific keys (network_args list + named bool flags).
+
+    Upstream's ``--network_args`` is ``nargs="*"`` so in TOML it
+    becomes ``network_args = ["use_ortho=true", "min_rank=8", ...]``.
+    Method-named CLI flags (``use_easycontrol`` / ``use_ip_adapter``)
+    are bool keys at the top level — io.py's flat-merge picks them up
+    the same way it would pick up an ``--use_easycontrol`` argv.
+
+    ``cfg_dict["use_custom_down_autograd"]`` is *not* a real flag — it
+    rides ``network_args`` because the LoRA factory reads it out of the
+    kwargs bag. Same trick the legacy CLI emitter used.
+    """
+    method = opts.method
+    pieces: list[str] = []
+
+    if method == "lora":
+        pieces.extend(_lora_network_args(opts))
+    elif method == "postfix":
+        pieces.extend(_postfix_network_args(opts))
+    elif method == "chimera":
+        pieces.extend(_chimera_network_args(opts))
+    elif method == "easycontrol":
+        cfg_dict["use_easycontrol"] = True
+        sub = opts.easycontrol
+        if sub is None:
+            msg = "method='easycontrol' missing sub-config"
+            raise CompilationError(msg)
+        cfg_dict["easycontrol_drop_p"] = float(sub.drop_p)
+        cfg_dict["easycontrol_cond_noise_max"] = float(sub.cond_noise_max)
+        pieces.extend(_easycontrol_network_args(opts))
+    elif method == "ip_adapter":
+        cfg_dict["use_ip_adapter"] = True
+        sub = opts.ip_adapter
+        if sub is None:
+            msg = "method='ip_adapter' missing sub-config"
+            raise CompilationError(msg)
+        cfg_dict["ip_encoder"] = sub.encoder
+        cfg_dict["ip_image_drop_p"] = float(sub.image_drop_p)
+        if sub.features_cache_to_disk:
+            cfg_dict["ip_features_cache_to_disk"] = True
+        pieces.extend(_ip_adapter_network_args(opts))
+    else:
+        msg = f"unhandled method {opts.method!r} (schema enum drift?)"
+        raise CompilationError(msg)
+
+    # Universal — the LoRA factory reads this kwarg regardless of method.
+    if opts.use_custom_down_autograd:
+        pieces.append("use_custom_down_autograd=true")
+
+    if pieces:
+        cfg_dict["network_args"] = pieces
+
+
+def _render_dataset(
+    cfg: TrainingConfig,
+    opts: AnimaLoraOptions,
+    workspace: Path,
+    cfg_dict: dict[str, Any],
+) -> None:
+    """Add the ``[general]`` / ``[[datasets]]`` / subset blueprint.
+
+    Replaces the legacy ``--dataset_config`` separate-file approach;
+    everything lives in the single ``_lorahub_anima_config.toml`` now.
+    Path keys (``source_image_dir`` / ``resized_image_dir`` /
+    ``lora_cache_dir``) are also written as top-level scalars so
+    template substitution (``{resized_image_dir}`` etc.) inside the
+    blueprint resolves to the LoraHub-managed dirs.
+    """
+    src = cfg.dataset.source.resolve()
+    resized = (workspace / "post_image_dataset" / "resized").resolve()
+    cache = (workspace / "post_image_dataset" / "lora").resolve()
+
+    cfg_dict["source_image_dir"] = str(src)
+    cfg_dict["resized_image_dir"] = str(resized)
+    cfg_dict["lora_cache_dir"] = str(cache)
+    cfg_dict["path_pattern"] = opts.path_pattern
+
+    res = cfg.dataset.resolution
+    if isinstance(res, (list, tuple)) and len(res) == 2:
+        resolution: Any = [int(res[0]), int(res[1])]
+    elif isinstance(res, (list, tuple)) and len(res) == 1:
+        resolution = int(res[0])
+    else:
+        resolution = 1024
+
+    batch_size = max(1, int(cfg.schedule.batch_size or 1))
+    keep_tokens = int(opts.keep_tokens)
+    caption_ext = (opts.caption_extension or ".txt").strip() or ".txt"
+    num_repeats = max(1, int(getattr(cfg.dataset, "num_repeats", 1) or 1))
+
+    cfg_dict["general"] = {
+        "caption_extension": caption_ext,
+        "keep_tokens": keep_tokens,
+    }
+
+    dataset_entry: dict[str, Any] = {
+        "resolution": resolution,
+        "batch_size": batch_size,
+        "enable_bucket": bool(opts.enable_bucket),
+        "validation_seed": int(opts.validation_seed) if opts.validation_seed is not None else 42,
+        "validation_split_num": int(opts.validation_split_num),
+        "subsets": [
+            {
+                "image_dir": str(resized),
+                "cache_dir": str(cache),
+                "num_repeats": num_repeats,
+                "recursive": True,
+            },
+        ],
+    }
+    cfg_dict["datasets"] = [dataset_entry]
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _apply_ema_compile_override(
+    opts: AnimaLoraOptions,
+    cfg_dict: dict[str, Any],
+    extra_args: dict[str, Any],
+) -> None:
+    """When EMA is on, force ``compile_inductor_mode = "default"``.
+
+    Background: ``reduce-overhead`` enables cudagraph_trees, whose
+    liveness check fails on EMA's per-step shadow.copy_(...). Upstream
+    base.toml ships ``reduce-overhead`` as default; without an explicit
+    override the run crashes mid-step. We log + force ``default`` here.
+    """
+    ema_on = bool(opts.ema) or bool(extra_args.get("ema") is True)
     if not ema_on:
         return
-    explicit_mode = opts.compile_inductor_mode
-    if extra_args is not None:
-        ea_mode = extra_args.get("compile_inductor_mode")
-        if ea_mode is not None:
-            explicit_mode = ea_mode  # type: ignore[assignment]
+    explicit_mode = cfg_dict.get("compile_inductor_mode")
+    if extra_args.get("compile_inductor_mode") is not None:
+        explicit_mode = extra_args["compile_inductor_mode"]
     if explicit_mode not in (None, "reduce-overhead"):
         return
     _log.warning(
         "anima_lora: ema=True with compile_inductor_mode=%r would "
         "trigger cudagraph_trees liveness check failure mid-step "
         "(EMA mutates LoRA params via detach/copy). Forcing "
-        "--compile_inductor_mode=default. Set compile_inductor_mode "
+        "compile_inductor_mode='default'. Set compile_inductor_mode "
         "explicitly to a non-reduce-overhead value to silence this.",
-        explicit_mode if explicit_mode is not None else "<base.toml=reduce-overhead>",
+        explicit_mode if explicit_mode is not None else "<default reduce-overhead>",
     )
-    args.append("--compile_inductor_mode=default")
+    cfg_dict["compile_inductor_mode"] = "default"
+
+
+def _overlay_extra_args(
+    extra_args: dict[str, Any],
+    cfg_dict: dict[str, Any],
+) -> None:
+    """Merge ``cfg.backend.extra_args`` into the TOML dict, last-write-wins.
+
+    The escape hatch for any train.py flag that hasn't (yet) been
+    promoted to a typed AnimaLoraOptions field. Keys may include the
+    leading ``--``; both forms are accepted.
+    Boolean ``False`` / ``None`` removes the key.
+    """
+    for raw_key, value in extra_args.items():
+        key = raw_key.lstrip("-")
+        if value is False or value is None:
+            cfg_dict.pop(key, None)
+            continue
+        cfg_dict[key] = value
+
+
+# --------------------------------------------------------------------------- #
+# Network-args generators (per method)
+# --------------------------------------------------------------------------- #
+
+
+def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
+    """Map the LoRA family enum + knobs onto ``network_args`` pieces."""
+    sub = opts.lora
+    flag_for_algorithm: dict[str, str | None] = {
+        "lora": None,
+        "ortho": "use_ortho",
+        "dora": "use_dora",
+        "ia3": "use_ia3",
+        "lokr": "use_lokr",
+        "loha": "use_loha",
+        "dylora": "use_dylora",
+        "full": "use_full",
+        "diag_oft": "use_diag_oft",
+        "boft": "use_boft",
+        "glora": "use_glora",
+        "vera": "use_vera",
+    }
+    pieces: list[str] = []
+    chosen = sub.algorithm
+    for algo, flag in flag_for_algorithm.items():
+        if flag is None:
+            continue
+        pieces.append(f"{flag}={'true' if algo == chosen else 'false'}")
+    pieces.append(f"lokr_factor={sub.lokr_factor}")
+    pieces.append(f"boft_factors={sub.boft_factors}")
+    pieces.append(
+        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
+    )
+    pieces.append(f"min_rank={sub.min_rank}")
+    pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")
+    return pieces
+
+
+def _postfix_network_args(opts: AnimaLoraOptions) -> list[str]:
+    sub = opts.postfix
+    if sub is None:
+        msg = "method='postfix' missing sub-config (validator should have caught this)"
+        raise CompilationError(msg)
+    pieces = [
+        f"mode={sub.mode}",
+        f"cond_hidden_dim={sub.cond_hidden_dim}",
+        f"splice_position={sub.splice_position}",
+        f"ortho_basis={sub.ortho_basis}",
+        f"svd_num_files={sub.svd_num_files}",
+        f"ortho_basis_seed={sub.ortho_basis_seed}",
+        f"lambda_init={sub.lambda_init}",
+    ]
+    if sub.te_cache_dir is not None:
+        pieces.append(f"te_cache_dir={sub.te_cache_dir}")
+    return pieces
+
+
+def _chimera_network_args(opts: AnimaLoraOptions) -> list[str]:
+    sub = opts.chimera
+    if sub is None:
+        msg = "method='chimera' missing sub-config"
+        raise CompilationError(msg)
+    return [
+        "use_chimera_hydra=true",
+        f"balance_w_content={_fmt_float(sub.balance_w_content)}",
+        f"balance_w_freq={_fmt_float(sub.balance_w_freq)}",
+        f"balance_loss_warmup_ratio={_fmt_float(sub.balance_loss_warmup_ratio)}",
+        f"fei_feature_dim={sub.fei_feature_dim}",
+        f"sigma_feature_dim={sub.sigma_feature_dim}",
+    ]
+
+
+def _easycontrol_network_args(opts: AnimaLoraOptions) -> list[str]:
+    sub = opts.easycontrol
+    if sub is None:
+        msg = "method='easycontrol' missing sub-config"
+        raise CompilationError(msg)
+    return [
+        f"b_cond_init={_fmt_float(sub.b_cond_init)}",
+        f"cond_scale={_fmt_float(sub.cond_scale)}",
+        f"apply_ffn_lora={'1' if sub.apply_ffn_lora else '0'}",
+        f"cond_token_count={sub.cond_token_count}",
+    ]
+
+
+def _ip_adapter_network_args(opts: AnimaLoraOptions) -> list[str]:
+    sub = opts.ip_adapter
+    if sub is None:
+        msg = "method='ip_adapter' missing sub-config"
+        raise CompilationError(msg)
+    return [
+        f"ip_resampler_layers={sub.resampler_layers}",
+        f"ip_resampler_heads={sub.resampler_heads}",
+        f"ip_scale={_fmt_float(sub.ip_scale)}",
+        f"gate_lr={_fmt_float(sub.gate_lr)}",
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Minimal TOML writer (we only need scalars / arrays / nested tables /
+# arrays of inline tables; the stdlib has tomllib for reading but no
+# writer, and we don't want to take on tomli_w as a dependency for the
+# narrow set of types this module actually emits).
+# --------------------------------------------------------------------------- #
+
+
+def _dump_toml(d: dict[str, Any]) -> str:
+    """Render ``d`` as a TOML document.
+
+    Layout:
+      * Top-level scalars are emitted first.
+      * Then any top-level tables (e.g. ``[general]``).
+      * Then any top-level arrays-of-tables (e.g. ``[[datasets]]``).
+        Each entry's ``subsets`` array (if present) becomes its own
+        ``[[datasets.subsets]]`` block.
+
+    Missing on purpose: TOML date types, deeply-nested arrays-of-arrays
+    of arbitrary tables, multi-line strings. We don't need any of those
+    for an anima_lora config.
+    """
+    lines: list[str] = []
+    lines.append(
+        "# LoraHub-generated anima_lora config — pre-merged base/preset/method.",
+    )
+    lines.append(
+        "# Regenerated on every launch; hand-edits are wiped at next compile.",
+    )
+    lines.append("")
+
+    scalars: list[tuple[str, Any]] = []
+    tables: list[tuple[str, dict[str, Any]]] = []
+    arrays_of_tables: list[tuple[str, list[dict[str, Any]]]] = []
+    for key, value in d.items():
+        if isinstance(value, dict):
+            tables.append((key, value))
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(x, dict) for x in value)
+        ):
+            arrays_of_tables.append((key, value))
+        else:
+            scalars.append((key, value))
+
+    for key, value in scalars:
+        lines.append(f"{key} = {_toml_value(value)}")
+
+    for key, table in tables:
+        lines.append("")
+        lines.append(f"[{key}]")
+        for sub_key, sub_value in table.items():
+            lines.append(f"{sub_key} = {_toml_value(sub_value)}")
+
+    for key, entries in arrays_of_tables:
+        for entry in entries:
+            lines.append("")
+            lines.append(f"[[{key}]]")
+            nested_arrays: list[tuple[str, list[dict[str, Any]]]] = []
+            for sub_key, sub_value in entry.items():
+                if (
+                    isinstance(sub_value, list)
+                    and sub_value
+                    and all(isinstance(x, dict) for x in sub_value)
+                ):
+                    nested_arrays.append((sub_key, sub_value))
+                else:
+                    lines.append(f"{sub_key} = {_toml_value(sub_value)}")
+            for sub_key, sub_entries in nested_arrays:
+                for sub_entry in sub_entries:
+                    lines.append("")
+                    lines.append(f"  [[{key}.{sub_key}]]")
+                    for k2, v2 in sub_entry.items():
+                        lines.append(f"  {k2} = {_toml_value(v2)}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _toml_value(v: Any) -> str:
+    """Render a single TOML-native value (scalar or homogeneous list)."""
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    if isinstance(v, str):
+        # Escape backslashes + double quotes; we never need multi-line.
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(v, int) and not isinstance(v, bool):
+        return str(v)
+    if isinstance(v, float):
+        return _fmt_float(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    if v is None:
+        # Should never happen — _render_full_config skips None values.
+        msg = f"cannot serialise None to TOML (key dropped upstream?)"
+        raise CompilationError(msg)
+    msg = f"unsupported TOML value type: {type(v).__name__} = {v!r}"
+    raise CompilationError(msg)
 
 
 def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
@@ -392,578 +928,6 @@ def _warn_locked_fields_changed(opts: AnimaLoraOptions) -> None:
                 kind,
                 reason,
             )
-
-
-def _shared_overrides(
-    cfg: TrainingConfig,
-    opts: AnimaLoraOptions,
-    output_dir: Path,
-) -> list[str]:
-    """Method-agnostic CLI overrides — applied for every method.
-
-    Upstream's flag names are snake_case (matches the TOML keys); the
-    AnimaLoraOptions schema is also snake_case at the python level so
-    most fields map 1:1.
-    """
-    out: list[str] = []
-    # ---- Output ----
-    out += ["--output_dir", str(output_dir)]
-    out += ["--output_name", opts.output_name]
-
-    # ---- Model paths (from BaseModelConfig — anima_lora reads its own
-    # base.toml model paths but we may override per-recipe) ----
-    bm = cfg.base_model
-    if bm.checkpoint:
-        out += ["--pretrained_model_name_or_path", str(bm.checkpoint)]
-    paths = bm.arch_paths
-    if paths.qwen3 is not None:
-        out += ["--qwen3", str(paths.qwen3)]
-    if paths.ae is not None:
-        # anima_lora calls the VAE flag --vae upstream
-        out += ["--vae", str(paths.ae)]
-
-    # ---- Network ----
-    out += ["--network_module", opts.network_module]
-    out += ["--network_dim", str(opts.network_dim)]
-    out += ["--network_alpha", str(opts.network_alpha)]
-    if opts.network_train_unet_only:
-        out += ["--network_train_unet_only"]
-
-    # ---- Optim / schedule ----
-    out += ["--optimizer_type", opts.optimizer_type]
-    out += ["--lr_scheduler", opts.lr_scheduler]
-    out += ["--learning_rate", _fmt_float(opts.learning_rate)]
-    # When ``cfg.schedule.max_steps`` is set, prefer it over the
-    # epoch budget. anima_lora's train.py unconditionally overwrites
-    # ``args.max_train_steps`` with ``epochs × steps_per_epoch`` if
-    # ``--max_train_epochs`` is present (see train.py line 1622), so
-    # passing both defeats the user's explicit step cap. Send only
-    # ``--max_train_steps`` in that case; epochs are still tracked
-    # internally by the trainer.
-    if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
-        # cfg.schedule.max_steps is the user-facing "训练总步数"
-        # override — the form widgets all read from there. Send only
-        # this; force --max_train_epochs=0 so train.py's ``if
-        # args.max_train_epochs is not None`` branch skips the
-        # epoch-derived recompute. Just omitting the flag isn't
-        # enough — lora.toml ships ``max_train_epochs = 8`` in its
-        # method config, and the TOML merge chain pre-populates args
-        # before CLI parsing, so without the explicit zero the user's
-        # explicit step cap silently becomes ``8 × steps_per_epoch``.
-        # The matching guard lives at external/anima_lora/train.py
-        # near the "Calculate training steps" comment — both must
-        # change together.
-        out += ["--max_train_steps", str(int(cfg.schedule.max_steps))]
-        out += ["--max_train_epochs", "0"]
-    else:
-        out += ["--max_train_epochs", str(opts.max_train_epochs)]
-    out += ["--save_every_n_epochs", str(opts.save_every_n_epochs)]
-    if opts.save_every_n_steps is not None and opts.save_every_n_steps > 0:
-        out += ["--save_every_n_steps", str(int(opts.save_every_n_steps))]
-    out += ["--checkpointing_epochs", str(opts.checkpointing_epochs)]
-    if opts.caption_dropout_rate > 0:
-        out += ["--caption_dropout_rate", _fmt_float(opts.caption_dropout_rate)]
-
-    # ---- Sampling / loss (flow-matching) ----
-    out += ["--timestep_sampling", opts.timestep_sampling]
-    out += ["--sigmoid_scale", _fmt_float(opts.sigmoid_scale)]
-    out += ["--discrete_flow_shift", _fmt_float(opts.discrete_flow_shift)]
-    if opts.weighting_scheme is not None:
-        out += ["--weighting_scheme", opts.weighting_scheme]
-    if opts.min_snr_gamma is not None:
-        out += ["--min_snr_gamma", _fmt_float(opts.min_snr_gamma)]
-    elif opts.weighting_scheme == "min_snr_rf":
-        # Trainer reduces to uniform weighting when γ is missing — log
-        # a warning so the user notices their min_snr_rf is a no-op.
-        _log.warning(
-            "anima_lora: weighting_scheme='min_snr_rf' set without "
-            "min_snr_gamma — the trainer falls back to uniform "
-            "weighting; set min_snr_gamma (recommended 5.0) to enable."
-        )
-    if opts.logit_mean is not None:
-        out += ["--logit_mean", _fmt_float(opts.logit_mean)]
-    if opts.logit_std is not None:
-        out += ["--logit_std", _fmt_float(opts.logit_std)]
-    if opts.mode_scale is not None:
-        out += ["--mode_scale", _fmt_float(opts.mode_scale)]
-    if opts.vr_loss_weight is not None:
-        out += ["--vr_loss_weight", _fmt_float(opts.vr_loss_weight)]
-
-    # ---- Training stabilisers (EMA / NaN guard / sample grid) ----
-    if opts.ema:
-        out += ["--ema"]
-        out += ["--ema_decay", _fmt_float(opts.ema_decay)]
-        if opts.ema_use_num_updates:
-            out += ["--ema_use_num_updates"]
-    if opts.nan_guard:
-        out += ["--nan_guard"]
-        out += ["--nan_guard_max_consecutive", str(opts.nan_guard_max_consecutive)]
-        if opts.nan_guard_recover:
-            out += ["--nan_guard_recover"]
-    if opts.sample_grid:
-        out += ["--sample_grid"]
-
-    # ---- Caching / data ----
-    if opts.cache_latents:
-        out += ["--cache_latents"]
-    if opts.cache_latents_to_disk:
-        out += ["--cache_latents_to_disk"]
-    if opts.cache_text_encoder_outputs:
-        out += ["--cache_text_encoder_outputs"]
-    if opts.cache_text_encoder_outputs_to_disk:
-        out += ["--cache_text_encoder_outputs_to_disk"]
-    if opts.cache_llm_adapter_outputs:
-        out += ["--cache_llm_adapter_outputs"]
-    if opts.use_shuffled_caption_variants:
-        out += ["--use_shuffled_caption_variants"]
-    if opts.sample_ratio is not None:
-        out += ["--sample_ratio", _fmt_float(opts.sample_ratio)]
-    if opts.static_token_count is not None:
-        out += ["--static_token_count", str(opts.static_token_count)]
-    out += ["--vae_chunk_size", str(opts.vae_chunk_size)]
-    if opts.vae_disable_cache:
-        out += ["--vae_disable_cache"]
-    if opts.no_half_vae:
-        out += ["--no_half_vae"]
-
-    # ---- Attention / compile ----
-    out += ["--attn_mode", opts.attn_mode]
-    if opts.xformers:
-        out += ["--xformers"]
-    if opts.split_attn:
-        out += ["--split_attn"]
-    if opts.compile_mode is not None:
-        out += ["--compile_mode", opts.compile_mode]
-    if opts.compile_inductor_mode is not None:
-        out += ["--compile_inductor_mode", opts.compile_inductor_mode]
-    if opts.enable_native_flatten:
-        # Mutually exclusive with --static_token_count on the vendored
-        # side (compile_blocks asserts). LoraHub policies will reject
-        # the combo at validate-time so we don't need a guard here.
-        out += ["--enable_native_flatten"]
-    if opts.bucket_table is not None and opts.bucket_table != "default":
-        # ``1536`` switches the bucket table to the 9216+9240 two-family
-        # set for Anima v1.0 native 1536x1536 training. Vendored
-        # buckets.py whitelists the values; an unknown table raises.
-        out += ["--bucket_table", opts.bucket_table]
-    if opts.use_custom_down_autograd:
-        # Upstream consumes this as a network kwarg, not an argparse flag.
-        # See ``networks/lora_anima/factory.py`` line 120 — the value
-        # is read off ``--network_args`` and dispatched onto each LoRA
-        # module's ``use_custom_down_autograd`` attribute. train.py's
-        # argparse only knows ``--network_args``; emitting
-        # ``--use_custom_down_autograd`` directly trips
-        # "unrecognized arguments".
-        out += ["--network_args", "use_custom_down_autograd=true"]
-
-    # ---- Memory / offload ----
-    if opts.blocks_to_swap > 0:
-        out += ["--blocks_to_swap", str(opts.blocks_to_swap)]
-    if opts.gradient_checkpointing:
-        out += ["--gradient_checkpointing"]
-    if opts.unsloth_offload_checkpointing:
-        out += ["--unsloth_offload_checkpointing"]
-    if opts.cpu_offload_checkpointing:
-        out += ["--cpu_offload_checkpointing"]
-    out += ["--mixed_precision", opts.mixed_precision]
-
-    # ---- Validation ----
-    if opts.use_cmmd:
-        out += ["--use_cmmd"]
-    if opts.validation_seed is not None:
-        out += ["--validation_seed", str(opts.validation_seed)]
-    if opts.validation_sample_steps is not None:
-        out += ["--validation_sample_steps", str(opts.validation_sample_steps)]
-    if opts.validation_cfg_scale is not None:
-        out += ["--validation_cfg_scale", _fmt_float(opts.validation_cfg_scale)]
-
-    # ---- Upstream-locked / risky fields (B5 cut-locks) ----
-    # Most of these are store_true and base.toml already pins them on,
-    # so we emit the flag whenever opts.* is True. When the user sets
-    # a locked-True field to False the emit is skipped — the compiler
-    # also logs a warning above so the operator notices the no-op.
-    if opts.masked_loss:
-        out += ["--masked_loss"]
-    if opts.torch_compile:
-        out += ["--torch_compile"]
-    if opts.skip_cache_check:
-        out += ["--skip_cache_check"]
-    if opts.dataloader_pin_memory:
-        out += ["--dataloader_pin_memory"]
-    if opts.persistent_data_loader_workers:
-        out += ["--persistent_data_loader_workers"]
-    if opts.trim_crossattn_kv:
-        out += ["--trim_crossattn_kv"]
-    out += ["--save_model_as", opts.save_model_as]
-    out += ["--save_precision", opts.save_precision]
-    out += ["--log_every_n_steps", str(opts.log_every_n_steps)]
-    # keep_tokens / caption_extension / validation_split_num /
-    # enable_bucket / path_pattern live in the dataset blueprint, not
-    # the argparse namespace. We surface them in the LoraHub schema for
-    # editor-side warnings; the actual dataset_config TOML is whatever
-    # base.toml ships with. cut B5 follow-up will materialise a
-    # per-recipe dataset.toml override if a user actually changes one.
-
-    # ---- Seed ----
-    seed = cfg.schedule.seed if cfg.schedule.seed is not None else 42
-    out += ["--seed", str(seed)]
-
-    # ---- Resume / state writing ----
-    # Mirror kohya's behaviour: write optimizer/scheduler state next to
-    # checkpoints so a later /resume can re-attach. Without this, a
-    # cancelled run can resume the LoRA weights but loses the optimizer
-    # momentum + lr schedule position.
-    if cfg.resume.save_state:
-        out += ["--save_state"]
-    if cfg.resume.save_state_at_end:
-        out += ["--save_state_on_train_end"]
-    if cfg.resume.save_last_n_epochs_state is not None:
-        out += [
-            "--save_last_n_epochs_state",
-            str(cfg.resume.save_last_n_epochs_state),
-        ]
-    if cfg.resume.save_last_n_steps_state is not None:
-        out += [
-            "--save_last_n_steps_state",
-            str(cfg.resume.save_last_n_steps_state),
-        ]
-
-    return out
-
-
-def _dataset_config_override(
-    cfg: TrainingConfig,
-    workspace: Path,
-) -> tuple[list[str], dict[Path, str]]:
-    """Pin dataset paths via a generated ``--dataset_config`` TOML.
-
-    Upstream's CLI doesn't expose the three relevant path keys
-    (``source_image_dir`` / ``resized_image_dir`` / ``lora_cache_dir``)
-    as argparse flags — they live as top-level scalars in
-    ``configs/base.toml`` and feed the dataset blueprint via
-    ``{...}`` template substitution. Trying to emit them as
-    ``--source_image_dir <path>`` etc. trips
-    "unrecognized arguments" against ``train.py``.
-
-    The clean injection point is ``--dataset_config <path>``, which
-    train.py honours by loading the supplied TOML and skipping the
-    base blueprint entirely. We materialise a minimal blueprint
-    pointing the resized + cache dirs at the LoraHub workspace's
-    ``post_image_dataset/`` (where the auto-preprocess step writes),
-    and the source image dir at ``cfg.dataset.source`` — same shape
-    kohya / dp use across the rest of LoraHub.
-
-    Returns ``(argv, files)`` so the caller can fold both into the
-    final compile result; ``files`` is a single ``{path: content}``
-    pair that ``backend.launch`` writes to disk before spawning
-    ``train.py``.
-    """
-    opts = cfg.backend.anima_lora
-    assert opts is not None  # narrowed by compile_config
-
-    # Match upstream's default blueprint shape exactly — same keys,
-    # same nesting. Only the path fields are LoraHub-specific.
-    src = cfg.dataset.source.resolve()
-    resized = (workspace / "post_image_dataset" / "resized").resolve()
-    cache = (workspace / "post_image_dataset" / "lora").resolve()
-
-    # Quote paths defensively. anima_lora's TOML parser uses tomllib
-    # (PEP 680) which accepts double-quoted strings with a fixed
-    # escape table; backslashes (Windows) and embedded double-quotes
-    # both need escaping.
-    def _q(p: Path | str) -> str:
-        s = str(p).replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{s}"'
-
-    # Resolution: take the first dim of cfg.dataset.resolution.
-    # anima_lora's blueprint uses a single int (square) when given
-    # one number, or "[H, W]" pair when given two.
-    res = cfg.dataset.resolution
-    if isinstance(res, (list, tuple)) and len(res) == 2:
-        res_token = f"[{int(res[0])}, {int(res[1])}]"
-    elif isinstance(res, (list, tuple)) and len(res) == 1:
-        res_token = str(int(res[0]))
-    else:
-        res_token = "1024"
-
-    batch_size = max(1, int(cfg.schedule.batch_size or 1))
-    keep_tokens = int(opts.keep_tokens)
-    caption_ext = (opts.caption_extension or ".txt").strip() or ".txt"
-    # num_repeats: same field kohya / dp read from ``cfg.dataset.num_repeats``
-    # (each image is sampled this many times per epoch). Write it into the
-    # generated dataset blueprint so anima_lora respects the same knob the
-    # rest of LoRaHub exposes; defaults to 1 when the recipe doesn't set it.
-    num_repeats = max(1, int(getattr(cfg.dataset, "num_repeats", 1) or 1))
-
-    body = (
-        "# LoRaHub-generated dataset_config — pins anima_lora's three\n"
-        "# data paths (source / resized / cache) at LoRaHub-managed\n"
-        "# absolute locations. Regenerated on every launch.\n"
-        "[general]\n"
-        f"caption_extension = {_q(caption_ext)}\n"
-        f"keep_tokens = {keep_tokens}\n"
-        "\n"
-        "[[datasets]]\n"
-        f"resolution = {res_token}\n"
-        f"batch_size = {batch_size}\n"
-        "enable_bucket = true\n"
-        "\n"
-        "  [[datasets.subsets]]\n"
-        f"  image_dir = {_q(resized)}\n"
-        f"  cache_dir = {_q(cache)}\n"
-        f"  num_repeats = {num_repeats}\n"
-    )
-
-    # Tag with a sub-folder so multiple parallel jobs writing to
-    # different workspaces don't collide on filename.
-    target = workspace / "_lorahub_anima_dataset.toml"
-
-    # We additionally export the three path keys via env-side
-    # config so the auto-preprocess step (which we already write to
-    # the workspace, see preprocess.py) and train.py see the same
-    # values. The argv side is just the --dataset_config pointer.
-    argv = ["--dataset_config", str(target)]
-    files = {target: body}
-    # Stash source path as an env hint for any downstream tooling
-    # (e.g. the GUI) that wants to know which raw dir backed this
-    # generated blueprint. Not consumed by train.py itself.
-    _ = src
-    return argv, files
-
-
-def _method_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """Method-specific CLI overrides — only the selected method's sub-config.
-
-    The other sub-configs are intentionally ignored (we keep them in the
-    schema so the user can flip ``opts.method`` between switches without
-    losing per-method tuning).
-
-    Most flag names match upstream's TOML keys 1:1 — see
-    ``library/training/cli_args.py`` in the vendored copy.
-    """
-    if opts.method == "lora":
-        return _lora_overrides(opts)
-    if opts.method == "postfix":
-        return _postfix_overrides(opts)
-    if opts.method == "chimera":
-        return _chimera_overrides(opts)
-    if opts.method == "easycontrol":
-        return _easycontrol_overrides(opts)
-    if opts.method == "ip_adapter":
-        return _ip_adapter_overrides(opts)
-    msg = f"unhandled method {opts.method!r} (schema enum drift?)"
-    raise CompilationError(msg)
-
-
-def _network_args(*pairs: str) -> list[str]:
-    """Format ``key=value`` pieces as repeated ``--network_args`` argv.
-
-    train.py only exposes ``--network_args [NETWORK_ARGS ...]`` (nargs="*");
-    each adapter family reads its own kwargs out of that bag (see
-    ``networks/lora_anima/factory.py:120`` and the ``kwargs.get(...)``
-    sites under ``networks/methods/``). Emitting ``--use_ortho`` or
-    ``--b_cond_init`` etc. directly trips "unrecognized arguments" —
-    upstream's argparse never declared them as flags.
-    """
-    out: list[str] = []
-    for piece in pairs:
-        out += ["--network_args", piece]
-    return out
-
-
-def _lora_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """LoRA family stack — anima_lora's full algorithm surface.
-
-    Drives selection from the canonical ``algorithm`` enum and emits
-    one ``use_X=true`` per matching algorithm so the existing anima
-    network factory (which still keys off the ``use_X`` flags) picks
-    up the choice. Algorithm-specific knobs (lokr_factor, boft_factors)
-    are forwarded too — harmless when the algorithm doesn't use them.
-    """
-    sub = opts.lora
-    # Map enum value → ``use_X`` flag(s) to emit. Most algorithms map
-    # 1:1; ``ortho`` is the special case that just enables the legacy
-    # ortho stack (no other algorithm-specific bool needed).
-    flag_for_algorithm: dict[str, str | None] = {
-        "lora": None,
-        "ortho": "use_ortho",
-        "dora": "use_dora",
-        "ia3": "use_ia3",
-        "lokr": "use_lokr",
-        "loha": "use_loha",
-        "dylora": "use_dylora",
-        "full": "use_full",
-        "diag_oft": "use_diag_oft",
-        "boft": "use_boft",
-        "glora": "use_glora",
-        "vera": "use_vera",
-    }
-    pieces: list[str] = []
-    chosen = sub.algorithm
-    selector = flag_for_algorithm.get(chosen)
-    # Emit every selector explicitly false except the chosen one — the
-    # anima factory's resolve_network_spec walks them in order; an
-    # explicit false avoids legacy YAML's old defaults sneaking in.
-    for algo, flag in flag_for_algorithm.items():
-        if flag is None:
-            continue
-        pieces.append(f"{flag}={'true' if algo == chosen else 'false'}")
-    # Algorithm-specific scalars.
-    pieces.append(f"lokr_factor={sub.lokr_factor}")
-    pieces.append(f"boft_factors={sub.boft_factors}")
-    # T-LoRA / rank knobs — composed with any LoRA-leg algorithm,
-    # ignored by atomic variants.
-    pieces.append(
-        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}"
-    )
-    pieces.append(f"min_rank={sub.min_rank}")
-    pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")
-    return _network_args(*pieces)
-
-
-def _postfix_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """Postfix tuning — see ``networks/methods/postfix.py``."""
-    sub = opts.postfix
-    if sub is None:  # validated upstream by AnimaLoraOptions model_validator
-        msg = "method='postfix' missing sub-config (validator should have caught this)"
-        raise CompilationError(msg)
-    pieces = [
-        f"mode={sub.mode}",
-        f"cond_hidden_dim={sub.cond_hidden_dim}",
-        f"splice_position={sub.splice_position}",
-        f"ortho_basis={sub.ortho_basis}",
-        f"svd_num_files={sub.svd_num_files}",
-        f"ortho_basis_seed={sub.ortho_basis_seed}",
-        f"lambda_init={sub.lambda_init}",
-    ]
-    if sub.te_cache_dir is not None:
-        pieces.append(f"te_cache_dir={sub.te_cache_dir}")
-    return _network_args(*pieces)
-
-
-def _chimera_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """ChimeraHydra dual-pool MoE — pinned router knobs.
-
-    All keys (use_chimera_hydra / balance_* / fei_feature_dim /
-    sigma_feature_dim) are read out of ``kwargs`` in
-    ``networks/lora_anima/config.py``'s ``LoRAConfig.from_kwargs`` and
-    ``networks/__init__.py::_parse_bool_flag``; emit them through
-    ``--network_args``.
-    """
-    sub = opts.chimera
-    if sub is None:
-        msg = "method='chimera' missing sub-config"
-        raise CompilationError(msg)
-    pieces = [
-        "use_chimera_hydra=true",
-        f"balance_w_content={_fmt_float(sub.balance_w_content)}",
-        f"balance_w_freq={_fmt_float(sub.balance_w_freq)}",
-        f"balance_loss_warmup_ratio={_fmt_float(sub.balance_loss_warmup_ratio)}",
-        f"fei_feature_dim={sub.fei_feature_dim}",
-        f"sigma_feature_dim={sub.sigma_feature_dim}",
-    ]
-    return _network_args(*pieces)
-
-
-def _easycontrol_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """EasyControl per-block conditioning LoRA + softmax gate.
-
-    ``--use_easycontrol`` / ``--easycontrol_drop_p`` /
-    ``--easycontrol_cond_noise_max`` ARE real argparse flags (see
-    ``library/anima/training.py``). The gate / scaling knobs live in
-    ``networks/methods/easycontrol.py:make_easycontrol_network`` which
-    reads them from kwargs, so they must go through ``--network_args``.
-    """
-    sub = opts.easycontrol
-    if sub is None:
-        msg = "method='easycontrol' missing sub-config"
-        raise CompilationError(msg)
-    out: list[str] = ["--use_easycontrol"]
-    out += ["--easycontrol_drop_p", _fmt_float(sub.drop_p)]
-    out += ["--easycontrol_cond_noise_max", _fmt_float(sub.cond_noise_max)]
-    pieces = [
-        f"b_cond_init={_fmt_float(sub.b_cond_init)}",
-        f"cond_scale={_fmt_float(sub.cond_scale)}",
-        f"apply_ffn_lora={'1' if sub.apply_ffn_lora else '0'}",
-        f"cond_token_count={sub.cond_token_count}",
-    ]
-    out += _network_args(*pieces)
-    return out
-
-
-def _ip_adapter_overrides(opts: AnimaLoraOptions) -> list[str]:
-    """IP-Adapter — PE-Core encoder + resampler + per-block KV.
-
-    ``--use_ip_adapter`` / ``--ip_encoder`` / ``--ip_image_drop_p`` /
-    ``--ip_features_cache_to_disk`` ARE argparse flags. The resampler
-    sizing + IP scale + gate LR live in the network factory's kwargs.
-    """
-    sub = opts.ip_adapter
-    if sub is None:
-        msg = "method='ip_adapter' missing sub-config"
-        raise CompilationError(msg)
-    out: list[str] = ["--use_ip_adapter"]
-    out += ["--ip_encoder", sub.encoder]
-    out += ["--ip_image_drop_p", _fmt_float(sub.image_drop_p)]
-    if sub.features_cache_to_disk:
-        out += ["--ip_features_cache_to_disk"]
-    pieces = [
-        f"ip_resampler_layers={sub.resampler_layers}",
-        f"ip_resampler_heads={sub.resampler_heads}",
-        f"ip_scale={_fmt_float(sub.ip_scale)}",
-        f"gate_lr={_fmt_float(sub.gate_lr)}",
-    ]
-    out += _network_args(*pieces)
-    return out
-
-
-# Filename used when LoraHub auto-generates a fallback prompts file
-# under the job workspace because the user enabled sampling but didn't
-# point at one. backend.launch materialises the file before spawning
-# train.py — see ``_ensure_sample_prompts_file`` in backend.py.
-DEFAULT_SAMPLE_PROMPTS_FILENAME = "_lorahub_sample_prompts.txt"
-
-
-def _sampling_overrides(cfg: TrainingConfig, workspace: Path) -> list[str]:
-    """Translate ``cfg.sampling`` into anima train.py ``--sample_*`` argv.
-
-    anima's upstream sampler accepts:
-      ``--sample_at_first`` / ``--sample_every_n_epochs N`` /
-      ``--sample_every_n_steps N`` / ``--sample_prompts <path>``
-
-    Behaviour:
-      * sampling.enabled=False: emit nothing — train.py defaults skip
-        sample generation entirely.
-      * sampling.enabled=True with ``prompts_file`` set: forward as-is.
-      * sampling.enabled=True without ``prompts_file``: point train.py
-        at the per-job fallback path under the workspace. backend.launch
-        materialises that file just before spawn.
-
-    The cadence flags fall through verbatim. anima's sampling loop
-    picks the first non-None of (every_n_steps, every_n_epochs) so it's
-    safe to emit both when the user set both.
-    """
-    sampling = cfg.sampling
-    if not sampling.enabled:
-        return []
-
-    out: list[str] = []
-    if sampling.at_first:
-        out += ["--sample_at_first"]
-    if sampling.every_n_epochs and sampling.every_n_epochs > 0:
-        out += ["--sample_every_n_epochs", str(int(sampling.every_n_epochs))]
-    if sampling.every_n_steps and sampling.every_n_steps > 0:
-        out += ["--sample_every_n_steps", str(int(sampling.every_n_steps))]
-
-    prompts_path: Path
-    if sampling.prompts_file is not None:
-        # Already resolved against the recipe base_dir by jobs_helpers'
-        # ``_absolutise_recipe_paths``. Forward as-is.
-        prompts_path = Path(str(sampling.prompts_file))
-    else:
-        prompts_path = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
-    out += ["--sample_prompts", str(prompts_path)]
-    return out
 
 
 def _fmt_float(v: float) -> str:
