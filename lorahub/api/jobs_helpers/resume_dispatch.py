@@ -133,24 +133,41 @@ class ResumeSpec:
 
 
 def _kohya_resume_spec(workspace: Path) -> ResumeSpec:
-    """Locate kohya `--save_state` artifacts and pack them into a ResumeSpec."""
+    """Locate kohya `--save_state` artifacts and pack them into a ResumeSpec.
+
+    Two paths, mirroring ``_anima_lora_resume_spec``:
+
+    1. **Full state resume** — both an ``--save_state`` dir and a
+       trainer-output ``.safetensors`` exist. Pass both so accelerate
+       restores optimizer/scheduler while the network weights seed
+       from the last checkpoint.
+    2. **Weights-only warm restart** — only the ``.safetensors``
+       exists (early cancel before the first state save). Fall back
+       to ``--network_weights`` alone; user loses optimizer momentum
+       but the LoRA continues training under the new config.
+    """
     state_dir = _find_latest_state_dir(workspace)
-    if state_dir is None:
-        raise ResumeNotReady(
-            f"no kohya state directory found under {workspace}; "
-            "resume requires --save_state to have produced at least one snapshot"
-        )
     weights = _find_latest_safetensors(workspace)
-    if weights is None:
-        raise ResumeNotReady(
-            f"no .safetensors weights found under {workspace}; "
-            "cannot seed --network_weights"
+    if state_dir is not None and weights is not None:
+        return ResumeSpec(
+            extra_argv=[
+                f"--resume={state_dir}",
+                f"--network_weights={weights}",
+            ],
         )
-    return ResumeSpec(
-        extra_argv=[
-            f"--resume={state_dir}",
-            f"--network_weights={weights}",
-        ],
+    if weights is not None:
+        log.warning(
+            "kohya resume: no --save_state dir under %s; falling back "
+            "to --network_weights=%s (warm restart — optimizer momentum "
+            "and scheduler position are reset)",
+            workspace,
+            weights,
+        )
+        return ResumeSpec(extra_argv=[f"--network_weights={weights}"])
+    raise ResumeNotReady(
+        f"no kohya state directory or .safetensors weights under "
+        f"{workspace}; the run never produced a checkpoint. Wait for "
+        "at least one save_every_n_epochs cycle before resuming."
     )
 
 
@@ -216,39 +233,63 @@ def _dispatch_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
 
 
 def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
-    """Locate anima_lora ``--save_state`` artifacts and pack them into a ResumeSpec.
+    """Locate anima_lora resume artifacts and pack them into a ResumeSpec.
 
-    anima_lora is a sd-scripts fork, so its state-dir layout matches kohya.
-    Emit ``--resume=<state_dir>`` and let accelerate's ``load_state``
-    restore the LoRA state_dict from ``state_dir/model.safetensors``
-    along with optimizer/scheduler. We deliberately do *not* pass
-    ``--network_weights``.
+    Two paths, tried in order:
 
-    Also read ``train_state.json`` from the picked state directory and
-    inject ``--initial_step=<N>`` + ``--skip_until_initial_step``.
+    1. **Full state resume** — when an ``--save_state`` directory
+       exists, use ``--resume=<state_dir>`` so accelerate's
+       ``load_state`` restores LoRA weights + optimizer + scheduler +
+       step counter together. This is the lossless path.
+    2. **Weights-only warm restart** — when no state dir is present
+       (e.g. user cancelled before the first save_every_n_epochs
+       cadence fired) but at least one trainer-output ``.safetensors``
+       exists, fall back to ``--network_weights=<latest>``. The user
+       loses optimizer momentum and scheduler position, but the LoRA
+       weights themselves continue training. This unblocks the very
+       common "ran 1 epoch, want to tweak lr / network_dim, keep going"
+       workflow that the strict state-only path used to reject with
+       a 409.
+
+    Only when *neither* exists do we surface ``ResumeNotReady`` so
+    the router still returns a clear error for genuinely-empty
+    workspaces.
     """
     state_dir = _find_latest_state_dir(workspace)
-    if state_dir is None:
+    if state_dir is not None:
+        extra_argv = [f"--resume={state_dir}"]
+        train_state = state_dir / "train_state.json"
+        try:
+            data = json.loads(train_state.read_text(encoding="utf-8"))
+            current_step = int(data.get("current_step", 0))
+        except (OSError, ValueError, TypeError):
+            current_step = 0
+        if current_step > 0:
+            extra_argv.extend([
+                f"--initial_step={current_step}",
+                "--skip_until_initial_step",
+            ])
+        return ResumeSpec(extra_argv=extra_argv)
+
+    # No state dir — fall back to weights-only warm restart.
+    weights = _find_latest_safetensors(workspace)
+    if weights is None:
         raise ResumeNotReady(
-            f"no anima_lora state directory found under {workspace}; "
-            "resume requires ``cfg.resume.saveState=true`` (default) so "
-            "the trainer wrote optimizer state at least once"
+            f"no anima_lora state directory or .safetensors weights "
+            f"under {workspace}; the run never produced a checkpoint. "
+            "Wait for at least one save_every_n_epochs cycle before "
+            "trying to resume."
         )
-    extra_argv = [
-        f"--resume={state_dir}",
-    ]
-    train_state = state_dir / "train_state.json"
-    try:
-        data = json.loads(train_state.read_text(encoding="utf-8"))
-        current_step = int(data.get("current_step", 0))
-    except (OSError, ValueError, TypeError):
-        current_step = 0
-    if current_step > 0:
-        extra_argv.extend([
-            f"--initial_step={current_step}",
-            "--skip_until_initial_step",
-        ])
-    return ResumeSpec(extra_argv=extra_argv)
+    log.warning(
+        "anima_lora resume: no --save_state dir under %s; falling back "
+        "to --network_weights=%s (warm restart — optimizer momentum "
+        "and scheduler position are reset)",
+        workspace,
+        weights,
+    )
+    return ResumeSpec(
+        extra_argv=[f"--network_weights={weights}"],
+    )
 
 
 def _apply_cfg_overrides(cfg: TrainingConfig, overrides: dict[str, Any]) -> TrainingConfig:

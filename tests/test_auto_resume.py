@@ -270,3 +270,65 @@ def test_anima_lora_resume_spec_omits_initial_step_when_unknown(
     assert not any(a.startswith("--network_weights") for a in argv)
     assert not any(a.startswith("--initial_step") for a in argv)
     assert "--skip_until_initial_step" not in argv
+
+
+def test_anima_lora_resume_spec_falls_back_to_weights_when_no_state_dir(
+    tmp_path: Path,
+) -> None:
+    """When no --save_state dir exists yet, resume falls back to a warm
+    restart from the latest .safetensors instead of raising 409.
+
+    Common case: user cancelled before save_every_n_epochs fired but
+    after the first per-step / per-epoch weight save. They want to
+    keep the LoRA weights and tweak lr / network rank / etc.
+    """
+    from lorahub.api.jobs_helpers import _anima_lora_resume_spec
+
+    ws = tmp_path / "anima_ws"
+    ckpt = ws / "ckpt"
+    ckpt.mkdir(parents=True)
+    weights = ckpt / "anima_lora-000004.safetensors"
+    weights.write_bytes(b"")
+
+    spec = _anima_lora_resume_spec(ws)
+
+    argv = spec.extra_argv
+    assert not any(a.startswith("--resume=") for a in argv), (
+        "must not emit --resume when there's no state dir to load"
+    )
+    assert any(a.startswith("--network_weights=") for a in argv)
+    assert str(weights) in " ".join(argv)
+
+
+def test_anima_lora_resume_spec_raises_when_truly_empty(tmp_path: Path) -> None:
+    """Resume on a workspace that produced neither state dir nor weights
+    must still surface ``ResumeNotReady`` so the router 409s clearly."""
+    from lorahub.api.jobs_helpers import _anima_lora_resume_spec
+    from lorahub.api.jobs_helpers.resume_dispatch import ResumeNotReady
+
+    ws = tmp_path / "anima_ws"
+    (ws / "ckpt").mkdir(parents=True)
+
+    import pytest as _pytest
+
+    with _pytest.raises(ResumeNotReady):
+        _anima_lora_resume_spec(ws)
+
+
+def test_kohya_resume_spec_falls_back_to_weights_when_no_state_dir(
+    tmp_path: Path,
+) -> None:
+    """Same warm-restart fallback for kohya."""
+    from lorahub.api.jobs_helpers.resume_dispatch import _kohya_resume_spec
+
+    ws = tmp_path / "kohya_ws"
+    ws.mkdir()
+    weights = ws / "char_a-000002.safetensors"
+    weights.write_bytes(b"")
+
+    spec = _kohya_resume_spec(ws)
+
+    argv = spec.extra_argv
+    assert not any(a.startswith("--resume=") for a in argv)
+    assert any(a.startswith("--network_weights=") for a in argv)
+    assert str(weights) in " ".join(argv)
