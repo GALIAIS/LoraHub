@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { FlipHorizontal, Heart, Maximize2, Pencil, RotateCw, Save, Sparkles, Trash2, X } from "lucide-react"
+import { FlipHorizontal, Heart, ImageOff, Maximize2, Pencil, RotateCw, Save, Sparkles, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   api,
@@ -40,6 +40,12 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
   const [notesDraft, setNotesDraft] = useState("")
   const [optimisticCaption, setOptimisticCaption] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [imageBroken, setImageBroken] = useState(false)
+  // Reset broken flag when navigating to a different image so a stale
+  // failure doesn't suppress the next preview.
+  useEffect(() => {
+    setImageBroken(false)
+  }, [path])
 
   // Reset edit drafts whenever the inspector switches to a new image.
   // Deliberately keyed on `detail?.path` ALONE — not on caption /
@@ -156,12 +162,21 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
 
       {detail && (
         <div className="flex flex-col gap-3">
-          <div className="overflow-hidden rounded-md border">
-            <img
-              src={api.datasetThumbUrl(detail.path, 1024)}
-              alt={detail.name}
-              className="w-full"
-            />
+          <div className="aspect-square overflow-hidden rounded-md border bg-muted">
+            {imageBroken ? (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground/70">
+                <ImageOff className="size-6" />
+                <span className="text-[11px]">缩略图未生成</span>
+              </div>
+            ) : (
+              <img
+                src={api.datasetThumbUrl(detail.path, 1024)}
+                alt={detail.name}
+                draggable={false}
+                onError={() => setImageBroken(true)}
+                className="block h-full w-full object-contain"
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">

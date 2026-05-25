@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import threading
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
@@ -34,6 +35,16 @@ from lorahub.api import state
 # anything realistic, still far below memory blow-up territory once the
 # JPEG draft below kicks in).
 Image.MAX_IMAGE_PIXELS = 1_000_000_000
+
+
+# Cap concurrent thumbnail *generation* at a small number. FastAPI runs
+# sync route handlers on a 40-worker threadpool; without this guard a
+# burst of 30 first-access big-image requests (typical right after a
+# bulk upload) decodes 30 multi-MP files at once, saturating the
+# Python GIL via libjpeg/libpng C calls and starving the rest of the
+# API. Cached lookups still hit the fast path; only first-time builds
+# wait on the semaphore.
+_THUMB_BUILD_SEM = threading.BoundedSemaphore(value=4)
 
 # Suffixes we are willing to thumbnail / treat as dataset images. Mirrors the
 # set used by `_scan_dataset_path` so the UI sees a consistent surface.
@@ -169,25 +180,33 @@ def get_or_build_thumbnail(image: Path, size: int) -> Path:
             if cache.stat().st_mtime >= image.stat().st_mtime:
                 return cache
 
-    try:
-        with Image.open(image) as im:
-            # Fast path for JPEG: ``draft`` instructs libjpeg to return a
-            # pre-scaled DCT-aware downsample (1/2, 1/4, or 1/8 of the
-            # original). Skipping full-resolution decode is the difference
-            # between thumbing a 12K landscape in 60ms vs 4s. Safe no-op
-            # on formats that don't support it.
-            with contextlib.suppress(Exception):
-                im.draft("RGB", (size * 2, size * 2))
-            # Convert away from palette / grayscale modes so WEBP encoding
-            # stays predictable; we deliberately drop alpha to keep thumbs
-            # compact and consistent across sources.
-            if im.mode not in ("RGB",):
-                im = im.convert("RGB")
-            im.thumbnail((size, size))
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            im.save(cache, format="WEBP", quality=82, method=4)
-    except (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError) as exc:
-        raise OSError(f"could not generate thumbnail: {exc}") from exc
+    # Throttle first-time builds so a bulk-upload doesn't spawn dozens of
+    # parallel Pillow decodes. Re-check the cache once we hold the slot —
+    # another worker may have produced the file while we were queued.
+    with _THUMB_BUILD_SEM:
+        if cache.is_file():
+            with contextlib.suppress(OSError):
+                if cache.stat().st_mtime >= image.stat().st_mtime:
+                    return cache
+        try:
+            with Image.open(image) as im:
+                # Fast path for JPEG: ``draft`` instructs libjpeg to return a
+                # pre-scaled DCT-aware downsample (1/2, 1/4, or 1/8 of the
+                # original). Skipping full-resolution decode is the difference
+                # between thumbing a 12K landscape in 60ms vs 4s. Safe no-op
+                # on formats that don't support it.
+                with contextlib.suppress(Exception):
+                    im.draft("RGB", (size * 2, size * 2))
+                # Convert away from palette / grayscale modes so WEBP encoding
+                # stays predictable; we deliberately drop alpha to keep thumbs
+                # compact and consistent across sources.
+                if im.mode not in ("RGB",):
+                    im = im.convert("RGB")
+                im.thumbnail((size, size))
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                im.save(cache, format="WEBP", quality=82, method=4)
+        except (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError) as exc:
+            raise OSError(f"could not generate thumbnail: {exc}") from exc
     return cache
 
 

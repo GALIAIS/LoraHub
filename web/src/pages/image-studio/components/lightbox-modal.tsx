@@ -5,6 +5,8 @@ import {
   Download,
   ExternalLink,
   Heart,
+  ImageOff,
+  Loader2,
   X,
   ZoomIn,
   ZoomOut,
@@ -49,8 +51,13 @@ export function LightboxModal({
 
   // Reset zoom whenever the active image changes — staying at 3× on
   // a tiny image after flipping past a huge one looks broken.
+  const [loaded, setLoaded] = useState(false)
+  const [broken, setBroken] = useState(false)
+
   useEffect(() => {
     setZoom(1)
+    setLoaded(false)
+    setBroken(false)
   }, [item?.path])
 
   const goPrev = useCallback(() => {
@@ -189,17 +196,37 @@ export function LightboxModal({
                   <ChevronRight className="size-5" />
                 </button>
               )}
-              <img
-                src={rawUrl}
-                alt={item.name}
-                style={{
-                  transform: `scale(${zoom})`,
-                  transformOrigin: "center center",
-                  transition: "transform 120ms ease-out",
-                }}
-                className="max-w-full max-h-[calc(100dvh-10rem)] object-contain select-none"
-                draggable={false}
-              />
+              {!loaded && !broken && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                  <Loader2 className="size-7 animate-spin text-muted-foreground/70" />
+                </div>
+              )}
+              {broken ? (
+                <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground/70 px-6 py-10">
+                  <ImageOff className="size-10" />
+                  <span className="text-xs">无法加载该图片</span>
+                </div>
+              ) : (
+                <img
+                  src={rawUrl}
+                  alt={item.name}
+                  style={{
+                    transform: `scale(${zoom})`,
+                    transformOrigin: "center center",
+                    transition: "transform 120ms ease-out",
+                  }}
+                  className={cn(
+                    "max-w-full max-h-[calc(100dvh-10rem)] object-contain select-none",
+                    !loaded && "opacity-0",
+                  )}
+                  draggable={false}
+                  onLoad={() => setLoaded(true)}
+                  onError={() => {
+                    setBroken(true)
+                    setLoaded(true)
+                  }}
+                />
+              )}
             </div>
 
             <div className="flex items-center gap-3 px-3 py-1.5 border-t border-border/60 bg-background/40 text-[11px] text-muted-foreground shrink-0">
