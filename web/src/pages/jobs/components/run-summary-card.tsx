@@ -440,7 +440,21 @@ function deriveSummary(
   const optimizer = pluckObj(cfg, "optimizer") ?? {}
   const schedule = pluckObj(cfg, "schedule") ?? {}
   const dataset = pluckObj(cfg, "dataset") ?? {}
-  const lr = pluck(pluckObj(optimizer, "lr") ?? {}, "unet")
+  const backend = pluckObj(cfg, "backend") ?? {}
+  const backendType = stringOrNull(pluck(backend, "type"))
+  // anima_lora reads learning rate from backend.animaLora.learningRate;
+  // kohya / diffusion-pipe read it from optimizer.lr.unet. Mirror the
+  // compiler's source-of-truth field per backend so the displayed value
+  // matches what the trainer actually consumes.
+  const animaLora = pluckObj(backend, "animaLora") ?? pluckObj(backend, "anima_lora") ?? {}
+  const lr =
+    backendType === "anima_lora"
+      ? pluckOne(animaLora, "learningRate", "learning_rate")
+      : pluck(pluckObj(optimizer, "lr") ?? {}, "unet")
+  const optimizerType =
+    backendType === "anima_lora"
+      ? pluckOne(animaLora, "optimizerType", "optimizer_type")
+      : pluck(optimizer, "type")
   const batchSize = pluckOne(schedule, "batchSize", "batch_size")
   const gradAccum = pluckOne(schedule, "gradAccum", "grad_accum")
 
@@ -455,7 +469,7 @@ function deriveSummary(
         ? `${batchSize}×${gradAccum}`
         : stringOrNull(batchSize),
     epochs: stringOrNull(pluck(schedule, "epochs")),
-    optimizer: stringOrNull(pluck(optimizer, "type")),
+    optimizer: stringOrNull(optimizerType),
   }
 
   return {
