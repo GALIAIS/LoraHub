@@ -97,10 +97,14 @@ LOCKED_FIELDS: dict[str, dict[str, str]] = {
         "kind": "locked_true",
         "reason": "LLM adapter 输出必缓存。",
     },
-    # — value-locked 整数 —
+    # — risky 整数（能改但有副作用) —
     "static_token_count": {
-        "kind": "locked_value",
-        "reason": "Anima DiT torch.compile 路径锁死 4096(constant-token bucket map)。其它值会引发每个分辨率重新编译。",
+        "kind": "risky",
+        "reason": (
+            "默认 4096 适配 1024² 训练。1536² 训练改成 9240 + bucket_table='1536',"
+            "或开 enable_native_flatten 让上游自动接管(此时本字段会被忽略)。"
+            "数值与 bucket_table / enable_native_flatten 三者协同;改完需要重做 dataset 缓存。"
+        ),
     },
     "vae_chunk_size": {
         "kind": "locked_value",
@@ -364,8 +368,24 @@ def _render_full_config(
         cfg_dict["use_shuffled_caption_variants"] = True
     if opts.sample_ratio is not None:
         cfg_dict["sample_ratio"] = float(opts.sample_ratio)
-    if opts.static_token_count is not None:
+    # static_token_count vs enable_native_flatten are mutually exclusive
+    # at the upstream ``compile_blocks(native_flatten=True)`` assert. The
+    # legacy 4096 default is harmless on its own, but combining it with
+    # native-flatten makes ``train.py`` crash at compile time. Treat
+    # native-flatten as the authoritative override here so users who
+    # only flip the toggle don't have to remember to also null the
+    # token count.
+    if opts.static_token_count is not None and not opts.enable_native_flatten:
         cfg_dict["static_token_count"] = int(opts.static_token_count)
+    elif opts.static_token_count is not None and opts.enable_native_flatten:
+        _log.info(
+            "anima_lora: enable_native_flatten=true overrides "
+            "static_token_count=%d (the two paths are mutually "
+            "exclusive at compile time); LoraHub is suppressing the "
+            "static_token_count emit so train.py picks the native-"
+            "flatten 4032+4200 bucket map.",
+            int(opts.static_token_count),
+        )
     cfg_dict["vae_chunk_size"] = int(opts.vae_chunk_size)
     if opts.vae_disable_cache:
         cfg_dict["vae_disable_cache"] = True
@@ -873,6 +893,12 @@ def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
       * ``blocks_to_swap > 0`` is incompatible with
         ``cpu_offload_checkpointing=true``
         (``train.py:326`` AssertionError).
+      * ``bucket_table='1536'`` requires either
+        ``enable_native_flatten=true`` (auto-picks the 9216+9240
+        family) or ``static_token_count >= 9240``. Lower token
+        budgets can't fit the 1536² latent (12288 tokens) at any
+        aspect, so training dies on the first batch with a shape
+        mismatch deep inside ``compile_blocks``.
     """
     bad: list[str] = []
     if opts.compile_mode == "full":
@@ -897,6 +923,27 @@ def _enforce_compile_constraints(opts: AnimaLoraOptions) -> None:
             "Pick one: keep blocks_to_swap (the bigger memory win) and "
             "set cpu_offload_checkpointing=false, or vice versa. "
             "unsloth_offload_checkpointing composes with blocks_to_swap."
+        )
+        raise CompilationError(msg)
+
+    if (
+        opts.bucket_table == "1536"
+        and not opts.enable_native_flatten
+        and (opts.static_token_count is None or opts.static_token_count < 9240)
+    ):
+        cur = (
+            f"static_token_count={opts.static_token_count}"
+            if opts.static_token_count is not None
+            else "static_token_count=None"
+        )
+        msg = (
+            f"bucket_table='1536' needs at least 9240 tokens of capacity "
+            f"(the 9216+9240 two-family table is what makes 1536² training "
+            f"fit), but {cur} and enable_native_flatten=false. Either:\n"
+            "  - set static_token_count=9240 (or higher), or\n"
+            "  - set enable_native_flatten=true (recommended; auto-picks "
+            "the matching native bucket map and frees you from the manual "
+            "token-count knob)."
         )
         raise CompilationError(msg)
 

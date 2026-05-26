@@ -377,6 +377,73 @@ def test_blocks_to_swap_with_unsloth_offload_allowed(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Bucket / token-count interactions (mutually exclusive paths)
+# --------------------------------------------------------------------------- #
+
+
+def test_native_flatten_overrides_static_token_count(tmp_path: Path) -> None:
+    """``enable_native_flatten=true`` is mutually exclusive with
+    ``static_token_count`` at upstream's ``compile_blocks`` assert.
+    The compiler must not emit ``static_token_count`` when native-flatten
+    is on, even though the schema default is 4096 — otherwise train.py
+    crashes at compile time before the first training step.
+    """
+    opts = AnimaLoraOptions(enable_native_flatten=True)  # static_token_count default 4096
+    cfg = _recipe(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert "--enable_native_flatten" in pairs
+    assert "--static_token_count" not in pairs
+
+
+def test_static_token_count_emitted_without_native_flatten(tmp_path: Path) -> None:
+    """When native-flatten is off (default), the schema default 4096
+    is forwarded normally — that's the legacy 1024² training path."""
+    opts = AnimaLoraOptions()  # both defaults: enable_native_flatten=False, static_token_count=4096
+    cfg = _recipe(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert pairs.get("--static_token_count") == ["4096"]
+    assert "--enable_native_flatten" not in pairs
+
+
+def test_bucket_table_1536_requires_capacity(tmp_path: Path) -> None:
+    """``bucket_table='1536'`` with the default 4096 token budget can't
+    fit the 1536² latent (12288 tokens). Either bump
+    ``static_token_count >= 9240`` or flip on native-flatten — anything
+    else is a configuration mistake that we now reject up-front so the
+    user doesn't sit through a model load before discovering it.
+    """
+    opts = AnimaLoraOptions(bucket_table="1536")  # static_token_count=4096 (default)
+    cfg = _recipe(tmp_path, opts)
+    with pytest.raises(CompilationError, match="9240"):
+        compile_config(cfg, tmp_path / "ws")
+
+
+def test_bucket_table_1536_accepts_explicit_token_bump(tmp_path: Path) -> None:
+    """Setting ``static_token_count=9240`` (or more) clears the constraint."""
+    opts = AnimaLoraOptions(bucket_table="1536", static_token_count=9240)
+    cfg = _recipe(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert pairs.get("--bucket_table") == ["1536"]
+    assert pairs.get("--static_token_count") == ["9240"]
+
+
+def test_bucket_table_1536_accepts_native_flatten(tmp_path: Path) -> None:
+    """``enable_native_flatten=true`` is the recommended escape hatch:
+    the bucket table is auto-picked, no manual token-count tuning needed."""
+    opts = AnimaLoraOptions(bucket_table="1536", enable_native_flatten=True)
+    cfg = _recipe(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv, files)
+    assert pairs.get("--bucket_table") == ["1536"]
+    assert "--enable_native_flatten" in pairs
+    # static_token_count must NOT be emitted (mutex with native-flatten)
+    assert "--static_token_count" not in pairs
+
+
+# --------------------------------------------------------------------------- #
 # Output dir + output name
 # --------------------------------------------------------------------------- #
 

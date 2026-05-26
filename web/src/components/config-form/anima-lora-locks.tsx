@@ -78,9 +78,9 @@ export const ANIMA_LORA_LOCKS: Record<string, LockMeta> = {
     reason: "LLM adapter 输出必缓存。",
   },
   staticTokenCount: {
-    kind: "locked_value",
+    kind: "risky",
     reason:
-      "Anima DiT torch.compile 路径锁死 4096(constant-token bucket map);其它值会引发每个分辨率重新编译。",
+      "默认 4096 适配 1024² 训练。1536² 训练改成 9240 + Bucket 表选 1536,或开启 native-flatten 让上游自动接管(此时本字段被忽略)。三者协同;改完需要重做 dataset 缓存。",
   },
   vaeChunkSize: {
     kind: "locked_value",

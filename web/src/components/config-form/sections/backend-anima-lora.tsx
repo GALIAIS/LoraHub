@@ -536,7 +536,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="静态 token 数"
           labelBadge={lockBadgeFor("staticTokenCount")}
-          description="Anima DiT torch.compile 路径锁死 4096。"
+          description="默认 4096 适配 1024² 训练。1536² 训练设 9240 + Bucket 表选 1536。开启 native-flatten 时本字段会被忽略（两条 bucket 路径互斥）。"
         >
           <FloatInput
             value={v.staticTokenCount}
