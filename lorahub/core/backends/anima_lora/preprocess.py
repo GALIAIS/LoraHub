@@ -27,12 +27,26 @@ here — only the IP-Adapter / DCW v4 paths use those sidecars and they
 need extra args (centroid, etc.) that aren't surfaced in the standard
 LoraHub recipe schema. Future cut: detect ``method=ip_adapter`` and
 chain the PE step automatically.
+
+Bucket-fingerprint invalidation
+-------------------------------
+
+The latent ``.npz`` keys are bucket-specific (``latents_{H/8}x{W/8}``),
+so when the user flips ``enable_native_flatten`` / ``bucket_table`` /
+``static_token_count`` between training runs, the previous-run npz no
+longer contains the keys the new bucket assignment will request. We
+write a ``_lorahub_bucket_fingerprint.json`` next to the cache and
+treat any mismatch as "cache is stale, rebuild from scratch" — better
+to spend the preprocess time again than to hit
+``ValueError: latents_NxN not found in {npz_path}`` mid-training.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from lorahub.core.backends._common.runner import (
     EventListener,
@@ -47,6 +61,11 @@ __all__ = [
     "PreprocessError",
     "ensure_cache",
 ]
+
+
+# Filename for the bucket fingerprint sidecar. Lives in the cache_dir
+# alongside the latent / TE caches.
+_FINGERPRINT_FILENAME = "_lorahub_bucket_fingerprint.json"
 
 
 # Image extensions the LoRA pipeline accepts. Kept in lock-step with
@@ -112,6 +131,98 @@ RunnerFactory = Callable[..., SubprocessRunner]
 
 def _default_runner_factory(**kwargs: object) -> SubprocessRunner:
     return SubprocessRunner(**kwargs)  # type: ignore[arg-type]
+
+
+def _bucket_fingerprint(opts: Any | None) -> dict[str, Any]:
+    """Snapshot of every option that influences the bucket selection.
+
+    When any of these change, every ``.npz`` written by an earlier run
+    becomes useless: the new bucket assignment will look up keys
+    (``latents_{H/8}x{W/8}``) that simply don't exist in the on-disk
+    arrays. We persist this dict next to the cache and force a
+    rebuild whenever it disagrees with the current recipe.
+
+    ``opts`` is duck-typed (``AnimaLoraOptions`` from
+    ``lorahub.core.config.schema``); we intentionally don't import the
+    type to keep ``preprocess.py`` cheap to import in tests. ``None``
+    means "no options provided" → we fall back to a permissive
+    fingerprint that always invalidates conservatively.
+    """
+    if opts is None:
+        return {"version": 1, "_no_opts": True}
+    return {
+        "version": 1,
+        "static_token_count": getattr(opts, "static_token_count", None),
+        "enable_native_flatten": bool(
+            getattr(opts, "enable_native_flatten", False),
+        ),
+        "bucket_table": getattr(opts, "bucket_table", None),
+    }
+
+
+def _fingerprint_path(cache_dir: Path) -> Path:
+    return cache_dir / _FINGERPRINT_FILENAME
+
+
+def _read_fingerprint(cache_dir: Path) -> dict[str, Any] | None:
+    """Read the previously-persisted fingerprint, or ``None`` on miss."""
+    path = _fingerprint_path(cache_dir)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_fingerprint(cache_dir: Path, fp: dict[str, Any]) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _fingerprint_path(cache_dir).write_text(
+        json.dumps(fp, indent=2, sort_keys=True), encoding="utf-8",
+    )
+
+
+def _wipe_stale_caches(cache_dir: Path, on_event: EventListener | None) -> None:
+    """Delete every ``*_anima*.{npz,safetensors}`` under ``cache_dir``.
+
+    Called when the bucket fingerprint changes — the npz arrays were
+    keyed on the previous bucket table and are guaranteed to mismatch
+    the new training run. We leave non-cache files (the fingerprint
+    sidecar itself, any user-dropped notes) alone.
+    """
+    if not cache_dir.is_dir():
+        return
+    removed = 0
+    for path in cache_dir.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if not (
+            name.endswith("_anima.npz")
+            or name.endswith("_anima_te.safetensors")
+            or name.endswith("_anima_pe.safetensors")
+        ):
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    if on_event is not None and removed > 0:
+        on_event(
+            TrainingEvent(
+                type=EventType.log,
+                payload={
+                    "level": "info",
+                    "source": "preprocess",
+                    "message": (
+                        f"anima_lora: bucket config changed — "
+                        f"wiped {removed} stale cache file(s) "
+                        f"under {cache_dir}; will re-run preprocess"
+                    ),
+                },
+            )
+        )
 
 
 def _run_step(
@@ -235,14 +346,16 @@ def ensure_cache(
     env: AnimaLoraEnv,
     on_event: EventListener | None = None,
     runner_factory: RunnerFactory | None = None,
+    opts: Any | None = None,
 ) -> None:
     """Bring ``<workspace>/post_image_dataset/lora`` up to date.
 
     Detects whether every image in ``image_dir`` already has a matching
     ``{stem}_anima_te.safetensors`` cache file under
-    ``<workspace>/post_image_dataset/lora``. When all are present the
-    function returns immediately. Otherwise it runs upstream's three
-    preprocess scripts in sequence:
+    ``<workspace>/post_image_dataset/lora`` AND whether the bucket-
+    selection options match what the cache was originally built with.
+    When everything is current, the function returns immediately.
+    Otherwise it runs upstream's three preprocess scripts in sequence:
 
         1. ``preprocess/resize_images.py``     → resized PNGs
         2. ``preprocess/cache_latents.py``     → VAE latent caches
@@ -252,6 +365,13 @@ def ensure_cache(
     progress) and the function blocks until the step finishes. Failures
     raise :class:`PreprocessError` so the caller can abort the launch
     cleanly instead of feeding train.py incomplete caches.
+
+    ``opts`` is the active ``AnimaLoraOptions``. It's used to compute
+    the bucket fingerprint — when ``enable_native_flatten`` /
+    ``bucket_table`` / ``static_token_count`` differ from the previous
+    run, the latent ``.npz`` keys won't match the new bucket
+    assignment, so we wipe the cache and rebuild. Without this guard
+    the user hits ``ValueError: latents_NxN not found`` mid-training.
     """
     image_dir = image_dir.resolve()
     workspace = workspace.resolve()
@@ -267,7 +387,40 @@ def ensure_cache(
 
     cache_dir = workspace / "post_image_dataset" / "lora"
     resized_dir = workspace / "post_image_dataset" / "resized"
-    missing = _missing_caches(images, cache_dir)
+
+    # Bucket fingerprint check — when the bucket table changed since
+    # the last run, every npz in the cache is keyed on stale shapes.
+    # Wipe and rebuild rather than letting train.py crash mid-step on
+    # a missing latents_HxW key.
+    new_fp = _bucket_fingerprint(opts)
+    old_fp = _read_fingerprint(cache_dir)
+    fingerprint_mismatch = old_fp is not None and old_fp != new_fp
+
+    if fingerprint_mismatch:
+        if on_event is not None:
+            on_event(
+                TrainingEvent(
+                    type=EventType.log,
+                    payload={
+                        "level": "warning",
+                        "source": "preprocess",
+                        "message": (
+                            "anima_lora: bucket config changed since "
+                            f"last cache build (was {old_fp}, now "
+                            f"{new_fp}); wiping latent / TE caches "
+                            "and re-running preprocess to avoid "
+                            "'latents_NxN not found' at training start"
+                        ),
+                    },
+                )
+            )
+        _wipe_stale_caches(cache_dir, on_event)
+        # Force the missing-images path below to see every image as missing
+        # so the preprocess steps run.
+        missing = list(images)
+    else:
+        missing = _missing_caches(images, cache_dir)
+
     if not missing:
         if on_event is not None:
             on_event(
@@ -283,6 +436,12 @@ def ensure_cache(
                     },
                 )
             )
+        # Make sure the fingerprint is on disk even when we skipped — old
+        # caches built before this guard existed have no fingerprint
+        # sidecar, so we backfill on the first launch that takes the hit
+        # path. Future runs will compare against this snapshot.
+        if old_fp is None:
+            _write_fingerprint(cache_dir, new_fp)
         return
 
     if on_event is not None:
@@ -362,6 +521,10 @@ def ensure_cache(
         on_event=on_event,
         runner_factory=factory,
     )
+
+    # Persist the bucket fingerprint so the next launch can detect
+    # config changes and rebuild appropriately.
+    _write_fingerprint(cache_dir, new_fp)
 
     if on_event is not None:
         on_event(

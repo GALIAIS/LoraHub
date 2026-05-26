@@ -183,6 +183,7 @@ class AnimaLoraBackend:
                 base_model=cfg.base_model,
                 env=bootstrap_env,
                 on_event=on_event,
+                opts=cfg.backend.anima_lora,
             )
         except PreprocessError as e:
             on_event(
