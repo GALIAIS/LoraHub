@@ -806,15 +806,29 @@ def _warn_unsupported(
 
 
 def _emit_extra_args(cfg: TrainingConfig, args: list[str]) -> None:
-    """Append user-provided escape-hatch args verbatim. Last write wins."""
+    """Append user-provided escape-hatch args verbatim. Last write wins.
+
+    Accepts native bool values as well as their string forms ("true" /
+    "false", case-insensitive) so the YAML editor and the form-driven
+    KeyValueTextArea (which only emits strings) feed argparse the same
+    shape: ``True`` -> single store_true flag, ``False`` / ``None`` ->
+    omitted, anything else -> ``--flag=value``.
+    """
     for key, value in cfg.backend.extra_args.items():
         flag = f"--{key}" if not key.startswith("--") else key
-        if value is True:
+        normalized = value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "true":
+                normalized = True
+            elif lowered == "false":
+                normalized = False
+        if normalized is True:
             args.append(flag)
-        elif value is False or value is None:
+        elif normalized is False or normalized is None:
             continue
         else:
-            args.append(f"{flag}={value}")
+            args.append(f"{flag}={normalized}")
 
 
 # --------------------------------------------------------------------------- #

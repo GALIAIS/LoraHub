@@ -712,13 +712,24 @@ def _overlay_extra_args(
     promoted to a typed AnimaLoraOptions field. Keys may include the
     leading ``--``; both forms are accepted.
     Boolean ``False`` / ``None`` removes the key.
+
+    String values ``"true"`` / ``"false"`` (case-insensitive) coerce to
+    real bools so the form-driven KeyValueTextArea editor (which only
+    emits strings) and direct YAML edits feed the same TOML shape.
     """
     for raw_key, value in extra_args.items():
         key = raw_key.lstrip("-")
-        if value is False or value is None:
+        normalized = value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "true":
+                normalized = True
+            elif lowered == "false":
+                normalized = False
+        if normalized is False or normalized is None:
             cfg_dict.pop(key, None)
             continue
-        cfg_dict[key] = value
+        cfg_dict[key] = normalized
 
 
 # --------------------------------------------------------------------------- #

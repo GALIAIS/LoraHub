@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input"
 import { BACKEND_BADGE } from "../backend-meta"
 import { BACKEND_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { EnumSelect, PathInput, Row } from "../widgets"
+import { EnumSelect, KeyValueTextArea, PathInput, Row } from "../widgets"
 
 const BACKEND_DESCRIPTIONS: Record<string, string> = {
   kohya:
@@ -100,6 +100,57 @@ export const BackendFields = memo(function BackendFields({
           onChange={(e) => set(["backend", "pinVersion"], e.target.value || null)}
           placeholder="(未实装,仅 YAML 占位)"
           disabled
+        />
+      </Row>
+      <Row
+        label="额外参数"
+        description={
+          type === "kohya"
+            ? "透传给 sd-scripts 的额外 CLI flag。每行一条,key=value。bool flag 写 key=true 即可,store_true 由 compiler 兼容。"
+            : type === "anima_lora"
+              ? "写入 _lorahub_anima_config.toml 顶层的额外字段。每行一条,key=value。"
+              : "追加到 diffusion-pipe TOML 顶层的额外字段。每行一条,key=value。"
+        }
+      >
+        <KeyValueTextArea
+          value={
+            v.extraArgs
+              ? Object.fromEntries(
+                  Object.entries(v.extraArgs).map(([k, val]) => [
+                    k,
+                    val === true
+                      ? "true"
+                      : val === false
+                        ? "false"
+                        : val == null
+                          ? ""
+                          : String(val),
+                  ]),
+                )
+              : {}
+          }
+          onChange={(next) => {
+            const out: Record<string, unknown> = {}
+            for (const [k, val] of Object.entries(next)) {
+              const trimmed = val.trim()
+              if (trimmed === "") {
+                out[k] = true
+              } else if (trimmed === "true") {
+                out[k] = true
+              } else if (trimmed === "false") {
+                out[k] = false
+              } else {
+                out[k] = trimmed
+              }
+            }
+            set(["backend", "extraArgs"], out)
+          }}
+          placeholder={
+            type === "kohya"
+              ? "network_train_unet_only=true\ngradient_accumulation_steps=4"
+              : "key=value"
+          }
+          rows={4}
         />
       </Row>
     </>

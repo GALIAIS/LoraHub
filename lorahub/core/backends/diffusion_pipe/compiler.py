@@ -344,8 +344,47 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
     parts += [""]
     parts += _monitoring_section(cfg, opts)
     parts += [""]
+    parts += _extra_args_section(cfg)
     _log_dropped_kohya_only_fields(cfg)
     return "\n".join(parts)
+
+
+def _extra_args_section(cfg: TrainingConfig) -> list[str]:
+    """Emit ``cfg.backend.extra_args`` as top-level TOML scalars.
+
+    Escape hatch for any dp TOML key that isn't (yet) typed on the
+    schema. Strings ``"true"`` / ``"false"`` (case-insensitive) coerce
+    to real bools so the form-driven editor and direct YAML edits feed
+    dp the same shape. ``None`` and ``False`` skip the entry entirely.
+
+    Users are on their own for typos: dp's TOML parser will error out
+    at startup if a key isn't recognized.
+    """
+    extra = cfg.backend.extra_args if cfg.backend else None
+    if not extra:
+        return []
+    lines: list[str] = []
+    for raw_key, value in extra.items():
+        key = raw_key.lstrip("-")
+        normalized: Any = value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "true":
+                normalized = True
+            elif lowered == "false":
+                normalized = False
+        if normalized is None or normalized is False:
+            continue
+        if normalized is True:
+            lines.append(f"{key} = true")
+        elif isinstance(normalized, (int, float)) and not isinstance(normalized, bool):
+            lines.append(f"{key} = {normalized}")
+        else:
+            lines.append(f"{key} = {_toml_str(str(normalized))}")
+    if lines:
+        lines.insert(0, "# backend.extra_args (escape hatch)")
+        lines.append("")
+    return lines
 
 
 def _monitoring_section(
