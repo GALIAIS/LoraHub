@@ -458,11 +458,29 @@ function deriveSummary(
   const batchSize = pluckOne(schedule, "batchSize", "batch_size")
   const gradAccum = pluckOne(schedule, "gradAccum", "grad_accum")
 
+  // anima_lora reads rank/alpha/dropout from backend.animaLora.*
+  // (networkDim / networkAlpha / lora.networkDropout); kohya / dp
+  // read from the top-level network section. Mirror the lr / optimizer
+  // routing above so the summary always reflects what train.py actually
+  // consumed.
+  const animaLoraLora = pluckObj(animaLora, "lora") ?? {}
+  const rank =
+    backendType === "anima_lora"
+      ? pluckOne(animaLora, "networkDim", "network_dim")
+      : pluck(network, "rank")
+  const alpha =
+    backendType === "anima_lora"
+      ? pluckOne(animaLora, "networkAlpha", "network_alpha")
+      : pluck(network, "alpha")
+  const networkDropout =
+    backendType === "anima_lora"
+      ? pluckOne(animaLoraLora, "networkDropout", "network_dropout")
+      : pluckOne(network, "networkDropout", "network_dropout")
   const hparams = {
     lr: typeof lr === "number" ? scientific(lr) : null,
-    rank: stringOrNull(pluck(network, "rank")),
-    alpha: stringOrNull(pluck(network, "alpha")),
-    dropout: numberOrNull(pluckOne(network, "networkDropout", "network_dropout")),
+    rank: stringOrNull(rank),
+    alpha: stringOrNull(alpha),
+    dropout: numberOrNull(networkDropout),
     numRepeats: stringOrNull(pluckOne(dataset, "numRepeats", "num_repeats")),
     batchAccum:
       batchSize != null && gradAccum != null
