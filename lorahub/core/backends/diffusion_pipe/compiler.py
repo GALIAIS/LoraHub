@@ -355,7 +355,7 @@ def _monitoring_section(
 
     Reads from the top-level ``cfg.monitoring`` (the public, all-backend
     surface). Legacy ``opts.enable_wandb`` / ``opts.tracker_name`` /
-    ``opts.run_name`` are honored as a fallback for recipes saved before
+    ``opts.run_name`` are honored as a fallback for configs saved before
     ``MonitoringConfig`` was promoted out of ``DiffusionPipeOptions``.
 
     Only the three diffusion-pipe-recognized TOML keys are emitted

@@ -526,12 +526,12 @@ def _render_monitoring(
     run_id / group / job_type / mode / resume / base_url) are read by
     the wandb client from ``WANDB_*`` env vars injected by
     ``lorahub.api.wandb_env.wandb_env``. The split is intentional: the
-    CLI carries values that belong in the recipe (project, run name,
+    CLI carries values that belong in the config (project, run name,
     tracker selection); env vars carry per-launch identity.
 
     Secrets (``--wandb_api_key``) are deliberately not emitted; the
     job runner injects ``WANDB_API_KEY`` so the api key never lands
-    on disk inside the recipe TOML.
+    on disk inside the config TOML.
     """
     monitoring = cfg.monitoring
     if not monitoring.enable_wandb:

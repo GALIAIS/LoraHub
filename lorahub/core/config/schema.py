@@ -772,7 +772,7 @@ class MonitoringConfig(BaseModel):
 
     Strictly mirrors the wandb.ai docs: every field maps to either a
     ``wandb.init()`` keyword or a documented ``WANDB_*`` environment
-    variable. Secrets (api key) live in user settings, not the recipe.
+    variable. Secrets (api key) live in user settings, not the config.
 
     The job runner translates these fields to ``WANDB_*`` env vars at
     subprocess launch so every backend (kohya / anima_lora /
@@ -885,7 +885,7 @@ class DiffusionPipeOptions(BaseModel):
     checkpoint_every_n_minutes: int | None = Field(default=None, ge=1)
 
     # ---- [monitoring] section (DEPRECATED — see top-level monitoring) ----
-    # Kept for back-compat with recipes saved before MonitoringConfig was
+    # Kept for back-compat with configs saved before MonitoringConfig was
     # promoted to a top-level section. Top-level ``monitoring.*`` wins
     # when present; these fields are only consulted as a fallback.
     enable_wandb: bool = False

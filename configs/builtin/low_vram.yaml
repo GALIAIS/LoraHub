@@ -10,7 +10,7 @@ _template:
 
 _placeholders:
   - key: name
-    label: 配方 / 输出名称
+    label: 配置 / 输出名称
     path_field: output.name
     placeholder: my_character_v1
   - key: checkpoint

@@ -63,7 +63,8 @@ import { SamplesGallery } from "../panels/samples-gallery"
 import { SeriesStatsCard } from "../panels/series-stats"
 import { WandbTab } from "../panels/wandb-tab"
 
-type BottomTabKey = "stats" | "table" | "samples" | "ai" | "wandb"
+type BottomTabKey = "stats" | "table" | "samples" | "ai"
+type ViewKind = "builtin" | "wandb"
 
 const EMA_ALPHA = 0.1
 
@@ -408,6 +409,16 @@ export function AnalysisWorkbench({
 
   // Bottom tabs default + counts (used in tab labels).
   const [bottomTab, setBottomTab] = useState<BottomTabKey>("stats")
+  // Top-level view: 内置训练分析 vs W&B 数据
+  const [viewKind, setViewKind] = useState<ViewKind>(() => {
+    if (typeof window === "undefined") return "builtin"
+    const stored = window.localStorage.getItem("lorahub.analysis.view-kind")
+    return stored === "wandb" ? "wandb" : "builtin"
+  })
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem("lorahub.analysis.view-kind", viewKind)
+  }, [viewKind])
   const samplesCount = files.data?.samples?.length ?? 0
   const tableRowCount = totalPoints
   const seriesCount = lossSeries.length
@@ -434,7 +445,33 @@ export function AnalysisWorkbench({
 
   return (
     <div className="flex flex-col min-h-0">
-      <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
+      <div className="px-7 pt-4 border-b border-border/40 bg-background/40">
+        <Tabs value={viewKind} onValueChange={(v) => setViewKind(v as ViewKind)}>
+          <TabsList variant="line" className="gap-3">
+            <TabsTrigger value="builtin" className="text-[12px]">
+              训练分析
+            </TabsTrigger>
+            <TabsTrigger value="wandb" className="text-[12px]">
+              W&amp;B
+              {wandbRunUrl ? (
+                <span className="ml-1 text-emerald-600 dark:text-emerald-400">✓</span>
+              ) : wandbEnabled ? (
+                <span className="ml-1 text-muted-foreground/80">等待</span>
+              ) : (
+                <span className="ml-1 text-muted-foreground/80">未启用</span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {viewKind === "wandb" ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <WandbTab jobId={job.id} enabled={wandbEnabled} runUrl={wandbRunUrl} />
+        </div>
+      ) : (
+        <>
+          <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
       <div className="px-7 py-4 space-y-4">
         {/* View-mode switcher: live / postmortem / custom. Mode picks
@@ -582,18 +619,6 @@ export function AnalysisWorkbench({
                   {aiState === "ready" ? "✓" : "未生成"}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="wandb" className="text-[11.5px]">
-                W&amp;B
-                {wandbRunUrl ? (
-                  <span className="ml-1 text-emerald-600 dark:text-emerald-400">
-                    ✓
-                  </span>
-                ) : wandbEnabled ? (
-                  <span className="ml-1 text-muted-foreground/80">等待</span>
-                ) : (
-                  <span className="ml-1 text-muted-foreground/80">未启用</span>
-                )}
-              </TabsTrigger>
             </TabsList>
           </div>
           <TabsContent value="stats" className="m-0">
@@ -624,15 +649,10 @@ export function AnalysisWorkbench({
               canRun={isTerminal || (metrics.data?.loss?.length ?? 0) > 0}
             />
           </TabsContent>
-          <TabsContent value="wandb" className="m-0">
-            <WandbTab
-              jobId={job.id}
-              enabled={wandbEnabled}
-              runUrl={wandbRunUrl}
-            />
-          </TabsContent>
         </Tabs>
       </div>
+        </>
+      )}
     </div>
   )
 }

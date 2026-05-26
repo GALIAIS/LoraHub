@@ -78,7 +78,7 @@ export function WandbTab({ jobId, enabled, runUrl }: WandbTabProps) {
     return (
       <EmptyHint
         title="未启用 W&B"
-        body="在配方编辑器的「实验跟踪」中勾选 启用 W&B 后,新启动的训练会推送到 wandb.ai。"
+        body="在配置编辑器的「实验跟踪」中勾选 启用 W&B 后,新启动的训练会推送到 wandb.ai。"
       />
     )
   }

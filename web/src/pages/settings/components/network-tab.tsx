@@ -547,7 +547,7 @@ export function NetworkTab() {
                 className="font-mono"
               />
               <p className="text-[11px] text-muted-foreground/80">
-                在 wandb.ai/authorize 获取。仅当配方的
+                在 wandb.ai/authorize 获取。仅当配置的
                 <code> monitoring.enable_wandb=true </code>
                 时才会注入到训练子进程。
               </p>

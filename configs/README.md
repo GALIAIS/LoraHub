@@ -1,8 +1,8 @@
-# LoraHub recipes
+# LoraHub configs
 
-LoraHub 自带的训练配方目录。每份 YAML 都已经端到端验证过 schema + backend.validate,可以直接 copy 后改 `dataset.source` / `output.name` 开训。
+LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 schema + backend.validate,可以直接 copy 后改 `dataset.source` / `output.name` 开训。
 
-## 现有 6 份配方
+## 现有 6 份配置
 
 | 文件 | 后端 | 算法 | 显存档 | 简介 |
 |------|------|------|--------|------|
@@ -29,17 +29,17 @@ LoraHub 自带的训练配方目录。每份 YAML 都已经端到端验证过 sc
 最快路径:
 
 ```bash
-cp configs/anima_lora_default.yaml configs/my_recipe.yaml
+cp configs/anima_lora_default.yaml configs/my_config.yaml
 # 改 dataset.source / output.name
-lorahub validate configs/my_recipe.yaml
-lorahub train configs/my_recipe.yaml
+lorahub validate configs/my_config.yaml
+lorahub train configs/my_config.yaml
 ```
 
 或者从 8GB / 32GB 模板出发,按硬件档位选起点。
 
 ## 字段含义
 
-每份配方头部的注释块对每条非平凡设置都解释了:
+每份配置头部的注释块对每条非平凡设置都解释了:
 
 * 为什么这个值(对应硬件预算 / 算法权衡)
 * 跟其他档位比有什么差异
@@ -58,9 +58,9 @@ lorahub train configs/my_recipe.yaml
 | 96GB 想榨满吞吐(可接受 LoRA 收敛 warning) | `batchSize` 16 → 32 / `numRepeats` × 0.5 / `learningRate` × √2 |
 | 训练时间太长 | `numRepeats` 或 `epochs` 降一半 / 从 `default` 切到 `8gb`(epochs 已经更短) |
 
-## 不再保留的旧配方
+## 不再保留的旧配置
 
-以下文件历史上存在过但因为 schema 变更 / 上游 API 不兼容删除了,如果你依赖它们请从 4 份当前配方迁移:
+以下文件历史上存在过但因为 schema 变更 / 上游 API 不兼容删除了,如果你依赖它们请从 4 份当前配置迁移:
 
 * `anima_character_24gb.yaml` / `anima_character_8gb.yaml` / `anima_character_8gb_dora.yaml`
 * `anima_lora_starter.yaml` / `anima_lora_turbo.yaml`

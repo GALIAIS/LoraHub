@@ -19,13 +19,13 @@ client (whether invoked through accelerate, raw wandb.init, or
 diffusion-pipe's own bootstrap) reads these env vars at startup.
 Per-backend CLI/TOML transports (``--log_tracker_name``,
 ``wandb_tracker_name``, ``--wandb_run_name``) layer on top to keep
-recipes self-describing — but the env var path is the safety net that
+configs self-describing — but the env var path is the safety net that
 guarantees wandb sees the same identity even when a backend forgets
 to surface a particular field.
 
 Secrets (api key) live in ``Settings.wandb_api_key`` and are injected
 by ``lorahub.api.settings.env_overrides``; they are intentionally not
-in ``MonitoringConfig`` so recipe YAML never carries the key.
+in ``MonitoringConfig`` so config YAML never carries the key.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def _resolve_monitoring(cfg: TrainingConfig) -> MonitoringConfig:
     Top-level ``cfg.monitoring`` always wins. The legacy
     ``cfg.backend.diffusion_pipe.{enable_wandb,tracker_name,run_name}``
     fields are honored only when the top-level block is at its
-    untouched default — this keeps pre-MonitoringConfig recipes from
+    untouched default — this keeps pre-MonitoringConfig configs from
     silently losing wandb when they're loaded against the new schema.
     """
     from lorahub.core.config.schema import MonitoringConfig  # noqa: PLC0415

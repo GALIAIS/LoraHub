@@ -127,11 +127,11 @@ export function AboutTab() {
           )}
           <p>
             LoraHub 把 kohya-ss/sd-scripts 与 tdrussell/diffusion-pipe
-            两套训练后端、配方编辑器、数据集预处理、自动标注与作业调度统一在
+            两套训练后端、配置编辑器、数据集预处理、自动标注与作业调度统一在
             单进程 FastAPI 服务后，前端通过纯本地 HTTP 调用，无需登录、无云端依赖。
           </p>
           <p className="text-muted-foreground">
-            开源 AGPL-3.0 协议; 训练数据、配方、运行结果全部存放在用户的本地工作目录,
+            开源 AGPL-3.0 协议; 训练数据、配置、运行结果全部存放在用户的本地工作目录,
             可随时 git 跟踪、备份或迁移。
           </p>
         </CardContent>

@@ -24,7 +24,7 @@ export const OptimizationFields = memo(function OptimizationFields({
     <>
       <Row
         label="torchCompile"
-        description="kohya 训练加速；dp 已默认启用，保留此开关只为配方互通。"
+        description="kohya 训练加速；dp 已默认启用，保留此开关只为配置互通。"
       >
         <ToggleSwitch
           checked={v.torchCompile ?? false}
