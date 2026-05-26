@@ -337,6 +337,7 @@ export interface SettingsState {
   download_proxy: string | null
   huggingface_token: string | null
   wandb_api_key: string | null
+  wandb_base_url: string | null
   terminal_unrestricted: boolean
   terminal_command_timeout_s: number
   // Error registry fan-out — see Settings.error_upstream_*

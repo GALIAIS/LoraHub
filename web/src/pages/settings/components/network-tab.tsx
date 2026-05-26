@@ -39,6 +39,7 @@ type Draft = {
   torch_index_url: string
   download_proxy: string
   wandb_api_key: string
+  wandb_base_url: string
 }
 
 function buildDraft(s: SettingsState): Draft {
@@ -52,6 +53,7 @@ function buildDraft(s: SettingsState): Draft {
     torch_index_url: s.torch_index_url ?? "",
     download_proxy: s.download_proxy ?? "",
     wandb_api_key: s.wandb_api_key ?? "",
+    wandb_base_url: s.wandb_base_url ?? "",
   }
 }
 
@@ -244,7 +246,8 @@ export function NetworkTab() {
     draft.pypi_index_url !== (saved.pypi_index_url ?? "") ||
     draft.torch_index_url !== (saved.torch_index_url ?? "") ||
     draft.download_proxy !== (saved.download_proxy ?? "") ||
-    draft.wandb_api_key !== (saved.wandb_api_key ?? "")
+    draft.wandb_api_key !== (saved.wandb_api_key ?? "") ||
+    draft.wandb_base_url !== (saved.wandb_base_url ?? "")
 
   const githubPresets = presetsQuery.data?.github_proxy ?? []
   const hfPresets = presetsQuery.data?.huggingface ?? []
@@ -550,6 +553,26 @@ export function NetworkTab() {
               </p>
             </div>
           </div>
+          <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-start">
+            <Label className="text-xs pt-2">Base URL</Label>
+            <div className="space-y-1">
+              <Input
+                value={draft.wandb_base_url}
+                placeholder="https://wandb.your-domain.com（留空走 wandb.ai SaaS）"
+                onChange={(e) =>
+                  setDraft({ ...draft, wandb_base_url: e.target.value })
+                }
+                className="font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground/80">
+                自托管 W&amp;B Server 地址。同时作为
+                <code> WANDB_BASE_URL </code>
+                注入训练子进程,以及
+                <code> wandb.Api(overrides=...) </code>
+                的 base_url 用于「训练分析 → W&amp;B」拉取数据。
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -568,6 +591,7 @@ export function NetworkTab() {
               download_proxy: draft.download_proxy || null,
               huggingface_token: draft.huggingface_token || null,
               wandb_api_key: draft.wandb_api_key || null,
+              wandb_base_url: draft.wandb_base_url || null,
             })
           }
         >
