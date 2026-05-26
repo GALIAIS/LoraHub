@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
@@ -19,13 +19,19 @@ import {
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioBatchDelete,
-  imageStudioSmartCaption,
   imageStudioBatchQuality,
   imageStudioBatchTriggerWords,
+  startSmartCaptionSession,
   startTaggingSession,
-  getTaggingSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
+import {
+  addTask,
+  removeTask,
+  updateTask,
+  type StudioTaskRecord,
+} from "@/lib/studio-task-store"
+import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,13 +90,6 @@ export function DatasetDetail() {
   const [pendingDeleteSingle, setPendingDeleteSingle] =
     useState<ImageStudioItem | null>(null)
   const [pendingDeleteBulk, setPendingDeleteBulk] = useState(false)
-  const [aiProgress, setAiProgress] = useState<{
-    running: boolean
-    label: string
-    processed?: number
-    total?: number
-    error?: string
-  } | null>(null)
   // Dataset-level trigger word ranking surfaced after a trigger-words
   // batch completes. Stays around so the user can copy a candidate into
   // the smart-caption "trigger word" field on the next run without
@@ -115,18 +114,31 @@ export function DatasetDetail() {
   })
   const pendingOpsCount = opsCountQuery.data ?? 0
 
-  // Track the WD14 polling interval so unmount / restart cleans it up
-  // — previously a stray setInterval kept calling setState on an
-  // unmounted component when the user navigated away mid-tagging.
-  const wd14PollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Subscribe to the global studio task store so the AI progress banner
+  // is driven by an out-of-tree polling loop instead of a per-component
+  // setInterval. This makes the banner survive route changes (the page
+  // unmounts on navigation, but the server keeps running and the store
+  // keeps polling) and even hard reloads for sessioned task kinds.
+  const studioTasks = useStudioTasksFor(path)
+  // Newest first so the banner reflects whatever the user just kicked
+  // off — multiple concurrent tasks are rare but tolerable.
+  const activeStudioTask: StudioTaskRecord | null =
+    studioTasks.length === 0
+      ? null
+      : [...studioTasks].sort((a, b) => b.startedAt - a.startedAt)[0]
+
+  // When a sessioned task transitions to a terminal state, refresh the
+  // dataset listing so any new annotations / scores light up. Keying
+  // the effect on a derived signature stops it from firing every poll.
+  const terminalSig = studioTasks
+    .filter((t) => t.status !== "running")
+    .map((t) => `${t.id}:${t.status}`)
+    .join(",")
   useEffect(() => {
-    return () => {
-      if (wd14PollRef.current) {
-        clearInterval(wd14PollRef.current)
-        wd14PollRef.current = null
-      }
+    if (terminalSig) {
+      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
     }
-  }, [])
+  }, [terminalSig, queryClient])
 
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
@@ -305,17 +317,18 @@ export function DatasetDetail() {
     setShowAiBulk(false)
     const taskPath = (params.path as string) || path
 
+    // Synthetic id for kinds without a server session_id. crypto.randomUUID
+    // is everywhere we run; the fallback is just defensive.
+    const newId = (): string =>
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
     try {
       switch (tab) {
         case "smart-caption": {
           const captionSource = (params.captionSource as "vlm" | "tags" | undefined) ?? "vlm"
-          setAiProgress({
-            running: true,
-            label: captionSource === "tags"
-              ? "智能标注（WD14 + LLM 文本模式）…"
-              : "智能标注（WD14 + VLM 视觉模式）…",
-          })
-          const res = await imageStudioSmartCaption({
+          const submit = await startSmartCaptionSession({
             path: taskPath,
             recursive,
             device: params.device as string,
@@ -325,41 +338,21 @@ export function DatasetDetail() {
             triggerWord: params.triggerWord as string | undefined,
             stripStyleTags: params.stripStyleTags as boolean | undefined,
             skipExisting: params.skipExisting as boolean | undefined,
-            onProgress: (snap) => {
-              const last = snap.last_image
-                ? snap.last_image.split(/[/\\]/).pop() ?? ""
-                : ""
-              setAiProgress({
-                running: snap.status === "running" || snap.status === "pending",
-                label: snap.status === "running" || snap.status === "pending"
-                  ? `智能标注中… ${last ? `· ${last}` : ""}`
-                  : "智能标注完成",
-                processed: snap.processed,
-                total: snap.total,
-              })
-            },
           })
-          setAiProgress({ running: false, label: "智能标注完成", processed: res.processed })
-          break
-        }
-        case "quality-score": {
-          setAiProgress({ running: true, label: "质量评分中…" })
-          const res = await imageStudioBatchQuality({
-            path: taskPath,
-            recursive,
-            skipScored: params.skipScored as boolean | undefined,
+          addTask({
+            id: submit.session_id,
+            kind: "smart-caption",
+            datasetPath: taskPath,
+            label: captionSource === "tags"
+              ? "智能标注（WD14 + LLM 文本模式）"
+              : "智能标注（WD14 + VLM 视觉模式）",
+            total: submit.total,
           })
-          setAiProgress({
-            running: false,
-            label: res.skipped
-              ? `质量评分完成（跳过 ${res.skipped} 已评分）`
-              : "质量评分完成",
-            processed: res.processed,
-          })
-          break
+          // Polling is now driven by the global studio task store; nothing
+          // else to do here beyond dropping the record into the store.
+          return
         }
         case "wd14": {
-          setAiProgress({ running: true, label: "WD14 标注中…" })
           const session = await startTaggingSession({
             path: taskPath,
             tagger: (params.model_id as string)?.startsWith("joy") ? "joytag" : "wd14",
@@ -370,66 +363,94 @@ export function DatasetDetail() {
             overwrite: params.overwrite as boolean,
             recursive,
           })
-          // Cancel any previous poll before starting a new one.
-          if (wd14PollRef.current) {
-            clearInterval(wd14PollRef.current)
-            wd14PollRef.current = null
-          }
-          // Poll session progress; the ref is cleared on unmount.
-          wd14PollRef.current = setInterval(async () => {
-            try {
-              const snap = await getTaggingSession(session.session_id)
-              setAiProgress({
-                running: snap.status === "running",
-                label: snap.status === "running"
-                  ? `WD14 标注中… ${snap.written}/${snap.total ?? "?"}`
-                  : snap.status === "succeeded" ? "WD14 标注完成" : "WD14 标注失败",
-                processed: snap.written,
-                total: snap.total ?? undefined,
-                error: snap.error ?? undefined,
-              })
-              if (snap.status !== "running") {
-                if (wd14PollRef.current) {
-                  clearInterval(wd14PollRef.current)
-                  wd14PollRef.current = null
-                }
-                queryClient.invalidateQueries({ queryKey: ["image-studio"] })
-              }
-            } catch {
-              if (wd14PollRef.current) {
-                clearInterval(wd14PollRef.current)
-                wd14PollRef.current = null
-              }
-            }
-          }, 2000)
+          addTask({
+            id: session.session_id,
+            kind: "wd14",
+            datasetPath: taskPath,
+            label: "WD14 标注",
+          })
           return
+        }
+        case "quality-score": {
+          // Synchronous server endpoint with no session_id. The task is
+          // tracked in the store as "in-flight" so the banner survives a
+          // navigate-away within the same page-load. A hard reload mid-run
+          // can't reconnect (no handle to look up) — that's documented
+          // upstream and acceptable for these short batches.
+          const id = newId()
+          addTask({
+            id,
+            kind: "quality-score",
+            datasetPath: taskPath,
+            label: "质量评分",
+            sessioned: false,
+          })
+          try {
+            const res = await imageStudioBatchQuality({
+              path: taskPath,
+              recursive,
+              skipScored: params.skipScored as boolean | undefined,
+            })
+            updateTask(id, {
+              status: "completed",
+              processed: res.processed,
+              label: res.skipped
+                ? `质量评分完成（跳过 ${res.skipped} 已评分）`
+                : "质量评分完成",
+            })
+          } catch (err) {
+            updateTask(id, {
+              status: "failed",
+              errorMsg: err instanceof Error ? err.message : String(err),
+              label: "质量评分失败",
+            })
+          }
+          break
         }
         case "trigger-words": {
           // Dedicated per-image trigger-word VLM analysis. Each image
           // gets 1-3 candidate phrases stored on its annotation, and
           // the response carries a dataset-level top-N ranking we
           // surface once the batch finishes.
-          setAiProgress({ running: true, label: "分析触发词…" })
-          const res = await imageStudioBatchTriggerWords({
-            path: taskPath,
-            recursive,
-            skipAnalyzed: params.skipAnalyzed as boolean | undefined,
+          const id = newId()
+          addTask({
+            id,
+            kind: "trigger-words",
+            datasetPath: taskPath,
+            label: "分析触发词",
+            sessioned: false,
           })
-          setTriggerWordTop(res.dataset_top)
-          setAiProgress({
-            running: false,
-            label: res.skipped
-              ? `触发词分析完成（跳过 ${res.skipped} 已分析）`
-              : "触发词分析完成",
-            processed: res.processed,
-          })
+          try {
+            const res = await imageStudioBatchTriggerWords({
+              path: taskPath,
+              recursive,
+              skipAnalyzed: params.skipAnalyzed as boolean | undefined,
+            })
+            setTriggerWordTop(res.dataset_top)
+            updateTask(id, {
+              status: "completed",
+              processed: res.processed,
+              label: res.skipped
+                ? `触发词分析完成（跳过 ${res.skipped} 已分析）`
+                : "触发词分析完成",
+            })
+          } catch (err) {
+            updateTask(id, {
+              status: "failed",
+              errorMsg: err instanceof Error ? err.message : String(err),
+              label: "触发词分析失败",
+            })
+          }
           break
         }
       }
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })
     } catch (err: unknown) {
+      // Top-level catch is for failures BEFORE a task record made it into
+      // the store (e.g. /smart-caption submit returned 4xx). Surface via
+      // toast since there's no banner to attach the error to.
       const msg = err instanceof Error ? err.message : String(err)
-      setAiProgress({ running: false, label: "执行失败", error: msg })
+      toast.error("AI 批量任务启动失败", { description: msg })
     }
   }
 
@@ -593,28 +614,11 @@ export function DatasetDetail() {
       )}
 
       {/* AI progress bar */}
-      {aiProgress && (
-        <div className="flex items-center gap-3 border-b px-4 py-2 bg-muted/30">
-          {aiProgress.running && <Loader2 className="size-4 animate-spin text-primary" />}
-          <span className="text-xs font-medium">{aiProgress.label}</span>
-          {aiProgress.processed != null && (
-            <span className="text-xs text-muted-foreground">
-              {aiProgress.processed}{aiProgress.total ? ` / ${aiProgress.total}` : ""} 张
-            </span>
-          )}
-          {aiProgress.error && (
-            <span className="text-xs text-destructive truncate flex-1">{aiProgress.error}</span>
-          )}
-          {!aiProgress.running && (
-            <button
-              type="button"
-              onClick={() => setAiProgress(null)}
-              className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-            >
-              关闭
-            </button>
-          )}
-        </div>
+      {activeStudioTask && (
+        <StudioTaskBanner
+          task={activeStudioTask}
+          onDismiss={() => removeTask(activeStudioTask.id)}
+        />
       )}
 
       {/* Trigger word top-N (dataset-level summary, shown after a
@@ -937,6 +941,62 @@ function Pagination({
       >
         下一页
       </button>
+    </div>
+  )
+}
+
+/**
+ * Banner that summarises a single global studio task. The data shape
+ * comes from the task store so the banner is identical no matter
+ * whether the user just kicked the task off or just got back from
+ * another route while it was running in the background.
+ */
+function StudioTaskBanner({
+  task,
+  onDismiss,
+}: {
+  task: StudioTaskRecord
+  onDismiss: () => void
+}) {
+  const running = task.status === "running"
+  const lastImageName = task.lastImage
+    ? task.lastImage.split(/[/\\]/).pop() ?? ""
+    : ""
+  // Compose a label that mirrors what the legacy inline progress used to
+  // show. For sessioned kinds we tack on the most recent image filename
+  // so the user can tell the task is making forward progress.
+  const label = running
+    ? task.kind === "smart-caption"
+      ? `${task.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
+      : task.kind === "wd14"
+        ? `${task.label}中… ${task.processed ?? 0}/${task.total ?? "?"}`
+        : `${task.label}中…`
+    : task.label
+
+  return (
+    <div className="flex items-center gap-3 border-b px-4 py-2 bg-muted/30">
+      {running && <Loader2 className="size-4 animate-spin text-primary" />}
+      <span className="text-xs font-medium">{label}</span>
+      {task.processed != null && task.kind !== "wd14" && (
+        <span className="text-xs text-muted-foreground">
+          {task.processed}
+          {task.total ? ` / ${task.total}` : ""} 张
+        </span>
+      )}
+      {task.errorMsg && (
+        <span className="text-xs text-destructive truncate flex-1">
+          {task.errorMsg}
+        </span>
+      )}
+      {!running && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+        >
+          关闭
+        </button>
+      )}
     </div>
   )
 }

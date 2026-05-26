@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCheck, Play, Save, XCircle } from "lucide-react"
@@ -7,6 +7,16 @@ import { fieldDisplay } from "@/lib/field-labels"
 import { toastApiError } from "@/lib/toast-api-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
 // LLM advisor temporarily disabled for stability (see toolbar comment).
 // Imports kept commented so a one-line revert restores the entry point.
@@ -14,6 +24,7 @@ import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
 // import { setIn as setByPath } from "@/components/config-form/types"
 import type { Mode } from "../types"
 import { buildDefaults } from "../utils"
+import { useDraftPersistence } from "../use-draft-persistence"
 import { ErrorBanner } from "./error-banner"
 import { PreflightPanel } from "./preflight-panel"
 
@@ -54,6 +65,22 @@ export function ConfigEditor({
   // edit) still rebuilds, which is what users expect.
   const seededForRef = useRef<string | null>(null)
 
+  // Canonical "clean" baseline for the persistence hook to diff against.
+  //  - new mode: the freshly-built defaults for the chosen backend.
+  //  - edit mode: whatever the server gave us back.
+  // Memoized so the hook doesn't see a fresh object identity on every
+  // render (each call to buildDefaults returns a new object), which
+  // would make every JSON.stringify diff redundant work.
+  const baseline = useMemo<ConfigFormValue | null>(() => {
+    if (isNew) return buildDefaults(defaultBackend)
+    return (sourceQuery.data?.parsed as unknown as ConfigFormValue) ?? null
+  }, [isNew, defaultBackend, sourceQuery.data])
+  const baselineReady = isNew
+    ? settingsQuery.isSuccess || settingsQuery.isError
+    : Boolean(sourceQuery.data?.parsed)
+
+  const storageKey = `lorahub.config-draft:${isNew ? "__new__" : mode.name}`
+
   useEffect(() => {
     const seedKey = isNew ? "__new__" : mode.name
     const alreadySeeded = seededForRef.current === seedKey
@@ -75,6 +102,13 @@ export function ConfigEditor({
     }
   }, [isNew, sourceQuery.data, mode, defaultBackend])
 
+  const persistence = useDraftPersistence({
+    storageKey,
+    baseline,
+    baselineReady,
+    draft,
+  })
+
   const validate = useMutation({
     mutationFn: () =>
       api.validateConfig((draft ?? {}) as unknown as Record<string, unknown>),
@@ -95,6 +129,18 @@ export function ConfigEditor({
       const saved = await api.saveConfig(cleanName, payload, opts.overwrite || !isNew)
       qc.invalidateQueries({ queryKey: ["configs"] })
       qc.invalidateQueries({ queryKey: ["config", cleanName] })
+      // Successful write — drop both the source draft (current
+      // editor target) and, when creating, the synthetic ``__new__``
+      // slot, so a follow-up "新建" doesn't restore the just-saved
+      // form as if it were unsaved work.
+      persistence.clearStoredDraft()
+      if (isNew) {
+        try {
+          window.localStorage.removeItem("lorahub.config-draft:__new__")
+        } catch {
+          // ignore storage failures
+        }
+      }
       if (opts.thenLaunch) {
         const job = await api.createJob(payload)
         qc.invalidateQueries({ queryKey: ["jobs"] })
@@ -232,6 +278,44 @@ export function ConfigEditor({
           )}
         </div>
       </div>
+
+      <AlertDialog
+        open={persistence.pendingRestoreDraft !== null}
+        onOpenChange={(next) => {
+          // Closing without an explicit choice — treat the same as
+          // 丢弃, otherwise the prompt would just re-open on the next
+          // mount and feel naggy.
+          if (!next && persistence.pendingRestoreDraft !== null) {
+            persistence.discardRestore()
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>恢复未保存的草稿？</AlertDialogTitle>
+            <AlertDialogDescription>
+              检测到上次未保存的修改。选择「恢复」继续编辑这份草稿，或「丢弃」回到当前已保存的版本。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => persistence.discardRestore()}
+            >
+              丢弃
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                const restored = persistence.pendingRestoreDraft
+                if (restored) setDraft(restored)
+                persistence.acceptRestore()
+              }}
+            >
+              恢复
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

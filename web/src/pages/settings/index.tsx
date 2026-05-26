@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useCallback } from "react"
+import { useUrlState } from "@/lib/url-state"
 import {
   Tabs,
   TabsContent,
@@ -14,22 +15,33 @@ import { ModelsTab } from "./components/models-tab"
 import { AIProvidersTab } from "./components/ai-providers-tab"
 import { MaintenanceTab } from "./components/maintenance-tab"
 
-type TabKey =
-  | "overview"
-  | "environment"
-  | "network"
-  | "models"
-  | "tagging"
-  | "ai"
-  | "errors"
-  | "maintenance"
+const TAB_KEYS = [
+  "overview",
+  "environment",
+  "network",
+  "models",
+  "tagging",
+  "ai",
+  "errors",
+  "maintenance",
+] as const
+
+type TabKey = (typeof TAB_KEYS)[number]
+
+const VALID_TABS = new Set<string>(TAB_KEYS)
 
 /**
  * Settings page shell. Each tab is independently scrollable so a long log
  * in the install tab never pushes the header off-screen.
  */
 export function SettingsPage() {
-  const [tab, setTab] = useState<TabKey>("overview")
+  const { params, update } = useUrlState()
+  const raw = params.get("tab")
+  const tab: TabKey = raw && VALID_TABS.has(raw) ? (raw as TabKey) : "overview"
+  const setTab = useCallback(
+    (next: TabKey) => update({ tab: next === "overview" ? null : next }),
+    [update],
+  )
 
   return (
     <div className="h-full overflow-hidden flex flex-col">

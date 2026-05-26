@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router-dom"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type ConfigListEntry } from "@/lib/api"
+import { useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
@@ -29,6 +30,26 @@ type RowDialogState = {
 } | null
 
 const SIDEBAR_KEY = "lorahub.configs.sidebar"
+
+const ARCH_VALUES: ArchFilter[] = ["all", "sdxl", "sd15", "flux", "sd3"]
+const BACKEND_VALUES: BackendFilter[] = [
+  "default",
+  "all",
+  "kohya",
+  "diffusion-pipe",
+  "anima_lora",
+]
+const SORT_VALUES: SortOrder[] = ["name-asc", "name-desc", "modified-desc"]
+
+function parseMode(params: URLSearchParams): Mode | null {
+  const kind = params.get("mode")
+  const name = params.get("name") ?? ""
+  if (kind === "new") return { kind: "new" }
+  if ((kind === "preview" || kind === "edit") && name) {
+    return { kind, name }
+  }
+  return null
+}
 
 export function ConfigsPage() {
   const list = useQuery({
@@ -59,16 +80,59 @@ export function ConfigsPage() {
   const settingsResolved =
     settingsQuery.isSuccess || settingsQuery.isError
 
-  const [mode, setMode] = useState<Mode | null>(null)
+  // URL-backed filter / preview state — survives route switches and is
+  // shareable. The mode pair (?mode=preview|edit|new&name=…) replaces the
+  // previous useState<Mode|null>; ``null`` is encoded as no ``?mode=`` at all.
+  const { params, update } = useUrlState()
+  const mode = useMemo(() => parseMode(params), [params])
+  const setMode = useCallback(
+    (next: Mode | null) => {
+      if (next === null) {
+        update({ mode: null, name: null })
+      } else if (next.kind === "new") {
+        update({ mode: "new", name: null })
+      } else {
+        update({ mode: next.kind, name: next.name })
+      }
+    },
+    [update],
+  )
+
+  const rawArch = params.get("arch") as ArchFilter | null
+  const archFilter: ArchFilter =
+    rawArch && ARCH_VALUES.includes(rawArch) ? rawArch : "all"
+  const setArchFilter = useCallback(
+    (next: ArchFilter) => update({ arch: next === "all" ? null : next }),
+    [update],
+  )
+
+  const rawBackend = params.get("backend") as BackendFilter | null
+  const backendFilter: BackendFilter =
+    rawBackend && BACKEND_VALUES.includes(rawBackend) ? rawBackend : "default"
+  const setBackendFilter = useCallback(
+    (next: BackendFilter) =>
+      update({ backend: next === "default" ? null : next }),
+    [update],
+  )
+
+  const rawSort = params.get("sort") as SortOrder | null
+  const sort: SortOrder =
+    rawSort && SORT_VALUES.includes(rawSort) ? rawSort : "name-asc"
+  const setSort = useCallback(
+    (next: SortOrder) => update({ sort: next === "name-asc" ? null : next }),
+    [update],
+  )
+
+  const query = params.get("q") ?? ""
+  const setQuery = useCallback(
+    (next: string) => update({ q: next || null }),
+    [update],
+  )
+
   // Pre-populated dataset path that flows in from the Datasets page via
   // router state. Once the launch dialog opens we hand it off and clear.
   const [pendingDataset, setPendingDataset] = useState<string | null>(null)
   const [autoOpenLaunch, setAutoOpenLaunch] = useState(false)
-
-  const [query, setQuery] = useState("")
-  const [archFilter, setArchFilter] = useState<ArchFilter>("all")
-  const [backendFilter, setBackendFilter] = useState<BackendFilter>("default")
-  const [sort, setSort] = useState<SortOrder>("name-asc")
 
   const [rowDialog, setRowDialog] = useState<RowDialogState>(null)
   const [templateOpen, setTemplateOpen] = useState(false)
@@ -179,7 +243,7 @@ export function ConfigsPage() {
         setMode({ kind: "preview", name: visibleConfigs[0].name })
       }
     }
-  }, [mode, visibleConfigs, autoOpenLaunch])
+  }, [mode, visibleConfigs, autoOpenLaunch, setMode])
 
   // Closing a row dialog returns null; keep the previous config reference for
   // animation but reset action so the dialog actually closes.

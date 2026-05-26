@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
@@ -14,6 +14,7 @@ import {
   datasetList,
   type DatasetScanResponse,
 } from "@/lib/api"
+import { readBool, useUrlState } from "@/lib/url-state"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -58,19 +59,54 @@ export function DatasetsPage() {
     [datasetsList.data],
   )
 
-  // ``submitted`` is the actual scan target. ``path`` is the
-  // free-form text input shown only when "高级模式" is on. The
-  // dropdown writes directly to submitted so picking a dataset
-  // re-scans immediately (no extra "scan" button click needed for
-  // the common case).
-  const [advanced, setAdvanced] = useState(false)
+  // ``submitted`` is the actual scan target — synced into the URL so a
+  // navigation away and back keeps the user on the same dataset. ``path``
+  // is the free-form text input shown only when "高级模式" is on, and
+  // stays purely local because mid-typing values aren't worth shoving in
+  // the URL bar.
+  const { params, update } = useUrlState()
+  const submitted = params.get("path") ?? ""
+  const recursive = readBool(params, "recursive")
+  const advanced = readBool(params, "advanced")
+
+  const setSubmitted = useCallback(
+    (next: string) => update({ path: next || null }),
+    [update],
+  )
+  const setRecursive = useCallback(
+    (next: boolean) => update({ recursive: next ? "1" : null }),
+    [update],
+  )
+  const setAdvanced = useCallback(
+    (next: boolean) => update({ advanced: next ? "1" : null }),
+    [update],
+  )
+
+  const pageRaw = Number.parseInt(params.get("page") ?? "1", 10)
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? pageRaw : 1
+  const setPage = useCallback(
+    (next: number) => update({ page: next === 1 ? null : String(next) }),
+    [update],
+  )
+
+  const pageSizeRaw = Number.parseInt(params.get("page_size") ?? "48", 10)
+  const pageSize =
+    PAGE_SIZE_OPTIONS.includes(pageSizeRaw) ? pageSizeRaw : 48
+  const setPageSize = useCallback(
+    (next: number) => update({ page_size: next === 48 ? null : String(next) }),
+    [update],
+  )
+
   const [path, setPath] = useState("")
-  const [submitted, setSubmitted] = useState("")
-  const [recursive, setRecursive] = useState(false)
   const [editor, setEditor] = useState<{ imagePath: string } | null>(null)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(48)
   const navigate = useNavigate()
+
+  // Keep the advanced text input mirror in sync with the URL-driven
+  // scan target — fixes the case where the user lands on the page with
+  // ?path=... already set and then opens "高级模式".
+  useEffect(() => {
+    if (path === "" && submitted) setPath(submitted)
+  }, [submitted, path])
 
   // Auto-select the first dataset on first load so the page isn't
   // blank — same affordance the previous "./datasets" default gave.
@@ -79,13 +115,19 @@ export function DatasetsPage() {
       setSubmitted(knownDatasets[0].path)
       setPath(knownDatasets[0].path)
     }
-  }, [knownDatasets, submitted])
+  }, [knownDatasets, submitted, setSubmitted])
 
   // Reset to page 1 whenever the scan target changes — otherwise the user
-  // can land on an out-of-range page after switching directories.
+  // can land on an out-of-range page after switching directories. Skipped
+  // on mount so a deep link with ``?page=N`` keeps its page on first load.
+  const firstScanResetRef = useRef(true)
   useEffect(() => {
+    if (firstScanResetRef.current) {
+      firstScanResetRef.current = false
+      return
+    }
     setPage(1)
-  }, [submitted, recursive, pageSize])
+  }, [submitted, recursive, pageSize, setPage])
 
   const offset = (page - 1) * pageSize
   const scan = useQuery({
@@ -138,7 +180,7 @@ export function DatasetsPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setAdvanced((v) => !v)}
+                onClick={() => setAdvanced(!advanced)}
                 className="gap-1 text-[11px]"
               >
                 <Pencil className="size-3" />
@@ -183,7 +225,7 @@ export function DatasetsPage() {
                 <Button
                   type="button"
                   variant={recursive ? "default" : "outline"}
-                  onClick={() => setRecursive((v) => !v)}
+                  onClick={() => setRecursive(!recursive)}
                   title="递归扫描所有子目录"
                 >
                   递归
@@ -218,7 +260,7 @@ export function DatasetsPage() {
                 <Button
                   type="button"
                   variant={recursive ? "default" : "outline"}
-                  onClick={() => setRecursive((v) => !v)}
+                  onClick={() => setRecursive(!recursive)}
                   title="递归扫描所有子目录"
                 >
                   递归

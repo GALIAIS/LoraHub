@@ -15,14 +15,17 @@ import {
   Cpu,
   Download,
   MemoryStick,
+  Sparkles,
   Wifi,
   WifiOff,
   Zap,
 } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { useSystemVersion } from "@/hooks/use-system-version"
+import { useStudioTasks } from "@/hooks/use-studio-tasks"
+import type { StudioTaskRecord } from "@/lib/studio-task-store"
 import { cn } from "@/lib/utils"
 
 const POLL_MS = 10_000
@@ -36,6 +39,8 @@ export function GlobalStatusBar() {
     staleTime: 3_000,
   })
   const jobsQuery = useJobsList()
+  const studioTasks = useStudioTasks()
+  const studioRunning = studioTasks.filter((t) => t.status === "running")
 
   const snapshot: SystemSnapshot | null =
     stream.snapshot ?? polled.data ?? null
@@ -105,6 +110,9 @@ export function GlobalStatusBar() {
             value={running > 0 ? `${running} 个` : "空闲"}
             tone={running > 0 ? "text-primary" : "text-muted-foreground"}
           />
+          {studioRunning.length > 0 && (
+            <StudioTaskChip tasks={studioRunning} />
+          )}
         </>
       ) : (
         <span className="text-muted-foreground/70">正在连接系统监控…</span>
@@ -189,6 +197,45 @@ function fmtRate(b: number): string {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB/s`
   if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB/s`
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB/s`
+}
+
+/**
+ * Pinned chip that surfaces the count of in-flight image-studio AI
+ * batch tasks (smart-caption, WD14, trigger-words, quality scoring).
+ *
+ * Clicking jumps to the dataset where the most-recently-started task
+ * is running — that's the page whose progress banner the user is
+ * most likely chasing. If the dataset path can't be expressed as a
+ * route param the chip stays as plain text rather than producing a
+ * dead link.
+ */
+function StudioTaskChip({ tasks }: { tasks: StudioTaskRecord[] }) {
+  const navigate = useNavigate()
+  if (tasks.length === 0) return null
+  // Newest first so we prefer "the thing the user just kicked off".
+  const newest = [...tasks].sort((a, b) => b.startedAt - a.startedAt)[0]
+  const onClick = () => {
+    if (!newest?.datasetPath) return
+    navigate(
+      `/image-studio?path=${encodeURIComponent(newest.datasetPath)}`,
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={tasks.map((t) => `${t.label} · ${t.datasetPath}`).join("\n")}
+      className="inline-flex items-center gap-1.5 min-w-0 shrink-0 hover:text-primary transition-colors cursor-pointer"
+    >
+      <Sparkles className="size-3 text-primary animate-pulse" />
+      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
+        AI 任务
+      </span>
+      <span className="font-mono tabular-nums font-semibold text-primary">
+        {tasks.length} 个
+      </span>
+    </button>
+  )
 }
 
 /**

@@ -817,7 +817,7 @@ export interface SweepParetoResponse {
   pending: number
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   // Wire in a default deadline. If the caller already passed a signal
   // we honour it; if not, ``AbortSignal.any`` lets the timeout race
   // alone. Either way the timeout fires after DEFAULT_TIMEOUT_MS unless
@@ -2311,6 +2311,34 @@ export async function imageStudioSmartCaption(params: {
     await new Promise<void>((resolve) => setTimeout(resolve, interval))
     elapsed += interval / 1000
   }
+}
+
+/**
+ * Fire-and-return-handle variant of {@link imageStudioSmartCaption}.
+ *
+ * Returns immediately once the server has accepted the request and
+ * issued a session_id. Polling is the caller's responsibility — the
+ * studio task store uses this so it can drive a single shared poll
+ * loop instead of one per in-flight component.
+ */
+export async function startSmartCaptionSession(params: {
+  path: string
+  recursive?: boolean
+  device?: string
+  mergeStrategy?: string
+  captionMode?: "general" | "style" | "character"
+  captionSource?: "vlm" | "tags"
+  triggerWord?: string
+  stripStyleTags?: boolean
+  skipExisting?: boolean
+}): Promise<{ session_id: string; total: number; status_url: string }> {
+  return http<{ session_id: string; total: number; status_url: string }>(
+    "/image-studio/ai/smart-caption",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
 }
 
 export async function imageStudioSmartCaptionSingle(params: {

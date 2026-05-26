@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Archive, ArrowRight, Loader2, PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { toast } from "sonner"
 import { api, type JobSummary } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
+import { readBool, readList, useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -52,16 +53,68 @@ function matchesQuery(job: JobSummary, query: string): boolean {
 }
 
 export function JobsPage() {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [query, setQuery] = useState("")
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
-  const [hideCompleted, setHideCompleted] = useState(false)
-  const [compareMode, setCompareMode] = useState(false)
-  const [compareIds, setCompareIds] = useState<string[]>([])
-  // Independent of compareMode — same checkbox UI on the row, but the
-  // selected ids drive bulk-archive instead of /analysis/compare.
-  // Mutually exclusive at the toolbar level so the user only sees one
-  // batch action at a time.
+  // URL-backed UI state — keeps selection / filters / compare baskets
+  // alive across route switches and survives deep links from sweeps,
+  // analysis, and the gallery.
+  const { params, update } = useUrlState()
+  const selectedId = params.get("id")
+  const query = params.get("q") ?? ""
+  const rawStatus = params.get("status") as StatusFilter | null
+  const statusFilter: StatusFilter =
+    rawStatus && STATUS_GROUPS[rawStatus] ? rawStatus : "all"
+  const hideCompleted = readBool(params, "hide_completed")
+  const compareMode = readBool(params, "compare")
+  const compareIds = useMemo(
+    () => readList(params, "compare_ids").slice(0, COMPARE_LIMIT),
+    [params],
+  )
+
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      update({ id: id ?? null })
+    },
+    [update],
+  )
+  const setQuery = useCallback(
+    (next: string) => {
+      update({ q: next || null })
+    },
+    [update],
+  )
+  const setStatusFilter = useCallback(
+    (next: StatusFilter) => {
+      update({ status: next === "all" ? null : next })
+    },
+    [update],
+  )
+  const setHideCompleted = useCallback(
+    (next: boolean) => {
+      update({ hide_completed: next ? "1" : null })
+    },
+    [update],
+  )
+  const setCompareMode = useCallback(
+    (next: boolean) => {
+      // Turning compare mode off also drops the basket — the previous
+      // useState version did this via effect; doing both writes in one
+      // patch keeps the URL clean (no transient ?compare_ids=… without
+      // ?compare=1).
+      update({
+        compare: next ? "1" : null,
+        compare_ids: next ? undefined : null,
+      })
+    },
+    [update],
+  )
+  const setCompareIds = useCallback(
+    (ids: string[]) => {
+      update({ compare_ids: ids.length ? ids.join(",") : null })
+    },
+    [update],
+  )
+
+  // Bulk-archive selection lives outside the URL — it's a transient
+  // action, not something users want to share or restore on reload.
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false)
@@ -71,44 +124,6 @@ export function JobsPage() {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem(SIDEBAR_KEY) !== "closed"
   })
-
-  // Honor ?id=<jobId> and ?compare=<id1>,<id2>,... handed in by the sweeps
-  // page (or any external link). We consume the query string exactly once
-  // and then strip it so a refresh doesn't fight the user's later choices.
-  const [searchParams, setSearchParams] = useSearchParams()
-  const consumedQueryRef = useRef(false)
-  useEffect(() => {
-    if (consumedQueryRef.current) return
-    const idParam = searchParams.get("id")
-    const compareParam = searchParams.get("compare")
-    let touched = false
-    if (idParam) {
-      setSelectedId(idParam)
-      touched = true
-    }
-    if (compareParam) {
-      const ids = compareParam
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .slice(0, COMPARE_LIMIT)
-      if (ids.length > 0) {
-        setCompareMode(true)
-        setCompareIds(ids)
-        if (!idParam) setSelectedId(ids[0])
-        touched = true
-      }
-    }
-    if (touched) {
-      consumedQueryRef.current = true
-      const next = new URLSearchParams(searchParams)
-      next.delete("id")
-      next.delete("compare")
-      setSearchParams(next, { replace: true })
-    } else {
-      consumedQueryRef.current = true
-    }
-  }, [searchParams, setSearchParams])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -143,21 +158,16 @@ export function JobsPage() {
   const autoSelectedRef = useRef(false)
   useEffect(() => {
     if (autoSelectedRef.current) return
-    if (!consumedQueryRef.current) return
     if (!jobs.isSuccess) return
     autoSelectedRef.current = true
     if (selectedId) return
     if (visibleJobs.length === 0) return
     setSelectedId(visibleJobs[0].id)
-  }, [jobs.isSuccess, selectedId, visibleJobs])
+  }, [jobs.isSuccess, selectedId, visibleJobs, setSelectedId])
 
-  // When compare mode is turned off, drop the selection so re-enabling it
-  // doesn't surprise the user with stale ticks.
-  useEffect(() => {
-    if (!compareMode) setCompareIds([])
-  }, [compareMode])
-
-  // Mirror the same lifecycle for select mode.
+  // Mirror the compareMode → drop basket lifecycle for select mode.
+  // (Compare-side cleanup already happens inline in setCompareMode so
+  // both writes share a single URL update.)
   useEffect(() => {
     if (!selectMode) setSelectedIds([])
   }, [selectMode])
@@ -168,7 +178,7 @@ export function JobsPage() {
     const known = new Set(list.map((j) => j.id))
     const pruned = compareIds.filter((id) => known.has(id))
     if (pruned.length !== compareIds.length) setCompareIds(pruned)
-  }, [list, compareIds])
+  }, [list, compareIds, setCompareIds])
 
   // Same prune for batch-selection ids — a successful bulk archive
   // removes the rows, so the checkboxes need to drop along with them.
@@ -184,11 +194,12 @@ export function JobsPage() {
     : null
 
   function toggleCompare(id: string) {
-    setCompareIds((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id)
-      if (prev.length >= COMPARE_LIMIT) return prev
-      return [...prev, id]
-    })
+    if (compareIds.includes(id)) {
+      setCompareIds(compareIds.filter((x) => x !== id))
+      return
+    }
+    if (compareIds.length >= COMPARE_LIMIT) return
+    setCompareIds([...compareIds, id])
   }
 
   function toggleSelected(id: string) {
