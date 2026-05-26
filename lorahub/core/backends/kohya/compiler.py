@@ -142,6 +142,7 @@ def compile_config(
     _emit_optimization_args(cfg, args)
     _emit_variant_args(cfg, args)
     _emit_extra_args(cfg, args)
+    _emit_monitoring_args(cfg, args)
 
     return script, args, files, env
 
@@ -568,6 +569,33 @@ def _emit_sampling_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -
         args.append(f"--sample_every_n_steps={s.every_n_steps}")
     if s.at_first:
         args.append("--sample_at_first")
+
+
+def _emit_monitoring_args(cfg: TrainingConfig, args: list[str]) -> None:
+    """Forward ``cfg.monitoring`` to upstream sd-scripts wandb flags.
+
+    Mirrors the official sd-scripts CLI surface (``library/train_util.py``
+    ``add_logging_arguments``): ``--log_with``, ``--log_tracker_name``,
+    ``--wandb_run_name``. ``--logging_dir`` is already emitted by
+    ``_emit_output_args``, so a wandb-enabled run reuses the same
+    workspace logs directory and accelerate's bootstrap will set
+    ``WANDB_DIR`` accordingly.
+
+    Identity fields not exposed via the sd-scripts CLI (entity / tags /
+    notes / run_id / group / job_type / mode / resume / base_url) flow
+    through ``WANDB_*`` env vars injected by
+    ``lorahub.api.wandb_env.wandb_env``. Secrets (``--wandb_api_key``)
+    are deliberately not emitted; the job runner injects
+    ``WANDB_API_KEY`` so the api key never lands in the recorded argv.
+    """
+    monitoring = cfg.monitoring
+    if not monitoring.enable_wandb:
+        return
+    args.append("--log_with=wandb")
+    if monitoring.project:
+        args.append(f"--log_tracker_name={monitoring.project}")
+    if monitoring.run_name:
+        args.append(f"--wandb_run_name={monitoring.run_name}")
 
 
 def _emit_resume_args(cfg: TrainingConfig, args: list[str]) -> None:

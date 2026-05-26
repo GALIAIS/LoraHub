@@ -558,6 +558,28 @@ export interface ConfigFormValue {
     faceCropAugRange?: string | null
     alphaMask?: boolean
   }
+  /**
+   * Weights & Biases tracker. Strict 1:1 mapping with wandb.init() and
+   * the WANDB_* env-var docs — see lorahub/core/config/schema.py
+   * MonitoringConfig and lorahub/api/wandb_env.py for the back-end
+   * translation. ``project`` becomes wandb.init(project=...);
+   * everything else either rides the backend's CLI/TOML surface or
+   * is forwarded as a WANDB_* env var by the job runner.
+   */
+  monitoring?: {
+    enableWandb?: boolean
+    project?: string | null
+    entity?: string | null
+    runName?: string | null
+    runId?: string | null
+    group?: string | null
+    jobType?: string | null
+    tags?: string[]
+    notes?: string | null
+    mode?: "online" | "offline" | "disabled" | "shared" | null
+    resume?: "allow" | "never" | "must" | "auto" | null
+    baseUrl?: string | null
+  }
   [k: string]: unknown
 }
 

@@ -767,6 +767,65 @@ class MultiNodeConfig(BaseModel):
     master_port: int | None = Field(default=None, ge=1024, le=65535)
 
 
+class MonitoringConfig(BaseModel):
+    """Weights & Biases tracker configuration (shared by all backends).
+
+    Strictly mirrors the wandb.ai docs: every field maps to either a
+    ``wandb.init()`` keyword or a documented ``WANDB_*`` environment
+    variable. Secrets (api key) live in user settings, not the recipe.
+
+    The job runner translates these fields to ``WANDB_*`` env vars at
+    subprocess launch so every backend (kohya / anima_lora /
+    diffusion_pipe) sees a consistent run identity regardless of how
+    its CLI surfaces tracker arguments.
+    """
+
+    model_config = _CAMEL_CONFIG
+
+    # Master switch. False = no tracker is initialized; the backend's
+    # log_with stays at its default (typically tensorboard).
+    enable_wandb: bool = False
+
+    # ``wandb.init(project=...)`` / ``WANDB_PROJECT``.
+    # kohya & anima_lora surface this as ``--log_tracker_name``;
+    # diffusion-pipe writes ``wandb_tracker_name`` into its TOML.
+    project: str | None = None
+
+    # ``wandb.init(entity=...)`` / ``WANDB_ENTITY``. User or team owner.
+    entity: str | None = None
+
+    # ``wandb.init(name=...)`` / ``WANDB_NAME``. UI display label.
+    # kohya & anima_lora pass this via ``--wandb_run_name``;
+    # diffusion-pipe writes ``wandb_run_name`` into its TOML.
+    run_name: str | None = None
+
+    # ``wandb.init(id=...)`` / ``WANDB_RUN_ID``. Project-unique run id;
+    # required for resume policies other than ``never``.
+    run_id: str | None = None
+
+    # ``wandb.init(group=...)`` / ``WANDB_RUN_GROUP``.
+    group: str | None = None
+
+    # ``wandb.init(job_type=...)`` / ``WANDB_JOB_TYPE``.
+    job_type: str | None = None
+
+    # ``wandb.init(tags=[...])`` / ``WANDB_TAGS`` (comma-joined).
+    tags: list[str] = Field(default_factory=list)
+
+    # ``wandb.init(notes=...)`` / ``WANDB_NOTES``.
+    notes: str | None = None
+
+    # ``wandb.init(mode=...)`` / ``WANDB_MODE``. Spec values are
+    # online / offline / disabled / shared.
+    mode: Literal["online", "offline", "disabled", "shared"] | None = None
+
+    # ``wandb.init(resume=...)`` / ``WANDB_RESUME``.
+    resume: Literal["allow", "never", "must", "auto"] | None = None
+
+    # ``WANDB_BASE_URL``. For self-hosted W&B Server. Empty = SaaS.
+    base_url: str | None = None
+
+
 class DiffusionPipeOptions(BaseModel):
     """diffusion-pipe specific knobs not represented anywhere else.
 
@@ -825,7 +884,10 @@ class DiffusionPipeOptions(BaseModel):
     checkpoint_every_n_epochs: int | None = Field(default=None, ge=1)
     checkpoint_every_n_minutes: int | None = Field(default=None, ge=1)
 
-    # ---- [monitoring] section ----
+    # ---- [monitoring] section (DEPRECATED — see top-level monitoring) ----
+    # Kept for back-compat with recipes saved before MonitoringConfig was
+    # promoted to a top-level section. Top-level ``monitoring.*`` wins
+    # when present; these fields are only consulted as a fallback.
     enable_wandb: bool = False
     tracker_name: str | None = None
     run_name: str | None = None
@@ -1534,6 +1596,7 @@ class TrainingConfig(BaseModel):
     optimization: OptimizationConfig = Field(default_factory=lambda: OptimizationConfig())
     dataloader: DataLoaderConfig = Field(default_factory=lambda: DataLoaderConfig())
     augmentation: AugmentationConfig = Field(default_factory=lambda: AugmentationConfig())
+    monitoring: MonitoringConfig = Field(default_factory=lambda: MonitoringConfig())
 
     model_config = ConfigDict(
         alias_generator=to_camel,

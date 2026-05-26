@@ -206,6 +206,8 @@ def _enqueue_launch(
             _report_live_event(job, ev)
         elif ev.type is EventType.log and _is_error_log(ev):
             _report_live_event(job, ev)
+        if ev.type is EventType.log:
+            _capture_wandb_run_url(job.id, ev)
         if ev.type is EventType.checkpoint_saved:
             worker = preview_worker_ref.get("worker")
             if worker is not None:
@@ -298,6 +300,9 @@ def _enqueue_launch(
         from lorahub.api import app as _app  # noqa: PLC0415
 
         slot_env.update(env_overrides(_app._settings_store.load()))
+        from lorahub.api.wandb_env import wandb_env  # noqa: PLC0415
+
+        slot_env.update(wandb_env(cfg))
         # Switch out of queued before backend.launch — anima_lora's
         # auto-preprocess can run for a couple of minutes (resize +
         # cache_latents + cache_text_embeddings) before the trainer
@@ -793,6 +798,39 @@ def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
 
 
 _LOG_ERROR_LEVELS = frozenset({"error", "critical", "fatal", "warning", "warn"})
+
+
+# wandb prints a single banner line at run startup ("View run at <url>" or
+# "wandb: View run at <url>"); the pattern is stable across the wandb 0.16+
+# family, which is what every backend in this repo bundles.
+_WANDB_RUN_URL_RE = re.compile(
+    r"View\s+run\s+(?:.+?\s+)?at\s+(?P<url>https?://\S+)",
+    re.IGNORECASE,
+)
+
+
+def _capture_wandb_run_url(job_id: str, ev: TrainingEvent) -> None:
+    """Stash the wandb run URL on ``JobRecord.metadata`` when first seen.
+
+    The training subprocess prints the run URL to stdout exactly once,
+    right after ``wandb.init``. We persist it the first time it shows
+    up so the jobs UI can render a "Open in W&B" link without parsing
+    log files retroactively.
+    """
+    payload = ev.payload or {}
+    msg = str(payload.get("message", ""))
+    match = _WANDB_RUN_URL_RE.search(msg)
+    if match is None:
+        return
+    rec = state.registry.get(job_id)
+    if rec is None:
+        return
+    metadata = dict(rec.metadata or {})
+    if metadata.get("wandb_run_url"):
+        return
+    metadata["wandb_run_url"] = match.group("url").rstrip(",.;")
+    rec.metadata = metadata
+    state.registry.update(rec)
 
 
 def _is_error_log(ev: TrainingEvent) -> bool:

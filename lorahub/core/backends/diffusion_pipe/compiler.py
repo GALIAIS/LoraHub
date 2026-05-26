@@ -342,23 +342,46 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
     parts += [""]
     parts += _optimizer_section(cfg)
     parts += [""]
-    parts += _monitoring_section(opts)
+    parts += _monitoring_section(cfg, opts)
     parts += [""]
     _log_dropped_kohya_only_fields(cfg)
     return "\n".join(parts)
 
 
-def _monitoring_section(opts: DiffusionPipeOptions) -> list[str]:
+def _monitoring_section(
+    cfg: TrainingConfig, opts: DiffusionPipeOptions
+) -> list[str]:
     """Emit the ``[monitoring]`` block.
+
+    Reads from the top-level ``cfg.monitoring`` (the public, all-backend
+    surface). Legacy ``opts.enable_wandb`` / ``opts.tracker_name`` /
+    ``opts.run_name`` are honored as a fallback for recipes saved before
+    ``MonitoringConfig`` was promoted out of ``DiffusionPipeOptions``.
+
+    Only the three diffusion-pipe-recognized TOML keys are emitted
+    (``enable_wandb`` / ``wandb_tracker_name`` / ``wandb_run_name``);
+    the broader wandb identity (entity, tags, notes, run_id, group,
+    job_type, mode, resume, base_url) is delivered through ``WANDB_*``
+    environment variables injected by ``lorahub.api.wandb_env``.
 
     ``wandb_api_key`` is intentionally absent: dp picks it up from
     ``$WANDB_API_KEY`` so secrets never touch the on-disk recipe.
     """
-    lines: list[str] = ["[monitoring]", f"enable_wandb = {_toml_bool(opts.enable_wandb)}"]
-    if opts.tracker_name is not None:
-        lines.append(f"wandb_tracker_name = {_toml_str(opts.tracker_name)}")
-    if opts.run_name is not None:
-        lines.append(f"wandb_run_name = {_toml_str(opts.run_name)}")
+    monitoring = cfg.monitoring
+    if monitoring.enable_wandb or monitoring.project or monitoring.run_name:
+        enable = monitoring.enable_wandb
+        project = monitoring.project
+        run_name = monitoring.run_name
+    else:
+        enable = opts.enable_wandb
+        project = opts.tracker_name
+        run_name = opts.run_name
+
+    lines: list[str] = ["[monitoring]", f"enable_wandb = {_toml_bool(enable)}"]
+    if project is not None:
+        lines.append(f"wandb_tracker_name = {_toml_str(project)}")
+    if run_name is not None:
+        lines.append(f"wandb_run_name = {_toml_str(run_name)}")
     return lines
 
 

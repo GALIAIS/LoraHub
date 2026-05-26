@@ -494,37 +494,6 @@ export const BackendDiffusionPipeFields = memo(
           </Row>
         </SubGroup>
 
-        <SubGroup label="监控">
-          <Row label="启用 W&amp;B" description="把 loss / metrics 推送到 wandb。">
-            <ToggleSwitch
-              checked={v.enableWandb ?? false}
-              onCheckedChange={(b) =>
-                set(["backend", "diffusionPipe", "enableWandb"], b)
-              }
-            />
-          </Row>
-          <Row label="Tracker 名称" description="W&amp;B project / tracker 名。">
-            <TextInput
-              className="w-64"
-              value={v.trackerName ?? ""}
-              onChange={(s) =>
-                set(["backend", "diffusionPipe", "trackerName"], s || null)
-              }
-              placeholder="（可选）"
-            />
-          </Row>
-          <Row label="Run 名称" description="W&amp;B run 名；留空自动派生。">
-            <TextInput
-              className="w-64"
-              value={v.runName ?? ""}
-              onChange={(s) =>
-                set(["backend", "diffusionPipe", "runName"], s || null)
-              }
-              placeholder="（可选）"
-            />
-          </Row>
-        </SubGroup>
-
         <SubGroup label="AR Bucket">
           <Row
             label="最小宽高比"

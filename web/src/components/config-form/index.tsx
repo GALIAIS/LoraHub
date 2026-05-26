@@ -30,6 +30,7 @@ import {
   Shuffle,
   SlidersHorizontal,
   Sparkles,
+  LineChart,
   Wand2,
   Workflow,
   Zap,
@@ -50,6 +51,7 @@ import { ScheduleFields } from "./sections/schedule"
 import { PrecisionFields } from "./sections/precision"
 import { OptimizationFields } from "./sections/optimization"
 import { SamplingFields } from "./sections/sampling"
+import { MonitoringFields } from "./sections/monitoring"
 import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
 import { BackendAnimaLoraFields } from "./sections/backend-anima-lora"
@@ -85,6 +87,7 @@ export const SECTION_BACKENDS: Record<string, readonly BackendKey[]> = {
   augmentation: ["kohya", "diffusion-pipe"], // anima has no augmentation knobs at the top level
   validation: ["kohya", "diffusion-pipe"], // anima uses animaLora.useCmmd + validationSplitNum
   resume: ["kohya", "diffusion-pipe", "anima_lora"], // all three back ends read save_state*
+  monitoring: ["kohya", "diffusion-pipe", "anima_lora"], // wandb is universal: see lorahub/api/wandb_env.py
 }
 
 /**
@@ -371,6 +374,20 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       >
         <SamplingFields value={value.sampling} set={set} errorMap={errorMap} />
       </Section>
+
+      {showsForBackend("monitoring", backendType) && (
+        <Section
+          icon={<LineChart className="size-3.5" />}
+          title="实验跟踪"
+          subtitle="把训练指标推到 wandb.ai 或自托管 W&amp;B Server"
+        >
+          <MonitoringFields
+            value={value.monitoring}
+            set={set}
+            errorMap={errorMap}
+          />
+        </Section>
+      )}
 
       <Section
         icon={<Folder className="size-3.5" />}

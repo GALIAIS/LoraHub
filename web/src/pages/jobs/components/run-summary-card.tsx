@@ -22,6 +22,7 @@ import {
   ArrowDownRight,
   BarChart3,
   ChevronDown,
+  ExternalLink,
   Hourglass,
   Zap,
 } from "lucide-react"
@@ -84,6 +85,25 @@ export function RunSummaryCard({ job, metrics, fallbackTotalSteps }: Props) {
           {collapsed && <CollapsedSnapshot summary={summary} />}
         </button>
         <div className="flex items-center gap-1 shrink-0">
+          {(() => {
+            const url =
+              typeof job?.metadata?.wandb_run_url === "string"
+                ? (job.metadata.wandb_run_url as string)
+                : null
+            if (!url) return null
+            return (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                title="在 wandb.ai 打开本次 run"
+                className="inline-flex items-center gap-1 rounded-[3px] border border-transparent px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-border/60 hover:bg-background/60 hover:text-foreground"
+              >
+                <ExternalLink className="size-3" /> W&amp;B
+              </a>
+            )
+          })()}
           {job?.id && (
             <button
               type="button"

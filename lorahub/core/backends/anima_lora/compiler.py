@@ -466,6 +466,9 @@ def _render_full_config(
     # ---- Sampling preview ----
     _render_sampling(cfg, workspace, cfg_dict)
 
+    # ---- Tracker / monitoring (wandb) ----
+    _render_monitoring(cfg, workspace, cfg_dict)
+
     # ---- Method-specific (network_args + named flags) ----
     _render_method(opts, cfg_dict)
 
@@ -501,6 +504,52 @@ def _render_sampling(
     else:
         prompts_path = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
     cfg_dict["sample_prompts"] = str(prompts_path)
+
+
+def _render_monitoring(
+    cfg: TrainingConfig,
+    workspace: Path,
+    cfg_dict: dict[str, Any],
+) -> None:
+    """Translate ``cfg.monitoring`` into anima_lora's wandb CLI surface.
+
+    Maps the public ``MonitoringConfig`` to the upstream sd-scripts
+    flags: ``--log_with``, ``--logging_dir``, ``--log_tracker_name``,
+    ``--wandb_run_name`` (consumed by
+    ``library/runtime/accelerator.py:116`` and
+    ``library/training/cli_args.py:481``). The upstream code paths
+    flow into ``accelerator.init_trackers(project_name=...,
+    init_kwargs={"wandb": {"name": ...}})``, matching the
+    ``wandb.init`` signature in the official docs.
+
+    Identity fields not exposed via CLI (entity / tags / notes /
+    run_id / group / job_type / mode / resume / base_url) are read by
+    the wandb client from ``WANDB_*`` env vars injected by
+    ``lorahub.api.wandb_env.wandb_env``. The split is intentional: the
+    CLI carries values that belong in the recipe (project, run name,
+    tracker selection); env vars carry per-launch identity.
+
+    Secrets (``--wandb_api_key``) are deliberately not emitted; the
+    job runner injects ``WANDB_API_KEY`` so the api key never lands
+    on disk inside the recipe TOML.
+    """
+    monitoring = cfg.monitoring
+    if not monitoring.enable_wandb:
+        return
+
+    cfg_dict["log_with"] = "wandb"
+    # accelerate's wandb tracker doesn't strictly require a logging
+    # dir, but providing one keeps WANDB_DIR pointed at the workspace
+    # so debug.log / artifacts land alongside the run, matching the
+    # ``logging_dir is required when log_with is tensorboard`` rule
+    # in upstream's accelerator bootstrap.
+    cfg_dict.setdefault("logging_dir", str((workspace / "logs").resolve()))
+    if monitoring.project:
+        # sd-scripts forwards this to accelerator.init_trackers as the
+        # project name, which becomes ``wandb.init(project=...)``.
+        cfg_dict["log_tracker_name"] = monitoring.project
+    if monitoring.run_name:
+        cfg_dict["wandb_run_name"] = monitoring.run_name
 
 
 def _render_method(opts: AnimaLoraOptions, cfg_dict: dict[str, Any]) -> None:
