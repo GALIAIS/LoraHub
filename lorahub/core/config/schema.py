@@ -1,4 +1,4 @@
-"""Semantic recipe schema for LoRA training.
+"""Semantic config schema for LoRA training.
 
 Users write a single YAML file describing *what* they want to train. The schema
 validates it, fills defaults (tuned for 8GB VRAM on SDXL), and later a
@@ -7,7 +7,7 @@ backend-specific compiler translates it into the backend's native arguments.
 The schema deliberately mirrors the union of kohya-ss/sd-scripts argv and
 tdrussell/diffusion-pipe TOML keys. Each backend's compiler emits whichever
 fields its upstream understands and silently ignores the rest, so the same
-recipe can be retargeted between backends with minimal edits.
+config can be retargeted between backends with minimal edits.
 
 Field consumption is split across three layers, which can be confusing when
 spelunking a single field "is anyone reading this?":
@@ -49,7 +49,7 @@ from pydantic.alias_generators import to_camel
 
 # Shared model_config: every YAML field is accepted both in its Python
 # snake_case form and in camelCase (the canonical wire form going forward).
-# `populate_by_name=True` keeps existing recipes valid; `extra="forbid"` is
+# `populate_by_name=True` keeps existing configs valid; `extra="forbid"` is
 # applied per-model where appropriate.
 _CAMEL_CONFIG = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
@@ -61,7 +61,7 @@ class BaseModelConfig(BaseModel):
     # across kohya sd-scripts and diffusion-pipe. Backends are responsible for
     # rejecting arches they do not implement (kohya rejects dp-only entries
     # like `wan` or `hunyuan_video`; dp rejects kohya-only entries like sd15).
-    # Old recipe values stay valid; new values follow each upstream's docs.
+    # Old config values stay valid; new values follow each upstream's docs.
     arch: Literal[
         # kohya sd-scripts (README "Supported Models")
         "sd15",
@@ -323,7 +323,7 @@ class NetworkConfig(BaseModel):
     conv_dim: int | None = Field(default=None, ge=1, le=512)
     conv_alpha: int | None = Field(default=None, ge=1)
     # Regularisation knobs forwarded to sd-scripts as `--network_args`. All
-    # default to 0 / None so existing recipes keep emitting identical argv.
+    # default to 0 / None so existing configs keep emitting identical argv.
     network_dropout: float = Field(0.0, ge=0.0, lt=1.0)
     rank_dropout: float = Field(0.0, ge=0.0, lt=1.0)
     module_dropout: float = Field(0.0, ge=0.0, lt=1.0)
@@ -400,7 +400,7 @@ class OptimizerConfig(BaseModel):
     eps: float = Field(1e-8, gt=0)
     optimizer_args: dict[str, str] = Field(default_factory=dict)
     # Gradient clipping max-norm. kohya: --max_grad_norm; dp: gradient_clipping
-    # (already on DiffusionPipeOptions, this top-level mirror lets recipes
+    # (already on DiffusionPipeOptions, this top-level mirror lets configs
     # share). 0 disables clipping.
     max_grad_norm: float = Field(1.0, ge=0)
     # Custom LR scheduler module (kohya: --lr_scheduler_type).
@@ -501,7 +501,7 @@ class PromptSpec(BaseModel):
 
     The trainer-side prompts file (kohya `--sample_prompts`) is a plain
     text format with `--w` / `--h` / `--d` / `--s` / `--l` / `--n`
-    flags. We let users author prompts directly in the recipe instead
+    flags. We let users author prompts directly in the config instead
     of pointing at a sibling .txt — the launcher materialises the
     kohya-style file under workspace/prompts.txt at job-start time so
     no upstream tooling has to change.
@@ -567,7 +567,7 @@ class SamplingConfig(BaseModel):
     # first comma-separated token of the dataset's .txt captions and
     # picking the most common value. Failing both paths the placeholder
     # (and any trailing ", ") is stripped, leaving a generic prompt.
-    # Lets the same default recipe template adapt to character / style
+    # Lets the same default config template adapt to character / style
     # LoRAs without hand-editing every prompt row.
     trigger_word: str | None = None
     outputs: SamplingOutputs = Field(default_factory=SamplingOutputs)
@@ -669,7 +669,7 @@ class OptimizationConfig(BaseModel):
 
     Each field lines up with an upstream argv or TOML key the per-backend
     compilers already know how to emit. Defaults match upstream defaults
-    so existing recipes keep producing identical commands.
+    so existing configs keep producing identical commands.
     """
 
     model_config = _CAMEL_CONFIG
@@ -677,7 +677,7 @@ class OptimizationConfig(BaseModel):
     # PyTorch 2 graph compilation. kohya: --torch_compile. dp:
     # `pipeline_model.compile(dynamic=True)` is currently unconditional
     # in upstream's train.py, so dp ignores this knob (kept for parity
-    # of UI/recipe shape).
+    # of UI/config shape).
     torch_compile: bool = False
     # Fused LoRA backward + optimizer step. kohya: --fused_backward_pass.
     # Saves one gradient buffer; LoRA-compatible. dp does not have an
@@ -693,7 +693,7 @@ class OptimizationConfig(BaseModel):
     # the forward pass. kohya FLUX/SD3: --blocks_to_swap. dp:
     # `blocks_to_swap` in TOML's [general] block (already supported via
     # backend.diffusion_pipe.blocks_to_swap; this top-level mirror lets
-    # us share recipes across backends without two source-of-truth keys).
+    # us share configs across backends without two source-of-truth keys).
     blocks_to_swap: int = Field(0, ge=0)
     # FP8 base model weight load (FLUX / SD3 / HunyuanImage). VRAM -40%.
     fp8_base: bool = False
@@ -1328,7 +1328,7 @@ class AnimaLoraOptions(BaseModel):
     # Default to ``flash`` to match Backend's base.toml — flash-attn
     # delivers the best throughput on Ampere+ when the build is
     # available. Operators without a working flash-attn install should
-    # flip this to ``torch`` (PyTorch SDPA) in their recipe; SDPA hits
+    # flip this to ``torch`` (PyTorch SDPA) in their config; SDPA hits
     # ~85-95% of flash-attn throughput and is always available.
     attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
     xformers: bool = False
@@ -1350,7 +1350,7 @@ class AnimaLoraOptions(BaseModel):
     #     GPUs that bottleneck on dynamo guard checks rather than FLOPs
     #   * is mutually exclusive with non-zero static_token_count; the
     #     vendored ``compile_blocks`` raises if both are set
-    # Off by default so existing recipes keep their behaviour. Switching
+    # Off by default so existing configs keep their behaviour. Switching
     # ON requires re-caching the dataset (the bucket table changes).
     enable_native_flatten: bool = False
     # Bucket-resolution table override. ``"1536"`` selects the
@@ -1570,7 +1570,7 @@ class ValidationConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
-    """Top-level recipe configuration. One YAML file = one TrainingConfig."""
+    """Top-level config configuration. One YAML file = one TrainingConfig."""
 
     schema_version: str = "1.0"
     base_model: BaseModelConfig

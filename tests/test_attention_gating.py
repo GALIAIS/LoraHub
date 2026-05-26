@@ -82,7 +82,7 @@ def test_blackwell_drops_flash3_and_xformers() -> None:
 
 @pytest.mark.parametrize("cap", ["7.0", "7.5", "8.0", "8.6", "8.9", "9.0", "10.0", "12.0"])
 def test_returned_options_are_subset_of_known_universe(cap: str) -> None:
-    """Every option must be a known recipe-level value."""
+    """Every option must be a known config-level value."""
     out = attention_backends_for_gpu(cap)
     assert set(out).issubset(ALL_ATTENTION_BACKENDS), (cap, out)
     # Every supported list always opens with the safe Pytorch-native set.

@@ -254,7 +254,7 @@ def jobs_resume(
 def jobs_rerun(
     job_id: Annotated[str, typer.Argument(help="Full or trailing job id.")],
 ) -> None:
-    """Re-launch a finished job with the same recipe.
+    """Re-launch a finished job with the same config.
 
     Same caveat as ``resume`` — needs ``lorahub serve`` running.
     """

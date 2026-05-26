@@ -19,7 +19,7 @@ import { EnumSelect, Row, TextInput, ToggleSwitch } from "../widgets"
  *     ``lorahub.api.wandb_env.wandb_env``.
  *
  * The api key lives in user settings (Settings → 网络) and is forwarded as
- * ``WANDB_API_KEY`` so secrets never touch the recipe YAML.
+ * ``WANDB_API_KEY`` so secrets never touch the config YAML.
  */
 export const MonitoringFields = memo(function MonitoringFields({
   value,
@@ -176,7 +176,7 @@ export const MonitoringFields = memo(function MonitoringFields({
           </Row>
           <p className="text-[11px] text-muted-foreground px-1 leading-relaxed">
             API Key 在「设置 → 网络」中填写,启动训练时会以
-            <code> WANDB_API_KEY </code>注入子进程,不会写入 recipe。
+            <code> WANDB_API_KEY </code>注入子进程,不会写入 config。
           </p>
         </>
       )}

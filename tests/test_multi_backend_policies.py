@@ -47,7 +47,7 @@ def _kohya_cfg(**override: Any) -> TrainingConfig:
     """Smallest valid kohya config we can build from the schema.
 
     We assemble the dict manually (vs loading from configs/) so the
-    test isn't coupled to whatever recipes happen to ship.
+    test isn't coupled to whatever configs happen to ship.
     """
     payload: dict[str, Any] = {
         "baseModel": {"arch": "sdxl", "checkpoint": "/tmp/sdxl.safetensors"},
@@ -250,7 +250,7 @@ def test_dp_uncond_fraction_too_high_warns() -> None:
 def test_dp_skips_when_backend_is_kohya() -> None:
     """An anima / kohya cfg must not light dp rules."""
     cfg = _dp_cfg(**{"backend.type": "kohya"})
-    # Strip the dp options bag so cfg is a plausible kohya recipe.
+    # Strip the dp options bag so cfg is a plausible kohya config.
     payload = cfg.model_dump(by_alias=True, mode="json")
     payload["backend"] = {"type": "kohya"}
     fresh = TrainingConfig.model_validate(payload)

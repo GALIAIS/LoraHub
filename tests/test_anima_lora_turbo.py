@@ -32,7 +32,7 @@ from lorahub.core.config.schema import (
 from lorahub.core.events import EventType
 
 
-def _recipe(tmp_path: Path, *, with_turbo: bool) -> TrainingConfig:
+def _config(tmp_path: Path, *, with_turbo: bool) -> TrainingConfig:
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -117,28 +117,28 @@ def test_turbo_field_attachment_optional() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_compile_config_rejects_recipe_with_turbo_set(tmp_path: Path) -> None:
+def test_compile_config_rejects_config_with_turbo_set(tmp_path: Path) -> None:
     """compile_config (train.py path) must refuse when turbo is set.
 
     backend.launch uses the presence of opts.turbo to pick which
     compiler to call. If a caller bypasses launch and invokes
     compile_config directly with turbo set, surface a clear error.
     """
-    cfg = _recipe(tmp_path, with_turbo=True)
+    cfg = _config(tmp_path, with_turbo=True)
     with pytest.raises(CompilationError, match="turbo"):
         compile_config(cfg, tmp_path / "ws")
 
 
 def test_compile_turbo_config_rejects_when_turbo_unset(tmp_path: Path) -> None:
-    """Inverse — compile_turbo_config refuses recipes without turbo."""
-    cfg = _recipe(tmp_path, with_turbo=False)
+    """Inverse — compile_turbo_config refuses configs without turbo."""
+    cfg = _config(tmp_path, with_turbo=False)
     with pytest.raises(CompilationError, match="turbo"):
         compile_turbo_config(cfg, tmp_path / "ws")
 
 
 def test_compile_turbo_emits_distill_turbo_argv(tmp_path: Path) -> None:
-    """Standard turbo recipe produces a clean distill_turbo argv set."""
-    cfg = _recipe(tmp_path, with_turbo=True)
+    """Standard turbo config produces a clean distill_turbo argv set."""
+    cfg = _config(tmp_path, with_turbo=True)
     argv, files = compile_turbo_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv)
 
@@ -163,7 +163,7 @@ def test_compile_turbo_emits_distill_turbo_argv(tmp_path: Path) -> None:
 
 def test_compile_turbo_no_method_or_preset_flags(tmp_path: Path) -> None:
     """Turbo path must NOT emit `--method` / `--preset` — that's train.py only."""
-    cfg = _recipe(tmp_path, with_turbo=True)
+    cfg = _config(tmp_path, with_turbo=True)
     argv, _ = compile_turbo_config(cfg, tmp_path / "ws")
     assert "--method" not in argv, "turbo path must not pass --method"
     assert "--preset" not in argv, "turbo path must not pass --preset"
@@ -171,7 +171,7 @@ def test_compile_turbo_no_method_or_preset_flags(tmp_path: Path) -> None:
 
 def test_compile_turbo_use_custom_down_autograd_off(tmp_path: Path) -> None:
     """`use_custom_down_autograd=False` emits the `--no_use_custom_down_autograd` flag."""
-    cfg = _recipe(tmp_path, with_turbo=True)
+    cfg = _config(tmp_path, with_turbo=True)
     cfg.backend.anima_lora.turbo.__dict__["use_custom_down_autograd"] = False
     argv, _ = compile_turbo_config(cfg, tmp_path / "ws")
     assert "--no_use_custom_down_autograd" in argv
@@ -179,13 +179,13 @@ def test_compile_turbo_use_custom_down_autograd_off(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# backend.launch — turbo recipe picks AnimaLoraTurboRunner not AnimaLoraRunner
+# backend.launch — turbo config picks AnimaLoraTurboRunner not AnimaLoraRunner
 # --------------------------------------------------------------------------- #
 
 
 def test_launch_picks_turbo_runner_when_turbo_set(tmp_path: Path) -> None:
     """backend.launch dispatches to TurboRunner (no accelerate prefix)."""
-    cfg = _recipe(tmp_path, with_turbo=True)
+    cfg = _config(tmp_path, with_turbo=True)
     captured: list[list[str]] = []
 
     def fake_start(self):  # type: ignore[no-untyped-def]
@@ -224,7 +224,7 @@ def test_launch_picks_turbo_runner_when_turbo_set(tmp_path: Path) -> None:
 
 def test_launch_picks_regular_runner_when_turbo_unset(tmp_path: Path) -> None:
     """Without turbo, backend.launch still routes through accelerate launch."""
-    cfg = _recipe(tmp_path, with_turbo=False)
+    cfg = _config(tmp_path, with_turbo=False)
     captured: list[list[str]] = []
 
     def fake_start(self):  # type: ignore[no-untyped-def]

@@ -102,7 +102,7 @@ _PATTERNS: list[tuple[str, str, Severity, str, str]] = [
         r"(KeyboardInterrupt|received signal|user aborted)",
         "info",
         "Training was canceled by the user (Ctrl+C / API cancel).",
-        "Resume with the same recipe — the saver wrote a checkpoint at "
+        "Resume with the same config — the saver wrote a checkpoint at "
         "the last save_every_n_epochs boundary.",
     ),
     (
@@ -229,7 +229,7 @@ _PATTERNS: list[tuple[str, str, Severity, str, str]] = [
         "error",
         "A dataset image has no matching caption.txt file.",
         "Either generate captions for the offending images (image-studio "
-        "→ AI 标注), set dataset.caption.required=false in the recipe, "
+        "→ AI 标注), set dataset.caption.required=false in the config, "
         "or remove the orphan images.",
     ),
     (

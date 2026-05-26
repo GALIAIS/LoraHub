@@ -378,7 +378,7 @@ def _check_backend_repo(cfg: TrainingConfig) -> list[PreflightFinding]:
 
 
 def _check_python_executable(cfg: TrainingConfig) -> list[PreflightFinding]:
-    """If the recipe pins a Python executable, ensure it exists & is callable."""
+    """If the config pins a Python executable, ensure it exists & is callable."""
     out: list[PreflightFinding] = []
     py = cfg.backend.python_executable
     if py is None:

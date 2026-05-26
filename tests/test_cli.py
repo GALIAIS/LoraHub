@@ -54,12 +54,12 @@ def _make_stub_sd_scripts(root: Path) -> Path:
     return root
 
 
-def _make_recipe_yaml(tmp_path: Path, sd_scripts: Path) -> Path:
+def _make_config_yaml(tmp_path: Path, sd_scripts: Path) -> Path:
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
-    recipe = {
+    config = {
         "base_model": {"checkpoint": str(ckpt)},
         "dataset": {"source": str(data)},
         "schedule": {"epochs": 1, "batch_size": 1},
@@ -70,7 +70,7 @@ def _make_recipe_yaml(tmp_path: Path, sd_scripts: Path) -> Path:
         },
     }
     path = tmp_path / "config.yaml"
-    path.write_text(yaml.dump(recipe), encoding="utf-8")
+    path.write_text(yaml.dump(config), encoding="utf-8")
     return path
 
 
@@ -82,22 +82,22 @@ def test_version_command() -> None:
 
 def test_validate_passes(tmp_path: Path) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe_yaml(tmp_path, sd)
-    result = runner.invoke(app, ["validate", str(recipe)])
+    config = _make_config_yaml(tmp_path, sd)
+    result = runner.invoke(app, ["validate", str(config)])
     assert result.exit_code == 0
     assert "valid" in result.stdout
 
 
 def test_validate_fails_for_missing_sd_scripts(tmp_path: Path) -> None:
-    recipe = _make_recipe_yaml(tmp_path, tmp_path / "missing")
-    result = runner.invoke(app, ["validate", str(recipe)])
+    config = _make_config_yaml(tmp_path, tmp_path / "missing")
+    result = runner.invoke(app, ["validate", str(config)])
     assert result.exit_code == 1
 
 
 def test_info_renders_summary(tmp_path: Path) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe_yaml(tmp_path, sd)
-    result = runner.invoke(app, ["info", str(recipe)])
+    config = _make_config_yaml(tmp_path, sd)
+    result = runner.invoke(app, ["info", str(config)])
     assert result.exit_code == 0
     assert "sdxl" in result.stdout
     assert "VRAM" in result.stdout
@@ -105,15 +105,15 @@ def test_info_renders_summary(tmp_path: Path) -> None:
 
 def test_train_runs_end_to_end(tmp_path: Path) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe_yaml(tmp_path, sd)
+    config = _make_config_yaml(tmp_path, sd)
     ws = tmp_path / "ws"
-    result = runner.invoke(app, ["train", str(recipe), "--workspace", str(ws)])
+    result = runner.invoke(app, ["train", str(config), "--workspace", str(ws)])
     assert result.exit_code == 0, result.stdout
     assert "training complete" in result.stdout
     assert (ws / "events.jsonl").exists()
 
 
-def test_init_scaffolds_recipe(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_init_scaffolds_config(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init", "my_lora"])
     assert result.exit_code == 0
@@ -130,14 +130,14 @@ def test_sweep_dry_run_lists_variants(tmp_path: Path) -> None:
     """`lorahub sweep ... --dry-run` prints each variant name and its diff
     without touching disk."""
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe_yaml(tmp_path, sd)
-    output_root = tmp_path / "recipes-out"
+    config = _make_config_yaml(tmp_path, sd)
+    output_root = tmp_path / "configs-out"
 
     result = runner.invoke(
         app,
         [
             "sweep",
-            str(recipe),
+            str(config),
             "--axis",
             "network.rank=16,32",
             "--axis",

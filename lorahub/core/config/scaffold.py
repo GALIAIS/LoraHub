@@ -1,7 +1,7 @@
-﻿"""Recipe scaffolder — turn known facts (GPU, dataset, base model) into a recipe.
+﻿"""Config scaffolder — turn known facts (GPU, dataset, base model) into a config.
 
 `auto_scaffold()` picks reasonable defaults the way a human writes a fresh
-recipe: rank/batch by VRAM tier, num_repeats inversely by image count,
+config: rank/batch by VRAM tier, num_repeats inversely by image count,
 target architecture from the checkpoint filename. The output is a fully
 populated `TrainingConfig` ready to dump to YAML.
 """
@@ -22,7 +22,7 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 @dataclass(frozen=True, slots=True)
 class VRAMTier:
-    """Recipe parameters tuned for a particular VRAM band."""
+    """Config parameters tuned for a particular VRAM band."""
 
     min_mib: int
     rank: int
@@ -173,7 +173,7 @@ def auto_scaffold(
     """Build a TrainingConfig from probed facts and tier defaults.
 
     `vram_mib=None` triggers `detect_gpu_vram_mib()`; if that fails too we
-    assume the conservative 8GB tier so the recipe is still runnable on
+    assume the conservative 8GB tier so the config is still runnable on
     most users' machines.
     """
     if vram_mib is None:

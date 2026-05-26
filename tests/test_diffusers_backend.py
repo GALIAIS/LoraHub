@@ -107,7 +107,7 @@ def test_render_raises_unavailable_when_diffusers_missing(
 
 
 # --------------------------------------------------------------------------- #
-# Factory — recipe-aware base id resolution
+# Factory — config-aware base id resolution
 # --------------------------------------------------------------------------- #
 
 
@@ -122,8 +122,8 @@ class _FakeRecipe:
 
 
 def test_factory_returns_none_for_unsupported_arch() -> None:
-    assert _factory(arch="hunyuan_video", recipe=None, workspace=None) is None
-    assert _factory(arch="anima", recipe=None, workspace=None) is None
+    assert _factory(arch="hunyuan_video", config=None, workspace=None) is None
+    assert _factory(arch="anima", config=None, workspace=None) is None
 
 
 def test_factory_returns_none_when_diffusers_missing(
@@ -141,7 +141,7 @@ def test_factory_returns_none_when_diffusers_missing(
         if mod == "diffusers" or mod.startswith("diffusers."):
             sys.modules.pop(mod, None)
 
-    assert _factory(arch="sdxl", recipe=None, workspace=None) is None
+    assert _factory(arch="sdxl", config=None, workspace=None) is None
 
 
 def test_factory_picks_local_checkpoint_when_present(
@@ -153,9 +153,9 @@ def test_factory_picks_local_checkpoint_when_present(
 
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_text("fake")
-    recipe = _FakeRecipe(checkpoint=ckpt)
+    config = _FakeRecipe(checkpoint=ckpt)
 
-    backend = _factory(arch="sdxl", recipe=recipe, workspace=tmp_path)
+    backend = _factory(arch="sdxl", config=config, workspace=tmp_path)
     assert backend is not None
     assert backend.base_model_id == str(ckpt)
 
@@ -167,7 +167,7 @@ def test_factory_treats_missing_local_path_as_repo_id(
     fake_diffusers = type(sys)("diffusers")
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
 
-    recipe = _FakeRecipe(checkpoint="some-org/some-repo")
-    backend = _factory(arch="sdxl", recipe=recipe, workspace=tmp_path)
+    config = _FakeRecipe(checkpoint="some-org/some-repo")
+    backend = _factory(arch="sdxl", config=config, workspace=tmp_path)
     assert backend is not None
     assert backend.base_model_id == "some-org/some-repo"

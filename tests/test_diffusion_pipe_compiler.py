@@ -18,7 +18,7 @@ from lorahub.core.backends.diffusion_pipe.compiler import (
 from lorahub.core.config.schema import TrainingConfig
 
 
-def _recipe(**overrides: object) -> TrainingConfig:
+def _config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
         "dataset": {"source": "/d/imgs"},
@@ -50,7 +50,7 @@ def _dataset_toml(cfg: TrainingConfig, ws: Path = Path("/ws")) -> str:
 
 
 def test_argv_uses_deepspeed_and_workspace_config(tmp_path: Path) -> None:
-    argv, files = _compile(_recipe(), tmp_path)
+    argv, files = _compile(_config(), tmp_path)
     assert argv[0] == "--deepspeed"
     assert "--config" in argv
     cfg_path = Path(argv[argv.index("--config") + 1])
@@ -60,43 +60,43 @@ def test_argv_uses_deepspeed_and_workspace_config(tmp_path: Path) -> None:
 
 
 def test_two_files_written_under_workspace(tmp_path: Path) -> None:
-    _argv, files = _compile(_recipe(), tmp_path)
+    _argv, files = _compile(_config(), tmp_path)
     assert set(p.name for p in files) == {"diffusion_pipe.toml", "dataset.toml"}
     for p in files:
         assert tmp_path.resolve() in p.parents
 
 
-def test_flux_recipe_emits_diffusers_path() -> None:
-    cfg = _recipe(base_model={"arch": "flux", "checkpoint": "/models/FLUX.1-dev"})
+def test_flux_config_emits_diffusers_path() -> None:
+    cfg = _config(base_model={"arch": "flux", "checkpoint": "/models/FLUX.1-dev"})
     main = _main_toml(cfg)
     assert "type = \"flux\"" in main
     assert f'diffusers_path = "{_toml_repr("/models/FLUX.1-dev")}"' in main
     assert "checkpoint_path" not in main
 
 
-def test_sdxl_recipe_emits_checkpoint_path() -> None:
-    cfg = _recipe(base_model={"arch": "sdxl", "checkpoint": "/models/sdxl.safetensors"})
+def test_sdxl_config_emits_checkpoint_path() -> None:
+    cfg = _config(base_model={"arch": "sdxl", "checkpoint": "/models/sdxl.safetensors"})
     main = _main_toml(cfg)
     assert "type = \"sdxl\"" in main
     assert f'checkpoint_path = "{_toml_repr("/models/sdxl.safetensors")}"' in main
     assert "diffusers_path" not in main
 
 
-def test_sd3_recipe_emits_diffusers_path() -> None:
-    cfg = _recipe(base_model={"arch": "sd3", "checkpoint": "/models/sd3"})
+def test_sd3_config_emits_diffusers_path() -> None:
+    cfg = _config(base_model={"arch": "sd3", "checkpoint": "/models/sd3"})
     main = _main_toml(cfg)
     assert "type = \"sd3\"" in main
     assert f'diffusers_path = "{_toml_repr("/models/sd3")}"' in main
 
 
 def test_sd15_rejected_with_actionable_error() -> None:
-    cfg = _recipe(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
+    cfg = _config(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
     with pytest.raises(CompilationError, match="does not support arch"):
         _compile(cfg)
 
 
 def test_adapter_section_uses_lora_with_rank() -> None:
-    cfg = _recipe(network={"type": "lora", "rank": 64, "alpha": 32})
+    cfg = _config(network={"type": "lora", "rank": 64, "alpha": 32})
     main = _main_toml(cfg)
     assert "[adapter]" in main
     assert "type = 'lora'" in main
@@ -106,13 +106,13 @@ def test_adapter_section_uses_lora_with_rank() -> None:
 
 
 def test_non_lora_network_rejected() -> None:
-    cfg = _recipe(network={"type": "locon"})
+    cfg = _config(network={"type": "locon"})
     with pytest.raises(CompilationError, match="only supports network.type='lora'"):
         _compile(cfg)
 
 
 def test_optimizer_maps_known_names() -> None:
-    cfg = _recipe(optimizer={"type": "adamw_optimi", "lr": {"unet": 2e-5}})
+    cfg = _config(optimizer={"type": "adamw_optimi", "lr": {"unet": 2e-5}})
     main = _main_toml(cfg)
     assert 'type = "adamw_optimi"' in main
     assert "lr = 2e-05" in main
@@ -121,50 +121,50 @@ def test_optimizer_maps_known_names() -> None:
 def test_optimizer_unknown_passes_through_for_pytorch_optimizer() -> None:
     # diffusion-pipe falls back to pytorch_optimizer for unknown types,
     # so we shouldn't reject them at compile time.
-    cfg = _recipe(optimizer={"type": "Lamb"})
+    cfg = _config(optimizer={"type": "Lamb"})
     main = _main_toml(cfg)
     assert 'type = "Lamb"' in main
 
 
 def test_schedule_cosine_with_restarts_collapses_to_cosine() -> None:
-    cfg = _recipe(optimizer={"schedule": "cosine_with_restarts"})
+    cfg = _config(optimizer={"schedule": "cosine_with_restarts"})
     main = _main_toml(cfg)
     assert 'lr_scheduler = "cosine"' in main
 
 
 def test_schedule_constant_omits_lr_scheduler_field() -> None:
-    cfg = _recipe(optimizer={"schedule": "constant"})
+    cfg = _config(optimizer={"schedule": "constant"})
     main = _main_toml(cfg)
     # diffusion-pipe defaults to constant when the field is absent.
     assert "lr_scheduler" not in main
 
 
 def test_schedule_max_steps_passthrough() -> None:
-    cfg = _recipe(schedule={"epochs": 5, "max_steps": 1234})
+    cfg = _config(schedule={"epochs": 5, "max_steps": 1234})
     main = _main_toml(cfg)
     assert "max_steps = 1234" in main
 
 
 def test_save_dtype_translates_to_diffusion_pipe_names() -> None:
-    cfg = _recipe(output={"name": "x", "save_dtype": "bf16"})
+    cfg = _config(output={"name": "x", "save_dtype": "bf16"})
     main = _main_toml(cfg)
     assert 'save_dtype = "bfloat16"' in main
 
 
 def test_dataset_resolution_single_value() -> None:
-    cfg = _recipe(dataset={"source": "/d", "resolution": [512]})
+    cfg = _config(dataset={"source": "/d", "resolution": [512]})
     ds = _dataset_toml(cfg)
     assert "resolutions = [512]" in ds
 
 
 def test_dataset_resolution_pair_uses_nested_array() -> None:
-    cfg = _recipe(dataset={"source": "/d", "resolution": [1024, 768]})
+    cfg = _config(dataset={"source": "/d", "resolution": [1024, 768]})
     ds = _dataset_toml(cfg)
     assert "resolutions = [[1024, 768]]" in ds
 
 
 def test_dataset_directory_section_includes_path_and_repeats() -> None:
-    cfg = _recipe(dataset={"source": "/d/imgs", "num_repeats": 3})
+    cfg = _config(dataset={"source": "/d/imgs", "num_repeats": 3})
     ds = _dataset_toml(cfg)
     assert "[[directory]]" in ds
     assert f'path = "{_toml_repr("/d/imgs")}"' in ds
@@ -172,17 +172,17 @@ def test_dataset_directory_section_includes_path_and_repeats() -> None:
 
 
 def test_dataset_ar_bucket_toggle() -> None:
-    on = _dataset_toml(_recipe())
+    on = _dataset_toml(_config())
     assert "enable_ar_bucket = true" in on
     assert "min_ar = 0.5" in on
-    cfg = _recipe(dataset={"source": "/d", "bucket": {"enabled": False}})
+    cfg = _config(dataset={"source": "/d", "bucket": {"enabled": False}})
     off = _dataset_toml(cfg)
     assert "enable_ar_bucket = false" in off
     assert "min_ar" not in off
 
 
 def test_main_toml_points_at_dataset_toml(tmp_path: Path) -> None:
-    main = _main_toml(_recipe(), ws=tmp_path)
+    main = _main_toml(_config(), ws=tmp_path)
     expected = tmp_path.resolve() / "dataset.toml"
     # Path is escaped for TOML; check the basename + parent appear.
     assert "dataset.toml" in main
@@ -192,15 +192,15 @@ def test_main_toml_points_at_dataset_toml(tmp_path: Path) -> None:
 
 
 def test_output_dir_defaults_under_workspace(tmp_path: Path) -> None:
-    main = _main_toml(_recipe(), ws=tmp_path)
+    main = _main_toml(_config(), ws=tmp_path)
     assert "output_dir" in main
     assert "output" in main
 
 
-def test_activation_checkpointing_follows_recipe_flag() -> None:
-    on = _main_toml(_recipe(gradient_checkpointing=True))
+def test_activation_checkpointing_follows_config_flag() -> None:
+    on = _main_toml(_config(gradient_checkpointing=True))
     assert "activation_checkpointing = true" in on
-    off = _main_toml(_recipe(gradient_checkpointing=False))
+    off = _main_toml(_config(gradient_checkpointing=False))
     assert "activation_checkpointing = false" in off
 
 
@@ -211,7 +211,7 @@ def test_activation_checkpointing_follows_recipe_flag() -> None:
 
 def test_default_options_preserve_legacy_general_fields() -> None:
     """Without `backend.diffusion_pipe`, the toml retains the old hard-coded knobs."""
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "pipeline_stages = 1" in main
     assert "gradient_clipping = 1.0" in main
     assert 'partition_method = "parameters"' in main
@@ -223,19 +223,19 @@ def test_default_options_preserve_legacy_general_fields() -> None:
 
 
 def test_blocks_to_swap_emitted_when_positive() -> None:
-    cfg = _recipe(backend={"type": "diffusion-pipe", "diffusion_pipe": {"blocks_to_swap": 20}})
+    cfg = _config(backend={"type": "diffusion-pipe", "diffusion_pipe": {"blocks_to_swap": 20}})
     main = _main_toml(cfg)
     assert "blocks_to_swap = 20" in main
 
 
 def test_compile_flag_emitted_when_true() -> None:
-    cfg = _recipe(backend={"type": "diffusion-pipe", "diffusion_pipe": {"compile": True}})
+    cfg = _config(backend={"type": "diffusion-pipe", "diffusion_pipe": {"compile": True}})
     main = _main_toml(cfg)
     assert "compile = true" in main
 
 
 def test_partition_method_uniform_overrides_default() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={"type": "diffusion-pipe", "diffusion_pipe": {"partition_method": "uniform"}}
     )
     main = _main_toml(cfg)
@@ -243,13 +243,13 @@ def test_partition_method_uniform_overrides_default() -> None:
 
 
 def test_eval_section_absent_by_default() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "eval_every_n_epochs" not in main
     assert "eval_before_first_step" not in main
 
 
 def test_eval_section_emitted_when_every_n_epochs_set() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -266,7 +266,7 @@ def test_eval_section_emitted_when_every_n_epochs_set() -> None:
 
 
 def test_monitoring_section_disabled_by_default() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "[monitoring]" in main
     assert "enable_wandb = false" in main
     # Optional sub-keys absent.
@@ -275,7 +275,7 @@ def test_monitoring_section_disabled_by_default() -> None:
 
 
 def test_monitoring_section_with_wandb_keys() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -289,7 +289,7 @@ def test_monitoring_section_with_wandb_keys() -> None:
     assert "enable_wandb = true" in main
     assert 'wandb_tracker_name = "lorahub_runs"' in main
     assert 'wandb_run_name = "exp-42"' in main
-    # Secret intentionally not in the recipe.
+    # Secret intentionally not in the config.
     assert "wandb_api_key" not in main
 
 
@@ -299,14 +299,14 @@ def test_monitoring_section_with_wandb_keys() -> None:
 
 
 def test_dataset_ar_defaults_match_legacy_values() -> None:
-    ds = _dataset_toml(_recipe())
+    ds = _dataset_toml(_config())
     assert "min_ar = 0.5" in ds
     assert "max_ar = 2.0" in ds
     assert "num_ar_buckets = 7" in ds
 
 
 def test_dataset_ar_overrides_via_options() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -323,13 +323,13 @@ def test_dataset_ar_overrides_via_options() -> None:
 
 
 def test_dataset_cache_shuffle_and_skip_empty_caption_defaults() -> None:
-    ds = _dataset_toml(_recipe())
+    ds = _dataset_toml(_config())
     assert "cache_shuffle_num = 0" in ds
     assert "skip_empty_caption = true" in ds
 
 
 def test_dataset_cache_shuffle_override() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -343,7 +343,7 @@ def test_dataset_cache_shuffle_override() -> None:
     assert "skip_empty_caption = false" in ds
 def test_optimizer_betas_weight_decay_eps_render_to_toml() -> None:
     main = _main_toml(
-        _recipe(optimizer={"betas": [0.95, 0.98], "weight_decay": 0.05, "eps": 1e-7})
+        _config(optimizer={"betas": [0.95, 0.98], "weight_decay": 0.05, "eps": 1e-7})
     )
     assert "betas = [0.95, 0.98]" in main
     assert "weight_decay = 0.05" in main
@@ -352,7 +352,7 @@ def test_optimizer_betas_weight_decay_eps_render_to_toml() -> None:
 
 def test_optimizer_args_extra_keys_render_to_toml() -> None:
     main = _main_toml(
-        _recipe(optimizer={"optimizer_args": {"foreach": "true", "amsgrad": "false"}})
+        _config(optimizer={"optimizer_args": {"foreach": "true", "amsgrad": "false"}})
     )
     assert "foreach =" in main
     assert "amsgrad =" in main
@@ -390,19 +390,19 @@ def test_optimizer_args_extra_keys_render_to_toml() -> None:
     ],
 )
 def test_dp_arch_emits_correct_model_type(arch: str, dp_type: str) -> None:
-    cfg = _recipe(base_model={"arch": arch, "checkpoint": "/m/ckpt"})
+    cfg = _config(base_model={"arch": arch, "checkpoint": "/m/ckpt"})
     main = _main_toml(cfg)
     assert f'type = "{dp_type}"' in main
 
 
 def test_dp_rejects_kohya_only_arch_sd15() -> None:
-    cfg = _recipe(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
+    cfg = _config(base_model={"arch": "sd15", "checkpoint": "/m/sd15"})
     with pytest.raises(CompilationError, match="does not support arch"):
         _compile(cfg)
 
 
 def test_dp_rejects_kohya_only_arch_sd2() -> None:
-    cfg = _recipe(base_model={"arch": "sd2", "checkpoint": "/m/sd2"})
+    cfg = _config(base_model={"arch": "sd2", "checkpoint": "/m/sd2"})
     with pytest.raises(CompilationError, match="does not support arch"):
         _compile(cfg)
 
@@ -414,7 +414,7 @@ def test_dp_rejects_kohya_only_arch_sd2() -> None:
 
 def test_dp_model_paths_render_to_toml() -> None:
     """model_paths flatten into the [model] block as `key = "value"` lines."""
-    cfg = _recipe(
+    cfg = _config(
         base_model={"arch": "anima", "checkpoint": "/m/anima"},
         backend={
             "type": "diffusion-pipe",
@@ -436,7 +436,7 @@ def test_dp_model_paths_render_to_toml() -> None:
 
 def test_dp_model_paths_override_default_diffusers_path() -> None:
     """Explicit `diffusers_path` in model_paths wins over the default."""
-    cfg = _recipe(
+    cfg = _config(
         base_model={"arch": "flux", "checkpoint": "/auto/inferred"},
         backend={
             "type": "diffusion-pipe",
@@ -462,7 +462,7 @@ def test_dp_model_paths_override_default_diffusers_path() -> None:
 def test_dp_full_bf16_emits_optim_dtype() -> None:
     # Plain torch AdamW accepts optim_dtype, so full_bf16 must surface
     # it in the [optimizer] block.
-    cfg = _recipe(
+    cfg = _config(
         optimization={"full_bf16": True},
         optimizer={"type": "adamw"},
     )
@@ -471,7 +471,7 @@ def test_dp_full_bf16_emits_optim_dtype() -> None:
 
 
 def test_dp_full_bf16_default_omits_optim_dtype() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "optim_dtype" not in main
 
 
@@ -480,7 +480,7 @@ def test_dp_full_bf16_with_8bit_optimizer_omits_optim_dtype() -> None:
     # optim_dtype kwarg (state is fp32 by design). full_bf16 must be a
     # no-op for these so dp doesn't crash with a TypeError.
     for q_type in ("adamw8bit", "lion8bit", "paged_adamw_8bit", "adamw8bitkahan"):
-        cfg = _recipe(
+        cfg = _config(
             optimization={"full_bf16": True},
             optimizer={"type": q_type},
         )
@@ -492,7 +492,7 @@ def test_dp_full_bf16_with_8bit_optimizer_omits_optim_dtype() -> None:
 
 def test_dp_blocks_to_swap_top_level_wins_over_dp_options() -> None:
     """`cfg.optimization.blocks_to_swap` overrides the dp-specific knob."""
-    cfg = _recipe(
+    cfg = _config(
         optimization={"blocks_to_swap": 12},
         backend={
             "type": "diffusion-pipe",
@@ -505,8 +505,8 @@ def test_dp_blocks_to_swap_top_level_wins_over_dp_options() -> None:
 
 
 def test_dp_blocks_to_swap_legacy_field_still_works() -> None:
-    """Old recipes setting only `backend.diffusion_pipe.blocks_to_swap` still emit."""
-    cfg = _recipe(
+    """Old configs setting only `backend.diffusion_pipe.blocks_to_swap` still emit."""
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"blocks_to_swap": 7},
@@ -517,14 +517,14 @@ def test_dp_blocks_to_swap_legacy_field_still_works() -> None:
 
 
 def test_dp_blocks_to_swap_emitted_from_top_level() -> None:
-    cfg = _recipe(optimization={"blocks_to_swap": 5})
+    cfg = _config(optimization={"blocks_to_swap": 5})
     main = _main_toml(cfg)
     assert "blocks_to_swap = 5" in main
 
 
 def test_dp_torch_compile_optimization_field_is_noop() -> None:
     """dp ignores `cfg.optimization.torch_compile` (its own `compile` flag still works)."""
-    cfg = _recipe(optimization={"torch_compile": True})
+    cfg = _config(optimization={"torch_compile": True})
     main = _main_toml(cfg)
     # No `compile = true` from the optimization knob alone.
     assert "compile = true" not in main
@@ -532,7 +532,7 @@ def test_dp_torch_compile_optimization_field_is_noop() -> None:
 
 def test_dp_fused_backward_pass_optimization_field_is_noop() -> None:
     """dp has no fused-backward concept; the field shouldn't fail compilation."""
-    cfg = _recipe(optimization={"fused_backward_pass": True})
+    cfg = _config(optimization={"fused_backward_pass": True})
     # Just verify it compiles cleanly without crashing.
     main = _main_toml(cfg)
     assert "fused_backward" not in main
@@ -541,7 +541,7 @@ def test_dp_fused_backward_pass_optimization_field_is_noop() -> None:
 def test_dp_optimization_kitchen_sink() -> None:
     # full_bf16 surfaces optim_dtype only when the optimizer accepts it —
     # explicit adamw here so the kitchen-sink assertion stays meaningful.
-    cfg = _recipe(
+    cfg = _config(
         optimization={
             "torch_compile": True,
             "fused_backward_pass": True,
@@ -562,10 +562,10 @@ def test_sampling_attention_legacy_field_silently_ignored() -> None:
     eval/sample reuses the training attention kernel). Legacy YAML
     files carrying it must still load — pydantic's default
     ``extra="ignore"`` policy on SamplingConfig drops the unknown
-    key. Resulting TOML stays byte-identical to a recipe that omits
+    key. Resulting TOML stays byte-identical to a config that omits
     the field."""
-    baseline = _main_toml(_recipe())
-    cfg = _recipe(sampling={"attention": "sageattn"})
+    baseline = _main_toml(_config())
+    cfg = _config(sampling={"attention": "sageattn"})
     main = _main_toml(cfg)
     assert main == baseline
 
@@ -575,14 +575,14 @@ def test_sampling_attention_legacy_field_silently_ignored() -> None:
 
 
 def test_attention_default_emits_no_marker_comment() -> None:
-    """Vanilla recipes shouldn't grow an attention comment."""
-    main = _main_toml(_recipe())
+    """Vanilla configs shouldn't grow an attention comment."""
+    main = _main_toml(_config())
     assert "attention.training" not in main
 
 
 def test_attention_flash3_compiles_without_error() -> None:
     """`flash3` is purely advisory on dp — compile_config must succeed."""
-    cfg = _recipe(attention={"training": "flash3"})
+    cfg = _config(attention={"training": "flash3"})
     argv, files = _compile(cfg, Path("/ws"))
     # argv shape stays unchanged
     assert argv[0] == "--deepspeed"
@@ -592,7 +592,7 @@ def test_attention_flash3_compiles_without_error() -> None:
 
 
 def test_attention_flash4_compiles_without_error() -> None:
-    cfg = _recipe(attention={"training": "flash4"})
+    cfg = _config(attention={"training": "flash4"})
     argv, files = _compile(cfg, Path("/ws"))
     assert "--deepspeed" in argv
     main_path = Path("/ws").resolve() / "diffusion_pipe.toml"
@@ -603,7 +603,7 @@ def test_attention_xformers_logs_but_compiles(caplog: pytest.LogCaptureFixture) 
     """dp doesn't honour xformers; log a warning but never error."""
     import logging
 
-    cfg = _recipe(attention={"training": "xformers"})
+    cfg = _config(attention={"training": "xformers"})
     with caplog.at_level(logging.WARNING):
         argv, _files = _compile(cfg, Path("/ws"))
     assert "--deepspeed" in argv
@@ -651,8 +651,8 @@ DEFAULT_OMITTED_KEYS: list[str] = [
 ]
 
 
-def test_default_recipe_omits_every_optional_key() -> None:
-    main = _main_toml(_recipe())
+def test_default_config_omits_every_optional_key() -> None:
+    main = _main_toml(_config())
     for key in DEFAULT_OMITTED_KEYS:
         assert f"{key} =" not in main, f"unexpected {key} in default TOML"
 
@@ -661,7 +661,7 @@ def test_default_recipe_omits_every_optional_key() -> None:
 
 
 def test_partition_split_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"partition_split": [10, 20]},
@@ -672,7 +672,7 @@ def test_partition_split_emitted() -> None:
 
 
 def test_reentrant_activation_checkpointing_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"reentrant_activation_checkpointing": True},
@@ -683,7 +683,7 @@ def test_reentrant_activation_checkpointing_emitted() -> None:
 
 
 def test_disable_block_swap_for_eval_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"disable_block_swap_for_eval": True},
@@ -694,7 +694,7 @@ def test_disable_block_swap_for_eval_emitted() -> None:
 
 
 def test_image_micro_batch_size_per_gpu_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -709,7 +709,7 @@ def test_image_micro_batch_size_per_gpu_emitted() -> None:
 
 
 def test_force_constant_lr_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"force_constant_lr": 1e-5},
@@ -720,9 +720,9 @@ def test_force_constant_lr_emitted() -> None:
 
 
 def test_uncond_fraction_emitted_only_when_positive() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "uncond_fraction" not in main
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"uncond_fraction": 0.1},
@@ -733,7 +733,7 @@ def test_uncond_fraction_emitted_only_when_positive() -> None:
 
 
 def test_x_axis_examples_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"x_axis_examples": True},
@@ -744,9 +744,9 @@ def test_x_axis_examples_emitted() -> None:
 
 
 def test_logging_steps_emitted_only_when_overridden() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "logging_steps" not in main  # default 1 is dp default
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"logging_steps": 10},
@@ -757,9 +757,9 @@ def test_logging_steps_emitted_only_when_overridden() -> None:
 
 
 def test_video_clip_mode_emitted_only_when_non_default() -> None:
-    main = _main_toml(_recipe())
+    main = _main_toml(_config())
     assert "video_clip_mode" not in main  # default single_beginning is dp default
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"video_clip_mode": "single_middle"},
@@ -770,26 +770,26 @@ def test_video_clip_mode_emitted_only_when_non_default() -> None:
 
 
 def test_map_num_proc_emitted_from_dataloader() -> None:
-    cfg = _recipe(dataloader={"map_num_proc": 32})
+    cfg = _config(dataloader={"map_num_proc": 32})
     main = _main_toml(cfg)
     assert "map_num_proc = 32" in main
 
 
 def test_save_every_n_steps_and_examples_emitted() -> None:
-    cfg = _recipe(output={"save_every_n_steps": 100, "save_every_n_examples": 1000})
+    cfg = _config(output={"save_every_n_steps": 100, "save_every_n_examples": 1000})
     main = _main_toml(cfg)
     assert "save_every_n_steps = 100" in main
     assert "save_every_n_examples = 1000" in main
 
 
 def test_pseudo_huber_c_emitted() -> None:
-    cfg = _recipe(loss={"pseudo_huber_c": 0.5})
+    cfg = _config(loss={"pseudo_huber_c": 0.5})
     main = _main_toml(cfg)
     assert "pseudo_huber_c = 0.5" in main
 
 
 def test_checkpoint_cadence_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -804,7 +804,7 @@ def test_checkpoint_cadence_emitted() -> None:
 
 
 def test_eval_section_with_steps_and_examples() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -821,7 +821,7 @@ def test_eval_section_with_steps_and_examples() -> None:
 
 
 def test_eval_datasets_emitted_as_inline_table_array() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {
@@ -843,7 +843,7 @@ def test_eval_datasets_emitted_as_inline_table_array() -> None:
 
 
 def test_transformer_dtype_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"transformer_dtype": "float8_e4m3fn"},
@@ -854,7 +854,7 @@ def test_transformer_dtype_emitted() -> None:
 
 
 def test_diffusion_model_dtype_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"diffusion_model_dtype": "float8_e4m3fn"},
@@ -865,7 +865,7 @@ def test_diffusion_model_dtype_emitted() -> None:
 
 
 def test_timestep_sample_method_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         backend={
             "type": "diffusion-pipe",
             "diffusion_pipe": {"timestep_sample_method": "logit_normal"},
@@ -879,7 +879,7 @@ def test_timestep_sample_method_emitted() -> None:
 
 
 def test_arch_paths_render_to_model_section() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "anima",
             "checkpoint": "/m/anima",
@@ -901,7 +901,7 @@ def test_arch_paths_render_to_model_section() -> None:
 
 
 def test_arch_paths_clip_t5_ae_render() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -925,7 +925,7 @@ def test_arch_paths_clip_t5_ae_render() -> None:
 
 
 def test_arch_paths_legacy_vae_renders_as_vae_path() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -937,7 +937,7 @@ def test_arch_paths_legacy_vae_renders_as_vae_path() -> None:
 
 
 def test_arch_paths_token_caps_emitted() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -955,7 +955,7 @@ def test_arch_paths_token_caps_emitted() -> None:
 
 
 def test_arch_paths_attn_masks_and_dropouts() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -977,7 +977,7 @@ def test_arch_paths_attn_masks_and_dropouts() -> None:
 
 
 def test_arch_paths_guidance_scale_and_vae_tweaks() -> None:
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -995,8 +995,8 @@ def test_arch_paths_guidance_scale_and_vae_tweaks() -> None:
 
 
 def test_arch_paths_default_unchanged_byte_identical() -> None:
-    """A recipe with no arch_paths fields should produce zero new keys."""
-    main = _main_toml(_recipe())
+    """A config with no arch_paths fields should produce zero new keys."""
+    main = _main_toml(_config())
     assert "transformer_path" not in main
     assert "llm_path" not in main
     assert "vae_path" not in main
@@ -1005,7 +1005,7 @@ def test_arch_paths_default_unchanged_byte_identical() -> None:
 
 def test_model_paths_legacy_overrides_arch_paths_collisions() -> None:
     """`model_paths` (free dict) wins over `arch_paths` for shared keys."""
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -1026,7 +1026,7 @@ def test_model_paths_legacy_overrides_arch_paths_collisions() -> None:
 
 def test_model_paths_and_arch_paths_dont_clobber_distinct_keys() -> None:
     """When keys differ, both arch_paths and model_paths render."""
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -1048,7 +1048,7 @@ def test_model_paths_and_arch_paths_dont_clobber_distinct_keys() -> None:
 
 
 def test_adapter_dtype_emitted() -> None:
-    cfg = _recipe(network={"dtype": "bf16"})
+    cfg = _config(network={"dtype": "bf16"})
     main = _main_toml(cfg)
     # Adapter block dtype key is plain `dtype`, not `lora_dtype`.
     assert "[adapter]" in main
@@ -1057,13 +1057,13 @@ def test_adapter_dtype_emitted() -> None:
 
 
 def test_adapter_init_from_existing_emitted() -> None:
-    cfg = _recipe(network={"init_from": "/runs/prev/epoch5"})
+    cfg = _config(network={"init_from": "/runs/prev/epoch5"})
     main = _main_toml(cfg)
     assert f'init_from_existing = "{_toml_repr("/runs/prev/epoch5")}"' in main
 
 
 def test_adapter_fuse_adapters_inline_table_array() -> None:
-    cfg = _recipe(
+    cfg = _config(
         network={
             "fuse_adapters": [
                 {"path": "/loras/a.safetensors", "weight": 1.0},
@@ -1082,7 +1082,7 @@ def test_adapter_fuse_adapters_inline_table_array() -> None:
 
 
 def test_optimizer_gradient_release_emitted() -> None:
-    cfg = _recipe(optimizer={"gradient_release": True})
+    cfg = _config(optimizer={"gradient_release": True})
     main = _main_toml(cfg)
     assert "gradient_release = true" in main
 
@@ -1091,18 +1091,18 @@ def test_optimizer_gradient_release_emitted() -> None:
 
 
 def test_dataset_frame_buckets_default_unchanged() -> None:
-    ds = _dataset_toml(_recipe())
+    ds = _dataset_toml(_config())
     assert "frame_buckets = [1]" in ds
 
 
 def test_dataset_frame_buckets_video_emitted() -> None:
-    cfg = _recipe(dataset={"source": "/d", "frame_buckets": [1, 33, 65]})
+    cfg = _config(dataset={"source": "/d", "frame_buckets": [1, 33, 65]})
     ds = _dataset_toml(cfg)
     assert "frame_buckets = [1, 33, 65]" in ds
 
 
 def test_dataset_subsets_emit_multiple_directory_blocks() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={
             "source": "/d",  # ignored when subsets is non-empty
             "num_repeats": 99,  # also ignored
@@ -1135,7 +1135,7 @@ def test_dataset_subsets_emit_multiple_directory_blocks() -> None:
 
 
 def test_dataset_explicit_ar_buckets_overrides_min_max() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={"source": "/d", "bucket": {"ar_buckets": [1.0, 1.5, 2.0]}}
     )
     ds = _dataset_toml(cfg)
@@ -1146,7 +1146,7 @@ def test_dataset_explicit_ar_buckets_overrides_min_max() -> None:
 
 
 def test_dataset_caption_shuffle_delimiter_renders_dp_key() -> None:
-    cfg = _recipe(dataset={"source": "/d", "caption": {"shuffle_delimiter": " | "}})
+    cfg = _config(dataset={"source": "/d", "caption": {"shuffle_delimiter": " | "}})
     ds = _dataset_toml(cfg)
     # Note: dp uses `cache_shuffle_delimiter`, not `shuffle_delimiter`.
     assert 'cache_shuffle_delimiter = " | "' in ds
@@ -1154,7 +1154,7 @@ def test_dataset_caption_shuffle_delimiter_renders_dp_key() -> None:
 
 
 def test_dataset_caption_shuffle_tags_legacy_flag() -> None:
-    cfg = _recipe(dataset={"source": "/d", "caption": {"shuffle_tags": True}})
+    cfg = _config(dataset={"source": "/d", "caption": {"shuffle_tags": True}})
     ds = _dataset_toml(cfg)
     assert "shuffle_tags = true" in ds
 
@@ -1167,8 +1167,8 @@ def test_kohya_only_fields_logged_at_debug(caplog: pytest.LogCaptureFixture) -> 
     no warnings, and no TOML drift."""
     import logging
 
-    baseline = _main_toml(_recipe())
-    cfg = _recipe(
+    baseline = _main_toml(_config())
+    cfg = _config(
         loss={"min_snr_gamma": 5.0},  # kohya-only
         augmentation={"flip": True},  # kohya-only
         optimization={"fp8_base": True},  # kohya-only

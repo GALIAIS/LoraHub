@@ -75,9 +75,9 @@ nav:
       - 快速开始: getting-started/quickstart.md
       - 端到端教程: getting-started/smoke-test.md
   - 配置:
-      - 概览: recipes/index.md
-      - 模板: recipes/templates.md
-      - 字段参考: recipes/fields.md
+      - 概览: configs/index.md
+      - 模板: configs/templates.md
+      - 字段参考: configs/fields.md
   - CLI:
       - 概览: cli/index.md
       - 命令参考: cli/commands.md

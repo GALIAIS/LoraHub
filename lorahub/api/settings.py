@@ -2,7 +2,7 @@
 
 Persists workbench-wide defaults (per-backend checkout + python, default
 backend choice, tagger device) to a single JSON file under the user's data
-directory. Env vars (LORAHUB_*) still take precedence at recipe-launch
+directory. Env vars (LORAHUB_*) still take precedence at config-launch
 time -- Settings are the *fallback* defaults the UI lets users override
 without touching their shell config.
 """
@@ -22,7 +22,7 @@ from lorahub.core.backends.registry import known_ids
 
 @dataclass
 class Settings:
-    """User-configurable defaults applied when a recipe doesn't specify them."""
+    """User-configurable defaults applied when a config doesn't specify them."""
 
     # kohya backend
     sd_scripts_path: str | None = None
@@ -38,7 +38,7 @@ class Settings:
     anima_lora_repo_path: str | None = None
     anima_lora_python: str | None = None
 
-    # Which backend the UI defaults to when starting a fresh recipe.
+    # Which backend the UI defaults to when starting a fresh config.
     default_backend: str = "kohya"
 
     tagger_device: str = "auto"  # "auto" | "cpu" | "cuda"
@@ -443,7 +443,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     # MSVC Build Tools detection — only meaningful on Windows. anima's
     # torch_compile path needs triton-windows -> cl.exe; without it
     # the trainer crashes inside Inductor codegen with a TypeError
-    # that has nothing to do with the user's recipe. The install
+    # that has nothing to do with the user's config. The install
     # panel uses these fields to surface a one-click installer CTA.
     msvc = _anima_msvc.detect()
     import sys as _sys  # noqa: PLC0415

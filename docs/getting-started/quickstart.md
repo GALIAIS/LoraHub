@@ -88,4 +88,4 @@ scripts\run.bat dev            # dev：API + Vite 热更新
 ## 下一步
 
 - [端到端教程](smoke-test.md) — 从 BangumiBase 图片到训练好的 LoRA 全流程。
-- [配置字段参考](../recipes/fields.md) — schema 的每一个旋钮。
+- [配置字段参考](../configs/fields.md) — schema 的每一个旋钮。

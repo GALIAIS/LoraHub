@@ -14,7 +14,7 @@
  *     side-effect free).
  *   - Findings are bucketed into Data / Config / Numerical / Other to
  *     match the layered "where does the bug live" mental model
- *     (dataset → recipe → numerics).
+ *     (dataset → config → numerics).
  *   - Severity ordering: error > warn > info, with errors always
  *     visible while warns/infos collapse into a "show all" pill.
  *   - On API failure shows a compact retry, never blocks the page.

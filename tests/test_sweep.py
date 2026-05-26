@@ -18,7 +18,7 @@ from lorahub.core.sweep import (
 
 
 def _base_config(tmp_path: Path) -> dict[str, Any]:
-    """Minimal but TrainingConfig-valid recipe used as the sweep base."""
+    """Minimal but TrainingConfig-valid config used as the sweep base."""
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -99,7 +99,7 @@ def test_unknown_axis_path_raises(tmp_path: Path) -> None:
     assert "does not resolve" in str(exc_info.value)
 
 
-def test_each_variant_validates_against_recipe_schema(tmp_path: Path) -> None:
+def test_each_variant_validates_against_config_schema(tmp_path: Path) -> None:
     """Every materialised variant must round-trip through TrainingConfig."""
     base = _base_config(tmp_path)
     plan = SweepPlan(

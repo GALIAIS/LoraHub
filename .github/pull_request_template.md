@@ -22,4 +22,4 @@
 
 ## Notes for reviewers
 
-<!-- Anything that would help review go faster: known unknowns, deferred work, screenshots, recipe excerpts. -->
+<!-- Anything that would help review go faster: known unknowns, deferred work, screenshots, config excerpts. -->

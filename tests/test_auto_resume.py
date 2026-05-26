@@ -201,7 +201,7 @@ def test_auto_resume_handles_stale_config_snapshot(
     _seed_kohya_artifacts(ws)
     job = state.registry.create(
         workspace=ws,
-        config_snapshot={"this": "is", "not": "a recipe"},
+        config_snapshot={"this": "is", "not": "a config"},
     )
     job.state = state.JobState.interrupted
     state.registry.update(job)

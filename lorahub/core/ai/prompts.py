@@ -3,7 +3,7 @@
 Lives outside `routers/` so both the backend (default route seeding)
 and the frontend (Settings → AI 路由 "use recommended prompt" button)
 can reach for the same text. The prompts target Anima Base
-(DiT + Qwen3 TE) training recipe conventions; they're written so a
+(DiT + Qwen3 TE) training config conventions; they're written so a
 VLM can produce a complete, ready-to-train caption directly without
 the wd14+VLM stitching that smart-caption does.
 """

@@ -1,6 +1,6 @@
 """Integration test for the ``preview_unavailable`` event path.
 
-When the recipe asks for a video arch (Wan / HunyuanVideo / ...) that no
+When the config asks for a video arch (Wan / HunyuanVideo / ...) that no
 registered backend can serve, ``_maybe_start_preview_worker`` must:
   * still spin up a worker (with ``StubInference``) so the rest of the
     event flow keeps producing ``sample_ready`` pings;
@@ -21,7 +21,7 @@ from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 
-def _build_recipe(arch: str, prompts_file: Path) -> TrainingConfig:
+def _build_config(arch: str, prompts_file: Path) -> TrainingConfig:
     return TrainingConfig.model_validate(
         {
             "base_model": {"checkpoint": "./model.safetensors", "arch": arch},
@@ -49,7 +49,7 @@ def test_video_arch_emits_preview_unavailable_and_uses_stub(tmp_path: Path) -> N
     launch with ``StubInference`` *and* emit a ``preview_unavailable``
     event."""
     prompts = _make_prompts_file(tmp_path)
-    cfg = _build_recipe("hunyuan_video", prompts)
+    cfg = _build_config("hunyuan_video", prompts)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -147,7 +147,7 @@ def test_supported_arch_does_not_emit_preview_unavailable(
 
     try:
         prompts = _make_prompts_file(tmp_path)
-        cfg = _build_recipe("sdxl", prompts)
+        cfg = _build_config("sdxl", prompts)
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()

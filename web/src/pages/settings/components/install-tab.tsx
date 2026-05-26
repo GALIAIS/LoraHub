@@ -365,7 +365,7 @@ function AnimaModelDownloadCard({
  * Inductor to JIT through triton-windows; without ``cl.exe`` the
  * trainer crashes inside the first compile pass with a TypeError
  * from triton's MSVC discovery — a failure mode that has no
- * obvious connection to the user's recipe and is hard to diagnose
+ * obvious connection to the user's config and is hard to diagnose
  * after the fact. The button shells out to ``winget install
  * Microsoft.VisualStudio.2022.BuildTools`` with the C++ workload +
  * Win 11 SDK pre-selected; the tail of winget's output is mirrored

@@ -411,7 +411,7 @@ def _detect_dirty(cwd: Path) -> bool:
     upgrade. We filter out paths the user is expected to mutate
     locally:
 
-      * ``configs/`` — user's own training recipes
+      * ``configs/`` — user's own training configs
       * ``runs/``, ``output/``, ``models/`` — runtime artefacts
       * ``.env``, ``.env.local`` — local secrets / overrides
       * ``external/anima_lora/uv.lock`` — anima locks itself
@@ -870,7 +870,7 @@ class _UpdateContext:
     stash is left to the caller. On an exception:
 
       * ``snapshot_path`` (if set and not yet consumed) is unpacked
-        back over ``configs/`` so the user's recipes survive even
+        back over ``configs/`` so the user's configs survive even
         when the upgrade aborted mid-flight.
       * ``stash_active`` triggers a final ``git stash pop`` so the
         user's other local edits aren't trapped in the stash list.

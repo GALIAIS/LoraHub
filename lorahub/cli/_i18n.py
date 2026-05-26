@@ -511,7 +511,7 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "jobs.cancel.help": {"zh": "取消排队中的任务。运行中的请用 `kill`。", "en": "Cancel a queued job. Use ``kill`` for running jobs."},
     "jobs.kill.help": {"zh": "按 PID 停止运行中的任务,然后在 store 中标记为 canceled。", "en": "Stop a running job by PID, then mark it canceled in the store."},
     "jobs.resume.help": {"zh": "从最近 checkpoint 恢复一个被中断的任务。", "en": "Resume an interrupted job from its last checkpoint."},
-    "jobs.rerun.help": {"zh": "用同一份 recipe 重新启动一个已结束的任务。", "en": "Re-launch a finished job with the same recipe."},
+    "jobs.rerun.help": {"zh": "用同一份 config 重新启动一个已结束的任务。", "en": "Re-launch a finished job with the same config."},
     "system.gpu.help": {"zh": "打印 GPU 一次性快照:型号、显存、利用率、温度。", "en": "Print one-shot GPU info: name, memory, utilisation, temp, processes."},
     "system.info.help": {"zh": "打印完整主机快照(CPU + 内存 + 磁盘 + 网络)。", "en": "Print the full host snapshot (CPU + memory + disks + network)."},
     "system.errors.help": {"zh": "查看本地错误上报记录(最近 N 条)。", "en": "Show recent entries from the local error-report registry."},

@@ -231,7 +231,7 @@ def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
     assert event == done.to_dict()
 
 
-def test_invalid_recipe_returns_422(client: TestClient) -> None:
+def test_invalid_config_returns_422(client: TestClient) -> None:
     r = client.post("/api/jobs", json={"config": {"missing": "everything"}})
     assert r.status_code == 422
 
@@ -292,7 +292,7 @@ def test_resume_without_weights_returns_409(
 
 
 def _dp_config_payload(tmp_path: Path) -> dict[str, Any]:
-    """Minimal dp recipe snapshot — sdxl arch + dp backend type."""
+    """Minimal dp config snapshot — sdxl arch + dp backend type."""
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -490,14 +490,14 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
 
 
 # --------------------------------------------------------------------------- #
-# Recipe template browsing
+# Config template browsing
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
 def configs_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point the API at an isolated recipes directory."""
-    rdir = tmp_path / "recipes"
+    """Point the API at an isolated configs directory."""
+    rdir = tmp_path / "configs"
     rdir.mkdir()
     monkeypatch.setenv("LORAHUB_configs_dir", str(rdir))
     return rdir
@@ -589,7 +589,7 @@ def test_config_schema_still_resolves_under_recipes_prefix(
 
 
 # --------------------------------------------------------------------------- #
-# Recipe validate + save
+# Config validate + save
 # --------------------------------------------------------------------------- #
 
 
@@ -703,7 +703,7 @@ def test_save_config_rejects_invalid_name(
     assert r.status_code == 400
 
 
-def test_save_config_rejects_invalid_recipe(
+def test_save_config_rejects_invalid_config(
     client: TestClient, configs_dir: Path
 ) -> None:
     r = client.post("/api/configs", json={"name": "bad", "config": {}})
@@ -1701,7 +1701,7 @@ def test_job_metrics_returns_val_loss_and_overfit_signal(
 
 
 # --------------------------------------------------------------------------- #
-# Recipe duplicate / rename / delete / templates / import
+# Config duplicate / rename / delete / templates / import
 # --------------------------------------------------------------------------- #
 
 
@@ -1753,7 +1753,7 @@ def test_rename_config(client: TestClient, configs_dir: Path) -> None:
     )
     assert r_clash.status_code == 409
 
-    # Renaming a missing recipe -> 404
+    # Renaming a missing config -> 404
     r_missing = client.post(
         "/api/configs/ghost/rename", json={"new_name": "demo_v3"}
     )
@@ -1769,7 +1769,7 @@ def test_delete_config(client: TestClient, configs_dir: Path) -> None:
 
     # Now it's gone
     assert client.get("/api/configs/demo").status_code == 404
-    # Re-deleting a missing recipe -> 404
+    # Re-deleting a missing config -> 404
     assert client.delete("/api/configs/demo").status_code == 404
 
 
@@ -1787,7 +1787,7 @@ def test_list_templates_returns_validated_configs(client: TestClient) -> None:
         "low_vram",
     }
 
-    # Each template recipe must round-trip through the schema.
+    # Each template config must round-trip through the schema.
     for tpl in body["templates"]:
         cfg = TrainingConfig.model_validate(tpl["config"])
         assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3"}
@@ -1956,7 +1956,7 @@ def test_bootstrap_with_diffusion_pipe_backend(
 
 
 def test_config_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path) -> None:
-    """A recipe using backend.type='diffusion-pipe' must validate cleanly."""
+    """A config using backend.type='diffusion-pipe' must validate cleanly."""
     cfg_dict = _valid_config_dict(tmp_path)
     cfg_dict["backend"] = {"type": "diffusion-pipe"}
 
@@ -1968,7 +1968,7 @@ def test_config_with_diffusion_pipe_validates(client: TestClient, tmp_path: Path
 
 
 def test_diffusion_pipe_launch_writes_toml_and_starts_subprocess(tmp_path: Path) -> None:
-    """launch() compiles the recipe to TOML and spawns train.py."""
+    """launch() compiles the config to TOML and spawns train.py."""
     import sys
     import textwrap
 
@@ -2707,7 +2707,7 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
-# Recipe template instantiate (POST /api/configs/templates/{id}/instantiate)
+# Config template instantiate (POST /api/configs/templates/{id}/instantiate)
 # --------------------------------------------------------------------------- #
 
 
@@ -2717,7 +2717,7 @@ def test_instantiate_template_substitutes_placeholders(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Placeholders applied by dotted-path setter, recipe validates, and the
+    """Placeholders applied by dotted-path setter, config validates, and the
     persisted YAML carries the substituted values."""
     from lorahub.api import config_templates as config_templates_module
 

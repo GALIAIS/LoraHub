@@ -599,7 +599,7 @@ function pickTotalSteps(
   // Trainer-reported total wins — it's the only number that survives
   // mid-run schedule changes (warmup steps rolling in, sample_ratio
   // truncating the dataset, …). Falls back to schedule.maxSteps in the
-  // recipe, then to the config-derived estimate (epochs × repeats ×
+  // config, then to the config-derived estimate (epochs × repeats ×
   // images / (batch × accum)) the parent computes off the dataset
   // scan. This is the same priority order overview-tab uses, so the
   // three tabs now agree.

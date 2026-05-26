@@ -1,6 +1,6 @@
 """Hyperparameter sweep — grid + random + Optuna TPE.
 
-A :class:`SweepPlan` takes a validated base recipe dict plus one or more
+A :class:`SweepPlan` takes a validated base config dict plus one or more
 :class:`SweepAxis` declarations and materialises N variants. Each variant
 carries a unique ``output.name`` suffix so the resulting workspaces,
 checkpoints, and events.jsonl streams never collide when the API enqueues
@@ -75,7 +75,7 @@ class SamplerUnavailableError(SweepError):
 class SweepAxis:
     """One axis of the search space.
 
-    `path` is a dotted recipe path (e.g. ``optimizer.lr.unet`` or
+    `path` is a dotted config path (e.g. ``optimizer.lr.unet`` or
     ``network.rank``). The remaining fields depend on `kind`:
 
     - ``categorical`` (default, the legacy shape): use `values`. Each
@@ -397,7 +397,7 @@ class SweepPlan:
     cartesian product (and ``SWEEP_MAX_VARIANTS``).
 
     `name_template` controls the per-variant ``output.name`` suffix.
-    Two placeholders are recognised: ``{base}`` (the base recipe's
+    Two placeholders are recognised: ``{base}`` (the base config's
     ``output.name``) and ``{i}`` (the 1-based variant index, formatted
     with whatever spec the caller supplies — default is zero-padded
     three-digit).
@@ -588,7 +588,7 @@ class MaterialisedSweep:
         return max(0, self.n_trials - self._emitted)
 
     def next_variant(self) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
-        """Yield (variant_name, recipe, axis_values) for the next trial.
+        """Yield (variant_name, config, axis_values) for the next trial.
 
         Returns ``None`` when the budget is exhausted; the API layer
         loops on this until exhausted, then closes the sweep record.
@@ -678,7 +678,7 @@ def _validate_path(base: dict[str, Any], dotted: str) -> None:
         if part not in cursor:
             head = ".".join(parts[: i + 1])
             msg = (
-                f"axis path {dotted!r} does not resolve in base recipe "
+                f"axis path {dotted!r} does not resolve in base config "
                 f"(missing key at {head!r})"
             )
             raise SweepError(msg)

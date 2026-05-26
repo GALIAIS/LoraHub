@@ -114,7 +114,7 @@ export function downsamplePoints<T>(points: T[], maxPoints: number): T[] {
  * Derive an expected `total_steps` from a job's config_snapshot.
  *
  * Priority:
- *   1. `schedule.maxSteps` (or `max_steps`) if explicitly set in the recipe.
+ *   1. `schedule.maxSteps` (or `max_steps`) if explicitly set in the config.
  *   2. `epochs * dataset.numRepeats * image_files / (batchSize * gradAccum)`
  *      if we have an image count from the latest preflight.
  *   3. `null` (fall back to `?`) — backend events with `total_steps` will

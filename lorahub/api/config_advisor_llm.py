@@ -406,7 +406,7 @@ class AdvisorOutcome:
     patches: list[dict[str, Any]]
     full_config: dict[str, Any]
     # Validation issues the LLM-proposed full_config triggers (cross-field
-    # rule set). Empty when the LLM produced a clean recipe.
+    # rule set). Empty when the LLM produced a clean config.
     validation_issues: list[dict[str, Any]] = field(default_factory=list)
     # Provider / model that actually answered, for the UI to display.
     provider_id: str = ""

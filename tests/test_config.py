@@ -16,7 +16,7 @@ MINIMAL_RECIPE = {
 }
 
 
-def test_minimal_recipe_loads_with_defaults() -> None:
+def test_minimal_config_loads_with_defaults() -> None:
     cfg = TrainingConfig.model_validate(MINIMAL_RECIPE)
     assert cfg.base_model.arch == "sdxl"
     assert cfg.schedule.batch_size == 1
@@ -26,11 +26,11 @@ def test_minimal_recipe_loads_with_defaults() -> None:
 
 
 def test_load_config_from_yaml(tmp_path: Path) -> None:
-    recipe_file = tmp_path / "config.yaml"
-    recipe_file.write_text(
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
         yaml.dump(MINIMAL_RECIPE, default_flow_style=False), encoding="utf-8"
     )
-    cfg = load_config(recipe_file)
+    cfg = load_config(config_file)
     assert cfg.base_model.checkpoint == Path("./model.safetensors")
     assert cfg.dataset.source == Path("./data")
 
@@ -66,11 +66,11 @@ def test_json_schema_export() -> None:
     assert "baseModel" in schema_str or "base_model" in schema_str
 
 
-def test_example_recipe_loads() -> None:
-    """Smoke-load one of the bundled recipes via the schema loader.
+def test_example_config_loads() -> None:
+    """Smoke-load one of the bundled configs via the schema loader.
 
     Pinned to ``anima_lora_default.yaml`` because that's the canonical
-    upstream-default recipe — every other config is a delta on top of
+    upstream-default config — every other config is a delta on top of
     it. The test is conditional on the file's existence so a checkout
     that's pruned configs/ for a CI shard still passes.
     """

@@ -1,7 +1,7 @@
-"""Recipe-path absolutisation.
+"""Config-path absolutisation.
 
 Training subprocesses (kohya / diffusion-pipe / anima_lora) run with
-their cwd pinned to the backend's own repo, so a recipe path like
+their cwd pinned to the backend's own repo, so a config path like
 ``./models/foo.safetensors`` would otherwise be looked up under
 ``diffusion-pipe/models/`` instead of the lorahub project root. The
 helpers here resolve every path field on a ``TrainingConfig`` against
@@ -16,11 +16,11 @@ from lorahub.core.config.schema import TrainingConfig
 
 
 def _absolutise(p: Path | str | None, base: Path) -> Path | None:
-    """Resolve a recipe-relative path against the project root.
+    """Resolve a config-relative path against the project root.
 
     When the literal resolved path doesn't exist on disk but the
     same path under ``base/models/`` does, prefer the latter — this
-    rescues recipe yamls that store bare relative paths like
+    rescues config yamls that store bare relative paths like
     ``circlestone-labs__Anima/foo.safetensors`` (the old picker
     output before the prefix fix) without forcing every user to
     re-save.
@@ -40,7 +40,7 @@ def _absolutise(p: Path | str | None, base: Path) -> Path | None:
     return resolved
 
 
-def _normalize_recipe_paths(cfg: TrainingConfig, base: Path | None = None) -> TrainingConfig:
+def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> TrainingConfig:
     """Make every path field in `cfg` absolute, anchored at `base`.
 
     Mutates a *copy* of the cfg (Pydantic models are effectively
@@ -99,4 +99,4 @@ def _normalize_recipe_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
     return cfg
 
 
-__all__ = ["_absolutise", "_normalize_recipe_paths"]
+__all__ = ["_absolutise", "_normalize_config_paths"]

@@ -40,7 +40,7 @@ LoraHub 是一个自托管的 LoRA 训练工作台。它把三套训练栈
 - [安装](getting-started/install.md) — 系统要求、一键脚本、手动安装、后端 bootstrap。
 - [快速开始](getting-started/quickstart.md) — 四条命令把第一份配置跑成第一次训练。
 - [端到端教程](getting-started/smoke-test.md) — 从图片到 LoRA 文件的全流程示例。
-- [配置概览](recipes/index.md) — `TrainingConfig` 结构与字段索引。
+- [配置概览](configs/index.md) — `TrainingConfig` 结构与字段索引。
 - [CLI 参考](cli/index.md) — 每条 `lorahub` 命令的用法。
 - [API 参考](api/index.md) — REST + SSE + WebSocket 端点。
 

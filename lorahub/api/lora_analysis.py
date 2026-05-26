@@ -29,7 +29,7 @@ emitting through the same ``on_event`` callback the rest of the job
 uses. Errors are caught and logged as a single warning event so a
 malformed checkpoint never breaks the live training loop.
 
-Recipe-level toggle: ``cfg.sampling.spectrum_analysis`` (default
+Config-level toggle: ``cfg.sampling.spectrum_analysis`` (default
 ``True`` — the cost is < 1 s per checkpoint on a typical adapter and
 the signal is genuinely useful). Set to ``False`` to disable.
 """
@@ -347,7 +347,7 @@ def _flatten_to_2d(arr: Any) -> Any:
 
 
 def is_enabled(cfg: Any) -> bool:
-    """Read the recipe toggle. Defaults to True if absent."""
+    """Read the config toggle. Defaults to True if absent."""
     sampling = getattr(cfg, "sampling", None)
     if sampling is None:
         return True

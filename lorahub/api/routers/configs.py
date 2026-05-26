@@ -1,4 +1,4 @@
-"""Recipe browse / preview / validate / save / duplicate / rename / delete / import."""
+"""Config browse / preview / validate / save / duplicate / rename / delete / import."""
 
 from __future__ import annotations
 
@@ -165,7 +165,7 @@ def _new_config_target(name: str) -> Path:
 
 @router.get("/configs/schema")
 def config_schema() -> dict[str, Any]:
-    """JSON Schema for the recipe — used by the future UI to render forms."""
+    """JSON Schema for the config — used by the future UI to render forms."""
     return TrainingConfig.model_json_schema()
 
 

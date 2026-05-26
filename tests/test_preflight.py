@@ -1,6 +1,6 @@
 """Pre-flight blocker tests for POST /api/jobs and /api/jobs/{id}/resume.
 
-Each test sets up a *minimally-valid* recipe via ``_config_payload`` and
+Each test sets up a *minimally-valid* config via ``_config_payload`` and
 then deliberately corrupts one field. We want a 422 with a structured
 ``findings`` list — *not* a 202 + a job that crashes 5 seconds later in
 the trainer subprocess.
@@ -107,7 +107,7 @@ def _cfg(tmp_path: Path, **overrides: Any) -> TrainingConfig:
     return TrainingConfig.model_validate(payload)
 
 
-def test_preflight_clean_recipe_has_no_blockers(tmp_path: Path) -> None:
+def test_preflight_clean_config_has_no_blockers(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
     blockers = [f for f in findings if f.severity == "error"]
@@ -226,7 +226,7 @@ def test_create_job_blocks_when_dataset_empty(
 def test_create_job_passes_with_warnings(client: TestClient, tmp_path: Path) -> None:
     """Warning-severity findings (e.g. disk_low when intentionally small) do
     not block creation. We can't reliably trigger disk_low in CI, so we
-    just confirm a clean recipe gets a 202."""
+    just confirm a clean config gets a 202."""
     payload = _valid_payload(tmp_path)
     r = client.post(
         "/api/jobs",

@@ -421,7 +421,7 @@ def rebuild_active_sweeps(state_module: Any, sweep_store: Any) -> int:
         else:
             log.info(
                 "sweep %s: plan missing workspace_root, advance suspended after "
-                "rebuild (recipe predates cut2)",
+                "rebuild (config predates cut2)",
                 record.id,
             )
 

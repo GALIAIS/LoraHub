@@ -46,7 +46,7 @@ dataset:
   - 1
 network:
   type: lora
-  rank: 16
+  rank: 32
   alpha: 16
   targetUnet: true
   targetTextEncoder: false
@@ -57,9 +57,9 @@ network:
   baseWeightsMultiplier: []
   fuseAdapters: []
 optimizer:
-  type: AdamW
+  type: adamw8bit
   lr:
-    unet: 5.0e-05
+    unet: 0.0001
     textEncoder: 5.0e-05
   schedule: cosine_with_restarts
   warmupSteps: 100
@@ -90,7 +90,7 @@ flowMatch: {}
 schedule:
   epochs: 8
   batchSize: 1
-  gradAccum: 1               # 上游 base.toml effective batch_size=1
+  gradAccum: 1
   seed: 42
 precision: bf16
 gradientCheckpointing: true
@@ -101,7 +101,7 @@ cacheInfo: false
 trainInpainting: false
 sampling:
   enabled: true
-  everyNEpochs: 2            # 减少训练打断，每 2 epoch 一次 sample
+  everyNEpochs: 2
   atFirst: true
   prompts:
   - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body,
@@ -186,16 +186,17 @@ backend:
     preset: default
     outputName: anima_lora
     networkModule: networks.lora_anima
-    networkDim: 32             # 上游 methods/lora.toml 默认；rank=32 容量更稳
-    networkAlpha: 32.0         # 上游默认；与 rank 同值保持 alpha/rank=1.0
+    networkDim: 32
+    networkAlpha: 32.0
     networkTrainUnetOnly: true
+    channelScalingAlpha: 0.5
     optimizerType: AdamW
-    lrScheduler: cosine        # 上游 base.toml 默认；配合 5% warmup 走完整衰减
-    learningRate: 2.0e-05      # 上游默认；搭配 cosine + warmup 更稳
-    lrWarmupRatio: 0.05        # 5% 总步数 warmup（>=1 视为绝对步数）
-    maxTrainEpochs: 3          # 上游 methods/lora.toml 默认 3 epoch
-    saveEveryNEpochs: 3        # 与 maxTrainEpochs 对齐
-    checkpointingEpochs: 3     # 与 maxTrainEpochs 对齐
+    lrScheduler: cosine
+    learningRate: 2.0e-05
+    lrWarmupRatio: 0.05
+    maxTrainEpochs: 3
+    saveEveryNEpochs: 3
+    checkpointingEpochs: 3
     captionDropoutRate: 0.1
     timestepSampling: sigmoid
     sigmoidScale: 1.0
@@ -217,11 +218,12 @@ backend:
     vaeChunkSize: 64
     vaeDisableCache: true
     noHalfVae: false
-    attnMode: flash            # 上游 base.toml 默认；高显存卡用 flash-attn 更快
+    attnMode: flash
     xformers: false
     splitAttn: false
     compileMode: blocks
     compileInductorMode: reduce-overhead
+    enableNativeFlatten: false
     useCustomDownAutograd: true
     blocksToSwap: 0
     gradientCheckpointing: false
@@ -233,14 +235,14 @@ backend:
     torchCompile: true
     skipCacheCheck: true
     dataloaderPinMemory: true
-    persistentDataLoaderWorkers: true   # 上游 base.toml 默认；避免每 epoch 重启 worker
+    persistentDataLoaderWorkers: true
     trimCrossattnKv: false
     saveModelAs: safetensors
     savePrecision: bf16
     logEveryNSteps: 2
     keepTokens: 3
     captionExtension: .txt
-    validationSplitNum: 0      # 上游 base.toml 默认；不切验证集
+    validationSplitNum: 0
     enableBucket: true
     pathPattern: '*'
     lora:
@@ -249,8 +251,7 @@ backend:
       lokrFactor: 8
       boftFactors: 4
       useTimestepMask: true
-      minRank: 16              # 上游 methods/lora.toml 默认
-      channelScalingAlpha: 0.5 # 上游 methods/lora.toml 默认通道缩放系数
+      minRank: 16
       alphaRankScale: 1.0
 resume:
   saveState: true
@@ -289,3 +290,6 @@ augmentation:
   color: false
   randomCrop: false
   alphaMask: false
+monitoring:
+  enableWandb: true
+  tags: []

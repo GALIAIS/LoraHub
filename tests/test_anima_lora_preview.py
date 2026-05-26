@@ -52,7 +52,7 @@ def test_anima_lora_registered_before_anima() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _fake_recipe(
+def _fake_config(
     *,
     dit: Path | None,
     vae: Path | None,
@@ -79,31 +79,31 @@ def test_factory_returns_none_for_non_anima_arch(tmp_path: Path) -> None:
     """Factory must skip arches it can't serve so the registry falls through."""
     p = tmp_path / "f"
     p.write_bytes(b"")
-    recipe = _fake_recipe(dit=p, vae=p, qwen3=p)
-    assert _anima_lora_factory(arch="sdxl", recipe=recipe, workspace=tmp_path) is None
-    assert _anima_lora_factory(arch="flux", recipe=recipe, workspace=tmp_path) is None
+    config = _fake_config(dit=p, vae=p, qwen3=p)
+    assert _anima_lora_factory(arch="sdxl", config=config, workspace=tmp_path) is None
+    assert _anima_lora_factory(arch="flux", config=config, workspace=tmp_path) is None
 
 
 def test_factory_returns_none_when_missing_dit_path(tmp_path: Path) -> None:
     """Missing dit/vae/qwen3 path → factory bows out, registry tries next."""
     p = tmp_path / "f"
     p.write_bytes(b"")
-    recipe = _fake_recipe(dit=None, vae=p, qwen3=p)
-    assert _anima_lora_factory(arch="anima", recipe=recipe, workspace=tmp_path) is None
+    config = _fake_config(dit=None, vae=p, qwen3=p)
+    assert _anima_lora_factory(arch="anima", config=config, workspace=tmp_path) is None
 
 
 def test_factory_returns_none_when_missing_vae_path(tmp_path: Path) -> None:
     p = tmp_path / "f"
     p.write_bytes(b"")
-    recipe = _fake_recipe(dit=p, vae=None, qwen3=p)
-    assert _anima_lora_factory(arch="anima", recipe=recipe, workspace=tmp_path) is None
+    config = _fake_config(dit=p, vae=None, qwen3=p)
+    assert _anima_lora_factory(arch="anima", config=config, workspace=tmp_path) is None
 
 
 def test_factory_returns_none_when_missing_qwen3_path(tmp_path: Path) -> None:
     p = tmp_path / "f"
     p.write_bytes(b"")
-    recipe = _fake_recipe(dit=p, vae=p, qwen3=None)
-    assert _anima_lora_factory(arch="anima", recipe=recipe, workspace=tmp_path) is None
+    config = _fake_config(dit=p, vae=p, qwen3=None)
+    assert _anima_lora_factory(arch="anima", config=config, workspace=tmp_path) is None
 
 
 def test_factory_returns_backend_when_all_paths_present(tmp_path: Path) -> None:
@@ -116,8 +116,8 @@ def test_factory_returns_backend_when_all_paths_present(tmp_path: Path) -> None:
     for p in (dit,):
         p.write_bytes(b"")
 
-    recipe = _fake_recipe(dit=dit, vae=vae, qwen3=qwen3)
-    backend = _anima_lora_factory(arch="anima", recipe=recipe, workspace=tmp_path)
+    config = _fake_config(dit=dit, vae=vae, qwen3=qwen3)
+    backend = _anima_lora_factory(arch="anima", config=config, workspace=tmp_path)
     assert backend is not None
     assert isinstance(backend, AnimaLoraInferenceBackend)
     assert backend.name == "anima_lora"
@@ -126,9 +126,9 @@ def test_factory_returns_backend_when_all_paths_present(tmp_path: Path) -> None:
     assert not backend.is_available(arch="sdxl")
 
 
-def test_factory_returns_none_when_recipe_is_none() -> None:
-    """No recipe → factory bows out (used by registry resolve_backend)."""
-    assert _anima_lora_factory(arch="anima", recipe=None, workspace=None) is None
+def test_factory_returns_none_when_config_is_none() -> None:
+    """No config → factory bows out (used by registry resolve_backend)."""
+    assert _anima_lora_factory(arch="anima", config=None, workspace=None) is None
 
 
 # --------------------------------------------------------------------------- #

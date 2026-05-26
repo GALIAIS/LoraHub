@@ -464,7 +464,7 @@ def get_sweep(sweep_id: str) -> dict[str, Any]:
     }
     if record is not None:
         # Surface the immutable plan (axes, name template, base config)
-        # alongside the live aggregate so the UI can show the recipe even
+        # alongside the live aggregate so the UI can show the config even
         # when every child job is gone.
         payload["plan"] = record.plan
         payload["name"] = record.name

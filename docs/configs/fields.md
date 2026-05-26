@@ -135,10 +135,10 @@ description: TrainingConfig schema 的每个字段,按段分组。
 | `compile` | `bool` | `false` | **保持关闭**。dp pipeline 内部已经 compile;打开会再起一个 Inductor 编译池,在 Anima 跑的 cache 尾段卡在 `unix_stream_data_wait`。 |
 | `minAr` | `float (>0)` | `0.5` | 最小 aspect ratio bucket。 |
 | `maxAr` | `float (>0)` | `2.0` | 最大 aspect ratio bucket。 |
-| `numArBuckets` | `int (>=1)` | `7` | aspect-ratio 桶数。**latent cache 占盘的最大变量** — 每个桶都存自己一份 VAE 编码;200 张图 × 11 桶在训练前就要 ~35 GB cache。Anima recipe 选 `5`。 |
+| `numArBuckets` | `int (>=1)` | `7` | aspect-ratio 桶数。**latent cache 占盘的最大变量** — 每个桶都存自己一份 VAE 编码;200 张图 × 11 桶在训练前就要 ~35 GB cache。Anima config 选 `5`。 |
 | `cacheShuffleNum` | `int (>=0)` | `0` | 缓存阶段随机打乱前 N 个 tag(0 保持原顺序)。 |
 | `skipEmptyCaption` | `bool` | `true` | 跳过没 caption 的图;`false` 时按空 caption 训。 |
-| `checkpointEveryNMinutes` | `int (>=1) \| None` | `None` | **完整 DeepSpeed checkpoint** 的 wall-clock 节奏(optimizer state + LR scheduler + dataloader epoch + `latest` 指针)。`POST /api/jobs/{id}/resume` 必需 — `output.saveEveryNSteps` 只写 LoRA 权重,不写 optimizer 状态。Anima recipe 选 `30`。 |
+| `checkpointEveryNMinutes` | `int (>=1) \| None` | `None` | **完整 DeepSpeed checkpoint** 的 wall-clock 节奏(optimizer state + LR scheduler + dataloader epoch + `latest` 指针)。`POST /api/jobs/{id}/resume` 必需 — `output.saveEveryNSteps` 只写 LoRA 权重,不写 optimizer 状态。Anima config 选 `30`。 |
 | `checkpointEveryNEpochs` | `int (>=1) \| None` | `None` | 同上,但按 epoch 节奏。两者只用其一(单 epoch 长跑选 minutes 更稳)。 |
 | `multiNode` | `MultiNodeOptions \| None` | `None` | 多机训练(B8):`{hostfile, num_nodes, master_addr?, master_port?}`。runner 透传给 DeepSpeed launcher。 |
 | `modelPaths` | `dict[str, str]` | `{}` | 自由 per-arch 路径包。**key 原样写入 dp TOML**,沿用上游 `snake_case`(`transformer_path` / `vae_path` / `llm_path`)。 |

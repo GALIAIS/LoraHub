@@ -34,7 +34,7 @@ from lorahub.core.config.loader import dump_config
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
-from .paths_norm import _normalize_recipe_paths
+from .paths_norm import _normalize_config_paths
 from .preview import _gpu_sampler_loop, _maybe_start_preview_worker
 
 log = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def _launch_job(
     """
     workspace.mkdir(parents=True, exist_ok=True)
 
-    _normalize_recipe_paths(cfg)
+    _normalize_config_paths(cfg)
     _resolve_runtime_seeds(cfg)
     _resolve_trigger_word(cfg)
     _materialise_prompts_file(cfg, workspace)
@@ -130,7 +130,7 @@ def _relaunch_job_in_place(
     workspace = job.workspace
     workspace.mkdir(parents=True, exist_ok=True)
 
-    _normalize_recipe_paths(cfg)
+    _normalize_config_paths(cfg)
     _resolve_runtime_seeds(cfg)
     _resolve_trigger_word(cfg)
     _materialise_prompts_file(cfg, workspace)
@@ -482,7 +482,7 @@ def _resolve_sample_path(
 def _lora_spectrum_enabled(cfg: Any) -> bool:
     """Whether to run side-band SVD on every checkpoint.
 
-    Default-on; recipe sets ``sampling.spectrum_analysis = false`` to
+    Default-on; config sets ``sampling.spectrum_analysis = false`` to
     opt out (e.g. air-gapped users with > 100-layer adapters where the
     SVD wall time isn't trivial).
     """
@@ -621,7 +621,7 @@ def _resolve_runtime_seeds(cfg: TrainingConfig) -> None:
     between runs. The drawn value is written back into the config so
     downstream consumers (compilers, prompt-file materialiser, snapshot)
     all see the same concrete integer, and the value also lands in the
-    job's config snapshot — copy that into a fresh recipe to reproduce.
+    job's config snapshot — copy that into a fresh config to reproduce.
     """
     sampling = cfg.sampling
     if sampling.seed == -1:
@@ -705,7 +705,7 @@ def _resolve_trigger_word(cfg: TrainingConfig) -> None:
     placeholder in every prompt body.
 
     Resolution order:
-      1. ``sampling.trigger_word`` set explicitly in the recipe
+      1. ``sampling.trigger_word`` set explicitly in the config
       2. Most common first comma-separated token across the dataset's
          caption ``.txt`` files (excluding generic quality tags)
       3. None — placeholders are then stripped along with their
@@ -760,7 +760,7 @@ def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
     populated the structured ``prompts`` list in yaml we materialise
     that here so no upstream tooling has to learn about the new
     schema. ``promptsFile`` (legacy) takes precedence when set, so
-    older recipes keep working unchanged.
+    older configs keep working unchanged.
     """
     sampling = cfg.sampling
     if not sampling.prompts:

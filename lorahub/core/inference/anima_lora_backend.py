@@ -32,7 +32,7 @@ Subprocess contract:
         --seed <S>
 
 Paths come from ``cfg.base_model.arch_paths`` (DiT / VAE / Qwen3) which
-the recipe already populates for training.
+the config already populates for training.
 """
 
 from __future__ import annotations
@@ -177,14 +177,14 @@ class AnimaLoraInferenceBackend:
 
 
 def _anima_lora_factory(
-    *, arch: str, recipe: Any, workspace: Any
+    *, arch: str, config: Any, workspace: Any
 ) -> AnimaLoraInferenceBackend | None:
     """Registry factory for the anima_lora backend.
 
     Skips when:
       * arch != "anima"
       * the vendored copy (or env override) doesn't resolve cleanly
-      * the recipe lacks the DiT / VAE / Qwen3 paths upstream needs
+      * the config lacks the DiT / VAE / Qwen3 paths upstream needs
 
     Returning ``None`` lets the registry fall through to the next
     backend (the in-process anima.py one) — preview rendering
@@ -192,13 +192,13 @@ def _anima_lora_factory(
     """
     if arch != "anima":
         return None
-    if recipe is None:
+    if config is None:
         return None
 
-    # Resolve the vendored copy + python interpreter. Recipe-level
+    # Resolve the vendored copy + python interpreter. Config-level
     # overrides live on backend.python_executable / backend.repo_path
     # the same way the training backend reads them.
-    backend_cfg = getattr(recipe, "backend", None)
+    backend_cfg = getattr(config, "backend", None)
     config_python = getattr(backend_cfg, "python_executable", None) if backend_cfg else None
     config_path = getattr(backend_cfg, "repo_path", None) if backend_cfg else None
     try:
@@ -212,8 +212,8 @@ def _anima_lora_factory(
         )
         return None
 
-    # Pull DiT / VAE / Qwen3 paths from the recipe's BaseModelConfig.
-    bm = getattr(recipe, "base_model", None)
+    # Pull DiT / VAE / Qwen3 paths from the config's BaseModelConfig.
+    bm = getattr(config, "base_model", None)
     if bm is None:
         return None
     paths = getattr(bm, "arch_paths", None)

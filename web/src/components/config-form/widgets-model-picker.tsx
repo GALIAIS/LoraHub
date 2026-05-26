@@ -170,9 +170,9 @@ export function ModelPathPicker({
                 {filtered.map((f) => {
                   // Backend ``GET /api/models/scan`` returns paths
                   // relative to the resolved scan root (always
-                  // ``<project>/models``). The recipe yaml needs the
+                  // ``<project>/models``). The config yaml needs the
                   // ``models/`` prefix because lifecycle resolves
-                  // recipe paths against ``Path.cwd()`` (the project
+                  // config paths against ``Path.cwd()`` (the project
                   // root), not against ``<project>/models``. Without
                   // the prefix the path resolves to the wrong place
                   // and training fails with "checkpoint not found".

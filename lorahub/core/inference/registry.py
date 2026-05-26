@@ -1,6 +1,6 @@
 """Registry of preview inference backends.
 
-LoRA preview rendering used to be hardcoded to Anima — when a recipe
+LoRA preview rendering used to be hardcoded to Anima — when a config
 selected a different arch (Flux/Wan/HunyuanVideo) the worker silently
 fell back to ``StubInference`` and only logged a warning. The registry
 formalises the dispatch so we can:
@@ -14,7 +14,7 @@ formalises the dispatch so we can:
 
 Design notes:
   * Backends are looked up via *factory functions* registered in import
-    order. Each factory receives the (arch, recipe, workspace) tuple and
+    order. Each factory receives the (arch, config, workspace) tuple and
     returns either a configured ``InferenceBackend`` or ``None`` (meaning
     "I don't claim this arch / my prerequisites aren't here").
   * The registry doesn't enforce arch->backend uniqueness. A future cut
@@ -63,13 +63,13 @@ class InferenceBackend(Protocol):
     ) -> None: ...
 
 
-# A factory takes the lookup context (arch + recipe + workspace) and
-# returns either a configured backend or None. ``recipe`` and
+# A factory takes the lookup context (arch + config + workspace) and
+# returns either a configured backend or None. ``config`` and
 # ``workspace`` are kept ``Any`` / optional so a factory can ignore
 # them when its config is purely env-based (e.g. diffusers with default
 # pretrained ids). Concrete signature:
 #
-#     factory(arch=arch, recipe=recipe, workspace=workspace) -> InferenceBackend | None
+#     factory(arch=arch, config=config, workspace=workspace) -> InferenceBackend | None
 #
 # Factories are responsible for catching their own ImportError /
 # FileNotFoundError style failures and returning None — the registry
@@ -127,10 +127,10 @@ def registered_backend_names() -> list[str]:
 def resolve_backend(
     *,
     arch: str,
-    recipe: Any | None = None,
+    config: Any | None = None,
     workspace: Path | None = None,
 ) -> InferenceBackend | None:
-    """First registered backend that can serve ``arch`` for this recipe.
+    """First registered backend that can serve ``arch`` for this config.
 
     Each factory is tried in registration order. The first one returning
     a non-None backend wins. Factory exceptions are caught + logged so a
@@ -138,7 +138,7 @@ def resolve_backend(
     """
     for name, factory in list(_REGISTRY):
         try:
-            backend = factory(arch=arch, recipe=recipe, workspace=workspace)
+            backend = factory(arch=arch, config=config, workspace=workspace)
         except Exception:  # noqa: BLE001
             log.exception("inference backend factory %r raised; skipping", name)
             continue

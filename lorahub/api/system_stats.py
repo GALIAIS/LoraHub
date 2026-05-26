@@ -1646,7 +1646,7 @@ __all__ = [
 
 
 # Canonical superset of attention backends LoraHub knows how to translate
-# at the recipe level (see schema.AttentionConfig.training). The frontend
+# at the config level (see schema.AttentionConfig.training). The frontend
 # disables anything missing from `attention_backends_for_gpu(...)` so the
 # user can't pick a kernel their GPU can't run.
 ALL_ATTENTION_BACKENDS: tuple[str, ...] = (

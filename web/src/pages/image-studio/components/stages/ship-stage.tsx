@@ -158,7 +158,7 @@ function LintCard({
   }
   const launchTraining = () => {
     // Hand off to the configs page with the dataset path pre-filled.
-    // Configs page reads `?dataset=` to seed the new-recipe flow.
+    // Configs page reads `?dataset=` to seed the new-config flow.
     navigate(`/configs?dataset=${encodeURIComponent(datasetPath)}`)
   }
 

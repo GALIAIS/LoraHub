@@ -7,7 +7,7 @@
  *   - filter the arch select on the config editor (only show arches the
  *     selected backend can actually train);
  *   - render a colored backend badge on every config row + template card
- *     so users can scan a list and tell what each recipe targets;
+ *     so users can scan a list and tell what each config targets;
  *   - drive the global "Settings → default backend" filter on the
  *     /configs list (hide configs from other backends by default);
  *   - choose a sensible initial arch when the user creates a fresh

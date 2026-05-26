@@ -7,7 +7,7 @@ import _foo`` worked against before still works through this re-export.
 
 Submodules:
 
-* :mod:`paths_norm` — recipe-path absolutisation
+* :mod:`paths_norm` — config-path absolutisation
 * :mod:`metrics` — workspace artifact listing + ``events.jsonl`` parsing
 * :mod:`preview` — optional live-preview worker + GPU sampler thread
 * :mod:`lifecycle` — job creation / re-launch / scheduler hookup
@@ -38,7 +38,7 @@ from .metrics import (
     _resolve_workspace_file,
     _tail_slope,
 )
-from .paths_norm import _absolutise, _normalize_recipe_paths
+from .paths_norm import _absolutise, _normalize_config_paths
 from .preview import _gpu_sampler_loop, _maybe_start_preview_worker
 from .resume_dispatch import (
     ResumeNotReady,
@@ -81,7 +81,7 @@ __all__ = [
     "_tail_slope",
     # paths_norm
     "_absolutise",
-    "_normalize_recipe_paths",
+    "_normalize_config_paths",
     # preview
     "_gpu_sampler_loop",
     "_maybe_start_preview_worker",

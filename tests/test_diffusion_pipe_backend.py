@@ -70,7 +70,7 @@ def _make_stub_python_with_deepspeed(tmp_path: Path) -> Path:
     return python
 
 
-def _make_recipe(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> TrainingConfig:
+def _make_config(tmp_path: Path, repo: Path, *, arch: str = "sdxl") -> TrainingConfig:
     ckpt = tmp_path / ("model.safetensors" if arch == "sdxl" else "diffusers")
     if arch == "sdxl":
         ckpt.write_bytes(b"")
@@ -130,12 +130,12 @@ def test_supported_archs_cover_dp_only_models(backend: DiffusionPipeBackend) -> 
     }.issubset(names)
 
 
-def test_validate_passes_for_good_recipe(
+def test_validate_passes_for_good_config(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:
     repo = _make_stub_repo(tmp_path / "dp")
-    recipe = _make_recipe(tmp_path, repo, arch="flux")
-    issues = backend.validate(recipe)
+    config = _make_config(tmp_path, repo, arch="flux")
+    issues = backend.validate(config)
     errors = [i for i in issues if i.severity is Severity.error]
     assert errors == []
 
@@ -143,8 +143,8 @@ def test_validate_passes_for_good_recipe(
 def test_validate_reports_missing_repo(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:
-    recipe = _make_recipe(tmp_path, tmp_path / "missing")
-    issues = backend.validate(recipe)
+    config = _make_config(tmp_path, tmp_path / "missing")
+    issues = backend.validate(config)
     assert any(
         i.severity is Severity.error and "repo_path" in i.field for i in issues
     )
@@ -158,7 +158,7 @@ def test_validate_rejects_sd15_with_pointer_to_kohya(
     ckpt.write_bytes(b"")
     data = tmp_path / "d"
     data.mkdir()
-    recipe = TrainingConfig.model_validate(
+    config = TrainingConfig.model_validate(
         {
             "base_model": {"arch": "sd15", "checkpoint": str(ckpt)},
             "dataset": {"source": str(data)},
@@ -171,7 +171,7 @@ def test_validate_rejects_sd15_with_pointer_to_kohya(
             },
         }
     )
-    issues = backend.validate(recipe)
+    issues = backend.validate(config)
     arch_errors = [
         i for i in issues if i.severity is Severity.error and i.field == "base_model.arch"
     ]
@@ -183,8 +183,8 @@ def test_estimate_vram_returns_sane_numbers(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:
     repo = _make_stub_repo(tmp_path / "dp")
-    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
-    est = backend.estimate_vram(recipe)
+    config = _make_config(tmp_path, repo, arch="sdxl")
+    est = backend.estimate_vram(config)
     assert est.total_mib > 0
 
 
@@ -225,13 +225,13 @@ def test_estimate_vram_covers_every_arch(
     from lorahub.core.backends.base import VRAMEstimate
 
     repo = _make_stub_repo(tmp_path / "dp")
-    # `_make_recipe` creates either a flat .safetensors or a diffusers dir
+    # `_make_config` creates either a flat .safetensors or a diffusers dir
     # depending on the arch token; reuse it so checkpoint shape matches what
-    # the dp recipe expects.
-    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
-    cfg = recipe.model_copy(
+    # the dp config expects.
+    config = _make_config(tmp_path, repo, arch="sdxl")
+    cfg = config.model_copy(
         update={
-            "base_model": recipe.base_model.model_copy(update={"arch": arch}),
+            "base_model": config.base_model.model_copy(update={"arch": arch}),
         }
     )
     est = backend.estimate_vram(cfg)
@@ -244,17 +244,17 @@ def test_estimate_vram_activations_scale_with_batch_size(
 ) -> None:
     """Doubling batch_size doubles the activations component."""
     repo = _make_stub_repo(tmp_path / "dp")
-    recipe = _make_recipe(tmp_path, repo, arch="sdxl")
-    recipe = recipe.model_copy(update={"gradient_checkpointing": False})
+    config = _make_config(tmp_path, repo, arch="sdxl")
+    config = config.model_copy(update={"gradient_checkpointing": False})
 
     bs1 = backend.estimate_vram(
-        recipe.model_copy(
-            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 1})}
+        config.model_copy(
+            update={"schedule": config.schedule.model_copy(update={"batch_size": 1})}
         )
     )
     bs2 = backend.estimate_vram(
-        recipe.model_copy(
-            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 2})}
+        config.model_copy(
+            update={"schedule": config.schedule.model_copy(update={"batch_size": 2})}
         )
     )
     assert bs2.activations_mib == 2 * bs1.activations_mib
@@ -267,9 +267,9 @@ def test_launch_writes_toml_files_and_runs_subprocess(
         pytest.skip("shell-script stubs only work on POSIX")
     repo = _make_stub_repo(tmp_path / "dp")
     stub_python = _make_stub_python_with_deepspeed(tmp_path / "dp")
-    recipe = TrainingConfig.model_validate(
+    config = TrainingConfig.model_validate(
         {
-            "base_model": {"arch": "sdxl", "checkpoint": str(_make_recipe(tmp_path, repo, arch="sdxl").base_model.checkpoint)},
+            "base_model": {"arch": "sdxl", "checkpoint": str(_make_config(tmp_path, repo, arch="sdxl").base_model.checkpoint)},
             "dataset": {"source": str(tmp_path / "data")},
             "schedule": {"epochs": 1, "batch_size": 1},
             "sampling": {"enabled": False},
@@ -283,7 +283,7 @@ def test_launch_writes_toml_files_and_runs_subprocess(
     workspace = tmp_path / "ws"
 
     events: list[TrainingEvent] = []
-    handle = backend.launch(recipe, workspace=workspace, on_event=events.append)
+    handle = backend.launch(config, workspace=workspace, on_event=events.append)
     assert handle.pid is not None
     rc = handle.wait(timeout=30)
     assert rc == 0
@@ -309,7 +309,7 @@ def test_launch_writes_toml_files_and_runs_subprocess(
 
 
 def test_dp_runner_passes_multi_node_launcher_flags(tmp_path: Path) -> None:
-    """B8: when recipe.backend.diffusionPipe.multiNode is set,
+    """B8: when config.backend.diffusionPipe.multiNode is set,
     the runner prepends ``--hostfile`` / ``--num_nodes`` (etc.) to the
     deepspeed argv BEFORE the train.py path. DeepSpeed's launcher parses
     its own argv up to ``train.py`` so the order matters; this test
@@ -372,7 +372,7 @@ def test_dp_runner_passes_multi_node_launcher_flags(tmp_path: Path) -> None:
     assert argv[num_nodes_idx + 1] == "4"
     assert argv[master_addr_idx + 1] == "10.0.0.1"
     assert argv[master_port_idx + 1] == "29501"
-    # recipe argv preserved AFTER train.py
+    # config argv preserved AFTER train.py
     assert "--deepspeed" in argv[train_idx + 1 :]
     assert "--config" in argv[train_idx + 1 :]
 

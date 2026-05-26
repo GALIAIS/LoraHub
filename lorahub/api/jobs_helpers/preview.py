@@ -26,7 +26,7 @@ def _maybe_start_preview_worker(
     on_event: Any,
     stop_evt: threading.Event,
 ) -> tuple[threading.Thread, Any] | None:
-    """Start a PreviewWorker thread if the recipe asks for it.
+    """Start a PreviewWorker thread if the config asks for it.
 
     Returns ``(thread, worker)`` so callers can both join the thread on
     shutdown and call ``worker.notify_checkpoint(name)`` from the
@@ -87,7 +87,7 @@ def _maybe_start_preview_worker(
 
     arch = cfg.base_model.arch
     inference_backend: Any
-    real_backend = resolve_backend(arch=arch, recipe=cfg, workspace=workspace)
+    real_backend = resolve_backend(arch=arch, config=cfg, workspace=workspace)
     if real_backend is not None:
         inference_backend = real_backend
         log.info(

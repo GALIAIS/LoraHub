@@ -10,7 +10,7 @@ from lorahub.core.backends.kohya.compiler import CompilationError, compile_confi
 from lorahub.core.config.schema import TrainingConfig
 
 
-def _recipe(**overrides: object) -> TrainingConfig:
+def _config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"checkpoint": "/m/sdxl.safetensors"},
         "dataset": {"source": "/d/imgs"},
@@ -55,7 +55,7 @@ def test_picks_correct_script_per_arch(tmp_path: Path) -> None:
         assert s == script
 
 
-def _arch_recipe(arch: str) -> TrainingConfig:
+def _arch_config(arch: str) -> TrainingConfig:
     return TrainingConfig.model_validate(
         {
             "base_model": {"arch": arch, "checkpoint": "/m.safetensors"},
@@ -66,23 +66,23 @@ def _arch_recipe(arch: str) -> TrainingConfig:
 
 def test_pick_script_anima(tmp_path: Path) -> None:
     """Anima uses its own entry script per kohya's README."""
-    s, _, _, _ = compile_config(_arch_recipe("anima"), tmp_path)
+    s, _, _, _ = compile_config(_arch_config("anima"), tmp_path)
     assert s == "anima_train_network.py"
 
 
 def test_pick_script_lumina(tmp_path: Path) -> None:
-    s, _, _, _ = compile_config(_arch_recipe("lumina"), tmp_path)
+    s, _, _, _ = compile_config(_arch_config("lumina"), tmp_path)
     assert s == "lumina_train_network.py"
 
 
 def test_pick_script_hunyuan_image(tmp_path: Path) -> None:
-    s, _, _, _ = compile_config(_arch_recipe("hunyuan_image"), tmp_path)
+    s, _, _, _ = compile_config(_arch_config("hunyuan_image"), tmp_path)
     assert s == "hunyuan_image_train_network.py"
 
 
 def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
     """sd-scripts ships sd1.x/2.x in the same train_network.py entry script."""
-    s, _, _, _ = compile_config(_arch_recipe("sd2"), tmp_path)
+    s, _, _, _ = compile_config(_arch_config("sd2"), tmp_path)
     assert s == "train_network.py"
 
 
@@ -100,11 +100,11 @@ def test_pick_script_sd2_reuses_sd15_entry(tmp_path: Path) -> None:
 def test_pick_script_rejects_dp_only_arch(tmp_path: Path, arch: str) -> None:
     """Arches that only diffusion-pipe ships fail kohya compilation up front."""
     with pytest.raises(CompilationError, match="diffusion-pipe"):
-        compile_config(_arch_recipe(arch), tmp_path)
+        compile_config(_arch_config(arch), tmp_path)
 
 
 def test_dataset_toml_emitted_with_dataset_config() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert any(a.startswith("--dataset_config=") for a in args)
     assert not any(a.startswith("--train_data_dir=") for a in args)
     assert not any(a.startswith("--resolution=") for a in args)
@@ -112,26 +112,26 @@ def test_dataset_toml_emitted_with_dataset_config() -> None:
 
 
 def test_dataset_resolution_single_value() -> None:
-    cfg = _recipe(dataset={"source": "/d", "resolution": [768]})
+    cfg = _config(dataset={"source": "/d", "resolution": [768]})
     toml = _dataset_toml(cfg)
     assert "resolution = 768" in toml
 
 
 def test_dataset_resolution_pair() -> None:
-    cfg = _recipe(dataset={"source": "/d", "resolution": [1024, 768]})
+    cfg = _config(dataset={"source": "/d", "resolution": [1024, 768]})
     toml = _dataset_toml(cfg)
     assert "resolution = [1024, 768]" in toml
 
 
 def test_bucket_args_when_enabled() -> None:
-    toml = _dataset_toml(_recipe())
+    toml = _dataset_toml(_config())
     assert "enable_bucket = true" in toml
     assert "min_bucket_reso" in toml
     assert "max_bucket_reso" in toml
 
 
 def test_bucket_args_omitted_when_disabled() -> None:
-    cfg = _recipe(dataset={"source": "/d", "bucket": {"enabled": False}})
+    cfg = _config(dataset={"source": "/d", "bucket": {"enabled": False}})
     toml = _dataset_toml(cfg)
     assert "enable_bucket" not in toml
 
@@ -139,7 +139,7 @@ def test_bucket_args_omitted_when_disabled() -> None:
 def test_dataset_subset_includes_image_dir_and_repeats(tmp_path: Path) -> None:
     src = tmp_path / "imgs"
     src.mkdir()
-    cfg = _recipe(dataset={"source": str(src), "num_repeats": 5})
+    cfg = _config(dataset={"source": str(src), "num_repeats": 5})
     toml = _dataset_toml(cfg)
     # path is escaped for TOML; just confirm the basename appears and num_repeats lines up.
     assert "imgs" in toml
@@ -147,7 +147,7 @@ def test_dataset_subset_includes_image_dir_and_repeats(tmp_path: Path) -> None:
 
 
 def test_dataset_toml_path_is_under_workspace(tmp_path: Path) -> None:
-    files = _files(_recipe(), ws=tmp_path)
+    files = _files(_config(), ws=tmp_path)
     assert len(files) == 1
     toml_path = next(iter(files.keys()))
     assert toml_path.name == "dataset.toml"
@@ -155,7 +155,7 @@ def test_dataset_toml_path_is_under_workspace(tmp_path: Path) -> None:
 
 
 def test_network_lora_default() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert "--network_module=networks.lora" in args
     assert "--network_dim=32" in args
     assert "--network_alpha=16" in args
@@ -163,7 +163,7 @@ def test_network_lora_default() -> None:
 
 
 def test_network_locon_emits_algo() -> None:
-    cfg = _recipe(network={"type": "locon", "rank": 16, "alpha": 8})
+    cfg = _config(network={"type": "locon", "rank": 16, "alpha": 8})
     args = _argv(cfg)
     assert "--network_module=lycoris.kohya" in args
     assert "--network_args" in args
@@ -171,37 +171,37 @@ def test_network_locon_emits_algo() -> None:
 
 
 def test_optimizer_maps_adamw8bit() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert "--optimizer_type=AdamW8bit" in args
     assert "--learning_rate=0.0001" in args
     assert "--unet_lr=0.0001" in args
 
 
 def test_unknown_optimizer_rejected() -> None:
-    cfg = _recipe(optimizer={"type": "made_up"})
+    cfg = _config(optimizer={"type": "made_up"})
     with pytest.raises(CompilationError):
         compile_config(cfg, Path("/ws"))
 
 
 def test_precision_and_memory_flags() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert "--mixed_precision=bf16" in args
     assert "--gradient_checkpointing" in args
     assert "--cache_latents" in args
 
 
 def test_output_paths_use_workspace(tmp_path: Path) -> None:
-    args = _argv(_recipe(), ws=tmp_path)
+    args = _argv(_config(), ws=tmp_path)
     assert f"--output_dir={tmp_path / 'output'}" in args
     assert f"--logging_dir={tmp_path / 'logs'}" in args
     assert "--save_model_as=safetensors" in args
 
 
 def test_sampling_args_only_when_prompts_present() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--sample_prompts=") for a in args)
 
-    cfg = _recipe(sampling={"prompts_file": "/p/eval.txt"})
+    cfg = _config(sampling={"prompts_file": "/p/eval.txt"})
     args2 = _argv(cfg)
     assert "--sample_prompts=/p/eval.txt" in args2 or any(
         "eval.txt" in a for a in args2
@@ -213,10 +213,10 @@ def test_sampling_attention_legacy_field_silently_ignored() -> None:
     no compiler ever wired it). Legacy YAML files carrying it must
     still load — pydantic's default ``extra="ignore"`` policy on
     SamplingConfig drops the unknown key. The compiled argv stays
-    byte-identical to a recipe that omits the field."""
-    baseline = _argv(_recipe(sampling={"prompts_file": "/p/eval.txt"}))
+    byte-identical to a config that omits the field."""
+    baseline = _argv(_config(sampling={"prompts_file": "/p/eval.txt"}))
     legacy = _argv(
-        _recipe(
+        _config(
             sampling={"prompts_file": "/p/eval.txt", "attention": "sageattn"}
         )
     )
@@ -224,7 +224,7 @@ def test_sampling_attention_legacy_field_silently_ignored() -> None:
 
 
 def test_extra_args_escape_hatch() -> None:
-    cfg = _recipe(backend={"extra_args": {"seed": 1234, "noise_offset": 0.05, "xformers": True}})
+    cfg = _config(backend={"extra_args": {"seed": 1234, "noise_offset": 0.05, "xformers": True}})
     args = _argv(cfg)
     assert "--seed=1234" in args
     assert "--noise_offset=0.05" in args
@@ -232,19 +232,19 @@ def test_extra_args_escape_hatch() -> None:
 
 
 def test_pony_variant_emits_clip_skip() -> None:
-    cfg = _recipe(base_model={"arch": "sdxl", "arch_variant": "pony", "checkpoint": "/m.safetensors"})
+    cfg = _config(base_model={"arch": "sdxl", "arch_variant": "pony", "checkpoint": "/m.safetensors"})
     args = _argv(cfg)
     assert "--clip_skip=2" in args
 
 
 def test_non_pony_variants_dont_emit_clip_skip() -> None:
     # Vanilla SDXL has no clip_skip flag.
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--clip_skip") for a in args)
 
     # Illustrious / NoobAI / Animagine intentionally don't add argv yet.
     for variant in ("illustrious", "noobai", "animagine"):
-        cfg = _recipe(
+        cfg = _config(
             base_model={
                 "arch": "sdxl",
                 "arch_variant": variant,
@@ -257,14 +257,14 @@ def test_non_pony_variants_dont_emit_clip_skip() -> None:
 
 def test_validation_default_off() -> None:
     """val_split=0 (default) keeps validation argv off entirely."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--validation_split_percentage") for a in args)
     assert not any(a.startswith("--validate_every_n_epochs") for a in args)
     assert not any(a.startswith("--max_validation_steps") for a in args)
 
 
 def test_validation_split_emits_kohya_flags() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={"source": "/d", "val_split": 0.1},
         validation={"every_n_epochs": 2, "max_samples": 50},
     )
@@ -288,8 +288,8 @@ def test_validation_split_too_large_rejected() -> None:
 
 
 def test_locon_emits_conv_dim_and_alpha() -> None:
-    """locon recipes forward conv_dim/conv_alpha as `--network_args` keys."""
-    cfg = _recipe(
+    """locon configs forward conv_dim/conv_alpha as `--network_args` keys."""
+    cfg = _config(
         network={
             "type": "locon",
             "rank": 16,
@@ -309,7 +309,7 @@ def test_locon_emits_conv_dim_and_alpha() -> None:
 
 def test_loha_conv_alpha_optional() -> None:
     """conv_alpha unset means we don't emit the key (sd-scripts defaults it)."""
-    cfg = _recipe(network={"type": "loha", "conv_dim": 8})
+    cfg = _config(network={"type": "loha", "conv_dim": 8})
     args = _argv(cfg)
     idx = args.index("--network_args")
     network_args = args[idx + 1 :]
@@ -319,7 +319,7 @@ def test_loha_conv_alpha_optional() -> None:
 
 def test_dropout_args_only_when_positive() -> None:
     """All three dropout knobs default to 0 and stay off the argv."""
-    args_default = _argv(_recipe())
+    args_default = _argv(_config())
     if "--network_args" in args_default:
         idx = args_default.index("--network_args")
         rest = args_default[idx + 1 :]
@@ -327,7 +327,7 @@ def test_dropout_args_only_when_positive() -> None:
         assert not any(a.startswith("rank_dropout=") for a in rest)
         assert not any(a.startswith("module_dropout=") for a in rest)
 
-    cfg = _recipe(
+    cfg = _config(
         network={
             "type": "locon",
             "network_dropout": 0.1,
@@ -345,7 +345,7 @@ def test_dropout_args_only_when_positive() -> None:
 
 def test_scale_weight_norms_is_top_level_flag() -> None:
     """scale_weight_norms goes on the top-level argv, not inside --network_args."""
-    cfg = _recipe(network={"scale_weight_norms": 1.0})
+    cfg = _config(network={"scale_weight_norms": 1.0})
     args = _argv(cfg)
     assert "--scale_weight_norms=1.0" in args
     # Make sure it isn't accidentally swept into --network_args
@@ -382,7 +382,7 @@ def test_conv_alpha_rejected_for_dora() -> None:
         )
 def test_loss_default_emits_no_flags() -> None:
     """A bare LossConfig() is identity 鈥?sd-scripts keeps its own defaults."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     for flag in (
         "--min_snr_gamma",
         "--noise_offset",
@@ -398,7 +398,7 @@ def test_loss_default_emits_no_flags() -> None:
 
 
 def test_loss_min_snr_gamma_only() -> None:
-    cfg = _recipe(loss={"min_snr_gamma": 5})
+    cfg = _config(loss={"min_snr_gamma": 5})
     args = _argv(cfg)
     assert "--min_snr_gamma=5.0" in args
     # noise_offset stayed default 鈫?still absent
@@ -406,7 +406,7 @@ def test_loss_min_snr_gamma_only() -> None:
 
 
 def test_loss_full_kitchen_sink() -> None:
-    cfg = _recipe(
+    cfg = _config(
         loss={
             "min_snr_gamma": 5,
             "noise_offset": 0.05,
@@ -433,12 +433,12 @@ def test_loss_full_kitchen_sink() -> None:
 
 def test_loss_prior_weight_default_one_omitted() -> None:
     """prior_loss_weight=1.0 matches sd-scripts default 鈫?omit to keep argv tight."""
-    args = _argv(_recipe(loss={"prior_loss_weight": 1.0}))
+    args = _argv(_config(loss={"prior_loss_weight": 1.0}))
     assert not any(a.startswith("--prior_loss_weight") for a in args)
 
 
 def test_optimizer_args_emit_betas_weight_decay_eps() -> None:
-    args = _argv(_recipe(optimizer={"betas": [0.95, 0.999], "weight_decay": 0.1, "eps": 1e-7}))
+    args = _argv(_config(optimizer={"betas": [0.95, 0.999], "weight_decay": 0.1, "eps": 1e-7}))
     idx = args.index("--optimizer_args")
     tail = args[idx + 1 :]
     assert "betas=0.95,0.999" in tail
@@ -449,7 +449,7 @@ def test_optimizer_args_emit_betas_weight_decay_eps() -> None:
 def test_optimizer_args_user_overrides_dedicated_fields() -> None:
     """Free-form `optimizer_args` keys win over the dedicated betas/eps."""
     args = _argv(
-        _recipe(optimizer={"optimizer_args": {"betas": "0.5,0.5", "use_bias_correction": "True"}})
+        _config(optimizer={"optimizer_args": {"betas": "0.5,0.5", "use_bias_correction": "True"}})
     )
     idx = args.index("--optimizer_args")
     tail = args[idx + 1 :]
@@ -472,7 +472,7 @@ def test_optimizer_args_user_overrides_dedicated_fields() -> None:
 
 def test_optimization_default_emits_no_flags() -> None:
     """Bare OptimizationConfig() leaves the argv untouched (kohya defaults)."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     for flag in (
         "--torch_compile",
         "--fused_backward_pass",
@@ -483,18 +483,18 @@ def test_optimization_default_emits_no_flags() -> None:
 
 
 def test_optimization_torch_compile_emits_flag() -> None:
-    cfg = _recipe(optimization={"torch_compile": True})
+    cfg = _config(optimization={"torch_compile": True})
     assert "--torch_compile" in _argv(cfg)
 
 
 def test_optimization_fused_backward_pass_emits_flag() -> None:
-    cfg = _recipe(optimization={"fused_backward_pass": True})
+    cfg = _config(optimization={"fused_backward_pass": True})
     assert "--fused_backward_pass" in _argv(cfg)
 
 
 def test_optimization_full_bf16_coexists_with_mixed_precision() -> None:
     """`--full_bf16` is additive: it lands alongside `--mixed_precision=bf16`."""
-    cfg = _recipe(optimization={"full_bf16": True})
+    cfg = _config(optimization={"full_bf16": True})
     args = _argv(cfg)
     assert "--full_bf16" in args
     assert "--mixed_precision=bf16" in args
@@ -527,7 +527,7 @@ def test_optimization_blocks_to_swap_skipped_for_sdxl(caplog) -> None:
     """SDXL's sd-scripts entry has no --blocks_to_swap; we drop the flag + warn."""
     import logging
 
-    cfg = _recipe(optimization={"blocks_to_swap": 8})
+    cfg = _config(optimization={"blocks_to_swap": 8})
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
         args = _argv(cfg)
     assert not any(a.startswith("--blocks_to_swap") for a in args)
@@ -554,7 +554,7 @@ def test_optimization_blocks_to_swap_skipped_for_unsupported_arches(
 
 def test_optimization_blocks_to_swap_zero_is_silent() -> None:
     """blocks_to_swap=0 (default) emits no flag and no warning."""
-    cfg = _recipe(optimization={"blocks_to_swap": 0})
+    cfg = _config(optimization={"blocks_to_swap": 0})
     args = _argv(cfg)
     assert not any(a.startswith("--blocks_to_swap") for a in args)
 
@@ -583,7 +583,7 @@ def test_optimization_full_kitchen_sink_on_flux() -> None:
 
 def test_attention_auto_emits_no_argv() -> None:
     """`auto` keeps kohya's own default — we never emit attention argv."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--attn_mode") for a in args)
     assert "--xformers" not in args
     assert "--sdpa" not in args
@@ -591,30 +591,30 @@ def test_attention_auto_emits_no_argv() -> None:
 
 
 def test_attention_torch_emits_attn_mode() -> None:
-    args = _argv(_recipe(attention={"training": "torch"}))
+    args = _argv(_config(attention={"training": "torch"}))
     assert "--attn_mode=torch" in args
 
 
 def test_attention_sdpa_emits_sdpa_flag() -> None:
-    args = _argv(_recipe(attention={"training": "sdpa"}))
+    args = _argv(_config(attention={"training": "sdpa"}))
     assert "--sdpa" in args
 
 
 def test_attention_xformers_with_split() -> None:
-    cfg = _recipe(attention={"training": "xformers", "split": True})
+    cfg = _config(attention={"training": "xformers", "split": True})
     args = _argv(cfg)
     assert "--xformers" in args
     assert "--split_attn" in args
 
 
 def test_attention_xformers_without_split() -> None:
-    args = _argv(_recipe(attention={"training": "xformers"}))
+    args = _argv(_config(attention={"training": "xformers"}))
     assert "--xformers" in args
     assert "--split_attn" not in args
 
 
 def test_attention_flash_emits_attn_mode() -> None:
-    args = _argv(_recipe(attention={"training": "flash"}))
+    args = _argv(_config(attention={"training": "flash"}))
     assert "--attn_mode=flash" in args
 
 
@@ -623,20 +623,20 @@ def test_attention_flex_falls_back_to_sdpa(caplog: pytest.LogCaptureFixture) -> 
     import logging
 
     with caplog.at_level(logging.WARNING):
-        args = _argv(_recipe(attention={"training": "flex"}))
+        args = _argv(_config(attention={"training": "flex"}))
     assert "--sdpa" in args
     assert any("flex" in rec.message for rec in caplog.records)
 
 
 def test_attention_flash3_sets_env_override() -> None:
-    cfg = _recipe(attention={"training": "flash3"})
+    cfg = _config(attention={"training": "flash3"})
     _, args, _files, env = compile_config(cfg, Path("/ws"))
     assert "--attn_mode=flash" in args
     assert env.get("LORAHUB_KOHYA_ATTN_OVERRIDE") == "flash3"
 
 
 def test_attention_flash4_sets_env_override() -> None:
-    cfg = _recipe(attention={"training": "flash4"})
+    cfg = _config(attention={"training": "flash4"})
     _, args, _files, env = compile_config(cfg, Path("/ws"))
     assert "--attn_mode=flash" in args
     assert env.get("LORAHUB_KOHYA_ATTN_OVERRIDE") == "flash4"
@@ -644,7 +644,7 @@ def test_attention_flash4_sets_env_override() -> None:
 
 def test_attention_default_env_is_empty() -> None:
     """Backends that don't need an env override get an empty mapping."""
-    _, _args, _files, env = compile_config(_recipe(), Path("/ws"))
+    _, _args, _files, env = compile_config(_config(), Path("/ws"))
     assert env == {}
 
 
@@ -672,7 +672,7 @@ def test_attn_patch_module_imports_cleanly(monkeypatch: pytest.MonkeyPatch) -> N
 # --------------------------------------------------------------------------- #
 
 
-def _flux_recipe(**overrides: object) -> TrainingConfig:
+def _flux_config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "flux", "checkpoint": "/m/flux"},
         "dataset": {"source": "/d"},
@@ -681,7 +681,7 @@ def _flux_recipe(**overrides: object) -> TrainingConfig:
     return TrainingConfig.model_validate(base)
 
 
-def _sd3_recipe(**overrides: object) -> TrainingConfig:
+def _sd3_config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "sd3", "checkpoint": "/m/sd3"},
         "dataset": {"source": "/d"},
@@ -690,7 +690,7 @@ def _sd3_recipe(**overrides: object) -> TrainingConfig:
     return TrainingConfig.model_validate(base)
 
 
-def _anima_recipe(**overrides: object) -> TrainingConfig:
+def _anima_config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "anima", "checkpoint": "/m/anima"},
         "dataset": {"source": "/d"},
@@ -699,7 +699,7 @@ def _anima_recipe(**overrides: object) -> TrainingConfig:
     return TrainingConfig.model_validate(base)
 
 
-def _hunyuan_recipe(**overrides: object) -> TrainingConfig:
+def _hunyuan_config(**overrides: object) -> TrainingConfig:
     base = {
         "base_model": {"arch": "hunyuan_image", "checkpoint": "/m/h"},
         "dataset": {"source": "/d"},
@@ -711,11 +711,11 @@ def _hunyuan_recipe(**overrides: object) -> TrainingConfig:
 # --- Defaults stay byte-identical -----------------------------------------
 
 
-def test_b1_default_recipe_emits_no_new_argv() -> None:
-    """A bare recipe must not pick up any of the new B1 flags. Existing
+def test_b1_default_config_emits_no_new_argv() -> None:
+    """A bare config must not pick up any of the new B1 flags. Existing
     fixtures encode the byte-level expectation; this guards explicit
     membership."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     forbidden = (
         "--noise_offset_random_strength",
         "--multires_noise_iterations",
@@ -830,14 +830,14 @@ def test_b1_default_recipe_emits_no_new_argv() -> None:
         "--mod_lr",
     )
     for flag in forbidden:
-        assert not any(a.startswith(flag) for a in args), f"unexpected {flag} on default recipe"
+        assert not any(a.startswith(flag) for a in args), f"unexpected {flag} on default config"
 
 
 # --- LossConfig new fields -------------------------------------------------
 
 
 def test_b1_loss_advanced_full_emit() -> None:
-    cfg = _recipe(
+    cfg = _config(
         loss={
             "noise_offset": 0.05,
             "noise_offset_random_strength": True,
@@ -877,7 +877,7 @@ def test_b1_loss_advanced_full_emit() -> None:
 
 def test_b1_loss_multires_discount_default_omitted() -> None:
     """`multires_noise_discount=0.3` matches kohya default — argv stays clean."""
-    args = _argv(_recipe(loss={"multires_noise_discount": 0.3}))
+    args = _argv(_config(loss={"multires_noise_discount": 0.3}))
     assert not any(a.startswith("--multires_noise_discount") for a in args)
 
 
@@ -885,18 +885,18 @@ def test_b1_loss_multires_discount_default_omitted() -> None:
 
 
 def test_b1_optimizer_max_grad_norm_emitted_when_moved() -> None:
-    args = _argv(_recipe(optimizer={"max_grad_norm": 0.5}))
+    args = _argv(_config(optimizer={"max_grad_norm": 0.5}))
     assert "--max_grad_norm=0.5" in args
 
 
 def test_b1_optimizer_max_grad_norm_default_omitted() -> None:
     """`max_grad_norm=1.0` matches kohya default — argv stays clean."""
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--max_grad_norm") for a in args)
 
 
 def test_b1_optimizer_scheduler_module_and_args() -> None:
-    cfg = _recipe(
+    cfg = _config(
         optimizer={
             "scheduler_module": "transformers.optimization.cosine",
             "scheduler_args": {"num_cycles": "0.5"},
@@ -921,7 +921,7 @@ def test_b1_optimizer_scheduler_module_and_args() -> None:
 
 
 def test_b1_schedule_seed_and_lr_decay() -> None:
-    cfg = _recipe(schedule={"seed": 1234, "lr_decay_steps": 500})
+    cfg = _config(schedule={"seed": 1234, "lr_decay_steps": 500})
     args = _argv(cfg)
     assert "--seed=1234" in args
     assert "--lr_decay_steps=500" in args
@@ -931,7 +931,7 @@ def test_b1_schedule_seed_and_lr_decay() -> None:
 
 
 def test_b1_top_level_caching_flags() -> None:
-    cfg = _recipe(
+    cfg = _config(
         cache_latents_to_disk=True,
         skip_cache_check=True,
         cache_info=True,
@@ -948,7 +948,7 @@ def test_b1_top_level_caching_flags() -> None:
 
 
 def test_b1_output_step_and_retention() -> None:
-    cfg = _recipe(
+    cfg = _config(
         output={
             "save_every_n_steps": 100,
             "save_last_n_epochs": 3,
@@ -966,7 +966,7 @@ def test_b1_output_step_and_retention() -> None:
 
 
 def test_b1_output_metadata_keys_emit_metadata_flags() -> None:
-    cfg = _recipe(
+    cfg = _config(
         output={
             "metadata": {
                 "title": "My LoRA",
@@ -986,7 +986,7 @@ def test_b1_output_metadata_unknown_key_warns_and_passes(
 ) -> None:
     import logging
 
-    cfg = _recipe(output={"metadata": {"weird_key": "v"}})
+    cfg = _config(output={"metadata": {"weird_key": "v"}})
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
         args = _argv(cfg)
     assert "--metadata_weird_key=v" in args
@@ -997,7 +997,7 @@ def test_b1_output_metadata_unknown_key_warns_and_passes(
 
 
 def test_b1_resume_extras_full_emit() -> None:
-    cfg = _recipe(
+    cfg = _config(
         resume={
             "save_state": True,
             "save_state_at_end": True,
@@ -1022,7 +1022,7 @@ def test_b1_resume_extras_full_emit() -> None:
 
 
 def test_b1_validation_step_cadence_and_seed() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={"source": "/d", "val_split": 0.1},
         validation={"every_n_epochs": 1, "every_n_steps": 200, "seed": 7},
     )
@@ -1035,7 +1035,7 @@ def test_b1_validation_step_cadence_and_seed() -> None:
 
 
 def test_b1_sampling_step_cadence_and_at_first() -> None:
-    cfg = _recipe(
+    cfg = _config(
         sampling={
             "prompts_file": "/p/eval.txt",
             "every_n_epochs": 1,
@@ -1052,7 +1052,7 @@ def test_b1_sampling_step_cadence_and_at_first() -> None:
 
 
 def test_b1_dataloader_overrides_emit() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataloader={
             "num_workers": 2,
             "persistent_workers": True,
@@ -1066,7 +1066,7 @@ def test_b1_dataloader_overrides_emit() -> None:
 
 
 def test_b1_dataloader_text_encoder_batch_size_sdxl() -> None:
-    cfg = _recipe(dataloader={"text_encoder_batch_size": 8})
+    cfg = _config(dataloader={"text_encoder_batch_size": 8})
     args = _argv(cfg)
     assert "--text_encoder_batch_size=8" in args
 
@@ -1090,7 +1090,7 @@ def test_b1_dataloader_text_encoder_batch_size_sd15_warns(
 
 
 def test_b1_dataloader_defaults_silent() -> None:
-    args = _argv(_recipe())
+    args = _argv(_config())
     assert not any(a.startswith("--max_data_loader_n_workers") for a in args)
 
 
@@ -1098,7 +1098,7 @@ def test_b1_dataloader_defaults_silent() -> None:
 
 
 def test_b1_augmentation_full_emit() -> None:
-    cfg = _recipe(
+    cfg = _config(
         augmentation={
             "flip": True,
             "color": True,
@@ -1119,7 +1119,7 @@ def test_b1_augmentation_full_emit() -> None:
 
 
 def test_b1_caption_advanced_full_emit() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={
             "source": "/d",
             "caption": {
@@ -1157,7 +1157,7 @@ def test_b1_caption_advanced_full_emit() -> None:
 
 
 def test_b1_bucket_extra_argv() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={
             "source": "/d",
             "bucket": {
@@ -1174,7 +1174,7 @@ def test_b1_bucket_extra_argv() -> None:
 
 
 def test_b1_bucket_extra_argv_silent_when_bucket_disabled() -> None:
-    cfg = _recipe(
+    cfg = _config(
         dataset={
             "source": "/d",
             "bucket": {
@@ -1193,7 +1193,7 @@ def test_b1_bucket_extra_argv_silent_when_bucket_disabled() -> None:
 
 
 def test_b1_optimization_universal_toggles() -> None:
-    cfg = _recipe(
+    cfg = _config(
         optimization={
             "full_fp16": True,
             "lowram": True,
@@ -1219,7 +1219,7 @@ def test_b1_optimization_universal_toggles() -> None:
 
 def test_b1_optimization_disable_mmap_emits_for_sdxl() -> None:
     """SDXL's add_sdxl_training_arguments ships --disable_mmap_load_safetensors."""
-    cfg = _recipe(optimization={"disable_mmap_load_safetensors": True})
+    cfg = _config(optimization={"disable_mmap_load_safetensors": True})
     assert "--disable_mmap_load_safetensors" in _argv(cfg)
 
 
@@ -1242,7 +1242,7 @@ def test_b1_optimization_disable_mmap_skipped_for_sd15(
 
 
 def test_b1_optimization_cache_te_outputs_for_sdxl() -> None:
-    cfg = _recipe(
+    cfg = _config(
         optimization={
             "cache_text_encoder_outputs": True,
             "cache_text_encoder_outputs_to_disk": True,
@@ -1272,7 +1272,7 @@ def test_b1_optimization_cache_te_outputs_skipped_for_sd15(
 
 
 def test_b1_optimization_fp8_scaled_only_hunyuan() -> None:
-    args = _argv(_hunyuan_recipe(optimization={"fp8_scaled": True}))
+    args = _argv(_hunyuan_config(optimization={"fp8_scaled": True}))
     assert "--fp8_scaled" in args
 
 
@@ -1280,20 +1280,20 @@ def test_b1_optimization_fp8_scaled_warns_on_flux(caplog: pytest.LogCaptureFixtu
     import logging
 
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
-        args = _argv(_flux_recipe(optimization={"fp8_scaled": True}))
+        args = _argv(_flux_config(optimization={"fp8_scaled": True}))
     assert "--fp8_scaled" not in args
     assert any("fp8_scaled" in r.message for r in caplog.records)
 
 
 def test_b1_optimization_fp8_vl_text_encoder_emits_short_flag_on_hunyuan() -> None:
     """Schema field is `fp8_vl_text_encoder` but kohya's argv is `--fp8_vl`."""
-    args = _argv(_hunyuan_recipe(optimization={"fp8_vl_text_encoder": True}))
+    args = _argv(_hunyuan_config(optimization={"fp8_vl_text_encoder": True}))
     assert "--fp8_vl" in args
     assert not any(a.startswith("--fp8_vl_text_encoder") for a in args)
 
 
 def test_b1_optimization_unsloth_offload_only_anima() -> None:
-    args = _argv(_anima_recipe(optimization={"unsloth_offload_checkpointing": True}))
+    args = _argv(_anima_config(optimization={"unsloth_offload_checkpointing": True}))
     assert "--unsloth_offload_checkpointing" in args
 
 
@@ -1301,7 +1301,7 @@ def test_b1_optimization_unsloth_offload_warns_on_flux(caplog: pytest.LogCapture
     import logging
 
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
-        args = _argv(_flux_recipe(optimization={"unsloth_offload_checkpointing": True}))
+        args = _argv(_flux_config(optimization={"unsloth_offload_checkpointing": True}))
     assert "--unsloth_offload_checkpointing" not in args
     assert any("unsloth" in r.message for r in caplog.records)
 
@@ -1310,7 +1310,7 @@ def test_b1_optimization_unsloth_offload_warns_on_flux(caplog: pytest.LogCapture
 
 
 def test_b1_flow_match_full_emit_on_flux() -> None:
-    cfg = _flux_recipe(
+    cfg = _flux_config(
         flow_match={
             "timestep_sampling": "logit_normal",
             "sigmoid_scale": 1.5,
@@ -1334,7 +1334,7 @@ def test_b1_flow_match_full_emit_on_flux() -> None:
 
 
 def test_b1_flow_match_training_shift_only_sd3() -> None:
-    args = _argv(_sd3_recipe(flow_match={"training_shift": 2.5}))
+    args = _argv(_sd3_config(flow_match={"training_shift": 2.5}))
     assert "--training_shift=2.5" in args
 
 
@@ -1342,7 +1342,7 @@ def test_b1_flow_match_training_shift_warns_on_flux(caplog: pytest.LogCaptureFix
     import logging
 
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
-        args = _argv(_flux_recipe(flow_match={"training_shift": 2.5}))
+        args = _argv(_flux_config(flow_match={"training_shift": 2.5}))
     assert not any(a.startswith("--training_shift") for a in args)
     assert any("training_shift" in r.message for r in caplog.records)
 
@@ -1352,7 +1352,7 @@ def test_b1_flow_match_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
-        args = _argv(_recipe(flow_match={"timestep_sampling": "logit_normal"}))
+        args = _argv(_config(flow_match={"timestep_sampling": "logit_normal"}))
     assert not any(a.startswith("--timestep_sampling") for a in args)
     assert any("flow_match" in r.message for r in caplog.records)
 
@@ -1361,7 +1361,7 @@ def test_b1_flow_match_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_b1_arch_paths_flux_full_emit() -> None:
-    cfg = _flux_recipe(
+    cfg = _flux_config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -1390,7 +1390,7 @@ def test_b1_arch_paths_flux_full_emit() -> None:
 
 
 def test_b1_arch_paths_sd3_full_emit() -> None:
-    cfg = _sd3_recipe(
+    cfg = _sd3_config(
         base_model={
             "arch": "sd3",
             "checkpoint": "/m/sd3",
@@ -1430,7 +1430,7 @@ def test_b1_arch_paths_sd3_full_emit() -> None:
 def test_b1_arch_paths_anima_uses_upstream_spelling() -> None:
     """Anima argv: `--llm_adapter_path` (not `--llm_adapter`),
     `--t5_tokenizer_path` (not `--t5_tokenizer`)."""
-    cfg = _anima_recipe(
+    cfg = _anima_config(
         base_model={
             "arch": "anima",
             "checkpoint": "/m/anima",
@@ -1459,7 +1459,7 @@ def test_b1_arch_paths_anima_uses_upstream_spelling() -> None:
 
 
 def test_b1_arch_paths_hunyuan_full_emit() -> None:
-    cfg = _hunyuan_recipe(
+    cfg = _hunyuan_config(
         base_model={
             "arch": "hunyuan_image",
             "checkpoint": "/m/h",
@@ -1482,7 +1482,7 @@ def test_b1_arch_paths_flux_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixture
     """clip_l / t5xxl / ae set on SDXL must not leak into argv."""
     import logging
 
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "sdxl",
             "checkpoint": "/m",
@@ -1499,7 +1499,7 @@ def test_b1_arch_paths_flux_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixture
 def test_b1_arch_paths_anima_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
-    cfg = _recipe(
+    cfg = _config(
         base_model={
             "arch": "sdxl",
             "checkpoint": "/m",
@@ -1515,7 +1515,7 @@ def test_b1_arch_paths_anima_fields_warn_on_sdxl(caplog: pytest.LogCaptureFixtur
 def test_b1_arch_paths_byt5_warns_on_flux(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
-    cfg = _flux_recipe(
+    cfg = _flux_config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -1532,7 +1532,7 @@ def test_b1_arch_paths_byt5_warns_on_flux(caplog: pytest.LogCaptureFixture) -> N
 
 
 def test_b1_module_lr_anima_full_emit() -> None:
-    cfg = _anima_recipe(
+    cfg = _anima_config(
         network={
             "module_lr": {
                 "llm_adapter": 5e-5,
@@ -1554,7 +1554,7 @@ def test_b1_module_lr_anima_full_emit() -> None:
 def test_b1_module_lr_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
-    cfg = _recipe(network={"module_lr": {"self_attn": 1e-4}})
+    cfg = _config(network={"module_lr": {"self_attn": 1e-4}})
     with caplog.at_level(logging.WARNING, logger="lorahub.core.backends.kohya.compiler"):
         args = _argv(cfg)
     assert not any(a.startswith("--self_attn_lr") for a in args)
@@ -1565,13 +1565,13 @@ def test_b1_module_lr_warns_on_sdxl(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_b1_network_init_from_emits_network_weights() -> None:
-    cfg = _recipe(network={"init_from": "/lora/base.safetensors"})
+    cfg = _config(network={"init_from": "/lora/base.safetensors"})
     args = _argv(cfg)
     assert any(a.startswith("--network_weights=") for a in args)
 
 
 def test_b1_network_dim_from_weights_flag() -> None:
-    cfg = _recipe(
+    cfg = _config(
         network={
             "init_from": "/lora/base.safetensors",
             "dim_from_weights": "/lora/base.safetensors",
@@ -1583,7 +1583,7 @@ def test_b1_network_dim_from_weights_flag() -> None:
 
 
 def test_b1_network_base_weights_with_multipliers() -> None:
-    cfg = _recipe(
+    cfg = _config(
         network={
             "base_weights": ["/lora/a.safetensors", "/lora/b.safetensors"],
             "base_weights_multiplier": [0.7, 0.3],
@@ -1607,8 +1607,8 @@ def test_b1_network_base_weights_with_multipliers() -> None:
 def test_b1_kitchen_sink_full_bf16_plus_fp8_plus_cache_te_disk() -> None:
     """Real-world combo: bf16 mixed precision + full_bf16 + fp8_base +
     cache_text_encoder_outputs_to_disk + multires_noise + max_grad_norm.
-    All must coexist on a single SDXL recipe without conflicts."""
-    cfg = _recipe(
+    All must coexist on a single SDXL config without conflicts."""
+    cfg = _config(
         optimization={
             "full_bf16": True,
             "fp8_base": True,
@@ -1631,8 +1631,8 @@ def test_b1_kitchen_sink_full_bf16_plus_fp8_plus_cache_te_disk() -> None:
 
 
 def test_b1_kitchen_sink_flux_full_arch_paths_plus_flow_match() -> None:
-    """FLUX recipe with arch_paths + flow_match + advanced loss + optimization."""
-    cfg = _flux_recipe(
+    """FLUX config with arch_paths + flow_match + advanced loss + optimization."""
+    cfg = _flux_config(
         base_model={
             "arch": "flux",
             "checkpoint": "/m/flux",
@@ -1677,11 +1677,11 @@ def test_b1_kitchen_sink_flux_full_arch_paths_plus_flow_match() -> None:
     assert any(a.startswith("--guidance_scale=1.0") for a in args)
 
 
-def test_b1_default_recipe_argv_byte_identical_after_b1() -> None:
-    """Anchor test: producing argv from a default-only recipe must remain
+def test_b1_default_config_argv_byte_identical_after_b1() -> None:
+    """Anchor test: producing argv from a default-only config must remain
     a stable list with the existing fields (sanity check the new helpers
     don't slip in any defaults)."""
-    args = _argv(_recipe(), ws=Path("/ws"))
+    args = _argv(_config(), ws=Path("/ws"))
     expected_anchors = [
         "--network_module=networks.lora",
         "--network_dim=32",

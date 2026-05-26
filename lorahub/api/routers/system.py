@@ -107,7 +107,7 @@ def system_cluster() -> dict[str, Any]:
     if settings is not None:
         # Surface the user's last-saved hostfile if any — pulled from
         # the global Settings extras bag so users don't have to bake it
-        # into every recipe. Settings.extra is the existing escape
+        # into every config. Settings.extra is the existing escape
         # hatch for fields not yet in the schema.
         hostfile_str = settings.extra.get("multi_node_hostfile")
         if isinstance(hostfile_str, str) and hostfile_str.strip():

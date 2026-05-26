@@ -17,7 +17,7 @@ description: REST + SSE + WebSocket 端点参考。
 
 ## Configs
 
-端点集已从 `/api/recipes` 改名 `/api/configs`,与磁盘 `configs/` 对齐。
+端点集已从 `/api/configs` 改名 `/api/configs`,与磁盘 `configs/` 对齐。
 validator + schema 同时接受 `camelCase`(新 wire format)和 `snake_case`。
 
 | Method | Path | 作用 |

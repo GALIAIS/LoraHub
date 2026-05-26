@@ -1,4 +1,4 @@
-# Anima style LoRA on the anima_lora backend — 32GB VPS recipe.
+# Anima style LoRA on the anima_lora backend — 32GB VPS config.
 #
 # Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
 # Expected throughput: ~1.2-1.8 s/step (LoHA is ~20% slower than DoRA at the
@@ -35,7 +35,7 @@ dataset:
   bucket:
     enabled: true
     # Style datasets mix portraits / landscapes / scenes — wider AR
-    # range than the character recipe.
+    # range than the character config.
     min: 512
     max: 1664
     step: 64
@@ -141,7 +141,7 @@ backend:
     preset: default
     outputName: style_anima_32gb
 
-    # Algorithm: LoHA — same choice as the 8GB recipe, scaled up.
+    # Algorithm: LoHA — same choice as the 8GB config, scaled up.
     # Effective rank is ``r²`` so r=16 here is comparable in expressive
     # power to a r≈256 plain LoRA, at 32 × the parameter cost (vs r=16
     # plain LoRA).

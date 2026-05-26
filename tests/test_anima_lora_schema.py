@@ -25,7 +25,7 @@ from lorahub.core.config.schema import (
 )
 
 
-def _minimal_recipe(tmp_path: Path) -> dict[str, Any]:
+def _minimal_config(tmp_path: Path) -> dict[str, Any]:
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -51,7 +51,7 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.optimizer_type == "AdamW"
     # ``flash`` matches Backend's base.toml default — operators without
     # a working flash-attn build override to ``torch`` (PyTorch SDPA)
-    # explicitly in their recipe.
+    # explicitly in their config.
     assert opts.attn_mode == "flash"
     # method=lora's default stack: algorithm=ortho keeps anima's upstream
     # OrthoLoRA + T-LoRA layout; the legacy ``use_ortho`` shadow stays
@@ -153,7 +153,7 @@ def test_select_backend_returns_anima_lora_backend(
     from lorahub.core.backends.anima_lora import AnimaLoraBackend
 
     cfg = TrainingConfig.model_validate(
-        _minimal_recipe(tmp_path)
+        _minimal_config(tmp_path)
         | {"backend": {"type": "anima_lora", "animaLora": {}}}
     )
     backend = _select_backend(cfg)
@@ -163,6 +163,6 @@ def test_select_backend_returns_anima_lora_backend(
 
 def test_select_backend_unchanged_for_kohya_and_dp(tmp_path: Path) -> None:
     """Adding the anima_lora branch must not regress the other two."""
-    cfg_k = TrainingConfig.model_validate(_minimal_recipe(tmp_path))
+    cfg_k = TrainingConfig.model_validate(_minimal_config(tmp_path))
     backend = _select_backend(cfg_k)
     assert backend.__class__.__name__ == "KohyaBackend"

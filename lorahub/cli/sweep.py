@@ -1,4 +1,4 @@
-"""Sweep CLI — submit a sweep recipe to the running scheduler.
+"""Sweep CLI — submit a sweep config to the running scheduler.
 
 Wraps ``POST /api/sweeps`` so a user can drive grid / random / TPE
 search without opening the web UI. Reads a YAML config that maps to

@@ -264,7 +264,7 @@ def test_pipeline_booru_alias_disabled_by_default() -> None:
 
     Even when ``booru_alias_extra`` would carry a mapping, the pipeline must
     leave the tag untouched until the user opts in. This guards the
-    backwards-compatibility promise made by older recipes.
+    backwards-compatibility promise made by older configs.
     """
     pipeline = CaptionPipeline(
         booru_alias_extra={"fake danbooru tag": "fake gelbooru tag"},

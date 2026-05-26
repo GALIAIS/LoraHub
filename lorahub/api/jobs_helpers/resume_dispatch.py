@@ -119,7 +119,7 @@ class ResumeNotReady(Exception):
 
 @dataclass(slots=True)
 class ResumeSpec:
-    """Backend-agnostic recipe for what to inject into a resume launch.
+    """Backend-agnostic config for what to inject into a resume launch.
 
     `extra_argv` is appended after the compiler's argv (same channel kohya
     /resume already uses). `cfg_overrides` is a flat dot-path mapping the

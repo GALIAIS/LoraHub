@@ -1,7 +1,7 @@
 """Curated Danbooru -> Gelbooru tag aliases.
 
 When the same concept is tagged differently between Danbooru and Gelbooru,
-the upstream Anima recipe (and most of the SDXL anime-fork community) asks
+the upstream Anima config (and most of the SDXL anime-fork community) asks
 authors to take the Gelbooru spelling, since that is what the public NoobAI
 / Pony / Animagine prompt examples use.
 
@@ -74,7 +74,7 @@ def load_aliases(
     """Merge ``extra`` over ``base`` (default :data:`DANBOORU_TO_GELBOORU`).
 
     Keys in ``extra`` win over keys in ``base`` — this lets a user inject a
-    site- or recipe-specific override on top of the curated default without
+    site- or config-specific override on top of the curated default without
     having to copy the whole table. ``base=None`` falls back to the curated
     default; ``base={}`` yields a remap built only from ``extra`` (handy for
     tests that want to verify the mechanism with a tiny synthetic table).

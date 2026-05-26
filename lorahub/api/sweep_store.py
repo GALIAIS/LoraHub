@@ -4,7 +4,7 @@ Sweeps are currently a *view* over jobs (``state.registry.list()`` filtered
 by ``metadata.sweep_id``). That works at runtime but loses the sweep's
 *plan* (the axes, the name template, the create timestamp) on restart —
 the API can still group jobs by their stamped ``sweep_id``, but the
-"sweep recipe" itself is gone.
+"sweep config" itself is gone.
 
 This store keeps one row per sweep with the immutable plan as JSON.
 Jobs continue to live in ``jobs.sqlite``; this DB only holds sweep

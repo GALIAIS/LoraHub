@@ -243,7 +243,7 @@ def inject_quality(
 ) -> list[str]:
     """Prepend quality / score / safety markers if they're not already present.
 
-    Order on the prefix is ``score -> quality -> safety`` so a Pony recipe's
+    Order on the prefix is ``score -> quality -> safety`` so a Pony config's
     ``score_9, score_8_up, masterpiece, safe`` pattern materialises naturally.
     Each input list is treated as a sequence of literals; nothing is
     re-normalised here, the caller has already chosen the spelling.
@@ -341,7 +341,7 @@ class CaptionPipeline:
     drop_rate: float = 0.0
     seed: int | None = None
     # Apply the curated Danbooru -> Gelbooru alias table after the user
-    # ``remap`` step. Off by default so existing recipes round-trip
+    # ``remap`` step. Off by default so existing configs round-trip
     # bit-identically; opt-in via the CLI's ``--booru-alias`` flag or the
     # API's ``apply_booru_alias`` field.
     apply_booru_alias: bool = False

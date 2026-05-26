@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a bug. The fastest path to a fix is a minimal recipe + the exact command + the relevant lines from `events.jsonl`.
+        Thanks for reporting a bug. The fastest path to a fix is a minimal config + the exact command + the relevant lines from `events.jsonl`.
 
   - type: input
     id: version
@@ -40,14 +40,14 @@ body:
     attributes:
       label: Command you ran
       render: shell
-      placeholder: "lorahub train my_recipe.yaml"
+      placeholder: "lorahub train my_config.yaml"
     validations:
       required: true
 
   - type: textarea
-    id: recipe
+    id: config
     attributes:
-      label: Recipe (or relevant excerpt)
+      label: Config (or relevant excerpt)
       render: yaml
 
   - type: textarea

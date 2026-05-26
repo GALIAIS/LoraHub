@@ -132,7 +132,7 @@ def resolve_caption_path(raw_image_path: str) -> Path:
     `raw_image_path` must end in one of `IMAGE_SUFFIXES`; that's what
     forces the writeable target to land on a `.txt` we synthesise from
     the image stem. Letting callers hand us an arbitrary path -- even
-    one inside the allow-list -- would let them rewrite recipe files,
+    one inside the allow-list -- would let them rewrite config files,
     settings, or training logs by guessing names.
 
     The image path itself is allow-list checked; the `.txt` file inherits

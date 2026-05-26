@@ -1,4 +1,4 @@
-"""Tests for the recipe scaffolder."""
+"""Tests for the config scaffolder."""
 
 from __future__ import annotations
 

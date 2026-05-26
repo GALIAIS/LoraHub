@@ -19,7 +19,7 @@
  */
 
 const RAW_PATH_LABELS: Record<string, string> = {
-  // Top-level recipe
+  // Top-level config
   "schemaVersion": "Schema 版本",
 
   // baseModel.*

@@ -75,7 +75,7 @@ export function ConfigsPage() {
   // can't resolve to a concrete backend yet. Previously we fell back to
   // "all" in that window, which made the right pane flash the *full*
   // config list for a beat before snapping down to just the default
-  // backend's recipes. Track the loading state so visibleConfigs can
+  // backend's configs. Track the loading state so visibleConfigs can
   // hold the list empty until we know what to filter to.
   const settingsResolved =
     settingsQuery.isSuccess || settingsQuery.isError
@@ -168,7 +168,7 @@ export function ConfigsPage() {
   // Default selection: first config in preview mode, picked from the
   // *visible* list (after backend / arch / search filters). The naive
   // "configs[0]" version showed the global first config — typically a
-  // kohya recipe — even when the user had already filtered the
+  // kohya config — even when the user had already filtered the
   // sidebar to ``anima_lora``. Switching the auto-select to
   // ``visibleConfigs[0]`` matches the row the user actually sees at
   // the top.
@@ -225,7 +225,7 @@ export function ConfigsPage() {
   // Auto-select the first *visible* config so the right pane stays in
   // sync with whatever the sidebar's filters are showing. Without this
   // a user who set the backend filter to anima_lora still saw the
-  // global first config (typically a kohya recipe) rendered in the
+  // global first config (typically a kohya config) rendered in the
   // right pane and ConfigForm picked the wrong backend section.
   useEffect(() => {
     if (visibleConfigs.length === 0) return

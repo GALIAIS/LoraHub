@@ -385,7 +385,7 @@ export interface AttentionBackendsResponse {
   compute_capability: string | null
   /** Backends usable on this host (subset of `all`). */
   supported: string[]
-  /** Canonical superset of recipe-level attention.training values. */
+  /** Canonical superset of config-level attention.training values. */
   all: string[]
 }
 
@@ -775,7 +775,7 @@ export interface SweepDetail {
   interrupted: number
   canceling: number
   jobs: SweepJobSummary[]
-  /** Plan recipe (axes + name_template + mode etc.) when persisted. */
+  /** Plan config (axes + name_template + mode etc.) when persisted. */
   plan?: {
     axes?: Array<{
       path: string

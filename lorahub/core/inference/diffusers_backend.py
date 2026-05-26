@@ -2,7 +2,7 @@
 
 Catch-all path for arches diffusers' ``AutoPipelineForText2Image``
 recognises out of the box: SDXL, FLUX, SD3, SD1.5/SD2 and friends. The
-backend exists primarily so non-Anima recipes don't have to fall back
+backend exists primarily so non-Anima configs don't have to fall back
 to the bare placeholder PNG when the user just wants a sanity check.
 
 Two intentional limitations:
@@ -15,7 +15,7 @@ Two intentional limitations:
     lorahub, so we import on first call and fail the ``is_available``
     check when the import errors. That means: ``pip install lorahub``
     on a host without diffusers installed still launches jobs cleanly,
-    just without rich previews for non-Anima recipes.
+    just without rich previews for non-Anima configs.
 
 The render path keeps the pipeline pinned to a single base-model id per
 ``(arch, base_id)`` pair via a tiny in-process LRU. Loading SDXL once
@@ -37,9 +37,9 @@ log = logging.getLogger(__name__)
 
 
 # diffusers AutoPipelineForText2Image natively maps these arches today.
-# We map lorahub arch -> conservative default pretrained id so a recipe
+# We map lorahub arch -> conservative default pretrained id so a config
 # that doesn't pin one still gets *some* preview pipeline. When the
-# recipe carries an explicit checkpoint path we prefer that over the
+# config carries an explicit checkpoint path we prefer that over the
 # default id.
 _ARCH_TO_DEFAULT_REPO: dict[str, str] = {
     "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
@@ -228,17 +228,17 @@ class InferenceUnavailable(RuntimeError):  # noqa: N818
 # --------------------------------------------------------------------------- #
 
 
-def _factory(*, arch: str, recipe: Any, workspace: Path | None) -> Any:
+def _factory(*, arch: str, config: Any, workspace: Path | None) -> Any:
     if arch in _UNSUPPORTED_ARCHES:
         return None
     if arch not in _ARCH_TO_DEFAULT_REPO:
         return None
-    # Pull the base-model checkpoint hint from the recipe so the user's
+    # Pull the base-model checkpoint hint from the config so the user's
     # locally pinned model wins over the conservative default repo id.
     base_id: str | None = None
-    if recipe is not None:
+    if config is not None:
         try:
-            ckpt = getattr(recipe.base_model, "checkpoint", None)
+            ckpt = getattr(config.base_model, "checkpoint", None)
             if ckpt is not None:
                 ckpt_path = Path(str(ckpt))
                 # Use a local checkpoint path verbatim if it exists; otherwise

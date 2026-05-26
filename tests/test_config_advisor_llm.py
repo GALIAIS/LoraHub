@@ -136,7 +136,7 @@ def test_policy_save_every_n_exceeds_max_epochs() -> None:
 def test_policy_clean_default_yaml_emits_no_issues() -> None:
     cfg = _base_cfg()
     issues = check_cross_field_conflicts(cfg)
-    # The shipped default recipe must not light up any rule —
+    # The shipped default config must not light up any rule —
     # otherwise users get noise the first time they open the form.
     assert issues == [], [i.message for i in issues]
 
@@ -295,7 +295,7 @@ def test_run_advisor_round_trips_through_validate(
     assert len(outcome.patches) == 1
     assert outcome.patches[0]["field"] == "schedule.epochs"
     assert outcome.full_config["schedule"]["epochs"] == 12
-    # Default recipe is policy-clean, so there should be no issues
+    # Default config is policy-clean, so there should be no issues
     # surfaced from the round-trip.
     assert outcome.validation_issues == []
 

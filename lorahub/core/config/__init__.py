@@ -1,1 +1,1 @@
-"""Recipe schema, YAML loader, and backend-specific compilers."""
+"""Config schema, YAML loader, and backend-specific compilers."""

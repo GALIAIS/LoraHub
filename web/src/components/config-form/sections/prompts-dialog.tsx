@@ -73,7 +73,7 @@ export const PromptsDialog = memo(function PromptsDialog({
 
   function commit() {
     // Drop fully-empty rows so saving doesn't carry placeholder
-    // rubbish into the recipe — but keep partial rows so a half-typed
+    // rubbish into the config — but keep partial rows so a half-typed
     // negative / dim doesn't quietly disappear.
     const cleaned = rows.filter((r) => r.prompt.trim().length > 0)
     onSave(cleaned)

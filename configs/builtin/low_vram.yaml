@@ -1,4 +1,4 @@
-# Built-in recipe template: SDXL LoRA tuned for an 8GB VRAM budget.
+# Built-in config template: SDXL LoRA tuned for an 8GB VRAM budget.
 # Stacks every memory-saving switch lorahub knows about: torch.compile,
 # fused backward pass, full bf16, and 8 transformer blocks swapped to CPU.
 # REQUIRED before saving: base_model.checkpoint, dataset.source.

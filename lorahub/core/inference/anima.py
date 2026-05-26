@@ -378,27 +378,27 @@ def _has_enough_vram(min_free_mib: int) -> bool:
 
 
 def build_backend_from_config(
-    *, recipe: Any, workspace: Path
+    *, config: Any, workspace: Path
 ) -> AnimaInferenceBackend | None:
     """Resolve sd-scripts paths from settings and the dp model paths
-    block in the recipe; return None if any prerequisite is missing.
+    block in the config; return None if any prerequisite is missing.
 
-    `recipe` is a TrainingConfig (typed loose to keep this module free
+    `config` is a TrainingConfig (typed loose to keep this module free
     of cyclic imports).
     """
     # sd-scripts python: prefer the configured backend.python_executable,
     # fall back to env var, fall back to the shell `python`.
     sd_scripts_python_env = os.environ.get("LORAHUB_SD_SCRIPTS_PYTHON")
-    if recipe.backend.python_executable is not None:
-        py = Path(str(recipe.backend.python_executable))
+    if config.backend.python_executable is not None:
+        py = Path(str(config.backend.python_executable))
     elif sd_scripts_python_env:
         py = Path(sd_scripts_python_env)
     else:
         py = Path("python")
 
     sd_scripts_repo_env = os.environ.get("LORAHUB_KOHYA_SD_SCRIPTS")
-    if recipe.backend.repo_path is not None:
-        repo = Path(str(recipe.backend.repo_path))
+    if config.backend.repo_path is not None:
+        repo = Path(str(config.backend.repo_path))
     elif sd_scripts_repo_env:
         repo = Path(sd_scripts_repo_env)
     else:
@@ -406,10 +406,10 @@ def build_backend_from_config(
 
     # Anima base paths come straight from the dp model_paths bag (these
     # are the raw upstream strings — transformer_path / vae_path / llm_path).
-    if recipe.backend.diffusion_pipe is None:
+    if config.backend.diffusion_pipe is None:
         return None
-    mp = recipe.backend.diffusion_pipe.model_paths or {}
-    transformer = mp.get("transformer_path") or recipe.base_model.checkpoint
+    mp = config.backend.diffusion_pipe.model_paths or {}
+    transformer = mp.get("transformer_path") or config.base_model.checkpoint
     vae = mp.get("vae_path")
     te = mp.get("llm_path")
     if not transformer or not vae or not te:
@@ -433,7 +433,7 @@ def build_backend_from_config(
 
 
 def _anima_factory(
-    *, arch: str, recipe: Any, workspace: Any
+    *, arch: str, config: Any, workspace: Any
 ) -> AnimaInferenceBackend | None:
     """Registry factory for the Anima backend.
 
@@ -444,9 +444,9 @@ def _anima_factory(
     """
     if arch != "anima":
         return None
-    if recipe is None or workspace is None:
+    if config is None or workspace is None:
         return None
-    backend = build_backend_from_config(recipe=recipe, workspace=Path(workspace))
+    backend = build_backend_from_config(config=config, workspace=Path(workspace))
     if backend is None:
         return None
     if not backend.is_available(arch=arch):

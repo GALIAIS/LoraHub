@@ -43,7 +43,7 @@ def _make_stub_sd_scripts(root: Path) -> Path:
     return root
 
 
-def _make_recipe(tmp_path: Path, sd_scripts: Path) -> TrainingConfig:
+def _make_config(tmp_path: Path, sd_scripts: Path) -> TrainingConfig:
     ckpt = tmp_path / "model.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -89,17 +89,17 @@ def test_supported_archs_excludes_dp_only_models(backend: KohyaBackend) -> None:
         assert dp_only not in names
 
 
-def test_validate_passes_for_good_recipe(tmp_path: Path, backend: KohyaBackend) -> None:
+def test_validate_passes_for_good_config(tmp_path: Path, backend: KohyaBackend) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe(tmp_path, sd)
-    issues = backend.validate(recipe)
+    config = _make_config(tmp_path, sd)
+    issues = backend.validate(config)
     errors = [i for i in issues if i.severity is Severity.error]
     assert errors == []
 
 
 def test_validate_reports_missing_sd_scripts(tmp_path: Path, backend: KohyaBackend) -> None:
-    recipe = _make_recipe(tmp_path, tmp_path / "missing")
-    issues = backend.validate(recipe)
+    config = _make_config(tmp_path, tmp_path / "missing")
+    issues = backend.validate(config)
     assert any(
         i.severity is Severity.error and "repo_path" in i.field for i in issues
     )
@@ -107,8 +107,8 @@ def test_validate_reports_missing_sd_scripts(tmp_path: Path, backend: KohyaBacke
 
 def test_estimate_vram_returns_sane_numbers(tmp_path: Path, backend: KohyaBackend) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe(tmp_path, sd)
-    est = backend.estimate_vram(recipe)
+    config = _make_config(tmp_path, sd)
+    est = backend.estimate_vram(config)
     assert est.total_mib > 0
     assert 1.0 <= est.total_gib <= 32.0
 
@@ -148,10 +148,10 @@ def test_estimate_vram_covers_every_arch(
     from lorahub.core.backends.base import VRAMEstimate
 
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe(tmp_path, sd)
-    cfg = recipe.model_copy(
+    config = _make_config(tmp_path, sd)
+    cfg = config.model_copy(
         update={
-            "base_model": recipe.base_model.model_copy(update={"arch": arch}),
+            "base_model": config.base_model.model_copy(update={"arch": arch}),
         }
     )
     est = backend.estimate_vram(cfg)
@@ -164,19 +164,19 @@ def test_estimate_vram_activations_scale_with_batch_size(
 ) -> None:
     """Doubling batch_size doubles the activations component."""
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe(tmp_path, sd)
+    config = _make_config(tmp_path, sd)
     # Disable gradient_checkpointing so the //3 discount doesn't fold the
     # multiplier away through integer truncation.
-    recipe = recipe.model_copy(update={"gradient_checkpointing": False})
+    config = config.model_copy(update={"gradient_checkpointing": False})
 
     bs1 = backend.estimate_vram(
-        recipe.model_copy(
-            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 1})}
+        config.model_copy(
+            update={"schedule": config.schedule.model_copy(update={"batch_size": 1})}
         )
     )
     bs2 = backend.estimate_vram(
-        recipe.model_copy(
-            update={"schedule": recipe.schedule.model_copy(update={"batch_size": 2})}
+        config.model_copy(
+            update={"schedule": config.schedule.model_copy(update={"batch_size": 2})}
         )
     )
     assert bs2.activations_mib == 2 * bs1.activations_mib
@@ -184,10 +184,10 @@ def test_estimate_vram_activations_scale_with_batch_size(
 
 def test_launch_runs_to_completion(tmp_path: Path, backend: KohyaBackend) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
-    recipe = _make_recipe(tmp_path, sd)
+    config = _make_config(tmp_path, sd)
 
     events: list[TrainingEvent] = []
-    handle = backend.launch(recipe, workspace=tmp_path / "ws", on_event=events.append)
+    handle = backend.launch(config, workspace=tmp_path / "ws", on_event=events.append)
     assert handle.pid is not None
     rc = handle.wait(timeout=30)
     assert rc == 0

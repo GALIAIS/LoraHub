@@ -106,7 +106,7 @@ export function unusedSectionsForBackend(backend: BackendKey | undefined): strin
 
 function showsForBackend(section: string, backend: BackendKey | undefined): boolean {
   const allowed = SECTION_BACKENDS[section] ?? BACKENDS_ALL
-  // When backend is undefined (recipe still loading), show every section
+  // When backend is undefined (config still loading), show every section
   // rather than hiding the whole form.
   if (backend === undefined) return true
   return allowed.includes(backend)

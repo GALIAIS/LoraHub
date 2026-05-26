@@ -149,7 +149,7 @@ def recommend_hyperparams(
     network_alpha = network_dim
 
     # ---- epochs --------------------------------------------------------
-    # Total samples seen ≈ epochs × dataset_size. Anima recipes target
+    # Total samples seen ≈ epochs × dataset_size. Anima configs target
     # 1k-10k effective samples for character; we land in that range.
     target_samples = {
         "character": 5000,

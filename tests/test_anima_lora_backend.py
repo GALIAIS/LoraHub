@@ -184,7 +184,7 @@ def test_parser_empty_line_returns_none() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _recipe(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
+def _config(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -221,16 +221,16 @@ def test_backend_name_and_supported_archs() -> None:
 
 
 def test_validate_anima_arch_clean(tmp_path: Path) -> None:
-    """An anima recipe with vendored copy reachable returns no error issues."""
-    cfg = _recipe(tmp_path)
+    """An anima config with vendored copy reachable returns no error issues."""
+    cfg = _config(tmp_path)
     issues = AnimaLoraBackend().validate(cfg)
     errors = [i for i in issues if i.severity.value == "error"]
     assert errors == [], f"unexpected errors: {errors}"
 
 
 def test_validate_wrong_arch_errors(tmp_path: Path) -> None:
-    """Recipe targets sdxl but type=anima_lora — clear error pointing back to kohya."""
-    cfg = _recipe(tmp_path)
+    """Config targets sdxl but type=anima_lora — clear error pointing back to kohya."""
+    cfg = _config(tmp_path)
     # Force-bypass the schema-level arch check for this defence-in-depth test:
     # we want the backend's own validator to surface its message even if the
     # schema accepts the value.
@@ -255,7 +255,7 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
     """
     from types import SimpleNamespace
 
-    cfg = _recipe(tmp_path)
+    cfg = _config(tmp_path)
     captured_argv: list[list[str]] = []
 
     def fake_start(self):  # type: ignore[no-untyped-def]

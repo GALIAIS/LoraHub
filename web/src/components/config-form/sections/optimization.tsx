@@ -8,7 +8,7 @@ import { IntInput, Row, ToggleSwitch } from "../widgets"
  * Speed / VRAM toggles compiled into kohya argv or diffusion-pipe TOML.
  * Each description tags which backend actually consumes the field; the
  * compilers ignore mismatched fields rather than erroring, so flipping
- * a kohya-only toggle on a dp recipe is harmless (and vice versa).
+ * a kohya-only toggle on a dp config is harmless (and vice versa).
  */
 export const OptimizationFields = memo(function OptimizationFields({
   value,

@@ -1,6 +1,6 @@
-# Built-in recipe template: SDXL character LoRA, 8GB-friendly (rank 32 / 1024px).
+# Built-in config template: SDXL character LoRA, 8GB-friendly (rank 32 / 1024px).
 # REQUIRED before saving: base_model.checkpoint, dataset.source.
-# The _template block is metadata for GET /api/recipes/templates and is
+# The _template block is metadata for GET /api/configs/templates and is
 # stripped before the document is validated against RecipeConfig.
 
 _template:
@@ -10,7 +10,7 @@ _template:
 
 _placeholders:
   - key: name
-    label: Recipe / output name
+    label: Config / output name
     path_field: output.name
     placeholder: my_character_v1
   - key: checkpoint

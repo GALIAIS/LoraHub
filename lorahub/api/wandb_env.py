@@ -55,11 +55,15 @@ def _resolve_monitoring(cfg: TrainingConfig) -> MonitoringConfig:
         and monitoring.entity is None
         and monitoring.run_id is None
     )
-    if is_default_top_level and cfg.backend.diffusion_pipe.enable_wandb:
+    # ``cfg.backend.diffusion_pipe`` is optional — kohya / anima_lora
+    # configs leave the dp options block at None. Skip the legacy
+    # fallback path entirely in that case.
+    dp = getattr(cfg.backend, "diffusion_pipe", None) if cfg.backend else None
+    if is_default_top_level and dp is not None and dp.enable_wandb:
         return MonitoringConfig(
             enable_wandb=True,
-            project=cfg.backend.diffusion_pipe.tracker_name,
-            run_name=cfg.backend.diffusion_pipe.run_name,
+            project=dp.tracker_name,
+            run_name=dp.run_name,
         )
     return monitoring
 

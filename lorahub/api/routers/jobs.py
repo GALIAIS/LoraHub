@@ -111,7 +111,7 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
     else:
         # Without an explicit workspace, derive one under runs/ keyed by
         # output.name. We previously returned that path verbatim, which
-        # meant a second job with the same recipe re-used the same
+        # meant a second job with the same config re-used the same
         # workspace — that left stale events.jsonl, a stale config.yaml,
         # an existing checkpoint dir, and (for anima_lora) a populated
         # post_image_dataset/ cache. Symptoms ranged from confusing
@@ -308,7 +308,7 @@ def resume_job(
 
     # Run preflight against the (possibly overridden) cfg + the original
     # workspace. Resume must still verify model/dataset/output paths
-    # because the recipe may have been edited and a path could have
+    # because the config may have been edited and a path could have
     # gone missing since the original run.
     findings = _raise_if_preflight_blocks(cfg, Path(original.workspace))
 
@@ -643,7 +643,7 @@ def recommend_hyperparams_endpoint(req: _RecommendInput) -> dict[str, Any]:
     """Suggest a hyperparameter starting point for a fresh training run.
 
     Inputs are decoupled from any specific job — the user might be
-    setting up a new recipe in the UI without an existing run. The
+    setting up a new config in the UI without an existing run. The
     response carries both the concrete numbers and a list of one-line
     rationales so a power user can see why we picked each value.
     """

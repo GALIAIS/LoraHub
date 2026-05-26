@@ -37,7 +37,7 @@ from lorahub.core.config.schema import (
 )
 
 
-def _recipe(tmp_path: Path, opts: AnimaLoraOptions) -> TrainingConfig:
+def _config(tmp_path: Path, opts: AnimaLoraOptions) -> TrainingConfig:
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -148,7 +148,7 @@ def test_max_steps_emits_zero_max_train_epochs(tmp_path: Path) -> None:
     sentinel; if either side drifts, runs revert to the 1984-step bug.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.schedule.max_steps = 4000
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -160,7 +160,7 @@ def test_max_steps_emits_zero_max_train_epochs(tmp_path: Path) -> None:
 def test_max_steps_unset_emits_method_max_train_epochs(tmp_path: Path) -> None:
     """When the user leaves max_steps unset, send the method's epoch budget."""
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.schedule.max_steps = None
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -177,7 +177,7 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     upstream's train.py never declared them.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -203,7 +203,7 @@ def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
         method="postfix",
         postfix=AnimaLoraMethodPostfixConfig(),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -226,7 +226,7 @@ def test_chimera_method_emits_balance_weights(tmp_path: Path) -> None:
         method="chimera",
         chimera=AnimaLoraMethodChimeraConfig(),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -250,7 +250,7 @@ def test_easycontrol_method_emits_b_cond_init(tmp_path: Path) -> None:
         method="easycontrol",
         easycontrol=AnimaLoraMethodEasyControlConfig(),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -269,7 +269,7 @@ def test_ip_adapter_method_emits_pe_encoder(tmp_path: Path) -> None:
         method="ip_adapter",
         ip_adapter=AnimaLoraMethodIPAdapterConfig(),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -290,7 +290,7 @@ def test_ip_adapter_method_emits_pe_encoder(tmp_path: Path) -> None:
 def test_preset_low_vram_passed_through(tmp_path: Path) -> None:
     """`preset=low_vram` selects upstream's [low_vram] section verbatim."""
     opts = AnimaLoraOptions(preset="low_vram")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     # assert pairs["--preset"] == ["low_vram"]  # method/preset gone — driven by config_file
@@ -298,7 +298,7 @@ def test_preset_low_vram_passed_through(tmp_path: Path) -> None:
 
 def test_preset_debug_passed_through(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(preset="debug")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     # assert pairs["--preset"] == ["debug"]  # method/preset gone — driven by config_file
@@ -316,7 +316,7 @@ def test_compile_full_with_gradient_checkpointing_rejected(tmp_path: Path) -> No
         compile_inductor_mode="reduce-overhead",
         gradient_checkpointing=True,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     with pytest.raises(CompilationError, match="compile_mode"):
         compile_config(cfg, tmp_path / "ws")
 
@@ -326,7 +326,7 @@ def test_compile_full_with_blocks_to_swap_rejected(tmp_path: Path) -> None:
         compile_mode="full",
         blocks_to_swap=4,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     with pytest.raises(CompilationError, match="blocks_to_swap"):
         compile_config(cfg, tmp_path / "ws")
 
@@ -337,7 +337,7 @@ def test_compile_blocks_with_gradient_checkpointing_allowed(tmp_path: Path) -> N
         compile_mode="blocks",
         gradient_checkpointing=True,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     # No raise.
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -357,19 +357,19 @@ def test_blocks_to_swap_with_cpu_offload_checkpointing_rejected(
         blocks_to_swap=24,
         cpu_offload_checkpointing=True,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     with pytest.raises(CompilationError, match="cpu_offload_checkpointing"):
         compile_config(cfg, tmp_path / "ws")
 
 
 def test_blocks_to_swap_with_unsloth_offload_allowed(tmp_path: Path) -> None:
-    """``unsloth_offload_checkpointing`` composes with blocks_to_swap (the 8GB recipe)."""
+    """``unsloth_offload_checkpointing`` composes with blocks_to_swap (the 8GB config)."""
     opts = AnimaLoraOptions(
         blocks_to_swap=24,
         unsloth_offload_checkpointing=True,
         cpu_offload_checkpointing=False,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "--blocks_to_swap" in pairs
@@ -389,7 +389,7 @@ def test_native_flatten_overrides_static_token_count(tmp_path: Path) -> None:
     crashes at compile time before the first training step.
     """
     opts = AnimaLoraOptions(enable_native_flatten=True)  # static_token_count default 4096
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "--enable_native_flatten" in pairs
@@ -400,7 +400,7 @@ def test_static_token_count_emitted_without_native_flatten(tmp_path: Path) -> No
     """When native-flatten is off (default), the schema default 4096
     is forwarded normally — that's the legacy 1024² training path."""
     opts = AnimaLoraOptions()  # both defaults: enable_native_flatten=False, static_token_count=4096
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert pairs.get("--static_token_count") == ["4096"]
@@ -415,7 +415,7 @@ def test_bucket_table_1536_requires_capacity(tmp_path: Path) -> None:
     user doesn't sit through a model load before discovering it.
     """
     opts = AnimaLoraOptions(bucket_table="1536")  # static_token_count=4096 (default)
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     with pytest.raises(CompilationError, match="9240"):
         compile_config(cfg, tmp_path / "ws")
 
@@ -423,7 +423,7 @@ def test_bucket_table_1536_requires_capacity(tmp_path: Path) -> None:
 def test_bucket_table_1536_accepts_explicit_token_bump(tmp_path: Path) -> None:
     """Setting ``static_token_count=9240`` (or more) clears the constraint."""
     opts = AnimaLoraOptions(bucket_table="1536", static_token_count=9240)
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert pairs.get("--bucket_table") == ["1536"]
@@ -434,7 +434,7 @@ def test_bucket_table_1536_accepts_native_flatten(tmp_path: Path) -> None:
     """``enable_native_flatten=true`` is the recommended escape hatch:
     the bucket table is auto-picked, no manual token-count tuning needed."""
     opts = AnimaLoraOptions(bucket_table="1536", enable_native_flatten=True)
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert pairs.get("--bucket_table") == ["1536"]
@@ -451,7 +451,7 @@ def test_bucket_table_1536_accepts_native_flatten(tmp_path: Path) -> None:
 def test_workspace_drives_output_dir(tmp_path: Path) -> None:
     """`workspace/ckpt` is what anima_lora writes safetensors into."""
     opts = AnimaLoraOptions(output_name="my_run")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     ws = tmp_path / "ws"
     argv, files = compile_config(cfg, ws)
     pairs = _argv_pairs(argv, files)
@@ -465,8 +465,8 @@ def test_workspace_drives_output_dir(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_compile_rejects_non_anima_lora_recipe(tmp_path: Path) -> None:
-    """Defence-in-depth: dispatch should never give us a non-anima_lora recipe."""
+def test_compile_rejects_non_anima_lora_config(tmp_path: Path) -> None:
+    """Defence-in-depth: dispatch should never give us a non-anima_lora config."""
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -517,7 +517,7 @@ def test_compile_rejects_anima_lora_with_no_options(tmp_path: Path) -> None:
 def test_default_options_emit_seeded_argv(tmp_path: Path) -> None:
     """Even without explicit cfg.seed, the compiler emits a deterministic seed."""
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "--seed" in pairs
@@ -529,7 +529,7 @@ def test_default_options_emit_seeded_argv(tmp_path: Path) -> None:
 def test_caching_flags_emit_when_enabled(tmp_path: Path) -> None:
     """The four cache_* booleans default True and must all surface as flags."""
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     for flag in (
@@ -547,11 +547,11 @@ def test_attn_mode_default_is_flash(tmp_path: Path) -> None:
 
     Backend ships flash-attn as the throughput-leading default on
     Ampere+ GPUs. Operators without a working flash-attn install must
-    flip this to ``torch`` (PyTorch SDPA) explicitly in their recipe;
+    flip this to ``torch`` (PyTorch SDPA) explicitly in their config;
     SDPA hits ~85-95% of flash-attn throughput and is always available.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert pairs["--attn_mode"] == ["flash"]
@@ -575,7 +575,7 @@ def test_compile_emits_source_resized_lora_cache_paths(tmp_path: Path) -> None:
     its preprocess scripts agree on the same absolute paths.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     ws = tmp_path / "ws"
     argv, files = compile_config(cfg, ws)
     cfg_dict = _emitted_toml(argv, files)
@@ -601,10 +601,10 @@ def test_extra_args_pass_through_verbatim(tmp_path: Path) -> None:
 
     This is the escape hatch new train.py flags ride before they're
     promoted into AnimaLoraOptions: EMA, nan_guard, min_snr_gamma,
-    sample_grid all live here in the recipe.
+    sample_grid all live here in the config.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {
         "ema": True,
         "ema_decay": 0.9999,
@@ -647,7 +647,7 @@ def test_ema_forces_inductor_mode_default_when_unset(tmp_path: Path) -> None:
     during replay``. The compiler force-overrides to silence this trap.
     """
     opts = AnimaLoraOptions()  # compile_inductor_mode left None
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True, "ema_decay": 0.9999}
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -658,7 +658,7 @@ def test_ema_forces_inductor_mode_default_when_unset(tmp_path: Path) -> None:
 def test_ema_overrides_reduce_overhead_from_opts(tmp_path: Path) -> None:
     """``ema=true`` overrides an explicit reduce-overhead from opts."""
     opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True}
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -676,7 +676,7 @@ def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
     last-write-wins picks ``default``.
     """
     opts = AnimaLoraOptions()
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {
         "ema": True,
         "compile_inductor_mode": "reduce-overhead",
@@ -692,7 +692,7 @@ def test_ema_overrides_reduce_overhead_from_extra_args(tmp_path: Path) -> None:
 def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
     """``ema=true`` + already ``default`` → no surprise mutation."""
     opts = AnimaLoraOptions(compile_inductor_mode="default")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {"ema": True}
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -707,7 +707,7 @@ def test_ema_leaves_default_mode_alone(tmp_path: Path) -> None:
 def test_no_ema_leaves_reduce_overhead_alone(tmp_path: Path) -> None:
     """Without EMA, reduce-overhead is a legitimate fast path — don't touch it."""
     opts = AnimaLoraOptions(compile_inductor_mode="reduce-overhead")
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     cfg.backend.extra_args = {}
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -730,7 +730,7 @@ def test_ema_schema_field_emits_full_flag_set(tmp_path: Path) -> None:
         ema_decay=0.999,
         ema_use_num_updates=False,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -750,7 +750,7 @@ def test_nan_guard_schema_field_emits_recovery_flags(tmp_path: Path) -> None:
         nan_guard_recover=True,
         nan_guard_max_consecutive=10,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -765,7 +765,7 @@ def test_min_snr_rf_emits_gamma_when_provided(tmp_path: Path) -> None:
         weighting_scheme="min_snr_rf",
         min_snr_gamma=5.0,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
 
@@ -778,7 +778,7 @@ def test_min_snr_rf_without_gamma_falls_back_uniform(tmp_path: Path, caplog) -> 
     import logging
 
     opts = AnimaLoraOptions(weighting_scheme="min_snr_rf", min_snr_gamma=None)
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     with caplog.at_level(logging.WARNING):
         argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
@@ -794,7 +794,7 @@ def test_sample_grid_schema_field_emits_flag(tmp_path: Path) -> None:
         compile_inductor_mode="default",
         sample_grid=True,
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "--sample_grid" in pairs
@@ -813,7 +813,7 @@ def test_dora_emits_use_dora_network_arg(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dora=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_dora=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -847,7 +847,7 @@ def test_ia3_emits_use_ia3_network_arg(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_ia3=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_ia3=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -871,7 +871,7 @@ def test_lokr_emits_use_lokr_and_factor(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_lokr=True, lokr_factor=12),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_lokr=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -886,7 +886,7 @@ def test_loha_emits_use_loha(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_loha=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_loha=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -912,7 +912,7 @@ def test_dylora_emits_use_dylora(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_dylora=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_dylora=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -926,7 +926,7 @@ def test_full_emits_use_full(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_full=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_full=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -950,7 +950,7 @@ def test_diag_oft_emits_use_diag_oft(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_diag_oft=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_diag_oft=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -966,7 +966,7 @@ def test_boft_emits_use_boft_and_factors(tmp_path: Path) -> None:
             use_ortho=False, use_boft=True, boft_factors=6
         ),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_boft=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -981,7 +981,7 @@ def test_glora_emits_use_glora(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_glora=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_glora=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -995,7 +995,7 @@ def test_vera_emits_use_vera(tmp_path: Path) -> None:
     opts = AnimaLoraOptions(
         lora=AnimaLoraMethodLoraConfig(use_ortho=False, use_vera=True),
     )
-    cfg = _recipe(tmp_path, opts)
+    cfg = _config(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "use_vera=true" in _argv_pairs(argv, files).get("--network_args", [])
@@ -1025,14 +1025,14 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
         ("vera", "use_vera=true"),
     ]
     for i, (algo, expected) in enumerate(cases):
-        # Distinct sub-tmp_path per case so _recipe's data.mkdir() and
+        # Distinct sub-tmp_path per case so _config's data.mkdir() and
         # the dataset_config TOML write don't collide.
         sub = tmp_path / f"case_{i}_{algo}"
         sub.mkdir()
         opts = AnimaLoraOptions(
             lora=AnimaLoraMethodLoraConfig(algorithm=algo),
         )
-        cfg = _recipe(sub, opts)
+        cfg = _config(sub, opts)
         argv, files = compile_config(cfg, sub / "ws")
         pairs = _argv_pairs(argv, files)
         network_args = _argv_pairs(argv, files).get("--network_args", [])

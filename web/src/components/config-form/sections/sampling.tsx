@@ -30,7 +30,7 @@ export const SamplingFields = memo(function SamplingFields({
 
   // Resolution lives as an arbitrary-length list in yaml but the form
   // ResolutionInput takes a [w, h] tuple. Coerce defensively so an old
-  // recipe with a single-value list doesn't crash the dialog.
+  // config with a single-value list doesn't crash the dialog.
   const resTuple: [number, number] | undefined =
     Array.isArray(v.resolution) && v.resolution.length >= 2
       ? [v.resolution[0]!, v.resolution[1]!]

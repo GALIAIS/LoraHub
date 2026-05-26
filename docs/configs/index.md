@@ -10,7 +10,7 @@ description: TrainingConfig schema 是一次 LoRA 训练的单一语义描述。
 schema 的定位是 **语义层**：用户描述要训什么，而不是怎么调后端。新后端接进来不需要改既有 config 文件。
 
 !!! note "命名变更"
-    早期文档与代码把这些文件叫「recipe」、放在 `recipes/`。磁盘目录现在叫 `configs/`，REST 端点挂 `/api/configs`。Python 类型仍叫 `TrainingConfig`（一直是）。`recipe` 这个词只作为抽象名词保留在注释里。
+    早期文档与代码把这些文件叫「config」、放在 `configs/`。磁盘目录现在叫 `configs/`，REST 端点挂 `/api/configs`。Python 类型仍叫 `TrainingConfig`（一直是）。`config` 这个词只作为抽象名词保留在注释里。
 
 ## 顶层结构
 
@@ -54,7 +54,7 @@ schedule:
 ## 一份 config 怎么变成训练运行
 
 1. **加载** — `load_config(path)` 解析 YAML、套默认、校验类型，返回 `TrainingConfig`。
-2. **路径规范化** — job 启动时把 recipe 内每条相对路径（checkpoint、vae、`archPaths.*`、`dataset.source`、`modelPaths.*`、`init_from`、`prompts_file`）对项目根做绝对化，使训练子进程不论 chdir 到哪儿都能找到。
+2. **路径规范化** — job 启动时把 config 内每条相对路径（checkpoint、vae、`archPaths.*`、`dataset.source`、`modelPaths.*`、`init_from`、`prompts_file`）对项目根做绝对化，使训练子进程不论 chdir 到哪儿都能找到。
 3. **编译** — `compile_config(cfg, workspace)` 返回入口 argv 与一组要写到 workspace 的文件（`dataset.toml`、diffusion-pipe TOML、sample prompts 等）。
 4. **启动** — 选中的后端起子进程，把 stdout 解析成 `TrainingEvent`，持久化到 `events.jsonl`。SSE / WS 流在重连时回放该文件。
 

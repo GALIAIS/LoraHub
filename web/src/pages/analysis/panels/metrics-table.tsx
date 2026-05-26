@@ -118,7 +118,7 @@ export function MetricsTable({
           {!hasValLoss && (
             <span
               className="text-[10px] text-muted-foreground/70"
-              title="recipe 未配置 validation.valSplit，所以验证 loss 列已隐藏"
+              title="config 未配置 validation.valSplit，所以验证 loss 列已隐藏"
             >
               未启用验证集
             </span>
