@@ -67,6 +67,11 @@ class Settings:
     # training subprocesses so users don't need to `export` it from a
     # shell before each run.
     wandb_api_key: str | None = None
+    # Optional W&B base URL for self-hosted W&B Server. Empty/None
+    # targets wandb.ai (SaaS). Forwarded both as ``WANDB_BASE_URL`` to
+    # subprocesses and as ``wandb.Api(overrides={"base_url": ...})`` for
+    # the read-only proxy that powers "训练分析 → W&B".
+    wandb_base_url: str | None = None
     # When true, downloads default to ModelScope where applicable.
     modelscope_enabled: bool = False
     # Optional access token for private ModelScope models.
@@ -551,6 +556,8 @@ def env_overrides(settings: Settings) -> dict[str, str]:
         overrides["HUGGING_FACE_HUB_TOKEN"] = settings.huggingface_token
     if settings.wandb_api_key and "WANDB_API_KEY" not in os.environ:
         overrides["WANDB_API_KEY"] = settings.wandb_api_key
+    if settings.wandb_base_url and "WANDB_BASE_URL" not in os.environ:
+        overrides["WANDB_BASE_URL"] = settings.wandb_base_url
     return overrides
 
 

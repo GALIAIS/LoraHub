@@ -53,6 +53,7 @@ _PATH_FIELDS: tuple[str, ...] = (
     "pypi_index_url",
     "torch_index_url",
     "download_proxy",
+    "wandb_base_url",
 )
 
 # Free-form text fields that aren't path-shaped but should still
@@ -113,6 +114,7 @@ class UpdateSettingsRequest(BaseModel):
     download_proxy: str | None = None
     huggingface_token: str | None = None
     wandb_api_key: str | None = None
+    wandb_base_url: str | None = None
     auto_resume_interrupted: bool | None = None
     auto_resume_max_attempts: int | None = None
     terminal_unrestricted: bool | None = None

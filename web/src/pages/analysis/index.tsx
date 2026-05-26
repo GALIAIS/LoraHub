@@ -367,7 +367,13 @@ function SingleJobView({ job }: { job: JobSummary }) {
       datasetScan.data?.image_files ?? null,
     )
   }, [detail.data, datasetScan.data])
-  return <AnalysisWorkbench job={job} fallbackTotalSteps={fallbackTotalSteps} />
+  return (
+    <AnalysisWorkbench
+      job={job}
+      jobDetail={detail.data ?? null}
+      fallbackTotalSteps={fallbackTotalSteps}
+    />
+  )
 }
 
 // ---------------------------------------------------------------------------

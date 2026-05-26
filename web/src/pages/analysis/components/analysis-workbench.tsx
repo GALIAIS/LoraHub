@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api, type JobSummary } from "@/lib/api"
+import { api, type JobDetail, type JobSummary } from "@/lib/api"
 import {
   LossChart,
   type ChartBand,
@@ -61,16 +61,19 @@ import { AICard } from "../panels/ai-card"
 import { MetricsTable } from "../panels/metrics-table"
 import { SamplesGallery } from "../panels/samples-gallery"
 import { SeriesStatsCard } from "../panels/series-stats"
+import { WandbTab } from "../panels/wandb-tab"
 
-type BottomTabKey = "stats" | "table" | "samples" | "ai"
+type BottomTabKey = "stats" | "table" | "samples" | "ai" | "wandb"
 
 const EMA_ALPHA = 0.1
 
 export function AnalysisWorkbench({
   job,
+  jobDetail,
   fallbackTotalSteps,
 }: {
   job: JobSummary
+  jobDetail: JobDetail | null
   fallbackTotalSteps: number | null
 }) {
   const isTerminal = TERMINAL_STATES.has(job.state)
@@ -410,6 +413,25 @@ export function AnalysisWorkbench({
   const seriesCount = lossSeries.length
   const aiState: "ready" | "missing" = aiCache.data?.analysis ? "ready" : "missing"
 
+  // wandb state — read from the same JobDetail that powers the rest
+  // of the workbench. ``enable_wandb`` lives at the top-level
+  // [monitoring] section per ``MonitoringConfig``; the run URL comes
+  // from JobRecord.metadata once `wandb.init()` prints its banner.
+  const wandbEnabled = useMemo(() => {
+    const cfg = jobDetail?.config_snapshot as Record<string, unknown> | undefined
+    const m = cfg?.["monitoring"] as Record<string, unknown> | undefined
+    const bag = (cfg?.["backend"] as Record<string, unknown> | undefined)?.[
+      "diffusionPipe"
+    ] as Record<string, unknown> | undefined
+    // Top-level wins; legacy DiffusionPipeOptions block is the fallback.
+    return Boolean(m?.["enableWandb"]) || Boolean(bag?.["enableWandb"])
+  }, [jobDetail])
+  const wandbRunUrl = useMemo(() => {
+    const meta = jobDetail?.metadata as Record<string, unknown> | undefined
+    const url = meta?.["wandb_run_url"]
+    return typeof url === "string" && url ? url : null
+  }, [jobDetail])
+
   return (
     <div className="flex flex-col min-h-0">
       <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
@@ -560,6 +582,18 @@ export function AnalysisWorkbench({
                   {aiState === "ready" ? "✓" : "未生成"}
                 </span>
               </TabsTrigger>
+              <TabsTrigger value="wandb" className="text-[11.5px]">
+                W&amp;B
+                {wandbRunUrl ? (
+                  <span className="ml-1 text-emerald-600 dark:text-emerald-400">
+                    ✓
+                  </span>
+                ) : wandbEnabled ? (
+                  <span className="ml-1 text-muted-foreground/80">等待</span>
+                ) : (
+                  <span className="ml-1 text-muted-foreground/80">未启用</span>
+                )}
+              </TabsTrigger>
             </TabsList>
           </div>
           <TabsContent value="stats" className="m-0">
@@ -588,6 +622,13 @@ export function AnalysisWorkbench({
               cached={aiCache.data?.analysis ?? null}
               loading={aiCache.isLoading}
               canRun={isTerminal || (metrics.data?.loss?.length ?? 0) > 0}
+            />
+          </TabsContent>
+          <TabsContent value="wandb" className="m-0">
+            <WandbTab
+              jobId={job.id}
+              enabled={wandbEnabled}
+              runUrl={wandbRunUrl}
             />
           </TabsContent>
         </Tabs>
