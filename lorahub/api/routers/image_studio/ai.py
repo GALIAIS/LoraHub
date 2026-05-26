@@ -557,115 +557,84 @@ def _get_tagger(
         return tagger
 
 _SMART_CAPTION_PROMPT_STYLE = (
-    "You are writing the natural-language sentences that will sit inside an Anima training "
-    "caption for a STYLE LoRA.\n\n"
-    "Training rule: the trigger word will OWN the visual style. Your sentences must describe "
-    "everything that VARIES across images — every concrete entity, action, and spatial "
-    "relationship — so the model learns to attribute the only shared signal (the style) to "
-    "the trigger and not to your prose.\n\n"
-    "Be exhaustive and concrete. For every visible element, write what it IS, not what it "
-    "looks like as art. Cover, in this order:\n"
-    "  1. Subjects: count and kind (one girl, two boys, a cat, a robot, a crowd of ~10), "
-    "     apparent age range (child/teen/adult/elderly), apparent gender presentation.\n"
-    "  2. Per subject: pose (standing / sitting / kneeling / running / leaning / lying), "
-    "     action verb (holding / pointing / drinking / writing / fighting), facial "
-    "     expression (smiling / smirking / frowning / crying / blank), gaze direction "
-    "     (looking at viewer / looking up / looking away / eyes closed).\n"
-    "  3. Per subject: every visible clothing item (jacket, blouse, skirt, jeans, hoodie, "
-    "     dress, school uniform, kimono, armor) with color and pattern (red plaid, white "
-    "     with black stripes, navy blue), and every accessory (glasses, hat, scarf, gloves, "
-    "     necklace, earrings, headphones, bag, ribbon).\n"
-    "  4. Held / nearby props: every distinct object (sword, book, phone, coffee cup, "
-    "     umbrella, flower bouquet, wine glass) with material/color when visible.\n"
-    "  5. Setting and background: location type (classroom, forest, city street, beach, "
-    "     bedroom, rooftop, train interior, fantasy castle), every named background entity "
-    "     (window, desk, blackboard, tree, lamppost, parked car, distant mountain, river, "
-    "     sky with clouds), weather and time-of-day (rain, snow, sunny, dusk, night).\n"
-    "  6. Composition and framing: shot type (close-up portrait / upper body / cowboy shot "
-    "     / full body / wide shot), camera angle (eye level / from above / from below / "
-    "     dutch tilt), where each subject sits in the frame (centered / left third / "
-    "     foreground / mid-ground / background).\n"
-    "  7. Lighting as physical fact: source direction (sunlight from upper right / "
-    "     backlight / rim light / overhead fluorescent), cast colors on the subjects "
-    "     (warm orange highlights / cool blue shadows). Describe the light, not the "
-    "     'mood'.\n\n"
-    "FORBIDDEN — never write any of these or their synonyms anywhere in your output: "
-    "anime, manga, illustration, cartoon, chibi, realistic, photorealistic, semi-realistic, "
-    "lineart, line art, sketch, painterly, watercolor, oil painting, ink, pastel, "
-    "monochrome, greyscale, cel-shaded, cel shading, flat color, screentone, halftone, "
-    "saturated palette, muted palette, vivid colors, retro artstyle, 1990s style, ukiyo-e, "
-    "art nouveau, 2d, 3d, 3dcg. Do NOT describe the artistic medium, rendering technique, "
-    "brush style, color palette as a category, or art-historical reference. Do NOT use "
-    "vague praise (beautiful, stunning, gorgeous, amazing, masterpiece). Do NOT begin with "
-    "a trigger word, header, or label — output ONLY the descriptive sentences.\n\n"
-    "Use 4-6 sentences. Write everything you can confidently see — the goal is exhaustive "
-    "concrete enumeration, not concise summary.\n\n"
-    "Reference WD14 general tags (for grounding the entities only — do NOT use tags that "
-    "describe medium, rendering, or palette): {tags}"
+    "You are writing the ultimate training caption for a STYLE LoRA in Stable Diffusion.\n\n"
+    "Training rule: the trigger word will OWN the visual style. Your sentences must "
+    "describe everything that VARIES across images (concrete entities, actions, clothing, "
+    "spatial relationships) so the model learns to attribute the only shared signal "
+    "(the style/render quality) strictly to the trigger word.\n\n"
+    "Be exhaustive and concrete about CONTENTS, but completely BLIND to STYLE. For every "
+    "visible element, write what it IS, not what it looks like as art. Cover, in this "
+    "order:\n"
+    " 1. Subjects: count and kind, apparent age range, gender.\n"
+    " 2. Per subject: pose, action verb, facial expression, gaze direction.\n"
+    " 3. Per subject: every visible clothing item with color and pattern, every accessory.\n"
+    " 4. Held / nearby props: every distinct object.\n"
+    " 5. Setting and background: location type, weather, time-of-day, or plain background "
+    "color.\n"
+    " 6. Composition and framing: shot type, camera angle.\n\n"
+    "[STRICT STYLE DROP INSTRUCTION]\n"
+    "Do NOT use the words anime, manga, illustration, cartoon, chibi, realistic, "
+    "photorealistic, lineart, sketch, painterly, watercolor, monochrome, cel-shaded, "
+    "flat color, screentone, 2d, 3d, 3dcg, render, octane, masterpiece.\n"
+    "CRITICAL: Do NOT describe the specific visible craft (e.g., brushstrokes, edge "
+    "softness, palette warmth, shading contrast, lighting quality, glossy skin). The "
+    "lighting and rendering techniques MUST NOT BE DESCRIBED so the trigger word can "
+    "absorb them. Describe ONLY physical facts.\n\n"
+    "[TAG PRUNING INSTRUCTION]\n"
+    "I will provide you with raw WD14 tags: {tags}\n"
+    "Use them to ground your entity descriptions. MORE IMPORTANTLY, you must act as a "
+    "filter. If the WD14 tags contain contradictions (e.g., both \"skirt\" and \"dress\", "
+    "both \"black hair\" and \"blue hair\"), or hallucinated items, you must resolve them "
+    "based on the actual image.\n\n"
+    "[OUTPUT FORMAT]\n"
+    "Output your response strictly in two parts:\n"
+    "Part 1: 3-4 concise, highly dense natural language sentences describing the content.\n"
+    "Part 2: A comma-separated list of the PRUNED and CORRECTED WD14 tags. Do NOT include "
+    "any tags that contradict your sentences.\n\n"
+    "Output ONLY the final caption text (Part 1 followed by Part 2, separated by a comma). "
+    "Do not use headers or labels."
 )
 
 _SMART_CAPTION_PROMPT_CHARACTER = (
-    "You are writing the natural-language sentences that will sit inside an Anima training "
-    "caption for a CHARACTER LoRA.\n\n"
-    "Training rule: the trigger word will OWN the character's FIXED PHYSICAL IDENTITY (face, "
-    "hair, eyes, body, skin). Your sentences must describe everything else that VARIES "
-    "across images — outfit, accessories, props, setting, pose, expression, framing — so "
-    "the model attributes the only shared signal (the appearance) to the trigger and not to "
-    "your prose.\n\n"
-    "Be exhaustive and concrete on every axis EXCEPT physical appearance. Cover, in this "
-    "order:\n"
-    "  1. Subject framing: count of people in scene (solo / with one other person / group), "
-    "     and the character's apparent role in the composition (centered subject, on the "
-    "     left, in the foreground, ...).\n"
-    "  2. Pose: standing / sitting / kneeling / running / leaning / lying / crouching / "
-    "     jumping; arm position (arms crossed / hands on hips / arms raised / hands behind "
-    "     back); leg position when relevant.\n"
-    "  3. Action / activity: holding / pointing / drinking / writing / fighting / reading / "
-    "     cooking / dancing / playing instrument / using phone (be specific about what is "
-    "     done with what).\n"
-    "  4. Facial expression and gaze: smiling / smirking / frowning / crying / blushing / "
-    "     surprised / blank / open mouth, plus where they are looking (looking at viewer / "
-    "     looking up / looking down / looking away / eyes closed).\n"
-    "  5. Outfit — describe EVERY visible clothing item and its color/pattern/material as "
-    "     thoroughly as possible: jacket, blouse, shirt, t-shirt, hoodie, sweater, dress, "
-    "     skirt, pants, jeans, shorts, swimsuit, kimono, school uniform, armor, lab coat, "
-    "     etc., with concrete descriptors (white blouse, navy pleated skirt, red plaid "
-    "     jacket, black leather boots, blue denim shorts). Even if this character usually "
-    "     wears the same outfit, list every piece anyway — outfit pieces are training "
-    "     content, not identity.\n"
-    "  6. Accessories — every visible one: glasses, hat, cap, scarf, gloves, necklace, "
-    "     earrings, bracelet, ring, ribbon, hair clip, headphones, bag, backpack, belt, "
-    "     wristwatch.\n"
-    "  7. Held / nearby props: every distinct object the character is holding or that "
-    "     touches them (sword, gun, book, phone, coffee cup, umbrella, flower, food, "
-    "     instrument, weapon).\n"
-    "  8. Setting and background: location type (classroom, forest, city street, beach, "
-    "     bedroom, kitchen, rooftop, train interior, fantasy castle), every named "
-    "     background entity (window, desk, blackboard, tree, lamppost, parked car, distant "
-    "     mountain, river, cloud, building), weather and time-of-day (rain, snow, sunny, "
-    "     dusk, night, golden hour).\n"
-    "  9. Composition / framing: shot type (close-up portrait / upper body / cowboy shot / "
-    "     full body / wide shot), camera angle (eye level / from above / from below / "
-    "     from behind / from side / dutch tilt).\n"
-    "  10. Lighting as physical fact: source direction (sunlight from upper right / "
-    "      backlight / rim light / overhead fluorescent), cast colors (warm orange "
-    "      highlights / cool blue shadows). Describe the light, not the 'mood'.\n\n"
-    "FORBIDDEN — never describe any aspect of the character's PHYSICAL APPEARANCE: "
-    "hair color (red hair, blonde, black hair, ...), hair length or style (long hair, "
-    "short hair, ponytail, twintails, braid, bangs, ahoge, ...), eye color (blue eyes, "
-    "red eyes, heterochromia, ...), eye shape, skin tone or texture (pale skin, tan, "
-    "freckles, beauty mark, ...), face shape, body proportions (slim, curvy, muscular, "
-    "tall, short), height, breast size, age markers (young, elderly, looks 16). These "
-    "are fixed identity that the trigger word must own — describing them in caption "
-    "leaks the signal away from the trigger.\n"
-    "Also forbidden: vague praise (beautiful, pretty, handsome, cute, gorgeous), and "
-    "starting with a trigger word, header, or label. Output ONLY the descriptive "
-    "sentences.\n\n"
-    "Use 4-6 sentences. Be exhaustive on outfit / accessories / props / setting / "
-    "framing / pose — the goal is rich varying content so the trigger can lock onto "
-    "the only constant (the character's body).\n\n"
-    "Reference WD14 general tags (use them to ground entities only — do NOT use any tag "
-    "that describes hair / eyes / skin / face / body shape): {tags}"
+    "You are writing the ultimate training caption for a CHARACTER LoRA in Stable Diffusion.\n\n"
+    "Training rule: the trigger word will OWN the character's FIXED PHYSICAL IDENTITY "
+    "(face, hair, eyes, body, skin tone). Your sentences must describe everything else "
+    "that VARIES across images (outfit, accessories, props, setting, pose, expression, "
+    "framing) so the model attributes the only shared signal (the character's appearance) "
+    "strictly to the trigger word.\n\n"
+    "Be exhaustive and concrete about CONTENTS, but completely BLIND to physical "
+    "appearance. For every visible element, write what it IS. Cover, in this order:\n"
+    " 1. Subject framing: solo / 2girls / group; the character's role in the composition.\n"
+    " 2. Pose, action verb, facial expression, gaze direction.\n"
+    " 3. Outfit: every visible clothing item with color, pattern, material.\n"
+    " 4. Every accessory: glasses, hat, scarf, gloves, necklace, earrings, ribbon, bag.\n"
+    " 5. Held / nearby props: every distinct object the character is holding.\n"
+    " 6. Setting: location type, weather, time-of-day.\n"
+    " 7. Composition / framing: shot type, camera angle.\n\n"
+    "[STRICT IDENTITY DROP INSTRUCTION]\n"
+    "Do NOT describe any aspect of the character's PHYSICAL APPEARANCE: hair color, hair "
+    "length or style (long hair, short hair, ponytail, twintails, braid, bangs, ahoge), "
+    "eye color or shape, skin tone or texture (pale skin, tan, freckles), face shape, body "
+    "proportions (slim, curvy, muscular, tall, short), height, breast size, age markers "
+    "(young, elderly).\n"
+    "CRITICAL: Do NOT describe vague praise (beautiful, pretty, handsome, cute, "
+    "gorgeous). The trigger word MUST absorb the character's identity. Describe ONLY "
+    "what changes from one image to the next.\n\n"
+    "[TAG PRUNING INSTRUCTION]\n"
+    "I will provide you with raw WD14 tags: {tags}\n"
+    "Use them to ground your entity descriptions. MORE IMPORTANTLY, you must act as a "
+    "filter. If the WD14 tags contain contradictions (e.g., both \"skirt\" and \"dress\", "
+    "both \"standing\" and \"sitting\"), hallucinated items, or any tag describing the "
+    "FIXED IDENTITY (hair color, eye color, body proportions...), you must drop them. "
+    "Resolve real contradictions based on the actual image.\n\n"
+    "[OUTPUT FORMAT]\n"
+    "Output your response strictly in two parts:\n"
+    "Part 1: 3-4 concise, highly dense natural language sentences describing the content.\n"
+    "Part 2: A comma-separated list of the PRUNED and CORRECTED WD14 tags. Identity tags "
+    "(hair / eyes / skin / body) MUST NOT appear. Do NOT include any tags that contradict "
+    "your sentences.\n\n"
+    "Output ONLY the final caption text (Part 1 followed by Part 2, separated by a comma). "
+    "Do not use headers or labels."
 )
 
 _SMART_CAPTION_PROMPT_GENERAL = (
@@ -686,105 +655,75 @@ _SMART_CAPTION_PROMPT_GENERAL = (
 # agnostic to which path produced ``nl_text``.
 
 _TAGS_ONLY_PROMPT_STYLE = (
-    "You are writing the natural-language sentences that will sit inside an Anima training "
-    "caption for a STYLE LoRA. You DO NOT have access to the image — only the WD14 tagger's "
-    "output for it. Treat the tag list as the ground truth. Do NOT invent entities, props, "
-    "or background elements that aren't supported by at least one tag.\n\n"
-    "Training rule: the trigger word will OWN the visual style. Your sentences must enumerate "
-    "everything CONCRETE that the tags expose — entities, clothing, props, setting, framing — "
-    "so the model attributes the only shared signal (the style) to the trigger and not to "
-    "your prose.\n\n"
-    "Walk the tag list and convert it into prose, in this order:\n"
-    "  1. Subjects: count and kind (1girl/2girls/1boy/group/no humans/animals/mecha) plus "
-    "     apparent age range when tags imply it (child / teenager / adult / elderly).\n"
-    "  2. Per subject: pose tags (standing / sitting / kneeling / running / lying / leaning / "
-    "     crossed arms), action tags (holding / pointing / drinking / writing / fighting / "
-    "     reading), expression tags (smile / smirk / frown / open mouth / blush / crying / "
-    "     sweating), gaze tags (looking at viewer / looking up / looking away / eyes closed).\n"
-    "  3. Per subject: every clothing tag (shirt, jacket, skirt, dress, hoodie, school "
-    "     uniform, kimono, armor, swimsuit) with color tags when adjacent (white shirt, red "
-    "     skirt, black jacket), and every accessory tag (glasses, hat, scarf, gloves, "
-    "     necklace, earrings, ribbon, bag, headphones).\n"
-    "  4. Prop / object tags: every distinct held or nearby object (sword, gun, book, phone, "
-    "     coffee cup, umbrella, flower, food).\n"
-    "  5. Setting / background tags: location (classroom, forest, beach, city, bedroom, "
-    "     rooftop, train interior, indoors, outdoors), background entities (window, desk, "
-    "     tree, building, sky, clouds, mountain, water, sunset), weather / time-of-day tags "
-    "     (rain, snow, night, day, sunset, sunlight, moonlight).\n"
-    "  6. Framing / camera tags: shot type (close-up / upper body / cowboy shot / full body "
-    "     / wide shot), camera angle (from above / from below / from behind / from side / "
-    "     profile view), spatial position when tags say so (looking at viewer, on the left, "
-    "     in the foreground).\n"
-    "  7. Lighting tags as physical fact: source / direction (backlight, rim light, "
-    "     sunlight, moonlight, lens flare). Describe the light, not its 'mood'.\n\n"
-    "FORBIDDEN — never write any of these or their synonyms anywhere in your output: "
-    "anime, manga, illustration, cartoon, chibi, realistic, photorealistic, semi-realistic, "
-    "lineart, line art, sketch, painterly, watercolor, oil painting, ink, pastel, "
-    "monochrome, greyscale, cel-shaded, cel shading, flat color, screentone, halftone, "
-    "saturated palette, muted palette, vivid colors, retro artstyle, 1990s style, ukiyo-e, "
-    "art nouveau, 2d, 3d, 3dcg. Do NOT describe the artistic medium, rendering technique, "
-    "brush style, palette as a category, or art-historical reference. Do NOT use vague "
-    "praise (beautiful, stunning, gorgeous, amazing, masterpiece). Do NOT begin with a "
-    "trigger word, header, or label — output ONLY the descriptive sentences.\n\n"
-    "Use 4-6 sentences. Be exhaustive — list every concrete entity / clothing piece / "
-    "accessory / prop / background element the tags support. If a given axis (e.g. "
-    "lighting, weather) has no supporting tag, omit only that axis; do NOT pad with "
-    "invented detail.\n\n"
-    "WD14 tags: {tags}"
+    "You are writing the ultimate training caption for a STYLE LoRA in Stable Diffusion. "
+    "You DO NOT have access to the image — only the WD14 tagger's output for it. Treat "
+    "the tag list as the ground truth and do NOT invent entities, props, or background "
+    "elements unsupported by the tags.\n\n"
+    "Training rule: the trigger word will OWN the visual style. Your sentences must "
+    "describe everything that VARIES across images (concrete entities, actions, clothing, "
+    "spatial relationships) so the model attributes the only shared signal (style/render "
+    "quality) strictly to the trigger word.\n\n"
+    "Be exhaustive about CONTENTS, but completely BLIND to STYLE. Walk the tag list and "
+    "convert it into prose covering, in this order:\n"
+    " 1. Subjects: count and kind, apparent age range, gender (from 1girl/2boys/etc).\n"
+    " 2. Per subject: pose, action, expression, gaze.\n"
+    " 3. Per subject: clothing items + colors, accessories.\n"
+    " 4. Held / nearby props.\n"
+    " 5. Setting and background tags, weather, time-of-day.\n"
+    " 6. Composition and framing tags.\n\n"
+    "[STRICT STYLE DROP INSTRUCTION]\n"
+    "Do NOT use the words anime, manga, illustration, cartoon, chibi, realistic, "
+    "photorealistic, lineart, sketch, painterly, watercolor, monochrome, cel-shaded, "
+    "flat color, screentone, 2d, 3d, 3dcg, render, octane, masterpiece. Do NOT describe "
+    "the visible craft (brushstrokes, edge softness, palette warmth, shading). The "
+    "lighting and rendering techniques MUST NOT BE DESCRIBED so the trigger word can "
+    "absorb them.\n\n"
+    "[TAG PRUNING INSTRUCTION]\n"
+    "Raw WD14 tags: {tags}\n"
+    "Act as a filter. If tags contain contradictions (e.g., both \"skirt\" and \"dress\"), "
+    "or low-confidence hallucinations, drop them. You may also drop quality / medium "
+    "tags entirely.\n\n"
+    "[OUTPUT FORMAT]\n"
+    "Output strictly in two parts joined by a comma:\n"
+    "Part 1: 3-4 dense natural-language sentences describing the content.\n"
+    "Part 2: comma-separated list of the PRUNED WD14 tags. Drop any tag that contradicts "
+    "your sentences or describes style/medium.\n\n"
+    "Output ONLY the final caption text. No headers or labels."
 )
 
 _TAGS_ONLY_PROMPT_CHARACTER = (
-    "You are writing the natural-language sentences that will sit inside an Anima training "
-    "caption for a CHARACTER LoRA. You DO NOT have access to the image — only the WD14 "
-    "tagger's output for it. Treat the tag list as the ground truth. Do NOT invent "
-    "entities, props, or background elements unsupported by the tags.\n\n"
+    "You are writing the ultimate training caption for a CHARACTER LoRA in Stable "
+    "Diffusion. You DO NOT have access to the image — only the WD14 tagger's output for "
+    "it. Treat the tag list as the ground truth and do NOT invent entities unsupported "
+    "by the tags.\n\n"
     "Training rule: the trigger word will OWN the character's FIXED PHYSICAL IDENTITY "
-    "(face, hair, eyes, body, skin). Your sentences must enumerate everything else the "
-    "tags expose — outfit, accessories, props, setting, pose, expression, framing — so "
-    "the model attributes the only shared signal (the appearance) to the trigger.\n\n"
-    "Walk the tag list and convert it into prose, in this order:\n"
-    "  1. Subject framing: solo / multiple_girls / multiple_boys plus the character's "
-    "     position when tags say so (looking at viewer / on the left / in the foreground).\n"
-    "  2. Pose tags: standing / sitting / kneeling / running / lying / leaning / crossed "
-    "     arms / arms up / hands on hips / squatting.\n"
-    "  3. Action tags: holding (X) / pointing / drinking / writing / fighting / reading / "
-    "     using phone / dancing / cooking — be specific about the object when paired.\n"
-    "  4. Expression tags: smile / smirk / frown / open mouth / blush / crying / sweating "
-    "     / surprised / annoyed; gaze tags: looking at viewer / looking up / looking down "
-    "     / looking away / eyes closed.\n"
-    "  5. Outfit — every clothing tag (shirt, blouse, jacket, hoodie, sweater, dress, "
-    "     skirt, pants, jeans, shorts, swimsuit, school uniform, kimono, armor, ...) and "
-    "     every adjacent color tag pairing them when present (white shirt / red skirt / "
-    "     blue jacket / black boots / pleated skirt / plaid). List every garment piece "
-    "     even if it looks like part of a signature outfit — outfit is training content.\n"
-    "  6. Accessories — every accessory tag: glasses, hat, scarf, gloves, necklace, "
-    "     earrings, ribbon, hair clip, headphones, bag, belt, wristwatch.\n"
-    "  7. Held / nearby props: every object tag (sword, gun, book, phone, cup, flower, "
-    "     food, instrument).\n"
-    "  8. Setting / background tags: location (classroom, forest, beach, city, bedroom, "
-    "     rooftop, train, indoors, outdoors), background entities (window, desk, tree, "
-    "     building, sky, clouds, mountain, water), weather / time-of-day (rain, snow, "
-    "     night, day, sunset, sunlight, moonlight).\n"
-    "  9. Framing / camera tags: shot (close-up / upper body / cowboy shot / full body / "
-    "     wide shot), angle (from above / from below / from behind / from side / profile "
-    "     view).\n"
-    "  10. Lighting tags as physical fact: source / direction (backlight, rim light, "
-    "      sunlight, moonlight, lens flare). Describe the light, not its 'mood'.\n\n"
-    "FORBIDDEN — never write any tag or word describing PHYSICAL APPEARANCE, even if "
-    "the tag is in the list: hair color (red hair, blonde, black hair, white hair, ...), "
-    "hair length / style (long hair, short hair, ponytail, twintails, braid, bangs, "
-    "ahoge, hair ornament shape, ...), eye color (blue eyes, red eyes, heterochromia, "
-    "...), eye shape, skin tone / texture (pale skin, tan, freckles, beauty mark, ...), "
-    "face shape, body proportions (slim, curvy, muscular, tall, short), height, breast "
-    "size (large breasts, flat chest, ...), age markers (young, elderly). These tags "
-    "describe identity that the trigger word must own — emitting them leaks signal "
-    "away from the trigger.\n"
-    "Also forbidden: vague praise (beautiful, pretty, handsome, cute, gorgeous), and "
-    "starting with a trigger word, header, or label.\n\n"
-    "Use 4-6 sentences. Be exhaustive on outfit / accessories / props / setting / "
-    "framing / pose. If a given axis (e.g. weather, lighting) has no supporting tag, "
-    "omit that axis only — do NOT pad with invented detail.\n\n"
-    "WD14 tags: {tags}"
+    "(face, hair, eyes, body, skin tone). Your sentences must describe everything else "
+    "the tags expose (outfit, accessories, props, setting, pose, expression, framing) "
+    "so the model attributes the only shared signal (appearance) strictly to the trigger.\n\n"
+    "Walk the tag list and convert it into prose covering, in this order:\n"
+    " 1. Subject framing: solo / 2girls / group; spatial role.\n"
+    " 2. Pose, action, expression, gaze.\n"
+    " 3. Outfit clothing tags + adjacent color tags, accessories.\n"
+    " 4. Held / nearby object tags.\n"
+    " 5. Setting / background tags, weather, time-of-day.\n"
+    " 6. Composition / framing tags.\n\n"
+    "[STRICT IDENTITY DROP INSTRUCTION]\n"
+    "Do NOT describe any aspect of PHYSICAL APPEARANCE, even if the tag is in the list: "
+    "hair color, hair length / style (long hair, short hair, ponytail, twintails, braid, "
+    "bangs, ahoge), eye color, eye shape, skin tone / texture (pale skin, freckles), "
+    "face shape, body proportions, height, breast size, age markers (young, elderly).\n"
+    "CRITICAL: Do NOT use vague praise (beautiful, pretty, handsome, cute, gorgeous). "
+    "The trigger word MUST absorb the character's identity.\n\n"
+    "[TAG PRUNING INSTRUCTION]\n"
+    "Raw WD14 tags: {tags}\n"
+    "Act as a filter. Drop any contradicting tags, low-confidence hallucinations, AND "
+    "every identity tag (hair / eyes / skin / face / body shape).\n\n"
+    "[OUTPUT FORMAT]\n"
+    "Output strictly in two parts joined by a comma:\n"
+    "Part 1: 3-4 dense natural-language sentences describing the content.\n"
+    "Part 2: comma-separated list of the PRUNED WD14 tags. Identity tags MUST NOT "
+    "appear. Drop any tag contradicted by your sentences.\n\n"
+    "Output ONLY the final caption text. No headers or labels."
 )
 
 _TAGS_ONLY_PROMPT_GENERAL = (
@@ -822,37 +761,47 @@ def _build_anima_caption(
     trigger_word: str | None,
     strip_style_tags: bool = True,
 ) -> str:
-    """Assemble an Anima-format caption.
+    """Assemble a training caption.
 
     Layout (trigger-first):
       <trigger word>,
       masterpiece, best quality, score_7, <safe|sensitive|nsfw>,
-      [1girl/1boy/etc], [character_trigger or @artist], [series],
-      <NL paragraph (omitted in style mode or when use_wd14=false)>,
-      <remaining general tags>
+      [1girl/1boy/etc],            # subject-count tag from WD14
+      [WD14 character predictions],
+      <LLM payload>                # sentences + LLM-pruned tag list
+                                   # (or empty when skip_llm path took over)
 
-    Putting the trigger word at position 0 is the kohya / sd-scripts
-    convention — `keep_tokens` defaults to 3 (or 1 in style configs)
-    and the head N tokens are pinned through caption shuffling, so
-    the trigger MUST be at the head to survive shuffling.
+    The LLM output is expected to contain BOTH the natural-language
+    description AND a corrected/filtered tag list (Part 1 + Part 2 in
+    the prompt format), so the backend no longer pastes the raw WD14
+    ``general_tags`` tail. That was the exact path that let style
+    contradictions ("anime, realistic, painterly") and identity tags
+    ("blue eyes, long hair") leak into character / style captions.
+
+    ``general_tags`` is still used for two specific things:
+      * extracting the subject-count tag (1girl, 2girls, ...) — these
+        are high-confidence WD14 metadata that the LLM doesn't always
+        bother to surface.
+      * upstream filtering (in stage_one) of what the LLM sees as
+        ``{tags}``, so style/identity words never reach the prompt.
+
+    Anything else from WD14 reaches disk only via the LLM's pruned
+    Part 2 list inside ``nl_text``. ``strip_style_tags`` is now a
+    pure stage-one knob; the in-caption rebuild ignores it.
     """
     rating = _RATING_MAP.get((rating_tag or "").lower(), "safe")
     header = f"masterpiece, best quality, score_7, {rating}"
 
-    # Pick subject-count tag (1girl, 2girls, 1boy, etc.) from general — Anima
-    # wants this immediately after the header.
-    subject_tags: list[str] = []
-    rest_general: list[str] = []
+    # Pick subject-count tag (1girl, 2girls, 1boy, etc.) — Anima wants
+    # this immediately after the header. Everything else from
+    # ``general_tags`` is intentionally dropped: the LLM has already
+    # written its own pruned tag list inside ``nl_text``.
     subject_pattern = (
         "1girl", "2girls", "3girls", "4girls", "5girls", "6+girls",
         "1boy", "2boys", "3boys", "multiple_girls", "multiple_boys",
         "solo", "no humans",
     )
-    for t in general_tags:
-        if t in subject_pattern:
-            subject_tags.append(t)
-        else:
-            rest_general.append(t)
+    subject_tags = [t for t in general_tags if t in subject_pattern]
 
     # Trigger / character / artist line.
     trig = (trigger_word or "").strip().lower()
@@ -861,22 +810,7 @@ def _build_anima_caption(
         if not trig.startswith("@"):
             trig = f"@{trig}"
 
-    # WD14 character predictions go on the same line as identity hints,
-    # right after the subject-count tag.
-    line2_pieces: list[str] = [*subject_tags, *character_tags]
-    line2 = ", ".join(line2_pieces)
-
-    # Clean general tag tail: drop quality noise (header already covers it).
-    # In style mode also drop medium / palette descriptors. In character
-    # mode also drop every appearance / identity tag so the trigger word
-    # remains the only signal correlated with the character's body.
-    drop_for_tail = set(_QUALITY_NOISE_TAGS)
-    if strip_style_tags and caption_mode == "style":
-        drop_for_tail = drop_for_tail | _STYLE_NOISE_TAGS
-    tail = _drop_tags(rest_general, drop_for_tail)
-    if caption_mode == "character":
-        tail = _drop_appearance_tags(tail)
-    tail_str = ", ".join(tail)
+    line2 = ", ".join([*subject_tags, *character_tags])
 
     parts: list[str] = []
     # Trigger word leads — kohya keep_tokens convention.
@@ -887,8 +821,9 @@ def _build_anima_caption(
         parts.append(line2)
     if nl_text.strip():
         parts.append(nl_text.strip())
-    if tail_str:
-        parts.append(tail_str)
+    # Suppress unused-arg linter: kept in signature for back-compat
+    # callers + future reintroduction of stage-three filtering.
+    _ = strip_style_tags
     return ",\n".join(parts)
 
 
@@ -1001,9 +936,15 @@ def _smart_caption_stage_one(
     dataclass, doesn't write files or touch the store.
 
     When ``use_wd14`` is False the WD14 tagger is bypassed entirely and
-    every tag-derived field is empty; ``tagger`` may be ``None``. When
-    ``caption_mode == "style"``, no LLM call happens either (the trigger
-    word alone is the full caption — see ``skip_llm`` on the result).
+    every tag-derived field is empty; ``tagger`` may be ``None``.
+
+    The LLM is the source of truth for everything except the trigger
+    word and the rating/header — its output covers both natural-
+    language description AND the pruned-and-corrected tag list. The
+    backend no longer re-pastes raw WD14 output into the caption tail
+    because that's exactly the path that lets contradictions and
+    style-words leak in. Only ``use_wd14=False`` AND ``mode==style``
+    skips the LLM entirely (the trigger word alone is the caption).
     """
     import base64  # noqa: PLC0415
     import mimetypes  # noqa: PLC0415
@@ -1021,11 +962,12 @@ def _smart_caption_stage_one(
         character_tags = []
         rating_name = None
 
-    # Style mode produces a hard-coded "trigger only" caption — no LLM
-    # natural-language sentence. The LLM was reintroducing style words
-    # despite every prompt-level safeguard; the cleanest fix is not to
-    # let it write any prose at all.
-    skip_llm = caption_mode == "style"
+    # The LLM is now responsible for both nl_text AND the pruned tag
+    # list (Part 1 + Part 2 in the new prompt format). The only path
+    # that skips the LLM is "WD14 disabled in style mode" — there's
+    # nothing for the LLM to write in that case (no image input, no
+    # tag context, just the trigger word).
+    skip_llm = caption_mode == "style" and not use_wd14
 
     # Build the LLM-facing reference tags. Always strip the quality-noise
     # set; additionally strip the style/medium set when requested AND the
@@ -1079,10 +1021,11 @@ def _smart_caption_stage_one(
         else:
             prompt_template = _SMART_CAPTION_PROMPT_GENERAL
     prompt_text = prompt_template.format(tags=tags_for_prompt)
-    if strip_style_tags and caption_mode == "style":
-        # Front-load the strict no-style-words clause so the LLM sees it
-        # before the per-mode body — easier to obey than a trailing rule.
-        prompt_text = _STYLE_DROP_INSTRUCTION + prompt_text
+    # Note: the new prompt templates already embed the
+    # [STRICT STYLE DROP INSTRUCTION] / [STRICT IDENTITY DROP INSTRUCTION]
+    # blocks inline; we no longer prepend the legacy
+    # ``_STYLE_DROP_INSTRUCTION`` override (it's still defined as
+    # documentation but unused at runtime).
 
     return _StageOneResult(
         img_path=img_path,

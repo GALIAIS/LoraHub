@@ -222,20 +222,24 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   value={captionSource}
                   onChange={(e) => setCaptionSource(e.target.value as typeof captionSource)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
-                  disabled={!useWd14 || captionMode === "style"}
+                  disabled={!useWd14 && captionMode === "style"}
                 >
                   <option value="vlm">视觉模型（看图）· 质量最高</option>
                   <option value="tags">仅 WD14 标签 · 不上传图片，省额度/兼容文本模型</option>
                 </select>
               </label>
               <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
-                {captionMode === "style"
-                  ? "风格 LoRA 模式不调用 LLM —— caption 只保留触发词 + WD14 标签尾，避免 LLM 反复写出画风词污染训练。"
+                {!useWd14 && captionMode === "style"
+                  ? "WD14 关闭 + 风格模式：caption 仅含触发词，不调用 LLM。"
                   : !useWd14
-                    ? "WD14 已关闭：LLM 直接看图描述，caption = 触发词 + LLM 描述。"
-                    : captionSource === "tags"
-                      ? "LLM 不会看到图片，仅根据 WD14 给出的 tag 列表撰写描述。提示词已针对此场景优化，避免凭空虚构。"
-                      : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
+                    ? "WD14 已关闭：LLM 直接看图描述并自行写 caption（无标签参考）。"
+                    : captionMode === "style"
+                      ? "风格模式：LLM 看图（或 WD14 标签）后输出『描述 + 修正后的标签』，过滤掉画风词与矛盾标签。caption 末尾不再硬拼接原始 WD14。"
+                      : captionMode === "character"
+                        ? "角色模式：LLM 输出『描述 + 修正后的标签』，过滤掉外貌身份词（hair / eyes / skin / body）与矛盾标签。"
+                        : captionSource === "tags"
+                          ? "LLM 不会看到图片，仅根据 WD14 标签列表撰写。提示词已针对此场景优化，避免凭空虚构。"
+                          : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>
@@ -244,8 +248,8 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setCaptionMode(e.target.value as typeof captionMode)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
-                  <option value="style">风格 LoRA（仅触发词 + WD14 实体尾，不写自然语言）</option>
-                  <option value="character">角色 LoRA（不写角色特征）</option>
+                  <option value="style">风格 LoRA（描述 + 修正后的标签，禁画风词）</option>
+                  <option value="character">角色 LoRA（描述 + 修正后的标签，禁外貌词）</option>
                   <option value="general">通用（描述全部内容）</option>
                 </select>
               </label>
