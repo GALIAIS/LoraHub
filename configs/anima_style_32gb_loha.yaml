@@ -150,6 +150,11 @@ backend:
       # T-LoRA mask is a no-op for LoHA (atomic decomposition owns the
       # full ΔW); explicit off for clarity.
       useTimestepMask: false
+      # channel_scaling_alpha 只对 LoRA / OrthoLoRA factory 生效;LoHA
+      # 走 atomic 路径会忽略它。这里仍设 0.5,方便用户在不动其它字段
+      # 的前提下把 algorithm 切到 ortho 时立刻拿到上游 methods/lora.toml
+      # 默认 channel scale。
+      channelScalingAlpha: 0.5
 
     # Network sizing. r=16 here gives effective rank up to 256 via the
     # Hadamard product. Going higher quickly hits OOM at 1024² because
@@ -165,6 +170,7 @@ backend:
     # signal vs character training where only a few images carry the
     # specific identity feature).
     learningRate: 7.0e-05
+    lrWarmupRatio: 0.05          # 5% 总步数 warmup;style 也需要,初期防 LR 抖
     maxTrainEpochs: 10
     saveEveryNEpochs: 2
     checkpointingEpochs: 2
@@ -205,6 +211,7 @@ backend:
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
     mixedPrecision: bf16
+    persistentDataLoaderWorkers: true   # 32GB 卡稳;上游 base.toml 默认
 
     # Training stabilisers. Same default as character: EMA off to
     # preserve cudagraph_trees throughput, nan_guard on.
