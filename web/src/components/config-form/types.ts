@@ -329,6 +329,7 @@ export interface ConfigFormValue {
         | "linear"
         | "polynomial"
       learningRate?: number
+      lrWarmupRatio?: number | null
       maxTrainEpochs?: number
       saveEveryNEpochs?: number
       checkpointingEpochs?: number
@@ -435,6 +436,7 @@ export interface ConfigFormValue {
         useTimestepMask?: boolean
         minRank?: number
         alphaRankScale?: number
+        channelScalingAlpha?: number
       }
       postfix?: {
         mode?: "postfix" | "cond"

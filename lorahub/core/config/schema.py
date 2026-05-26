@@ -916,7 +916,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # (ia3 / lokr / loha / full / diag_oft / boft / glora / vera) but
     # keeping the field on universally simplifies the front-end.
     use_timestep_mask: bool = True
-    min_rank: int = Field(8, ge=1)
+    min_rank: int = Field(16, ge=1)
     alpha_rank_scale: float = Field(1.0, gt=0)
 
     # Mapping legacy ``use_X`` booleans → algorithm enum value. Ordered
@@ -1161,25 +1161,40 @@ class AnimaLoraOptions(BaseModel):
 
     # ---- Network ----
     network_module: str = "networks.lora_anima"
-    network_dim: int = Field(16, ge=1)
-    network_alpha: float = Field(16, gt=0)
+    network_dim: int = Field(32, ge=1)
+    network_alpha: float = Field(32, gt=0)
     network_train_unet_only: bool = True
+    # OrthoLoRA / LoRA channel-wise gain scaling (network kwarg, not a CLI
+    # flag). Controls the magnitude of the per-channel scale applied on
+    # the output of the LoRA branch — Backend's ``methods/lora.toml``
+    # ships 0.5 as the numerically-stable default. Lower values shrink
+    # the LoRA contribution at init (slower learn, less collapse risk);
+    # higher values let the LoRA leg pull harder against the base.
+    channel_scaling_alpha: float = Field(0.5, gt=0, le=1)
 
     # ---- Optimizer / schedule ----
     optimizer_type: Literal["AdamW", "AdamW8bit", "Lion", "Prodigy"] = "AdamW"
     lr_scheduler: Literal[
         "constant", "cosine", "cosine_with_restarts", "linear", "polynomial"
-    ] = "constant"
-    learning_rate: float = Field(5.0e-5, gt=0)
-    max_train_epochs: int = Field(8, ge=1)
-    save_every_n_epochs: int = Field(1, ge=1)
+    ] = "cosine"
+    learning_rate: float = Field(2.0e-5, gt=0)
+    # Warmup as a *ratio* of total steps. Upstream's ``--lr_warmup_steps``
+    # is dual-typed: float < 1 → ratio, int >= 1 → absolute step count.
+    # When this field is non-None it wins over the absolute-steps path
+    # (cfg.optimizer.warmup_steps) and the compiler emits the value as a
+    # float so argparse takes the ratio branch. None → fall back to the
+    # absolute-steps path; the trainer then uses Backend's base.toml
+    # default if neither is set.
+    lr_warmup_ratio: float | None = Field(default=0.05, ge=0.0, le=1.0)
+    max_train_epochs: int = Field(3, ge=1)
+    save_every_n_epochs: int = Field(3, ge=1)
     # Optional step-based checkpoint cadence. When set, the trainer
     # also writes a ckpt every N steps (in addition to the epoch
     # cadence above). Useful for short epochs / small datasets where
     # a full epoch is the only thing that triggers a state dir, and
     # the pause-resume workflow wants finer granularity.
     save_every_n_steps: int | None = Field(default=None, ge=1)
-    checkpointing_epochs: int = Field(1, ge=1)
+    checkpointing_epochs: int = Field(3, ge=1)
     caption_dropout_rate: float = Field(0.1, ge=0.0, le=1.0)
 
     # ---- Sampling / loss (flow-matching for Anima DiT) ----
@@ -1248,13 +1263,12 @@ class AnimaLoraOptions(BaseModel):
     no_half_vae: bool = False
 
     # ---- Attention / compile ----
-    # Default to ``torch`` (PyTorch SDPA) instead of upstream's ``flash``
-    # because flash-attn is an optional, compute-capability-sensitive
-    # build that many environments don't have. SDPA is always available
-    # and on Ampere+ runs at ~85-95% of flash-attn's throughput. Users
-    # with flash-attn installed flip this to ``flash`` for the last
-    # 5-15% perf gain.
-    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "torch"
+    # Default to ``flash`` to match Backend's base.toml — flash-attn
+    # delivers the best throughput on Ampere+ when the build is
+    # available. Operators without a working flash-attn install should
+    # flip this to ``torch`` (PyTorch SDPA) in their recipe; SDPA hits
+    # ~85-95% of flash-attn throughput and is always available.
+    attn_mode: Literal["flash", "torch", "flex", "sageattn", "xformers"] = "flash"
     xformers: bool = False
     split_attn: bool = False
     # ``compile_mode = "full"`` enables CUDAGraph capture via
@@ -1334,10 +1348,11 @@ class AnimaLoraOptions(BaseModel):
     # 🔒 LOCKED_TRUE — DataLoader pin_memory; upstream sets it true and
     # offers no off-switch. Off would slow down host→GPU transfers.
     dataloader_pin_memory: bool = True
-    # ⚠️ RISKY — persistent dataloader workers; upstream default is
-    # false (workers re-spawn each epoch). Setting true reduces epoch
-    # boundary stalls but may leak file handles on long runs.
-    persistent_data_loader_workers: bool = False
+    # ⚠️ RISKY — persistent dataloader workers; Backend's base.toml ships
+    # this true (workers stay alive across epochs, reducing epoch-boundary
+    # stalls). Setting false reverts to per-epoch worker spawn — slower
+    # but avoids long-run file-handle leaks.
+    persistent_data_loader_workers: bool = True
     # 🔒 LOCKED_TRUE — base.toml writes ``trim_crossattn_kv = false``,
     # but the corresponding flag is store_true so users *can* turn it
     # on via CLI. Setting True enables KV trimming for short captions
@@ -1372,9 +1387,10 @@ class AnimaLoraOptions(BaseModel):
     # data pipeline scans for this exact suffix; changing it skips
     # every image with no warning. Exposed for completeness.
     caption_extension: str = ".txt"
-    # ⚠️ RISKY — held-out validation set count. base.toml uses 16.
-    # 0 disables CMMD val (val_loss series stops updating).
-    validation_split_num: int = Field(16, ge=0)
+    # ⚠️ RISKY — held-out validation set count. Backend's base.toml uses
+    # 0 (no held-out images; CMMD validation disabled by default; the
+    # method TOML can override). Bump this to enable val_loss tracking.
+    validation_split_num: int = Field(0, ge=0)
     # Bucketing is a hard requirement of Anima's static-shape compile;
     # 🔒 LOCKED_TRUE here too.
     enable_bucket: bool = True

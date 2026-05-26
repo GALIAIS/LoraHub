@@ -186,7 +186,7 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     network_args = pairs["--network_args"]
     assert "use_ortho=true" in network_args
     assert "use_timestep_mask=true" in network_args
-    assert "min_rank=8" in network_args
+    assert "min_rank=16" in network_args
     assert any(p.startswith("alpha_rank_scale=") for p in network_args)
     # files-to-write contains exactly the generated dataset_config TOML
     # — upstream's argparse has no flag for the three data path keys
@@ -475,20 +475,19 @@ def test_caching_flags_emit_when_enabled(tmp_path: Path) -> None:
         assert flag in pairs, f"missing default cache flag {flag}"
 
 
-def test_attn_mode_default_is_torch(tmp_path: Path) -> None:
-    """Default attn_mode is ``torch`` (PyTorch SDPA) for portability.
+def test_attn_mode_default_is_flash(tmp_path: Path) -> None:
+    """Default attn_mode is ``flash`` to match Backend's base.toml.
 
-    Upstream's base.toml default is ``flash``, but flash-attn is an
-    optional, compute-capability-sensitive build many environments
-    don't have (and trips a RuntimeError at DiT load time when
-    missing). LoRaHub overrides the default to ``torch`` so a fresh
-    install runs out of the box; users with flash-attn flip it back.
+    Backend ships flash-attn as the throughput-leading default on
+    Ampere+ GPUs. Operators without a working flash-attn install must
+    flip this to ``torch`` (PyTorch SDPA) explicitly in their recipe;
+    SDPA hits ~85-95% of flash-attn throughput and is always available.
     """
     opts = AnimaLoraOptions()
     cfg = _recipe(tmp_path, opts)
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
-    assert pairs["--attn_mode"] == ["torch"]
+    assert pairs["--attn_mode"] == ["flash"]
 
 
 # --------------------------------------------------------------------------- #

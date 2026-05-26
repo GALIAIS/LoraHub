@@ -273,6 +273,28 @@ def _render_full_config(
     cfg_dict["optimizer_type"] = opts.optimizer_type
     cfg_dict["lr_scheduler"] = opts.lr_scheduler
     cfg_dict["learning_rate"] = float(opts.learning_rate)
+    # ``lr_warmup_steps`` is upstream's dual-typed argparse field:
+    #   * float < 1   → ratio of total steps (Backend base.toml default)
+    #   * int >= 1    → absolute step count
+    # We prefer the ratio path when ``opts.lr_warmup_ratio`` is set
+    # because it tracks total-step changes (epochs × steps_per_epoch)
+    # automatically. Falling back to None lets the trainer use whatever
+    # base.toml supplies (still 0.05 as of Backend's current cut). We
+    # never emit both — argparse last-write-wins on the same key would
+    # collapse to the int form and silently change semantics.
+    if opts.lr_warmup_ratio is not None:
+        cfg_dict["lr_warmup_steps"] = float(opts.lr_warmup_ratio)
+    else:
+        # Fallback: honour the absolute-steps knob on cfg.optimizer when
+        # the ratio path is explicitly disabled. Emitted as an int so
+        # argparse takes the absolute-steps branch instead of the ratio
+        # branch. ``warmup_steps`` defaults to 100 in OptimizerConfig;
+        # users disabling the ratio path while keeping the default get
+        # 100 absolute steps — a sane fallback that mirrors a typical
+        # short-warmup convention.
+        steps = int(getattr(cfg.optimizer, "warmup_steps", 0) or 0)
+        if steps > 0:
+            cfg_dict["lr_warmup_steps"] = steps
 
     if cfg.schedule.max_steps is not None and cfg.schedule.max_steps > 0:
         # See compiler history for the long version: train.py
@@ -665,6 +687,11 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
     )
     pieces.append(f"min_rank={sub.min_rank}")
     pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")
+    # ``channel_scaling_alpha`` rides ``network_args`` (kwarg, not a CLI
+    # flag) — Backend's lora.toml ships 0.5 as the numerically-stable
+    # default. Emitted regardless of algorithm because the LoRA factory
+    # reads it for every variant in the ortho/dora/lokr/loha cluster.
+    pieces.append(f"channel_scaling_alpha={_fmt_float(opts.channel_scaling_alpha)}")
     return pieces
 
 

@@ -47,11 +47,12 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.method == "lora"
     assert opts.preset == "default"
     assert opts.network_module == "networks.lora_anima"
-    assert opts.network_dim == 16
+    assert opts.network_dim == 32
     assert opts.optimizer_type == "AdamW"
-    # ``torch`` (PyTorch SDPA) is the default since the flash-attn
-    # gate landed — flash-attn 是可选可缺的扩展,SDPA 在每台机器上都可用。
-    assert opts.attn_mode == "torch"
+    # ``flash`` matches Backend's base.toml default — operators without
+    # a working flash-attn build override to ``torch`` (PyTorch SDPA)
+    # explicitly in their recipe.
+    assert opts.attn_mode == "flash"
     # method=lora's default stack: algorithm=ortho keeps anima's upstream
     # OrthoLoRA + T-LoRA layout; the legacy ``use_ortho`` shadow stays
     # ``None`` because the user didn't touch it (the enum drives the
@@ -59,7 +60,7 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.lora.algorithm == "ortho"
     assert opts.lora.use_ortho is None
     assert opts.lora.use_timestep_mask is True
-    assert opts.lora.min_rank == 8
+    assert opts.lora.min_rank == 16
     # Other method sub-configs are None until the user opts in.
     assert opts.postfix is None
     assert opts.chimera is None

@@ -1,267 +1,291 @@
-# Anima LoRA — anima_lora 上游默认配置（原样翻译）
-#
-# 这份配置 100% 复刻 sorryhyun/anima_lora 的三层 merge 链：
-#   external/anima_lora/configs/base.toml
-#   + external/anima_lora/configs/methods/lora.toml
-#   + external/anima_lora/configs/presets.toml[default]
-#
-# 等价于在 anima_lora 目录里跑：
-#   make lora               # 即 PRESET=default METHOD=lora 默认走 lora.toml
-#   python tasks.py lora    # Windows 等价
-#
-# 默认堆叠：LoRA + OrthoLoRA + T-LoRA (Hydra / FeRA / ReFT 等高级路由保持
-# 关闭,需要的话直接改 backend.animaLora.method 字段或参考
-# external/anima_lora/configs/methods/ 里的 toml)。
-
-schemaVersion: "1.0"
-
+schemaVersion: '1.0'
 baseModel:
   arch: anima
-  # 与 kohya / diffusion-pipe 模板共用的 LoraHub 项目根 ./models/ 路径
-  # (与 anima_lora_8gb.yaml / anima_character_32gb_dora.yaml 同款)。
-  # 用户切后端不必重下模型 — 三个权重统一由项目根 ./models/ 提供。
-  checkpoint: ./models/circlestone-labs__Anima/split_files/diffusion_models/anima-base-v1.0.safetensors
+  archVariant: ''
+  checkpoint: models\circlestone-labs__Anima\anima-base-v1.0.safetensors
   archPaths:
-    qwen3: ./models/circlestone-labs__Anima/split_files/text_encoders/qwen_3_06b_base.safetensors
-    ae: ./models/circlestone-labs__Anima/split_files/vae/qwen_image_vae.safetensors
-
-# 数据集 — 与 kohya / dp 一致:source 指向**原始图片目录**(.jpg + 同名 .txt)。
-# LoraHub 的 anima_lora 后端在 launch 时会自动检测 cache 是否齐全,缺则调
-# external/anima_lora/preprocess/ 里的 resize_images.py / cache_latents.py /
-# cache_text_embeddings.py 写到 <workspace>/post_image_dataset/lora/。
-# 用户不需要手动 `make preprocess`,也不需要把 source 指向 cache 目录。
+    ae: models\circlestone-labs__Anima\qwen_image_vae.safetensors
+    qwen3: models\circlestone-labs__Anima\qwen_3_06b_base.safetensors
+    applyT5AttnMask: false
+    applyLgAttnMask: false
+    t5DropoutRate: 0.0
+    clipLDropoutRate: 0.0
+    clipGDropoutRate: 0.0
+    posEmbRandomCropRate: 0.0
+    enableScaledPosEmbed: false
+    vaeDisableCache: false
+    textEncoderCpu: false
 dataset:
-  source: ./datasets/your_dataset
-  resolution: [1024, 1024]
+  source: datasets\your_dataset
+  resolution:
+  - 1024
+  - 1024
   bucket:
     enabled: true
     min: 256
     max: 2048
     step: 64
+    noUpscale: false
+    skipImageResolution: false
   caption:
     strategy: tag_file
-    ext: .txt        # 上游 [general].caption_extension = '.txt'
-    shuffle: true    # 上游默认 shuffle 通过 use_shuffled_caption_variants 实现
-    dropRate: 0.1    # 上游 caption_dropout_rate = 0.1 (在 lora.toml)
-    keepTokens: 3    # 上游 [general].keep_tokens = 3
-  numRepeats: 1      # 上游 [[datasets.subsets]].num_repeats = 1
-
-# LoraHub schema 通用字段(对 anima_lora 后端不直接生效,真正字段在
-# backend.animaLora 段。这里填合理默认满足 schema 校验即可)
+    ext: .txt
+    shuffle: true
+    dropRate: 0.1
+    dropoutEveryNEpochs: 0
+    tagDropoutRate: 0.0
+    keepTokens: 3
+    dropTokens: []
+    enableWildcard: false
+    weighted: false
+    shuffleTags: false
+  numRepeats: 1
+  valSplit: 0.0
+  subsets: []
+  frameBuckets:
+  - 1
 network:
   type: lora
   rank: 16
   alpha: 16
-
+  targetUnet: true
+  targetTextEncoder: false
+  networkDropout: 0.0
+  rankDropout: 0.0
+  moduleDropout: 0.0
+  baseWeights: []
+  baseWeightsMultiplier: []
+  fuseAdapters: []
 optimizer:
   type: AdamW
   lr:
-    unet: 5.0e-5
-    textEncoder: 5.0e-5
-  scheduler:
-    type: constant
-
+    unet: 5.0e-05
+    textEncoder: 5.0e-05
+  schedule: cosine_with_restarts
+  warmupSteps: 100
+  betas:
+  - 0.9
+  - 0.999
+  weightDecay: 0.0
+  eps: 1.0e-08
+  optimizerArgs: {}
+  maxGradNorm: 1.0
+  schedulerArgs: {}
+  schedulerNumCycles: 1
+  schedulerPower: 1.0
+  gradientRelease: false
+loss:
+  noiseOffset: 0.0
+  noiseOffsetRandomStrength: false
+  multiresNoiseDiscount: 0.3
+  ipNoiseGammaRandomStrength: false
+  zeroTerminalSnr: false
+  priorLossWeight: 1.0
+  lossType: l2
+  debiasedEstimation: false
+  maskedLoss: false
+  scaleVPredLossLikeNoisePred: false
+  vParameterization: false
+flowMatch: {}
 schedule:
   epochs: 8
   batchSize: 1
+  gradAccum: 1               # 上游 base.toml effective batch_size=1
   seed: 42
-
+precision: bf16
+gradientCheckpointing: true
+cacheLatents: true
+cacheLatentsToDisk: false
+skipCacheCheck: false
+cacheInfo: false
+trainInpainting: false
+sampling:
+  enabled: true
+  everyNEpochs: 2            # 减少训练打断，每 2 epoch 一次 sample
+  atFirst: true
+  prompts:
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body,
+      looking at viewer, neutral expression, simple background, soft natural lighting
+    negative: lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry,
+      jpeg artifacts, deformed, mutated, watermark, signature, text
+    cfg: 5.0
+    steps: 28
+    seed: 42
+    width: 1024
+    height: 1024
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body,
+      standing, dynamic pose, looking at viewer, outdoors, daytime, soft sunlight
+    negative: lowres, worst quality, bad anatomy, bad hands, missing fingers, extra
+      fingers, blurry, jpeg artifacts, deformed, mutated, watermark, text
+    cfg: 5.0
+    steps: 28
+    seed: 1024
+    width: 832
+    height: 1216
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, close-up,
+      smiling, blush, looking at viewer, indoor warm lighting, bokeh background
+    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
+      deformed, mutated, watermark, text, sad, angry
+    cfg: 5.0
+    steps: 28
+    seed: 7777
+    width: 896
+    height: 1152
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 2girls, multiple girls,
+      sitting together, casual conversation, indoor, daytime
+    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
+      deformed, watermark, text
+    cfg: 5.0
+    steps: 28
+    seed: 256
+    width: 1024
+    height: 1024
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain
+      landscape, river, autumn forest, dramatic clouds, golden hour, cinematic
+    negative: lowres, worst quality, blurry, jpeg artifacts, watermark, text, signature,
+      person, character, human
+    cfg: 5.0
+    steps: 28
+    seed: 8888
+    width: 1344
+    height: 768
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, urban night,
+      neon signs, rain, reflective wet ground, dramatic rim light, looking back over
+      shoulder
+    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
+      deformed, watermark, text, daytime, sunny, grayscale
+    cfg: 5.5
+    steps: 30
+    seed: 31415
+    width: 1216
+    height: 832
+  resolution:
+  - 1024
+  - 1024
+  seed: -1
+  outputs:
+    gridStitching: true
+    baseCompare: false
+    crossCkptAnimation: false
+    pngMetadata: true
+  enableLiveInference: false
+  inferenceSteps: 24
+  inferenceCfg: 5.0
+  spectrumAnalysis: true
 output:
   name: anima_lora
-
+  saveEveryNEpochs: 1
+  saveDtype: fp16
+  noMetadata: false
+  metadata: {}
 backend:
   type: anima_lora
-
+  extraArgs: {}
   animaLora:
-    # === 上游 method = lora + preset = default(merge 链产物) ===
     method: lora
     preset: default
-
-    # base.toml: output_name
     outputName: anima_lora
-
-    # base.toml: network_module + network_train_unet_only
     networkModule: networks.lora_anima
+    networkDim: 32             # 上游 methods/lora.toml 默认；rank=32 容量更稳
+    networkAlpha: 32.0         # 上游默认；与 rank 同值保持 alpha/rank=1.0
     networkTrainUnetOnly: true
-
-    # lora.toml: network_dim + network_alpha
-    networkDim: 16
-    networkAlpha: 16
-
-    # base.toml: optimizer_type + lr_scheduler
-    # lora.toml: learning_rate + max_train_epochs + save_every_n_epochs
     optimizerType: AdamW
-    lrScheduler: constant
-    learningRate: 5.0e-5
-    maxTrainEpochs: 8
-    saveEveryNEpochs: 2
-    checkpointingEpochs: 2
-
-    # lora.toml: caption_dropout_rate + use_shuffled_caption_variants +
-    # cache_llm_adapter_outputs
+    lrScheduler: cosine        # 上游 base.toml 默认；配合 5% warmup 走完整衰减
+    learningRate: 2.0e-05      # 上游默认；搭配 cosine + warmup 更稳
+    lrWarmupRatio: 0.05        # 5% 总步数 warmup（>=1 视为绝对步数）
+    maxTrainEpochs: 3          # 上游 methods/lora.toml 默认 3 epoch
+    saveEveryNEpochs: 3        # 与 maxTrainEpochs 对齐
+    checkpointingEpochs: 3     # 与 maxTrainEpochs 对齐
     captionDropoutRate: 0.1
-    useShuffledCaptionVariants: true
-    cacheLlmAdapterOutputs: true
-
-    # base.toml: 流匹配采样
     timestepSampling: sigmoid
     sigmoidScale: 1.0
     discreteFlowShift: 1.0
-
-    # base.toml: 缓存(LoraHub schema 默认就是 true,这里显式列出对应上游)
+    ema: false
+    emaDecay: 0.9999
+    emaUseNumUpdates: true
+    nanGuard: false
+    nanGuardRecover: false
+    nanGuardMaxConsecutive: 5
+    sampleGrid: false
     cacheLatents: true
     cacheLatentsToDisk: true
     cacheTextEncoderOutputs: true
     cacheTextEncoderOutputsToDisk: true
-
-    # base.toml: 数据 / VAE
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
     staticTokenCount: 4096
     vaeChunkSize: 64
-    vaeDisableCache: true   # 上游 base.toml 默认 true
-
-    # native-flatten 模式开关(LoraHub 侧迁移自上游 75e121d).打开后:
-    #   * 走 4032+4200 双家族 bucket 表(每个 bucket 精确填满 token count
-    #     、零 padding;flash-attn 不再看到 pad token)
-    #   * block 栈编译为 2 张图(vs staticTokenCount 路径 ~24 张)
-    #   * 在 RTX Pro 6000 / 4090 类卡上获得 ~2x 训练加速
-    # 与 staticTokenCount 互斥(开启后必须把 staticTokenCount 删掉/置 0,
-    # 同时重做 dataset 缓存因为 bucket 表不同)。本默认配方保持向后兼容
-    # 走 staticTokenCount 路径;追求最高吞吐时改成 enableNativeFlatten: true
-    # 并删掉 staticTokenCount 字段。
-    enableNativeFlatten: false
-
-    # base.toml: 注意力 / 编译
-    # torch (PyTorch SDPA) 默认:始终可用,Ampere+ 跑到 flash-attn 的 85-95% 吞吐。
-    # 装了 flash-attn 的环境改成 flash 拿额外 5-15%。
-    attnMode: torch
-    useCustomDownAutograd: true
-    # 编译路径双开: compileMode=blocks 让 train.py 走 ``compile_blocks``
-    # 路径,把 DiT 块栈编译成 reduce-overhead 模式下的 CUDA Graphs。
-    # 仅设 compileInductorMode 而不设 compileMode 时,train.py 会落到
-    # 普通 inductor 编译(每个 bucket 形状一份图、无 graph replay),
-    # 在 RTX Pro 6000 / 4090 这类高吞吐卡上有显著 (~2x) 速度差距。
-    # compileMode = full 会再升一档(整模型 cudagraph),但与
-    # gradient_checkpointing / blocks_to_swap 互斥,默认 blocks 最稳妥。
+    vaeDisableCache: true
+    noHalfVae: false
+    attnMode: flash            # 上游 base.toml 默认；高显存卡用 flash-attn 更快
+    xformers: false
+    splitAttn: false
     compileMode: blocks
     compileInductorMode: reduce-overhead
-
-    # base.toml: mixed_precision = "bf16"
-    mixedPrecision: bf16
-
-    # presets.toml [default]: blocks_to_swap = 0(显式)
+    useCustomDownAutograd: true
     blocksToSwap: 0
-    gradientCheckpointing: false        # 上游被注释,默认 false
-    unslothOffloadCheckpointing: false  # 上游被注释,默认 false
-
-    # base.toml: use_cmmd = false(LoraHub schema 默认就是 false)
+    gradientCheckpointing: false
+    unslothOffloadCheckpointing: false
+    cpuOffloadCheckpointing: false
+    mixedPrecision: bf16
     useCmmd: false
-
-    # === method = lora 子配置(对应 lora.toml 默认堆叠) ===
-    # 上游默认开启 LoRA + OrthoLoRA + T-LoRA。Hydra / FeRA / ReFT 块在
-    # lora.toml 里被注释,这里也保持关闭(无字段就是关)。
+    maskedLoss: true
+    torchCompile: true
+    skipCacheCheck: true
+    dataloaderPinMemory: true
+    persistentDataLoaderWorkers: true   # 上游 base.toml 默认；避免每 epoch 重启 worker
+    trimCrossattnKv: false
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 2
+    keepTokens: 3
+    captionExtension: .txt
+    validationSplitNum: 0      # 上游 base.toml 默认；不切验证集
+    enableBucket: true
+    pathPattern: '*'
     lora:
-      useOrtho: true              # lora.toml: use_ortho = true
-      useTimestepMask: true       # lora.toml: use_timestep_mask = true
-      minRank: 8                  # lora.toml: min_rank = 8
-      alphaRankScale: 1.0         # lora.toml: alpha_rank_scale = 1.0
-
-# === 训练采样 ===
-# 默认 6 张图覆盖单角色/群像/风景/静物/光照/构图各一种典型退化模式,跨 ckpt
-# 用同一组 seed 比较权重演变。
-#
-# ${TRIGGER} 占位符:
-#   - sampling.triggerWord 显式填了 → 启动时替换为该值
-#   - 留空 → 启动时扫 dataset/*.txt 第一个 token 取众数(剔除 1girl /
-#     masterpiece 这类通用 quality 标签),拿到就替换
-#   - 都拿不到 → 占位符 + 邻接的 ", " 一起删除,保证 prompt 仍然合法
-#
-# 角色 / 风格 LoRA 用户在表单里填上 triggerWord 即可让所有采样图统一注入,
-# 不需要逐条改 prompt。atFirst=true 在第 0 步先采一组基线,日后回看更直观。
-sampling:
-  enabled: true
+      algorithm: ortho
+      useOrtho: true
+      lokrFactor: 8
+      boftFactors: 4
+      useTimestepMask: true
+      minRank: 16              # 上游 methods/lora.toml 默认
+      channelScalingAlpha: 0.5 # 上游 methods/lora.toml 默认通道缩放系数
+      alphaRankScale: 1.0
+resume:
+  saveState: true
+  saveStateAtEnd: true
+  skipUntilInitialStep: false
+validation:
   everyNEpochs: 1
-  atFirst: true
-  resolution: [1024, 1024]
-  seed: -1
-  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
-  outputs:
-    gridStitching: true
-    pngMetadata: true
-    baseCompare: false
-    crossCkptAnimation: false
-  prompts:
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body, looking at viewer, neutral expression, simple background, soft natural lighting"
-      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, mutated, watermark, signature, text"
-      cfg: 5.0
-      steps: 28
-      seed: 42
-      width: 1024
-      height: 1024
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body, standing, dynamic pose, looking at viewer, outdoors, daytime, soft sunlight"
-      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, extra fingers, blurry, jpeg artifacts, deformed, mutated, watermark, text"
-      cfg: 5.0
-      steps: 28
-      seed: 1024
-      width: 832
-      height: 1216
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, close-up, smiling, blush, looking at viewer, indoor warm lighting, bokeh background"
-      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, mutated, watermark, text, sad, angry"
-      cfg: 5.0
-      steps: 28
-      seed: 7777
-      width: 896
-      height: 1152
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 2girls, multiple girls, sitting together, casual conversation, indoor, daytime"
-      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
-      cfg: 5.0
-      steps: 28
-      seed: 256
-      width: 1024
-      height: 1024
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain landscape, river, autumn forest, dramatic clouds, golden hour, cinematic"
-      negative: "lowres, worst quality, blurry, jpeg artifacts, watermark, text, signature, person, character, human"
-      cfg: 5.0
-      steps: 28
-      seed: 8888
-      width: 1344
-      height: 768
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, urban night, neon signs, rain, reflective wet ground, dramatic rim light, looking back over shoulder"
-      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, daytime, sunny, grayscale"
-      cfg: 5.5
-      steps: 30
-      seed: 31415
-      width: 1216
-      height: 832
-
-# === 上游字段未在 LoraHub schema 暴露的清单(均为默认值,运行时由上游
-# train.py 自己应用) ===
-#
-# base.toml:
-#   save_model_as = "safetensors"
-#   skip_cache_check = true
-#   masked_loss = true
-#   torch_compile = true
-#   trim_crossattn_kv = false
-#   save_precision = "bf16"
-#   log_every_n_steps = 2
-#   dataloader_pin_memory = true
-#   persistent_data_loader_workers = false
-#   path_pattern = "*"
-#
-# lora.toml:
-#   logging_dir = "output/logs"
-#   log_with = "tensorboard"
-#
-# [[datasets]]:
-#   validation_split_num = 16
-#   validation_seed = 42
-#   recursive = true
-#
-# 这些都是上游 train.py 默认行为,通过 base.toml 的 `--config_file` 路径
-# 自动生效 — LoraHub 不需要在 CLI override 上重复传它们。如需自定义请
-# 直接修改 external/anima_lora/configs/base.toml(LoraHub fork 副本)。
+attention:
+  training: auto
+  split: false
+optimization:
+  torchCompile: false
+  fusedBackwardPass: false
+  fullBf16: false
+  fullFp16: false
+  blocksToSwap: 0
+  fp8Base: false
+  fp8BaseUnet: false
+  fp8Scaled: false
+  fp8VlTextEncoder: false
+  lowram: false
+  highvram: false
+  noHalfVae: false
+  disableMmapLoadSafetensors: false
+  cpuOffloadCheckpointing: false
+  unslothOffloadCheckpointing: false
+  cacheTextEncoderOutputs: false
+  cacheTextEncoderOutputsToDisk: false
+dataloader:
+  numWorkers: 8
+  persistentWorkers: false
+  vaeBatchSize: 1
+  cacheShuffleNum: 0
+augmentation:
+  flip: false
+  color: false
+  randomCrop: false
+  alphaMask: false

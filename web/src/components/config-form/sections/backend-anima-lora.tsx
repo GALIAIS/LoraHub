@@ -247,6 +247,20 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             step={1e-6}
           />
         </Row>
+        <Row
+          label="LR Warmup 比例"
+          description="占总训练步数的比例（0.05 = 5%）。比绝对步数更稳健，跨数据集大小同样表现。"
+          errors={errorMap.get("backend.animaLora.lrWarmupRatio")}
+        >
+          <FloatInput
+            value={v.lrWarmupRatio}
+            onChange={(n) => set(["backend", "animaLora", "lrWarmupRatio"], n)}
+            placeholder="0.05"
+            step={0.01}
+            min={0}
+            max={1}
+          />
+        </Row>
         <Row label="最大训练轮数">
           <FloatInput
             value={v.maxTrainEpochs}
@@ -770,6 +784,25 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
               />
             </Row>
           )}
+          <Row
+            label="channel scaling α"
+            description="OrthoLoRA / LoRA 输出 channel-wise 缩放系数，上游默认 0.5。降低可缓解梯度震荡。"
+            errors={errorMap.get("backend.animaLora.lora.channelScalingAlpha")}
+          >
+            <FloatInput
+              value={v.lora?.channelScalingAlpha}
+              onChange={(n) =>
+                set(
+                  ["backend", "animaLora", "lora", "channelScalingAlpha"],
+                  n ?? 0.5,
+                )
+              }
+              placeholder="0.5"
+              step={0.05}
+              min={0}
+              max={1}
+            />
+          </Row>
         </Section>
       )}
 

@@ -90,7 +90,7 @@ flowMatch: {}
 schedule:
   epochs: 8
   batchSize: 1
-  gradAccum: 4
+  gradAccum: 1               # 上游 base.toml effective batch_size=1
   seed: 42
 precision: bf16
 gradientCheckpointing: true
@@ -103,46 +103,47 @@ sampling:
   enabled: true
   everyNEpochs: 2
   atFirst: false
+  prompts:
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body,
+      looking at viewer, neutral expression, simple background, soft natural lighting
+    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
+      deformed, watermark, text
+    cfg: 5.0
+    steps: 24
+    seed: 42
+    width: 1024
+    height: 1024
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body,
+      standing, outdoors, daytime, soft sunlight
+    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
+      deformed, watermark, text
+    cfg: 5.0
+    steps: 24
+    seed: 1024
+    width: 832
+    height: 1216
+  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain
+      landscape, golden hour, cinematic
+    negative: lowres, worst quality, blurry, jpeg artifacts, watermark, text, person,
+      character, human
+    cfg: 5.0
+    steps: 24
+    seed: 8888
+    width: 1344
+    height: 768
   resolution:
   - 1024
   - 1024
   seed: -1
+  outputs:
+    gridStitching: true
+    baseCompare: false
+    crossCkptAnimation: false
+    pngMetadata: true
   enableLiveInference: false
   inferenceSteps: 24
   inferenceCfg: 5.0
-  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
-  outputs:
-    gridStitching: true
-    pngMetadata: true
-    baseCompare: false
-    crossCkptAnimation: false
-  # 8GB 卡 GPU 内存紧张,采样数压到 3 张 + 24 step,跨 epoch 频率减半。需要更
-  # 详细的演变追踪请参考 configs/anima_lora_default.yaml 的 6 张采样集。
-  # ${TRIGGER} 的解析逻辑同 default 配方:triggerWord 优先 → dataset 推断 → 占位符清除
-  prompts:
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body, looking at viewer, neutral expression, simple background, soft natural lighting"
-      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
-      cfg: 5.0
-      steps: 24
-      seed: 42
-      width: 1024
-      height: 1024
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body, standing, outdoors, daytime, soft sunlight"
-      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text"
-      cfg: 5.0
-      steps: 24
-      seed: 1024
-      width: 832
-      height: 1216
-
-    - prompt: "masterpiece, best quality, score_7, ${TRIGGER}, scenery, no humans, mountain landscape, golden hour, cinematic"
-      negative: "lowres, worst quality, blurry, jpeg artifacts, watermark, text, person, character, human"
-      cfg: 5.0
-      steps: 24
-      seed: 8888
-      width: 1344
-      height: 768
+  spectrumAnalysis: true
 output:
   name: anima_lora_8gb
   saveEveryNEpochs: 1
@@ -157,15 +158,16 @@ backend:
     preset: low_vram
     outputName: anima_lora_8gb
     networkModule: networks.lora_anima
-    networkDim: 8
-    networkAlpha: 8.0
+    networkDim: 32             # 上游 methods/lora.toml 默认；rank=32 容量更稳
+    networkAlpha: 32.0         # 上游默认；与 rank 同值保持 alpha/rank=1.0
     networkTrainUnetOnly: true
     optimizerType: AdamW8bit
-    lrScheduler: constant
-    learningRate: 5.0e-05
-    maxTrainEpochs: 8
-    saveEveryNEpochs: 2
-    checkpointingEpochs: 2
+    lrScheduler: cosine        # 上游 base.toml 默认；配合 5% warmup 走完整衰减
+    learningRate: 2.0e-05      # 上游默认；搭配 cosine + warmup 更稳
+    lrWarmupRatio: 0.05        # 5% 总步数 warmup（>=1 视为绝对步数）
+    maxTrainEpochs: 3          # 上游 methods/lora.toml 默认 3 epoch
+    saveEveryNEpochs: 3        # 与 maxTrainEpochs 对齐
+    checkpointingEpochs: 3     # 与 maxTrainEpochs 对齐
     captionDropoutRate: 0.1
     timestepSampling: sigmoid
     sigmoidScale: 1.0
@@ -191,7 +193,7 @@ backend:
     xformers: false
     splitAttn: false
     useCustomDownAutograd: true
-    blocksToSwap: 24
+    blocksToSwap: 0
     gradientCheckpointing: true
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
@@ -201,14 +203,14 @@ backend:
     torchCompile: true
     skipCacheCheck: true
     dataloaderPinMemory: true
-    persistentDataLoaderWorkers: false
+    persistentDataLoaderWorkers: true   # 上游 base.toml 默认；避免每 epoch 重启 worker
     trimCrossattnKv: false
     saveModelAs: safetensors
     savePrecision: bf16
     logEveryNSteps: 2
     keepTokens: 3
     captionExtension: .txt
-    validationSplitNum: 16
+    validationSplitNum: 0      # 上游 base.toml 默认；不切验证集
     enableBucket: true
     pathPattern: '*'
     lora:
@@ -217,7 +219,8 @@ backend:
       lokrFactor: 8
       boftFactors: 4
       useTimestepMask: true
-      minRank: 8
+      minRank: 16              # 上游 methods/lora.toml 默认
+      channelScalingAlpha: 0.5 # 上游 methods/lora.toml 默认通道缩放系数
       alphaRankScale: 1.0
 resume:
   saveState: true
