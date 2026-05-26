@@ -287,8 +287,22 @@ def _run_step(
         raise PreprocessError(msg)
 
 
-def _resize_argv(repo: Path, source: Path, resized: Path) -> list[str]:
-    return [
+def _resize_argv(
+    repo: Path,
+    source: Path,
+    resized: Path,
+    opts: Any | None,
+) -> list[str]:
+    """Build the argv for ``preprocess/resize_images.py``.
+
+    Critical: the bucket-selection flags must match what train.py will
+    use, or the resized image dimensions land in a different bucket
+    than the trainer expects → ``select_bucket`` picks a key like
+    ``latents_256x144`` but the npz the resizer wrote only has
+    ``latents_168x96`` → first-step ValueError. ``native_token_buckets``
+    + ``bucket_table`` are the live-wired switches.
+    """
+    argv = [
         str(repo / "preprocess" / "resize_images.py"),
         "--src",
         str(source.resolve()),
@@ -296,6 +310,13 @@ def _resize_argv(repo: Path, source: Path, resized: Path) -> list[str]:
         str(resized.resolve()),
         "--recursive",
     ]
+    if opts is not None:
+        if getattr(opts, "enable_native_flatten", False):
+            argv.append("--native_token_buckets")
+        bucket_table = getattr(opts, "bucket_table", None)
+        if bucket_table is not None and bucket_table != "default":
+            argv += ["--bucket_table", str(bucket_table)]
+    return argv
 
 
 def _cache_latents_argv(
@@ -467,10 +488,13 @@ def ensure_cache(
     python = str(env.python_executable)
     repo = env.repo_path
 
-    # Step 1: resize raw images → resized_dir.
+    # Step 1: resize raw images → resized_dir. Pass opts so the
+    # bucket-selection flags match what train.py uses — otherwise the
+    # resized image dimensions land in one bucket and the trainer
+    # selects a different one, blowing up the dataloader on step 0.
     _run_step(
         label="resize",
-        argv=[python, *_resize_argv(repo, image_dir, resized_dir)],
+        argv=[python, *_resize_argv(repo, image_dir, resized_dir, opts)],
         cwd=repo,
         workspace=workspace,
         on_event=on_event,

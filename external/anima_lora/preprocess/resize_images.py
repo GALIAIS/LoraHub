@@ -38,8 +38,22 @@ def process_image(
     The output mirrors the source layout: ``out_dir / rel_dir / stem.png``.
     Empty ``rel_dir`` collapses back to the flat layout for users without
     nested image_dataset/ trees.
+
+    ``bucket_args`` order:
+      (max_reso, min_size, max_size, reso_steps, use_constant,
+       use_native_token_buckets, bucket_table)
+    The last two control which bucket TABLE the manager picks; defaulting
+    them to ``False`` / ``None`` reproduces the legacy 4096-pad behaviour.
     """
-    max_reso, min_size, max_size, reso_steps, use_constant = bucket_args
+    (
+        max_reso,
+        min_size,
+        max_size,
+        reso_steps,
+        use_constant,
+        use_native_token_buckets,
+        bucket_table,
+    ) = bucket_args
     bucket_mgr = BucketManager(
         no_upscale=False,
         max_reso=max_reso,
@@ -47,7 +61,15 @@ def process_image(
         max_size=max_size,
         reso_steps=reso_steps,
     )
-    bucket_mgr.make_buckets(constant_token_buckets=use_constant)
+    # bucket_table='1536' wins over native_token_buckets wins over
+    # constant_token_buckets — same selection priority as
+    # BucketManager.make_buckets uses internally. When all three are
+    # off we fall through to the multi-AR generator.
+    bucket_mgr.make_buckets(
+        constant_token_buckets=use_constant,
+        native_token_buckets=use_native_token_buckets,
+        bucket_table=bucket_table,
+    )
 
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
@@ -124,6 +146,27 @@ def main() -> None:
         help="Disable constant-token buckets",
     )
     parser.add_argument(
+        "--native_token_buckets",
+        action="store_true",
+        help=(
+            "Resize against the 4032+4200+... CONSTANT_TOKEN_BUCKETS_NATIVE "
+            "table (paired with compile_blocks(native_flatten=True) at "
+            "training time). Must match the trainer's bucket selection or "
+            "the latent .npz keys won't line up at training start."
+        ),
+    )
+    parser.add_argument(
+        "--bucket_table",
+        type=str,
+        default=None,
+        help=(
+            "Override the bucket table by name. '1536' picks the 9216+9240 "
+            "two-family table for Anima v1.0 native 1536² training. None "
+            "means use whatever (constant_token_buckets / native_token_buckets) "
+            "selects."
+        ),
+    )
+    parser.add_argument(
         "--workers", type=int, default=4, help="Number of parallel workers (default: 4)"
     )
     parser.add_argument(
@@ -168,6 +211,8 @@ def main() -> None:
         args.max_bucket_reso,
         args.bucket_reso_steps,
         use_constant,
+        bool(args.native_token_buckets),
+        args.bucket_table,
     )
 
     if args.recursive:
