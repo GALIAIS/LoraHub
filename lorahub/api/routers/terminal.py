@@ -42,6 +42,7 @@ from lorahub.api.settings import VALID_BACKEND_IDS
 from lorahub.api.terminal_runner import (
     TerminalDenied,
     TerminalSession,
+    _TERMINAL_ONLY_IDS,
     resolve_backend_session,
     stream_command,
 )
@@ -89,10 +90,19 @@ class TerminalSessionsResponse(BaseModel):
 
 @router.get("/sessions", response_model=TerminalSessionsResponse)
 def list_sessions() -> TerminalSessionsResponse:
-    """Return the venv environment summary for every known backend."""
+    """Return the venv environment summary for every known backend.
+
+    The response also includes a synthetic ``lorahub`` entry for the
+    API server's own venv — useful for installing optional packages
+    (wandb, ruff, ...) into the LoraHub environment without leaving
+    the in-app terminal.
+    """
     settings = app_module._settings_store.load()
     out: list[TerminalEnvironment] = []
-    for backend_id in VALID_BACKEND_IDS:
+    # Real training backends first (kohya / dp / anima_lora), then the
+    # LoraHub-self entry. Listing order matches the BackendPicker tab
+    # order in the UI.
+    for backend_id in (*sorted(VALID_BACKEND_IDS), *sorted(_TERMINAL_ONLY_IDS)):
         try:
             session = resolve_backend_session(backend_id, settings)
         except TerminalDenied as exc:
@@ -168,10 +178,13 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
     ``type=exit`` fires last with an integer ``code``.
     """
     settings = app_module._settings_store.load()
-    if req.backend_id not in VALID_BACKEND_IDS:
+    if req.backend_id not in VALID_BACKEND_IDS and req.backend_id not in _TERMINAL_ONLY_IDS:
         raise HTTPException(
             status_code=422,
-            detail=f"backend_id must be one of {sorted(VALID_BACKEND_IDS)}",
+            detail=(
+                f"backend_id must be one of "
+                f"{sorted(VALID_BACKEND_IDS | _TERMINAL_ONLY_IDS)}"
+            ),
         )
 
     try:

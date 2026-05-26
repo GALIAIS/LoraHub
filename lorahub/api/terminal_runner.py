@@ -36,7 +36,18 @@ _BACKEND_DISPLAY = {
     "kohya": "Kohya (sd-scripts)",
     "diffusion-pipe": "Diffusion-pipe",
     "anima_lora": "Anima LoRA",
+    # Synthetic id — the LoraHub server itself, the venv that runs
+    # FastAPI. Useful for installing optional packages (wandb, ruff,
+    # huggingface_hub) into the API environment without leaving the
+    # in-app terminal. See ``_resolve_lorahub`` for the wiring.
+    "lorahub": "LoraHub (本程序)",
 }
+
+
+# IDs accepted by the terminal that are NOT real training backends.
+# Kept separate so we don't pollute ``backends.registry`` for a
+# UI-only concept.
+_TERMINAL_ONLY_IDS: frozenset[str] = frozenset({"lorahub"})
 
 
 @dataclass(slots=True)
@@ -103,6 +114,8 @@ def resolve_backend_session(backend_id: str, settings: Settings) -> TerminalSess
         return _resolve_diffusion_pipe(settings)
     if backend_id == "anima_lora":
         return _resolve_anima_lora(settings)
+    if backend_id == "lorahub":
+        return _resolve_lorahub(settings)
     raise TerminalDenied(f"unknown backend {backend_id!r}")
 
 
@@ -199,6 +212,57 @@ def _resolve_anima_lora(settings: Settings) -> TerminalSession:
         python_path=py_path,
         venv_dir=venv_dir,
         ready=repo.is_dir() and py_path is not None,
+    )
+
+
+def _resolve_lorahub(settings: Settings) -> TerminalSession:  # noqa: ARG001
+    """Terminal session for the LoraHub server's own venv.
+
+    Unlike the backend resolvers, this one points at the running API
+    process itself: the cwd is the LoraHub repo root, the interpreter
+    is whatever launched ``uvicorn``. ``ready`` is true whenever
+    ``sys.executable`` is a real file, which it always is for a live
+    server.
+
+    Use case: install optional packages into the API environment
+    (e.g. ``pip install wandb`` so the W&B data tab can call
+    ``wandb.Api()``) without dropping back to a system shell.
+    """
+    import sys  # noqa: PLC0415
+
+    py_path = Path(sys.executable).resolve()
+    if not py_path.is_file():
+        return TerminalSession(
+            backend_id="lorahub",
+            display_name=_BACKEND_DISPLAY["lorahub"],
+            repo_path=Path(__file__).resolve().parent.parent.parent,
+            python_path=None,
+            venv_dir=None,
+            ready=False,
+        )
+    # Detect a venv: pyvenv.cfg sits at the venv root, two levels
+    # above the python binary on Windows (Scripts/python.exe) and one
+    # level above on Unix (bin/python). When we can't find a marker we
+    # still report the interpreter — the user might be running
+    # LoraHub from a system python install on purpose.
+    venv_root: Path | None = None
+    for candidate in (py_path.parent.parent, py_path.parent):
+        if (candidate / "pyvenv.cfg").is_file():
+            venv_root = candidate
+            break
+    # Project root = three levels up from terminal_runner.py
+    # (lorahub/api/terminal_runner.py -> repo). Path.cwd() would
+    # depend on where uvicorn was launched, which can be the web/
+    # subdir during dev — pinning to __file__ keeps the prompt
+    # consistent regardless.
+    repo = Path(__file__).resolve().parent.parent.parent
+    return TerminalSession(
+        backend_id="lorahub",
+        display_name=_BACKEND_DISPLAY["lorahub"],
+        repo_path=repo,
+        python_path=py_path,
+        venv_dir=venv_root,
+        ready=True,
     )
 
 
@@ -332,6 +396,7 @@ def _monotonic() -> float:
 __all__ = [
     "TerminalDenied",
     "TerminalSession",
+    "_TERMINAL_ONLY_IDS",
     "resolve_backend_session",
     "stream_command",
 ]
