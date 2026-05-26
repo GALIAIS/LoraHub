@@ -1173,7 +1173,7 @@ class AnimaLoraOptions(BaseModel):
     channel_scaling_alpha: float = Field(0.5, gt=0, le=1)
 
     # ---- Optimizer / schedule ----
-    optimizer_type: Literal["AdamW", "AdamW8bit", "Lion", "Prodigy"] = "AdamW"
+    optimizer_type: Literal["AdamW", "AdamW8bit", "Lion", "Prodigy", "CAME"] = "AdamW"
     lr_scheduler: Literal[
         "constant", "cosine", "cosine_with_restarts", "linear", "polynomial"
     ] = "cosine"

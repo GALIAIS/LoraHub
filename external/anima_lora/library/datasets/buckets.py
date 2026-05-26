@@ -29,15 +29,18 @@ CONSTANT_TOKEN_BUCKETS = [
 ]
 
 # Native-flatten bucket table — paired with compile_blocks(native_flatten=True)
-# (see :func:`Anima.compile_blocks`). Two token-count families: 4032 (=63*64)
-# and 4200 (=60*70). Both are highly composite, so each factors into many
+# (see :func:`Anima.compile_blocks`). Six token-count families: 4032 (=63*64),
+# 4200 (=60*70), 4096 (=64*64), 6144 (=96*64), 9216 (=96*96), and 1024 (=32*32).
+# The first two are highly composite, so each factors into many
 # near-square→elongated patch grids — and crucially every bucket *exactly*
 # fills its token count, so there is zero intra-bucket padding by construction.
 #
-# Two families instead of one because a single token count's divisors near √N
-# are sparse (4032 alone jumps aspect 1.29→1.75); interleaving 4032 and 4200
-# densely covers aspect space at the cost of one extra graph. Landscape mirrors
-# (swap W, H) are included explicitly. Token count = (W//16)*(H//16). The rope
+# The first two families densely cover aspect space; a single token count's
+# divisors near √N are sparse (4032 alone jumps aspect 1.29→1.75), so
+# interleaving 4032 and 4200 densely covers aspect space at the cost of one
+# extra graph. The additional families (4096, 6144, 9216, 1024) provide
+# exact-match buckets for common resolutions. Landscape mirrors (swap W, H)
+# are included explicitly. Token count = (W//16)*(H//16). The rope
 # per-axis cap is 256 patches; the largest dim here is 2016px → 126.
 #
 # Use this with ``BucketManager.make_buckets(native_token_buckets=True)`` (or
@@ -72,6 +75,15 @@ CONSTANT_TOKEN_BUCKETS_NATIVE = [
     (1680, 640),  #           ar 2.62
     (560, 1920),  # 35 x 120, ar 0.29
     (1920, 560),  #           ar 3.43
+    # ---- 4096-token family (64*64) ----
+    (1024, 1024),  # 64 x 64, ar 1.00 (exact square)
+    # ---- 6144-token family (96*64) ----
+    (1536, 1024),  # 96 x 64, ar 1.50
+    (1024, 1536),  # 64 x 96, ar 0.67
+    # ---- 9216-token family (96*96) ----
+    (1536, 1536),  # 96 x 96, ar 1.00 (large square)
+    # ---- 1024-token family (32*32) ----
+    (512, 512),  # 32 x 32, ar 1.00 (small square)
 ]
 
 # 1536-resolution bucket table — paired with compile_blocks(native_flatten=True)
@@ -273,7 +285,19 @@ class BucketManager:
                 pass
             else:
                 ar_errors = self.predefined_aspect_ratios - aspect_ratio
-                predefined_bucket_id = np.abs(ar_errors).argmin()
+                abs_ar_errors = np.abs(ar_errors)
+                min_ar_error = abs_ar_errors.min()
+                tied = np.where(abs_ar_errors == min_ar_error)[0]
+                if len(tied) > 1:
+                    image_area = image_width * image_height
+                    areas = np.array(
+                        [w * h for w, h in self.predefined_resos]
+                    )[tied]
+                    predefined_bucket_id = tied[
+                        np.abs(areas - image_area).argmin()
+                    ]
+                else:
+                    predefined_bucket_id = tied[0]
                 reso = self.predefined_resos[predefined_bucket_id]
 
             ar_reso = reso[0] / reso[1]

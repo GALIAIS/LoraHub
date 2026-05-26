@@ -19,12 +19,14 @@ import gc
 import logging
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 import torch
 from accelerate import Accelerator
+from accelerate.utils import send_to_device
 from tqdm import tqdm
 
 from library import train_util
@@ -320,6 +322,136 @@ def build_loop_state(
     )
 
 
+def _get_sampler_generator(dataloader) -> Optional[torch.Generator]:
+    sampler = getattr(dataloader, "sampler", None)
+    if sampler is None:
+        return None
+    return getattr(sampler, "generator", None)
+
+
+def _pre_generate_shuffle_indices(
+    dataloader, generator: Optional[torch.Generator], epoch: int
+) -> list[int]:
+    dataset = dataloader.dataset
+    if hasattr(dataset, "__len__"):
+        n = len(dataset)
+    else:
+        return []
+    if n == 0:
+        return []
+    gen = torch.Generator()
+    if generator is not None:
+        gen.set_state(generator.get_state())
+    else:
+        gen.manual_seed(epoch)
+    return torch.randperm(n, generator=gen).tolist()
+
+
+class _EpochPrefetch:
+    def __init__(self, dataloader, shuffle_indices: list[int], device):
+        self._dataloader = dataloader
+        self._shuffle_indices = shuffle_indices
+        self._device = device
+        self._iterator: Optional[Any] = None
+        self._first_batch: Optional[Any] = None
+        self._thread: Optional[threading.Thread] = None
+        self._error: Optional[BaseException] = None
+        self._started = False
+
+    def start(self):
+        if self._started:
+            return
+        self._started = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        try:
+            from torch.utils.data import SequentialSampler, BatchSampler
+
+            batch_size = getattr(self._dataloader, "batch_size", None) or 1
+            drop_last = getattr(self._dataloader, "drop_last", None) or False
+
+            sampler = SequentialSampler(self._dataloader.dataset)
+            batch_sampler = BatchSampler(
+                sampler,
+                batch_size=batch_size,
+                drop_last=drop_last,
+            )
+            if self._shuffle_indices:
+                index_map = self._shuffle_indices
+
+                class _RemapSampler:
+                    def __iter__(self_inner):
+                        for idx in index_map:
+                            yield idx
+
+                    def __len__(self_inner):
+                        return len(index_map)
+
+                remap_sampler = _RemapSampler()
+                batch_sampler = BatchSampler(
+                    remap_sampler,
+                    batch_size=batch_size,
+                    drop_last=drop_last,
+                )
+
+            class _IndexBatchSampler:
+                def __init__(self_inner, bs):
+                    self_inner._bs = bs
+
+                def __iter__(self_inner):
+                    for batch in batch_sampler:
+                        yield batch
+
+                def __len__(self_inner):
+                    return len(batch_sampler)
+
+            wrapped_bs = _IndexBatchSampler(batch_sampler)
+
+            dl_kwargs = {
+                "dataset": self._dataloader.dataset,
+                "batch_sampler": wrapped_bs,
+                "collate_fn": self._dataloader.collate_fn,
+                "num_workers": getattr(self._dataloader, "num_workers", None) or 0,
+                "pin_memory": getattr(self._dataloader, "pin_memory", None) or False,
+            }
+            if dl_kwargs["num_workers"] > 0:
+                pf = getattr(self._dataloader, "prefetch_factor", None)
+                if pf is not None:
+                    dl_kwargs["prefetch_factor"] = pf
+                pw = getattr(self._dataloader, "persistent_workers", False)
+                dl_kwargs["persistent_workers"] = pw
+                wif = getattr(self._dataloader, "worker_init_fn", None)
+                if wif is not None:
+                    dl_kwargs["worker_init_fn"] = wif
+
+            dl = torch.utils.data.DataLoader(**dl_kwargs)
+            self._iterator = iter(dl)
+            self._first_batch = send_to_device(next(self._iterator), self._device)
+        except BaseException as exc:
+            self._error = exc
+
+    def result(self):
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        if self._error is not None:
+            raise self._error
+        return self._iterator, self._first_batch
+
+    def cancel(self):
+        if self._iterator is not None:
+            try:
+                shutdown = getattr(self._iterator, "_shutdown_workers", None)
+                if shutdown is not None:
+                    shutdown()
+            except Exception:
+                pass
+            self._iterator = None
+        self._first_batch = None
+
+
 def run_training_loop(trainer, state: LoopState) -> None:
     """Run the full for-epoch training loop and the post-loop end-of-training
     metadata write. Mutates ``state.global_step``, profiler bookkeeping, and
@@ -327,6 +459,8 @@ def run_training_loop(trainer, state: LoopState) -> None:
     """
     args = state.args
     accelerator = state.accelerator
+
+    pending_prefetch: Optional[_EpochPrefetch] = None
 
     for epoch in range(state.epoch_to_start, state.num_train_epochs):
         accelerator.print(f"\nepoch {epoch + 1}/{state.num_train_epochs}\n")
@@ -338,7 +472,15 @@ def run_training_loop(trainer, state: LoopState) -> None:
             state.text_encoder, state.unet
         )
 
-        _run_epoch_steps(trainer, state, epoch)
+        try:
+            pending_prefetch = _run_epoch_steps(
+                trainer, state, epoch, prefetch=pending_prefetch
+            )
+        except (Exception, KeyboardInterrupt):
+            if pending_prefetch is not None:
+                pending_prefetch.cancel()
+                pending_prefetch = None
+            raise
 
         # LoRaHub pause break — when ``_run_epoch_steps`` exited via
         # the pause flag, ``state._lorahub_pause`` is set. Skip the
@@ -384,53 +526,25 @@ def run_training_loop(trainer, state: LoopState) -> None:
     state.metadata["ss_training_finished_at"] = str(time.time())
 
 
-def _run_epoch_steps(trainer, state: LoopState, epoch: int) -> None:
+def _run_epoch_steps(
+    trainer,
+    state: LoopState,
+    epoch: int,
+    prefetch: Optional[_EpochPrefetch] = None,
+) -> Optional[_EpochPrefetch]:
     """Inner per-step loop: walk the dataloader, execute the accumulate
-    scope, run sample / save / log / step-validation ticks."""
+    scope, run sample / save / log / step-validation ticks.
+
+    Returns a started (but not yet joined) ``_EpochPrefetch`` for epoch N+1
+    when conditions allow, or ``None``.
+    """
     args = state.args
     accelerator = state.accelerator
 
-    skipped_dataloader = None
-    if state.initial_step > 0:
-        skipped_dataloader = accelerator.skip_first_batches(
-            state.train_dataloader, state.initial_step - 1
-        )
-        state.initial_step = 1
+    next_prefetch: Optional[_EpochPrefetch] = None
+    prefetch_ahead = max(20, len(state.train_dataloader) // 4)
 
-    for step, batch in enumerate(skipped_dataloader or state.train_dataloader):
-        state.current_step.value = state.global_step
-        if state.initial_step > 0:
-            state.initial_step -= 1
-            continue
-
-        _profiler_step_begin(state)
-
-        loss = _run_step(trainer, state, batch)
-
-        _profiler_step_end(state)
-
-        keys_scaled, mean_norm, maximum_norm, max_mean_logs = _maybe_scale_norm(state)
-
-        if accelerator.sync_gradients:
-            state.progress_bar.update(1)
-            state.global_step += 1
-            _sample_at_step(trainer, state)
-            state.saver.maybe_save_step(state.network, state.global_step, epoch)
-            state.optimizer_train_fn()
-
-        _log_step(
-            trainer,
-            state,
-            loss=loss,
-            step=step,
-            epoch=epoch,
-            keys_scaled=keys_scaled,
-            mean_norm=mean_norm,
-            maximum_norm=maximum_norm,
-            max_mean_logs=max_mean_logs,
-        )
-        _maybe_run_step_validation(trainer, state, epoch)
-
+    def _check_lorahub_pause() -> bool:
         # LoRaHub pause hook — when an external process drops a
         # ``_lorahub_pause`` file under the workspace (parent of
         # ``args.output_dir``), overwrite the resumable
@@ -489,10 +603,120 @@ def _run_epoch_steps(trainer, state: LoopState, epoch: int) -> None:
 
         if getattr(state, "_lorahub_pause", False):
             accelerator.wait_for_everyone()
-            break
+            return True
+        return False
 
-        if state.global_step >= args.max_train_steps:
-            break
+    def _maybe_schedule_next_prefetch(step: int) -> None:
+        nonlocal next_prefetch
+        total_steps = len(state.train_dataloader)
+        if (
+            next_prefetch is None
+            and step >= total_steps - prefetch_ahead - 1
+            and epoch + 1 < state.num_train_epochs
+        ):
+            gen = _get_sampler_generator(state.train_dataloader)
+            indices = _pre_generate_shuffle_indices(
+                state.train_dataloader, gen, epoch + 1
+            )
+            next_prefetch = _EpochPrefetch(
+                state.train_dataloader, indices, accelerator.device
+            )
+            next_prefetch.start()
+
+    if prefetch is not None:
+        iterator, first_batch = prefetch.result()
+        device = accelerator.device
+        step = 0
+        batch = first_batch
+        while True:
+            state.current_step.value = state.global_step
+            _profiler_step_begin(state)
+            loss = _run_step(trainer, state, batch)
+            _profiler_step_end(state)
+            keys_scaled, mean_norm, maximum_norm, max_mean_logs = _maybe_scale_norm(state)
+            if accelerator.sync_gradients:
+                state.progress_bar.update(1)
+                state.global_step += 1
+                _sample_at_step(trainer, state)
+                state.saver.maybe_save_step(state.network, state.global_step, epoch)
+                state.optimizer_train_fn()
+            _log_step(
+                trainer,
+                state,
+                loss=loss,
+                step=step,
+                epoch=epoch,
+                keys_scaled=keys_scaled,
+                mean_norm=mean_norm,
+                maximum_norm=maximum_norm,
+                max_mean_logs=max_mean_logs,
+            )
+            _maybe_run_step_validation(trainer, state, epoch)
+
+            if _check_lorahub_pause():
+                break
+
+            if state.global_step >= args.max_train_steps:
+                break
+
+            _maybe_schedule_next_prefetch(step)
+
+            step += 1
+            try:
+                batch = send_to_device(next(iterator), device)
+            except StopIteration:
+                break
+    else:
+        skipped_dataloader = None
+        if state.initial_step > 0:
+            skipped_dataloader = accelerator.skip_first_batches(
+                state.train_dataloader, state.initial_step - 1
+            )
+            state.initial_step = 1
+
+        for step, batch in enumerate(skipped_dataloader or state.train_dataloader):
+            state.current_step.value = state.global_step
+            if state.initial_step > 0:
+                state.initial_step -= 1
+                continue
+
+            _profiler_step_begin(state)
+
+            loss = _run_step(trainer, state, batch)
+
+            _profiler_step_end(state)
+
+            keys_scaled, mean_norm, maximum_norm, max_mean_logs = _maybe_scale_norm(state)
+
+            if accelerator.sync_gradients:
+                state.progress_bar.update(1)
+                state.global_step += 1
+                _sample_at_step(trainer, state)
+                state.saver.maybe_save_step(state.network, state.global_step, epoch)
+                state.optimizer_train_fn()
+
+            _log_step(
+                trainer,
+                state,
+                loss=loss,
+                step=step,
+                epoch=epoch,
+                keys_scaled=keys_scaled,
+                mean_norm=mean_norm,
+                maximum_norm=maximum_norm,
+                max_mean_logs=max_mean_logs,
+            )
+            _maybe_run_step_validation(trainer, state, epoch)
+
+            if _check_lorahub_pause():
+                break
+
+            if state.global_step >= args.max_train_steps:
+                break
+
+            _maybe_schedule_next_prefetch(step)
+
+    return next_prefetch
 
 
 def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:

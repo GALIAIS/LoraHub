@@ -125,6 +125,7 @@ const OPTIMIZER_OPTIONS = [
   { value: "AdamW8bit", label: "AdamW8bit" },
   { value: "Lion", label: "Lion" },
   { value: "Prodigy", label: "Prodigy" },
+  { value: "CAME", label: "CAME · 显存友好二阶矩 (LyCORIS / 风格 LoRA 推荐)" },
 ] as const
 
 const LR_SCHEDULER_OPTIONS = [
