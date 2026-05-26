@@ -824,11 +824,17 @@ def _build_anima_caption(
 ) -> str:
     """Assemble an Anima-format caption.
 
-    Layout:
+    Layout (trigger-first):
+      <trigger word>,
       masterpiece, best quality, score_7, <safe|sensitive|nsfw>,
       [1girl/1boy/etc], [character_trigger or @artist], [series],
-      <NL paragraph>,
+      <NL paragraph (omitted in style mode or when use_wd14=false)>,
       <remaining general tags>
+
+    Putting the trigger word at position 0 is the kohya / sd-scripts
+    convention — `keep_tokens` defaults to 3 (or 1 in style configs)
+    and the head N tokens are pinned through caption shuffling, so
+    the trigger MUST be at the head to survive shuffling.
     """
     rating = _RATING_MAP.get((rating_tag or "").lower(), "safe")
     header = f"masterpiece, best quality, score_7, {rating}"
@@ -849,18 +855,16 @@ def _build_anima_caption(
             rest_general.append(t)
 
     # Trigger / character / artist line.
-    trigger_part: list[str] = []
     trig = (trigger_word or "").strip().lower()
-    if trig:
-        if caption_mode == "style":
-            # Style LoRA → format as @artist-style trigger if not already.
-            if not trig.startswith("@"):
-                trig = f"@{trig}"
-        trigger_part.append(trig)
-    # WD14 character predictions go on the same line as identity hints.
-    trigger_part.extend(character_tags)
+    if trig and caption_mode == "style":
+        # Style LoRA → format as @artist-style trigger if not already.
+        if not trig.startswith("@"):
+            trig = f"@{trig}"
 
-    line2 = ", ".join([*subject_tags, *trigger_part])
+    # WD14 character predictions go on the same line as identity hints,
+    # right after the subject-count tag.
+    line2_pieces: list[str] = [*subject_tags, *character_tags]
+    line2 = ", ".join(line2_pieces)
 
     # Clean general tag tail: drop quality noise (header already covers it).
     # In style mode also drop medium / palette descriptors. In character
@@ -874,7 +878,11 @@ def _build_anima_caption(
         tail = _drop_appearance_tags(tail)
     tail_str = ", ".join(tail)
 
-    parts = [header]
+    parts: list[str] = []
+    # Trigger word leads — kohya keep_tokens convention.
+    if trig:
+        parts.append(trig)
+    parts.append(header)
     if line2:
         parts.append(line2)
     if nl_text.strip():
@@ -909,6 +917,12 @@ class SmartCaptionBatchInput(BaseModel):
     # Off by default for character / general modes since "anime" anchors
     # rendering for those.
     stripStyleTags: bool = True
+    # When False, skip the WD14 tagger entirely. The caption then reduces
+    # to ``[trigger,] [<LLM nl_text>]`` (or just the trigger word in
+    # ``style`` mode where the nl text is also disabled). Useful for
+    # users who want a clean trigger-only training set, or who do their
+    # own tagging upstream.
+    useWd14: bool = True
     # Parallelism + reliability knobs.
     #
     # Pipeline shape:
@@ -962,15 +976,22 @@ class _StageOneResult:
     # whether to also strip style tags from the final assembled tail
     # (in addition to the already-filtered tags_for_prompt).
     strip_style_tags: bool = True
+    # Whether stage two should call the LLM at all. False when WD14 is
+    # disabled AND mode==style (the trigger word alone is the whole
+    # caption, no nl text needed) — this is the cleanest setup for
+    # training a style LoRA where every caption being identical is the
+    # desired behaviour.
+    skip_llm: bool = False
 
 
 def _smart_caption_stage_one(
     img_path: Path,
-    tagger: WD14Tagger,
+    tagger: WD14Tagger | None,
     caption_mode: str,
     *,
     caption_source: str = "vlm",
     strip_style_tags: bool = True,
+    use_wd14: bool = True,
 ) -> _StageOneResult:
     """Run WD14 tagging + image prep — everything that doesn't need the VLM.
 
@@ -978,17 +999,33 @@ def _smart_caption_stage_one(
     can run this on a small GPU-bound pool while the VLM stage runs on
     a much wider network-bound pool. Side-effect free: returns a plain
     dataclass, doesn't write files or touch the store.
+
+    When ``use_wd14`` is False the WD14 tagger is bypassed entirely and
+    every tag-derived field is empty; ``tagger`` may be ``None``. When
+    ``caption_mode == "style"``, no LLM call happens either (the trigger
+    word alone is the full caption — see ``skip_llm`` on the result).
     """
     import base64  # noqa: PLC0415
     import mimetypes  # noqa: PLC0415
 
-    tag_result = tagger.tag_image(img_path)
-    general_tags_underscore = [t.name for t in tag_result.general]
-    general_tags = [t.replace("_", " ").lower() for t in general_tags_underscore]
-    character_tags = [
-        t.name.replace("_", " ").lower() for t in tag_result.character
-    ]
-    rating_name = tag_result.rating.name if tag_result.rating else None
+    if use_wd14 and tagger is not None:
+        tag_result = tagger.tag_image(img_path)
+        general_tags_underscore = [t.name for t in tag_result.general]
+        general_tags = [t.replace("_", " ").lower() for t in general_tags_underscore]
+        character_tags = [
+            t.name.replace("_", " ").lower() for t in tag_result.character
+        ]
+        rating_name = tag_result.rating.name if tag_result.rating else None
+    else:
+        general_tags = []
+        character_tags = []
+        rating_name = None
+
+    # Style mode produces a hard-coded "trigger only" caption — no LLM
+    # natural-language sentence. The LLM was reintroducing style words
+    # despite every prompt-level safeguard; the cleanest fix is not to
+    # let it write any prose at all.
+    skip_llm = caption_mode == "style"
 
     # Build the LLM-facing reference tags. Always strip the quality-noise
     # set; additionally strip the style/medium set when requested AND the
@@ -1004,6 +1041,21 @@ def _smart_caption_stage_one(
     if caption_mode == "character":
         pre_filtered = _drop_appearance_tags(pre_filtered)
     tags_for_prompt = ", ".join(pre_filtered)
+
+    # When skipping the LLM there is no prompt to assemble and no image
+    # to encode — return early with the empty payload.
+    if skip_llm:
+        return _StageOneResult(
+            img_path=img_path,
+            rating_name=rating_name,
+            general_tags=general_tags,
+            character_tags=character_tags,
+            prompt_text="",
+            data_url="",
+            caption_source=caption_source,
+            strip_style_tags=strip_style_tags,
+            skip_llm=True,
+        )
 
     if caption_source == "tags":
         # Tags-only path — skip the base64 encode entirely; stage two
@@ -1041,6 +1093,7 @@ def _smart_caption_stage_one(
         data_url=data_url,
         caption_source=caption_source,
         strip_style_tags=strip_style_tags,
+        skip_llm=False,
     )
 
 
@@ -1057,6 +1110,46 @@ def _smart_caption_stage_two(
     from datetime import UTC, datetime  # noqa: PLC0415
 
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
+
+    # Style-mode (or any LLM-skip flow): no provider call, no nl_text.
+    # The caption is whatever ``_build_anima_caption`` produces from
+    # ``trigger_word + WD14 tag tail`` alone. Provider metadata stays
+    # blank so the store row reflects that no LLM saw this image.
+    if s1.skip_llm:
+        new_caption = _build_anima_caption(
+            rating_tag=s1.rating_name,
+            general_tags=s1.general_tags,
+            character_tags=s1.character_tags,
+            nl_text="",
+            caption_mode=caption_mode,
+            trigger_word=trigger_word,
+            strip_style_tags=s1.strip_style_tags,
+        )
+
+        caption_path = s1.img_path.with_suffix(".txt")
+        existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
+        if merge_strategy == "append":
+            new_caption = (existing.strip() + "\n" + new_caption).strip()
+        elif merge_strategy == "prepend":
+            new_caption = (new_caption + "\n" + existing.strip()).strip()
+        caption_path.write_text(new_caption, encoding="utf-8")
+
+        ann = store.get_annotation(str(s1.img_path))
+        if ann is None:
+            ann = ImageAnnotation(
+                image_path=str(s1.img_path),
+                sha256=_file_sha256(s1.img_path),
+            )
+        ann.ai_caption = ""
+        ann.ai_caption_provider = ""
+        ann.ai_caption_at = datetime.now(UTC).isoformat()
+        store.upsert_annotation(ann)
+
+        return {
+            "path": str(s1.img_path),
+            "wd14Tags": ", ".join(s1.general_tags),
+            "caption": new_caption,
+        }
 
     messages: list[dict[str, Any]] = []
     if route.system_prompt:
@@ -1125,7 +1218,7 @@ def _smart_caption_stage_two(
 
 def _smart_caption_single_image(
     img_path: Path,
-    tagger: WD14Tagger,
+    tagger: WD14Tagger | None,
     ai_store: Any,
     route: Any,
     merge_strategy: str,
@@ -1135,6 +1228,7 @@ def _smart_caption_single_image(
     strip_style_tags: bool = True,
     *,
     caption_source: str = "vlm",
+    use_wd14: bool = True,
 ) -> dict[str, Any]:
     """Single-image pipeline kept for the /single endpoint and tests.
 
@@ -1149,6 +1243,7 @@ def _smart_caption_single_image(
         caption_mode,
         caption_source=caption_source,
         strip_style_tags=strip_style_tags,
+        use_wd14=use_wd14,
     )
     return _smart_caption_stage_two(
         s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
@@ -1191,12 +1286,17 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     # request thread — it takes ~1s on a warm cache and the UI freezing for
     # a second is fine; running it in the background means the user has no
     # signal that the tagger failed to load.
-    tagger = _get_tagger(
-        body.taggerModel,
-        body.generalThreshold,
-        body.characterThreshold,
-        body.device,
-    )
+    if body.useWd14:
+        tagger = _get_tagger(
+            body.taggerModel,
+            body.generalThreshold,
+            body.characterThreshold,
+            body.device,
+        )
+    else:
+        # WD14 disabled — caption is trigger + LLM nl_text only (or just
+        # the trigger word for style mode where the LLM is also off).
+        tagger = None
 
     images = _scan_images(directory, body.recursive)
     if body.skipExisting:
@@ -1264,6 +1364,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     body.captionMode,
                     caption_source=body.captionSource,
                     strip_style_tags=body.stripStyleTags,
+                    use_wd14=body.useWd14,
                 )
             except Exception as exc:  # noqa: BLE001
                 err_msg = f"WD14: {type(exc).__name__}: {exc}"
@@ -1451,6 +1552,7 @@ class SmartCaptionSingleInput(BaseModel):
     captionSource: str = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
+    useWd14: bool = True
 
 
 @router.post("/ai/smart-caption/single")
@@ -1472,12 +1574,15 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
 
-    tagger = _get_tagger(
-        body.taggerModel,
-        body.generalThreshold,
-        body.characterThreshold,
-        body.device,
-    )
+    if body.useWd14:
+        tagger = _get_tagger(
+            body.taggerModel,
+            body.generalThreshold,
+            body.characterThreshold,
+            body.device,
+        )
+    else:
+        tagger = None
 
     store = _store()
     try:
@@ -1487,6 +1592,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
             trigger_word=body.triggerWord,
             strip_style_tags=body.stripStyleTags,
             caption_source=body.captionSource,
+            use_wd14=body.useWd14,
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001

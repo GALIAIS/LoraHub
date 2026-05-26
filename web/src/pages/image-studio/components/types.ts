@@ -28,7 +28,6 @@ export interface SelectionState {
 // AI Bulk operation tab
 export type AiBulkTab =
   | "smart-caption"
-  | "vlm-caption"
   | "quality-score"
   | "wd14"
   | "trigger-words"

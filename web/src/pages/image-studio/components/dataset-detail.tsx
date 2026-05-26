@@ -20,7 +20,6 @@ import {
   imageStudioApplyOps,
   imageStudioBatchDelete,
   imageStudioSmartCaption,
-  imageStudioBatchCaption,
   imageStudioBatchQuality,
   imageStudioBatchTriggerWords,
   startTaggingSession,
@@ -341,23 +340,6 @@ export function DatasetDetail() {
             },
           })
           setAiProgress({ running: false, label: "智能标注完成", processed: res.processed })
-          break
-        }
-        case "vlm-caption": {
-          setAiProgress({ running: true, label: "VLM 标注中…" })
-          const res = await imageStudioBatchCaption({
-            path: taskPath,
-            recursive,
-            mergeStrategy: (params.mergeStrategy as string) || "replace",
-            skipAnnotated: params.skipAnnotated as boolean | undefined,
-          })
-          setAiProgress({
-            running: false,
-            label: res.skipped
-              ? `VLM 标注完成（跳过 ${res.skipped} 已标注）`
-              : "VLM 标注完成",
-            processed: res.processed,
-          })
           break
         }
         case "quality-score": {

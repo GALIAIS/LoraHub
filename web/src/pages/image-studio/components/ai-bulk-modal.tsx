@@ -13,7 +13,6 @@ interface AiBulkModalProps {
 
 const tabs: { id: AiBulkTab; label: string }[] = [
   { id: "smart-caption", label: "智能标注" },
-  { id: "vlm-caption", label: "VLM 标注" },
   { id: "quality-score", label: "质量评分" },
   { id: "wd14", label: "WD14 标注" },
   { id: "trigger-words", label: "触发词建议" },
@@ -42,6 +41,11 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
   const [triggerWord, setTriggerWord] = useState("")
   const [stripStyleTags, setStripStyleTags] = useState(true)
+  // Disabling WD14 reduces the caption to "trigger word + LLM nl_text"
+  // (or just the trigger in style mode where the LLM is also off).
+  // Useful for users who want a clean trigger-only training set or
+  // who do their own tagging upstream.
+  const [useWd14, setUseWd14] = useState(true)
   // Shared "skip already-processed" toggle for the three tabs that
   // don't have an explicit overwrite/skip control of their own
   // (smart-caption, vlm-caption, quality-score, trigger-words). WD14
@@ -85,14 +89,8 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           captionSource,
           triggerWord: triggerWord.trim() || undefined,
           stripStyleTags,
+          useWd14,
           skipExisting: skipDone,
-        })
-        break
-      case "vlm-caption":
-        onStart(activeTab, {
-          ...base,
-          path: datasetPath,
-          skipAnnotated: skipDone,
         })
         break
       case "quality-score":
@@ -206,21 +204,38 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
               <p className="text-xs text-muted-foreground">
                 WD14 标签 + LLM 综合标注，按训练用途自动调整 prompt
               </p>
+              <label className="flex items-center gap-1.5 text-xs">
+                <input
+                  type="checkbox"
+                  checked={useWd14}
+                  onChange={(e) => setUseWd14(e.target.checked)}
+                  className="size-3"
+                />
+                <span>启用 WD14 标签预处理</span>
+                <span className="text-muted-foreground/70">
+                  （关闭后仅用 LLM 描述 + 触发词，不调用 WD14 模型）
+                </span>
+              </label>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">LLM 输入</span>
                 <select
                   value={captionSource}
                   onChange={(e) => setCaptionSource(e.target.value as typeof captionSource)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                  disabled={!useWd14 || captionMode === "style"}
                 >
                   <option value="vlm">视觉模型（看图）· 质量最高</option>
                   <option value="tags">仅 WD14 标签 · 不上传图片，省额度/兼容文本模型</option>
                 </select>
               </label>
               <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
-                {captionSource === "tags"
-                  ? "LLM 不会看到图片，仅根据 WD14 给出的 tag 列表撰写描述。提示词已针对此场景优化，避免凭空虚构。"
-                  : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
+                {captionMode === "style"
+                  ? "风格 LoRA 模式不调用 LLM —— caption 只保留触发词 + WD14 标签尾，避免 LLM 反复写出画风词污染训练。"
+                  : !useWd14
+                    ? "WD14 已关闭：LLM 直接看图描述，caption = 触发词 + LLM 描述。"
+                    : captionSource === "tags"
+                      ? "LLM 不会看到图片，仅根据 WD14 给出的 tag 列表撰写描述。提示词已针对此场景优化，避免凭空虚构。"
+                      : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>
@@ -229,7 +244,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setCaptionMode(e.target.value as typeof captionMode)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
-                  <option value="style">风格 LoRA（不写画风词）</option>
+                  <option value="style">风格 LoRA（仅触发词 + WD14 实体尾，不写自然语言）</option>
                   <option value="character">角色 LoRA（不写角色特征）</option>
                   <option value="general">通用（描述全部内容）</option>
                 </select>
@@ -256,7 +271,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   <option value="prepend">前置</option>
                 </select>
               </label>
-              {captionMode === "style" && (
+              {captionMode === "style" && useWd14 && (
                 <label className="flex items-center gap-1.5 text-xs">
                   <input
                     type="checkbox"
@@ -268,12 +283,6 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                 </label>
               )}
             </div>
-          )}
-
-          {activeTab === "vlm-caption" && (
-            <p className="text-xs text-muted-foreground">
-              仅使用视觉语言模型生成自然语言描述
-            </p>
           )}
 
           {activeTab === "quality-score" && (
