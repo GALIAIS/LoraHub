@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ConfigForm, type ConfigFormValue } from "@/components/config-form"
+import { ConfigForm, type ConfigFormValue, unusedSectionsForBackend } from "@/components/config-form"
 // LLM advisor temporarily disabled for stability (see toolbar comment).
 // Imports kept commented so a one-line revert restores the entry point.
 // import { LlmAdvisorButton } from "@/components/config-form/llm-advisor-button"
@@ -118,7 +118,25 @@ export function ConfigEditor({
   const save = useMutation({
     mutationFn: async (opts: { overwrite: boolean; thenLaunch: boolean }) => {
       if (!draft) throw new Error("当前没有草稿可保存")
-      const payload = draft as unknown as Record<string, unknown>
+      // Strip top-level sections the active backend's compiler doesn't
+      // consume. Without this the saved YAML carries orphan defaults
+      // like ``network.rank=32`` next to the active
+      // ``backend.animaLora.networkDim=16`` — confusing on inspection
+      // and a real foot-gun when users see two "rank-shaped" numbers
+      // and assume they conflict.
+      const backendType = draft.backend?.type as
+        | "kohya"
+        | "diffusion-pipe"
+        | "anima_lora"
+        | undefined
+      const orphans = unusedSectionsForBackend(backendType)
+      const cleanedDraft: Record<string, unknown> = {
+        ...(draft as unknown as Record<string, unknown>),
+      }
+      for (const key of orphans) {
+        delete cleanedDraft[key]
+      }
+      const payload = cleanedDraft
       const v = await api.validateConfig(payload)
       if (!v.valid) {
         setErrors(v.errors ?? [])

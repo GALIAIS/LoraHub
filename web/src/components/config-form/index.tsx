@@ -69,10 +69,10 @@ export type { ConfigFormValue } from "./types"
 //
 // Kept in sync with the compilers under lorahub/core/backends/<id>/. Update
 // here whenever a compiler starts (or stops) reading a top-level field.
-type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora"
+export type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora"
 const BACKENDS_ALL: readonly BackendKey[] = ["kohya", "diffusion-pipe", "anima_lora"]
 
-const SECTION_BACKENDS: Record<string, readonly BackendKey[]> = {
+export const SECTION_BACKENDS: Record<string, readonly BackendKey[]> = {
   network: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.networkDim/Alpha instead
   optimizer: ["kohya", "diffusion-pipe"], // anima reads backend.animaLora.optimizerType / learningRate
   loss: ["kohya", "diffusion-pipe"], // anima drives loss via flow-match weighting in animaLora.*
@@ -85,6 +85,20 @@ const SECTION_BACKENDS: Record<string, readonly BackendKey[]> = {
   augmentation: ["kohya", "diffusion-pipe"], // anima has no augmentation knobs at the top level
   validation: ["kohya", "diffusion-pipe"], // anima uses animaLora.useCmmd + validationSplitNum
   resume: ["kohya", "diffusion-pipe", "anima_lora"], // all three back ends read save_state*
+}
+
+/**
+ * Return every top-level ConfigFormValue key that the given backend's compiler
+ * does NOT consume. Caller can use this to strip orphan sections from a
+ * payload right before save / launch, so the YAML doesn't carry stale
+ * fields like ``network.rank=32`` next to ``backend.animaLora.networkDim=16``
+ * (which is what actually feeds the trainer).
+ */
+export function unusedSectionsForBackend(backend: BackendKey | undefined): string[] {
+  if (backend === undefined) return []
+  return Object.entries(SECTION_BACKENDS)
+    .filter(([, allowed]) => !allowed.includes(backend))
+    .map(([section]) => section)
 }
 
 function showsForBackend(section: string, backend: BackendKey | undefined): boolean {
