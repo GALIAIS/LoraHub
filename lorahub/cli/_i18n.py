@@ -568,6 +568,14 @@ MESSAGES: dict[str, dict[Lang, str]] = {
         "zh": "[red]缺少依赖:[/red] {pkg}\n请在当前 venv 安装:\n  [yellow]pip install {pkg}[/yellow]\n首次跑 dwpose / openpose / lineart / depth 还会自动从 HuggingFace Hub 下载模型权重(几百 MB)。",
         "en": "[red]missing dependency:[/red] {pkg}\nInstall in this venv:\n  [yellow]pip install {pkg}[/yellow]\nThe first dwpose / openpose / lineart / depth run also pulls model weights from HuggingFace Hub (a few hundred MB).",
     },
+    "ref_extract.dep_missing_real": {
+        "zh": "[red]缺少子依赖:[/red] {missing}\n这是 {hint} 的传递依赖,父包已经装了但是这个子模块没装。请安装:\n  [yellow]pip install {missing}[/yellow]\n[dim]原始错误: {err}[/dim]",
+        "en": "[red]transitive dependency missing:[/red] {missing}\n{hint} is installed but its sub-dependency {missing} is not. Install it:\n  [yellow]pip install {missing}[/yellow]\n[dim]original error: {err}[/dim]",
+    },
+    "ref_extract.runtime_failed": {
+        "zh": "[red]{processor} 加载失败:[/red] {err}\n[dim]常见原因:模型权重下载失败 / onnxruntime 未装 / CUDA 不匹配。[/dim]",
+        "en": "[red]{processor} init failed:[/red] {err}\n[dim]common causes: weight download failed / onnxruntime not installed / CUDA mismatch.[/dim]",
+    },
     "ref_extract.canny_low.help": {
         "zh": "Canny 低阈值(仅 processor=canny 时生效)。", "en": "Canny low threshold (canny only).",
     },

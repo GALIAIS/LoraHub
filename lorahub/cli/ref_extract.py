@@ -49,9 +49,27 @@ class DepthModel(str, Enum):
     depth_anything_v2 = "depth-anything-v2"
 
 
-def _missing_dep(pkg: str) -> typer.Exit:
-    """Print a clean install hint and exit instead of raising ImportError."""
-    Console().print(t("ref_extract.dep_missing", pkg=pkg))
+def _missing_dep(exc: ImportError, hint_pkg: str) -> typer.Exit:
+    """Print a clean install hint and exit instead of raising ImportError.
+
+    Reads ``exc.name`` to surface the *actual* missing module — the
+    builder may need controlnet_aux's transitive deps (onnxruntime,
+    mmpose, mediapipe, ...) that aren't pulled in by controlnet_aux's
+    own setup.py. ``hint_pkg`` is the surface-level package the user
+    most likely tried to install; we mention it as a fallback when
+    ``exc.name`` doesn't pin down a single dep cleanly.
+    """
+    real = getattr(exc, "name", None)
+    if real and real != hint_pkg:
+        Console().print(t("ref_extract.dep_missing_real", missing=real, hint=hint_pkg, err=str(exc)))
+    else:
+        Console().print(t("ref_extract.dep_missing", pkg=hint_pkg))
+    return typer.Exit(code=2)
+
+
+def _runtime_failed(processor: str, exc: Exception) -> typer.Exit:
+    """Detector built but failed at instantiation (download / model init / ...)."""
+    Console().print(t("ref_extract.runtime_failed", processor=processor, err=str(exc)))
     return typer.Exit(code=2)
 
 
@@ -86,18 +104,22 @@ def _output_path(img: Path, src: Path, dst: Path, recursive: bool) -> Path:
 def _build_dwpose():
     try:
         from controlnet_aux import DWposeDetector
+        detector = DWposeDetector.from_pretrained("yzd-v/DWPose")
     except ImportError as exc:
-        raise _missing_dep("controlnet_aux") from exc
-    detector = DWposeDetector.from_pretrained("yzd-v/DWPose")
+        raise _missing_dep(exc, "controlnet_aux") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _runtime_failed("dwpose", exc) from exc
     return lambda img: detector(img)
 
 
 def _build_openpose():
     try:
         from controlnet_aux import OpenposeDetector
+        detector = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
     except ImportError as exc:
-        raise _missing_dep("controlnet_aux") from exc
-    detector = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+        raise _missing_dep(exc, "controlnet_aux") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _runtime_failed("openpose", exc) from exc
     return lambda img: detector(img, include_face=True, include_hand=True)
 
 
@@ -105,7 +127,7 @@ def _build_canny(low: int, high: int):
     try:
         from controlnet_aux import CannyDetector
     except ImportError as exc:
-        raise _missing_dep("controlnet_aux") from exc
+        raise _missing_dep(exc, "controlnet_aux") from exc
     detector = CannyDetector()
     return lambda img: detector(img, low_threshold=low, high_threshold=high)
 
@@ -113,9 +135,11 @@ def _build_canny(low: int, high: int):
 def _build_lineart_anime():
     try:
         from controlnet_aux import LineartAnimeDetector
+        detector = LineartAnimeDetector.from_pretrained("lllyasviel/Annotators")
     except ImportError as exc:
-        raise _missing_dep("controlnet_aux") from exc
-    detector = LineartAnimeDetector.from_pretrained("lllyasviel/Annotators")
+        raise _missing_dep(exc, "controlnet_aux") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _runtime_failed("lineart-anime", exc) from exc
     return lambda img: detector(img)
 
 
@@ -123,19 +147,23 @@ def _build_depth(model: DepthModel):
     if model is DepthModel.midas:
         try:
             from controlnet_aux import MidasDetector
+            detector = MidasDetector.from_pretrained("lllyasviel/Annotators")
         except ImportError as exc:
-            raise _missing_dep("controlnet_aux") from exc
-        detector = MidasDetector.from_pretrained("lllyasviel/Annotators")
+            raise _missing_dep(exc, "controlnet_aux") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise _runtime_failed("depth/midas", exc) from exc
         return lambda img: detector(img)
     # depth-anything-v2 — uses transformers' depth-estimation pipeline
     # so we don't need the standalone DepthAnything checkout.
     try:
         from transformers import pipeline
+        pipe = pipeline(
+            "depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf"
+        )
     except ImportError as exc:
-        raise _missing_dep("transformers") from exc
-    pipe = pipeline(
-        "depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf"
-    )
+        raise _missing_dep(exc, "transformers") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _runtime_failed("depth/depth-anything-v2", exc) from exc
     return lambda img: pipe(img)["depth"]
 
 
