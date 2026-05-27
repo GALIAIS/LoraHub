@@ -77,7 +77,10 @@ class TerminalSession:
 
         * ``VIRTUAL_ENV`` pointing at the venv root so tools that check
           for it (e.g. ``uv``) target the right environment.
-        * ``PATH`` with the venv's ``Scripts/`` (or ``bin/``) prepended.
+        * ``PATH`` with the venv's ``Scripts/`` (or ``bin/``) prepended,
+          plus optional ``./tools/`` and ``./.lorahub/tools/`` directories
+          under the repo root so user-dropped binaries (ffmpeg, custom
+          annotators, ...) become available without per-process shims.
         * ``PYTHONNOUSERSITE=1`` so ``python -m pip install --user`` can't
           accidentally drop wheels under ``%APPDATA%/Python``.
         * ``PIP_DISABLE_PIP_VERSION_CHECK=1`` to suppress the noisy
@@ -86,11 +89,25 @@ class TerminalSession:
           adjust their output (none today, but cheap to set).
         """
         env = os.environ.copy()
+        sep = ";" if os.name == "nt" else ":"
+        path_parts: list[str] = []
+        # Venv bin dir wins (highest priority on PATH).
         if self.venv_dir is not None:
             env["VIRTUAL_ENV"] = str(self.venv_dir)
             scripts_dir = self.venv_dir / ("Scripts" if os.name == "nt" else "bin")
-            sep = ";" if os.name == "nt" else ":"
-            env["PATH"] = f"{scripts_dir}{sep}{env.get('PATH', '')}"
+            path_parts.append(str(scripts_dir))
+        # Repo-local tools dirs — prepended next so they shadow system
+        # tools, but lose to the venv's own scripts. Both shapes are
+        # supported because the LoraHub installer drops uv into
+        # ``.lorahub/`` and users sometimes hand-curate ``./tools/``.
+        for tools_dir in (
+            self.repo_path / "tools",
+            self.repo_path / ".lorahub" / "tools",
+        ):
+            if tools_dir.is_dir():
+                path_parts.append(str(tools_dir))
+        if path_parts:
+            env["PATH"] = sep.join([*path_parts, env.get("PATH", "")])
         env["PYTHONNOUSERSITE"] = "1"
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         env["LORAHUB_TERMINAL"] = "1"
@@ -218,44 +235,91 @@ def _resolve_anima_lora(settings: Settings) -> TerminalSession:
 def _resolve_lorahub(settings: Settings) -> TerminalSession:  # noqa: ARG001
     """Terminal session for the LoraHub server's own venv.
 
-    Unlike the backend resolvers, this one points at the running API
-    process itself: the cwd is the LoraHub repo root, the interpreter
-    is whatever launched ``uvicorn``. ``ready`` is true whenever
-    ``sys.executable`` is a real file, which it always is for a live
-    server.
+    Resolution priority (first hit wins):
 
-    Use case: install optional packages into the API environment
-    (e.g. ``pip install wandb`` so the W&B data tab can call
-    ``wandb.Api()``) without dropping back to a system shell.
+      1. ``$LORAHUB_PYTHON`` — user override, takes precedence
+         over everything. Useful when the API was launched from one
+         interpreter but the user wants the in-app terminal to drive
+         a different one.
+      2. **Project-root venv**: ``./.venv/`` or ``./venv/``. This is
+         the convention LoraHub installs follow (``uv venv`` /
+         ``python -m venv .venv``), so when the user does
+         ``pip install foo`` here it lands where everything else
+         expects it. Picks .venv before venv to match modern uv /
+         poetry conventions.
+      3. **Bundled embedded python**: ``./.lorahub/python/.../python``
+         — populated by the LoraHub installer on Windows.
+      4. **Fallback**: ``sys.executable`` — whatever launched the
+         API server. Always works but may be base conda / system
+         python which isn't where the user expects packages to land.
+
+    The session also prepends ``./tools/`` and ``./.lorahub/tools/``
+    to PATH (when they exist) so user-dropped binaries (ffmpeg, custom
+    annotators, ...) become available without a per-process shim.
     """
     import sys  # noqa: PLC0415
 
-    py_path = Path(sys.executable).resolve()
+    repo = Path(__file__).resolve().parent.parent.parent
+
+    # 1. Env override.
+    py_path: Path | None = None
+    venv_root: Path | None = None
+    env_override = os.environ.get("LORAHUB_PYTHON", "").strip()
+    if env_override:
+        candidate = Path(env_override).expanduser().resolve()
+        if candidate.is_file():
+            py_path = candidate
+
+    # 2. Project-root venv (./.venv first, then ./venv).
+    if py_path is None:
+        for venv_name in (".venv", "venv"):
+            candidate_root = repo / venv_name
+            if not (candidate_root / "pyvenv.cfg").is_file():
+                continue
+            python = venv_python(candidate_root)
+            if python is not None and python.is_file():
+                py_path = python
+                venv_root = candidate_root
+                break
+
+    # 3. Bundled embedded python (Windows installer drops it here).
+    if py_path is None:
+        bundled_root = repo / ".lorahub" / "python"
+        if bundled_root.is_dir():
+            for sub in bundled_root.iterdir():
+                if not sub.is_dir():
+                    continue
+                bundled_py = (
+                    sub / ("python.exe" if os.name == "nt" else "bin/python")
+                )
+                if bundled_py.is_file():
+                    py_path = bundled_py.resolve()
+                    break
+
+    # 4. Fallback to whatever launched the API.
+    if py_path is None:
+        py_path = Path(sys.executable).resolve()
+
     if not py_path.is_file():
         return TerminalSession(
             backend_id="lorahub",
             display_name=_BACKEND_DISPLAY["lorahub"],
-            repo_path=Path(__file__).resolve().parent.parent.parent,
+            repo_path=repo,
             python_path=None,
             venv_dir=None,
             ready=False,
         )
-    # Detect a venv: pyvenv.cfg sits at the venv root, two levels
-    # above the python binary on Windows (Scripts/python.exe) and one
-    # level above on Unix (bin/python). When we can't find a marker we
-    # still report the interpreter — the user might be running
-    # LoraHub from a system python install on purpose.
-    venv_root: Path | None = None
-    for candidate in (py_path.parent.parent, py_path.parent):
-        if (candidate / "pyvenv.cfg").is_file():
-            venv_root = candidate
-            break
-    # Project root = three levels up from terminal_runner.py
-    # (lorahub/api/terminal_runner.py -> repo). Path.cwd() would
-    # depend on where uvicorn was launched, which can be the web/
-    # subdir during dev — pinning to __file__ keeps the prompt
-    # consistent regardless.
-    repo = Path(__file__).resolve().parent.parent.parent
+
+    # Re-detect venv_root if we didn't already pin one (env override or
+    # bundled python). pyvenv.cfg sits at the venv root, one level
+    # above bin/python on POSIX and two above Scripts/python.exe on
+    # Windows. We probe both shapes to stay platform-agnostic.
+    if venv_root is None:
+        for candidate in (py_path.parent.parent, py_path.parent):
+            if (candidate / "pyvenv.cfg").is_file():
+                venv_root = candidate
+                break
+
     return TerminalSession(
         backend_id="lorahub",
         display_name=_BACKEND_DISPLAY["lorahub"],
