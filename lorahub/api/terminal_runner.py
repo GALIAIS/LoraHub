@@ -277,6 +277,7 @@ def stream_command(
     cwd: Path,
     env: dict[str, str],
     timeout_s: int,
+    shell_cmd: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Spawn ``argv`` and yield SSE-shaped event dicts.
 
@@ -284,6 +285,14 @@ def stream_command(
     threads, ``readline()`` would block on whichever pipe is quiet and
     starve the other. Each yielded value is a dict the route serializes
     straight into the SSE frame.
+
+    When ``shell_cmd`` is set, the subprocess is started with
+    ``shell=True`` and the raw string as its first arg. This is the
+    unrestricted-mode path: the user's command goes straight to bash
+    / cmd so shell syntax (``$(...)``, ``|``, ``&&``, redirects, glob
+    expansion) all works. ``argv`` is still kept for the SSE start
+    event so the UI can echo what's about to run. Restricted mode
+    leaves ``shell_cmd`` ``None`` and uses the safer pure-argv path.
     """
     creationflags = 0
     if os.name == "nt":
@@ -292,26 +301,46 @@ def stream_command(
         creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
     _log.info(
-        "terminal exec: argv=%s cwd=%s python=%s",
+        "terminal exec: argv=%s cwd=%s python=%s shell=%s",
         argv,
         cwd,
         env.get("VIRTUAL_ENV", "(none)"),
+        shell_cmd is not None,
     )
 
     try:
-        proc = subprocess.Popen(  # noqa: S603
-            argv,
-            cwd=str(cwd),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=creationflags,
-        )
+        if shell_cmd is not None:
+            # On Windows, subprocess with shell=True spawns cmd.exe;
+            # on POSIX it spawns /bin/sh. We pass the raw string so
+            # the shell handles quoting / globbing / pipes itself.
+            proc = subprocess.Popen(  # noqa: S602
+                shell_cmd,
+                cwd=str(cwd),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                shell=True,
+                creationflags=creationflags,
+            )
+        else:
+            proc = subprocess.Popen(  # noqa: S603
+                argv,
+                cwd=str(cwd),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=creationflags,
+            )
     except FileNotFoundError as exc:
         msg = f"无法启动子进程: {exc}\nargv = {argv}\ncwd = {cwd}"
         _log.warning("terminal exec FileNotFoundError: %s", msg)

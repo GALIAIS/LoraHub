@@ -418,11 +418,17 @@ function TerminalSettingsCard() {
               )}
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              关闭时(默认):只允许 <code className="font-mono">pip / uv / python</code> 命令,
-              且 <code className="font-mono">pip</code> 自动改写为 <code className="font-mono">python -m pip</code>{" "}
-              以确保命中所选后端的 venv。
+              关闭时(默认):允许 <code className="font-mono">pip / uv / python / lorahub</code>
+              {" "}和常见诊断命令(<code className="font-mono">which / ls / cat / head / git / nvidia-smi</code> 等),
+              <code className="font-mono">pip</code> 自动改写为 <code className="font-mono">python -m pip</code>
+              {" "}以确保命中所选后端的 venv。argv 模式,不解析 shell 语法。
               <br />
-              开启时:任何命令都能执行,但你需要自己保证它的安全性。
+              开启时:任何命令都能执行 + 走 shell(Linux <code className="font-mono">bash -lc</code> /
+              {" "}Windows <code className="font-mono">cmd /c</code>),支持
+              {" "}<code className="font-mono">$()</code> /
+              {" "}<code className="font-mono">|</code> /
+              {" "}<code className="font-mono">&amp;&amp;</code> /
+              {" "}<code className="font-mono">&gt;</code> 等 shell 语法。安全性由你保证。
             </p>
           </div>
           <Switch

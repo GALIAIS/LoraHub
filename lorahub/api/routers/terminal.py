@@ -201,24 +201,45 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
             ),
         )
 
-    # Parse + validate the command upfront so we can reject 422 before
-    # opening the SSE stream (errors inside an SSE stream are awkward to
-    # surface in DevTools).
-    try:
-        argv = shlex.split(req.command, posix=(os.name != "nt"))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Could not parse command: {exc}") from exc
-    if not argv:
-        raise HTTPException(status_code=422, detail="Empty command.")
-
-    try:
-        argv = _enforce_command_policy(
-            argv,
-            python_path=session.python_path,
-            unrestricted=settings.terminal_unrestricted,
-        )
-    except TerminalDenied as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    # Unrestricted mode bypasses argv parsing entirely and hands the
+    # raw command line to the platform shell, so shell syntax — pipes,
+    # redirects, ``$(...)`` substitution, ``&&``, glob expansion — all
+    # work as the user expects. Restricted mode keeps the safe
+    # argv-only path with the venv-router policy applied.
+    use_shell = settings.terminal_unrestricted
+    argv: list[str]
+    shell_cmd: str | None = None
+    if use_shell:
+        if not req.command.strip():
+            raise HTTPException(status_code=422, detail="Empty command.")
+        shell_cmd = req.command
+        # argv is only used for the SSE start event so the UI can echo
+        # the canonical "what's about to run" line — show the literal
+        # shell invocation under the hood.
+        if os.name == "nt":
+            argv = ["cmd", "/c", req.command]
+        else:
+            argv = ["/bin/bash", "-lc", req.command]
+    else:
+        # Parse + validate the command upfront so we can reject 422
+        # before opening the SSE stream (errors inside an SSE stream
+        # are awkward to surface in DevTools).
+        try:
+            argv = shlex.split(req.command, posix=(os.name != "nt"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Could not parse command: {exc}",
+            ) from exc
+        if not argv:
+            raise HTTPException(status_code=422, detail="Empty command.")
+        try:
+            argv = _enforce_command_policy(
+                argv,
+                python_path=session.python_path,
+                unrestricted=False,
+            )
+        except TerminalDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     timeout_s = max(5, int(settings.terminal_command_timeout_s))
     cwd = session.repo_path
@@ -239,6 +260,7 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
                 cwd=cwd,
                 env=session.process_env(),
                 timeout_s=timeout_s,
+                shell_cmd=shell_cmd,
             ):
                 yield _sse(chunk)
         except Exception as exc:  # noqa: BLE001
@@ -265,10 +287,33 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
 # Top-level entry points the user is allowed to invoke (and aliases).
 # `pip` / `python` get routed at the venv interpreter; `uv` runs as-is
 # but with `--python <venv-python>` injected when missing so it always
-# targets the right environment.
-_ALLOWED_TOP_LEVEL = {"pip", "pip3", "python", "python3", "py", "uv"}
+# targets the right environment. Everything else in the list runs
+# verbatim — these are read-only-ish diagnostic / inspection commands
+# that are safe to expose without unrestricted mode.
+_ALLOWED_TOP_LEVEL = {
+    # Package / interpreter (rewritten through the venv resolver below)
+    "pip", "pip3", "python", "python3", "py", "uv",
+    # LoraHub self — picks up the in-tree CLI through PATH; required so
+    # users can run "lorahub ref-extract ..." in the same env the API
+    # server uses.
+    "lorahub",
+    # Diagnostic / inspection commands. These pass through verbatim,
+    # they don't get the venv-router rewrite.
+    "which", "where", "whereis", "command", "type",
+    "ls", "dir", "pwd", "cd",  # cd is dropped on first command — see note in stream_command
+    "cat", "head", "tail", "less", "more",
+    "echo", "printf",
+    "git",
+    "nvidia-smi", "nvcc",
+    "ps", "df", "du", "free", "uname",
+    # Useful for sanity-checking model / cache locations.
+    "find", "tree", "stat", "wc", "grep", "rg", "fgrep", "egrep",
+}
 _PIP_ALIASES = {"pip", "pip3"}
 _PYTHON_ALIASES = {"python", "python3", "py"}
+# These get routed to the venv interpreter; the rest of
+# _ALLOWED_TOP_LEVEL passes through to PATH unchanged.
+_VENV_ROUTED = _PIP_ALIASES | _PYTHON_ALIASES | {"uv"}
 
 
 def _enforce_command_policy(
@@ -296,8 +341,10 @@ def _enforce_command_policy(
         base = head.split("/")[-1].split("\\")[-1]
         if base not in _ALLOWED_TOP_LEVEL:
             raise TerminalDenied(
-                f"命令 {head!r} 不在白名单中（pip / uv / python）。"
-                "如需自由模式，请到 设置 → 终端 中开启。"
+                f"命令 {head!r} 不在白名单中。受限模式只允许 pip / uv / python / "
+                "lorahub / 常见诊断命令 (which, ls, cat, head, git, nvidia-smi 等)。"
+                "如需任意命令 + shell 语法 ($() / | / && / >),请到 设置 → 终端 "
+                "中开启「自由命令模式」。"
             )
         head = base
 
@@ -318,7 +365,10 @@ def _enforce_command_policy(
     if head == "uv":
         return _route_uv(python_path, argv[1:])
 
-    # Unrestricted fall-through.
+    # Whitelisted diagnostic / inspection command — pass through to PATH.
+    # These don't get rewritten because their semantics depend on PATH
+    # discovery (e.g. ``which lorahub`` would be useless if we hard-coded
+    # the venv python here).
     return argv
 
 
