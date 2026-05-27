@@ -541,6 +541,57 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "system.errors_clear.ok": {"zh": "[green]通过[/] 清空了 {n} 条记录", "en": "[green]OK[/] cleared {n} report(s)"},
     "sweepapp.submit.help": {"zh": "提交一个 sweep YAML 到 ``POST /api/sweeps``。", "en": "Submit a sweep YAML to ``POST /api/sweeps`` and print the response."},
     "sweepapp.ls.help": {"zh": "列出运行中服务上的所有 sweep。", "en": "List every sweep on the running server."},
+
+    # ── ref-extract (差异训练参考图自动生成) ───────────────────────
+    "ref_extract.help": {
+        "zh": "为差异训练自动生成参考图(pose / canny / lineart / depth)。把 src 里每张图喂给 controlnet_aux 的预处理器,输出按主名同名写到 dst,直接接 LoraHub 数据集子集的「参考图目录」。",
+        "en": "Auto-generate paired reference images for conditioning training (pose / canny / lineart / depth). Each src image is run through a controlnet_aux processor; outputs land in dst with same stem so the LoraHub dataset subset's conditioning_data_dir picks them up.",
+    },
+    "ref_extract.processor.help": {
+        "zh": "预处理器:dwpose / openpose / canny / lineart-anime / depth。",
+        "en": "Processor: dwpose / openpose / canny / lineart-anime / depth.",
+    },
+    "ref_extract.src.help": {
+        "zh": "源(target)图目录。", "en": "Source (target) image directory.",
+    },
+    "ref_extract.dst.help": {
+        "zh": "参考图输出目录。已存在的同名文件默认跳过(除非 --overwrite)。",
+        "en": "Output directory for reference images. Existing same-stem files are skipped unless --overwrite.",
+    },
+    "ref_extract.overwrite.help": {
+        "zh": "覆盖目标目录里已存在的同名 ref 文件。", "en": "Overwrite same-stem reference files already in dst.",
+    },
+    "ref_extract.recursive.help": {
+        "zh": "递归处理 src 子目录,镜像层级到 dst。", "en": "Recurse into subdirs of src, mirroring layout in dst.",
+    },
+    "ref_extract.dep_missing": {
+        "zh": "[red]缺少依赖:[/red] {pkg}\n请在当前 venv 安装:\n  [yellow]pip install {pkg}[/yellow]\n首次跑 dwpose / openpose / lineart / depth 还会自动从 HuggingFace Hub 下载模型权重(几百 MB)。",
+        "en": "[red]missing dependency:[/red] {pkg}\nInstall in this venv:\n  [yellow]pip install {pkg}[/yellow]\nThe first dwpose / openpose / lineart / depth run also pulls model weights from HuggingFace Hub (a few hundred MB).",
+    },
+    "ref_extract.canny_low.help": {
+        "zh": "Canny 低阈值(仅 processor=canny 时生效)。", "en": "Canny low threshold (canny only).",
+    },
+    "ref_extract.canny_high.help": {
+        "zh": "Canny 高阈值(仅 processor=canny 时生效)。", "en": "Canny high threshold (canny only).",
+    },
+    "ref_extract.depth_model.help": {
+        "zh": "depth processor 用哪一种:midas (controlnet_aux 内置) / depth-anything-v2 (transformers pipeline)。",
+        "en": "Which depth processor: midas (built-in controlnet_aux) / depth-anything-v2 (transformers pipeline).",
+    },
+    "ref_extract.start": {
+        "zh": "[bold]ref-extract[/bold] processor=[cyan]{processor}[/cyan] src={src} → dst={dst}",
+        "en": "[bold]ref-extract[/bold] processor=[cyan]{processor}[/cyan] src={src} → dst={dst}",
+    },
+    "ref_extract.scanned": {
+        "zh": "扫描到 [bold]{n}[/bold] 张图待处理(已跳过 {skipped} 张已存在的)。",
+        "en": "Found [bold]{n}[/bold] images to process ({skipped} skipped as already present).",
+    },
+    "ref_extract.processing": {"zh": "处理中…", "en": "processing..."},
+    "ref_extract.failed": {"zh": "[red]失败[/red] {path}: {err}", "en": "[red]failed[/red] {path}: {err}"},
+    "ref_extract.done": {
+        "zh": "[green]完成[/green] 成功 {ok} / 失败 {fail} / 跳过 {skipped}",
+        "en": "[green]done[/green] ok={ok} fail={fail} skipped={skipped}",
+    },
 }
 
 

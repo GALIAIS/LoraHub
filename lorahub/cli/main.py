@@ -94,6 +94,17 @@ app.add_typer(service_app, name="service")
 # verb. Per-command help / hint strings are localised via _i18n so
 # `lorahub --lang en manage --help` still produces a sensible page.
 app.add_typer(manage_app, name="manage")
+
+# Conditioning training reference-image extractor (差异训练 / Mirumo
+# fork). Lives as its own top-level command so users running ``lorahub
+# --help`` discover it next to ``lorahub train``. The implementation
+# imports controlnet_aux lazily so the CLI scan stays fast.
+from lorahub.cli.ref_extract import ref_extract as _ref_extract  # noqa: E402
+
+app.command(
+    "ref-extract",
+    help=t("ref_extract.help"),
+)(_ref_extract)
 err_console = Console(stderr=True)
 
 
