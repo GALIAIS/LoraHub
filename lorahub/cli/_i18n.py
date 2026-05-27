@@ -542,14 +542,14 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "sweepapp.submit.help": {"zh": "提交一个 sweep YAML 到 ``POST /api/sweeps``。", "en": "Submit a sweep YAML to ``POST /api/sweeps`` and print the response."},
     "sweepapp.ls.help": {"zh": "列出运行中服务上的所有 sweep。", "en": "List every sweep on the running server."},
 
-    # ── ref-extract (差异训练参考图自动生成) ───────────────────────
+    # ── ref-extract (差异训练参考图自动生成 - 仅 canny) ─────────────
     "ref_extract.help": {
-        "zh": "为差异训练自动生成参考图(pose / canny / lineart / depth)。把 src 里每张图喂给 controlnet_aux 的预处理器,输出按主名同名写到 dst,直接接 LoraHub 数据集子集的「参考图目录」。",
-        "en": "Auto-generate paired reference images for conditioning training (pose / canny / lineart / depth). Each src image is run through a controlnet_aux processor; outputs land in dst with same stem so the LoraHub dataset subset's conditioning_data_dir picks them up.",
+        "zh": "为差异训练自动生成 Canny 边缘参考图。每张目标图过 cv2 Canny,输出按主名同名写到 dst,直接接 LoraHub 数据集子集的「参考图目录」。\n\n[dim]更复杂的参考图(DWPose 骨架 / 线稿 / 深度图)请直接走 ComfyUI 生态(controlnet_aux 节点),完成后把目录路径填到「参考图目录」即可。本程序不集成那些重型预处理器。[/dim]",
+        "en": "Auto-generate Canny edge reference images for conditioning training. Each target is run through cv2 Canny; outputs land in dst with same stem so the LoraHub dataset subset's conditioning_data_dir picks them up.\n\n[dim]Heavier processors (DWPose skeleton / lineart / depth) are NOT integrated here — generate those via ComfyUI (controlnet_aux nodes) and just point conditioning_data_dir at the result.[/dim]",
     },
     "ref_extract.processor.help": {
-        "zh": "预处理器:dwpose / openpose / canny / lineart-anime / depth。",
-        "en": "Processor: dwpose / openpose / canny / lineart-anime / depth.",
+        "zh": "预处理器:目前仅支持 canny。其它 (DWPose / 线稿 / 深度) 请用 ComfyUI 生成。",
+        "en": "Processor: only canny is supported. Use ComfyUI for DWPose / lineart / depth.",
     },
     "ref_extract.src.help": {
         "zh": "源(target)图目录。", "en": "Source (target) image directory.",
@@ -565,26 +565,18 @@ MESSAGES: dict[str, dict[Lang, str]] = {
         "zh": "递归处理 src 子目录,镜像层级到 dst。", "en": "Recurse into subdirs of src, mirroring layout in dst.",
     },
     "ref_extract.dep_missing": {
-        "zh": "[red]缺少依赖:[/red] {pkg}\n请在当前 venv 安装:\n  [yellow]pip install {pkg}[/yellow]\n首次跑 dwpose / openpose / lineart / depth 还会自动从 HuggingFace Hub 下载模型权重(几百 MB)。",
-        "en": "[red]missing dependency:[/red] {pkg}\nInstall in this venv:\n  [yellow]pip install {pkg}[/yellow]\nThe first dwpose / openpose / lineart / depth run also pulls model weights from HuggingFace Hub (a few hundred MB).",
+        "zh": "[red]缺少依赖:[/red] {pkg}\n请在当前 venv 安装:\n  [yellow]pip install {pkg}[/yellow]",
+        "en": "[red]missing dependency:[/red] {pkg}\nInstall in this venv:\n  [yellow]pip install {pkg}[/yellow]",
     },
     "ref_extract.dep_missing_real": {
-        "zh": "[red]缺少子依赖:[/red] {missing}\n这是 {hint} 的传递依赖,父包已经装了但是这个子模块没装。请安装:\n  [yellow]pip install {missing}[/yellow]\n[dim]原始错误: {err}[/dim]",
-        "en": "[red]transitive dependency missing:[/red] {missing}\n{hint} is installed but its sub-dependency {missing} is not. Install it:\n  [yellow]pip install {missing}[/yellow]\n[dim]original error: {err}[/dim]",
-    },
-    "ref_extract.runtime_failed": {
-        "zh": "[red]{processor} 加载失败:[/red] {err}\n[dim]常见原因:模型权重下载失败 / onnxruntime 未装 / CUDA 不匹配。[/dim]",
-        "en": "[red]{processor} init failed:[/red] {err}\n[dim]common causes: weight download failed / onnxruntime not installed / CUDA mismatch.[/dim]",
+        "zh": "[red]缺少子依赖:[/red] {missing}\n请安装:\n  [yellow]pip install {missing}[/yellow]\n[dim]原始错误: {err}[/dim]",
+        "en": "[red]missing sub-dependency:[/red] {missing}\nInstall:\n  [yellow]pip install {missing}[/yellow]\n[dim]original error: {err}[/dim]",
     },
     "ref_extract.canny_low.help": {
-        "zh": "Canny 低阈值(仅 processor=canny 时生效)。", "en": "Canny low threshold (canny only).",
+        "zh": "Canny 低阈值。", "en": "Canny low threshold.",
     },
     "ref_extract.canny_high.help": {
-        "zh": "Canny 高阈值(仅 processor=canny 时生效)。", "en": "Canny high threshold (canny only).",
-    },
-    "ref_extract.depth_model.help": {
-        "zh": "depth processor 用哪一种:midas (controlnet_aux 内置) / depth-anything-v2 (transformers pipeline)。",
-        "en": "Which depth processor: midas (built-in controlnet_aux) / depth-anything-v2 (transformers pipeline).",
+        "zh": "Canny 高阈值。", "en": "Canny high threshold.",
     },
     "ref_extract.start": {
         "zh": "[bold]ref-extract[/bold] processor=[cyan]{processor}[/cyan] src={src} → dst={dst}",

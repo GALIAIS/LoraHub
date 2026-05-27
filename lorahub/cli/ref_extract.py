@@ -1,24 +1,19 @@
-"""``lorahub ref-extract`` — auto-generate reference images for conditioning training.
+"""``lorahub ref-extract`` — minimal Canny edge generator for conditioning training.
 
-Wraps controlnet_aux (and optionally HuggingFace transformers for
-DepthAnything v2) so users don't have to write a one-off Python
-script every time they prepare paired data for the anima_lora 差异训
-练 path. Output files share the same stem as the source so the
-generated dir can be plugged straight into a LoraHub dataset subset's
+差异训练 (anima_lora conditioning) 需要每张目标图配一张参考图。
+本命令只覆盖最轻量的一类:cv2 Canny 边缘检测。零外部模型下载、零
+重型依赖,跑得快。
+
+更复杂的参考图 (DWPose 骨架 / OpenPose / 线稿 / 深度图) 不在本程
+序范围内 — 那些预处理器对 mmpose / mediapipe / matplotlib /
+onnxruntime + 模型权重等一长串依赖有强约束,集成成本远高于产出
+价值。**生成那类 ref 图请直接走 ComfyUI 生态** (controlnet_aux
+节点 / DWPose 节点),完成后把目录路径填到 LoraHub 数据集子集的
+"参考图目录"即可。
+
+Output files share the same stem as the source so the generated
+dir can be plugged straight into a LoraHub dataset subset's
 ``conditioning_data_dir``.
-
-Five built-in processors:
-
-  - dwpose         (whole-body skeleton via DWPose)
-  - openpose       (whole-body via legacy OpenPose annotators)
-  - canny          (cv2 Canny edge map; no model download)
-  - lineart-anime  (anime line art)
-  - depth          (MiDaS or DepthAnything-V2 disparity map)
-
-Heavy deps (controlnet_aux / transformers / torch / cv2) are imported
-lazily inside the per-processor builder so ``lorahub --help`` and the
-top-level Typer scan stay snappy on a fresh checkout where these
-extras aren't installed yet.
 """
 
 from __future__ import annotations
@@ -28,7 +23,14 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from lorahub.cli._i18n import t
 
@@ -37,39 +39,18 @@ _IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 class Processor(str, Enum):
-    dwpose = "dwpose"
-    openpose = "openpose"
     canny = "canny"
-    lineart_anime = "lineart-anime"
-    depth = "depth"
-
-
-class DepthModel(str, Enum):
-    midas = "midas"
-    depth_anything_v2 = "depth-anything-v2"
 
 
 def _missing_dep(exc: ImportError, hint_pkg: str) -> typer.Exit:
-    """Print a clean install hint and exit instead of raising ImportError.
-
-    Reads ``exc.name`` to surface the *actual* missing module — the
-    builder may need controlnet_aux's transitive deps (onnxruntime,
-    mmpose, mediapipe, ...) that aren't pulled in by controlnet_aux's
-    own setup.py. ``hint_pkg`` is the surface-level package the user
-    most likely tried to install; we mention it as a fallback when
-    ``exc.name`` doesn't pin down a single dep cleanly.
-    """
+    """Print a clean install hint and exit instead of raising ImportError."""
     real = getattr(exc, "name", None)
     if real and real != hint_pkg:
-        Console().print(t("ref_extract.dep_missing_real", missing=real, hint=hint_pkg, err=str(exc)))
+        Console().print(
+            t("ref_extract.dep_missing_real", missing=real, hint=hint_pkg, err=str(exc))
+        )
     else:
         Console().print(t("ref_extract.dep_missing", pkg=hint_pkg))
-    return typer.Exit(code=2)
-
-
-def _runtime_failed(processor: str, exc: Exception) -> typer.Exit:
-    """Detector built but failed at instantiation (download / model init / ...)."""
-    Console().print(t("ref_extract.runtime_failed", processor=processor, err=str(exc)))
     return typer.Exit(code=2)
 
 
@@ -90,99 +71,32 @@ def _output_path(img: Path, src: Path, dst: Path, recursive: bool) -> Path:
         out_dir = dst
     out_dir.mkdir(parents=True, exist_ok=True)
     # Always write PNG: lossless and what every aux processor emits as
-    # the natural default. The differing input ext doesn't matter to
-    # the LoraHub pair resolver — it tries png/jpg/jpeg/webp/bmp.
+    # the natural default. Differing input ext doesn't matter to the
+    # LoraHub pair resolver — it tries png/jpg/jpeg/webp/bmp.
     return out_dir / f"{img.stem}.png"
-
-
-# --------------------------------------------------------------------------- #
-# Per-processor builders. Each returns ``callable(PIL.Image) -> PIL.Image``.
-# Heavy imports stay inside the builder so the CLI loads instantly.
-# --------------------------------------------------------------------------- #
-
-
-def _build_dwpose():
-    try:
-        from controlnet_aux import DWposeDetector
-        detector = DWposeDetector.from_pretrained("yzd-v/DWPose")
-    except ImportError as exc:
-        raise _missing_dep(exc, "controlnet_aux") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise _runtime_failed("dwpose", exc) from exc
-    return lambda img: detector(img)
-
-
-def _build_openpose():
-    try:
-        from controlnet_aux import OpenposeDetector
-        detector = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
-    except ImportError as exc:
-        raise _missing_dep(exc, "controlnet_aux") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise _runtime_failed("openpose", exc) from exc
-    return lambda img: detector(img, include_face=True, include_hand=True)
 
 
 def _build_canny(low: int, high: int):
     try:
-        from controlnet_aux import CannyDetector
+        import cv2  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415, F401
+        from PIL import Image  # noqa: PLC0415
     except ImportError as exc:
-        raise _missing_dep(exc, "controlnet_aux") from exc
-    detector = CannyDetector()
-    return lambda img: detector(img, low_threshold=low, high_threshold=high)
+        raise _missing_dep(exc, "opencv-python") from exc
 
+    def _run(img):
+        import cv2  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
 
-def _build_lineart_anime():
-    try:
-        from controlnet_aux import LineartAnimeDetector
-        detector = LineartAnimeDetector.from_pretrained("lllyasviel/Annotators")
-    except ImportError as exc:
-        raise _missing_dep(exc, "controlnet_aux") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise _runtime_failed("lineart-anime", exc) from exc
-    return lambda img: detector(img)
+        rgb = np.array(img.convert("RGB"))
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(gray, low, high)
+        # Stack to 3-channel so downstream pipelines that expect RGB
+        # see a consistent shape regardless of processor choice.
+        canvas = np.stack([edges, edges, edges], axis=-1)
+        return Image.fromarray(canvas)
 
-
-def _build_depth(model: DepthModel):
-    if model is DepthModel.midas:
-        try:
-            from controlnet_aux import MidasDetector
-            detector = MidasDetector.from_pretrained("lllyasviel/Annotators")
-        except ImportError as exc:
-            raise _missing_dep(exc, "controlnet_aux") from exc
-        except Exception as exc:  # noqa: BLE001
-            raise _runtime_failed("depth/midas", exc) from exc
-        return lambda img: detector(img)
-    # depth-anything-v2 — uses transformers' depth-estimation pipeline
-    # so we don't need the standalone DepthAnything checkout.
-    try:
-        from transformers import pipeline
-        pipe = pipeline(
-            "depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf"
-        )
-    except ImportError as exc:
-        raise _missing_dep(exc, "transformers") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise _runtime_failed("depth/depth-anything-v2", exc) from exc
-    return lambda img: pipe(img)["depth"]
-
-
-_PROCESSOR_BUILDERS = {
-    Processor.dwpose: _build_dwpose,
-    Processor.openpose: _build_openpose,
-    Processor.lineart_anime: _build_lineart_anime,
-}
-
-
-def _build(processor: Processor, *, canny_low: int, canny_high: int, depth_model: DepthModel):
-    if processor in _PROCESSOR_BUILDERS:
-        return _PROCESSOR_BUILDERS[processor]()
-    if processor is Processor.canny:
-        return _build_canny(canny_low, canny_high)
-    if processor is Processor.depth:
-        return _build_depth(depth_model)
-    msg = f"unhandled processor: {processor}"
-    raise RuntimeError(msg)
+    return _run
 
 
 # --------------------------------------------------------------------------- #
@@ -194,15 +108,12 @@ def ref_extract(
     src: Path = typer.Argument(..., help=t("ref_extract.src.help")),
     dst: Path = typer.Argument(..., help=t("ref_extract.dst.help")),
     processor: Processor = typer.Option(
-        Processor.dwpose, "--processor", "-p", help=t("ref_extract.processor.help"),
+        Processor.canny, "--processor", "-p", help=t("ref_extract.processor.help"),
     ),
     overwrite: bool = typer.Option(False, "--overwrite", help=t("ref_extract.overwrite.help")),
     recursive: bool = typer.Option(False, "--recursive", "-r", help=t("ref_extract.recursive.help")),
     canny_low: int = typer.Option(100, help=t("ref_extract.canny_low.help")),
     canny_high: int = typer.Option(200, help=t("ref_extract.canny_high.help")),
-    depth_model: DepthModel = typer.Option(
-        DepthModel.midas, "--depth-model", help=t("ref_extract.depth_model.help"),
-    ),
 ) -> None:
     """Generate paired reference images for anima_lora conditioning training."""
     console = Console()
@@ -213,9 +124,9 @@ def ref_extract(
         raise typer.Exit(code=2)
 
     try:
-        from PIL import Image
+        from PIL import Image  # noqa: F401, PLC0415
     except ImportError as exc:
-        raise _missing_dep("Pillow") from exc
+        raise _missing_dep(exc, "Pillow") from exc
 
     console.print(t("ref_extract.start", processor=processor.value, src=src, dst=dst))
 
@@ -234,12 +145,13 @@ def ref_extract(
         console.print(t("ref_extract.done", ok=0, fail=0, skipped=skipped))
         return
 
-    runner = _build(
-        processor,
-        canny_low=canny_low,
-        canny_high=canny_high,
-        depth_model=depth_model,
-    )
+    # Only one processor (canny) survives the simplification — heavier
+    # processors (dwpose / openpose / lineart / depth) live in ComfyUI.
+    if processor is Processor.canny:
+        runner = _build_canny(canny_low, canny_high)
+    else:
+        msg = f"unhandled processor: {processor}"
+        raise RuntimeError(msg)
 
     ok = 0
     fail = 0
@@ -254,11 +166,10 @@ def ref_extract(
         task_id = progress.add_task("", total=len(pairs))
         for img_path, out_path in pairs:
             try:
+                from PIL import Image  # noqa: PLC0415
+
                 img = Image.open(img_path).convert("RGB")
                 result = runner(img)
-                # All controlnet_aux detectors + transformers depth
-                # pipeline return PIL.Image directly; defensive coerce
-                # for anything that wandered off-spec.
                 if not isinstance(result, Image.Image):
                     result = Image.fromarray(result)
                 result.save(out_path)
