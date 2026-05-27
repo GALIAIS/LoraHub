@@ -175,12 +175,18 @@ if defined VENV_VALID (
     echo   stale .venv detected ^(home=!VENV_HOME!^); rebuilding
     rmdir /s /q ".venv"
   )
-  "%UV%" venv .venv --python "%PY_EXE%"
+  rem ``--seed`` makes uv install pip / setuptools / wheel into the
+  rem fresh venv. Without it the venv has no ``pip`` binary, so users
+  rem who ``pip install <pkg>`` from the LoraHub in-app terminal hit
+  rem the auto-fallback to ``uv pip``. Seeding pip directly is more
+  rem intuitive (and lets third-party tools that subprocess
+  rem ``pip install`` keep working).
+  "%UV%" venv .venv --python "%PY_EXE%" --seed
   if errorlevel 1 (
     echo   [ERROR] Failed to create venv.
     goto :fail
   )
-  echo   OK .venv created
+  echo   OK .venv created (seeded with pip / setuptools / wheel)
 )
 set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 echo.

@@ -166,8 +166,14 @@ else
         echo "  stale .venv detected; rebuilding"
         rm -rf .venv
     fi
-    "$UV" venv .venv --python "$PY_EXE"
-    echo "  OK .venv created"
+    # ``--seed`` makes uv install pip / setuptools / wheel into the
+    # fresh venv. Without it the venv has no ``pip`` binary, so users
+    # who ``pip install <pkg>`` from the LoraHub in-app terminal hit
+    # the auto-fallback to ``uv pip``. Seeding pip directly is more
+    # intuitive (and lets third-party tools that subprocess
+    # ``pip install`` keep working).
+    "$UV" venv .venv --python "$PY_EXE" --seed
+    echo "  OK .venv created (seeded with pip / setuptools / wheel)"
 fi
 VENV_PY="$ROOT/.venv/bin/python"
 echo ""
