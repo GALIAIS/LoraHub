@@ -270,17 +270,18 @@ def _resolve_lorahub(settings: Settings) -> TerminalSession:  # noqa: ARG001
         if candidate.is_file():
             py_path = candidate
 
-    # 2. Project-root venv (./.venv first, then ./venv).
+    # 2. Project-root venv. ``venv_python()`` already handles the
+    # platform / dirname matrix (Windows Scripts/.venv, POSIX bin/venv,
+    # both ordered to prefer ``.venv`` last). Reuse it instead of
+    # re-rolling our own four-way path probe.
     if py_path is None:
-        for venv_name in (".venv", "venv"):
-            candidate_root = repo / venv_name
-            if not (candidate_root / "pyvenv.cfg").is_file():
-                continue
-            python = venv_python(candidate_root)
-            if python is not None and python.is_file():
-                py_path = python
-                venv_root = candidate_root
-                break
+        candidate = venv_python(repo)
+        if candidate is not None:
+            py_path = candidate
+            # Walk back up to the venv root for VIRTUAL_ENV. The helper
+            # returns the python binary under either Scripts/ or bin/,
+            # so the venv root is python.parent.parent.
+            venv_root = candidate.parent.parent
 
     # 3. Bundled embedded python (Windows installer drops it here).
     if py_path is None:
