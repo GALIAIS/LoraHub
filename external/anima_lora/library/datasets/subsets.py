@@ -328,6 +328,7 @@ class DreamBoothSubset(BaseSubset):
         cache_dir: Optional[str] = None,
         recursive: bool = False,
         path_pattern: Optional[str] = None,
+        conditioning_data_dir: Optional[str] = None,
     ) -> None:
         assert image_dir is not None, "image_dir must be specified"
 
@@ -382,8 +383,17 @@ class DreamBoothSubset(BaseSubset):
         self.cache_dir = cache_dir
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
+        # Conditioning training (Mirumo fork's差异训练): each target image
+        # in ``image_dir`` is paired with a same-stem reference image in
+        # ``conditioning_data_dir``. The paired image is loaded into the
+        # batch as ``conditioning_images`` so downstream losses
+        # (``apply_masked_loss`` etc.) can use it. None disables.
+        self.conditioning_data_dir = conditioning_data_dir
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, DreamBoothSubset):
             return NotImplemented
-        return self.image_dir == other.image_dir
+        return (
+            self.image_dir == other.image_dir
+            and self.conditioning_data_dir == other.conditioning_data_dir
+        )

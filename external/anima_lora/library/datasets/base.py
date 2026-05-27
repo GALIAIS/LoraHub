@@ -1245,6 +1245,12 @@ class BaseDataset(torch.utils.data.Dataset):
         latents_list = []
         alpha_mask_list = []
         images = []
+        # Conditioning training: per-sample reference image tensor in
+        # the same shape as ``images`` (C, H, W in [-1, 1]). Stacked
+        # into ``example["conditioning_images"]`` at the end so
+        # downstream losses (apply_masked_loss / paired editing) can
+        # use it as the mask / reference channel.
+        cond_images_list: List[Optional[torch.Tensor]] = []
         original_sizes_hw = []
         crop_top_lefts = []
         target_sizes_hw = []
@@ -1395,6 +1401,36 @@ class BaseDataset(torch.utils.data.Dataset):
             images.append(image)
             latents_list.append(latents)
             alpha_mask_list.append(alpha_mask)
+            # Pair the same-stem reference (target H/W). cond_img_path
+            # is set during register_image when the subset declared a
+            # conditioning_data_dir; samples without a paired reference
+            # store None and are stacked into a no-op zero tensor below.
+            cond_path = getattr(image_info, "cond_img_path", None)
+            cond_tensor: Optional[torch.Tensor] = None
+            if cond_path:
+                try:
+                    from library.datasets.image_utils import load_image  # noqa: PLC0415
+
+                    cond_img_np = load_image(cond_path, alpha=False)
+                    if image is not None:
+                        target_h, target_w = image.shape[1], image.shape[2]
+                        cond_img_np, _, _ = trim_and_resize_if_required(
+                            False,
+                            cond_img_np,
+                            (target_w, target_h),
+                            (target_w, target_h),
+                            resize_interpolation=image_info.resize_interpolation,
+                        )
+                    cond_tensor = self.image_transforms(cond_img_np)
+                    if flipped:
+                        cond_tensor = torch.flip(cond_tensor, [-1])
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "[conditioning] failed to load %s; falling back to zero",
+                        cond_path,
+                    )
+                    cond_tensor = None
+            cond_images_list.append(cond_tensor)
 
             target_size = (
                 (image.shape[2], image.shape[1])
@@ -1547,6 +1583,26 @@ class BaseDataset(torch.utils.data.Dataset):
         else:
             images = None
         example["images"] = images
+
+        # Stack conditioning_images. Samples without a pair fall back
+        # to a zero tensor of the same shape so downstream losses can
+        # apply uniformly. None when no sample in the batch carried a
+        # cond — keeps existing non-paired training paths byte-identical.
+        if any(t is not None for t in cond_images_list):
+            stacked_cond: List[torch.Tensor] = []
+            shape_ref = next(t for t in cond_images_list if t is not None)
+            for t in cond_images_list:
+                if t is None:
+                    stacked_cond.append(torch.zeros_like(shape_ref))
+                else:
+                    stacked_cond.append(t)
+            example["conditioning_images"] = (
+                torch.stack(stacked_cond)
+                .to(memory_format=torch.contiguous_format)
+                .float()
+            )
+        else:
+            example["conditioning_images"] = None
 
         example["latents"] = (
             torch.stack(latents_list) if latents_list[0] is not None else None
@@ -2094,6 +2150,46 @@ class DreamBoothDataset(BaseDataset):
                             break
                 if size is not None:
                     info.image_size = size
+                # Conditioning training pairing: when subset has a
+                # conditioning_data_dir, look for a same-stem image
+                # there. Mirror image_dir's relative-path layout so a
+                # nested target (subset/sub/foo.jpg) pairs with the
+                # nested ref (cond/sub/foo.jpg). Tries common image
+                # extensions in order so users don't have to keep both
+                # sides on the same suffix.
+                cond_dir = getattr(subset, "conditioning_data_dir", None)
+                if cond_dir:
+                    stem = os.path.splitext(os.path.basename(img_path))[0]
+                    rel_dir = ""
+                    image_dir = getattr(subset, "image_dir", None)
+                    if image_dir:
+                        try:
+                            rel = os.path.relpath(os.path.dirname(img_path), image_dir)
+                            if rel and rel != "." and not rel.startswith(".."):
+                                rel_dir = rel
+                        except ValueError:
+                            rel_dir = ""
+                    own_ext = os.path.splitext(img_path)[1]
+                    candidate_exts = [own_ext] if own_ext else []
+                    for ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+                        if ext not in candidate_exts:
+                            candidate_exts.append(ext)
+                    for ext in candidate_exts:
+                        if rel_dir:
+                            candidate = os.path.join(cond_dir, rel_dir, f"{stem}{ext}")
+                        else:
+                            candidate = os.path.join(cond_dir, f"{stem}{ext}")
+                        if os.path.exists(candidate):
+                            info.cond_img_path = candidate
+                            break
+                    if info.cond_img_path is None:
+                        logger.warning(
+                            "[conditioning] no reference image found for %s "
+                            "under %s (tried extensions: %s)",
+                            img_path,
+                            cond_dir,
+                            candidate_exts,
+                        )
                 if subset.is_reg:
                     reg_infos.append((info, subset))
                 else:

@@ -255,6 +255,11 @@ class DatasetSubsetConfig(BaseModel):
     ar_buckets: list[float] | None = None
     # Per-subset caption override.
     caption_prefix: str | None = None
+    # Conditioning training (anima_lora 差异训练): same-stem reference
+    # image directory paired with this subset's image_dir. Loaded into
+    # ``batch['conditioning_images']`` when the trainer is launched
+    # with ``--conditioning``. None disables.
+    conditioning_data_dir: Path | None = None
 
 
 class DatasetConfig(BaseModel):
@@ -1220,6 +1225,16 @@ class AnimaLoraOptions(BaseModel):
 
     # ---- Output ----
     output_name: str = "anima_lora"
+
+    # ---- Conditioning training (差异训练) ----
+    # When True, ``--conditioning`` is forwarded to train.py and each
+    # subset's ``conditioning_data_dir`` (on DatasetSubsetConfig) is
+    # written into the generated dataset_config.toml so train.py pairs
+    # target images with same-stem references and exposes
+    # ``batch['conditioning_images']`` to downstream losses.
+    # Mirumo fork docs:
+    #   https://github.com/Mirumo0u0/sd-scripts/blob/main/docs/anima_conditioning_training-zh.md
+    conditioning: bool = False
 
     # ---- Network ----
     network_module: str = "networks.lora_anima"

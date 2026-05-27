@@ -565,6 +565,14 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         help="Number of inversion runs expected per image (aggregate_by of make invert). "
         "Each training step samples one run stochastically. Default: 3.",
     )
+    parser.add_argument(
+        "--conditioning",
+        action="store_true",
+        help="Enable conditioning training (差异训练): pair each target image in "
+        "image_dir with a same-stem reference image from conditioning_data_dir, "
+        "load the reference into batch['conditioning_images'] for downstream loss "
+        "use (apply_masked_loss, ControlNet-style flows, paired editing, ...).",
+    )
 
 
 # Loss weighting

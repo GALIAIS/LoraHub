@@ -191,6 +191,18 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         />
       </Row>
 
+      <Row
+        label="差异训练"
+        description="启用 conditioning training: 每张目标图与同名参考图配对(参考图目录在 数据集 → 子集 → 参考图目录 设置),train.py 把参考图加载到 batch['conditioning_images'] 供下游 loss 使用。适合图像编辑 / ControlNet 风格的成对训练。"
+      >
+        <ToggleSwitch
+          checked={v.conditioning ?? false}
+          onCheckedChange={(b) =>
+            set(["backend", "animaLora", "conditioning"], b)
+          }
+        />
+      </Row>
+
       {/* === 通用网络参数 === */}
       <Section
         icon={<Sparkles className="size-3.5" />}

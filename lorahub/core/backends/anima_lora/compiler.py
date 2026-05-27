@@ -663,6 +663,21 @@ def _render_dataset(
             },
         ],
     }
+
+    # Conditioning training (差异训练): forward the master switch and
+    # the per-subset reference dir so train.py picks them up. The
+    # conditioning_data_dir is read from the first DatasetSubsetConfig
+    # that supplies one; cfg.dataset.subsets is otherwise unused on
+    # the anima_lora backend (LoraHub renders a single resized subset).
+    if opts.conditioning:
+        cfg_dict["conditioning"] = True
+    cond_dir: str | None = None
+    for subset in cfg.dataset.subsets:
+        if subset.conditioning_data_dir is not None:
+            cond_dir = str(Path(str(subset.conditioning_data_dir)).resolve())
+            break
+    if cond_dir is not None:
+        dataset_entry["subsets"][0]["conditioning_data_dir"] = cond_dir
     cfg_dict["datasets"] = [dataset_entry]
 
 

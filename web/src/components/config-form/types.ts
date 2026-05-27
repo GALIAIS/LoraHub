@@ -82,6 +82,13 @@ export interface DatasetSubsetValue {
   maskPath?: string | null
   arBuckets?: number[] | null
   captionPrefix?: string | null
+  /**
+   * Per-subset conditioning reference dir. When set + the
+   * anima_lora backend has conditioning=true, train.py pairs each
+   * target image (this subset's path) with a same-stem reference
+   * from this dir into batch['conditioning_images'].
+   */
+  conditioningDataDir?: string | null
 }
 
 export interface ConfigFormValue {
@@ -318,6 +325,13 @@ export interface ConfigFormValue {
         | "debug"
       outputName?: string
       networkModule?: string
+      /**
+       * Conditioning training (差异训练): forwards `--conditioning`
+       * to anima_lora train.py and pairs each target image with a
+       * same-stem reference from each subset's
+       * `conditioningDataDir`. See Mirumo fork docs for usage.
+       */
+      conditioning?: boolean
       networkDim?: number
       networkAlpha?: number
       networkTrainUnetOnly?: boolean

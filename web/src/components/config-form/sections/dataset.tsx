@@ -514,6 +514,21 @@ export const DatasetFields = memo(function DatasetFields({
                 placeholder="（可选）"
               />
             </Row>
+            <Row
+              label="参考图目录"
+              description="差异训练 (anima_lora conditioning) 用。每张目标图配对同名参考图;后端开关在 后端 → 差异训练。留空禁用。"
+            >
+              <PathInput
+                value={sub.conditioningDataDir ?? ""}
+                onChange={(s) =>
+                  set(
+                    ["dataset", "subsets", idx, "conditioningDataDir"],
+                    s || null,
+                  )
+                }
+                placeholder="（可选）"
+              />
+            </Row>
             <Row label="captionPrefix">
               <TextInput
                 className="w-64"

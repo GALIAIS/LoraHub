@@ -94,6 +94,9 @@ class DreamBoothSubsetParams(BaseSubsetParams):
     alpha_mask: bool = False
     mask_dir: Optional[str] = None
     cache_dir: Optional[str] = None
+    # Conditioning training: same-stem reference image from this dir is
+    # loaded into ``batch['conditioning_images']``. None disables.
+    conditioning_data_dir: Optional[str] = None
 
 
 @dataclass
@@ -200,6 +203,7 @@ class ConfigSanitizer:
         "cache_dir": str,
         "mask_dir": str,
         "recursive": bool,
+        "conditioning_data_dir": str,
     }
     # datasets schema
     DATASET_ASCENDABLE_SCHEMA = {
