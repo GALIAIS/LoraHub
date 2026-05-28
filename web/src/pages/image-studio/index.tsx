@@ -11,13 +11,16 @@ import { AnnotateStage } from "./components/stages/annotate-stage"
 import { ShipStage } from "./components/stages/ship-stage"
 import { CreateDatasetDialog } from "./components/create-dataset-dialog"
 import { ToolsGrid } from "./components/tools-grid"
+import { LibraryPage } from "./components/library/library-page"
 import type { StageId } from "./components/stage-stepper"
 import type { ToolInfo } from "./tools-catalog"
 
 export { ImageStudioPage }
 
-// stage 参数允许的取值；多了一个虚拟 "tools" 用来显示工具广场。
-type StageOrTools = StageId | "tools"
+// stage 参数允许的取值；除了 5 个核心 stage，还有两个虚拟 stage：
+//  - "tools"   — 全部工具广场
+//  - "library" — 跨数据集的工具库（标签词典 / 触发词 / Prompt 模板）
+type StageOrTools = StageId | "tools" | "library"
 
 function ImageStudioPage() {
   const [params, setParams] = useSearchParams()
@@ -80,26 +83,31 @@ function ImageStudioPage() {
           {stageParam === "tools" && (
             <ToolsGrid datasetPath={datasetPath} onSelect={selectTool} />
           )}
-          {stageParam !== "tools" && !datasetPath && (
-            <EmptyState onCreateDataset={() => setShowCreate(true)} />
-          )}
-          {stageParam !== "tools" && datasetPath && (
-            <>
-              {stageParam === "intake" && (
-                <IntakeStage datasetPath={datasetPath} />
-              )}
-              {stageParam === "audit" && (
-                <AuditStage datasetPath={datasetPath} />
-              )}
-              {stageParam === "curate" && <DatasetDetail />}
-              {stageParam === "annotate" && (
-                <AnnotateStage datasetPath={datasetPath} />
-              )}
-              {stageParam === "ship" && (
-                <ShipStage datasetPath={datasetPath} />
-              )}
-            </>
-          )}
+          {stageParam === "library" && <LibraryPage />}
+          {stageParam !== "tools" &&
+            stageParam !== "library" &&
+            !datasetPath && (
+              <EmptyState onCreateDataset={() => setShowCreate(true)} />
+            )}
+          {stageParam !== "tools" &&
+            stageParam !== "library" &&
+            datasetPath && (
+              <>
+                {stageParam === "intake" && (
+                  <IntakeStage datasetPath={datasetPath} />
+                )}
+                {stageParam === "audit" && (
+                  <AuditStage datasetPath={datasetPath} />
+                )}
+                {stageParam === "curate" && <DatasetDetail />}
+                {stageParam === "annotate" && (
+                  <AnnotateStage datasetPath={datasetPath} />
+                )}
+                {stageParam === "ship" && (
+                  <ShipStage datasetPath={datasetPath} />
+                )}
+              </>
+            )}
         </div>
       </main>
 

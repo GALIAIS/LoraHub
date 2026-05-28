@@ -12,6 +12,7 @@
 import type { LucideIcon } from "lucide-react"
 import {
   AlertTriangle,
+  BookText,
   Boxes,
   ClipboardList,
   Copy,
@@ -22,6 +23,7 @@ import {
   Gauge,
   ImagePlus,
   Layers,
+  Library,
   PackageCheck,
   RefreshCw,
   Replace,
@@ -39,7 +41,14 @@ import {
 } from "lucide-react"
 import type { StageId } from "./components/stage-stepper"
 
-export type ToolCategory = "intake" | "audit" | "curate" | "tagging" | "ai" | "ship"
+export type ToolCategory =
+  | "intake"
+  | "audit"
+  | "curate"
+  | "tagging"
+  | "ai"
+  | "ship"
+  | "library"
 
 export interface ToolCategoryInfo {
   id: ToolCategory
@@ -55,14 +64,16 @@ export const TOOL_CATEGORIES: readonly ToolCategoryInfo[] = [
   { id: "tagging", label: "打标",   description: "WD14 / JoyTag 自动打标 + 标签词频与批量编辑",            icon: Tags          },
   { id: "ai",      label: "AI",     description: "VLM 直出 caption / 质量分 / 触发词 / Anima 重写",         icon: Sparkles      },
   { id: "ship",    label: "出口",   description: "训练就绪门禁、导出复制、另存数据集",                      icon: PackageCheck  },
+  { id: "library", label: "工具库", description: "跨数据集的标签词典、触发词索引、Prompt 模板",              icon: Library       },
 ] as const
 
 export interface ToolInfo {
   /** 在 URL 里出现的稳定 id (?tool=<id>)。也作为 stage 子页面板高亮的 hint。 */
   id: string
   category: ToolCategory
-  /** 工具进入哪个 stage 子页 — 即点击卡片后路由的 ?stage 参数。 */
-  stage: StageId
+  /** 工具进入哪个 stage 子页 — 即点击卡片后路由的 ?stage 参数。
+   *  "library" 是工具库虚拟 stage，不参与 stepper 推荐路径。 */
+  stage: StageId | "library"
   label: string
   /** 一句话描述 — 1-2 句，控制在 60 中文字符内便于卡片排版。 */
   description: string
@@ -325,6 +336,35 @@ export const TOOLS: readonly ToolInfo[] = [
     icon: PackageCheck,
     requiresDataset: true,
     writes: true,
+  },
+
+  // ===== 工具库（跨数据集，不需要选数据集） =====
+  {
+    id: "library-tags",
+    category: "library",
+    stage: "library",
+    label: "标签词典",
+    description: "维护全局 tag + 别名 + 分类 + 颜色，跨数据集复用",
+    icon: Tags,
+    requiresDataset: false,
+  },
+  {
+    id: "library-triggers",
+    category: "library",
+    stage: "library",
+    label: "触发词索引",
+    description: "trigger word ↔ 角色 / 概念 ↔ 数据集映射",
+    icon: Wand2,
+    requiresDataset: false,
+  },
+  {
+    id: "library-prompts",
+    category: "library",
+    stage: "library",
+    label: "Prompt 模板",
+    description: "VLM caption / 质量审计 / 触发词抽取的 prompt 库",
+    icon: BookText,
+    requiresDataset: false,
   },
 ] as const
 

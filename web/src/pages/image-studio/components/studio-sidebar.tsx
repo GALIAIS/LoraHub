@@ -12,6 +12,7 @@ import {
   PackageCheck,
   Trash2,
   LayoutGrid,
+  Library,
 } from "lucide-react"
 import { toast } from "sonner"
 import { datasetList, datasetDelete } from "@/lib/api"
@@ -34,8 +35,10 @@ import {
 import { cn } from "@/lib/utils"
 import type { StageId } from "./stage-stepper"
 
-// stepper 不再是必经路径,"全部工具"作为独立的虚拟阶段(顶部入口)。
-type SidebarStage = StageId | "tools"
+// 除 stepper 的 5 个 stage 外,还有两个虚拟 stage:
+//   - "tools"   — 全部工具广场
+//   - "library" — 跨数据集的工具库
+type SidebarStage = StageId | "tools" | "library"
 
 const STAGES: { id: StageId; label: string; icon: typeof Import }[] = [
   { id: "intake", label: "导入", icon: Import },
@@ -137,37 +140,68 @@ export function StudioSidebar({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
-          {/* "全部工具"入口 — 独立于数据集,作为工具广场的常驻入口。 */}
-          <div className="px-1.5 pb-1">
+          {/* "全部工具" / "工具库" 两个虚拟 stage 入口 — 独立于数据集,常驻顶部。 */}
+          <div className="px-1.5 pb-1 space-y-0.5">
             {collapsed ? (
-              <Tooltip>
-                <TooltipTrigger
+              <>
+                <Tooltip>
+                  <TooltipTrigger
+                    onClick={() => onSelectStage("tools")}
+                    className={cn(
+                      "flex w-full items-center justify-center rounded-md p-2",
+                      stage === "tools"
+                        ? "bg-primary/10 text-primary"
+                        : "hover:bg-accent/50 text-muted-foreground",
+                    )}
+                  >
+                    <LayoutGrid className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right">全部工具</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    onClick={() => onSelectStage("library")}
+                    className={cn(
+                      "flex w-full items-center justify-center rounded-md p-2",
+                      stage === "library"
+                        ? "bg-primary/10 text-primary"
+                        : "hover:bg-accent/50 text-muted-foreground",
+                    )}
+                  >
+                    <Library className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right">工具库</TooltipContent>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
                   onClick={() => onSelectStage("tools")}
                   className={cn(
-                    "flex w-full items-center justify-center rounded-md p-2",
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
                     stage === "tools"
-                      ? "bg-primary/10 text-primary"
-                      : "hover:bg-accent/50 text-muted-foreground",
+                      ? "bg-primary/10 text-primary font-medium"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
-                  <LayoutGrid className="size-4" />
-                </TooltipTrigger>
-                <TooltipContent side="right">全部工具</TooltipContent>
-              </Tooltip>
-            ) : (
-              <button
-                type="button"
-                onClick={() => onSelectStage("tools")}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  stage === "tools"
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                )}
-              >
-                <LayoutGrid className="size-3.5 shrink-0" />
-                <span>全部工具</span>
-              </button>
+                  <LayoutGrid className="size-3.5 shrink-0" />
+                  <span>全部工具</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectStage("library")}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                    stage === "library"
+                      ? "bg-primary/10 text-primary font-medium"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                  )}
+                >
+                  <Library className="size-3.5 shrink-0" />
+                  <span>工具库</span>
+                </button>
+              </>
             )}
           </div>
           <div className="mx-2 my-1 border-t" />
