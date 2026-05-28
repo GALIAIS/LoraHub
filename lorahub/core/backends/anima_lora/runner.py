@@ -84,6 +84,28 @@ class AnimaLoraRunner(SubprocessRunner):
         merged_env["PYTHONWARNINGS"] = (
             f"{anima_filter},{existing}" if existing else anima_filter
         )
+
+        # CUDA allocator: enable expandable segments by default. anima
+        # ships ``torch_compile=True`` (LOCKED_TRUE) which captures
+        # transformer blocks into CUDA Graphs — those Graphs sit in a
+        # private memory pool that ``torch.cuda.empty_cache()`` can't
+        # reclaim. With the default caching allocator a multi-GiB
+        # private pool plus the optimizer / latent / TE caches
+        # fragments the remaining headroom; the sampling-phase VAE
+        # decode then fails on a ~1 GiB ``F.pad`` even though
+        # ``reserved-but-unallocated`` says the bytes exist. PyTorch's
+        # documented fix is ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True``
+        # (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf).
+        # We only inject when the user hasn't already set the variable,
+        # so a deliberate override (``garbage_collection_threshold=...``)
+        # isn't clobbered.
+        cuda_alloc = merged_env.get("PYTORCH_CUDA_ALLOC_CONF", "")
+        if "expandable_segments" not in cuda_alloc:
+            merged_env["PYTORCH_CUDA_ALLOC_CONF"] = (
+                f"{cuda_alloc},expandable_segments:True"
+                if cuda_alloc
+                else "expandable_segments:True"
+            )
         # cwd=repo so train.py can resolve relative paths in its own
         # `configs/base.toml` model paths (`models/...`) without the
         # caller having to pre-resolve everything.
