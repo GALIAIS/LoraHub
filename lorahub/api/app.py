@@ -67,6 +67,7 @@ from lorahub.api.image_studio_store import (
     ImageStudioStore,
     default_image_studio_store_path,
 )
+from lorahub.api.image_studio_library import ImageStudioLibrary
 from lorahub.api.helpers import _resolve_web_dist
 from lorahub.api.jobs_helpers import _job_events
 from lorahub.api.session_store import SessionStore, default_session_store_path
@@ -95,6 +96,10 @@ _sweep_store: SweepStore | None = None
 _session_store: SessionStore | None = None
 _ai_store: AIStore | None = None
 _image_studio_store: ImageStudioStore | None = None
+# Cross-dataset library (tag dictionary, trigger-word index, prompt
+# templates). Shares the SQLite file with the studio store but lives in
+# disjoint tables so a tag/template edit can't corrupt per-image rows.
+_image_studio_library: ImageStudioLibrary | None = None
 # Error registry: every uncaught FastAPI exception, every job failure,
 # every preflight 422, every frontend POST /api/error-reports lands here.
 # See lorahub.api.error_reports + .error_reporter for the funnel.
@@ -166,7 +171,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_store, _image_studio_store, _error_report_store, _error_upstream_dispatcher  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store, _image_studio_store, _image_studio_library, _error_report_store, _error_upstream_dispatcher  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
@@ -242,6 +247,11 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
                     )
                 )
                 log.debug("seeded empty AI route for %s (%s)", task_id, hint)
+
+    if _image_studio_library is None:
+        # Reuse the studio sqlite file — disjoint table prefixes mean a
+        # library write can't interfere with annotations/phash/embeddings.
+        _image_studio_library = ImageStudioLibrary(default_image_studio_store_path())
 
     # Auto-resume: replay interrupted jobs that have a usable checkpoint.
     # Done before scheduler.start() so resumed work lands at the head of

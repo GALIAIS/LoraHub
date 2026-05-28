@@ -19,6 +19,12 @@ from lorahub.api.image_studio_store import (
     ImageStudioStore,
     PendingOp,
 )
+from lorahub.api.image_studio_library import (
+    ImageStudioLibrary,
+    PromptTemplate,
+    TagEntry,
+    TriggerWordEntry,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +188,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
     store = ImageStudioStore(tmp_path / "is.sqlite")
     monkeypatch.setattr(app_module, "_image_studio_store", store)
+    library = ImageStudioLibrary(tmp_path / "is.sqlite")
+    monkeypatch.setattr(app_module, "_image_studio_library", library)
     with TestClient(app_module.app) as c:
         yield c
 
@@ -384,3 +392,162 @@ def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> 
     assert r.json()["deletedCount"] == 0
     assert len(r.json()["errors"]) == 1
     assert "favourite" in r.json()["errors"][0]["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Library — store unit tests
+# --------------------------------------------------------------------------- #
+
+
+def test_library_tag_round_trip(tmp_path: Path) -> None:
+    lib = ImageStudioLibrary(tmp_path / "is.sqlite")
+    saved = lib.upsert_tag(
+        TagEntry(
+            tag="blue hair",
+            category="character",
+            aliases=["azure hair"],
+            color="#3b82f6",
+            notes="lead character",
+        )
+    )
+    assert saved.created_at
+    assert saved.updated_at
+    fetched = lib.get_tag("blue hair")
+    assert fetched is not None
+    assert fetched.aliases == ["azure hair"]
+    assert fetched.notes == "lead character"
+
+
+def test_library_tag_search(tmp_path: Path) -> None:
+    lib = ImageStudioLibrary(tmp_path / "is.sqlite")
+    lib.upsert_tag(TagEntry(tag="blue hair", category="character"))
+    lib.upsert_tag(TagEntry(tag="red hair", category="character"))
+    lib.upsert_tag(TagEntry(tag="masterpiece", category="quality"))
+    assert {t.tag for t in lib.list_tags(category="character")} == {
+        "blue hair",
+        "red hair",
+    }
+    assert {t.tag for t in lib.list_tags(search="blue")} == {"blue hair"}
+
+
+def test_library_trigger_round_trip(tmp_path: Path) -> None:
+    lib = ImageStudioLibrary(tmp_path / "is.sqlite")
+    lib.upsert_trigger(
+        TriggerWordEntry(
+            trigger_word="aelina",
+            character_name="Aelina",
+            datasets=["proj-a", "proj-b"],
+        )
+    )
+    fetched = lib.get_trigger("aelina")
+    assert fetched is not None
+    assert fetched.datasets == ["proj-a", "proj-b"]
+
+
+def test_library_prompt_default_demotes_others(tmp_path: Path) -> None:
+    lib = ImageStudioLibrary(tmp_path / "is.sqlite")
+    a = lib.upsert_prompt(
+        PromptTemplate(id="", name="Anima A", category="caption", body="x", is_default=True)
+    )
+    b = lib.upsert_prompt(
+        PromptTemplate(id="", name="Anima B", category="caption", body="y", is_default=True)
+    )
+    refreshed_a = lib.get_prompt(a.id)
+    refreshed_b = lib.get_prompt(b.id)
+    assert refreshed_a is not None and refreshed_a.is_default is False
+    assert refreshed_b is not None and refreshed_b.is_default is True
+
+
+# --------------------------------------------------------------------------- #
+# Library — API endpoint tests
+# --------------------------------------------------------------------------- #
+
+
+def test_library_tags_api_crud(client: TestClient) -> None:
+    r = client.put(
+        "/api/image-studio/library/tags/blue%20hair",
+        json={
+            "tag": "blue hair",
+            "category": "character",
+            "aliases": ["azure hair"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["tag"] == "blue hair"
+
+    listing = client.get("/api/image-studio/library/tags?category=character").json()
+    assert any(t["tag"] == "blue hair" for t in listing["tags"])
+
+    r = client.delete("/api/image-studio/library/tags/blue%20hair")
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+
+
+def test_library_tags_path_body_mismatch_rejected(client: TestClient) -> None:
+    r = client.put(
+        "/api/image-studio/library/tags/foo",
+        json={"tag": "bar"},
+    )
+    assert r.status_code == 400
+
+
+def test_library_triggers_api_crud(client: TestClient) -> None:
+    r = client.put(
+        "/api/image-studio/library/triggers/aelina",
+        json={
+            "triggerWord": "aelina",
+            "characterName": "Aelina",
+            "datasets": ["d1"],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["triggerWord"] == "aelina"
+
+    listing = client.get(
+        "/api/image-studio/library/triggers?characterName=Aelina"
+    ).json()
+    assert any(t["triggerWord"] == "aelina" for t in listing["triggers"])
+
+    r = client.delete("/api/image-studio/library/triggers/aelina")
+    assert r.status_code == 200
+
+
+def test_library_prompts_api_crud(client: TestClient) -> None:
+    r = client.post(
+        "/api/image-studio/library/prompts",
+        json={"name": "Anima Caption", "category": "caption", "body": "hello"},
+    )
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    assert pid
+
+    # Duplicate name should 409.
+    r2 = client.post(
+        "/api/image-studio/library/prompts",
+        json={"name": "Anima Caption", "category": "caption", "body": "x"},
+    )
+    assert r2.status_code == 409
+
+    # Update via PUT should change body and bump updated_at.
+    r3 = client.put(
+        f"/api/image-studio/library/prompts/{pid}",
+        json={"name": "Anima Caption", "category": "caption", "body": "world"},
+    )
+    assert r3.status_code == 200
+    assert r3.json()["body"] == "world"
+
+    listing = client.get(
+        "/api/image-studio/library/prompts?category=caption"
+    ).json()
+    assert any(p["id"] == pid for p in listing["prompts"])
+
+    r4 = client.delete(f"/api/image-studio/library/prompts/{pid}")
+    assert r4.status_code == 200
+
+
+def test_library_prompts_post_rejects_id(client: TestClient) -> None:
+    r = client.post(
+        "/api/image-studio/library/prompts",
+        json={"id": "should-not-allow", "name": "x", "body": "y"},
+    )
+    assert r.status_code == 400
