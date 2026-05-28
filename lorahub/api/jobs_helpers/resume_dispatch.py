@@ -385,9 +385,14 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
                 "(missing `latest` marker file). Pick a timestamped run dir."
             )
             raise ResumeTargetInvalid(msg)
+        try:
+            children = list(path.iterdir())
+        except OSError as exc:
+            msg = f"cannot enumerate resume.resume_from {path}: {exc}"
+            raise ResumeTargetInvalid(msg) from exc
         if not any(
             child.is_dir() and child.name.startswith("global_step")
-            for child in path.iterdir()
+            for child in children
         ):
             msg = (
                 f"resume.resume_from {path} has `latest` but no global_step* "
@@ -403,8 +408,16 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
                 f"to {path.parent} (the parent of the run dir)."
             )
             raise ResumeTargetInvalid(msg)
-        out_resolved = Path(str(out_dir)).expanduser().resolve()
-        parent_resolved = path.resolve().parent
+        out_resolved = Path(str(out_dir)).expanduser()
+        try:
+            out_resolved = out_resolved.resolve()
+            parent_resolved = path.resolve().parent
+        except OSError as exc:
+            msg = (
+                "could not resolve output.output_dir or resume.resume_from "
+                f"on disk: {exc}"
+            )
+            raise ResumeTargetInvalid(msg) from exc
         if out_resolved != parent_resolved:
             msg = (
                 "diffusion-pipe resume requires output.output_dir == "

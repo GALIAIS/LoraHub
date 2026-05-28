@@ -270,6 +270,28 @@ def test_validate_rejects_dp_when_output_dir_mismatches_run_parent(
         _validate_resume_target(cfg)
 
 
+def test_validate_wraps_iterdir_oserror_as_resume_target_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Permission errors on dp run dirs must surface as 400, not 500."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    run = _drop_dp_run(out_dir, "20260518_05-37-00")
+    cfg = _dp_cfg(tmp_path, output_dir=out_dir)
+    cfg.resume.resume_from = run
+
+    real_iterdir = Path.iterdir
+
+    def boom(self: Path) -> Iterator[Path]:
+        if self == run:
+            raise PermissionError("simulated EACCES")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    with pytest.raises(ResumeTargetInvalid, match="cannot enumerate"):
+        _validate_resume_target(cfg)
+
+
 # --------------------------------------------------------------------------- #
 # GET /artifacts/{id}/states
 # --------------------------------------------------------------------------- #
