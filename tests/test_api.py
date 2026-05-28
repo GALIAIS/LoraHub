@@ -4095,6 +4095,60 @@ def test_artifacts_zip_honours_include_query(
     assert names == {"model.safetensors", "output/sample.png"}
 
 
+def test_artifacts_zip_excludes_resume_state_safetensors(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Accelerator resume-state trees must not bloat the default zip.
+
+    kohya/anima save ``<output>-NNNNNN-state/`` and a rolling
+    ``<output>-checkpoint-state/`` next to each true LoRA checkpoint.
+    Those directories carry a full ``model.safetensors`` snapshot plus
+    optimizer / scheduler / sampler / random-state files needed for
+    resume — multiple GiB per saved epoch. Users hitting the default
+    "download checkpoints" zip want the LoRA artifact only.
+    """
+    import io
+    import zipfile
+
+    ws = tmp_path / "ws-state"
+    ws.mkdir()
+    (ws / "ckpt").mkdir()
+    # Real LoRA artifact — what users actually want.
+    (ws / "ckpt" / "lora-000002.safetensors").write_bytes(b"lora")
+    # Per-epoch resume tree.
+    state_dir = ws / "ckpt" / "lora-000002-state"
+    state_dir.mkdir()
+    (state_dir / "model.safetensors").write_bytes(b"snapshot")
+    (state_dir / "optimizer.bin").write_bytes(b"opt")
+    (state_dir / "train_state.json").write_text("{}", encoding="utf-8")
+    # Rolling (overwritten every save) state tree.
+    rolling = ws / "ckpt" / "lora-checkpoint-state"
+    rolling.mkdir()
+    (rolling / "model.safetensors").write_bytes(b"rolling")
+    (rolling / "scheduler.bin").write_bytes(b"sch")
+
+    job_id = _make_job_with_workspace(ws)
+
+    # Default include=checkpoints → only the real LoRA.
+    r = client.get(f"/api/artifacts/{job_id}/zip")
+    assert r.status_code == 200
+    names = set(zipfile.ZipFile(io.BytesIO(r.content)).namelist())
+    assert names == {"ckpt/lora-000002.safetensors"}, names
+
+    # include=other lets the user bring the resume tree along on demand.
+    r2 = client.get(f"/api/artifacts/{job_id}/zip?include=other")
+    assert r2.status_code == 200
+    names2 = set(zipfile.ZipFile(io.BytesIO(r2.content)).namelist())
+    assert "ckpt/lora-000002-state/model.safetensors" in names2
+    assert "ckpt/lora-000002-state/optimizer.bin" in names2
+    assert "ckpt/lora-000002-state/train_state.json" in names2
+    assert "ckpt/lora-checkpoint-state/model.safetensors" in names2
+    assert "ckpt/lora-checkpoint-state/scheduler.bin" in names2
+    # The real LoRA is in `checkpoints`, not `other` — must NOT come
+    # along when only `other` was requested.
+    assert "ckpt/lora-000002.safetensors" not in names2
+
+
 def test_artifacts_zip_rejects_unknown_bucket(
     client: TestClient, tmp_path: Path
 ) -> None:

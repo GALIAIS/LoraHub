@@ -160,6 +160,14 @@ def download_zip(
     Default is ``checkpoints`` only — the LoRA weights are what people
     actually ship; samples and logs balloon the archive without
     matching the typical user intent of "give me the model file".
+
+    Note: accelerator resume-state trees (``<output>-NNNNNN-state/`` and
+    ``<output>-checkpoint-state/``) are classified as "other", not
+    "checkpoints", even though they contain ``.safetensors`` files —
+    their ``model.safetensors`` is a full optimizer-paired model
+    snapshot for resume, not a LoRA artifact. The default zip
+    therefore excludes them. Pass ``include=other`` (or
+    ``include=checkpoints,other``) to bundle the resume tree.
     """
     job = state.registry.get(job_id)
     if job is None:

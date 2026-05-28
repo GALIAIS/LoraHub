@@ -53,6 +53,19 @@ def _classify_artifact(rel: Path) -> str:
     suffix = rel.suffix.lower()
     if name in _LOG_FILENAMES:
         return "logs"
+    # Accelerator resume-state directories (kohya/anima emit
+    # ``<output>-NNNNNN-state/`` and ``<output>-checkpoint-state/`` with
+    # ``model.safetensors`` + ``optimizer.bin`` + ``scheduler.bin`` +
+    # ``sampler*.bin`` + ``random_states_*.pkl``). The ``.safetensors``
+    # inside is the *full* model snapshot for resume — NOT a LoRA
+    # artifact users want to ship. Surface every file under a
+    # ``*-state/`` directory as "other" so the default
+    # ``checkpoints``-only zip doesn't bloat by multiple GiB per saved
+    # epoch. Users who genuinely need to download the resume tree can
+    # still pass ``include=other`` (or use the per-file delete /
+    # download routes); see ``artifacts.download_zip``.
+    if any(part.endswith("-state") for part in rel.parts):
+        return "other"
     if suffix in _CHECKPOINT_SUFFIXES:
         return "checkpoints"
     if suffix in _SAMPLE_SUFFIXES:
