@@ -162,6 +162,12 @@ class AnimaLoraBackend:
         workspace = workspace.resolve()
         workspace.mkdir(parents=True, exist_ok=True)
 
+        # Wandb seed: anima's pyproject doesn't depend on wandb, but the
+        # compiler emits --log_with=wandb whenever monitoring is enabled.
+        # Install on demand so the user doesn't hit ImportError mid-train
+        # after caching has already burned ~minutes of GPU time.
+        _ensure_wandb_if_enabled(cfg, bootstrap_env.python_executable, on_event)
+
         # Caption sanitisation — shared with kohya / dp; see
         # _common.dataset_prep.
         from lorahub.core.backends._common.dataset_prep import (  # noqa: PLC0415
@@ -440,3 +446,124 @@ def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
     body = "\n".join(prompt + suffix for prompt in captions) + "\n"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(body, encoding="utf-8")
+
+
+def _ensure_wandb_if_enabled(
+    cfg: TrainingConfig,
+    venv_python: Path,
+    on_event: Callable[[TrainingEvent], None],
+) -> None:
+    """Lazily install wandb into the anima venv when monitoring is on.
+
+    anima_lora's ``pyproject.toml`` only declares ``tensorboard`` — wandb
+    isn't pulled in by ``uv sync``. But ``library/runtime/accelerator.py``
+    hard-imports wandb whenever ``--log_with wandb`` is set, which the
+    compiler emits whenever ``cfg.monitoring.enable_wandb=true``. Without
+    a probe step the user only finds out after caching is done, mid-way
+    through ``prepare_accelerator`` — and at that point a long preprocess
+    run has been wasted on a config problem we could have detected in
+    ~200 ms before the spawn.
+
+    Probe is a one-shot ``python -c "import wandb"``; install is
+    ``uv pip install --python <venv> wandb`` (preferred — respects
+    anima's index pins) with a plain ``pip`` fallback. Idempotent on
+    success; raises ``CompilationError`` with an actionable message
+    when both probe and install fail so the user can fix it without
+    digging through the traceback.
+    """
+    if not cfg.monitoring.enable_wandb:
+        return
+
+    import subprocess  # noqa: PLC0415
+
+    def _probe() -> tuple[int, str]:
+        proc = subprocess.run(  # noqa: S603
+            [str(venv_python), "-c", "import wandb"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        return proc.returncode, (proc.stderr or proc.stdout or "").strip()
+
+    rc, _ = _probe()
+    if rc == 0:
+        return
+
+    on_event(
+        TrainingEvent(
+            type=EventType.log,
+            payload={
+                "source": "wandb-install",
+                "message": "anima venv 缺少 wandb,monitoring.enableWandb=true,正在安装……",
+            },
+        )
+    )
+
+    # Prefer uv (fast, respects anima's [tool.uv.sources] pins). Fall
+    # back to plain pip so the path still works if uv isn't on PATH.
+    try:
+        from lorahub.core.toolchain.uv import find_uv  # noqa: PLC0415
+        uv = find_uv()
+    except Exception:  # noqa: BLE001
+        uv = None
+    if uv:
+        install_cmd = [uv, "pip", "install", "--python", str(venv_python), "wandb"]
+    else:
+        install_cmd = [str(venv_python), "-m", "pip", "install", "wandb"]
+
+    try:
+        install = subprocess.run(  # noqa: S603
+            install_cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        msg = (
+            f"安装 wandb 失败 ({exc.__class__.__name__}: {exc})。\n"
+            f"请手动执行:\n  {venv_python} -m pip install wandb\n"
+            "或在前端 → 监控 → 关闭 W&B 后重启任务。"
+        )
+        on_event(TrainingEvent(
+            type=EventType.error,
+            payload={"source": "wandb-install", "error": msg},
+        ))
+        raise CompilationError(msg) from exc
+
+    if install.returncode != 0:
+        tail = (install.stderr or install.stdout or "").strip()
+        msg = (
+            f"安装 wandb 失败 (exit {install.returncode})。\n"
+            f"请手动执行:\n  {venv_python} -m pip install wandb\n"
+            f"或在前端 → 监控 → 关闭 W&B 后重启任务。\n"
+            f"安装器输出 (尾部 500 字):\n{tail[-500:]}"
+        )
+        on_event(TrainingEvent(
+            type=EventType.error,
+            payload={"source": "wandb-install", "error": msg},
+        ))
+        raise CompilationError(msg)
+
+    # Verify the install actually imports — uv reports success even when
+    # the resolved wheel is broken for the target python ABI.
+    verify_rc, verify_err = _probe()
+    if verify_rc != 0:
+        msg = (
+            f"wandb 安装报告成功但仍无法 import:{verify_err[:300]}\n"
+            f"venv: {venv_python}\n"
+            "请手动检查 venv 完整性。"
+        )
+        on_event(TrainingEvent(
+            type=EventType.error,
+            payload={"source": "wandb-install", "error": msg},
+        ))
+        raise CompilationError(msg)
+
+    on_event(
+        TrainingEvent(
+            type=EventType.log,
+            payload={"source": "wandb-install", "message": "wandb 已装入 anima venv。"},
+        )
+    )
