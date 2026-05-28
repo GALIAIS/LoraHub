@@ -136,6 +136,15 @@ def compile_config(
         config_path: _build_main_toml(cfg, workspace, dataset_path),
     }
     argv = ["--deepspeed", "--config", str(config_path)]
+    # Cross-job resume: dp's train.py takes --resume_from_checkpoint=<basename>
+    # where basename is a child directory of output_dir (e.g. a timestamped run
+    # dir). We accept a full path on cfg.resume.resume_from for symmetry with
+    # the other backends and reduce it to the basename here. Caller is
+    # responsible for keeping output.output_dir == resume_from.parent — the
+    # clone-with-state API and _validate_resume_target enforce that.
+    if cfg.resume.resume_from is not None:
+        basename = Path(str(cfg.resume.resume_from)).name
+        argv.append(f"--resume_from_checkpoint={basename}")
     return argv, files
 
 
@@ -840,9 +849,10 @@ def _log_dropped_kohya_only_fields(cfg: TrainingConfig) -> None:
     _track(dropped, "output.no_metadata", out.no_metadata)
     _track(dropped, "output.metadata", out.metadata, default={})
 
-    # Resume knobs that only kohya understands.
+    # Resume knobs that only kohya understands. resume.resume_from is now
+    # forwarded above (compile_config -> --resume_from_checkpoint), so it is
+    # NOT dropped here.
     r = cfg.resume
-    _track(dropped, "resume.resume_from", r.resume_from)
     _track(dropped, "resume.save_last_n_epochs_state", r.save_last_n_epochs_state)
     _track(dropped, "resume.save_last_n_steps_state", r.save_last_n_steps_state)
     _track(dropped, "resume.skip_until_initial_step", r.skip_until_initial_step)
