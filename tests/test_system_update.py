@@ -193,17 +193,38 @@ def test_snapshot_returns_none_when_configs_empty(tmp_path: Path) -> None:
     assert su._snapshot_configs(repo, emit) is None
 
 
-def test_snapshot_round_trip_preserves_files(tmp_path: Path) -> None:
+def test_snapshot_returns_none_when_only_tracked_present(tmp_path: Path) -> None:
+    """Tracked presets are git-owned and ride along ``git checkout``.
+
+    With nothing untracked under configs/, snapshot has nothing to do
+    and returns None — restore is a no-op and the upgrade lets upstream
+    preset fixes propagate.
+    """
     repo = _make_repo(tmp_path)
+    events, emit = _capturing_emit()
+    assert su._snapshot_configs(repo, emit) is None
+
+
+def test_snapshot_round_trip_preserves_untracked_only(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    # Author-side yamls — never seen by git.
     (repo / "configs" / "user.yaml").write_text("name: user_edit\n")
     (repo / "configs" / "nested").mkdir()
     (repo / "configs" / "nested" / "deep.yaml").write_text("deep: yes\n")
+    # Modification on a tracked preset — must NOT be snapshotted (git
+    # owns it; stash flow handles the user's edit downstream).
+    (repo / "configs" / "anima.yaml").write_text("name: locally_edited\n")
 
     events, emit = _capturing_emit()
     snap = su._snapshot_configs(repo, emit)
     assert snap is not None
     assert snap.is_file()
     assert tarfile.is_tarfile(snap)
+
+    # Tar must contain only the two untracked entries.
+    with tarfile.open(snap, "r") as tar:
+        names = sorted(m.name for m in tar.getmembers() if m.isfile())
+    assert names == ["configs/nested/deep.yaml", "configs/user.yaml"], names
 
     # Wipe configs/ then restore from the archive.
     for p in sorted(
@@ -216,7 +237,10 @@ def test_snapshot_round_trip_preserves_files(tmp_path: Path) -> None:
     (repo / "configs").rmdir()
 
     su._restore_configs(repo, snap, emit)
-    assert (repo / "configs" / "anima.yaml").read_text() == "name: original\n"
+    # Tracked file is NOT in the snapshot — it stays gone post-wipe
+    # (in the real upgrade flow `git checkout` would already have put
+    # the upstream version back; here we only assert snapshot scope).
+    assert not (repo / "configs" / "anima.yaml").exists()
     assert (repo / "configs" / "user.yaml").read_text() == "name: user_edit\n"
     assert (repo / "configs" / "nested" / "deep.yaml").read_text() == "deep: yes\n"
 
@@ -257,30 +281,32 @@ def test_restore_rejects_path_traversal(tmp_path: Path) -> None:
 
 
 def test_update_context_restores_snapshot_on_error(tmp_path: Path) -> None:
-    """If a stage raises mid-flight, configs/ must come back."""
+    """If a stage raises mid-flight, the user's untracked yamls return."""
     repo = _make_repo(tmp_path)
-    (repo / "configs" / "anima.yaml").write_text("name: user_edit\n")
+    (repo / "configs" / "user.yaml").write_text("name: user_edit\n")
     events, emit = _capturing_emit()
 
     snap = su._snapshot_configs(repo, emit)
     assert snap is not None
 
-    # Simulate the wipe a real upgrade would do.
-    (repo / "configs" / "anima.yaml").write_text("name: clobbered_by_checkout\n")
+    # Simulate the wipe a real upgrade's checkout would do.
+    (repo / "configs" / "user.yaml").unlink()
 
     with pytest.raises(RuntimeError, match="boom"):
         with su._UpdateContext(repo, emit) as ctx:
             ctx.snapshot_path = snap
             raise RuntimeError("boom")
 
-    # User's edit is back, archive cleaned up.
-    assert (repo / "configs" / "anima.yaml").read_text() == "name: user_edit\n"
+    # User's untracked yaml is back, archive cleaned up.
+    assert (repo / "configs" / "user.yaml").read_text() == "name: user_edit\n"
     assert not snap.exists()
 
 
 def test_update_context_consumes_snapshot_on_success(tmp_path: Path) -> None:
     """After a successful run the temp tar must be removed."""
     repo = _make_repo(tmp_path)
+    # Need at least one untracked file so the snapshot is non-empty.
+    (repo / "configs" / "user.yaml").write_text("name: u\n")
     events, emit = _capturing_emit()
     snap = su._snapshot_configs(repo, emit)
     assert snap is not None
@@ -424,9 +450,9 @@ def test_apply_force_clean_excludes_user_owned_paths(
 def test_apply_restores_configs_when_pip_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """If install_deps fails, the user's configs/ must be back on disk."""
+    """If install_deps fails, the user's untracked yamls must come back."""
     repo = _make_repo(tmp_path)
-    (repo / "configs" / "anima.yaml").write_text("name: user_edit\n")
+    (repo / "configs" / "user.yaml").write_text("name: user_edit\n")
     # Force pip to fail; everything earlier succeeds.
     _stub_apply(monkeypatch, repo, pip_rc=2)
     events, emit = _capturing_emit()
@@ -434,14 +460,15 @@ def test_apply_restores_configs_when_pip_fails(
     with pytest.raises(RuntimeError, match="pip install failed"):
         su.apply(channel="main", build=False, progress=emit)
 
-    # The fake _stream_subprocess is a no-op for "git checkout HEAD --
-    # configs", so the working copy on disk still says "user_edit".
-    # The test that *really* matters is the rollback path: if
-    # _install_deps had raised after a real checkout (which would
-    # have swapped configs/ to the upstream version), the snapshot
-    # restore would have put the user copy back. We assert that the
-    # context cleanly tore down and the temp tar is gone.
-    assert (repo / "configs" / "anima.yaml").read_text() == "name: user_edit\n"
+    # The fake _stream_subprocess is a no-op for every git verb, so the
+    # working copy on disk still says "user_edit". The test that *really*
+    # matters is the rollback path: if _install_deps had raised after a
+    # real checkout (which would have swapped configs/ to the upstream
+    # version), the snapshot restore would have put the user's untracked
+    # yamls back. Tracked presets are intentionally NOT in the snapshot
+    # — they're git-owned and the real upgrade would have left them on
+    # the upstream version.
+    assert (repo / "configs" / "user.yaml").read_text() == "name: user_edit\n"
 
 
 def test_apply_raises_when_not_a_git_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
