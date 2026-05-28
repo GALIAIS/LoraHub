@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { X, Sparkles } from "lucide-react"
+import { X, Sparkles, BookOpen } from "lucide-react"
 import { api } from "@/lib/api"
 import type { AiBulkTab } from "./types"
+import { TriggerPicker } from "./library/trigger-picker"
 
 interface AiBulkModalProps {
   paths: string[]
@@ -40,6 +41,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   // when the configured VLM is rate-limited / quota-exhausted.
   const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
   const [triggerWord, setTriggerWord] = useState("")
+  const [triggerPickerOpen, setTriggerPickerOpen] = useState(false)
   const [stripStyleTags, setStripStyleTags] = useState(true)
   // Disabling WD14 reduces the caption to "trigger word + LLM nl_text"
   // (or just the trigger in style mode where the LLM is also off).
@@ -253,16 +255,33 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   <option value="general">通用（描述全部内容）</option>
                 </select>
               </label>
-              <label className="flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">触发词</span>
-                <input
-                  type="text"
-                  value={triggerWord}
-                  onChange={(e) => setTriggerWord(e.target.value)}
-                  placeholder="例如 anima style"
-                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
-                />
-              </label>
+                <div className="relative flex-1 flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={triggerWord}
+                    onChange={(e) => setTriggerWord(e.target.value)}
+                    placeholder="例如 anima style"
+                    className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTriggerPickerOpen((v) => !v)}
+                    className="flex items-center gap-1 rounded border px-2 py-1 text-[11px] hover:bg-accent"
+                    title="从工具库选触发词"
+                  >
+                    <BookOpen className="size-3" />
+                    工具库
+                  </button>
+                  {triggerPickerOpen && (
+                    <TriggerPicker
+                      onSelect={(t) => setTriggerWord(t)}
+                      onClose={() => setTriggerPickerOpen(false)}
+                    />
+                  )}
+                </div>
+              </div>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">合并策略</span>
                 <select
