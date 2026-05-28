@@ -122,10 +122,12 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
         #
         # Append a short timestamp so re-runs land in sibling
         # directories. Users who need cache reuse can still pass an
-        # explicit `workspace` and opt in.
+        # explicit `workspace` and opt in. Millisecond suffix keeps
+        # back-to-back create calls (e.g. burst from a script or a
+        # double-clicked button) from racing onto the same path.
         from datetime import datetime, UTC  # noqa: PLC0415
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
         workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
     findings = _raise_if_preflight_blocks(cfg, workspace)
     result = _launch_job(cfg, workspace)
@@ -424,7 +426,7 @@ def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
     else:
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
 
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
         workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
 
     findings = _raise_if_preflight_blocks(cfg, workspace)
