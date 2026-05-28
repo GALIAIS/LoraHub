@@ -422,7 +422,6 @@ def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
     if req.workspace:
         workspace = Path(req.workspace).resolve()
     else:
-        from datetime import datetime, UTC  # noqa: PLC0415
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
 
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
