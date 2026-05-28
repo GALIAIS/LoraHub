@@ -26,6 +26,7 @@ Routes:
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import zipfile
@@ -41,8 +42,13 @@ from lorahub.api.jobs_helpers import (
     _list_workspace_files,
     _resolve_workspace_file,
 )
+from lorahub.api.jobs_helpers.resume_dispatch import (
+    _RESUME_SCAN_EXCLUDE_DIRS,
+    _dp_output_dir,
+)
 from lorahub.api.state import JobState
 from lorahub.api.zip_stream import ZipStream
+from lorahub.core.config.schema import TrainingConfig
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +151,127 @@ def _iter_zip_chunks(
     tail = stream.drain()
     if tail:
         yield tail
+
+
+def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConfig | None) -> list[dict[str, Any]]:
+    """Enumerate every resumable state target the user could pick.
+
+    Returns a list of ``{kind, path, basename, modified_at, ...}`` dicts.
+
+    * **kohya / anima_lora** — every ``*-state*`` directory under the
+      workspace, sorted by mtime descending so the latest is first.
+      ``current_step`` is parsed from ``train_state.json`` when present.
+    * **diffusion-pipe** — every timestamped run dir under the resolved
+      output_dir that has ``latest`` + at least one ``global_step*``
+      subfolder. ``global_step`` is read from ``latest`` (the file
+      contains the most recent step name).
+    """
+    candidates: list[dict[str, Any]] = []
+    if not workspace.is_dir():
+        return candidates
+
+    if backend_type in ("kohya", "anima_lora"):
+        for p in workspace.rglob("*"):
+            if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
+                continue
+            if not (p.is_dir() and "-state" in p.name):
+                continue
+            entry: dict[str, Any] = {
+                "kind": "accelerate-state",
+                "path": str(p),
+                "basename": p.name,
+                "modified_at": p.stat().st_mtime,
+            }
+            ts_file = p / "train_state.json"
+            if ts_file.is_file():
+                try:
+                    data = json.loads(ts_file.read_text(encoding="utf-8"))
+                    if isinstance(data.get("current_step"), int):
+                        entry["current_step"] = int(data["current_step"])
+                    if isinstance(data.get("current_epoch"), int):
+                        entry["current_epoch"] = int(data["current_epoch"])
+                except (OSError, ValueError, TypeError):
+                    pass
+            candidates.append(entry)
+        candidates.sort(key=lambda e: e["modified_at"], reverse=True)
+        return candidates
+
+    if backend_type == "diffusion-pipe":
+        if cfg is None:
+            return candidates
+        out_dir = _dp_output_dir(workspace, cfg)
+        if not out_dir.is_dir():
+            return candidates
+        for child in out_dir.iterdir():
+            if not child.is_dir():
+                continue
+            latest = child / "latest"
+            if not latest.is_file():
+                continue
+            global_steps = [
+                p for p in child.iterdir()
+                if p.is_dir() and p.name.startswith("global_step")
+            ]
+            if not global_steps:
+                continue
+            entry: dict[str, Any] = {
+                "kind": "dp-run-dir",
+                "path": str(child.resolve()),
+                "basename": child.name,
+                "modified_at": child.stat().st_mtime,
+                "output_dir": str(out_dir),
+                "global_step_count": len(global_steps),
+            }
+            try:
+                tag = latest.read_text(encoding="utf-8").strip()
+                if tag.startswith("global_step"):
+                    entry["latest_step"] = int(tag.removeprefix("global_step"))
+            except (OSError, ValueError):
+                pass
+            candidates.append(entry)
+        candidates.sort(key=lambda e: e["basename"], reverse=True)
+        return candidates
+
+    return candidates
+
+
+@router.get("/artifacts/{job_id}/states")
+def list_states(job_id: str) -> dict[str, Any]:
+    """List every resumable state target for a job.
+
+    The frontend's clone-with-state picker calls this to populate the
+    "pick a checkpoint" dropdown. Returned shape is backend-aware:
+
+    * kohya / anima_lora — accelerate ``*-state*`` directories;
+    * diffusion-pipe — timestamped run dirs with ``global_step*/``.
+
+    Backend type is read from the job's config snapshot. If the
+    snapshot is unparsable we still return the workspace path so the
+    UI can show a neutral "no resumable artifacts" empty state.
+    """
+    job = state.registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    cfg: TrainingConfig | None = None
+    backend_type: str | None = None
+    snap = job.config_snapshot
+    if isinstance(snap, dict):
+        try:
+            cfg = TrainingConfig.model_validate(snap)
+            backend_type = cfg.backend.type
+        except Exception:  # noqa: BLE001
+            cfg = None
+    candidates: list[dict[str, Any]] = []
+    if backend_type is not None:
+        candidates = _list_state_candidates(job.workspace, backend_type, cfg)
+
+    return {
+        "job_id": job_id,
+        "workspace": str(job.workspace),
+        "backend_type": backend_type,
+        "states": candidates,
+    }
 
 
 @router.get("/artifacts/{job_id}/zip")
