@@ -209,11 +209,13 @@ def test_dp_resume_spec_packs_run_basename_and_pins_output_dir(
     assert spec.extra_argv == [f"--resume_from_checkpoint={run_dir.name}"]
     # cfg_overrides: the resumed run must land in the same output_dir
     # the original used; serialised as a string for pydantic re-validation.
-    assert spec.cfg_overrides == {"output.output_dir": str(out_dir)}
+    # Override keys use the alias form because `_apply_cfg_overrides`
+    # walks an alias-dumped dict before re-validating.
+    assert spec.cfg_overrides == {"output.outputDir": str(out_dir)}
     # And critically, the override is an absolute path — dp's cwd is
     # the diffusion-pipe checkout, so a relative path would resolve
     # somewhere unexpected.
-    assert Path(spec.cfg_overrides["output.output_dir"]).is_absolute()
+    assert Path(spec.cfg_overrides["output.outputDir"]).is_absolute()
 
 
 def test_dp_resume_raises_when_output_dir_never_existed(tmp_path: Path) -> None:
