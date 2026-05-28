@@ -53,12 +53,23 @@ _WANDB_RUN_PATH_RE = re.compile(
 
 
 def _parse_run_url(url: str) -> tuple[str, str, str]:
-    """Split ``https://host/entity/project/runs/run_id`` into its parts."""
+    """Split ``https://host/entity/project/runs/run_id`` into its parts.
+
+    Raises ``HTTPException(502)`` instead of bare ``ValueError`` so a
+    malformed URL stamped on the job (e.g. user pasted the wandb sweep
+    URL instead of a run URL) surfaces as a structured 502, not the
+    framework's generic 500.
+    """
     parsed = urlparse(url)
     match = _WANDB_RUN_PATH_RE.match(parsed.path or "")
     if match is None:
-        msg = f"unrecognized wandb run url shape: {url!r}"
-        raise ValueError(msg)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "wandb_run_url_invalid",
+                "message": f"unrecognized wandb run url shape: {url!r}",
+            },
+        )
     return match.group("entity"), match.group("project"), match.group("run_id")
 
 
@@ -66,7 +77,7 @@ def _resolve_run_url(job_id: str) -> str:
     rec = state.registry.get(job_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
-    metadata = rec.metadata or {}
+    metadata = rec.metadata if isinstance(rec.metadata, dict) else {}
     url = metadata.get("wandb_run_url")
     if not isinstance(url, str) or not url:
         raise HTTPException(
@@ -113,7 +124,23 @@ def _wandb_api():  # noqa: ANN202 — wandb types only available on demand
     base_url = getattr(settings, "wandb_base_url", None)
     if base_url:
         overrides["base_url"] = base_url
-    return wandb.Api(api_key=api_key, overrides=overrides, timeout=20)
+    try:
+        return wandb.Api(api_key=api_key, overrides=overrides, timeout=20)
+    except Exception as exc:  # noqa: BLE001 — wandb raises CommError, AuthenticationError, etc.
+        # Wrap as 503 so the UI can show the underlying error rather
+        # than the framework's "Internal Server Error" placeholder.
+        log.exception("wandb.Api construction failed")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "wandb_api_init_failed",
+                "message": (
+                    f"{type(exc).__name__}: {exc}. "
+                    "检查 设置 → 网络 中的 W&B api key / base_url 是否正确,"
+                    "以及当前服务可访问 wandb 后端。"
+                ),
+            },
+        ) from exc
 
 
 # --------------------------------------------------------- response models ---
@@ -178,23 +205,37 @@ def wandb_run_summary(job_id: str) -> WandbRunSummary:
             detail={"code": "wandb_fetch_failed", "message": str(exc)},
         ) from exc
 
-    summary_dict: dict[str, Any] = {}
     try:
-        summary_dict = {k: v for k, v in dict(run.summary).items() if not k.startswith("_")}
-    except Exception:  # noqa: BLE001
-        log.exception("wandb summary unwrap failed for %s", url)
+        summary_dict: dict[str, Any] = {}
+        try:
+            summary_dict = {k: v for k, v in dict(run.summary).items() if not k.startswith("_")}
+        except Exception:  # noqa: BLE001
+            log.exception("wandb summary unwrap failed for %s", url)
 
-    return WandbRunSummary(
-        entity=entity,
-        project=project,
-        run_id=run_id,
-        name=getattr(run, "name", None),
-        state=getattr(run, "state", None),
-        url=getattr(run, "url", url),
-        config=dict(run.config) if run.config else {},
-        summary=summary_dict,
-        tags=list(run.tags) if getattr(run, "tags", None) else [],
-    )
+        return WandbRunSummary(
+            entity=entity,
+            project=project,
+            run_id=run_id,
+            name=getattr(run, "name", None),
+            state=getattr(run, "state", None),
+            url=getattr(run, "url", url),
+            config=dict(run.config) if run.config else {},
+            summary=summary_dict,
+            tags=list(run.tags) if getattr(run, "tags", None) else [],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Catch-all so a wandb-side schema change or unexpected attribute
+        # access surfaces as a structured 502, not the framework's bare 500.
+        log.exception("wandb run summary marshalling failed for %s", url)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "wandb_summary_marshal_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            },
+        ) from exc
 
 
 @router.get("/runs/{job_id}/history", response_model=WandbHistoryResponse)
@@ -222,23 +263,35 @@ def wandb_run_history(
             detail={"code": "wandb_fetch_failed", "message": str(exc)},
         ) from exc
 
-    rows: list[dict[str, Any]]
-    if df is None or len(df) == 0:
-        rows = []
-        out_keys: list[str] = []
-    else:
-        # pandas → list[dict]; coerce numpy NaN to None so JSON is valid.
-        out_keys = [c for c in df.columns.tolist()]
-        rows = [
-            {k: (None if _is_nan(v) else v) for k, v in row.items()}
-            for row in df.to_dict(orient="records")
-        ]
-    return WandbHistoryResponse(
-        keys=out_keys,
-        rows=rows,
-        sampled=True,
-        samples_requested=samples,
-    )
+    try:
+        rows: list[dict[str, Any]]
+        if df is None or len(df) == 0:
+            rows = []
+            out_keys: list[str] = []
+        else:
+            # pandas → list[dict]; coerce numpy NaN to None so JSON is valid.
+            out_keys = [c for c in df.columns.tolist()]
+            rows = [
+                {k: (None if _is_nan(v) else v) for k, v in row.items()}
+                for row in df.to_dict(orient="records")
+            ]
+        return WandbHistoryResponse(
+            keys=out_keys,
+            rows=rows,
+            sampled=True,
+            samples_requested=samples,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.exception("wandb run history marshalling failed for %s", url)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "wandb_history_marshal_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            },
+        ) from exc
 
 
 def _is_nan(v: Any) -> bool:
