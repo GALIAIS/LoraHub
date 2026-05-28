@@ -292,6 +292,109 @@ def _anima_lora_resume_spec(workspace: Path) -> ResumeSpec:
     )
 
 
+class ResumeTargetInvalid(Exception):
+    """Raised when a user-supplied ``resume.resume_from`` doesn't match the
+    backend's expected layout. Surfaced by the clone-with-state API as 400.
+    """
+
+
+def _validate_resume_target(cfg: TrainingConfig) -> None:
+    """Verify ``cfg.resume.resume_from`` points at a real, backend-shaped artifact.
+
+    Each backend has a different on-disk shape:
+
+    * **kohya / anima_lora** — a ``*-state*`` directory containing
+      ``optimizer.bin`` + ``random_states_*.pkl`` (accelerate's
+      ``load_state`` shape). We accept either ``-state`` (end-of-run) or
+      ``-state-step<N>`` (interval saves).
+    * **diffusion-pipe** — a timestamped run directory containing
+      ``latest`` + at least one ``global_step*`` subdir. We additionally
+      require ``cfg.output.output_dir`` to be the *parent* of that run
+      dir, because dp resolves ``--resume_from_checkpoint=<basename>``
+      relative to ``output_dir``.
+
+    A no-op when ``resume.resume_from`` is unset — the legacy
+    "no resume" path stays untouched.
+    """
+    target = cfg.resume.resume_from
+    if target is None:
+        return
+    path = Path(str(target))
+    if not path.exists():
+        msg = f"resume.resume_from does not exist: {path}"
+        raise ResumeTargetInvalid(msg)
+
+    backend_type = cfg.backend.type
+    if backend_type in ("kohya", "anima_lora"):
+        if not path.is_dir():
+            msg = (
+                f"resume.resume_from must be a directory for {backend_type}, "
+                f"got file: {path}"
+            )
+            raise ResumeTargetInvalid(msg)
+        if "-state" not in path.name:
+            msg = (
+                f"resume.resume_from for {backend_type} must be a *-state* "
+                f"directory (accelerate state shape); got: {path.name}"
+            )
+            raise ResumeTargetInvalid(msg)
+        # Cheap sanity check: at least one of the canonical state files exists.
+        markers = ("optimizer.bin", "model.safetensors", "train_state.json")
+        if not any((path / m).exists() for m in markers):
+            msg = (
+                f"resume.resume_from {path} looks empty — none of "
+                f"{markers} found inside. Pick a real state save."
+            )
+            raise ResumeTargetInvalid(msg)
+        return
+
+    if backend_type == "diffusion-pipe":
+        if not path.is_dir():
+            msg = (
+                f"resume.resume_from must be a run directory for "
+                f"diffusion-pipe, got file: {path}"
+            )
+            raise ResumeTargetInvalid(msg)
+        if not (path / "latest").is_file():
+            msg = (
+                f"resume.resume_from {path} is not a diffusion-pipe run dir "
+                "(missing `latest` marker file). Pick a timestamped run dir."
+            )
+            raise ResumeTargetInvalid(msg)
+        if not any(
+            child.is_dir() and child.name.startswith("global_step")
+            for child in path.iterdir()
+        ):
+            msg = (
+                f"resume.resume_from {path} has `latest` but no global_step* "
+                "subdir; the run never produced a checkpoint."
+            )
+            raise ResumeTargetInvalid(msg)
+        # output.output_dir must be the parent of the run dir; otherwise dp
+        # cannot resolve --resume_from_checkpoint=<basename>.
+        out_dir = cfg.output.output_dir
+        if out_dir is None:
+            msg = (
+                "diffusion-pipe resume requires output.output_dir to be set "
+                f"to {path.parent} (the parent of the run dir)."
+            )
+            raise ResumeTargetInvalid(msg)
+        out_resolved = Path(str(out_dir)).expanduser().resolve()
+        parent_resolved = path.resolve().parent
+        if out_resolved != parent_resolved:
+            msg = (
+                "diffusion-pipe resume requires output.output_dir == "
+                f"{parent_resolved}, got {out_resolved}. The clone-with-state "
+                "API sets this automatically; if you arrived here by hand, "
+                "update output.output_dir to the run dir's parent."
+            )
+            raise ResumeTargetInvalid(msg)
+        return
+
+    msg = f"resume validation not implemented for backend.type={backend_type!r}"
+    raise ResumeTargetInvalid(msg)
+
+
 def _apply_cfg_overrides(cfg: TrainingConfig, overrides: dict[str, Any]) -> TrainingConfig:
     """Apply a flat dot-path override mapping onto a validated TrainingConfig.
 
@@ -498,6 +601,7 @@ def _migrate_snapshots_to_camel() -> int:
 __all__ = [
     "ResumeNotReady",
     "ResumeSpec",
+    "ResumeTargetInvalid",
     "_anima_lora_resume_spec",
     "_apply_cfg_overrides",
     "_attempt_auto_resume",
@@ -511,4 +615,5 @@ __all__ = [
     "_migrate_snapshots_to_camel",
     "_requeue_pending_jobs",
     "_should_auto_resume",
+    "_validate_resume_target",
 ]

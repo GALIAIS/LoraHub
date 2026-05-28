@@ -43,6 +43,7 @@ from .preview import _gpu_sampler_loop, _maybe_start_preview_worker
 from .resume_dispatch import (
     ResumeNotReady,
     ResumeSpec,
+    ResumeTargetInvalid,
     _anima_lora_resume_spec,
     _apply_cfg_overrides,
     _attempt_auto_resume,
@@ -56,6 +57,7 @@ from .resume_dispatch import (
     _migrate_snapshots_to_camel,
     _requeue_pending_jobs,
     _should_auto_resume,
+    _validate_resume_target,
 )
 
 __all__ = [
@@ -88,6 +90,7 @@ __all__ = [
     # resume_dispatch
     "ResumeNotReady",
     "ResumeSpec",
+    "ResumeTargetInvalid",
     "_anima_lora_resume_spec",
     "_apply_cfg_overrides",
     "_attempt_auto_resume",
@@ -101,4 +104,5 @@ __all__ = [
     "_migrate_snapshots_to_camel",
     "_requeue_pending_jobs",
     "_should_auto_resume",
+    "_validate_resume_target",
 ]
