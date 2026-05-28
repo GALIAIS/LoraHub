@@ -624,7 +624,19 @@ async def stream_events_sse(job_id: str, request: Request) -> StreamingResponse:
         sent = 0
         try:
             replayed_terminal = False
-            replay_events = _job_events(job)[:replay_until]
+            replay_events = _job_events(job)
+            # ``attach_listener`` returns ``len(job.events)`` — the in-memory
+            # ring buffer's length at attach time. After a server restart
+            # (or for any terminal job loaded from SQLite), the ring is
+            # empty even though events.jsonl is fully populated, so
+            # ``_job_events`` falls back to the disk log and returns N>0
+            # while ``replay_until`` is still 0. Without this guard we'd
+            # slice ``[:0]`` and emit nothing for replays of historic runs.
+            # Active jobs with a live tailer always have ``replay_until``
+            # match the deque, so this branch is a no-op for them.
+            if replay_until == 0:
+                replay_until = len(replay_events)
+            replay_events = replay_events[:replay_until]
             for ev in replay_events:
                 if sent >= resume_from:
                     yield _sse_format(
@@ -769,7 +781,13 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
     replay_until = state.registry.attach_listener(job_id, queue)
     try:
         replayed_terminal = False
-        for ev in _job_events(job)[:replay_until]:  # replay only up to attach time
+        replay_events = _job_events(job)
+        # See SSE handler for the rationale: replay_until is the
+        # in-memory ring's length, but the disk log can have a longer
+        # history after a server restart.
+        if replay_until == 0:
+            replay_until = len(replay_events)
+        for ev in replay_events[:replay_until]:  # replay only up to attach time
             await ws.send_json(ev.to_dict())
             replayed_terminal = ev.type is EventType.done
         terminal_state = job.state in {
