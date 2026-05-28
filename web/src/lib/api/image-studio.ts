@@ -342,6 +342,71 @@ export async function imageStudioSmartCaptionSingle(params: {
   )
 }
 
+/**
+ * Stage one of smart-caption as a standalone tool: WD14 + prompt
+ * assembly only. No LLM call, no disk write. Result is the per-image
+ * payload {@link imageStudioVlmAnimaRewrite} accepts as input.
+ */
+export interface Wd14PrefilterResult {
+  path: string
+  ratingName: string | null
+  generalTags: string[]
+  characterTags: string[]
+  promptText: string
+  dataUrl: string
+  captionSource: "vlm" | "tags"
+  stripStyleTags: boolean
+  skipLlm: boolean
+}
+
+export async function imageStudioWd14Prefilter(params: {
+  path: string
+  taggerModel?: string
+  device?: string
+  generalThreshold?: number
+  characterThreshold?: number
+  captionMode?: "general" | "style" | "character"
+  captionSource?: "vlm" | "tags"
+  triggerWord?: string
+  stripStyleTags?: boolean
+}): Promise<Wd14PrefilterResult> {
+  return http<Wd14PrefilterResult>("/image-studio/ai/wd14-prefilter", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+/**
+ * Stage two of smart-caption as a standalone tool: VLM call + Anima
+ * caption assembly + write the .txt sidecar.
+ *
+ * Pass the per-image fields from {@link imageStudioWd14Prefilter}, or
+ * hand-build them if you have tags from another source.
+ */
+export async function imageStudioVlmAnimaRewrite(params: {
+  path: string
+  visionTask?: string
+  mergeStrategy?: string
+  captionMode?: "general" | "style" | "character"
+  captionSource?: "vlm" | "tags"
+  triggerWord?: string
+  stripStyleTags?: boolean
+  ratingName?: string | null
+  generalTags?: string[]
+  characterTags?: string[]
+  promptText: string
+  dataUrl?: string
+  skipLlm?: boolean
+}): Promise<{ ok: true; path: string; wd14Tags: string; caption: string }> {
+  return http<{ ok: true; path: string; wd14Tags: string; caption: string }>(
+    "/image-studio/ai/vlm-anima-rewrite",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+  )
+}
+
 export async function imageStudioBatchCaption(params: {
   path: string
   recursive?: boolean

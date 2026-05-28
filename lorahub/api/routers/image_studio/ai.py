@@ -1543,6 +1543,155 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Independent stage endpoints
+# --------------------------------------------------------------------------- #
+#
+# /ai/smart-caption is a one-shot two-stage pipeline (WD14 → VLM). For
+# users who want to run the steps separately — e.g. WD14 first, eyeball
+# the tags, then ask the VLM to write the caption — the two endpoints
+# below expose the stages as standalone tools. The composed
+# /ai/smart-caption endpoint stays for the common case.
+
+
+class Wd14PrefilterInput(BaseModel):
+    """Input for /ai/wd14-prefilter — single image, WD14 only."""
+
+    path: str
+    taggerModel: str = "SmilingWolf/wd-eva02-large-tagger-v3"
+    device: str = "auto"
+    generalThreshold: float = 0.35
+    characterThreshold: float = 0.85
+    captionMode: str = "general"
+    captionSource: str = "vlm"
+    triggerWord: str | None = None
+    stripStyleTags: bool = True
+
+
+@router.post("/ai/wd14-prefilter")
+def ai_wd14_prefilter(body: Wd14PrefilterInput) -> dict[str, Any]:
+    """Run WD14 + prompt assembly for one image, no LLM call, no disk write.
+
+    Returns the same fields the batch worker would hand to stage two,
+    so a caller can review the WD14 output and the assembled prompt
+    before committing to a (paid) VLM call. The result's ``promptText``
+    and ``dataUrl`` are accepted as-is by /ai/vlm-anima-rewrite.
+    """
+    file_path = _resolve_under_roots(body.path)
+    if not file_path.is_file():
+        raise HTTPException(404, "image not found")
+
+    tagger = _get_tagger(
+        body.taggerModel,
+        body.generalThreshold,
+        body.characterThreshold,
+        body.device,
+    )
+
+    s1 = _smart_caption_stage_one(
+        file_path,
+        tagger,
+        body.captionMode,
+        caption_source=body.captionSource,
+        strip_style_tags=body.stripStyleTags,
+        use_wd14=True,
+    )
+    return {
+        "path": str(s1.img_path),
+        "ratingName": s1.rating_name,
+        "generalTags": s1.general_tags,
+        "characterTags": s1.character_tags,
+        "promptText": s1.prompt_text,
+        # data_url can be multi-MB; only return when the caller will
+        # actually need it (vlm path). Tags-only path doesn't.
+        "dataUrl": s1.data_url if body.captionSource != "tags" else "",
+        "captionSource": s1.caption_source,
+        "stripStyleTags": s1.strip_style_tags,
+        "skipLlm": s1.skip_llm,
+    }
+
+
+class VlmAnimaRewriteInput(BaseModel):
+    """Input for /ai/vlm-anima-rewrite — runs the LLM + writes caption.
+
+    Accepts the per-image fields produced by /ai/wd14-prefilter (or
+    hand-built from any source that can fill the same shape).
+    ``visionTask`` selects the AI route, ``mergeStrategy`` controls
+    how the new caption is merged with the existing .txt sidecar.
+    """
+
+    path: str
+    visionTask: str = "tagging.assist"
+    mergeStrategy: str = "replace"
+    captionMode: str = "general"
+    captionSource: str = "vlm"
+    triggerWord: str | None = None
+    stripStyleTags: bool = True
+    # Stage-one outputs the caller is forwarding. ``promptText`` is the
+    # one field the LLM actually sees. ``dataUrl`` is required for vlm
+    # source, empty for tags source.
+    ratingName: str | None = None
+    generalTags: list[str] = []
+    characterTags: list[str] = []
+    promptText: str = ""
+    dataUrl: str = ""
+    skipLlm: bool = False
+
+
+@router.post("/ai/vlm-anima-rewrite")
+def ai_vlm_anima_rewrite(body: VlmAnimaRewriteInput) -> dict[str, Any]:
+    """Stage two of smart-caption as a standalone tool.
+
+    Skips the WD14 step entirely; expects the caller (typically
+    /ai/wd14-prefilter, but can be hand-built) to have already filled
+    in ``promptText`` / ``dataUrl`` / tag fields. Calls the configured
+    vision route, assembles the Anima caption, writes the .txt sidecar
+    and updates the annotation row — exactly what stage two does inside
+    /ai/smart-caption.
+    """
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+
+    file_path = _resolve_under_roots(body.path)
+    if not file_path.is_file():
+        raise HTTPException(404, "image not found")
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+
+    route = ai_store.get_route(body.visionTask)
+    if route is None or not (route.provider_id and route.model_id):
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
+
+    s1 = _StageOneResult(
+        img_path=file_path,
+        rating_name=body.ratingName,
+        general_tags=list(body.generalTags),
+        character_tags=list(body.characterTags),
+        prompt_text=body.promptText,
+        data_url=body.dataUrl,
+        caption_source=body.captionSource,
+        strip_style_tags=body.stripStyleTags,
+        skip_llm=body.skipLlm,
+    )
+    store = _store()
+    try:
+        item = _smart_caption_stage_two(
+            s1,
+            ai_store,
+            route,
+            body.mergeStrategy,
+            store,
+            body.captionMode,
+            body.triggerWord,
+        )
+        return {"ok": True, **item}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"vlm rewrite failed: {exc}") from exc
+
+
+# --------------------------------------------------------------------------- #
 # Trigger word suggestion
 # --------------------------------------------------------------------------- #
 #
