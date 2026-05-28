@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +59,35 @@ _RESUME_SCAN_EXCLUDE_DIRS = frozenset(
 )
 
 
+def _iter_state_dirs(workspace: Path) -> Iterator[Path]:
+    """Yield every ``*-state*`` directory under ``workspace``, pruning
+    ``_RESUME_SCAN_EXCLUDE_DIRS`` whole-subtree.
+
+    ``rglob('*')`` walks the entire tree even when a subdir is going to
+    be filtered out — on workspaces that contain a 100k-image
+    ``post_image_dataset`` cache that's a multi-second hit per scan.
+    Using ``os.scandir`` keeps the prune at the directory level.
+    """
+    if not workspace.is_dir():
+        return
+    stack: list[Path] = [workspace]
+    while stack:
+        cur = stack.pop()
+        try:
+            entries = list(os.scandir(cur))
+        except (OSError, PermissionError):
+            continue
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if entry.name in _RESUME_SCAN_EXCLUDE_DIRS:
+                continue
+            p = Path(entry.path)
+            if "-state" in entry.name:
+                yield p
+            stack.append(p)
+
+
 def _find_latest_state_dir(workspace: Path) -> Path | None:
     """Most recently modified ``*-state*`` directory under the job workspace.
 
@@ -67,14 +98,7 @@ def _find_latest_state_dir(workspace: Path) -> Path | None:
     ``post_image_dataset`` / ``captions_sanitized`` so cache artifacts
     can't poison the most-recent-mtime pick.
     """
-    if not workspace.is_dir():
-        return None
-    candidates: list[Path] = []
-    for p in workspace.rglob("*"):
-        if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
-            continue
-        if p.is_dir() and "-state" in p.name:
-            candidates.append(p)
+    candidates = list(_iter_state_dirs(workspace))
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)

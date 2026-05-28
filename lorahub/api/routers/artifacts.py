@@ -43,8 +43,8 @@ from lorahub.api.jobs_helpers import (
     _resolve_workspace_file,
 )
 from lorahub.api.jobs_helpers.resume_dispatch import (
-    _RESUME_SCAN_EXCLUDE_DIRS,
     _dp_output_dir,
+    _iter_state_dirs,
 )
 from lorahub.api.state import JobState
 from lorahub.api.zip_stream import ZipStream
@@ -171,16 +171,16 @@ def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConf
         return candidates
 
     if backend_type in ("kohya", "anima_lora"):
-        for p in workspace.rglob("*"):
-            if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
-                continue
-            if not (p.is_dir() and "-state" in p.name):
+        for p in _iter_state_dirs(workspace):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
                 continue
             entry: dict[str, Any] = {
                 "kind": "accelerate-state",
                 "path": str(p),
                 "basename": p.name,
-                "modified_at": p.stat().st_mtime,
+                "modified_at": mtime,
             }
             ts_file = p / "train_state.json"
             if ts_file.is_file():
