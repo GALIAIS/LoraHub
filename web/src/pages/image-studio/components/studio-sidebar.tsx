@@ -11,6 +11,7 @@ import {
   Tags,
   PackageCheck,
   Trash2,
+  LayoutGrid,
 } from "lucide-react"
 import { toast } from "sonner"
 import { datasetList, datasetDelete } from "@/lib/api"
@@ -33,6 +34,9 @@ import {
 import { cn } from "@/lib/utils"
 import type { StageId } from "./stage-stepper"
 
+// stepper 不再是必经路径,"全部工具"作为独立的虚拟阶段(顶部入口)。
+type SidebarStage = StageId | "tools"
+
 const STAGES: { id: StageId; label: string; icon: typeof Import }[] = [
   { id: "intake", label: "导入", icon: Import },
   { id: "audit", label: "审计", icon: ClipboardCheck },
@@ -43,9 +47,9 @@ const STAGES: { id: StageId; label: string; icon: typeof Import }[] = [
 
 interface StudioSidebarProps {
   datasetPath: string
-  stage: StageId
+  stage: SidebarStage
   onSelectDataset: (path: string) => void
-  onSelectStage: (stage: StageId) => void
+  onSelectStage: (stage: SidebarStage) => void
   onCreateDataset: () => void
 }
 
@@ -133,6 +137,41 @@ export function StudioSidebar({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+          {/* "全部工具"入口 — 独立于数据集,作为工具广场的常驻入口。 */}
+          <div className="px-1.5 pb-1">
+            {collapsed ? (
+              <Tooltip>
+                <TooltipTrigger
+                  onClick={() => onSelectStage("tools")}
+                  className={cn(
+                    "flex w-full items-center justify-center rounded-md p-2",
+                    stage === "tools"
+                      ? "bg-primary/10 text-primary"
+                      : "hover:bg-accent/50 text-muted-foreground",
+                  )}
+                >
+                  <LayoutGrid className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent side="right">全部工具</TooltipContent>
+              </Tooltip>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSelectStage("tools")}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  stage === "tools"
+                    ? "bg-primary/10 text-primary font-medium"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="size-3.5 shrink-0" />
+                <span>全部工具</span>
+              </button>
+            )}
+          </div>
+          <div className="mx-2 my-1 border-t" />
+
           {!collapsed && (
             <div className="px-2 pb-1">
               <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">

@@ -10,14 +10,19 @@ import { AuditStage } from "./components/stages/audit-stage"
 import { AnnotateStage } from "./components/stages/annotate-stage"
 import { ShipStage } from "./components/stages/ship-stage"
 import { CreateDatasetDialog } from "./components/create-dataset-dialog"
+import { ToolsGrid } from "./components/tools-grid"
 import type { StageId } from "./components/stage-stepper"
+import type { ToolInfo } from "./tools-catalog"
 
 export { ImageStudioPage }
+
+// stage 参数允许的取值；多了一个虚拟 "tools" 用来显示工具广场。
+type StageOrTools = StageId | "tools"
 
 function ImageStudioPage() {
   const [params, setParams] = useSearchParams()
   const datasetPath = params.get("path") || ""
-  const stageParam = (params.get("stage") || "audit") as StageId
+  const stageParam = (params.get("stage") || "tools") as StageOrTools
   const [showCreate, setShowCreate] = useState(false)
   const queryClient = useQueryClient()
 
@@ -42,13 +47,21 @@ function ImageStudioPage() {
   const selectDataset = (path: string) => {
     const next = new URLSearchParams(params)
     next.set("path", path)
-    if (!next.get("stage")) next.set("stage", "audit")
+    if (!next.get("stage")) next.set("stage", "tools")
     setParams(next)
   }
 
-  const selectStage = (stage: StageId) => {
+  const selectStage = (stage: StageOrTools) => {
     const next = new URLSearchParams(params)
     next.set("stage", stage)
+    next.delete("tool")
+    setParams(next)
+  }
+
+  const selectTool = (tool: ToolInfo) => {
+    const next = new URLSearchParams(params)
+    next.set("stage", tool.stage)
+    next.set("tool", tool.id)
     setParams(next)
   }
 
@@ -63,25 +76,31 @@ function ImageStudioPage() {
       />
 
       <main className="flex-1 min-w-0 flex flex-col min-h-0">
-        {!datasetPath ? (
-          <EmptyState onCreateDataset={() => setShowCreate(true)} />
-        ) : (
-          <div className="flex-1 min-h-0 overflow-hidden">
-            {stageParam === "intake" && (
-              <IntakeStage datasetPath={datasetPath} />
-            )}
-            {stageParam === "audit" && (
-              <AuditStage datasetPath={datasetPath} />
-            )}
-            {stageParam === "curate" && <DatasetDetail />}
-            {stageParam === "annotate" && (
-              <AnnotateStage datasetPath={datasetPath} />
-            )}
-            {stageParam === "ship" && (
-              <ShipStage datasetPath={datasetPath} />
-            )}
-          </div>
-        )}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {stageParam === "tools" && (
+            <ToolsGrid datasetPath={datasetPath} onSelect={selectTool} />
+          )}
+          {stageParam !== "tools" && !datasetPath && (
+            <EmptyState onCreateDataset={() => setShowCreate(true)} />
+          )}
+          {stageParam !== "tools" && datasetPath && (
+            <>
+              {stageParam === "intake" && (
+                <IntakeStage datasetPath={datasetPath} />
+              )}
+              {stageParam === "audit" && (
+                <AuditStage datasetPath={datasetPath} />
+              )}
+              {stageParam === "curate" && <DatasetDetail />}
+              {stageParam === "annotate" && (
+                <AnnotateStage datasetPath={datasetPath} />
+              )}
+              {stageParam === "ship" && (
+                <ShipStage datasetPath={datasetPath} />
+              )}
+            </>
+          )}
+        </div>
       </main>
 
       {showCreate && (
