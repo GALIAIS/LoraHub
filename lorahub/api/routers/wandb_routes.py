@@ -208,9 +208,16 @@ def wandb_run_summary(job_id: str) -> WandbRunSummary:
     try:
         summary_dict: dict[str, Any] = {}
         try:
-            summary_dict = {k: v for k, v in dict(run.summary).items() if not k.startswith("_")}
+            # ``run.summary`` is a SummaryDict whose nested values are
+            # ``SummarySubDict`` instances (dict *subclasses*); pydantic v2
+            # won't serialize a subclass through dict[str, Any], so we
+            # recursively flatten to plain primitives here.
+            raw = {k: v for k, v in dict(run.summary).items() if not k.startswith("_")}
+            summary_dict = _coerce_jsonable(raw)
         except Exception:  # noqa: BLE001
             log.exception("wandb summary unwrap failed for %s", url)
+
+        config_dict = _coerce_jsonable(dict(run.config)) if run.config else {}
 
         return WandbRunSummary(
             entity=entity,
@@ -219,7 +226,7 @@ def wandb_run_summary(job_id: str) -> WandbRunSummary:
             name=getattr(run, "name", None),
             state=getattr(run, "state", None),
             url=getattr(run, "url", url),
-            config=dict(run.config) if run.config else {},
+            config=config_dict,
             summary=summary_dict,
             tags=list(run.tags) if getattr(run, "tags", None) else [],
         )
@@ -269,12 +276,12 @@ def wandb_run_history(
             rows = []
             out_keys: list[str] = []
         else:
-            # pandas → list[dict]; coerce numpy NaN to None so JSON is valid.
+            # Coerce numpy types / NaN / wandb subdicts to plain JSON
+            # primitives so pydantic's default encoder is enough. Without
+            # this, any image-file / histogram / SummarySubDict row would
+            # blow up at response serialization.
             out_keys = [c for c in df.columns.tolist()]
-            rows = [
-                {k: (None if _is_nan(v) else v) for k, v in row.items()}
-                for row in df.to_dict(orient="records")
-            ]
+            rows = [_coerce_jsonable(row) for row in df.to_dict(orient="records")]
         return WandbHistoryResponse(
             keys=out_keys,
             rows=rows,
@@ -294,11 +301,59 @@ def wandb_run_history(
         ) from exc
 
 
-def _is_nan(v: Any) -> bool:
+def _coerce_jsonable(obj: Any) -> Any:
+    """Recursively rewrite wandb-side objects into plain JSON primitives.
+
+    ``run.summary`` returns ``wandb.old.summary.SummarySubDict`` for nested
+    fields (e.g. images, histograms). It's **not** a ``dict`` subclass —
+    just a dict-like that exposes ``.items()`` / ``__getitem__`` — and its
+    ``__getattr__`` raises ``KeyError`` instead of ``AttributeError`` on
+    unknown names, which means ``getattr(x, "items", None)`` does *not*
+    fall through to the default. Use explicit try/except around attribute
+    access here so a dict-like wandb value doesn't blow up the coercion.
+
+    Without this pass pydantic v2's serializer hits
+    ``PydanticSerializationError: Unable to serialize unknown type`` on
+    any nested wandb subdict and the endpoint surfaces as a bare 500.
+    The same trap applies to numpy scalars sneaking out of
+    ``run.history`` and to NaN floats — we normalise all three.
+    """
+    # Fast-path primitives so we don't spend a method-lookup on every leaf.
+    if obj is None or isinstance(obj, (bool, int, str)):
+        return obj
+    if isinstance(obj, float):
+        return None if obj != obj else obj  # NaN → null
+    if isinstance(obj, (bytes, bytearray)):
+        return obj.decode("utf-8", errors="replace")
+
+    # Dict-like: builtin dict, OrderedDict, wandb's SummarySubDict, etc.
+    # Use try/except instead of hasattr/getattr to dodge wandb's
+    # KeyError-on-missing-attr __getattr__.
     try:
-        return v != v  # NaN is the only float not equal to itself.
-    except Exception:  # noqa: BLE001
-        return False
+        items_fn = obj.items
+    except (AttributeError, KeyError):
+        items_fn = None
+    if callable(items_fn):
+        try:
+            return {str(k): _coerce_jsonable(v) for k, v in items_fn()}
+        except (TypeError, KeyError, AttributeError):
+            pass  # not actually iterable as items — fall through
+
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return [_coerce_jsonable(v) for v in obj]
+
+    # numpy scalars / pandas types expose .item() to unwrap to Python.
+    try:
+        item_fn = obj.item
+    except (AttributeError, KeyError):
+        item_fn = None
+    if callable(item_fn):
+        try:
+            return _coerce_jsonable(item_fn())
+        except Exception:  # noqa: BLE001
+            pass
+
+    return obj
 
 
 __all__ = ["router"]
