@@ -1,0 +1,396 @@
+/**
+ * 整理类工具 — EXIF 自动旋转 / 批量缩放 / 隔离区 / 备份回滚。
+ *
+ * 隔离区直接复用 QuarantinePanel；其他三个轻量自实现。所有写入操作都
+ * 自动备份到 .workbench/backups/，UI 上只在按钮 hover / 描述里提一下。
+ */
+import { useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Calendar,
+  Loader2,
+  RefreshCw,
+  RotateCw,
+  Trash2,
+  Wrench,
+} from "lucide-react"
+import { toast } from "sonner"
+import {
+  imageStudioAutoRotate,
+  imageStudioBackupsList,
+  imageStudioBatchResize,
+  imageStudioRestoreBackup,
+  type BackupEntry,
+} from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { QuarantinePanel } from "../components/quarantine-panel"
+import { cn } from "@/lib/utils"
+
+// --------------------------------------------------------------------------- //
+// curate-auto-rotate
+// --------------------------------------------------------------------------- //
+
+export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
+  const [recursive, setRecursive] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      imageStudioAutoRotate({
+        dataset_path: datasetPath,
+        recursive,
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        `自动旋转完成：${data.rotated_count} 张应用，${data.skipped_count} 张跳过`,
+        {
+          description:
+            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
+        },
+      )
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+    },
+    onError: (err) =>
+      toast.error("自动旋转失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
+
+  return (
+    <div className="h-full overflow-y-auto p-4 max-w-xl">
+      <section className="rounded-md border border-border/60 bg-card flex flex-col">
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          <RotateCw className="size-3.5" />
+          <span className="text-xs font-medium">EXIF 自动旋转</span>
+        </div>
+        <div className="p-3 space-y-3 text-xs">
+          <p className="text-muted-foreground">
+            按 EXIF orientation 把像素旋转到正向，并清空 orientation 标记。
+            原图自动备份到 <code>.workbench/backups/</code>，可在「备份回滚」工具还原。
+          </p>
+          <label className="inline-flex items-center gap-1.5 select-none">
+            <Switch checked={recursive} onCheckedChange={setRecursive} />
+            递归子目录
+          </label>
+          <Button
+            size="sm"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+            className="w-full gap-1"
+          >
+            {mutation.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <RotateCw className="size-3" />
+            )}
+            对整个数据集应用 EXIF 旋转
+          </Button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// curate-batch-resize
+// --------------------------------------------------------------------------- //
+
+export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
+  const [shortEdge, setShortEdge] = useState("1024")
+  const [filter, setFilter] = useState<"lanczos" | "bicubic" | "bilinear">("lanczos")
+  const [upscale, setUpscale] = useState(false)
+  const [recursive, setRecursive] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      imageStudioBatchResize({
+        dataset_path: datasetPath,
+        target_short_edge: Number(shortEdge),
+        filter,
+        upscale,
+        recursive,
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        `重采样完成：${data.resampled_count} 张，跳过 ${data.skipped_count} 张`,
+        {
+          description:
+            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
+        },
+      )
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+    },
+    onError: (err) =>
+      toast.error("批量缩放失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
+
+  const targetOk = Number(shortEdge) >= 64 && Number(shortEdge) <= 4096
+
+  return (
+    <div className="h-full overflow-y-auto p-4 max-w-xl">
+      <section className="rounded-md border border-border/60 bg-card flex flex-col">
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          <Wrench className="size-3.5" />
+          <span className="text-xs font-medium">批量缩放</span>
+        </div>
+        <div className="p-3 space-y-3 text-xs">
+          <p className="text-muted-foreground">
+            按目标短边重采样保持原长宽比。原图自动备份到{" "}
+            <code>.workbench/backups/</code>。短于目标短边的图默认跳过 —
+            勾「向上采样」才会放大。
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground w-16">目标短边</span>
+            <Input
+              type="number"
+              value={shortEdge}
+              onChange={(e) => setShortEdge(e.target.value)}
+              className="h-8 w-28 text-xs font-mono"
+              min={64}
+              max={4096}
+            />
+            <span className="text-muted-foreground">px</span>
+            {!targetOk && (
+              <span className="text-red-600 text-[10px] ml-auto">
+                需在 64–4096 之间
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground w-16">重采样</span>
+            <Select
+              value={filter}
+              onValueChange={(v) => v && setFilter(v as typeof filter)}
+            >
+              <SelectTrigger className="h-8 w-44 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lanczos">Lanczos（默认 · 锐）</SelectItem>
+                <SelectItem value="bicubic">Bicubic（更柔）</SelectItem>
+                <SelectItem value="bilinear">Bilinear（最快）</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="inline-flex items-center gap-1.5 select-none">
+              <Switch checked={upscale} onCheckedChange={setUpscale} />
+              向上采样（短于目标的也放大）
+            </label>
+            <label className="inline-flex items-center gap-1.5 select-none">
+              <Switch checked={recursive} onCheckedChange={setRecursive} />
+              递归子目录
+            </label>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !targetOk}
+            className="w-full gap-1"
+          >
+            {mutation.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Wrench className="size-3" />
+            )}
+            应用批量缩放
+          </Button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// curate-quarantine — 直接套用 QuarantinePanel(默认折叠的 drawer，给独立页加个抬头)
+// --------------------------------------------------------------------------- //
+
+export function CurateQuarantineTool({ datasetPath }: { datasetPath: string }) {
+  return (
+    <div className="h-full overflow-y-auto p-4 space-y-3">
+      <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+        这里管理已经移到 <code>.workbench/quarantine/</code> 的图片。
+        要把图<span className="font-medium">移入</span>隔离区，去「数据集体检」工具里
+        按异常类型批量隔离，或在「整理总览」工具的网格右键单张隔离。
+      </div>
+      <QuarantinePanel datasetPath={datasetPath} />
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------------- //
+// curate-restore-backup
+// --------------------------------------------------------------------------- //
+
+export function CurateRestoreBackupTool({
+  datasetPath,
+}: {
+  datasetPath: string
+}) {
+  const qc = useQueryClient()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const listQuery = useQuery({
+    queryKey: ["image-studio-backups", datasetPath],
+    queryFn: () => imageStudioBackupsList(datasetPath),
+    enabled: Boolean(datasetPath),
+  })
+
+  const restoreMutation = useMutation({
+    mutationFn: (paths: string[]) =>
+      imageStudioRestoreBackup({ dataset_path: datasetPath, backup_paths: paths }),
+    onSuccess: (data) => {
+      toast.success(`已恢复 ${data.restored_count} 个文件`, {
+        description:
+          data.failed.length > 0 ? `失败 ${data.failed.length} 个` : undefined,
+      })
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ["image-studio-backups", datasetPath] })
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+    },
+    onError: (err) =>
+      toast.error("恢复失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
+
+  const entries = listQuery.data?.entries ?? []
+  const toggle = (p: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(p)) next.delete(p)
+      else next.add(p)
+      return next
+    })
+
+  return (
+    <div className="h-full overflow-hidden p-4">
+      <section className="rounded-md border border-border/60 bg-card flex flex-col h-full min-h-0">
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          <Calendar className="size-3.5" />
+          <span className="text-xs font-medium">备份回滚</span>
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            {entries.length} 项备份
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => listQuery.refetch()}
+              disabled={listQuery.isFetching}
+            >
+              {listQuery.isFetching ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3" />
+              )}
+            </Button>
+            {selected.size > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[11px] gap-1"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      `确认恢复这 ${selected.size} 个备份？\n会覆盖当前同路径文件。`,
+                    )
+                  )
+                    return
+                  restoreMutation.mutate(Array.from(selected))
+                }}
+                disabled={restoreMutation.isPending}
+              >
+                {restoreMutation.isPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : null}
+                恢复选中 ({selected.size})
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {listQuery.isLoading ? (
+            <div className="flex items-center justify-center h-32 text-muted-foreground">
+              <Loader2 className="size-4 animate-spin mr-2" />
+              加载备份列表…
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-muted-foreground text-xs">
+              暂无备份。整理 / caption 写操作后会自动生成。
+            </div>
+          ) : (
+            <ul className="divide-y divide-border/30">
+              {entries.map((e) => (
+                <BackupRow
+                  key={e.backup_path}
+                  entry={e}
+                  selected={selected.has(e.backup_path)}
+                  onToggle={() => toggle(e.backup_path)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function BackupRow({
+  entry,
+  selected,
+  onToggle,
+}: {
+  entry: BackupEntry
+  selected: boolean
+  onToggle: () => void
+}) {
+  const filename = entry.relative_path.split(/[\\/]/).pop() ?? "?"
+  const sizeKb = (entry.size / 1024).toFixed(1)
+  return (
+    <li
+      className={cn(
+        "flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer hover:bg-muted/40",
+        selected && "bg-amber-50/40 dark:bg-amber-950/15",
+      )}
+      onClick={onToggle}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="size-3"
+        onClick={(e) => e.stopPropagation()}
+      />
+      <span className="font-mono truncate flex-1" title={entry.relative_path}>
+        {filename}
+        <span className="text-muted-foreground ml-1.5 text-[10px]">
+          {entry.relative_path !== filename ? entry.relative_path : ""}
+        </span>
+      </span>
+      <span className="tabular-nums text-muted-foreground text-[10px]">
+        {sizeKb} KB
+      </span>
+      <span className="tabular-nums text-muted-foreground text-[10px]">
+        {new Date(entry.mtime * 1000).toLocaleString()}
+      </span>
+    </li>
+  )
+}
+
+// 占位避免 ESLint 警告（一些 icon 暂未用，但保留以便后续扩展）
+void Trash2
