@@ -24,8 +24,10 @@ from lorahub.api.jobs_helpers import (
     _read_metrics,
     _relaunch_job_in_place,
     _resolve_workspace_file,
+    _validate_resume_target,
     ResumeNotReady,
 )
+from lorahub.api.jobs_helpers.resume_dispatch import ResumeTargetInvalid
 from lorahub.api.preflight import PreflightFinding, run_preflight
 from lorahub.api.state import JobState
 from lorahub.api.store import _pid_alive
@@ -325,6 +327,115 @@ def resume_job(
         extra_argv=spec.extra_argv,
         metadata_patch={"last_resumed_at": datetime.now(UTC).isoformat()},
     )
+    if findings:
+        result["preflight_warnings"] = [f.to_dict() for f in findings]
+    return result
+
+
+class CloneWithStateRequest(BaseModel):
+    """Body for ``POST /jobs/{id}/clone-with-state``.
+
+    ``statePath`` must point at a resumable artifact owned by the source
+    job (see ``GET /artifacts/{id}/states`` for the picker payload).
+    ``config`` is optional — when omitted the source's snapshot is
+    cloned verbatim. Same field-lock as ``/resume`` applies (rank,
+    arch, backend.type can't change).
+
+    ``workspace`` mirrors ``CreateJobRequest``: when omitted we derive
+    a fresh ``runs/<output.name>-<timestamp>`` directory. The new job
+    gets a brand-new id and event log, and never reuses the source's
+    workspace.
+    """
+
+    statePath: str
+    config: dict[str, Any] | None = None
+    workspace: str | None = None
+
+
+@router.post("/jobs/{job_id}/clone-with-state", status_code=202)
+def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
+    """Spawn a fresh job seeded from another job's saved state.
+
+    Unlike ``/resume`` which restarts the SAME JobRecord on its
+    original workspace (one timeline), this endpoint creates a NEW
+    JobRecord on a NEW workspace whose ``cfg.resume.resume_from`` points
+    at the source job's state. Use this when the original job already
+    succeeded but you want to keep training (extra epochs, fresh
+    schedule) without overwriting the original's run.
+
+    Behaviour:
+      * Field-locks same as ``/resume`` — rank/arch/backend.type can't
+        change because that invalidates the on-disk checkpoint.
+      * For diffusion-pipe, ``output.output_dir`` is auto-pinned to the
+        parent of the supplied run dir so dp can resolve
+        ``--resume_from_checkpoint=<basename>``.
+      * Stamps ``metadata.cloned_from_job_id`` and ``cloned_from_state``
+        so the new job's history shows which run it branched from.
+
+    Errors:
+      404 — source job id not found
+      400 — ``statePath`` doesn't pass backend-aware validation
+      409 — ``config`` tries to change a locked field
+      422 — config snapshot or new config no longer matches the schema
+    """
+    source = state.registry.get(job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    snapshot = source.config_snapshot or {}
+    if req.config is not None:
+        diffs = _diff_locked_fields(snapshot, req.config)
+        if diffs:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "clone-with-state cannot change fields that pin checkpoint shape: "
+                    f"{diffs}. Start a fresh training run instead."
+                ),
+            )
+        try:
+            cfg = TrainingConfig.model_validate(req.config)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    else:
+        try:
+            cfg = TrainingConfig.model_validate(snapshot)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    state_path = Path(req.statePath).expanduser().resolve()
+    cfg.resume.resume_from = state_path
+
+    # For diffusion-pipe, --resume_from_checkpoint=<basename> is resolved
+    # relative to output.output_dir, so the new job MUST point its
+    # output_dir at the run dir's parent (option A: no copy, dp builds a
+    # new timestamped run alongside the source's). Auto-pin here so the
+    # picker UI doesn't have to teach the user about this constraint.
+    if cfg.backend.type == "diffusion-pipe":
+        cfg.output.output_dir = state_path.parent
+
+    try:
+        _validate_resume_target(cfg)
+    except ResumeTargetInvalid as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if req.workspace:
+        workspace = Path(req.workspace).resolve()
+    else:
+        from datetime import datetime, UTC  # noqa: PLC0415
+        from lorahub.api.paths import runs_dir  # noqa: PLC0415
+
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
+
+    findings = _raise_if_preflight_blocks(cfg, workspace)
+
+    metadata = {
+        "cloned_from_job_id": source.id,
+        "cloned_from_state": str(state_path),
+        "cloned_at": datetime.now(UTC).isoformat(),
+    }
+    result = _launch_job(cfg, workspace, metadata=metadata)
     if findings:
         result["preflight_warnings"] = [f.to_dict() for f in findings]
     return result
