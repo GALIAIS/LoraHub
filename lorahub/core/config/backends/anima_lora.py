@@ -501,10 +501,14 @@ class AnimaLoraOptions(BaseModel):
     #   * RISKY          — can be changed but breaks something obvious.
     # See ``lorahub.core.backends.anima_lora.compiler.LOCKED_FIELDS``.
 
-    # 🔒 LOCKED_TRUE — masked loss is part of the Anima training pipeline
-    # contract; upstream's _compute_loss path branches on it without a
-    # backward edge. Disabling is a silent no-op.
-    masked_loss: bool = True
+    # ⚠️ RISKY — masked loss. 上游来自 kohya/sd-scripts 的 --masked_loss
+    # (store_true,默认 False),Anima 沿用同一开关。开启后 apply_masked_loss
+    # 在每步 loss 上贴 mask:优先取 batch["conditioning_images"] 的 R 通道,
+    # 其次取 alpha_masks。若两者皆无则 no-op,但若 batch 把
+    # conditioning_images=None 显式塞进去就会撞 NoneType.to。
+    # 实际生效路径需要差异训练资料: conditioning=True 且至少一个 subset
+    # 配了 conditioning_data_dir;否则保持默认 False 即可。
+    masked_loss: bool = False
     # 🔒 LOCKED_TRUE — torch.compile is required for the static-shape
     # constant-token bucketing to pay off; upstream's loop assumes it.
     torch_compile: bool = True

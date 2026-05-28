@@ -199,7 +199,7 @@ backend:
     cpuOffloadCheckpointing: false
     mixedPrecision: bf16
     useCmmd: false
-    maskedLoss: true
+    maskedLoss: false
     torchCompile: true
     skipCacheCheck: true
     dataloaderPinMemory: true

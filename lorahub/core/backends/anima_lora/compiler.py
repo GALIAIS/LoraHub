@@ -58,8 +58,12 @@ __all__ = [
 LOCKED_FIELDS: dict[str, dict[str, str]] = {
     # — pipeline-locked booleans (base.toml ``= true``, no reverse flag) —
     "masked_loss": {
-        "kind": "locked_true",
-        "reason": "Anima 训练管线硬依赖 masked loss;关掉是无效操作。",
+        "kind": "risky",
+        "reason": (
+            "上游 store_true(默认 False);开启需要 conditioning_images 或 alpha_masks 进 batch,"
+            "否则 apply_masked_loss 在 batch['conditioning_images'] is None 时报 NoneType.to。"
+            "想用差异训练:开 conditioning + 至少一个 subset 配 conditioning_data_dir。"
+        ),
     },
     "torch_compile": {
         "kind": "locked_true",
@@ -1038,7 +1042,7 @@ def _warn_locked_fields_changed(opts: AnimaLoraOptions) -> None:
     # the warning is honest about what "the default" means even if a
     # caller passes ``opts`` from a non-validated source.
     locked_defaults: dict[str, object] = {
-        "masked_loss": True,
+        "masked_loss": False,
         "torch_compile": True,
         "skip_cache_check": True,
         "dataloader_pin_memory": True,
