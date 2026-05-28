@@ -209,6 +209,55 @@ export async function imageStudioBatchDelete(body: {
 }
 
 // --------------------------------------------------------------------------- //
+// Image Studio — L2 AI semantic similarity
+// --------------------------------------------------------------------------- //
+
+export async function imageStudioSimilarityScan(body: {
+  path: string
+  recursive?: boolean
+  mode?: "embedding" | "pairwise"
+  threshold?: number
+  task?: string
+}): Promise<{
+  computed: number
+  total: number
+  errors: Array<{ path: string; error: string }>
+}> {
+  return http("/image-studio/similarity/scan", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function imageStudioSimilarityClusters(params: {
+  path: string
+  kind?: "ai" | "phash"
+  threshold?: number
+}): Promise<{ clusters: DedupeCluster[] }> {
+  const qs = new URLSearchParams({ path: params.path })
+  if (params.kind) qs.set("kind", params.kind)
+  if (params.threshold != null) qs.set("threshold", String(params.threshold))
+  return http<{ clusters: DedupeCluster[] }>(
+    `/image-studio/similarity/clusters?${qs}`,
+  )
+}
+
+export async function imageStudioSimilarityBatchDelete(body: {
+  paths: string[]
+  forceFavorites?: boolean
+}): Promise<{
+  deletedCount: number
+  deleted: string[]
+  bytesFreed: number
+  errors: Array<{ path: string; error: string }>
+}> {
+  return http("/image-studio/similarity/batch-delete", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+// --------------------------------------------------------------------------- //
 // Image Studio — Smart Caption / Tagging from Studio
 // --------------------------------------------------------------------------- //
 
