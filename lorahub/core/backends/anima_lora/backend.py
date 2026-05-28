@@ -437,9 +437,19 @@ def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
 
     width = sampling.resolution[0] if sampling.resolution else 1024
     height = sampling.resolution[1] if len(sampling.resolution) > 1 else width
+    seed_part = ""
+    # ``sampling.seed`` is the *training* seed; ``-1`` is the legacy
+    # ComfyUI-style "randomise at run time" sentinel that the lifecycle
+    # hook resolves to a concrete integer before launch. By the time we
+    # land here it should never be ``-1``, but if it ever does we omit
+    # ``--d`` so anima train.py's ``_sample_image_inference`` falls back
+    # to the ambient RNG (fresh noise per epoch) instead of pinning every
+    # epoch to the literal ``-1`` and producing identical previews.
+    if int(sampling.seed) >= 0:
+        seed_part = f" --d {int(sampling.seed)}"
     suffix = (
         f" --w {int(width)} --h {int(height)}"
-        f" --d {int(sampling.seed)}"
+        f"{seed_part}"
         f" --s {int(sampling.inference_steps)}"
         f" --l {sampling.inference_cfg}"
     )

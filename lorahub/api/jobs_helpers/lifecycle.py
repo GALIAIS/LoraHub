@@ -612,16 +612,25 @@ def _draw_random_seed() -> int:
 
 
 def _resolve_runtime_seeds(cfg: TrainingConfig) -> None:
-    """Replace ``-1`` sentinels in seed fields with a fresh draw.
+    """Resolve ``-1`` sentinels in seed fields.
 
-    The ComfyUI workflow uses ``-1`` to mean "draw a seed at run time so
-    every queue press is novel". The same convention applies here: a
-    yaml saved with ``seed: -1`` reproduces the spirit of the user's
-    choice (always-new) without forcing them to bump the number by hand
-    between runs. The drawn value is written back into the config so
-    downstream consumers (compilers, prompt-file materialiser, snapshot)
-    all see the same concrete integer, and the value also lands in the
-    job's config snapshot — copy that into a fresh config to reproduce.
+    Two different "-1" semantics live here:
+
+    * ``sampling.seed`` (top-level, ComfyUI-style "draw at run time") is
+      the *training* seed — controls dataset shuffle, dropout, etc.
+      We still draw a fresh integer at job-start so the run is
+      reproducible from the snapshot. Same legacy behaviour.
+
+    * ``sampling.prompts[*].seed = -1`` is the **per-preview** sentinel.
+      We previously drew a single random integer at job-start and froze
+      it into the prompt row, which meant every epoch's preview render
+      hit the same ``torch.manual_seed`` and produced visually identical
+      images even as the LoRA evolved. Now we collapse ``-1`` to
+      ``None`` instead — the prompt-file materialiser then omits
+      ``--d`` for that row, and the trainer's ``_sample_image_inference``
+      treats a missing seed as "use ambient RNG", giving a fresh sample
+      each epoch. Concrete integer seeds (e.g. 42) are still honoured
+      verbatim for users who want a reproducible preview.
     """
     sampling = cfg.sampling
     if sampling.seed == -1:
@@ -629,8 +638,10 @@ def _resolve_runtime_seeds(cfg: TrainingConfig) -> None:
         log.info("sampling.seed: drew runtime random %d", sampling.seed)
     for ps in sampling.prompts:
         if ps.seed == -1:
-            ps.seed = _draw_random_seed()
-            log.info("sampling.prompts seed: drew runtime random %d", ps.seed)
+            ps.seed = None
+            log.info(
+                "sampling.prompts seed: -1 → None (preview will randomise per epoch)"
+            )
 
 
 # Match ``${TRIGGER}`` / ``${trigger}`` plus an optional trailing ``,``
