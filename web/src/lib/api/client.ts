@@ -89,6 +89,43 @@ export const api = {
       method: "POST",
       body: JSON.stringify(config !== undefined ? { config } : {}),
     }),
+  /** List every resumable state target for a job — backend-aware shape
+   *  (kohya/anima_lora: *-state* dirs, dp: timestamped run dirs). Used
+   *  by the clone-with-state picker. Returns ``{states: []}`` when the
+   *  job has no resumable artifacts on disk yet. */
+  listJobStates: (id: string) =>
+    http<{
+      job_id: string
+      workspace: string
+      backend_type: string | null
+      states: Array<{
+        kind: "accelerate-state" | "dp-run-dir"
+        path: string
+        basename: string
+        modified_at: number
+        current_step?: number
+        current_epoch?: number
+        latest_step?: number
+        global_step_count?: number
+        output_dir?: string
+      }>
+    }>(`/artifacts/${encodeURIComponent(id)}/states`),
+  /** Branch a fresh job from a saved state of another job. Unlike
+   *  ``resumeJob`` (which restarts the same JobRecord in place), this
+   *  spawns a new id + new workspace whose ``cfg.resume.resume_from``
+   *  is pinned to ``statePath``. Same field-lock rules as resume. */
+  cloneJobWithState: (
+    id: string,
+    body: {
+      statePath: string
+      config?: Record<string, unknown>
+      workspace?: string
+    },
+  ) =>
+    http<JobSummary>(`/jobs/${id}/clone-with-state`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   killJob: (id: string) =>
     http<{
       job_id: string

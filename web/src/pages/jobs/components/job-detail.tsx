@@ -28,6 +28,7 @@ import {
   Pause,
   Play,
   Pencil,
+  GitBranch,
 } from "lucide-react"
 
 import { StateBadge } from "../../dashboard"
@@ -38,6 +39,7 @@ import { EventsTab } from "./events-tab"
 import { FilesTab } from "./files-tab"
 import { RunSummaryCard } from "./run-summary-card"
 import { ResumeWithEditDialog } from "./resume-with-edit-dialog"
+import { CloneWithStateDialog } from "./clone-with-state-dialog"
 
 type TabKey = "overview" | "events" | "files"
 
@@ -89,6 +91,7 @@ export function JobDetail({
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [killOpen, setKillOpen] = useState(false)
   const [resumeEditOpen, setResumeEditOpen] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
 
   // Fall back to a config-derived total step count when the backend hasn't
   // yet emitted a `total_steps` payload. We need the dataset image count,
@@ -385,6 +388,17 @@ export function JobDetail({
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setCloneOpen(true)}
+              disabled={busy !== null || !data?.config_snapshot}
+              title="从某个 saved state 派生新任务（保留 optimizer / lr 进度，不影响原任务）"
+            >
+              <GitBranch className="size-3" /> 派生
+            </Button>
+          )}
+          {isTerminal && (
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setArchiveOpen(true)}
               disabled={busy !== null}
             >
@@ -594,6 +608,17 @@ export function JobDetail({
           onResumed={() => {
             setResumeEditOpen(false)
             job.refetch()
+          }}
+        />
+      )}
+      {cloneOpen && data && (
+        <CloneWithStateDialog
+          job={data}
+          onClose={() => setCloneOpen(false)}
+          onCloned={(newId) => {
+            setCloneOpen(false)
+            queryClient.invalidateQueries({ queryKey: ["jobs"] })
+            onSelectJob(newId)
           }}
         />
       )}
