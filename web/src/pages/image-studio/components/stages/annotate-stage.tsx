@@ -75,6 +75,74 @@ export function AnnotateStage({ datasetPath }: Props) {
   )
 }
 
+export function VocabPanelTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
+  const vocabQuery = useQuery({
+    queryKey: ["image-studio-captions-vocab", datasetPath],
+    queryFn: () =>
+      imageStudioCaptionsVocab(datasetPath, { recursive: true, limit: 200 }),
+    enabled: Boolean(datasetPath),
+  })
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
+  const toggleTag = (tag: string) =>
+    setSelectedTags((prev) => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      return next
+    })
+  const clearTags = () => setSelectedTags(new Set())
+  const onMutated = () => {
+    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio"] })
+  }
+  return (
+    <div className="h-full overflow-hidden p-4">
+      <VocabPanel
+        vocab={vocabQuery.data?.vocab ?? []}
+        loading={vocabQuery.isLoading}
+        totalFiles={vocabQuery.data?.files_seen ?? 0}
+        tagCount={vocabQuery.data?.tag_count ?? 0}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearSelection={clearTags}
+        onRefresh={() => vocabQuery.refetch()}
+        datasetPath={datasetPath}
+        onMutated={onMutated}
+      />
+    </div>
+  )
+}
+
+export function FindReplaceTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
+  const onMutated = () => {
+    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio"] })
+  }
+  return (
+    <div className="h-full overflow-y-auto p-4">
+      <FindReplacePanel datasetPath={datasetPath} onMutated={onMutated} />
+    </div>
+  )
+}
+
+export function TriggerInjectTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
+  const onMutated = () => {
+    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
+    qc.invalidateQueries({ queryKey: ["image-studio"] })
+  }
+  return (
+    <div className="h-full overflow-y-auto p-4">
+      <TriggerInjectPanel datasetPath={datasetPath} onMutated={onMutated} />
+    </div>
+  )
+}
+
 // --------------------------------------------------------------------------- //
 // Vocab panel
 // --------------------------------------------------------------------------- //
