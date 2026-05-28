@@ -182,6 +182,13 @@ def test_embedding_delete(tmp_path: Path) -> None:
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.chdir(tmp_path)
+    # FastAPI runs sync handlers on a worker thread whose ``os.getcwd()``
+    # can lag behind the main thread's ``chdir`` on some platforms (e.g.
+    # WSL with the cwd on a ``/mnt/...`` drvfs mount), so the dataset
+    # path allow-list — which derives one root from cwd — would reject
+    # files under ``tmp_path``. Pin the allow-list with an explicit env
+    # root so the fixture works regardless of thread-cwd behaviour.
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
     registry = state_module.JobRegistry()
     monkeypatch.setattr(state_module, "registry", registry)
     fresh_sched = sched_module.JobScheduler(concurrency=1)
