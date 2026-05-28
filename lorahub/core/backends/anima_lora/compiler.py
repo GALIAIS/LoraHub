@@ -466,6 +466,18 @@ def _render_full_config(
         cfg_dict["save_last_n_steps_state"] = int(
             cfg.resume.save_last_n_steps_state,
         )
+    # Cross-job resume: when resume_from is set we forward it as --resume
+    # via cfg_dict so anima's accelerate.load_state restores optimizer +
+    # scheduler + RNG. The auto-resume hook still uses extra_argv for the
+    # same job's interrupted state; both channels land on args.resume.
+    if cfg.resume.resume_from is not None:
+        cfg_dict["resume"] = str(cfg.resume.resume_from)
+    if cfg.resume.skip_until_initial_step:
+        cfg_dict["skip_until_initial_step"] = True
+    if cfg.resume.initial_epoch is not None:
+        cfg_dict["initial_epoch"] = int(cfg.resume.initial_epoch)
+    if cfg.resume.initial_step is not None:
+        cfg_dict["initial_step"] = int(cfg.resume.initial_step)
 
     # ---- Sampling preview ----
     _render_sampling(cfg, workspace, cfg_dict)
