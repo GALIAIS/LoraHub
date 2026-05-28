@@ -1,26 +1,24 @@
 /**
  * 图像工作台"全部工具"广场页面。
  *
- * 入口在主区顶部 — 当 URL 没有 ?stage 参数（或显式 ?stage=tools）时显示。
- * 卡片网格按 5 大类聚合 13 个工具；每张卡片点击后写 URL `?stage=<stage>&tool=<id>`，
- * 让 stage 子页可以高亮对应面板。
+ * 入口在主区顶部 — 当 URL 是 /image-studio (或 ?stage=tools) 时显示。
+ * 卡片直接跳到 /image-studio/tools/<id>?path=<datasetPath>，每个工具有独立页面。
  *
  * 行为约束：
  *  - 不强制选数据集 — 没选时灰显 requiresDataset=true 的卡片，不直接 disable。
- *  - 不在这里弹对话框 — 跳到 stage 子页让现成面板处理。
+ *  - 用 <Link> 而不是按钮，方便右键"在新标签页打开"。
  *  - 卡片右下角的小标用来透露"异步会话"或"会写文件 / 自动备份"语义。
  */
+import { Link } from "react-router-dom"
 import { Link2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { TOOL_CATEGORIES, TOOLS, type ToolInfo } from "../tools-catalog"
 
 interface Props {
   datasetPath: string
-  /** 选中工具后回调；调用方写 URL ?stage=<tool.stage>&tool=<tool.id>。 */
-  onSelect: (tool: ToolInfo) => void
 }
 
-export function ToolsGrid({ datasetPath, onSelect }: Props) {
+export function ToolsGrid({ datasetPath }: Props) {
   const hasDataset = Boolean(datasetPath)
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -28,8 +26,8 @@ export function ToolsGrid({ datasetPath, onSelect }: Props) {
         <h1 className="text-base font-semibold">全部工具</h1>
         <p className="mt-1 text-xs text-muted-foreground">
           {hasDataset
-            ? "点任意工具直接跳到对应面板，无需走完整流程。"
-            : "先在左侧选一个数据集，工具会进入对应面板。"}
+            ? "点任意工具进入独立的工具页，每个工具自己一个 URL。"
+            : "先在左侧选一个数据集 — 跨数据集工具（工具库）不受影响。"}
         </p>
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
@@ -51,8 +49,8 @@ export function ToolsGrid({ datasetPath, onSelect }: Props) {
                   <ToolCard
                     key={tool.id}
                     tool={tool}
+                    datasetPath={datasetPath}
                     disabled={tool.requiresDataset && !hasDataset}
-                    onClick={() => onSelect(tool)}
                   />
                 ))}
               </div>
@@ -66,27 +64,20 @@ export function ToolsGrid({ datasetPath, onSelect }: Props) {
 
 function ToolCard({
   tool,
+  datasetPath,
   disabled,
-  onClick,
 }: {
   tool: ToolInfo
+  datasetPath: string
   disabled: boolean
-  onClick: () => void
 }) {
   const Icon = tool.icon
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "group relative flex flex-col items-start gap-1.5 rounded-md border bg-card px-3 py-2.5 text-left transition-colors",
-        disabled
-          ? "opacity-50 cursor-not-allowed"
-          : "hover:border-primary/40 hover:bg-accent/40",
-      )}
-      title={disabled ? "请先在左侧选择一个数据集" : tool.description}
-    >
+  const to = datasetPath
+    ? `/image-studio/tools/${tool.id}?path=${encodeURIComponent(datasetPath)}`
+    : `/image-studio/tools/${tool.id}`
+
+  const inner = (
+    <>
       <div className="flex w-full items-center gap-2">
         <Icon className="size-4 text-muted-foreground group-hover:text-foreground shrink-0" />
         <span className="text-sm font-medium truncate flex-1">{tool.label}</span>
@@ -107,6 +98,30 @@ function ToolCard({
           </span>
         )}
       </div>
-    </button>
+    </>
+  )
+
+  const baseCls =
+    "group relative flex flex-col items-start gap-1.5 rounded-md border bg-card px-3 py-2.5 text-left transition-colors"
+
+  if (disabled) {
+    return (
+      <div
+        className={cn(baseCls, "opacity-50 cursor-not-allowed")}
+        title="请先在左侧选择一个数据集"
+        aria-disabled
+      >
+        {inner}
+      </div>
+    )
+  }
+  return (
+    <Link
+      to={to}
+      className={cn(baseCls, "hover:border-primary/40 hover:bg-accent/40")}
+      title={tool.description}
+    >
+      {inner}
+    </Link>
   )
 }

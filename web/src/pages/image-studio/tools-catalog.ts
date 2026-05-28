@@ -153,6 +153,15 @@ export const TOOLS: readonly ToolInfo[] = [
 
   // ===== 整理 =====
   {
+    id: "curate-overview",
+    category: "curate",
+    stage: "curate",
+    label: "整理总览",
+    description: "网格 / inspector / 上传入口的一站式视图，单图操作都在这里",
+    icon: Layers,
+    requiresDataset: true,
+  },
+  {
     id: "curate-auto-rotate",
     category: "curate",
     stage: "curate",

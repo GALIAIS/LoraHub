@@ -13,7 +13,6 @@ import { CreateDatasetDialog } from "./components/create-dataset-dialog"
 import { ToolsGrid } from "./components/tools-grid"
 import { LibraryPage } from "./components/library/library-page"
 import type { StageId } from "./components/stage-stepper"
-import type { ToolInfo } from "./tools-catalog"
 
 export { ImageStudioPage }
 
@@ -61,13 +60,6 @@ function ImageStudioPage() {
     setParams(next)
   }
 
-  const selectTool = (tool: ToolInfo) => {
-    const next = new URLSearchParams(params)
-    next.set("stage", tool.stage)
-    next.set("tool", tool.id)
-    setParams(next)
-  }
-
   return (
     <div className="flex h-full min-h-0 w-full">
       <StudioSidebar
@@ -81,7 +73,7 @@ function ImageStudioPage() {
       <main className="flex-1 min-w-0 flex flex-col min-h-0">
         <div className="flex-1 min-h-0 overflow-hidden">
           {stageParam === "tools" && (
-            <ToolsGrid datasetPath={datasetPath} onSelect={selectTool} />
+            <ToolsGrid datasetPath={datasetPath} />
           )}
           {stageParam === "library" && <LibraryPage />}
           {stageParam !== "tools" &&
