@@ -744,14 +744,13 @@ def add_masked_loss_arguments(parser: argparse.ArgumentParser):
 
 def add_dit_training_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
-        "--cache_text_encoder_outputs",
-        action="store_true",
-        help="cache text encoder outputs",
-    )
-    parser.add_argument(
-        "--cache_text_encoder_outputs_to_disk",
-        action="store_true",
-        help="cache text encoder outputs to disk",
+        "--use_text_cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Cache text-encoder outputs to disk and read them during training "
+        "(load TE → cache → free → load DiT). Set false for live encoding "
+        "(e.g. IP-Adapter live mode). Subsumes the legacy "
+        "cache_text_encoder_outputs{,_to_disk} pair.",
     )
     parser.add_argument(
         "--text_encoder_batch_size",
@@ -989,11 +988,16 @@ def verify_training_args(args: argparse.Namespace):
     if args.v2 and args.clip_skip is not None:
         logger.warning("v2 with clip_skip will be unexpected")
 
-    if args.cache_latents_to_disk and not args.cache_latents:
-        args.cache_latents = True
-        logger.warning(
-            "cache_latents_to_disk is enabled, so cache_latents is also enabled"
-        )
+    # Expand the two semantic cache knobs into the legacy internal flags that
+    # the dataset / strategy / metadata code still reads. ``use_vae_cache`` and
+    # ``use_text_cache`` are the only config-facing surface; disk caching is the
+    # only supported mode (RAM-only was never used), so the ``_to_disk`` siblings
+    # always track their base flag. The old keys survive as schema aliases (see
+    # ``library/config/schema.py``) so pre-existing configs still resolve.
+    args.cache_latents = args.cache_latents_to_disk = bool(args.use_vae_cache)
+    args.cache_text_encoder_outputs = args.cache_text_encoder_outputs_to_disk = bool(
+        args.use_text_cache
+    )
 
     if args.adaptive_noise_scale is not None and args.noise_offset is None:
         raise ValueError("adaptive_noise_scale requires noise_offset")
@@ -1105,17 +1109,16 @@ def add_dataset_arguments(
         help="resolution in training ('size' or 'width,height')",
     )
     parser.add_argument(
-        "--cache_latents",
-        action="store_true",
-        help="cache latents to main memory to reduce VRAM usage",
+        "--use_vae_cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Cache VAE-encoded latents to disk and read them during training. "
+        "Set false for live VAE encoding (e.g. IP-Adapter live mode, where "
+        "batch['images'] carries the raw reference). Subsumes the legacy "
+        "cache_latents{,_to_disk} pair.",
     )
     parser.add_argument(
         "--vae_batch_size", type=int, default=1, help="batch size for caching latents"
-    )
-    parser.add_argument(
-        "--cache_latents_to_disk",
-        action="store_true",
-        help="cache latents to disk to reduce VRAM usage",
     )
     parser.add_argument(
         "--skip_cache_check",
