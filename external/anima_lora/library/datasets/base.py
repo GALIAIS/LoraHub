@@ -1802,13 +1802,17 @@ class DreamBoothDataset(BaseDataset):
                         except UnicodeDecodeError as e:
                             logger.error("illegal char in file (not UTF-8)")
                             raise e
-                        assert len(lines) > 0, "caption file is empty"
+                        # An empty caption file is a valid *explicit empty
+                        # caption* (unconditional / style-LoRA training)
+                        # — resolve to "" rather than asserting, so callers
+                        # can tell apart "no sidecar" (None) from "empty
+                        # sidecar" ("").
                         if enable_wildcard:
                             caption = "\n".join(
                                 [line.strip() for line in lines if line.strip() != ""]
                             )
                         else:
-                            caption = lines[0].strip()
+                            caption = lines[0].strip() if lines else ""
                     break
             return caption
 
