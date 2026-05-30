@@ -182,6 +182,12 @@ PR 与 issue 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。社区行为规范�
 
 ---
 
+## 社区
+
+本项目已在 [LINUX DO 社区](https://linux.do) 发布，感谢社区的支持与反馈。
+
+---
+
 ## 致谢
 
 - [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)
