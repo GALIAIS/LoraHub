@@ -795,6 +795,10 @@ def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
             flags.append(f"--s {spec.steps}")
         if spec.cfg is not None:
             flags.append(f"--l {spec.cfg}")
+        if spec.sampler is not None:
+            flags.append(f"--ss {spec.sampler}")
+        if spec.flow_shift is not None:
+            flags.append(f"--fs {spec.flow_shift}")
         if spec.negative:
             flags.append(f"--n {spec.negative}")
         line = body

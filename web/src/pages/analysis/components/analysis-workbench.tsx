@@ -443,6 +443,16 @@ export function AnalysisWorkbench({
     return typeof url === "string" && url ? url : null
   }, [jobDetail])
 
+  // sampling.triggerWord 是模板替换后的实际触发词；为 LoRA 预览角标提供文字。
+  // 后端在 lifecycle._resolve_trigger_word 里要么用配置里的值，要么从数据集
+  // 推断；这里只读快照里的最终值，未设时回退到 base name。
+  const samplingTriggerWord = useMemo<string | null>(() => {
+    const cfg = jobDetail?.config_snapshot as Record<string, unknown> | undefined
+    const sampling = cfg?.["sampling"] as Record<string, unknown> | undefined
+    const raw = sampling?.["triggerWord"] ?? sampling?.["trigger_word"]
+    return typeof raw === "string" && raw.trim() ? raw.trim() : null
+  }, [jobDetail])
+
   return (
     <div className="flex flex-col min-h-0">
       <div className="px-7 pt-4 border-b border-border/40 bg-background/40">
@@ -579,6 +589,7 @@ export function AnalysisWorkbench({
             jobId={job.id}
             samples={files.data?.samples ?? []}
             loading={files.isLoading}
+            triggerWord={samplingTriggerWord}
           />
         )}
 
@@ -639,6 +650,7 @@ export function AnalysisWorkbench({
               jobId={job.id}
               samples={files.data?.samples ?? []}
               loading={files.isLoading}
+              triggerWord={samplingTriggerWord}
             />
           </TabsContent>
           <TabsContent value="ai" className="m-0">

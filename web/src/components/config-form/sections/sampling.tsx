@@ -181,6 +181,7 @@ export const SamplingFields = memo(function SamplingFields({
         onOpenChange={setPromptsOpen}
         initial={prompts}
         defaultResolution={resTuple}
+        triggerWord={v.triggerWord ?? null}
         onSave={(next: SamplingPromptValue[]) =>
           set(["sampling", "prompts"], next)
         }

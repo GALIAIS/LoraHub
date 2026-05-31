@@ -154,10 +154,13 @@ export function CheckpointPlayback({
   jobId,
   samples,
   loading,
+  triggerWord,
 }: {
   jobId: string
   samples: JobFile[]
   loading: boolean
+  /** 触发词，作为 LoRA 预览缩略图的橙色短角标（缩略图小，仅取前几位）。*/
+  triggerWord?: string | null
 }) {
   const { rows, fallback, totalSteps } = useMemo(
     () => groupSamples(samples),
@@ -222,6 +225,7 @@ export function CheckpointPlayback({
                     row={row}
                     columns={totalSteps}
                     onOpen={setOpen}
+                    triggerWord={triggerWord ?? null}
                   />
                 ))}
               </tbody>
@@ -248,11 +252,13 @@ function PlaybackRowView({
   row,
   columns,
   onOpen,
+  triggerWord,
 }: {
   jobId: string
   row: PlaybackRow
   columns: number[]
   onOpen: (src: string) => void
+  triggerWord: string | null
 }) {
   // Index cells by their step / epoch key so we can render aligned
   // placeholders in columns where this row didn't sample.
@@ -296,6 +302,7 @@ function PlaybackRowView({
                 sample={cell}
                 onOpen={onOpen}
                 isBaseline={col === 0}
+                triggerWord={triggerWord}
               />
             ) : (
               <div className="size-16 rounded-[3px] border border-dashed border-border/40 bg-muted/20" />
@@ -312,14 +319,22 @@ function PlaybackCell({
   sample,
   onOpen,
   isBaseline,
+  triggerWord,
 }: {
   jobId: string
   sample: ParsedSample
   onOpen: (src: string) => void
   isBaseline?: boolean
+  triggerWord?: string | null
 }) {
   const url = api.jobFileUrl(jobId, sample.file.path)
   const name = sample.file.path.split(/[\\/]/).pop() ?? sample.file.path
+  // 16×16 缩略图角标空间紧；触发词截到前 4 字符全大写。
+  const loraBadgeFull = (triggerWord || "").trim() || "LORA"
+  const loraBadge =
+    loraBadgeFull.length > 4
+      ? loraBadgeFull.slice(0, 4).toUpperCase()
+      : loraBadgeFull.toUpperCase()
   return (
     <button
       type="button"
@@ -329,9 +344,13 @@ function PlaybackCell({
         "bg-muted/20 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         isBaseline
           ? "border-sky-400/70 ring-1 ring-sky-400/30 hover:border-sky-500"
-          : "border-border/60 hover:border-primary/60 focus-visible:border-primary/70",
+          : "border-amber-400/55 hover:border-amber-500/80 focus-visible:border-amber-500/80",
       )}
-      title={isBaseline ? `[基模] ${name}` : name}
+      title={
+        isBaseline
+          ? `[基模] ${name}`
+          : `[${loraBadgeFull}] ${name}`
+      }
     >
       <img
         src={url}
@@ -339,9 +358,16 @@ function PlaybackCell({
         loading="lazy"
         className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.06]"
       />
-      {isBaseline && (
+      {isBaseline ? (
         <div className="pointer-events-none absolute inset-x-0 top-0 bg-sky-500/80 px-1 py-px text-center text-[8px] font-medium text-white leading-tight">
           BASE
+        </div>
+      ) : (
+        <div
+          className="pointer-events-none absolute left-0 top-0 max-w-full bg-amber-500/85 px-1 py-px text-[8px] font-medium uppercase tracking-tight text-white leading-tight rounded-br-[3px] truncate"
+          title={loraBadgeFull}
+        >
+          {loraBadge}
         </div>
       )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-1 py-0.5 text-[9px] font-mono text-white opacity-0 transition group-hover:opacity-100">

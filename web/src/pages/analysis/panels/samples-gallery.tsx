@@ -32,10 +32,13 @@ export function SamplesGallery({
   jobId,
   samples,
   loading,
+  triggerWord,
 }: {
   jobId: string
   samples: JobFile[]
   loading: boolean
+  /** 触发词，作为 LoRA 预览图的橙色角标文字。null = 显示 LORA。*/
+  triggerWord?: string | null
 }) {
   const [openSrc, setOpenSrc] = useState<string | null>(null)
 
@@ -83,6 +86,11 @@ export function SamplesGallery({
               const url = api.jobFileUrl(jobId, s.path)
               const name = s.path.split(/[\\/]/).pop() ?? s.path
               const isBaseline = s.step === 0 || (s.step == null && s.epoch === 0)
+              // 触发词 ASCII 化作为左上角橙色角标文字，超长截断；
+              // 缺失时退回到字面 LORA。
+              const loraBadge = (triggerWord || "").trim() || "LORA"
+              const loraBadgeShort =
+                loraBadge.length > 18 ? loraBadge.slice(0, 17) + "…" : loraBadge
               return (
                 <button
                   key={s.path}
@@ -92,9 +100,13 @@ export function SamplesGallery({
                     "group relative aspect-square overflow-hidden rounded-[4px] border bg-muted/20 transition",
                     isBaseline
                       ? "border-sky-400/70 ring-1 ring-sky-400/30 hover:border-sky-500"
-                      : "border-border/60 hover:border-primary/60",
+                      : "border-amber-400/60 hover:border-amber-500/80",
                   )}
-                  title={isBaseline ? `[基模] ${name}` : name}
+                  title={
+                    isBaseline
+                      ? `[基模] ${name}`
+                      : `[${loraBadge}] ${name}`
+                  }
                 >
                   <img
                     src={url}
@@ -102,9 +114,16 @@ export function SamplesGallery({
                     loading="lazy"
                     className="h-full w-full object-cover transition group-hover:scale-105"
                   />
-                  {isBaseline && (
+                  {isBaseline ? (
                     <div className="pointer-events-none absolute inset-x-0 top-0 bg-sky-500/80 px-1 py-px text-center text-[9px] font-medium text-white leading-tight">
                       BASE
+                    </div>
+                  ) : (
+                    <div
+                      className="pointer-events-none absolute left-0 top-0 max-w-[80%] truncate bg-amber-500/85 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-white leading-tight rounded-br-[3px] shadow-sm"
+                      title={loraBadge}
+                    >
+                      {loraBadgeShort}
                     </div>
                   )}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">

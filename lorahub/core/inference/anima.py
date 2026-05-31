@@ -260,6 +260,10 @@ class AnimaInferenceBackend:
             "--lora_weights", str(kohya_lora),
             "--lora_multiplier", str(cfg.user_strength),
         ]
+        if spec.sampler is not None:
+            cmd.extend(["--sampler", spec.sampler])
+        if spec.flow_shift is not None:
+            cmd.extend(["--flow_shift", str(spec.flow_shift)])
         log.info(
             "[anima-inference] render %s prompt %d -> %s",
             lora_path.parent.name,

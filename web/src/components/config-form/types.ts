@@ -67,6 +67,10 @@ export interface SamplingPromptValue {
   seed?: number | null
   width?: number | null
   height?: number | null
+  /** Anima flow-matching sampler. `null` = backend default (euler). */
+  sampler?: "euler" | "er_sde" | "lcm" | null
+  /** Flow-matching schedule shift. `null` = upstream default 5.0. */
+  flowShift?: number | null
 }
 
 export interface SamplingOutputsValue {
