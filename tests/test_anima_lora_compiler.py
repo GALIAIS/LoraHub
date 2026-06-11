@@ -169,6 +169,25 @@ def test_max_steps_unset_emits_method_max_train_epochs(tmp_path: Path) -> None:
     assert pairs["--max_train_epochs"] == [str(opts.max_train_epochs)]
 
 
+def test_use_cmmd_false_is_emitted(tmp_path: Path) -> None:
+    """Explicitly disabling CMMD must override upstream's true default."""
+    opts = AnimaLoraOptions(use_cmmd=False)
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["use_cmmd"] is False
+
+
+def test_use_cmmd_true_is_emitted(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(use_cmmd=True)
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["use_cmmd"] is True
+
+
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
 

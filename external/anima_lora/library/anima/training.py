@@ -1130,6 +1130,25 @@ def _write_sample_grid(
     logger.info("sample grid: %s (%d prompts)", out_path, len(images))
 
 
+def _decode_latents_with_dit_parked(accelerator: Accelerator, dit, vae, latents):
+    """Decode VAE latents without keeping the DiT resident on GPU."""
+    dit.to("cpu")
+    clean_memory_on_device(accelerator.device)
+    org_vae_device = vae.device
+    try:
+        vae.to(accelerator.device)
+        return vae.decode_to_pixels(latents).cpu()
+    finally:
+        vae.to(org_vae_device)
+        if hasattr(dit, "move_to_device_except_swap_blocks"):
+            dit.move_to_device_except_swap_blocks(accelerator.device)
+        else:
+            dit.to(accelerator.device)
+        if hasattr(dit, "prepare_block_swap_before_forward"):
+            dit.prepare_block_swap_before_forward()
+        clean_memory_on_device(accelerator.device)
+
+
 def _sample_image_inference(
     accelerator,
     args,
@@ -1274,11 +1293,7 @@ def _sample_image_inference(
     gc.collect()
     synchronize_device(accelerator.device)
     clean_memory_on_device(accelerator.device)
-    org_vae_device = vae.device
-    vae.to(accelerator.device)
-    decoded = vae.decode_to_pixels(latents)
-    vae.to(org_vae_device)
-    clean_memory_on_device(accelerator.device)
+    decoded = _decode_latents_with_dit_parked(accelerator, dit, vae, latents)
 
     # Convert to image
     image = decoded.float()
@@ -1358,11 +1373,7 @@ def sample_image_to_tensor(
     gc.collect()
     synchronize_device(accelerator.device)
     clean_memory_on_device(accelerator.device)
-    org_vae_device = vae.device
-    vae.to(accelerator.device)
-    decoded = vae.decode_to_pixels(latents)
-    vae.to(org_vae_device)
-    clean_memory_on_device(accelerator.device)
+    decoded = _decode_latents_with_dit_parked(accelerator, dit, vae, latents)
 
     image = decoded.float()[0]
     if image.ndim == 4:

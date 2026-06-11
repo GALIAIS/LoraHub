@@ -83,21 +83,19 @@ class LoRAModule(BaseLoRAModule):
             lx = self.lora_up(self.lora_down(x_lora))
             return org_forwarded + lx * self.multiplier * self.scale
 
-        # Training: bf16 storage, fp32 bottleneck matmuls — recovers mantissa
-        # precision that bf16 sheds across the large-embed_dim accumulation.
+        # Training: rank GEMMs in the model compute dtype
+        # (``org_forwarded.dtype``), not the incoming activation dtype. AdaLN
+        # can emit fp32 under autocast, and using that would promote the rank
+        # path plus channel-scale rebalance to fp32 for no useful gain.
         if self._skip_module():
             return org_forwarded
 
-        if self.use_custom_down_autograd and isinstance(
-            self.lora_down, torch.nn.Linear
-        ):
-            inv_scale = self.inv_scale if self._has_channel_scale else None
-            lx = lora_down_project(x, self.lora_down.weight, inv_scale)
+        work = org_forwarded.dtype
+        x_lora = self._rebalance(x.to(work))
+        if isinstance(self.lora_down, torch.nn.Linear):
+            lx = torch.nn.functional.linear(x_lora, self.lora_down.weight.to(work))
         else:
-            x_lora = self._rebalance(x)
-            lx = torch.nn.functional.linear(
-                x_lora.float(), self.lora_down.weight.float()
-            )
+            lx = self.lora_down(x_lora)
 
         lx = lx * self._timestep_mask
 
@@ -106,7 +104,11 @@ class LoRAModule(BaseLoRAModule):
 
         lx, scale = self._apply_rank_dropout(lx)
 
-        lx = torch.nn.functional.linear(lx, self.lora_up.weight.float())
+        work = org_forwarded.dtype
+        if isinstance(self.lora_up, torch.nn.Linear):
+            lx = torch.nn.functional.linear(lx.to(work), self.lora_up.weight.to(work))
+        else:
+            lx = self.lora_up(lx.to(work))
         return org_forwarded + (lx * self.multiplier * scale).to(org_forwarded.dtype)
 
     def get_weight(self, multiplier=None):

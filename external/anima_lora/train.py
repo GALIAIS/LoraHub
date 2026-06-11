@@ -4,6 +4,7 @@ import importlib
 import argparse
 import math
 import os
+import shutil
 import typing
 from typing import Any, Union, Optional
 import sys
@@ -499,6 +500,9 @@ class AnimaTrainer:
         # in compile_blocks() itself.
         if getattr(args, "enable_native_flatten", False):
             if args.torch_compile:
+                self._maybe_clear_stale_compile_cache(
+                    self._compile_cache_signature(args, path="native_flatten")
+                )
                 model.compile_blocks(
                     args.dynamo_backend,
                     mode=getattr(args, "compile_inductor_mode", None),
@@ -523,6 +527,9 @@ class AnimaTrainer:
                 args.torch_compile
                 and getattr(args, "compile_mode", "blocks") == "blocks"
             ):
+                self._maybe_clear_stale_compile_cache(
+                    self._compile_cache_signature(args, path="static_token_count")
+                )
                 model.compile_blocks(
                     args.dynamo_backend,
                     mode=getattr(args, "compile_inductor_mode", None),
@@ -553,6 +560,57 @@ class AnimaTrainer:
             )
 
         return model, text_encoders
+
+    def _compile_cache_signature(self, args, *, path: str) -> str:
+        return (
+            f"path={path};"
+            f"static_token_count={getattr(args, 'static_token_count', None)};"
+            f"bucket_table={getattr(args, 'bucket_table', None)};"
+            f"dynamic_seq={getattr(args, 'compile_dynamic_seq', False)};"
+            f"backend={getattr(args, 'dynamo_backend', None)};"
+            f"mode={getattr(args, 'compile_inductor_mode', None)}"
+        )
+
+    def _maybe_clear_stale_compile_cache(self, signature: str) -> None:
+        """Wipe torch inductor cache once when compile shape policy changes."""
+        marker = os.path.join(
+            os.path.expanduser("~"), ".cache", "anima_lora", "torch_compile_sig"
+        )
+        try:
+            prev = (
+                open(marker, encoding="utf-8").read().strip()
+                if os.path.exists(marker)
+                else None
+            )
+        except OSError:
+            prev = None
+
+        if prev == signature:
+            return
+
+        cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+        if not cache_dir:
+            try:
+                from torch._inductor.runtime.runtime_utils import (
+                    cache_dir as _inductor_cache_dir,
+                )
+
+                cache_dir = _inductor_cache_dir()
+            except Exception:  # noqa: BLE001
+                cache_dir = None
+        if cache_dir and os.path.isdir(cache_dir):
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            logger.info(
+                "Cleared torch.compile inductor cache — compile signature "
+                f"changed ({prev or 'none'} -> {signature}); rebuilding."
+            )
+
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(signature)
+        except OSError as e:
+            logger.warning(f"Could not write compile-cache marker {marker}: {e}")
 
     def get_tokenize_strategy(self, args):
         tokenize_strategy = strategy_anima.AnimaTokenizeStrategy(
@@ -2161,6 +2219,10 @@ class AnimaTrainer:
         gen_pool = torch.stack(gen_pooled, dim=0).to(accelerator.device)
         cmmd_value = cmmd_from_pools(ref_pool, gen_pool)
         val_loss_recorder.add(epoch=epoch, step=global_step, loss=cmmd_value)
+        if accelerator.is_main_process:
+            accelerator.print(
+                f"validation loss={cmmd_value} epoch={epoch + 1} step={global_step}"
+            )
 
         # Optional LPIPS — perceptual distance between each ref item's
         # source image and our just-generated counterpart. Gated by
@@ -2321,6 +2383,13 @@ class AnimaTrainer:
                     val_timesteps_step += 1
         finally:
             val_progress_bar.close()
+
+        if accelerator.is_main_process and val_loss_recorder.loss_list:
+            accelerator.print(
+                "validation loss="
+                f"{val_loss_recorder.moving_average} epoch={epoch + 1} "
+                f"step={global_step}"
+            )
 
         if ctx.is_tracking:
             logs = {

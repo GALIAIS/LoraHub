@@ -323,9 +323,9 @@ class HydraLoRAModule(BaseLoRAModule):
         _clear_routing_weights(self)
 
     def forward(self, x):
-        # bf16 storage, fp32 bottleneck matmuls (see LoRAModule.forward).
-        # Gate/router stays in autocast dtype — softmax over E is fine in bf16
-        # given the small-std router init.
+        # Rank GEMMs run in the model compute dtype, not x.dtype. AdaLN can
+        # feed this module fp32 under autocast; keeping that dtype would
+        # upcast the rank path and channel-scale rebalance activation.
         org_forwarded = self.org_forward(x)
 
         if not self.enabled:
@@ -334,14 +334,9 @@ class HydraLoRAModule(BaseLoRAModule):
         if self._skip_module():
             return org_forwarded
 
-        if self.use_custom_down_autograd and self.training:
-            inv_scale = self.inv_scale if self._has_channel_scale else None
-            lx = lora_down_project(x, self.lora_down.weight, inv_scale)
-        else:
-            x_lora = self._rebalance(x)
-            lx = torch.nn.functional.linear(
-                x_lora.float(), self.lora_down.weight.float()
-            )
+        comp = org_forwarded.dtype if self.training else torch.float32
+        x_lora = self._rebalance(x.to(comp))
+        lx = torch.nn.functional.linear(x_lora, self.lora_down.weight.to(comp))
 
         # Gate from rank-R signal pre-mask/dropout — those are training-time
         # perturbations and the gate must behave identically at inference.

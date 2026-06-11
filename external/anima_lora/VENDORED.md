@@ -83,6 +83,17 @@ Applied piecewise from upstream commits past the 2026-05-22 base import:
   the step boundary lets the runtime reclaim the slots safely.
   Wrapped in try/except so older torch builds without the helper
   silently skip (those builds default to no cudagraphs anyway).
+* **June 2026 stability cherry-picks** (upstream `6c15855` /
+  `8c2005c` / `fea3433` / `d47207e` / `6a89efe`, applied selectively
+  on 2026-06-11): ported the useful backend-safe pieces without the
+  GUI/runtime-harness migration. Sample/validation VAE decode now parks
+  the DiT on CPU and moves decoded pixels back to CPU before training
+  resumes; LoRA-family rank GEMMs avoid fp32 upcast from AdaLN fp32
+  activations by computing in the model output dtype; stale
+  torch.compile inductor caches are cleared when the compile shape
+  signature changes. LoraHub also emits `use_cmmd = false` explicitly
+  and train.py prints `validation loss=...` so the wrapper can surface
+  validation events.
 
 ### Intentionally deferred upstream changes
 

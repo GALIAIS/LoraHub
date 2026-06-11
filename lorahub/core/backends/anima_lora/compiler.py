@@ -423,8 +423,9 @@ def _render_full_config(
     cfg_dict["mixed_precision"] = opts.mixed_precision
 
     # ---- Validation ----
-    if opts.use_cmmd:
-        cfg_dict["use_cmmd"] = True
+    # Upstream defaults ``use_cmmd`` to true. Emit both true and false so
+    # LoraHub's UI value wins instead of letting argparse fall back.
+    cfg_dict["use_cmmd"] = bool(opts.use_cmmd)
     if opts.validation_seed is not None:
         cfg_dict["validation_seed"] = int(opts.validation_seed)
     if opts.validation_sample_steps is not None:
