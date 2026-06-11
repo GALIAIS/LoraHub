@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PathDisplay } from "@/components/path-display"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { cn } from "@/lib/utils"
 import {
   COMPARE_LIMIT,
@@ -144,21 +145,12 @@ export function AnalysisPage() {
   }
 
   return (
-    <div
-      className={cn(
-        "grid h-full min-h-0 overflow-hidden transition-[grid-template-columns] duration-300 ease-out",
-        sidebarOpen
-          ? "grid-cols-[minmax(260px,300px)_1fr]"
-          : "grid-cols-[0px_1fr]",
-      )}
-    >
-      <aside
-        className={cn(
-          "shiro-page-aside flex flex-col min-h-0 overflow-hidden transition-opacity duration-200",
-          !sidebarOpen && "pointer-events-none opacity-0",
-        )}
-        aria-hidden={!sidebarOpen}
-      >
+    <WorkbenchSplitLayout
+      sidebarOpen={sidebarOpen}
+      sidebarWidth="minmax(260px,300px)"
+      transitionClassName="duration-300"
+      sidebar={
+        <>
         <header className="px-4 pt-4 pb-2 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
@@ -246,9 +238,9 @@ export function AnalysisPage() {
             ))}
           </ul>
         </ScrollArea>
-      </aside>
-
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+        </>
+      }
+    >
         {!sidebarOpen && (
           <Button
             size="sm"
@@ -326,8 +318,7 @@ export function AnalysisPage() {
             )}
           </>
         )}
-      </section>
-    </div>
+    </WorkbenchSplitLayout>
   )
 }
 

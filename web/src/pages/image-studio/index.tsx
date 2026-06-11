@@ -2,7 +2,10 @@ import { useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { ImageIcon, Plus } from "lucide-react"
 import { datasetCreate } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { StudioSidebar } from "./components/studio-sidebar"
 import { DatasetDetail } from "./components/dataset-detail"
 import { IntakeStage } from "./components/stages/intake-stage"
@@ -61,16 +64,20 @@ function ImageStudioPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full">
-      <StudioSidebar
-        datasetPath={datasetPath}
-        stage={stageParam}
-        onSelectDataset={selectDataset}
-        onSelectStage={selectStage}
-        onCreateDataset={() => setShowCreate(true)}
-      />
-
-      <main className="flex-1 min-w-0 flex flex-col min-h-0">
+    <>
+      <WorkbenchSplitLayout
+        sidebarWidth="max-content"
+        asideClassName="bg-transparent"
+        sidebar={
+          <StudioSidebar
+            datasetPath={datasetPath}
+            stage={stageParam}
+            onSelectDataset={selectDataset}
+            onSelectStage={selectStage}
+            onCreateDataset={() => setShowCreate(true)}
+          />
+        }
+      >
         <div className="flex-1 min-h-0 overflow-hidden">
           {stageParam === "tools" && (
             <ToolsGrid datasetPath={datasetPath} />
@@ -101,7 +108,7 @@ function ImageStudioPage() {
               </>
             )}
         </div>
-      </main>
+      </WorkbenchSplitLayout>
 
       {showCreate && (
         <CreateDatasetDialog
@@ -110,7 +117,7 @@ function ImageStudioPage() {
           loading={createMutation.isPending}
         />
       )}
-    </div>
+    </>
   )
 }
 
@@ -118,20 +125,8 @@ function EmptyState({ onCreateDataset }: { onCreateDataset: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
       <div className="flex flex-col items-center gap-4 text-center">
-        <div className="rounded-full bg-muted p-4">
-          <svg
-            className="size-8 text-muted-foreground/60"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z"
-            />
-          </svg>
+        <div className="grid size-16 place-items-center rounded-[6px] border border-border/60 bg-muted/35 shadow-[var(--panel-shadow)]">
+          <ImageIcon className="size-7 text-muted-foreground/70" />
         </div>
         <div>
           <p className="text-sm font-medium">图像工作台</p>
@@ -139,13 +134,14 @@ function EmptyState({ onCreateDataset }: { onCreateDataset: () => void }) {
             从侧边栏选择数据集，或创建新数据集开始工作
           </p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onCreateDataset}
-          className="rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          size="sm"
         >
+          <Plus className="size-3.5" />
           新建数据集
-        </button>
+        </Button>
       </div>
     </div>
   )

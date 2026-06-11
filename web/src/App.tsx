@@ -137,14 +137,6 @@ export default function App() {
     }
   }, [mode, accent])
 
-  useEffect(() => {
-    const prevent = (e: Event) => e.preventDefault()
-    document.addEventListener("contextmenu", prevent)
-    return () => {
-      document.removeEventListener("contextmenu", prevent)
-    }
-  }, [])
-
   // Eagerly warm every route chunk during browser idle time so the
   // first click on a nav item never pays a network round-trip. We
   // also kick a queueMicrotask fallback for browsers without
@@ -349,7 +341,7 @@ export default function App() {
       </Sidebar>
 
       {/* --- Main content --- */}
-      <SidebarInset className="shiro-page-canvas h-screen overflow-hidden">
+      <SidebarInset className="shiro-page-canvas h-[100dvh] overflow-hidden">
         <div className="relative flex h-full flex-col overflow-hidden">
           {/* Header */}
           <header className="shrink-0 z-30">

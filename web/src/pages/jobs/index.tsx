@@ -7,6 +7,7 @@ import { api, type JobSummary } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { readBool, readList, useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { cn } from "@/lib/utils"
 import { JobsToolbar } from "./components/jobs-toolbar"
 import { JobRow } from "./components/job-row"
 import { JobDetail } from "./components/job-detail"
@@ -272,21 +272,12 @@ export function JobsPage() {
   })
 
   return (
-    <div
-      className={cn(
-        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
-        sidebarOpen
-          ? "grid-cols-[minmax(280px,340px)_1fr]"
-          : "grid-cols-[0px_1fr]",
-      )}
-    >
-      <aside
-        className={cn(
-          "shiro-page-aside flex flex-col min-h-0 min-w-0 overflow-hidden",
-          !sidebarOpen && "pointer-events-none opacity-0",
-        )}
-        aria-hidden={!sidebarOpen}
-      >
+    <>
+      <WorkbenchSplitLayout
+        sidebarOpen={sidebarOpen}
+        sidebarWidth="minmax(280px,340px)"
+        sidebar={
+          <>
         <div className="flex items-center justify-between px-4 pt-3">
           <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
             训练任务
@@ -409,9 +400,9 @@ export function JobsPage() {
             })}
           </ul>
         </ScrollArea>
-      </aside>
-
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+          </>
+        }
+      >
         {!sidebarOpen && (
           <Button
             size="sm"
@@ -436,7 +427,7 @@ export function JobsPage() {
             从列表中选择一个任务以查看事件流。
           </div>
         )}
-      </section>
+      </WorkbenchSplitLayout>
 
       <AlertDialog
         open={bulkArchiveOpen}
@@ -476,6 +467,6 @@ export function JobsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }

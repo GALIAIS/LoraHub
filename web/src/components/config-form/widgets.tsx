@@ -5,7 +5,7 @@
  * its props don't change.
  */
 import { createContext, memo, useContext, useEffect, useRef, useState } from "react"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Dices } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch as RawSwitch } from "@/components/ui/switch"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 // Read-only mode is propagated via context so individual widgets don't need to
@@ -94,8 +95,8 @@ export const Row = memo(function Row({
   htmlFor,
 }: RowProps) {
   return (
-    <div className="grid grid-cols-[10rem_1fr] gap-x-4 items-start">
-      <Label htmlFor={htmlFor} className="text-xs pt-2 leading-tight">
+    <div className="grid gap-1.5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-x-4 sm:items-start">
+      <Label htmlFor={htmlFor} className="text-xs leading-tight sm:pt-2">
         <span className="inline-flex items-center gap-1.5 flex-wrap">
           <span>{label}</span>
           {labelBadge}
@@ -105,7 +106,7 @@ export const Row = memo(function Row({
       <div className="min-w-0">
         {children}
         {description && (
-          <p className="text-[11px] text-muted-foreground/80 mt-1">{description}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">{description}</p>
         )}
         {errors && errors.length > 0 && (
           <ul className="mt-1 text-[11px] text-destructive">
@@ -226,10 +227,10 @@ interface SeedInputProps {
 }
 
 /**
- * Numeric input + "🎲" button + "随机" toggle.
+ * Numeric input + roll button + "随机" toggle.
  *
  * - Typing a number locks that exact seed for every run.
- * - Clicking 🎲 drops a fresh random integer into the field; the YAML
+ * - Clicking the roll button drops a fresh random integer into the field; the YAML
  *   then records that specific value (great for "I liked the 9th
  *   roll, freeze it").
  * - The randomize pill flips the value to ``-1`` — the launcher draws
@@ -279,34 +280,28 @@ export const SeedInput = memo(function SeedInput({
           onChange(Math.max(-1, Math.min(SEED_MAX, n)))
         }}
       />
-      <button
+      <Button
         type="button"
         onClick={rollNew}
         disabled={readOnly}
         title="掷骰子（生成新种子并固定）"
         aria-label="生成新种子"
-        className={cn(
-          "inline-flex h-9 w-9 items-center justify-center rounded-[4px] border border-border/50",
-          "bg-background hover:bg-muted/40 text-base disabled:opacity-50",
-        )}
+        variant="outline"
+        size="icon"
       >
-        🎲
-      </button>
-      <button
+        <Dices className="size-4" />
+      </Button>
+      <Button
         type="button"
         onClick={setRandomSentinel}
         disabled={readOnly}
         title="每次运行时由后端随机抽取（写入 -1）"
-        className={cn(
-          "h-9 px-2 rounded-[4px] border text-[11px] font-medium",
-          isRandom
-            ? "border-primary/40 bg-primary/15 text-foreground"
-            : "border-border/50 bg-background hover:bg-muted/40 text-muted-foreground",
-          readOnly && "opacity-50 cursor-not-allowed",
-        )}
+        variant={isRandom ? "secondary" : "outline"}
+        size="sm"
+        className="h-9 text-[11px]"
       >
         随机
-      </button>
+      </Button>
     </div>
   )
 })

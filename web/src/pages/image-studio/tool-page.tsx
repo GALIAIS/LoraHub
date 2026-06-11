@@ -12,6 +12,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { ChevronLeft, FolderOpen } from "lucide-react"
 import { datasetList } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 import { TOOLS, TOOL_CATEGORIES } from "./tools-catalog"
 import { TOOL_COMPONENTS } from "./tool-registry"
 
@@ -30,13 +31,14 @@ export function ToolPage() {
           <p className="mt-1 text-xs text-muted-foreground">
             找不到 id 为 <code className="font-mono">{toolId}</code> 的工具。
           </p>
-          <button
+          <Button
             type="button"
             onClick={() => navigate("/image-studio")}
-            className="mt-4 rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground"
+            size="sm"
+            className="mt-4"
           >
             回到工具广场
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -60,14 +62,15 @@ export function ToolPage() {
           <span className="text-foreground">{tool.label}</span>
         </nav>
         <div className="mt-1.5 flex items-center gap-2">
-          <button
+          <Button
             type="button"
             onClick={() => navigate("/image-studio")}
-            className="rounded p-1 hover:bg-accent"
+            variant="ghost"
+            size="icon-xs"
             title="回到工具广场"
           >
             <ChevronLeft className="size-3.5" />
-          </button>
+          </Button>
           <Icon className="size-4 text-muted-foreground" />
           <h1 className="text-sm font-semibold">{tool.label}</h1>
           {tool.async && (

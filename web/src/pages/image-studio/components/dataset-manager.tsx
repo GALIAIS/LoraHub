@@ -149,13 +149,13 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
               <LayoutList className="size-3.5" />
             </button>
           </div>
-          <button
+          <Button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+            size="sm"
           >
             <FolderPlus className="size-3.5" /> 新建
-          </button>
+          </Button>
         </div>
       </div>
 

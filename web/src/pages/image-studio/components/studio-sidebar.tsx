@@ -32,6 +32,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { StageId } from "./stage-stepper"
 
@@ -86,12 +87,16 @@ export function StudioSidebar({
   })
 
   const datasets = datasetsQuery.data?.datasets ?? []
+  const navButtonClass =
+    "w-full justify-start text-left font-normal data-[active=true]:border-sidebar-primary/35 data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+  const iconButtonClass =
+    "text-muted-foreground data-[active=true]:border-sidebar-primary/35 data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
 
   return (
     <>
-      <aside
+      <div
         className={cn(
-          "flex h-full flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-150 ease-out overflow-hidden shrink-0",
+          "flex h-full flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-150 ease-out overflow-hidden shrink-0",
           collapsed ? "w-12" : "w-56",
         )}
       >
@@ -102,10 +107,12 @@ export function StudioSidebar({
             collapsed ? "flex-col items-center gap-2" : "items-center gap-1",
           )}
         >
-          <button
+          <Button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
-            className="rounded-md p-1.5 hover:bg-accent shrink-0"
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0"
             title={collapsed ? "展开侧边栏" : "折叠侧边栏"}
           >
             <ChevronLeft
@@ -114,22 +121,30 @@ export function StudioSidebar({
                 collapsed && "rotate-180",
               )}
             />
-          </button>
+          </Button>
           {!collapsed && (
-            <button
+            <Button
               type="button"
               onClick={onCreateDataset}
-              className="flex flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium hover:bg-accent"
+              variant="ghost"
+              size="sm"
+              className="flex-1 justify-start"
             >
               <FolderPlus className="size-3.5" />
               新建
-            </button>
+            </Button>
           )}
           {collapsed && (
             <Tooltip>
               <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                  />
+                }
                 onClick={onCreateDataset}
-                className="flex items-center justify-center rounded-md p-1.5 hover:bg-accent"
               >
                 <FolderPlus className="size-4" />
               </TooltipTrigger>
@@ -146,13 +161,16 @@ export function StudioSidebar({
               <>
                 <Tooltip>
                   <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        data-active={stage === "tools" ? "true" : undefined}
+                        className={iconButtonClass}
+                      />
+                    }
                     onClick={() => onSelectStage("tools")}
-                    className={cn(
-                      "flex w-full items-center justify-center rounded-md p-2",
-                      stage === "tools"
-                        ? "bg-primary/10 text-primary"
-                        : "hover:bg-accent/50 text-muted-foreground",
-                    )}
                   >
                     <LayoutGrid className="size-4" />
                   </TooltipTrigger>
@@ -160,13 +178,16 @@ export function StudioSidebar({
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        data-active={stage === "library" ? "true" : undefined}
+                        className={iconButtonClass}
+                      />
+                    }
                     onClick={() => onSelectStage("library")}
-                    className={cn(
-                      "flex w-full items-center justify-center rounded-md p-2",
-                      stage === "library"
-                        ? "bg-primary/10 text-primary"
-                        : "hover:bg-accent/50 text-muted-foreground",
-                    )}
                   >
                     <Library className="size-4" />
                   </TooltipTrigger>
@@ -175,32 +196,28 @@ export function StudioSidebar({
               </>
             ) : (
               <>
-                <button
+                <Button
                   type="button"
                   onClick={() => onSelectStage("tools")}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                    stage === "tools"
-                      ? "bg-primary/10 text-primary font-medium"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                  )}
+                  variant="ghost"
+                  size="sm"
+                  data-active={stage === "tools" ? "true" : undefined}
+                  className={navButtonClass}
                 >
                   <LayoutGrid className="size-3.5 shrink-0" />
                   <span>全部工具</span>
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() => onSelectStage("library")}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                    stage === "library"
-                      ? "bg-primary/10 text-primary font-medium"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                  )}
+                  variant="ghost"
+                  size="sm"
+                  data-active={stage === "library" ? "true" : undefined}
+                  className={navButtonClass}
                 >
                   <Library className="size-3.5 shrink-0" />
                   <span>工具库</span>
-                </button>
+                </Button>
               </>
             )}
           </div>
@@ -218,13 +235,16 @@ export function StudioSidebar({
               collapsed ? (
                 <Tooltip key={ds.name}>
                   <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        data-active={ds.path === datasetPath ? "true" : undefined}
+                        className={iconButtonClass}
+                      />
+                    }
                     onClick={() => onSelectDataset(ds.path)}
-                    className={cn(
-                      "flex items-center justify-center rounded-md p-2",
-                      ds.path === datasetPath
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50",
-                    )}
                   >
                     <FolderOpen className="size-4" />
                   </TooltipTrigger>
@@ -242,11 +262,13 @@ export function StudioSidebar({
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
-                  <button
+                  <Button
                     type="button"
                     onClick={() => onSelectDataset(ds.path)}
+                    variant="ghost"
+                    size="sm"
                     className={cn(
-                      "flex flex-1 min-w-0 items-center gap-2 px-2 py-1.5 text-left",
+                      "min-w-0 flex-1 justify-start gap-2 text-left font-normal",
                       ds.path === datasetPath && "font-medium",
                     )}
                   >
@@ -257,15 +279,22 @@ export function StudioSidebar({
                         {ds.imageCount}
                       </span>
                     )}
-                  </button>
+                  </Button>
                   <Tooltip>
                     <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="hidden text-muted-foreground hover:text-destructive group-hover/ds:inline-flex"
+                          aria-label={`删除数据集 ${ds.name}`}
+                        />
+                      }
                       onClick={(e) => {
                         e.stopPropagation()
                         setPendingDelete(ds)
                       }}
-                      className="hidden group-hover/ds:flex items-center justify-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive shrink-0"
-                      aria-label={`删除数据集 ${ds.name}`}
                     >
                       <Trash2 className="size-3.5" />
                     </TooltipTrigger>
@@ -297,33 +326,34 @@ export function StudioSidebar({
                   collapsed ? (
                     <Tooltip key={s.id}>
                       <TooltipTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            data-active={s.id === stage ? "true" : undefined}
+                            className={iconButtonClass}
+                          />
+                        }
                         onClick={() => onSelectStage(s.id)}
-                        className={cn(
-                          "flex items-center justify-center rounded-md p-2",
-                          s.id === stage
-                            ? "bg-primary/10 text-primary"
-                            : "hover:bg-accent/50 text-muted-foreground",
-                        )}
                       >
                         <s.icon className="size-4" />
                       </TooltipTrigger>
                       <TooltipContent side="right">{s.label}</TooltipContent>
                     </Tooltip>
                   ) : (
-                    <button
+                    <Button
                       key={s.id}
                       type="button"
                       onClick={() => onSelectStage(s.id)}
-                      className={cn(
-                        "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                        s.id === stage
-                          ? "bg-primary/10 text-primary font-medium"
-                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                      )}
+                      variant="ghost"
+                      size="sm"
+                      data-active={s.id === stage ? "true" : undefined}
+                      className={navButtonClass}
                     >
                       <s.icon className="size-3.5 shrink-0" />
                       <span>{s.label}</span>
-                    </button>
+                    </Button>
                   ),
                 )}
               </nav>
@@ -335,7 +365,16 @@ export function StudioSidebar({
         <div className="border-t px-2 py-2">
           {collapsed ? (
             <Tooltip>
-              <TooltipTrigger className="flex w-full items-center justify-center">
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="w-full text-muted-foreground"
+                  />
+                }
+              >
                 <Images className="size-4 text-muted-foreground" />
               </TooltipTrigger>
               <TooltipContent side="right">
@@ -349,7 +388,7 @@ export function StudioSidebar({
             </p>
           )}
         </div>
-      </aside>
+      </div>
 
       <AlertDialog
         open={!!pendingDelete}

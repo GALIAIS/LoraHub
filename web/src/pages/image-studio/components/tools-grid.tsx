@@ -102,7 +102,7 @@ function ToolCard({
   )
 
   const baseCls =
-    "group relative flex flex-col items-start gap-1.5 rounded-md border bg-card px-3 py-2.5 text-left transition-colors"
+    "shiro-surface group relative flex flex-col items-start gap-1.5 px-3 py-2.5 text-left transition-colors"
 
   if (disabled) {
     return (
