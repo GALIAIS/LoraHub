@@ -57,6 +57,35 @@ const SOURCE_OPTIONS: { value: Source; label: string }[] = [
 ]
 
 const MODEL_DOWNLOAD_SESSION_KEY = "lorahub:model-download-session-id"
+const DEFAULT_ALLOW_PATTERNS = [
+  "*.safetensors",
+  "*.ckpt",
+  "*.pt",
+  "*.pth",
+  "*.bin",
+  "*.gguf",
+  "*.onnx",
+  "*.json",
+  "*.txt",
+  "*.model",
+  "*.vocab",
+  "*.merges",
+].join(", ")
+const DEFAULT_IGNORE_PATTERNS = [
+  ".gitattributes",
+  "README*",
+  "LICENSE*",
+  "*.md",
+  "*.png",
+  "*.jpg",
+  "*.jpeg",
+  "*.webp",
+  "*.gif",
+  "*.mp4",
+  "*.zip",
+  "*.tar",
+  "*.tar.gz",
+].join(", ")
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B"
@@ -76,9 +105,19 @@ export function ModelsTab() {
   const [revision, setRevision] = useState("")
   const [targetDir, setTargetDir] = useState("")
   const [threads, setThreads] = useState(4)
+  const [allowPatterns, setAllowPatterns] = useState(DEFAULT_ALLOW_PATTERNS)
+  const [ignorePatterns, setIgnorePatterns] = useState(DEFAULT_IGNORE_PATTERNS)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [lastListedKey, setLastListedKey] = useState("")
+  const parsedAllowPatterns = useMemo(
+    () => parsePatterns(allowPatterns),
+    [allowPatterns],
+  )
+  const parsedIgnorePatterns = useMemo(
+    () => parsePatterns(ignorePatterns),
+    [ignorePatterns],
+  )
 
   const latestDownload = useQuery({
     queryKey: ["model-download-latest"],
@@ -111,6 +150,8 @@ export function ModelsTab() {
         target_dir: targetDir.trim() || undefined,
         threads,
         paths: Array.from(selectedPaths),
+        allow_patterns: parsedAllowPatterns,
+        ignore_patterns: parsedIgnorePatterns,
       }),
     onSuccess: (session) => {
       setSessionId(session.session_id)
@@ -124,12 +165,16 @@ export function ModelsTab() {
         source,
         repo_id: repoId.trim(),
         revision: revision.trim() || (source === "modelscope" ? "master" : "main"),
+        allow_patterns: parsedAllowPatterns,
+        ignore_patterns: parsedIgnorePatterns,
       }),
     onSuccess: (res) => {
       setSelectedPaths(
         new Set(res.files.filter((file) => file.selected).map((file) => file.path)),
       )
-      setLastListedKey(listKey(source, repoId, revision))
+      setLastListedKey(
+        listKey(source, repoId, revision, parsedAllowPatterns, parsedIgnorePatterns),
+      )
     },
   })
 
@@ -138,7 +183,7 @@ export function ModelsTab() {
     setLastListedKey("")
     fileList.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, repoId, revision])
+  }, [source, repoId, revision, allowPatterns, ignorePatterns])
 
   const session = useQuery({
     queryKey: ["model-download", sessionId],
@@ -166,7 +211,9 @@ export function ModelsTab() {
   const listed = fileList.data?.files ?? []
   const selectedFiles = listed.filter((file) => selectedPaths.has(file.path))
   const selectedBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0)
-  const staleList = lastListedKey !== listKey(source, repoId, revision)
+  const staleList =
+    lastListedKey !==
+    listKey(source, repoId, revision, parsedAllowPatterns, parsedIgnorePatterns)
   const canDownload = ready && selectedPaths.size > 0 && !running && !staleList
 
   const result = current?.result
@@ -245,6 +292,22 @@ export function ModelsTab() {
                 <ServerCog className="size-3.5" /> 1-16 个并发 worker
               </div>
             </div>
+
+            <Label className="text-xs">包含规则</Label>
+            <Input
+              value={allowPatterns}
+              onChange={(e) => setAllowPatterns(e.target.value)}
+              className="font-mono"
+              placeholder="*.safetensors, *.json, tokenizer/*"
+            />
+
+            <Label className="text-xs">忽略规则</Label>
+            <Input
+              value={ignorePatterns}
+              onChange={(e) => setIgnorePatterns(e.target.value)}
+              className="font-mono"
+              placeholder="README*, *.png, *.mp4"
+            />
           </div>
 
           <div className="flex items-center gap-3 pt-1">
@@ -556,6 +619,25 @@ function clampThreadCount(value: number): number {
   return Math.max(1, Math.min(16, Math.round(value)))
 }
 
-function listKey(source: Source, repoId: string, revision: string): string {
-  return `${source}:${repoId.trim()}:${revision.trim()}`
+function parsePatterns(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function listKey(
+  source: Source,
+  repoId: string,
+  revision: string,
+  allowPatterns: string[],
+  ignorePatterns: string[],
+): string {
+  return [
+    source,
+    repoId.trim(),
+    revision.trim(),
+    allowPatterns.join("\0"),
+    ignorePatterns.join("\0"),
+  ].join(":")
 }

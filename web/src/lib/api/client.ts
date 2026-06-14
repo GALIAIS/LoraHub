@@ -350,6 +350,8 @@ export const api = {
       target_dir?: string | null
       threads?: number
       paths?: string[]
+      allow_patterns?: string[]
+      ignore_patterns?: string[]
     },
   ) =>
     http<ModelDownloadSession>("/models/download", {
@@ -362,6 +364,8 @@ export const api = {
       repo_id: string
       revision?: string
       paths?: string[]
+      allow_patterns?: string[]
+      ignore_patterns?: string[]
     },
   ) =>
     http<RemoteModelFilesResponse>("/models/files", {
