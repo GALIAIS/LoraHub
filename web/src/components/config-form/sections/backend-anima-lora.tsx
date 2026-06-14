@@ -1156,12 +1156,12 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         <Row
           label="验证集大小"
           labelBadge={lockBadgeFor("validationSplitNum")}
-          description="留出验证集大小;0 = 关验证。大于 0 时需要开启 CMMD 验证。"
+          description="留出验证集大小；0 是 LoraHub 默认，关闭验证。大于 0 时需要开启 CMMD 验证。"
         >
           <FloatInput
             value={v.validationSplitNum}
             onChange={(n) => set(["backend", "animaLora", "validationSplitNum"], n)}
-            placeholder="16"
+            placeholder="0"
             min={0}
           />
         </Row>
