@@ -367,6 +367,43 @@ def test_smart_caption_status_reads_persisted_result_after_memory_clear(
     assert body["processed"] == 2
 
 
+@pytest.mark.parametrize(
+    ("kind", "url"),
+    [
+        ("image_studio_smart_caption", "/api/image-studio/ai/smart-caption/status/{sid}"),
+        ("image_studio_quality", "/api/image-studio/ai/quality/status/{sid}"),
+        ("image_studio_caption", "/api/image-studio/ai/caption/status/{sid}"),
+        ("image_studio_trigger_words", "/api/image-studio/ai/trigger-words/status/{sid}"),
+        ("image_studio_auto_rotate", "/api/image-studio/curate/auto-rotate/status/{sid}"),
+        ("image_studio_batch_resize", "/api/image-studio/curate/batch-resize/status/{sid}"),
+    ],
+)
+def test_image_studio_status_recovers_interrupted_task_without_result(
+    client: TestClient, sample_dir: Path, kind: str, url: str
+) -> None:
+    task = app_module._task_session_store.create(
+        kind=kind,
+        title="interrupted task",
+        metadata={"path": str(sample_dir), "dataset_path": str(sample_dir), "total": 3},
+    )
+    app_module._task_session_store.update(
+        task.id,
+        status="running",
+        percent=42,
+    )
+    app_module._task_session_store.mark_stale_interrupted()
+
+    recovered = client.get(url.format(sid=task.id))
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 42
+    assert body["error"] == "task interrupted by server restart"
+    assert body["events"][-1]["message"] == "task interrupted by server restart"
+
+
 def test_ai_quality_writes_task_session_and_recovers_status(
     client: TestClient,
     sample_dir: Path,

@@ -37,6 +37,7 @@ from lorahub.api import app as app_module
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
 from lorahub.api.task_sessions import (
     TaskEvent,
+    TaskSession,
     TaskSessionStore,
     default_task_store_path,
 )
@@ -59,9 +60,38 @@ def _persisted_task_result(session_id: str, kind: str) -> dict[str, Any] | None:
         task = _task_store().get(session_id)
     except Exception:
         return None
-    if task is None or task.kind != kind or not isinstance(task.result, dict):
+    if task is None or task.kind != kind:
         return None
-    return task.result
+    return _task_to_status_snapshot(task)
+
+
+def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    if task.status in {"queued", "running", "interrupted", "failed", "canceled"}:
+        metadata = task.metadata
+        return {
+            "session_id": task.id,
+            "dataset_path": str(metadata.get("dataset_path") or metadata.get("path") or ""),
+            "status": task.status,
+            "processed": 0,
+            "total": int(metadata.get("total") or metadata.get("selected") or 0),
+            "percent": task.percent,
+            "last_image": "",
+            "rotated": [],
+            "rotated_count": 0,
+            "resampled": [],
+            "resampled_count": 0,
+            "skipped_count": int(metadata.get("skipped") or 0),
+            "failed": [],
+            "error": task.error,
+            "started_at": task.started_at,
+            "finished_at": task.finished_at,
+            "events": [event.to_dict() for event in task.events],
+        }
+    return None
 
 
 # --------------------------------------------------------------------------- #
