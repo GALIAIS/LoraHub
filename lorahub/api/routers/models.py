@@ -61,6 +61,8 @@ class _DownloadSession:
     target_dir: str | None
     threads: int
     paths: list[str]
+    allow_patterns: list[str] = field(default_factory=list)
+    ignore_patterns: list[str] = field(default_factory=list)
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -102,6 +104,8 @@ class _DownloadSession:
                 "target_dir": self.target_dir,
                 "threads": self.threads,
                 "paths": list(self.paths),
+                "allow_patterns": list(self.allow_patterns),
+                "ignore_patterns": list(self.ignore_patterns),
                 "status": self.status,
                 "percent": self.percent,
                 "events": list(self.events),
@@ -187,6 +191,8 @@ def _session_from_task(task: TaskSession) -> _DownloadSession:
         target_dir=metadata.get("target_dir"),
         threads=int(metadata.get("threads") or 4),
         paths=list(metadata.get("paths") or []),
+        allow_patterns=list(metadata.get("allow_patterns") or []),
+        ignore_patterns=list(metadata.get("ignore_patterns") or []),
         status=status,
         percent=task.percent,
         events=[
@@ -277,6 +283,8 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
             "target_dir": str(target) if target else None,
             "threads": req.threads,
             "paths": list(req.paths),
+            "allow_patterns": list(download_req.allow_patterns),
+            "ignore_patterns": list(download_req.ignore_patterns),
         },
     )
     session = _DownloadSession(
@@ -287,6 +295,8 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         target_dir=str(target) if target else None,
         threads=req.threads,
         paths=list(req.paths),
+        allow_patterns=list(download_req.allow_patterns),
+        ignore_patterns=list(download_req.ignore_patterns),
     )
     session.add_progress(DownloadProgress(message="download queued", percent=0))
     _store_session(session)

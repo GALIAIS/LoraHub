@@ -2316,11 +2316,15 @@ def test_models_download_starts_session_and_reports_progress(
 
     seen_threads: list[int] = []
     seen_paths: list[tuple[str, ...]] = []
+    seen_allow_patterns: list[tuple[str, ...]] = []
+    seen_ignore_patterns: list[tuple[str, ...]] = []
     seen_endpoints: list[str | None] = []
 
     def fake_download(req: Any, progress: Any = None) -> DownloadResult:
         seen_threads.append(req.threads)
         seen_paths.append(tuple(req.paths))
+        seen_allow_patterns.append(tuple(req.allow_patterns))
+        seen_ignore_patterns.append(tuple(req.ignore_patterns))
         seen_endpoints.append(req.huggingface_endpoint)
         target = req.target_dir or tmp_path / "model"
         target.mkdir(parents=True, exist_ok=True)
@@ -2348,6 +2352,8 @@ def test_models_download_starts_session_and_reports_progress(
             "target_dir": str(tmp_path / "downloaded"),
             "threads": 3,
             "paths": ["weights.bin"],
+            "allow_patterns": ["*.bin"],
+            "ignore_patterns": ["README*"],
         },
     )
 
@@ -2370,12 +2376,17 @@ def test_models_download_starts_session_and_reports_progress(
     assert status["events"][-1]["message"].startswith("download complete")
     assert seen_threads == [3]
     assert seen_paths == [("weights.bin",)]
+    assert seen_allow_patterns == [("*.bin",)]
+    assert seen_ignore_patterns == [("README*",)]
     assert seen_endpoints == [None]
 
     latest = client.get("/api/models/download/latest").json()
     assert latest["session_id"] == body["session_id"]
     assert latest["status"] == "succeeded"
     assert latest["source"] == "modelscope"
+    task = client.get(f"/api/tasks/{body['session_id']}").json()
+    assert task["metadata"]["allow_patterns"] == ["*.bin"]
+    assert task["metadata"]["ignore_patterns"] == ["README*"]
 
 
 def test_models_download_latest_idle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
