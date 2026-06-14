@@ -139,6 +139,36 @@ def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
     assert "already running" in r.text
 
 
+def test_system_update_writes_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import system as system_router
+
+    def fake_apply(**kwargs: Any) -> None:
+        progress = kwargs["progress"]
+        progress("git", "info", "git fetch --tags origin")
+        progress("done", "info", "update applied")
+
+    monkeypatch.setattr(system_router.system_update, "apply", fake_apply)
+
+    response = client.post(
+        "/api/system/update",
+        json={"channel": "dev", "build": False, "restart": False},
+    )
+    assert response.status_code == 200, response.text
+    assert "update applied" in response.text
+
+    latest = client.get("/api/tasks/latest?kind=system_update")
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["status"] == "succeeded"
+    assert body["metadata"]["channel"] == "dev"
+    assert [event["message"] for event in body["events"]][-2:] == [
+        "git fetch --tags origin",
+        "update applied",
+    ]
+
+
 def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
     r = client.get("/api/configs/schema")
     assert r.status_code == 200
