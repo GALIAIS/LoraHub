@@ -42,6 +42,16 @@ def _task_store() -> TaskSessionStore:
     return store
 
 
+def _persisted_task_result(session_id: str, kind: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != kind or not isinstance(task.result, dict):
+        return None
+    return task.result
+
+
 def _ulid_safe() -> str:
     """Stand-in for ulid that's safe to call without the package.
 
@@ -1581,6 +1591,9 @@ def ai_smart_caption_status(session_id: str) -> dict[str, Any]:
     with _smart_caption_lock:
         session = _smart_caption_sessions.get(session_id)
     if session is None:
+        persisted = _persisted_task_result(session_id, _KIND_SMART_CAPTION)
+        if persisted is not None:
+            return persisted
         raise HTTPException(404, "session not found")
     return session.snapshot()
 

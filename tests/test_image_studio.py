@@ -308,6 +308,59 @@ def test_smart_caption_writes_task_session(
     assert latest["events"][-1]["message"].startswith("finished")
 
 
+def test_smart_caption_status_reads_persisted_result_after_memory_clear(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+
+    response = client.post(
+        "/api/image-studio/ai/smart-caption",
+        json={
+            "path": str(sample_dir),
+            "skipExisting": True,
+            "useWd14": False,
+            "concurrency": 1,
+            "taggerConcurrency": 1,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/smart-caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            break
+        time.sleep(0.02)
+
+    ai_router._smart_caption_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/ai/smart-caption/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["status"] == "succeeded"
+    assert body["processed"] == 2
+
+
 def test_image_studio_tagging_writes_task_session(
     client: TestClient,
     sample_dir: Path,
@@ -365,6 +418,56 @@ def test_image_studio_tagging_writes_task_session(
     assert latest["status"] == "succeeded"
     assert latest["result"]["written"] == 3
     assert latest["events"][-1]["message"].startswith("done")
+
+
+def test_image_studio_tagging_status_reads_persisted_result_after_memory_clear(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=kwargs["recursive"]):
+                image.with_suffix(".txt").write_text("studio tag", encoding="utf-8")
+                kwargs["on_progress"](image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "_build_is_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/image-studio/tagging/start",
+        json={"path": str(sample_dir), "device": "cpu", "overwrite": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/image-studio/tagging/{session_id}").json()
+        if status["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.02)
+
+    tagging_router._is_tagging_sessions.clear()
+    recovered = client.get(f"/api/image-studio/tagging/{session_id}")
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["status"] == "succeeded"
+    assert body["written"] == 3
 
 
 def test_annotation_crud_via_api(client: TestClient, sample_dir: Path) -> None:

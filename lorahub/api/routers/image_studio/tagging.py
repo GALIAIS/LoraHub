@@ -34,6 +34,20 @@ def _task_store() -> TaskSessionStore:
     return store
 
 
+def _persisted_task_result(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if (
+        task is None
+        or task.kind != _KIND_IMAGE_STUDIO_TAGGING
+        or not isinstance(task.result, dict)
+    ):
+        return None
+    return task.result
+
+
 class ISTaggingStartInput(BaseModel):
     path: str
     tagger: str = "wd14"  # "wd14" | "joytag"
@@ -331,6 +345,9 @@ def is_tagging_status(session_id: str) -> dict[str, Any]:
     with _is_tagging_lock:
         session = _is_tagging_sessions.get(session_id)
     if session is None:
+        persisted = _persisted_task_result(session_id)
+        if persisted is not None:
+            return persisted
         raise HTTPException(404, "tagging session not found")
     return session.snapshot()
 
