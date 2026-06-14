@@ -58,13 +58,14 @@ _SAVE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Validation loss reported by the val dataloader sweep — ``loop.py``
+# Validation loss reported by the val/eval dataloader sweep — ``loop.py``
 # constructs ``logs = {"avr_loss": ...}`` for the val pass too, so the
 # tqdm regex catches both. The ``val_loss`` keyed event is emitted by
-# the val_loss_recorder line further down. We support either phrasing
-# because upstream's exact wording drifted across releases.
+# the val_loss_recorder line further down. Some builds print
+# ``eval_loss`` instead. We support all phrasings because upstream's
+# exact wording drifted across releases.
 _VAL_LOSS_RE = re.compile(
-    r"\bval(?:idation)?[\s_/]?loss\s*[=:]\s*(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+    r"\b(?:val(?:idation)?|eval)[\s_/]?loss\s*[=:]\s*(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
     r"(?:.*?\bepoch\s*[=:]\s*(?P<epoch>\d+))?"
     r"(?:.*?\bstep\s*[=:]\s*(?P<step>\d+))?",
     re.IGNORECASE,

@@ -263,6 +263,16 @@ def test_parser_validation_loss_emits_validation_event() -> None:
     assert ev.payload["step"] == 512
 
 
+def test_parser_eval_loss_emits_validation_event() -> None:
+    line = "eval_loss=0.231 epoch=4 step=768"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type == EventType.validation
+    assert ev.payload["val_loss"] == pytest.approx(0.231)
+    assert ev.payload["epoch"] == 4
+    assert ev.payload["step"] == 768
+
+
 def test_parser_unknown_line_falls_to_log() -> None:
     """Anything we don't recognise lands on `log` so nothing's silently dropped."""
     ev = parse_line("loaded 1024 captions from image_dataset/")
