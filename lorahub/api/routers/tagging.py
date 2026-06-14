@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +11,12 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.dataset.anima import AnimaDatasetTransformer
 from lorahub.core.tagging.base import BaseTagger
 from lorahub.core.tagging.joytag import DEFAULT_THRESHOLD as JOYTAG_DEFAULT_THRESHOLD
@@ -24,6 +29,16 @@ from lorahub.core.tagging.wd14 import (
 )
 
 router = APIRouter(prefix="/api")
+_KIND_TAGGING = "tagging"
+_KIND_ANIMA_CAPTION = "anima_caption"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 class TagDatasetRequest(BaseModel):
@@ -55,6 +70,7 @@ class _TaggingSession:
     recursive: bool
     include_character: bool
     underscores: bool
+    task_kind: str | None = None
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -67,13 +83,27 @@ class _TaggingSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def push(self, message: str, *, percent: float | None = None, image: str | None = None) -> None:
+        ts = time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {"ts": time.time(), "message": message, "percent": self.percent, "image": image}
-            )
+            event = {"ts": ts, "message": message, "percent": self.percent, "image": image}
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -212,8 +242,20 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {target}")
 
+    task = _task_store().create(
+        kind=_KIND_TAGGING,
+        title=f"{req.tagger}:{target.name}",
+        metadata={
+            "path": str(target),
+            "tagger": req.tagger,
+            "model_id": req.model_id,
+            "device": req.device,
+            "overwrite": req.overwrite,
+            "recursive": req.recursive,
+        },
+    )
     session = _TaggingSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         path=str(target),
         tagger=req.tagger,
         model_id=req.model_id,
@@ -225,12 +267,14 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
         recursive=req.recursive,
         include_character=req.include_character,
         underscores=req.underscores,
+        task_kind=_KIND_TAGGING,
     )
     session.push("tagging queued", percent=0)
     _store(session)
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             tagger = _build_tagger(req)
             session.push(f"loading {req.tagger}")
             tagger.load()
@@ -251,6 +295,13 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result=session.snapshot(),
+                    finished=True,
+                )
                 return
 
             total = len(all_images)
@@ -275,18 +326,39 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                 session.percent = 100
                 session.finished_at = time.time()
             session.push(f"done — wrote {session.written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
         except CudaUnavailableError as exc:
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"cuda unavailable: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"tagging failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         finally:
             _persist_tagging_snapshot(session)
 
