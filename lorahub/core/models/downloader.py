@@ -140,11 +140,12 @@ def select_files(
     allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS,
     ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS,
 ) -> list[RemoteFile]:
-    selected_paths = {
-        path
-        for raw in paths
-        if (path := _normalise_path(raw)) is not None
-    }
+    selected_paths: set[str] = set()
+    for raw in paths:
+        path = _normalise_path(raw)
+        if path is None:
+            raise ValueError(f"invalid selected path: {raw!r}")
+        selected_paths.add(path)
     out: list[RemoteFile] = []
     seen: set[str] = set()
     for raw_path, size in files:

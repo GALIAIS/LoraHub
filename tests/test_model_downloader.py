@@ -311,6 +311,14 @@ def test_select_files_rejects_unsafe_remote_paths() -> None:
     assert [file.path for file in listed] == ["model.safetensors"]
 
 
+def test_select_files_rejects_unsafe_explicit_paths() -> None:
+    with pytest.raises(ValueError, match="invalid selected path"):
+        downloader.select_files(
+            [("model.safetensors", 1)],
+            paths=("../escape.safetensors",),
+        )
+
+
 def test_modelscope_download_uses_parallel_workers_and_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

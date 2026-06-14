@@ -2350,6 +2350,30 @@ def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     assert "owner/name" in r.json()["detail"]
 
 
+def test_models_download_rejects_unsafe_selected_path(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import models as models_router
+
+    calls = 0
+
+    def fake_download(req: Any, progress: Any = None) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("download must not start for unsafe selected paths")
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+
+    r = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "paths": ["../escape.safetensors"]},
+    )
+
+    assert r.status_code == 400
+    assert "invalid selected path" in r.json()["detail"]
+    assert calls == 0
+
+
 @pytest.mark.parametrize("target_dir", [".", Path(".").resolve().anchor])
 def test_models_download_rejects_dangerous_target_dir(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, target_dir: str

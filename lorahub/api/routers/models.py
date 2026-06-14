@@ -26,6 +26,7 @@ from lorahub.core.models.downloader import (
     DownloadResult,
     download,
     list_remote_files,
+    select_files,
 )
 
 router = APIRouter(prefix="/api")
@@ -217,6 +218,15 @@ def _validate_repo_id(repo_id: str) -> None:
         raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
 
 
+def _validate_selected_paths(paths: list[str]) -> None:
+    if not paths:
+        return
+    try:
+        select_files([], paths=tuple(paths))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _resolve_target_dir(target_dir: str | None) -> Path | None:
     if not target_dir:
         return None
@@ -265,6 +275,7 @@ def _download_request_from_api(
 @router.post("/models/files")
 def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
     _validate_repo_id(req.repo_id)
+    _validate_selected_paths(req.paths)
     files = list_remote_files(_download_request_from_api(req))
     selected = [f for f in files if f.selected]
     return {
@@ -290,6 +301,7 @@ def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
 @router.post("/models/download", status_code=202)
 def download_model(req: DownloadModelRequest) -> dict[str, Any]:
     _validate_repo_id(req.repo_id)
+    _validate_selected_paths(req.paths)
 
     target = _resolve_target_dir(req.target_dir)
     download_req = _download_request_from_api(req, target=target, threads=req.threads)
