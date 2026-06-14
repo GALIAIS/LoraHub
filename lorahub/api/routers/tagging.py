@@ -38,6 +38,7 @@ _TaggingStatus = Literal[
     "canceled",
     "interrupted",
 ]
+_AnimaCaptionStatus = _TaggingStatus
 
 
 def _task_store() -> TaskSessionStore:
@@ -492,7 +493,7 @@ class _AnimaSession:
     overwrite: bool
     recursive: bool
     task_kind: str | None = None
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _AnimaCaptionStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -563,6 +564,53 @@ def _get_anima(session_id: str) -> _AnimaSession:
     if session is None:
         raise HTTPException(status_code=404, detail="anima caption session not found")
     return session
+
+
+def _anima_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != _KIND_ANIMA_CAPTION:
+        return None
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+        return None
+    metadata = task.metadata
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "dataset_tag": metadata.get("dataset_tag"),
+        "quality": None,
+        "score": None,
+        "year": None,
+        "safety": None,
+        "overwrite": bool(metadata.get("overwrite") or False),
+        "recursive": bool(metadata.get("recursive") or False),
+        "status": (
+            task.status
+            if task.status in {"interrupted", "failed", "canceled"}
+            else "running"
+        ),
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "file": event.payload.get("file"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 # Indirection for tests so they can swap the transformer without monkey-patching
@@ -689,6 +737,9 @@ def anima_caption_status(session_id: str) -> dict[str, Any]:
         session = _anima_sessions.get(session_id)
     if session is not None:
         return session.snapshot()
+    task = _anima_snapshot_from_task(session_id)
+    if task is not None:
+        return task
     persisted = _get_persisted_tagging(session_id)
     if persisted is not None:
         return persisted

@@ -3232,6 +3232,38 @@ def test_anima_caption_writes_task_session(
     assert caption.read_text(encoding="utf-8") == "new"
 
 
+def test_anima_caption_status_recovers_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "captioned"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="anima_caption",
+        title="anima caption:captioned",
+        metadata={
+            "path": str(data),
+            "dataset_tag": "style",
+            "overwrite": False,
+            "recursive": False,
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=39)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._anima_sessions.clear()
+
+    recovered = client.get(f"/api/anima/caption/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 39
+    assert body["error"] == "task interrupted by server restart"
+
+
 def test_tagging_wd14_catalog_lists_all_curated_models(client: TestClient) -> None:
     """``GET /tagging/wd14/models`` returns the full catalogue + default.
 
