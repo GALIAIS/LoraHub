@@ -19,17 +19,9 @@ import {
   imageStudioApplyOps,
   imageStudioBatchDelete,
   getTriggerWordsSession,
-  startQualitySession,
-  startSmartCaptionSession,
-  startTaggingSession,
-  startTriggerWordsSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
-import {
-  addTask,
-  removeTask,
-  type StudioTaskRecord,
-} from "@/lib/studio-task-store"
+import { removeTask, type StudioTaskRecord } from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 import {
   AlertDialog,
@@ -63,6 +55,7 @@ import {
   StudioTaskBanner,
   ViewChip,
 } from "./dataset-detail-widgets"
+import { startDatasetAiBulkTask } from "./dataset-detail-ai"
 
 export function DatasetDetail() {
   const [params, setParams] = useSearchParams()
@@ -332,91 +325,9 @@ export function DatasetDetail() {
 
   const handleAiBulkStart = async (tab: AiBulkTab, params: Record<string, unknown>) => {
     setShowAiBulk(false)
-    const taskPath = (params.path as string) || path
 
     try {
-      switch (tab) {
-        case "smart-caption": {
-          const captionSource = (params.captionSource as "vlm" | "tags" | undefined) ?? "vlm"
-          const submit = await startSmartCaptionSession({
-            path: taskPath,
-            recursive,
-            device: params.device as string,
-            mergeStrategy: params.mergeStrategy as string,
-            captionMode: params.captionMode as "general" | "style" | "character",
-            captionSource,
-            triggerWord: params.triggerWord as string | undefined,
-            stripStyleTags: params.stripStyleTags as boolean | undefined,
-            skipExisting: params.skipExisting as boolean | undefined,
-          })
-          addTask({
-            id: submit.session_id,
-            kind: "smart-caption",
-            datasetPath: taskPath,
-            label: captionSource === "tags"
-              ? "智能标注（WD14 + LLM 文本模式）"
-              : "智能标注（WD14 + VLM 视觉模式）",
-            total: submit.total,
-          })
-          // Polling is now driven by the global studio task store; nothing
-          // else to do here beyond dropping the record into the store.
-          return
-        }
-        case "wd14": {
-          const session = await startTaggingSession({
-            path: taskPath,
-            tagger: (params.model_id as string)?.startsWith("joy") ? "joytag" : "wd14",
-            model_id: params.model_id as string,
-            general: params.general as number,
-            character: params.character as number,
-            device: params.device as string,
-            overwrite: params.overwrite as boolean,
-            recursive,
-          })
-          addTask({
-            id: session.session_id,
-            kind: "wd14",
-            datasetPath: taskPath,
-            label: "WD14 标注",
-          })
-          return
-        }
-        case "quality-score": {
-          const submit = await startQualitySession({
-            path: taskPath,
-            recursive,
-            skipScored: params.skipScored as boolean | undefined,
-          })
-          addTask({
-            id: submit.session_id,
-            kind: "quality-score",
-            datasetPath: taskPath,
-            label: submit.skipped
-              ? `质量评分（跳过 ${submit.skipped} 已评分）`
-              : "质量评分",
-            total: submit.total,
-          })
-          return
-        }
-        case "trigger-words": {
-          const submit = await startTriggerWordsSession({
-            path: taskPath,
-            recursive,
-            skipAnalyzed: params.skipAnalyzed as boolean | undefined,
-          })
-          addTask({
-            id: submit.session_id,
-            kind: "trigger-words",
-            datasetPath: taskPath,
-            label: submit.skipped
-              ? `分析触发词（跳过 ${submit.skipped} 已分析）`
-              : "分析触发词",
-            total: submit.total,
-          })
-          return
-        }
-      }
-      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+      await startDatasetAiBulkTask({ tab, params, path, recursive })
     } catch (err: unknown) {
       // Top-level catch is for failures BEFORE a task record made it into
       // the store (e.g. /smart-caption submit returned 4xx). Surface via
