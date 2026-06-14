@@ -35,6 +35,8 @@ _SKIP_DIR_NAMES = {
     "post_image_dataset",
 }
 _SKIP_SUFFIXES = {".tmp"}
+_DERIVED_SAMPLE_DIR_NAMES = {"grids", "grid", "animations", "animation"}
+_DERIVED_SAMPLE_KINDS = {"grid", "animation"}
 
 # Cap on the number of loss points returned by /metrics. Anything beyond this
 # gets uniformly downsampled so the response stays bounded for very long runs.
@@ -68,9 +70,28 @@ def _classify_artifact(rel: Path) -> str:
         return "other"
     if suffix in _CHECKPOINT_SUFFIXES:
         return "checkpoints"
-    if suffix in _SAMPLE_SUFFIXES:
+    if suffix in _SAMPLE_SUFFIXES and not _is_derived_sample_path(rel):
         return "samples"
     return "other"
+
+
+def _is_derived_sample_path(path: str | Path | None) -> bool:
+    """Return True for grid/contact-sheet/animation artifacts.
+
+    These are useful secondary previews, but treating them as ordinary
+    per-prompt samples pollutes the gallery and checkpoint playback.
+    """
+    if path is None:
+        return False
+    rel = Path(str(path).replace("\\", "/"))
+    return any(part.lower() in _DERIVED_SAMPLE_DIR_NAMES for part in rel.parts[:-1])
+
+
+def _is_derived_sample_event(payload: dict[str, Any]) -> bool:
+    kind = payload.get("kind")
+    if isinstance(kind, str) and kind.strip().lower() in _DERIVED_SAMPLE_KINDS:
+        return True
+    return _is_derived_sample_path(payload.get("path"))
 
 
 def _list_workspace_files(workspace: Path) -> dict[str, list[dict[str, Any]]]:
@@ -267,6 +288,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                     }
                 )
             elif etype == EventType.sample_ready.value:
+                if _is_derived_sample_event(payload):
+                    continue
                 samples.append({"path": payload.get("path"), "ts": ts})
             elif etype == EventType.gpu_sample.value:
                 gpu_samples.append(
@@ -435,6 +458,8 @@ __all__ = [
     "_downsample",
     "_empty_overfit_signal",
     "_job_events",
+    "_is_derived_sample_event",
+    "_is_derived_sample_path",
     "_list_workspace_files",
     "_media_type_for",
     "_read_metrics",

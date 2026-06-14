@@ -26,8 +26,8 @@
  * better than not rendering at all, and the existing samples-gallery
  * tab is the place users go for the unstructured view.
  */
-import { useMemo, useState } from "react"
-import { ImageIcon, ZoomIn, X } from "lucide-react"
+import { useMemo } from "react"
+import { ImageIcon, ZoomIn } from "lucide-react"
 import { api, type JobFile } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -47,6 +47,10 @@ const FILENAME_RX = [
   /e(?:poch)?[-_]?(?<epoch>\d+).*?(?:s(?:tep)?[-_]?(?<step>\d+))?.*?p(?:rompt)?[-_]?(?<prompt>\d+).*?s(?:eed)?[-_]?(?<seed>\d+)/i,
   // anima compact: 0004-001500-00-12345.png — no letter prefixes.
   /^(?<epoch>\d+)-(?<step>\d+)-(?<prompt>\d+)-(?<seed>\d+)\b/,
+  // anima_lora current: anima_lora_e000001_00_20260614010101_12345.png.
+  /(?:^|_)e(?<epoch>\d+)_(?<prompt>\d+)_(?:\d{10,14})(?:_(?<seed>\d+))?/i,
+  // anima_lora step path: anima_lora_001500_00_20260614010101_12345.png.
+  /(?:^|_)(?<step>\d{3,})_(?<prompt>\d+)_(?:\d{10,14})(?:_(?<seed>\d+))?/i,
 ] as const
 
 const SEED_ONLY_RX = /(?:^|[_-])(?<seed>\d{4,})\.[^.]+$/
@@ -78,8 +82,9 @@ function parseSample(file: JobFile): ParsedSample {
     return null
   })()
   const seedFromName = name.match(SEED_ONLY_RX)?.groups?.seed
-  const epochFromName = name.match(/e(?:poch)?[-_]?(\d+)/i)?.[1]
-  const stepFromName = name.match(/s(?:tep)?[-_]?(\d+)/i)?.[1]
+  const normalized = file.path.replace(/\\/g, "/")
+  const epochFromName = normalized.match(/(?:^|[/_-])e(?:poch)?[-_]?(\d+)(?:[/_.-]|$)/i)?.[1]
+  const stepFromName = normalized.match(/(?:^|[/_-])s(?:tep)?[-_]?(\d+)(?:[/_.-]|$)/i)?.[1]
   return {
     file,
     epoch: epochFromName ? Number(epochFromName) : null,
@@ -87,6 +92,10 @@ function parseSample(file: JobFile): ParsedSample {
     prompt: null,
     seed: seedFromName ? Number(seedFromName) : null,
   }
+}
+
+function openExternal(url: string): void {
+  window.open(url, "_blank", "noopener,noreferrer")
 }
 
 interface PlaybackRow {
@@ -166,8 +175,6 @@ export function CheckpointPlayback({
     () => groupSamples(samples),
     [samples],
   )
-  const [open, setOpen] = useState<string | null>(null)
-
   // Column count drives the row width. Capped at 24 visible cells to
   // avoid an absurdly wide grid for thousand-step runs; older cells
   // scroll out the left side as the strip becomes scrollable.
@@ -197,18 +204,18 @@ export function CheckpointPlayback({
         )}
 
         {totalRows > 0 && (
-          <div className="overflow-x-auto">
+          <div className="max-h-[62vh] min-h-0 overflow-auto overscroll-contain">
             <table className="w-max border-separate border-spacing-0 text-[11px] tabular-nums">
               <thead>
                 <tr className="text-muted-foreground/70">
-                  <th className="sticky left-0 z-10 bg-muted/40 border-b border-r border-border/60 px-2.5 py-1.5 text-left text-[10px] uppercase tracking-[0.16em]">
+                  <th className="sticky left-0 top-0 z-20 bg-muted/40 border-b border-r border-border/60 px-2.5 py-1.5 text-left text-[10px] uppercase tracking-[0.16em]">
                     prompt × seed
                   </th>
                   {totalSteps.map((s) => (
                     <th
                       key={s}
                       className={cn(
-                        "border-b border-border/60 px-1.5 py-1.5 text-center font-mono text-[10px] font-normal",
+                        "sticky top-0 z-10 border-b border-border/60 bg-muted/40 px-1.5 py-1.5 text-center font-mono text-[10px] font-normal",
                         s === 0 && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
                       )}
                     >
@@ -224,7 +231,6 @@ export function CheckpointPlayback({
                     jobId={jobId}
                     row={row}
                     columns={totalSteps}
-                    onOpen={setOpen}
                     triggerWord={triggerWord ?? null}
                   />
                 ))}
@@ -237,12 +243,10 @@ export function CheckpointPlayback({
           <FallbackStrip
             jobId={jobId}
             entries={fallback}
-            onOpen={setOpen}
             mixed={totalRows > 0}
           />
         )}
       </CardContent>
-      {open && <Lightbox src={open} onClose={() => setOpen(null)} />}
     </Card>
   )
 }
@@ -251,13 +255,11 @@ function PlaybackRowView({
   jobId,
   row,
   columns,
-  onOpen,
   triggerWord,
 }: {
   jobId: string
   row: PlaybackRow
   columns: number[]
-  onOpen: (src: string) => void
   triggerWord: string | null
 }) {
   // Index cells by their step / epoch key so we can render aligned
@@ -300,7 +302,6 @@ function PlaybackRowView({
               <PlaybackCell
                 jobId={jobId}
                 sample={cell}
-                onOpen={onOpen}
                 isBaseline={col === 0}
                 triggerWord={triggerWord}
               />
@@ -317,13 +318,11 @@ function PlaybackRowView({
 function PlaybackCell({
   jobId,
   sample,
-  onOpen,
   isBaseline,
   triggerWord,
 }: {
   jobId: string
   sample: ParsedSample
-  onOpen: (src: string) => void
   isBaseline?: boolean
   triggerWord?: string | null
 }) {
@@ -338,7 +337,7 @@ function PlaybackCell({
   return (
     <button
       type="button"
-      onClick={() => onOpen(url)}
+      onClick={() => openExternal(url)}
       className={cn(
         "group relative size-16 overflow-hidden rounded-[3px] border",
         "bg-muted/20 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
@@ -384,12 +383,10 @@ function PlaybackCell({
 function FallbackStrip({
   jobId,
   entries,
-  onOpen,
   mixed,
 }: {
   jobId: string
   entries: ParsedSample[]
-  onOpen: (src: string) => void
   mixed: boolean
 }) {
   return (
@@ -405,7 +402,7 @@ function FallbackStrip({
             <button
               key={s.file.path}
               type="button"
-              onClick={() => onOpen(url)}
+              onClick={() => openExternal(url)}
               className="shrink-0 size-16 overflow-hidden rounded-[3px] border border-border/60 bg-muted/20 transition hover:border-primary/60"
               title={name}
             >
@@ -430,30 +427,6 @@ function EmptyState() {
       <span className="text-[12px]">
         尚未生成样本图。在配置中开启 <code>sampling.everyNEpochs</code> 即可自动生成。
       </span>
-    </div>
-  )
-}
-
-function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
-      onClick={onClose}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="关闭"
-        className="absolute right-4 top-4 inline-flex size-8 items-center justify-center rounded-[4px] text-white hover:bg-white/10"
-      >
-        <X className="size-4" />
-      </button>
-      <img
-        src={src}
-        alt="sample preview"
-        className="max-h-[90vh] max-w-[90vw] rounded-[4px] object-contain shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      />
     </div>
   )
 }

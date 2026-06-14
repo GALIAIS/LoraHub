@@ -52,6 +52,8 @@ api = [
     "websockets>=12.0",
     "psutil>=5.9",
     "python-multipart>=0.0.9",
+    # API-side LoRA spectral analysis reads saved adapter checkpoints.
+    "safetensors>=0.4",
 ]
 sweep = [
     # Optional: TPE / Bayesian search for the hyperparameter sweep

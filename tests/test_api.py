@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from lorahub.api import state
 from lorahub.core.config.schema import TrainingConfig
-from lorahub.core.events import EventType, TrainingEvent
+from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 
 def _make_stub_sd_scripts(root: Path) -> Path:
@@ -3278,6 +3278,55 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
     r = client.get("/api/samples")
     paths = [item["path"] for item in r.json()["items"]]
     assert paths == ["new.png", "old.png"]
+
+
+def test_samples_exclude_grid_artifacts(client: TestClient, tmp_path: Path) -> None:
+    """Contact-sheet/grid images are derived previews, not per-prompt samples."""
+    ws = tmp_path / "run"
+    ws.mkdir()
+    (ws / "sample-1.png").write_bytes(_png_bytes())
+    grids = ws / "samples" / "grids"
+    grids.mkdir(parents=True)
+    (grids / "sample-grid.png").write_bytes(_png_bytes())
+    anima_grids = ws / "ckpt" / "sample" / "grids"
+    anima_grids.mkdir(parents=True)
+    (anima_grids / "anima_lora_e000001.png").write_bytes(_png_bytes())
+    state.registry.create(workspace=ws, config_snapshot={})
+
+    r = client.get("/api/samples")
+    assert r.status_code == 200
+    paths = [item["path"] for item in r.json()["items"]]
+    assert paths == ["sample-1.png"]
+
+    files = client.get(f"/api/jobs/{state.registry.list()[0].id}/files")
+    assert files.status_code == 200
+    assert [item["path"] for item in files.json()["samples"]] == ["sample-1.png"]
+
+
+def test_metrics_exclude_grid_sample_events(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "run"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    with JsonlEventSink(ws / "events.jsonl") as sink:
+        sink(
+            TrainingEvent(
+                type=EventType.sample_ready,
+                payload={"path": "sample-1.png"},
+                job_id=job.id,
+            )
+        )
+        sink(
+            TrainingEvent(
+                type=EventType.sample_ready,
+                payload={"path": "samples/grids/sample-grid.png", "kind": "grid"},
+                job_id=job.id,
+            )
+        )
+
+    r = client.get(f"/api/jobs/{job.id}/metrics")
+    assert r.status_code == 200
+    samples = r.json()["samples"]
+    assert [item["path"] for item in samples] == ["sample-1.png"]
 
 
 # --------------------------------------------------------------------------- #
