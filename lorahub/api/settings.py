@@ -554,6 +554,11 @@ def env_overrides(settings: Settings) -> dict[str, str]:
         # clients (some upstream training scripts still look for it).
         overrides["HF_TOKEN"] = settings.huggingface_token
         overrides["HUGGING_FACE_HUB_TOKEN"] = settings.huggingface_token
+    proxy = (settings.download_proxy or "").strip()
+    if proxy:
+        for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+            if name not in os.environ:
+                overrides[name] = proxy
     if settings.wandb_api_key and "WANDB_API_KEY" not in os.environ:
         overrides["WANDB_API_KEY"] = settings.wandb_api_key
     if settings.wandb_base_url and "WANDB_BASE_URL" not in os.environ:

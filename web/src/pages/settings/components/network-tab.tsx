@@ -489,14 +489,15 @@ export function NetworkTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Globe2 className="size-4 text-muted-foreground" />
-            下载代理（模型下载）
+            下载代理（模型下载与子进程）
           </CardTitle>
           <CardDescription>
-            模型下载（HuggingFace / ModelScope）时使用的网络代理。支持
+            模型下载（HuggingFace / ModelScope）和训练 / 标注子进程使用的网络代理。支持
             <code className="text-foreground"> socks5h://user:pass@host:port </code>
             或
             <code className="text-foreground"> http://user:pass@host:port </code>
-            格式。留空表示直连。
+            格式。子进程会在未设置代理环境变量时注入
+            <code className="text-foreground"> HTTPS_PROXY / HTTP_PROXY / ALL_PROXY </code>。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

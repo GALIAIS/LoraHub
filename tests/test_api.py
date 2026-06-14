@@ -2297,6 +2297,25 @@ def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> N
     assert "HF_ENDPOINT" not in env_overrides(s)
 
 
+def test_env_overrides_injects_download_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.settings import Settings, env_overrides
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(download_proxy="socks5h://127.0.0.1:7890")
+
+    out = env_overrides(s)
+
+    assert out["HTTPS_PROXY"] == "socks5h://127.0.0.1:7890"
+    assert out["HTTP_PROXY"] == "socks5h://127.0.0.1:7890"
+    assert out["ALL_PROXY"] == "socks5h://127.0.0.1:7890"
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://existing")
+    out = env_overrides(s)
+    assert "HTTPS_PROXY" not in out
+    assert out["HTTP_PROXY"] == "socks5h://127.0.0.1:7890"
+
+
 def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     r = client.post(
         "/api/models/download",
