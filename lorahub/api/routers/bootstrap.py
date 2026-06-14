@@ -57,15 +57,36 @@ def list_bootstrap_sessions(limit: int = 20) -> dict[str, Any]:
 def _latest_persisted_bootstrap() -> dict[str, Any] | None:
     try:
         store = getattr(app_module, "_session_store", None)
-        if store is None:
-            return None
-        rows = store.list_recent("bootstrap", limit=1)
+        rows = store.list_recent("bootstrap", limit=1) if store is not None else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if rows:
+        snap = rows[0].get("snapshot")
+        if isinstance(snap, dict):
+            return snap
+    try:
+        task = _task_store().latest(_KIND_BACKEND_BOOTSTRAP)
     except Exception:  # noqa: BLE001
         return None
-    if not rows:
+    if task is None:
         return None
-    snap = rows[0].get("snapshot")
-    return snap if isinstance(snap, dict) else None
+    if isinstance(task.result, dict):
+        return task.result
+    return {
+        "status": task.status,
+        "session_id": task.id,
+        "backend": str(task.metadata.get("backend") or ""),
+        "events": [
+            {
+                "level": event.level,
+                "message": event.message,
+                "ts": event.ts,
+                **event.payload,
+            }
+            for event in task.events
+        ],
+        "error": task.error,
+    }
 
 
 def _task_store() -> TaskSessionStore:

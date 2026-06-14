@@ -1503,6 +1503,56 @@ def test_bootstrap_writes_task_session(
     ]
 
 
+def test_bootstrap_status_recovers_latest_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_mod
+    from lorahub.api.task_sessions import TaskEvent
+
+    store = app_mod._task_session_store
+    assert store is not None
+    task = store.create(
+        kind="backend_bootstrap",
+        title="kohya backend bootstrap",
+        metadata={"backend": "kohya"},
+    )
+    result = {
+        "status": "succeeded",
+        "session_id": task.id,
+        "backend": "kohya",
+        "events": [
+            {
+                "level": "done",
+                "step": "complete",
+                "message": "kohya backend installed",
+                "ts": 1.0,
+            },
+        ],
+    }
+    store.append_event(
+        task.id,
+        TaskEvent(level="done", message="kohya backend installed", percent=100),
+    )
+    store.update(
+        task.id,
+        status="succeeded",
+        percent=100,
+        result=result,
+        finished=True,
+    )
+    monkeypatch.setattr(app_mod, "_bootstrap_session", None)
+    monkeypatch.setattr(app_mod, "_session_store", None)
+
+    response = client.get("/api/backend/bootstrap/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "succeeded"
+    assert body["backend"] == "kohya"
+    assert body["events"][-1]["message"] == "kohya backend installed"
+
+
 # --------------------------------------------------------------------------- #
 # System telemetry
 # --------------------------------------------------------------------------- #
