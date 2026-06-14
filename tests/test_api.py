@@ -2176,9 +2176,11 @@ def test_models_download_starts_session_and_reports_progress(
     from lorahub.core.models.downloader import DownloadProgress, DownloadResult
 
     seen_threads: list[int] = []
+    seen_paths: list[tuple[str, ...]] = []
 
     def fake_download(req: Any, progress: Any = None) -> DownloadResult:
         seen_threads.append(req.threads)
+        seen_paths.append(tuple(req.paths))
         target = req.target_dir or tmp_path / "model"
         target.mkdir(parents=True, exist_ok=True)
         if progress:
@@ -2204,6 +2206,7 @@ def test_models_download_starts_session_and_reports_progress(
             "repo_id": "owner/name",
             "target_dir": str(tmp_path / "downloaded"),
             "threads": 3,
+            "paths": ["weights.bin"],
         },
     )
 
@@ -2225,6 +2228,34 @@ def test_models_download_starts_session_and_reports_progress(
     assert status["result"]["files"] == 1
     assert status["events"][-1]["message"].startswith("download complete")
     assert seen_threads == [3]
+    assert seen_paths == [("weights.bin",)]
+
+
+def test_models_files_lists_remote_selection(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import RemoteFile
+
+    def fake_list(req: Any) -> list[RemoteFile]:
+        assert req.repo_id == "owner/name"
+        return [
+            RemoteFile("README.md", 10, False, "ignored by default"),
+            RemoteFile("model.safetensors", 100, True, "model asset"),
+        ]
+
+    monkeypatch.setattr(models_router, "list_remote_files", fake_list)
+
+    r = client.post(
+        "/api/models/files",
+        json={"source": "huggingface", "repo_id": "owner/name", "revision": "main"},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["selected_count"] == 1
+    assert body["selected_bytes"] == 100
+    assert [f["path"] for f in body["files"]] == ["README.md", "model.safetensors"]
 
 
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
@@ -4235,4 +4266,3 @@ def test_artifacts_delete_workspace_terminal_clears_tree_and_record(
     assert body["deleted"] is True
     assert not ws.exists()
     assert state.registry.get(job_id) is None
-

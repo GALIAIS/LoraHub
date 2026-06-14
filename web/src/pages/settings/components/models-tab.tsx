@@ -1,10 +1,20 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { Download, ExternalLink, Loader2, Rows3, ServerCog } from "lucide-react"
+import {
+  Check,
+  Download,
+  ExternalLink,
+  FileSearch,
+  Loader2,
+  Rows3,
+  ServerCog,
+} from "lucide-react"
 import { api } from "@/lib/api"
+import type { RemoteModelFile } from "@/lib/api/models"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -25,6 +35,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 
 type Source = "huggingface" | "modelscope"
 
@@ -66,6 +84,8 @@ export function ModelsTab() {
   const [targetDir, setTargetDir] = useState("")
   const [threads, setThreads] = useState(4)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [lastListedKey, setLastListedKey] = useState("")
 
   useEffect(() => {
     setSource((current) => (current ? current : preferModelscope ? "modelscope" : "huggingface"))
@@ -79,9 +99,32 @@ export function ModelsTab() {
         revision: revision.trim() || (source === "modelscope" ? "master" : "main"),
         target_dir: targetDir.trim() || undefined,
         threads,
+        paths: Array.from(selectedPaths),
       }),
     onSuccess: (session) => setSessionId(session.session_id),
   })
+
+  const fileList = useMutation({
+    mutationFn: () =>
+      api.listModelFiles({
+        source,
+        repo_id: repoId.trim(),
+        revision: revision.trim() || (source === "modelscope" ? "master" : "main"),
+      }),
+    onSuccess: (res) => {
+      setSelectedPaths(
+        new Set(res.files.filter((file) => file.selected).map((file) => file.path)),
+      )
+      setLastListedKey(listKey(source, repoId, revision))
+    },
+  })
+
+  useEffect(() => {
+    setSelectedPaths(new Set())
+    setLastListedKey("")
+    fileList.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, repoId, revision])
 
   const session = useQuery({
     queryKey: ["model-download", sessionId],
@@ -96,8 +139,14 @@ export function ModelsTab() {
   const error = (startDownload.error as Error | undefined) ?? (session.error as Error | undefined)
   const ready = repoId.includes("/") && repoId.trim().length > 2
   const running = current?.status === "running" || startDownload.isPending
+  const listing = fileList.isPending
   const latest = current?.events.at(-1)
   const percent = Math.max(0, Math.min(100, current?.percent ?? 0))
+  const listed = fileList.data?.files ?? []
+  const selectedFiles = listed.filter((file) => selectedPaths.has(file.path))
+  const selectedBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0)
+  const staleList = lastListedKey !== listKey(source, repoId, revision)
+  const canDownload = ready && selectedPaths.size > 0 && !running && !staleList
 
   const result = current?.result
   const summary = useMemo(() => {
@@ -116,8 +165,8 @@ export function ModelsTab() {
             模型下载
           </CardTitle>
           <CardDescription>
-            支持 HuggingFace 与 ModelScope。下载在后端线程中运行，本页会轮询显示进度；
-            多线程数量会传给下载器，HuggingFace 使用 `max_workers`，ModelScope 使用线程池。
+            支持 HuggingFace 与 ModelScope。先读取仓库文件清单，只下载勾选的模型权重、
+            配置和 tokenizer 文件，避免把仓库里的预览图、文档和无关变体一起拉下来。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -180,8 +229,21 @@ export function ModelsTab() {
           <div className="flex items-center gap-3 pt-1">
             <Button
               size="sm"
+              variant="outline"
+              onClick={() => fileList.mutate()}
+              disabled={!ready || running || listing}
+            >
+              {listing ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <FileSearch className="size-3" />
+              )}
+              {listing ? "读取中" : "读取文件清单"}
+            </Button>
+            <Button
+              size="sm"
               onClick={() => startDownload.mutate()}
-              disabled={!ready || running}
+              disabled={!canDownload}
             >
               {running ? (
                 <Loader2 className="size-3 animate-spin" />
@@ -190,6 +252,10 @@ export function ModelsTab() {
               )}
               {running ? "下载中" : "开始下载"}
             </Button>
+            <div className="text-xs text-muted-foreground">
+              已选 {selectedPaths.size} 个文件 · {formatBytes(selectedBytes)}
+              {staleList && listed.length > 0 ? " · 清单需刷新" : ""}
+            </div>
             <a
               href={
                 source === "modelscope"
@@ -208,6 +274,96 @@ export function ModelsTab() {
           {error && (
             <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
               {error.message}
+            </div>
+          )}
+          {fileList.error && (
+            <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
+              {(fileList.error as Error).message}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileSearch className="size-4 text-muted-foreground" />
+            远端文件清单
+          </CardTitle>
+          <CardDescription>
+            默认规则只选择模型运行需要的资产。可以手动调整，下载请求只会包含当前勾选项。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() => setSelectedPaths(new Set(listed.map((file) => file.path)))}
+            >
+              全选
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() => setSelectedPaths(new Set())}
+            >
+              清空
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() =>
+                setSelectedPaths(
+                  new Set(
+                    listed
+                      .filter((file) => file.selected)
+                      .map((file) => file.path),
+                  ),
+                )
+              }
+            >
+              恢复推荐
+            </Button>
+            {fileList.data && (
+              <div className="ml-auto text-xs text-muted-foreground">
+                推荐 {fileList.data.selected_count}/{fileList.data.total_count} ·{" "}
+                {formatBytes(fileList.data.selected_bytes)} /{" "}
+                {formatBytes(fileList.data.total_bytes)}
+              </div>
+            )}
+          </div>
+
+          {listed.length > 0 ? (
+            <div className="max-h-[360px] overflow-y-auto rounded-[6px] border border-border/60">
+              <Table className="text-xs">
+                <TableHeader className="sticky top-0 z-[1]">
+                  <TableRow>
+                    <TableHead className="w-11"></TableHead>
+                    <TableHead>路径</TableHead>
+                    <TableHead className="w-28 text-right">大小</TableHead>
+                    <TableHead className="w-36">规则</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {listed.map((file) => (
+                    <RemoteFileRow
+                      key={file.path}
+                      file={file}
+                      checked={selectedPaths.has(file.path)}
+                      disabled={running}
+                      onToggle={() => togglePath(file.path, setSelectedPaths)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <div className="rounded-[6px] border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+              输入仓库 ID 后读取文件清单。下载前需要至少选择一个文件。
             </div>
           )}
         </CardContent>
@@ -246,6 +402,7 @@ export function ModelsTab() {
                 value={`${formatBytes(latest?.bytes_done ?? result?.total_bytes ?? 0)} / ${formatBytes(latest?.bytes_total ?? result?.total_bytes ?? 0)}`}
               />
               <ProgressStat label="状态" value={current.status} />
+              <ProgressStat label="选择" value={`${current.paths?.length ?? 0}`} />
             </dl>
           )}
 
@@ -313,7 +470,69 @@ function ProgressStat({ label, value }: { label: string; value: string }) {
   )
 }
 
+function RemoteFileRow({
+  file,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  file: RemoteModelFile
+  checked: boolean
+  disabled: boolean
+  onToggle: () => void
+}) {
+  return (
+    <TableRow data-state={checked ? "selected" : undefined}>
+      <TableCell className="w-11">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={onToggle}
+          className="size-4 rounded-[4px] border border-border accent-primary"
+          aria-label={`选择 ${file.path}`}
+        />
+      </TableCell>
+      <TableCell className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {checked && <Check className="size-3 text-primary shrink-0" />}
+          <span className="font-mono truncate" title={file.path}>
+            {file.path}
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="text-right font-mono tabular-nums">
+        {formatBytes(file.size)}
+      </TableCell>
+      <TableCell>
+        <Badge variant={file.selected ? "secondary" : "outline"} className="text-[10px]">
+          {file.reason}
+        </Badge>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+function togglePath(
+  path: string,
+  setSelectedPaths: Dispatch<SetStateAction<Set<string>>>,
+) {
+  setSelectedPaths((current) => {
+    const next = new Set(current)
+    if (next.has(path)) {
+      next.delete(path)
+    } else {
+      next.add(path)
+    }
+    return next
+  })
+}
+
 function clampThreadCount(value: number): number {
   if (!Number.isFinite(value)) return 1
   return Math.max(1, Math.min(16, Math.round(value)))
+}
+
+function listKey(source: Source, repoId: string, revision: string): string {
+  return `${source}:${repoId.trim()}:${revision.trim()}`
 }

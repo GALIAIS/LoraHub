@@ -947,13 +947,25 @@ code {
   }
 
   .shiro-progress-track {
+    position: relative;
     overflow: hidden;
     border-radius: 999px;
     border: 1px solid color-mix(in oklab, var(--surface-border) 80%, transparent);
     background: var(--control-fill);
+    scrollbar-width: none !important;
+  }
+
+  [data-slot="progress-track"] {
+    scrollbar-width: none !important;
+  }
+
+  .shiro-progress-track::-webkit-scrollbar,
+  [data-slot="progress-track"]::-webkit-scrollbar {
+    display: none !important;
   }
 
   .shiro-progress-fill {
+    display: block;
     height: 100%;
     border-radius: inherit;
     transition: width 300ms ease;

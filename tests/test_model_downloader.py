@@ -16,6 +16,8 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     siblings = [
+        types.SimpleNamespace(rfilename="README.md", size=100),
+        types.SimpleNamespace(rfilename="preview.png", size=256),
         types.SimpleNamespace(rfilename="config.json", size=12),
         types.SimpleNamespace(rfilename="model.safetensors", size=4096),
         types.SimpleNamespace(rfilename="tokenizer/vocab.txt", size=64),
@@ -50,6 +52,7 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
         token: str | None = None,
     ) -> str:
         worker_names.add(threading.current_thread().name)
+        assert filename not in {"README.md", "preview.png"}
         out = Path(local_dir) / filename
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"x" * next(s.size for s in siblings if s.rfilename == filename))
@@ -70,21 +73,116 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
         events.append,
     )
 
-    assert result.files == len(siblings)
-    assert result.total_bytes == sum(s.size for s in siblings)
+    expected = [s for s in siblings if s.rfilename not in {"README.md", "preview.png"}]
+    assert result.files == len(expected)
+    assert result.total_bytes == sum(s.size for s in expected)
     # We expect: list-files event, file-count event, one per finished file, plus the final event.
     per_file_events = [e for e in events if e.files_done and e.files_done >= 1]
-    assert len(per_file_events) >= len(siblings)
+    assert len(per_file_events) >= len(expected)
     assert events[-1].percent == 100
-    assert events[-1].files_done == len(siblings)
+    assert events[-1].files_done == len(expected)
     # Multi-threaded: at least one file ran on a non-main thread when threads > 1.
     assert any(name != threading.current_thread().name for name in worker_names)
+
+
+def test_huggingface_download_honours_explicit_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    siblings = [
+        types.SimpleNamespace(rfilename="model-a.safetensors", size=10),
+        types.SimpleNamespace(rfilename="model-b.safetensors", size=20),
+        types.SimpleNamespace(rfilename="README.md", size=30),
+    ]
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            pass
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    downloaded: list[str] = []
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        filename = kw["filename"]
+        downloaded.append(filename)
+        out = Path(kw["local_dir"]) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    result = downloader.download(
+        DownloadRequest(
+            source="huggingface",
+            repo_id="owner/name",
+            target_dir=tmp_path / "hf",
+            paths=("model-b.safetensors",),
+        )
+    )
+
+    assert downloaded == ["model-b.safetensors"]
+    assert result.files == 1
+    assert result.total_bytes == 20
+
+
+def test_list_remote_files_marks_default_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = [
+        ("README.md", 10),
+        ("preview.jpg", 20),
+        ("model.safetensors", 30),
+        ("tokenizer/vocab.txt", 40),
+    ]
+    monkeypatch.setattr(downloader, "_hf_list_files", lambda *_args, **_kw: files)
+
+    listed = downloader.list_remote_files(
+        DownloadRequest(source="huggingface", repo_id="owner/name")
+    )
+
+    selected = {f.path for f in listed if f.selected}
+    assert selected == {"model.safetensors", "tokenizer/vocab.txt"}
+    assert next(f for f in listed if f.path == "README.md").reason == "ignored by default"
+
+
+def test_download_refuses_when_selection_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    siblings = [
+        types.SimpleNamespace(rfilename="README.md", size=10),
+        types.SimpleNamespace(rfilename="preview.jpg", size=20),
+    ]
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            pass
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    fake_hub = types.SimpleNamespace(
+        HfApi=FakeApi,
+        hf_hub_download=lambda **_kw: pytest.fail("must not download"),
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    with pytest.raises(ValueError, match="no files selected"):
+        downloader.download(
+            DownloadRequest(
+                source="huggingface",
+                repo_id="owner/name",
+                target_dir=tmp_path / "hf",
+            )
+        )
 
 
 def test_modelscope_download_uses_parallel_workers_and_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     files = [
+        {"Path": "README.md", "Size": 100},
+        {"Path": "preview.png", "Size": 200},
         {"Path": "a.bin", "Size": 3},
         {"Path": "nested/b.bin", "Size": 4},
     ]
@@ -104,6 +202,7 @@ def test_modelscope_download_uses_parallel_workers_and_progress(
         token: str | None,
     ) -> int:
         worker_names.add(threading.current_thread().name)
+        assert file_path not in {"README.md", "preview.png"}
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = file_path.encode("utf-8")
         target.write_bytes(payload)

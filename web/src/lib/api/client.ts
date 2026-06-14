@@ -31,7 +31,11 @@ import type {
 } from "./backends"
 import type { SettingsState, SettingsResponse } from "./settings"
 import type { DatasetScanResponse, DatasetCaptionResponse } from "./datasets"
-import type { ModelDownloadSession, ScannedModelsResponse } from "./models"
+import type {
+  ModelDownloadSession,
+  RemoteModelFilesResponse,
+  ScannedModelsResponse,
+} from "./models"
 import type { TaggingSession, TagDatasetRequest } from "./tagging"
 import type {
   AIProviderRecord,
@@ -344,9 +348,22 @@ export const api = {
       revision?: string
       target_dir?: string | null
       threads?: number
+      paths?: string[]
     },
   ) =>
     http<ModelDownloadSession>("/models/download", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listModelFiles: (
+    body: {
+      source: "huggingface" | "modelscope"
+      repo_id: string
+      revision?: string
+      paths?: string[]
+    },
+  ) =>
+    http<RemoteModelFilesResponse>("/models/files", {
       method: "POST",
       body: JSON.stringify(body),
     }),

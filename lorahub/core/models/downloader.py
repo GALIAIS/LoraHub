@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from fnmatch import fnmatch
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -14,6 +15,37 @@ from urllib.request import Request, urlopen
 
 ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
+
+DEFAULT_ALLOW_PATTERNS: tuple[str, ...] = (
+    "*.safetensors",
+    "*.ckpt",
+    "*.pt",
+    "*.pth",
+    "*.bin",
+    "*.gguf",
+    "*.onnx",
+    "*.json",
+    "*.txt",
+    "*.model",
+    "*.vocab",
+    "*.merges",
+)
+
+DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
+    ".gitattributes",
+    "README*",
+    "LICENSE*",
+    "*.md",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.webp",
+    "*.gif",
+    "*.mp4",
+    "*.zip",
+    "*.tar",
+    "*.tar.gz",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +59,9 @@ class DownloadRequest:
     modelscope_token: str | None = None
     threads: int = 4
     proxy: str | None = None  # socks5h://user:pass@host:port or http://...
+    paths: tuple[str, ...] = ()
+    allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS
+    ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +81,14 @@ class DownloadProgress:
     bytes_total: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class RemoteFile:
+    path: str
+    size: int
+    selected: bool
+    reason: str
+
+
 def _emit(progress: ProgressCallback | None, event: DownloadProgress) -> None:
     if progress:
         progress(event)
@@ -57,6 +100,56 @@ def _file_size(item: dict[str, Any]) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalise_path(path: str) -> str:
+    return path.strip().replace("\\", "/").lstrip("/")
+
+
+def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return any(fnmatch(path, pat) or fnmatch(name, pat) for pat in patterns)
+
+
+def _selection_reason(
+    path: str,
+    selected_paths: set[str],
+    allow_patterns: tuple[str, ...],
+    ignore_patterns: tuple[str, ...],
+) -> tuple[bool, str]:
+    if selected_paths:
+        return (path in selected_paths, "selected" if path in selected_paths else "not selected")
+    if _matches_any(path, ignore_patterns):
+        return False, "ignored by default"
+    if _matches_any(path, allow_patterns):
+        return True, "model asset"
+    return False, "not a model asset"
+
+
+def select_files(
+    files: list[tuple[str, int]],
+    *,
+    paths: tuple[str, ...] = (),
+    allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS,
+    ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS,
+) -> list[RemoteFile]:
+    selected_paths = {_normalise_path(p) for p in paths if _normalise_path(p)}
+    out: list[RemoteFile] = []
+    seen: set[str] = set()
+    for raw_path, size in files:
+        path = _normalise_path(raw_path)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        selected, reason = _selection_reason(
+            path,
+            selected_paths,
+            allow_patterns,
+            ignore_patterns,
+        )
+        out.append(RemoteFile(path=path, size=size, selected=selected, reason=reason))
+    out.sort(key=lambda f: f.path.lower())
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -112,12 +205,26 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
+    remote_files = select_files(
+        _hf_list_files(req.repo_id, revision, endpoint, token=token),
+        paths=req.paths,
+        allow_patterns=req.allow_patterns,
+        ignore_patterns=req.ignore_patterns,
+    )
+    files = [(f.path, f.size) for f in remote_files if f.selected]
     bytes_total = sum(size for _, size in files)
+    if remote_files and not files:
+        msg = (
+            "no files selected for download; list the remote files and select "
+            "the required weights/config/tokenizer files explicitly"
+        )
+        raise ValueError(msg)
     _emit(
         progress,
         DownloadProgress(
-            message=f"hf: {len(files)} files to download",
+            message=(
+                f"hf: {len(files)}/{len(remote_files)} files selected for download"
+            ),
             percent=5 if files else 100,
             files_total=len(files),
             bytes_total=bytes_total,
@@ -248,12 +355,32 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    files = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    listed = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    by_path: dict[str, dict[str, Any]] = {}
+    for it in listed:
+        path = _normalise_path(str(it.get("Path") or it.get("FilePath") or ""))
+        if path:
+            by_path[path] = it
+    remote_files = select_files(
+        [(path, _file_size(it)) for path, it in by_path.items()],
+        paths=req.paths,
+        allow_patterns=req.allow_patterns,
+        ignore_patterns=req.ignore_patterns,
+    )
+    files = [by_path[f.path] for f in remote_files if f.selected]
     bytes_total = sum(_file_size(it) for it in files)
+    if remote_files and not files:
+        msg = (
+            "no files selected for download; list the remote files and select "
+            "the required weights/config/tokenizer files explicitly"
+        )
+        raise ValueError(msg)
     _emit(
         progress,
         DownloadProgress(
-            message=f"ms: {len(files)} files to download",
+            message=(
+                f"ms: {len(files)}/{len(remote_files)} files selected for download"
+            ),
             percent=5 if files else 100,
             files_total=len(files),
             bytes_total=bytes_total,
@@ -320,6 +447,33 @@ def download(req: DownloadRequest, progress: ProgressCallback | None = None) -> 
     raise ValueError(msg)
 
 
+def list_remote_files(req: DownloadRequest) -> list[RemoteFile]:
+    """List remote repo files and mark the default download selection."""
+    if req.source == "huggingface":
+        endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
+        token = (req.huggingface_token or "").strip() or None
+        revision = "main" if req.revision == "master" else req.revision
+        files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
+    elif req.source == "modelscope":
+        items = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+        files = [
+            (
+                str(it.get("Path") or it.get("FilePath") or ""),
+                _file_size(it),
+            )
+            for it in items
+        ]
+    else:
+        msg = f"unknown source: {req.source!r}"
+        raise ValueError(msg)
+    return select_files(
+        files,
+        paths=req.paths,
+        allow_patterns=req.allow_patterns,
+        ignore_patterns=req.ignore_patterns,
+    )
+
+
 def cleanup_partial(target: Path) -> None:
     """Best-effort cleanup of a half-finished download directory."""
     if target.is_dir():
@@ -330,7 +484,9 @@ __all__ = [
     "DownloadProgress",
     "DownloadRequest",
     "DownloadResult",
+    "RemoteFile",
     "Source",
     "cleanup_partial",
     "download",
+    "list_remote_files",
 ]

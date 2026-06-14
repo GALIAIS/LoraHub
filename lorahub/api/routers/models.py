@@ -14,10 +14,13 @@ from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
 from lorahub.core.models.downloader import (
+    DEFAULT_ALLOW_PATTERNS,
+    DEFAULT_IGNORE_PATTERNS,
     DownloadProgress,
     DownloadRequest,
     DownloadResult,
     download,
+    list_remote_files,
 )
 
 router = APIRouter(prefix="/api")
@@ -29,6 +32,18 @@ class DownloadModelRequest(BaseModel):
     revision: str = "master"
     target_dir: str | None = None
     threads: int = Field(default=4, ge=1, le=16)
+    paths: list[str] = Field(default_factory=list, max_length=2048)
+    allow_patterns: list[str] | None = None
+    ignore_patterns: list[str] | None = None
+
+
+class ListModelFilesRequest(BaseModel):
+    source: Literal["huggingface", "modelscope"]
+    repo_id: str
+    revision: str = "master"
+    paths: list[str] = Field(default_factory=list, max_length=2048)
+    allow_patterns: list[str] | None = None
+    ignore_patterns: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -39,6 +54,7 @@ class _DownloadSession:
     revision: str
     target_dir: str | None
     threads: int
+    paths: list[str]
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -64,6 +80,7 @@ class _DownloadSession:
                 "revision": self.revision,
                 "target_dir": self.target_dir,
                 "threads": self.threads,
+                "paths": list(self.paths),
                 "status": self.status,
                 "percent": self.percent,
                 "events": list(self.events),
@@ -102,14 +119,19 @@ def _get_session(session_id: str) -> _DownloadSession:
     return session
 
 
-@router.post("/models/download", status_code=202)
-def download_model(req: DownloadModelRequest) -> dict[str, Any]:
-    if not req.repo_id or "/" not in req.repo_id:
+def _validate_repo_id(repo_id: str) -> None:
+    if not repo_id or "/" not in repo_id:
         raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
 
+
+def _download_request_from_api(
+    req: DownloadModelRequest | ListModelFilesRequest,
+    *,
+    target: Path | None = None,
+    threads: int = 4,
+) -> DownloadRequest:
     settings = app_module._settings_store.load()
-    target = Path(req.target_dir).expanduser().resolve() if req.target_dir else None
-    download_req = DownloadRequest(
+    return DownloadRequest(
         source=req.source,
         repo_id=req.repo_id,
         revision=req.revision,
@@ -117,9 +139,53 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         huggingface_endpoint=settings.huggingface_endpoint,
         huggingface_token=settings.huggingface_token,
         modelscope_token=settings.modelscope_token,
-        threads=req.threads,
+        threads=threads,
         proxy=settings.download_proxy,
+        paths=tuple(req.paths),
+        allow_patterns=(
+            tuple(req.allow_patterns)
+            if req.allow_patterns is not None
+            else DEFAULT_ALLOW_PATTERNS
+        ),
+        ignore_patterns=(
+            tuple(req.ignore_patterns)
+            if req.ignore_patterns is not None
+            else DEFAULT_IGNORE_PATTERNS
+        ),
     )
+
+
+@router.post("/models/files")
+def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
+    _validate_repo_id(req.repo_id)
+    files = list_remote_files(_download_request_from_api(req))
+    selected = [f for f in files if f.selected]
+    return {
+        "source": req.source,
+        "repo_id": req.repo_id,
+        "revision": req.revision,
+        "files": [
+            {
+                "path": f.path,
+                "size": f.size,
+                "selected": f.selected,
+                "reason": f.reason,
+            }
+            for f in files
+        ],
+        "selected_count": len(selected),
+        "selected_bytes": sum(f.size for f in selected),
+        "total_count": len(files),
+        "total_bytes": sum(f.size for f in files),
+    }
+
+
+@router.post("/models/download", status_code=202)
+def download_model(req: DownloadModelRequest) -> dict[str, Any]:
+    _validate_repo_id(req.repo_id)
+
+    target = Path(req.target_dir).expanduser().resolve() if req.target_dir else None
+    download_req = _download_request_from_api(req, target=target, threads=req.threads)
     session = _DownloadSession(
         session_id=uuid.uuid4().hex,
         source=req.source,
@@ -127,6 +193,7 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         revision=req.revision,
         target_dir=str(target) if target else None,
         threads=req.threads,
+        paths=list(req.paths),
     )
     session.add_progress(DownloadProgress(message="download queued", percent=0))
     _store_session(session)
