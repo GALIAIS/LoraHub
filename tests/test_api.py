@@ -2567,6 +2567,47 @@ def test_anima_model_download_status_survives_memory_clear(
     assert recovered["events"][-1]["message"] == "persisted anima progress"
 
 
+def test_anima_model_download_failure_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+
+    def fake_download_anima_models(**_kwargs: Any) -> None:
+        raise RuntimeError("modelscope 503")
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    status: dict[str, Any] = {}
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/download-models/status").json()
+        if status.get("status") == "failed":
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "failed"
+    assert status["session_id"] == session_id
+    assert status["error"] == "modelscope 503"
+
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "failed"
+    assert recovered["error"] == "modelscope 503"
+    assert recovered["events"][-1]["message"] == "failed: modelscope 503"
+
+
 def test_anima_msvc_install_status_survives_memory_clear(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
