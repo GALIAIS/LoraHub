@@ -239,6 +239,20 @@ def test_list_pagination(client: TestClient, sample_dir: Path) -> None:
     assert len(r2.json()["items"]) == 1
 
 
+def test_dataset_name_endpoints_reject_dot_paths(
+    client: TestClient, tmp_path: Path
+) -> None:
+    dataset = tmp_path / "safe"
+    dataset.mkdir()
+    (tmp_path / "outside.txt").write_text("keep", encoding="utf-8")
+
+    r = client.delete("/api/image-studio/datasets/..%5C")
+    assert r.status_code in (400, 404), r.text
+
+    assert dataset.is_dir()
+    assert (tmp_path / "outside.txt").is_file()
+
+
 def test_get_image(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     r = client.get("/api/image-studio/image", params={"path": img_path})

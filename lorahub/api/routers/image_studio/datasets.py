@@ -36,6 +36,33 @@ def _datasets_root() -> Path:
     return root.resolve()
 
 
+def _validate_dataset_name(name: str) -> str:
+    """Return the canonical dataset name, rejecting traversal-like values."""
+    canonical = name.strip()
+    if (
+        not canonical
+        or canonical in {".", ".."}
+        or "/" in canonical
+        or "\\" in canonical
+        or ".." in canonical
+    ):
+        raise HTTPException(400, "invalid dataset name")
+    return canonical
+
+
+def _dataset_path_by_name(name: str) -> Path:
+    root = _datasets_root()
+    canonical = _validate_dataset_name(name)
+    ds_path = (root / canonical).resolve()
+    try:
+        ds_path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid dataset name") from exc
+    if ds_path == root:
+        raise HTTPException(400, "invalid dataset name")
+    return ds_path
+
+
 def _read_dataset_meta(ds_path: Path) -> dict[str, Any]:
     meta_file = ds_path / _DATASET_META_FILE
     if meta_file.is_file():
@@ -102,13 +129,8 @@ class CreateDatasetInput(BaseModel):
 @router.post("/datasets")
 def create_dataset(body: CreateDatasetInput) -> dict[str, Any]:
     """Create a new dataset directory with metadata."""
-    root = _datasets_root()
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(400, "dataset name is required")
-    if "/" in name or "\\" in name or ".." in name:
-        raise HTTPException(400, "invalid dataset name")
-    ds_path = root / name
+    name = _validate_dataset_name(body.name)
+    ds_path = _dataset_path_by_name(name)
     if ds_path.exists():
         raise HTTPException(409, f"dataset '{name}' already exists")
     ds_path.mkdir(parents=True)
@@ -124,8 +146,7 @@ def create_dataset(body: CreateDatasetInput) -> dict[str, Any]:
 
 @router.get("/datasets/{name}/meta")
 def get_dataset_meta(name: str) -> dict[str, Any]:
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     return _read_dataset_meta(ds_path)
@@ -139,8 +160,7 @@ class UpdateDatasetMetaInput(BaseModel):
 
 @router.put("/datasets/{name}/meta")
 def update_dataset_meta(name: str, body: UpdateDatasetMetaInput) -> dict[str, Any]:
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     meta = _read_dataset_meta(ds_path)
@@ -157,14 +177,14 @@ def update_dataset_meta(name: str, body: UpdateDatasetMetaInput) -> dict[str, An
 @router.delete("/datasets/{name}")
 def delete_dataset(name: str) -> dict[str, Any]:
     """Move dataset to trash (not permanent delete)."""
-    root = _datasets_root()
-    ds_path = root / name
+    canonical = _validate_dataset_name(name)
+    ds_path = _dataset_path_by_name(canonical)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     from datetime import UTC, datetime  # noqa: PLC0415
     trash = Path("runs") / "_dataset_trash" / datetime.now(UTC).strftime("%Y-%m-%d")
     trash.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(ds_path), str(trash / name))
+    shutil.move(str(ds_path), str(trash / canonical))
     return {"ok": True}
 
 
@@ -298,8 +318,7 @@ async def upload_to_dataset(
 
     Returns SSE stream with progress events.
     """
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
 
