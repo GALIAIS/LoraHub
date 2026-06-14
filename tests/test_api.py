@@ -2826,6 +2826,61 @@ def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) ->
     assert r.status_code == 422
 
 
+def test_anima_caption_writes_task_session(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "captioned"
+    data.mkdir()
+    caption = data / "a.txt"
+    caption.write_text("old", encoding="utf-8")
+
+    class FakeTransformer:
+        def transform_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            overwrite: bool,
+            progress: Any,
+        ) -> int:
+            target = directory / "a.txt"
+            target.write_text("new", encoding="utf-8")
+            progress(target)
+            return 1
+
+    monkeypatch.setattr(
+        tagging_router,
+        "_build_anima_transformer",
+        lambda _req: FakeTransformer(),
+    )
+
+    response = client.post("/api/anima/caption", json={"path": str(data)})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=anima_caption")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(data)
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 1
+    assert latest["events"][-1]["message"].startswith("done")
+    assert caption.read_text(encoding="utf-8") == "new"
+
+
 def test_tagging_wd14_catalog_lists_all_curated_models(client: TestClient) -> None:
     """``GET /tagging/wd14/models`` returns the full catalogue + default.
 

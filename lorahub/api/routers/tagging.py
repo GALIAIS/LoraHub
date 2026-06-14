@@ -433,6 +433,7 @@ class _AnimaSession:
     safety: str | None
     overwrite: bool
     recursive: bool
+    task_kind: str | None = None
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -444,13 +445,27 @@ class _AnimaSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def push(self, message: str, *, percent: float | None = None, file: str | None = None) -> None:
+        ts = time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {"ts": time.time(), "message": message, "percent": self.percent, "file": file}
-            )
+            event = {"ts": ts, "message": message, "percent": self.percent, "file": file}
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -510,8 +525,18 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {target}")
 
+    task = _task_store().create(
+        kind=_KIND_ANIMA_CAPTION,
+        title=f"anima caption:{target.name}",
+        metadata={
+            "path": str(target),
+            "dataset_tag": req.dataset_tag,
+            "overwrite": req.overwrite,
+            "recursive": req.recursive,
+        },
+    )
     session = _AnimaSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         path=str(target),
         dataset_tag=req.dataset_tag,
         quality=req.quality,
@@ -520,12 +545,14 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
         safety=req.safety,
         overwrite=req.overwrite,
         recursive=req.recursive,
+        task_kind=_KIND_ANIMA_CAPTION,
     )
     session.push("anima caption queued", percent=0)
     _store_anima(session)
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             transformer = _build_anima_transformer(req)
 
             # Pre-count for percent display.
@@ -540,6 +567,13 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result=session.snapshot(),
+                    finished=True,
+                )
                 return
 
             total = len(captions)
@@ -562,12 +596,26 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                 session.percent = 100
                 session.finished_at = time.time()
             session.push(f"done — wrote {written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"anima caption failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         finally:
             _persist_tagging_snapshot(session)
 
