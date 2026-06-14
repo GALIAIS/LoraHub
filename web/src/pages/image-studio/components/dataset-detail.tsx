@@ -939,8 +939,13 @@ function StudioTaskBanner({
   // Compose a label that mirrors what the legacy inline progress used to
   // show. For sessioned kinds we tack on the most recent image filename
   // so the user can tell the task is making forward progress.
+  const showsLastImage =
+    task.kind === "caption" ||
+    task.kind === "smart-caption" ||
+    task.kind === "quality-score" ||
+    task.kind === "trigger-words"
   const label = running
-    ? task.kind === "smart-caption"
+    ? showsLastImage
       ? `${task.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : task.kind === "wd14"
         ? `${task.label}中… ${task.processed ?? 0}/${task.total ?? "?"}`
