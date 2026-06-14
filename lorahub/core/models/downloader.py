@@ -340,14 +340,22 @@ def _ms_download_file(
         headers["Authorization"] = f"Bearer {token}"
     req = Request(url, headers=headers)
     target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f"{target.name}.part")
+    if partial.exists():
+        partial.unlink()
     bytes_written = 0
-    with urlopen(req, timeout=120) as resp, target.open("wb") as fh:  # noqa: S310
-        while True:
-            chunk = resp.read(64 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
-            bytes_written += len(chunk)
+    try:
+        with urlopen(req, timeout=120) as resp, partial.open("wb") as fh:  # noqa: S310
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                bytes_written += len(chunk)
+        partial.replace(target)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
     return bytes_written
 
 

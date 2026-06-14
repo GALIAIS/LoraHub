@@ -392,3 +392,39 @@ def test_modelscope_download_fails_when_any_selected_file_fails(
         )
 
     assert any("failed" in event.message for event in events)
+
+
+def test_modelscope_file_download_does_not_leave_partial_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "model.safetensors"
+
+    class BrokenResponse:
+        def __init__(self) -> None:
+            self._reads = 0
+
+        def __enter__(self) -> "BrokenResponse":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            self._reads += 1
+            if self._reads == 1:
+                return b"partial"
+            raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(downloader, "urlopen", lambda *_args, **_kwargs: BrokenResponse())
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        downloader._ms_download_file(
+            "owner/name",
+            "master",
+            "model.safetensors",
+            target,
+            None,
+        )
+
+    assert not target.exists()
+    assert not target.with_name("model.safetensors.part").exists()
