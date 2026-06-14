@@ -1432,6 +1432,47 @@ def test_bootstrap_succeeds_with_stub(
     assert "info" in levels  # at least one progress step was buffered
 
 
+def test_bootstrap_writes_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed bootstrap should also appear in the generic task center."""
+    import time
+
+    from lorahub.api import app as app_mod
+
+    def builder(_req: object) -> Any:
+        def runner(progress: Any) -> None:
+            progress("clone")
+            progress("install requirements")
+
+        return runner
+
+    monkeypatch.setattr(app_mod, "_build_bootstrap_runner", builder)
+
+    response = client.post("/api/backend/bootstrap", json={"backend": "kohya"})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=backend_bootstrap")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.05)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["backend"] == "kohya"
+    assert [event["message"] for event in latest["events"]][-2:] == [
+        "install requirements",
+        "kohya backend installed",
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # System telemetry
 # --------------------------------------------------------------------------- #
