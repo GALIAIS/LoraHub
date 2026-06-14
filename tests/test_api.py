@@ -3455,6 +3455,33 @@ def test_captions_normalize_writes_task_session(
     assert latest["events"][-1]["message"].startswith("done")
 
 
+def test_captions_normalize_status_recovers_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "captions"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="captions_normalize",
+        title="captions normalize:captions",
+        metadata={"path": str(data), "recursive": False, "overwrite": False},
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=45)
+    app_module._task_session_store.mark_stale_interrupted()
+    captions_router._sessions.clear()
+
+    recovered = client.get(f"/api/captions/normalize/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 45
+    assert body["error"] == "task interrupted by server restart"
+
+
 def test_captions_normalize_status_unknown_returns_404(client: TestClient) -> None:
     r = client.get("/api/captions/normalize/does-not-exist")
     assert r.status_code == 404

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from lorahub.api import app as app_module
 from lorahub.api.task_sessions import (
     TaskEvent,
+    TaskSession,
     TaskSessionStore,
     default_task_store_path,
 )
@@ -28,6 +29,13 @@ from lorahub.core.dataset.captions import CaptionPipeline
 
 router = APIRouter(prefix="/api")
 _KIND_CAPTIONS_NORMALIZE = "captions_normalize"
+_CaptionsStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 def _task_store() -> TaskSessionStore:
@@ -66,7 +74,7 @@ class _CaptionsSession:
     session_id: str
     path: str
     task_kind: str | None = None
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _CaptionsStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -164,6 +172,50 @@ def _get_persisted(session_id: str) -> dict[str, Any] | None:
         return None
     snap = row.get("snapshot")
     return snap if isinstance(snap, dict) else None
+
+
+def _task_snapshot(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != _KIND_CAPTIONS_NORMALIZE:
+        return None
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    return _task_to_status_snapshot(task)
+
+
+def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
+    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+        return None
+    metadata = task.metadata
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "status": (
+            task.status
+            if task.status in {"interrupted", "failed", "canceled"}
+            else "running"
+        ),
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "file": event.payload.get("file"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 def _persist_captions_snapshot(session: _CaptionsSession) -> None:
@@ -284,6 +336,9 @@ def normalize_captions_status(session_id: str) -> dict[str, Any]:
         session = _sessions.get(session_id)
     if session is not None:
         return session.snapshot()
+    task = _task_snapshot(session_id)
+    if task is not None:
+        return task
     persisted = _get_persisted(session_id)
     if persisted is not None:
         return persisted
