@@ -1,28 +1,17 @@
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import {
-  Filter,
-  FolderOpen,
-  HelpCircle,
-  ListChecks,
-  Sparkles,
-  Tag,
-} from "lucide-react"
 import { toast } from "sonner"
 import {
   imageStudioList,
   imageStudioGetImage,
-  imageStudioListOps,
   imageStudioSaveAnnotation,
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioBatchDelete,
-  getTriggerWordsSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
-import { removeTask, type StudioTaskRecord } from "@/lib/studio-task-store"
-import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
+import { removeTask } from "@/lib/studio-task-store"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,9 +22,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
-import { cn } from "@/lib/utils"
 import { FilterPanel } from "./filter-panel"
 import { ImageGrid } from "./image-grid"
 import { Inspector } from "./inspector"
@@ -49,13 +35,14 @@ import { TaggingPanel } from "./tagging-panel"
 import { DuplicatesView } from "./duplicates-view"
 import { type FilterState, defaultFilters, applyFilters } from "./types"
 import type { AiBulkTab } from "./types"
-import {
-  Pagination,
-  SortSelect,
-  StudioTaskBanner,
-  ViewChip,
-} from "./dataset-detail-widgets"
+import { Pagination, StudioTaskBanner } from "./dataset-detail-widgets"
 import { startDatasetAiBulkTask } from "./dataset-detail-ai"
+import {
+  useDatasetPendingOpsCount,
+  useDatasetTaskState,
+} from "./dataset-detail-hooks"
+import { DatasetDetailToolbar } from "./dataset-detail-toolbar"
+import { TriggerWordSummary } from "./trigger-word-summary"
 
 export function DatasetDetail() {
   const [params, setParams] = useSearchParams()
@@ -81,74 +68,12 @@ export function DatasetDetail() {
   const [pendingDeleteSingle, setPendingDeleteSingle] =
     useState<ImageStudioItem | null>(null)
   const [pendingDeleteBulk, setPendingDeleteBulk] = useState(false)
-  // Dataset-level trigger word ranking surfaced after a trigger-words
-  // batch completes. Stays around so the user can copy a candidate into
-  // the smart-caption "trigger word" field on the next run without
-  // having to re-run analysis.
-  const [triggerWordTop, setTriggerWordTop] = useState<
-    { trigger: string; count: number }[] | null
-  >(null)
-
   const queryClient = useQueryClient()
   const datasetName = path.split(/[/\\]/).pop() || ""
 
-  // Lightweight pending-ops counter so the toolbar can flag the badge
-  // when the user has unflushed edits. Refetches every 5s and on
-  // cache invalidation (image-studio mutations bust everything under
-  // the "image-studio" key, so this stays in sync without bookkeeping).
-  const opsCountQuery = useQuery({
-    queryKey: ["image-studio", "ops-count", path],
-    queryFn: () => imageStudioListOps(path),
-    enabled: !!path,
-    refetchInterval: 5000,
-    select: (data) => data.ops.length,
-  })
-  const pendingOpsCount = opsCountQuery.data ?? 0
-
-  // Subscribe to the global studio task store so the AI progress banner
-  // is driven by an out-of-tree polling loop instead of a per-component
-  // setInterval. This makes the banner survive route changes (the page
-  // unmounts on navigation, but the server keeps running and the store
-  // keeps polling) and even hard reloads for sessioned task kinds.
-  const studioTasks = useStudioTasksFor(path)
-  // Newest first so the banner reflects whatever the user just kicked
-  // off — multiple concurrent tasks are rare but tolerable.
-  const activeStudioTask: StudioTaskRecord | null =
-    studioTasks.length === 0
-      ? null
-      : [...studioTasks].sort((a, b) => b.startedAt - a.startedAt)[0]
-
-  // When a sessioned task transitions to a terminal state, refresh the
-  // dataset listing so any new annotations / scores light up. Keying
-  // the effect on a derived signature stops it from firing every poll.
-  const terminalSig = studioTasks
-    .filter((t) => t.status !== "running")
-    .map((t) => `${t.id}:${t.status}`)
-    .join(",")
-  useEffect(() => {
-    if (terminalSig) {
-      queryClient.invalidateQueries({ queryKey: ["image-studio"] })
-    }
-  }, [terminalSig, queryClient])
-
-  useEffect(() => {
-    const completedTrigger = [...studioTasks]
-      .filter((t) => t.kind === "trigger-words" && t.status === "completed")
-      .sort((a, b) => b.startedAt - a.startedAt)[0]
-    if (!completedTrigger) return
-    let cancelled = false
-    getTriggerWordsSession(completedTrigger.id)
-      .then((snap) => {
-        if (!cancelled) setTriggerWordTop(snap.dataset_top)
-      })
-      .catch(() => {
-        // The task banner already reports status polling failures; this
-        // summary panel is helpful but non-critical.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [terminalSig, studioTasks])
+  const pendingOpsCount = useDatasetPendingOpsCount(path)
+  const { activeStudioTask, triggerWordTop, setTriggerWordTop } =
+    useDatasetTaskState(path)
 
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
@@ -339,146 +264,25 @@ export function DatasetDetail() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="size-7 p-0"
-          onClick={goBack}
-          aria-label="返回数据集列表"
-          title="返回数据集列表"
-        >
-          <FolderOpen className="size-4" />
-        </Button>
-        <span className="font-medium text-sm">{datasetName}</span>
-        <span className="font-mono text-xs text-muted-foreground truncate flex-1">{path}</span>
-        {data && (
-          <span className="text-xs text-muted-foreground">{data.total} 张图片</span>
-        )}
-        <SortSelect
-          value={sort}
-          onChange={(s) => {
-            const next = new URLSearchParams(params)
-            next.set("sort", s)
-            next.set("page", "1")
-            setParams(next)
-          }}
-        />
-        {/* View switch — same chip style as analysis page filter chips
-            so the language stays consistent across the workbench. */}
-        <div
-          role="group"
-          aria-label="视图模式"
-          className="inline-flex h-7 items-center rounded-[4px] border border-border/60 bg-background overflow-hidden text-[11px]"
-        >
-          <ViewChip
-            active={view === "grid"}
-            onClick={() => {
-              const n = new URLSearchParams(params)
-              n.set("view", "grid")
-              setParams(n)
-            }}
-          >
-            网格
-          </ViewChip>
-          <span className="h-full w-px bg-border/60" aria-hidden />
-          <ViewChip
-            active={view === "duplicates"}
-            onClick={() => {
-              const n = new URLSearchParams(params)
-              n.set("view", "duplicates")
-              setParams(n)
-            }}
-          >
-            去重
-          </ViewChip>
-        </div>
-        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
-          <Switch
-            size="sm"
-            checked={recursive}
-            onCheckedChange={(checked) => {
-              const n = new URLSearchParams(params)
-              if (checked) n.set("recursive", "1")
-              else n.delete("recursive")
-              n.set("page", "1")
-              setParams(n)
-            }}
-          />
-          递归
-        </label>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowFilters((v) => !v)}
-          className={cn(
-            "size-7 p-0",
-            showFilters && "bg-muted text-primary",
-          )}
-          aria-label="筛选面板"
-          aria-pressed={showFilters}
-          title="筛选面板"
-        >
-          <Filter className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowTagging((v) => !v)}
-          className={cn(
-            "size-7 p-0",
-            showTagging && "bg-muted text-primary",
-          )}
-          aria-label="WD14 标注"
-          aria-pressed={showTagging}
-          title="WD14 标注"
-        >
-          <Tag className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowAiBulk(true)}
-          className="size-7 p-0"
-          aria-label="AI 批量操作"
-          title="AI 批量操作"
-        >
-          <Sparkles className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowOpsQueue(true)}
-          className={cn(
-            "relative size-7 p-0",
-            pendingOpsCount > 0 && "text-primary",
-          )}
-          aria-label={`待应用操作 (${pendingOpsCount})`}
-          title={
-            pendingOpsCount > 0
-              ? `${pendingOpsCount} 个待应用操作`
-              : "待应用操作 (空)"
-          }
-        >
-          <ListChecks className="size-4" />
-          {pendingOpsCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold leading-none text-primary-foreground">
-              {pendingOpsCount > 99 ? "99+" : pendingOpsCount}
-            </span>
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowHelp(true)}
-          className="size-7 p-0"
-          aria-label="键盘快捷键 (?)"
-          title="键盘快捷键 (?)"
-        >
-          <HelpCircle className="size-4" />
-        </Button>
-      </div>
+      <DatasetDetailToolbar
+        datasetName={datasetName}
+        path={path}
+        total={data?.total}
+        sort={sort}
+        view={view}
+        recursive={recursive}
+        params={params}
+        setParams={setParams}
+        showFilters={showFilters}
+        showTagging={showTagging}
+        pendingOpsCount={pendingOpsCount}
+        onBack={goBack}
+        onToggleFilters={() => setShowFilters((v) => !v)}
+        onToggleTagging={() => setShowTagging((v) => !v)}
+        onOpenAiBulk={() => setShowAiBulk(true)}
+        onOpenOpsQueue={() => setShowOpsQueue(true)}
+        onOpenHelp={() => setShowHelp(true)}
+      />
 
       {/* Upload drop zone */}
       <UploadDropZone
@@ -504,35 +308,11 @@ export function DatasetDetail() {
         />
       )}
 
-      {/* Trigger word top-N (dataset-level summary, shown after a
-          trigger-words batch finishes). Click a chip to copy it to
-          the clipboard so the user can paste it into the smart-caption
-          "trigger word" input on the next run. */}
       {triggerWordTop && triggerWordTop.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 bg-muted/20">
-          <span className="text-xs text-muted-foreground">数据集触发词候选（点击复制）：</span>
-          {triggerWordTop.map((t) => (
-            <button
-              key={t.trigger}
-              type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(t.trigger)
-              }}
-              className="inline-flex items-center gap-1 rounded border bg-background px-2 py-0.5 text-[11px] font-mono hover:bg-muted transition-colors"
-              title={`${t.count} 张图片含此触发词 · 点击复制`}
-            >
-              <span>{t.trigger}</span>
-              <span className="text-muted-foreground">·{t.count}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setTriggerWordTop(null)}
-            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-          >
-            关闭
-          </button>
-        </div>
+        <TriggerWordSummary
+          candidates={triggerWordTop}
+          onClose={() => setTriggerWordTop(null)}
+        />
       )}
 
       {/* Main content */}
