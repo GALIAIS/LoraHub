@@ -171,6 +171,56 @@ def _get_persisted_tagging(session_id: str) -> dict[str, Any] | None:
     return snap if isinstance(snap, dict) else None
 
 
+def _tagging_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != _KIND_TAGGING:
+        return None
+    if isinstance(task.result, dict):
+        return task.result
+    metadata = task.metadata
+    status: Literal["running", "succeeded", "failed"]
+    if task.status == "succeeded":
+        status = "succeeded"
+    elif task.status in {"failed", "interrupted", "canceled"}:
+        status = "failed"
+    else:
+        status = "running"
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "tagger": str(metadata.get("tagger") or "wd14"),
+        "model_id": str(metadata.get("model_id") or DEFAULT_MODEL),
+        "device": str(metadata.get("device") or "auto"),
+        "general": 0.35,
+        "character": 0.85,
+        "joytag_threshold": JOYTAG_DEFAULT_THRESHOLD,
+        "overwrite": bool(metadata.get("overwrite") or False),
+        "recursive": bool(metadata.get("recursive") or False),
+        "include_character": True,
+        "underscores": False,
+        "status": status,
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "image": event.payload.get("image"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "active_provider": "",
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
+
+
 def _persist_tagging_snapshot(session: Any) -> None:
     """Best-effort flush of a session snapshot to the SessionStore."""
     try:
@@ -377,6 +427,9 @@ def tag_dataset_status(session_id: str) -> dict[str, Any]:
     persisted = _get_persisted_tagging(session_id)
     if persisted is not None:
         return persisted
+    task = _tagging_snapshot_from_task(session_id)
+    if task is not None:
+        return task
     raise HTTPException(status_code=404, detail="tagging session not found")
 
 

@@ -2929,6 +2929,56 @@ def test_tagging_writes_task_session(
     assert latest["events"][-1]["message"].startswith("done")
 
 
+def test_tagging_status_reads_task_session_after_memory_clear(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake image bytes")
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            image = directory / "a.png"
+            image.with_suffix(".txt").write_text("1girl", encoding="utf-8")
+            kwargs["on_progress"](image, object())
+            return [object()]
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu"},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/tagging/tag/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.02)
+
+    tagging_router._sessions.clear()
+    recovered = client.get(f"/api/tagging/tag/{session_id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["path"] == str(data)
+    assert body["status"] == "succeeded"
+    assert body["written"] == 1
+
+
 def test_tagging_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/tagging/tag/does-not-exist")
     assert r.status_code == 404

@@ -19,6 +19,7 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
   const [overwrite, setOverwrite] = useState(false)
   const [recursive, setRecursive] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null)
 
   // Same dropdown source as ai-bulk-modal — short names like
   // ``wd-swinv2-v3`` are missing the ``SmilingWolf/`` owner and the
@@ -38,6 +39,24 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
     { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
   ]
 
+  const latestTaggingTask = useQuery({
+    queryKey: ["tasks", "latest", "tagging"],
+    queryFn: () => api.getLatestTask("tagging"),
+    retry: false,
+    staleTime: 10_000,
+  })
+
+  useEffect(() => {
+    if (sessionId != null) return
+    const latest = latestTaggingTask.data
+    if (
+      latest?.metadata?.path === datasetPath &&
+      latest.id !== dismissedSessionId
+    ) {
+      setSessionId(latest.id)
+    }
+  }, [datasetPath, dismissedSessionId, latestTaggingTask.data, sessionId])
+
   const startMutation = useMutation({
     mutationFn: () =>
       api.tagDataset({
@@ -50,6 +69,7 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
         recursive,
       }),
     onSuccess: (data: TaggingSession) => {
+      setDismissedSessionId(null)
       setSessionId(data.session_id)
     },
   })
@@ -183,6 +203,18 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
           )}
           {session.error && (
             <p className="mt-1 text-destructive">{session.error}</p>
+          )}
+          {session.status !== "running" && (
+            <button
+              type="button"
+              className="mt-2 rounded border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setDismissedSessionId(session.session_id)
+                setSessionId(null)
+              }}
+            >
+              关闭结果
+            </button>
           )}
         </div>
       )}
