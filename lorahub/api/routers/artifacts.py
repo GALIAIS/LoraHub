@@ -68,6 +68,30 @@ _TERMINAL_STATES = (
 _VALID_BUCKETS: frozenset[str] = frozenset({"checkpoints", "samples", "logs", "other"})
 
 
+def _is_same_or_parent(target: Path, child: Path) -> bool:
+    try:
+        child.relative_to(target)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_workspace_delete_target(workspace: Path) -> Path:
+    target = workspace.expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if (
+        target.parent == target
+        or _is_same_or_parent(target, cwd)
+        or _is_same_or_parent(target, home)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="refusing to delete unsafe workspace path",
+        )
+    return target
+
+
 def _job_artifact_summary(job_id: str, workspace: Path) -> dict[str, Any]:
     """Reduce a workspace listing to the artifacts page's row shape."""
     buckets = _list_workspace_files(workspace)
@@ -391,21 +415,22 @@ def delete_workspace(job_id: str) -> dict[str, Any]:
                 f"job is {job.state.value}; cancel it before deleting the workspace"
             ),
         )
-    if not job.workspace.exists():
+    target = _validate_workspace_delete_target(job.workspace)
+    if not target.exists():
         # Drop the registry row anyway so the artifacts page doesn't
         # keep showing a phantom entry.
         state.registry.delete(job.id)
         return {"deleted": False, "reason": "workspace missing on disk"}
 
     try:
-        shutil.rmtree(job.workspace)
+        shutil.rmtree(target)
     except OSError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"rmtree failed: {exc}",
         ) from exc
     state.registry.delete(job.id)
-    return {"deleted": True, "workspace": str(job.workspace)}
+    return {"deleted": True, "workspace": str(target)}
 
 
 __all__ = ["router"]

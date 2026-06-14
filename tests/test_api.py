@@ -5187,6 +5187,22 @@ def test_artifacts_delete_workspace_refuses_nonterminal_jobs(
     assert ws.exists()
 
 
+def test_artifacts_delete_workspace_refuses_dangerous_workspace(
+    client: TestClient,
+) -> None:
+    job_id = _make_job_with_workspace(Path.cwd())
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    r = client.delete(f"/api/artifacts/{job_id}/workspace")
+
+    assert r.status_code == 400
+    assert "workspace" in r.json()["detail"]
+    assert state.registry.get(job_id) is not None
+
+
 def test_artifacts_delete_workspace_terminal_clears_tree_and_record(
     client: TestClient, tmp_path: Path
 ) -> None:
