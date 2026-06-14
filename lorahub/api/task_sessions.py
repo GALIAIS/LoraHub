@@ -314,11 +314,21 @@ class TaskSessionStore:
                 ).fetchall()
             return [self._row_to_session(conn, row) for row in rows]
 
+    def _list_active(self) -> list[TaskSession]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM task_sessions
+                WHERE status IN ('queued', 'running')
+                ORDER BY updated_at DESC
+                """,
+            ).fetchall()
+            return [self._row_to_session(conn, row) for row in rows]
+
     def mark_stale_interrupted(self) -> int:
         count = 0
-        for session in self.list_recent(limit=100):
-            if session.status not in ("queued", "running"):
-                continue
+        for session in self._list_active():
             self.update(
                 session.id,
                 status="interrupted",

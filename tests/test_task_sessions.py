@@ -51,6 +51,21 @@ def test_task_session_store_marks_stale_running_interrupted(tmp_path: Path) -> N
     )
 
 
+def test_task_session_store_marks_all_stale_running_interrupted(tmp_path: Path) -> None:
+    store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    ids: list[str] = []
+    for index in range(105):
+        session = store.create(kind="bulk", title=f"task-{index}", metadata={})
+        store.update(session.id, status="running", percent=index % 100)
+        ids.append(session.id)
+
+    reopened = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    count = reopened.mark_stale_interrupted()
+
+    assert count == 105
+    assert all(reopened.get(session_id).status == "interrupted" for session_id in ids)  # type: ignore[union-attr]
+
+
 def test_default_task_store_path_is_named_tasks_db() -> None:
     from lorahub.api.task_sessions import default_task_store_path
 
