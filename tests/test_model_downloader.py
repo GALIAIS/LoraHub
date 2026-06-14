@@ -128,6 +128,84 @@ def test_huggingface_download_honours_explicit_paths(
     assert result.total_bytes == 20
 
 
+def test_huggingface_download_uses_env_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com/")
+    monkeypatch.delenv("HUGGINGFACE_HUB_ENDPOINT", raising=False)
+    endpoints: list[str | None] = []
+    siblings = [types.SimpleNamespace(rfilename="model.safetensors", size=7)]
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            endpoints.append(endpoint)
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        endpoints.append(kw.get("endpoint"))
+        out = Path(kw["local_dir"]) / kw["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x" * 7)
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    events: list[downloader.DownloadProgress] = []
+    downloader.download(
+        DownloadRequest(
+            source="huggingface",
+            repo_id="owner/name",
+            target_dir=tmp_path / "hf",
+        ),
+        events.append,
+    )
+
+    assert endpoints == ["https://hf-mirror.com", "https://hf-mirror.com"]
+    assert "https://hf-mirror.com" in events[0].message
+
+
+def test_huggingface_explicit_endpoint_wins_over_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_ENDPOINT", "https://env-mirror.example")
+    endpoints: list[str | None] = []
+    siblings = [types.SimpleNamespace(rfilename="model.safetensors", size=1)]
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            endpoints.append(endpoint)
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        endpoints.append(kw.get("endpoint"))
+        out = Path(kw["local_dir"]) / kw["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    downloader.download(
+        DownloadRequest(
+            source="huggingface",
+            repo_id="owner/name",
+            target_dir=tmp_path / "hf",
+            huggingface_endpoint="https://settings-mirror.example/",
+        )
+    )
+
+    assert endpoints == [
+        "https://settings-mirror.example",
+        "https://settings-mirror.example",
+    ]
+
+
 def test_list_remote_files_marks_default_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     files = [
         ("README.md", 10),

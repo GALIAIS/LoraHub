@@ -29,6 +29,7 @@ import pytest
 from lorahub.core.backends.anima_lora import AnimaLoraBackend
 from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap
 from lorahub.core.backends.anima_lora import installer as al_installer
+from lorahub.core.backends.anima_lora import models as al_models
 from lorahub.core.backends.anima_lora.parser import parse_line
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.config.schema import (
@@ -135,6 +136,35 @@ def test_installer_uv_sync_env_preserves_user_overrides(
         assert "TMP" not in env
     else:
         assert "TMPDIR" not in env
+
+
+def test_anima_model_download_uses_env_hf_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com/")
+    monkeypatch.setattr(al_models, "models_root", lambda: tmp_path / "models")
+    monkeypatch.setattr(al_models, "_link_anima_models_dir", lambda: None)
+    endpoints: list[str | None] = []
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        endpoints.append(kw.get("endpoint"))
+        cached = Path(kw["local_dir"]) / kw["filename"]
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b"model")
+        return str(cached)
+
+    fake_hub = type(
+        "FakeHub",
+        (),
+        {"hf_hub_download": staticmethod(fake_hf_hub_download)},
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    al_models.download_models(threads=1)
+
+    assert endpoints == ["https://hf-mirror.com"] * 3
+    for path in al_models.expected_files():
+        assert path.is_file()
 
 
 # --------------------------------------------------------------------------- #

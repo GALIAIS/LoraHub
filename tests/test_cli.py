@@ -210,6 +210,27 @@ def test_system_info_runs() -> None:
     assert "CPU:" in result.stdout
 
 
+def test_service_restart_reuses_previous_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`service restart` without --port should keep the last daemon bind."""
+    from lorahub.api.runtime_bind import RuntimeBind
+    from lorahub.cli import service as service_mod
+
+    calls: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(service_mod, "read_runtime_bind", lambda: RuntimeBind("0.0.0.0", 19090, 123))
+    monkeypatch.setattr(service_mod, "_read_pid", lambda: None)
+    monkeypatch.setattr(
+        service_mod,
+        "start",
+        lambda *, host, port, foreground: calls.append((host, port)),
+    )
+
+    result = runner.invoke(app, ["service", "restart"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == [("0.0.0.0", 19090)]
+
+
 # --------------------------------------------------------------------------- #
 # Localisation — verify zh mode actually swaps the strings.
 # --------------------------------------------------------------------------- #

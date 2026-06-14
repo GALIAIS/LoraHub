@@ -18,7 +18,6 @@ place — re-running the download is a no-op.
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from collections.abc import Callable
@@ -27,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lorahub.core.backends.anima_lora.bootstrap import default_repo_path
+from lorahub.core.net import hf_endpoint, proxy_env
 
 ProgressCallback = Callable[["DownloadEvent"], None]
 
@@ -140,12 +140,8 @@ def download_models(
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
-    endpoint = (huggingface_endpoint or "").rstrip("/") or None
+    endpoint = hf_endpoint(huggingface_endpoint)
     token = (huggingface_token or "").strip() or None
-    if proxy:
-        os.environ["HTTPS_PROXY"] = proxy
-        os.environ["HTTP_PROXY"] = proxy
-        os.environ["ALL_PROXY"] = proxy
 
     root = models_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -170,7 +166,10 @@ def download_models(
     if progress:
         progress(
             DownloadEvent(
-                f"hf: {total} anima model file(s) to download from {ANIMA_REPO_ID}",
+                (
+                    f"hf: {total} anima model file(s) to download from "
+                    f"{ANIMA_REPO_ID} <- {endpoint or 'huggingface.co'}"
+                ),
                 2,
                 0,
                 total,
@@ -187,7 +186,8 @@ def download_models(
             kw["endpoint"] = endpoint
         if token:
             kw["token"] = token
-        cached = hf_hub_download(**kw)
+        with proxy_env(proxy):
+            cached = hf_hub_download(**kw)
         # hf_hub_download writes under <local_dir>/split_files/<kind>/<name>.
         # Move the file to <local_dir>/<kind>/<name> so anima's trainer
         # picks it up at the expected path.

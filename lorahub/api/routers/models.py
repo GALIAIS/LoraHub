@@ -136,7 +136,6 @@ def _download_request_from_api(
         repo_id=req.repo_id,
         revision=req.revision,
         target_dir=target,
-        huggingface_endpoint=settings.huggingface_endpoint,
         huggingface_token=settings.huggingface_token,
         modelscope_token=settings.modelscope_token,
         threads=threads,

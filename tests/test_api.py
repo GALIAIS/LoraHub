@@ -121,6 +121,22 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "sd_scripts_path" in body["backend"]
 
 
+def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
+    from lorahub.api.routers import system as system_router
+
+    assert system_router._UPDATE_LOCK.acquire(blocking=False)
+    try:
+        r = client.post(
+            "/api/system/update",
+            json={"channel": "dev", "build": False, "restart": False},
+        )
+    finally:
+        system_router._UPDATE_LOCK.release()
+
+    assert r.status_code == 409
+    assert "already running" in r.text
+
+
 def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
     r = client.get("/api/configs/schema")
     assert r.status_code == 200
@@ -2177,10 +2193,12 @@ def test_models_download_starts_session_and_reports_progress(
 
     seen_threads: list[int] = []
     seen_paths: list[tuple[str, ...]] = []
+    seen_endpoints: list[str | None] = []
 
     def fake_download(req: Any, progress: Any = None) -> DownloadResult:
         seen_threads.append(req.threads)
         seen_paths.append(tuple(req.paths))
+        seen_endpoints.append(req.huggingface_endpoint)
         target = req.target_dir or tmp_path / "model"
         target.mkdir(parents=True, exist_ok=True)
         if progress:
@@ -2229,6 +2247,7 @@ def test_models_download_starts_session_and_reports_progress(
     assert status["events"][-1]["message"].startswith("download complete")
     assert seen_threads == [3]
     assert seen_paths == [("weights.bin",)]
+    assert seen_endpoints == [None]
 
 
 def test_models_files_lists_remote_selection(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from fnmatch import fnmatch
 from collections.abc import Callable
@@ -12,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+from lorahub.core.net import hf_endpoint, proxy_env
 
 ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
@@ -188,12 +189,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
-    endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
+    endpoint = hf_endpoint(req.huggingface_endpoint)
     token = (req.huggingface_token or "").strip() or None
-    if req.proxy:
-        os.environ["HTTPS_PROXY"] = req.proxy
-        os.environ["HTTP_PROXY"] = req.proxy
-        os.environ["ALL_PROXY"] = req.proxy
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
@@ -205,12 +202,13 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    remote_files = select_files(
-        _hf_list_files(req.repo_id, revision, endpoint, token=token),
-        paths=req.paths,
-        allow_patterns=req.allow_patterns,
-        ignore_patterns=req.ignore_patterns,
-    )
+    with proxy_env(req.proxy):
+        remote_files = select_files(
+            _hf_list_files(req.repo_id, revision, endpoint, token=token),
+            paths=req.paths,
+            allow_patterns=req.allow_patterns,
+            ignore_patterns=req.ignore_patterns,
+        )
     files = [(f.path, f.size) for f in remote_files if f.selected]
     bytes_total = sum(size for _, size in files)
     if remote_files and not files:
@@ -242,7 +240,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             kw["endpoint"] = endpoint
         if token:
             kw["token"] = token
-        hf_hub_download(**kw)
+        with proxy_env(req.proxy):
+            hf_hub_download(**kw)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
             size = (target / name).stat().st_size
@@ -342,10 +341,6 @@ def _ms_download_file(
 
 
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
-    if req.proxy:
-        os.environ["HTTPS_PROXY"] = req.proxy
-        os.environ["HTTP_PROXY"] = req.proxy
-        os.environ["ALL_PROXY"] = req.proxy
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
     _emit(
@@ -355,7 +350,8 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    listed = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    with proxy_env(req.proxy):
+        listed = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
     by_path: dict[str, dict[str, Any]] = {}
     for it in listed:
         path = _normalise_path(str(it.get("Path") or it.get("FilePath") or ""))
@@ -395,7 +391,8 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
         if not path:
             return "", 0
         out = target / path
-        return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
+        with proxy_env(req.proxy):
+            return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(submit_file, it) for it in files]
@@ -450,12 +447,14 @@ def download(req: DownloadRequest, progress: ProgressCallback | None = None) -> 
 def list_remote_files(req: DownloadRequest) -> list[RemoteFile]:
     """List remote repo files and mark the default download selection."""
     if req.source == "huggingface":
-        endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
+        endpoint = hf_endpoint(req.huggingface_endpoint)
         token = (req.huggingface_token or "").strip() or None
         revision = "main" if req.revision == "master" else req.revision
-        files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
+        with proxy_env(req.proxy):
+            files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
     elif req.source == "modelscope":
-        items = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+        with proxy_env(req.proxy):
+            items = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
         files = [
             (
                 str(it.get("Path") or it.get("FilePath") or ""),

@@ -374,8 +374,8 @@ def test_apply_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     su.apply(channel="main", build=False, progress=emit)
 
     fetched = any(c[:2] == ["git", "fetch"] for c in calls)
-    checked_out_main = any(c == ["git", "checkout", "origin/main"] for c in calls)
-    assert fetched and checked_out_main, calls
+    checked_out_dev = any(c == ["git", "checkout", "origin/dev"] for c in calls)
+    assert fetched and checked_out_dev, calls
     assert any(p == "done" for p, _, _ in events)
 
 
@@ -411,7 +411,7 @@ def test_apply_with_force_passes_through_detached_head(
 
     # Should warn (not raise) and reach the checkout step.
     su.apply(channel="main", build=False, force=True, progress=emit)
-    assert any(c == ["git", "checkout", "--force", "origin/main"] for c in calls), calls
+    assert any(c == ["git", "checkout", "--force", "origin/dev"] for c in calls), calls
 
 
 def test_apply_force_clean_excludes_user_owned_paths(
@@ -485,6 +485,7 @@ def test_apply_raises_when_not_a_git_checkout(monkeypatch: pytest.MonkeyPatch) -
 def test_resolve_version_prefers_hatch_vcs(monkeypatch: pytest.MonkeyPatch) -> None:
     """When _version.py is materialised, hatch-vcs wins."""
     import lorahub
+    monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.5.1.post3+gabc1234")
     v, src = su._resolve_version()
     assert v == "0.5.1.post3+gabc1234"
@@ -501,6 +502,7 @@ def test_resolve_version_falls_through_placeholders(
     other sources.
     """
     import lorahub
+    monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.0.0+unknown")
     # Block dist metadata too so we definitely land on the changelog branch.
     monkeypatch.setattr(
@@ -521,6 +523,7 @@ def test_resolve_version_fallback_when_all_sources_fail(
 ) -> None:
     """Nothing on disk → ``0.0.0+unknown`` + source ``fallback``."""
     import lorahub
+    monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.0.0")
     monkeypatch.setattr(su, "_read_changelog_version", lambda: None)
     import importlib.metadata as md
@@ -603,3 +606,105 @@ def test_stream_subprocess_decodes_utf8_glyphs(tmp_path: Path) -> None:
     body = "\n".join(msg for _, _, msg in captured)
     assert "✓" in body, f"check mark lost in decode: {body!r}"
     assert "构建前端" in body, f"CJK lost in decode: {body!r}"
+
+
+# --------------------------------------------------------------------- #
+# Runtime bind persistence used by the in-app updater restart path
+# --------------------------------------------------------------------- #
+
+
+def test_runtime_bind_round_trips_and_preserves_legacy_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from lorahub.api import runtime_bind
+
+    monkeypatch.setattr(runtime_bind, "user_state_path", lambda *_args: tmp_path)
+
+    runtime_bind.write_runtime_bind("0.0.0.0", 19090, pid=1234)
+    bind = runtime_bind.read_runtime_bind()
+    assert bind is not None
+    assert bind.host == "0.0.0.0"
+    assert bind.port == 19090
+    assert bind.pid == 1234
+    assert runtime_bind.port_file().read_text(encoding="utf-8").strip() == "19090"
+
+    runtime_bind.clear_runtime_bind(keep_bind=True)
+    preserved = runtime_bind.read_runtime_bind()
+    assert preserved is not None
+    assert preserved.host == "0.0.0.0"
+    assert preserved.port == 19090
+    assert preserved.pid is None
+
+
+def test_update_restart_args_preserve_recorded_uvicorn_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import runtime_bind
+    from lorahub.api.runtime_bind import RuntimeBind
+
+    monkeypatch.setattr(
+        runtime_bind,
+        "read_runtime_bind",
+        lambda: RuntimeBind(host="0.0.0.0", port=18765, pid=42),
+    )
+
+    args = runtime_bind.restart_args(
+        "/opt/venv/bin/python",
+        [
+            "-m",
+            "uvicorn",
+            "lorahub.api.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+        ],
+    )
+    assert args == [
+        "/opt/venv/bin/python",
+        "-m",
+        "uvicorn",
+        "lorahub.api.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "18765",
+    ]
+
+
+def test_update_restart_args_append_missing_uvicorn_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import runtime_bind
+    from lorahub.api.runtime_bind import RuntimeBind
+
+    monkeypatch.setattr(
+        runtime_bind,
+        "read_runtime_bind",
+        lambda: RuntimeBind(host="127.0.0.1", port=19001, pid=None),
+    )
+
+    args = runtime_bind.restart_args(
+        "/opt/venv/bin/python",
+        ["-m", "uvicorn", "lorahub.api.app:app"],
+    )
+    assert args[-4:] == ["--host", "127.0.0.1", "--port", "19001"]
+
+
+def test_update_restart_args_leave_non_uvicorn_commands_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import runtime_bind
+    from lorahub.api.runtime_bind import RuntimeBind
+
+    monkeypatch.setattr(
+        runtime_bind,
+        "read_runtime_bind",
+        lambda: RuntimeBind(host="0.0.0.0", port=18765, pid=42),
+    )
+
+    args = runtime_bind.restart_args(
+        "/opt/venv/bin/python",
+        ["-m", "lorahub", "serve", "--port", "8123"],
+    )
+    assert args == ["/opt/venv/bin/python", "-m", "lorahub", "serve", "--port", "8123"]

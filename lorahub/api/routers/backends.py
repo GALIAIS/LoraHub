@@ -212,7 +212,6 @@ def start_anima_model_download() -> dict[str, Any]:
         global _anima_active_session
         try:
             _download_anima_models(
-                huggingface_endpoint=settings.huggingface_endpoint,
                 huggingface_token=settings.huggingface_token,
                 proxy=settings.download_proxy,
                 threads=3,
