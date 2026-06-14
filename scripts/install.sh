@@ -276,8 +276,14 @@ else
         --fetch-retries=2 \
         --fetch-retry-mintimeout=5000 \
         --fetch-retry-maxtimeout=20000 \
-        2>&1 | tee _npm_install.log
-    npm_rc=${PIPESTATUS[0]}
+        > _npm_install.log 2>&1 &
+    npm_pid=$!
+    while kill -0 "$npm_pid" 2>/dev/null; do
+        echo "  npm ci still running ... ($(date '+%H:%M:%S'))"
+        sleep 15
+    done
+    wait "$npm_pid"
+    npm_rc=$?
     cd "$ROOT"
     if [ "$npm_rc" -ne 0 ]; then
         echo "  [ERROR] npm ci failed; tail of web/_npm_install.log:"

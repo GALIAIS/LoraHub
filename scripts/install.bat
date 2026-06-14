@@ -282,9 +282,8 @@ if "%NEEDS_NPM_INSTALL%"=="0" (
   for /f "delims=" %%r in ('npm.cmd config get registry 2^>nul') do set "NPM_REGISTRY_NOW=%%r"
   echo   npm registry: !NPM_REGISTRY_NOW!
   echo   running npm ci (verbose log: web\_npm_install.log) ...
-  call npm.cmd ci --verbose --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=2 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=20000 > _npm_install.log 2>&1
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath 'npm.cmd' -ArgumentList @('ci','--verbose','--no-audit','--no-fund','--fetch-timeout=60000','--fetch-retries=2','--fetch-retry-mintimeout=5000','--fetch-retry-maxtimeout=20000') -RedirectStandardOutput '_npm_install.log' -RedirectStandardError '_npm_install.log.err' -PassThru -NoNewWindow; while (-not $p.HasExited) { Write-Host ('  npm ci still running ... (' + (Get-Date -Format 'HH:mm:ss') + ')'); Start-Sleep -Seconds 15 }; if (Test-Path '_npm_install.log.err') { Get-Content '_npm_install.log.err' | Add-Content '_npm_install.log'; Remove-Item '_npm_install.log.err' -Force }; exit $p.ExitCode"
   set "NPM_RC=!errorlevel!"
-  type _npm_install.log
   popd
   if not "!NPM_RC!"=="0" (
     echo   [ERROR] npm ci failed.
