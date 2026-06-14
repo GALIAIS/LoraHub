@@ -292,6 +292,7 @@ def start_anima_model_download() -> dict[str, Any]:
             )
             _download_anima_models(
                 source=session.source,
+                huggingface_endpoint=settings.huggingface_endpoint,
                 huggingface_token=settings.huggingface_token,
                 modelscope_token=settings.modelscope_token,
                 proxy=settings.download_proxy,

@@ -2389,6 +2389,43 @@ def test_models_download_starts_session_and_reports_progress(
     assert task["metadata"]["ignore_patterns"] == ["README*"]
 
 
+def test_models_download_uses_saved_huggingface_endpoint(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadResult
+
+    settings = app_module._settings_store.load()
+    settings.huggingface_endpoint = "https://hf-mirror.com/"
+    app_module._settings_store.save(settings)
+    seen_endpoints: list[str | None] = []
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        seen_endpoints.append(req.huggingface_endpoint)
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=1, total_bytes=1)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    response = client.post(
+        "/api/models/download",
+        json={
+            "source": "huggingface",
+            "repo_id": "owner/name",
+            "target_dir": str(tmp_path / "downloaded"),
+        },
+    )
+    assert response.status_code == 202
+
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen_endpoints:
+        time.sleep(0.01)
+    assert seen_endpoints == ["https://hf-mirror.com/"]
+
+
 def test_models_download_latest_idle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from lorahub.api.routers import models as models_router
 
@@ -2527,6 +2564,36 @@ def test_anima_model_download_defaults_to_modelscope(
     while time.time() < deadline and not seen:
         time.sleep(0.01)
     assert seen and seen[0][0] == "modelscope"
+
+
+def test_anima_model_download_uses_saved_huggingface_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import backends as backends_router
+
+    settings = app_module._settings_store.load()
+    settings.huggingface_endpoint = "https://hf-mirror.com/"
+    app_module._settings_store.save(settings)
+    seen: list[str | None] = []
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        seen.append(kwargs.get("huggingface_endpoint"))
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen:
+        time.sleep(0.01)
+    assert seen == ["https://hf-mirror.com/"]
 
 
 def test_anima_model_download_status_survives_memory_clear(
