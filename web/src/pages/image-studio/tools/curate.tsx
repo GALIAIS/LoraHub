@@ -245,7 +245,7 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
       }),
   })
 
-  const targetOk = Number(shortEdge) >= 64 && Number(shortEdge) <= 4096
+  const targetOk = Number(shortEdge) >= 128 && Number(shortEdge) <= 4096
 
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
@@ -267,13 +267,13 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
               value={shortEdge}
               onChange={(e) => setShortEdge(e.target.value)}
               className="h-8 w-28 text-xs font-mono"
-              min={64}
+              min={128}
               max={4096}
             />
             <span className="text-muted-foreground">px</span>
             {!targetOk && (
               <span className="text-red-600 text-[10px] ml-auto">
-                需在 64–4096 之间
+                需在 128–4096 之间
               </span>
             )}
           </div>
