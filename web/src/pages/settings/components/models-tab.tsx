@@ -516,6 +516,17 @@ export function ModelsTab() {
             </div>
           )}
 
+          {current?.status === "failed" && (
+            <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3 space-y-1.5">
+              <div className="text-sm font-semibold text-destructive">
+                下载失败
+              </div>
+              <div className="text-xs font-mono text-destructive whitespace-pre-wrap break-words">
+                {current.error ?? latest?.message ?? "未知错误"}
+              </div>
+            </div>
+          )}
+
           {current?.events.length ? (
             <div className="rounded-[4px] border border-border/60 bg-muted/25 max-h-56 overflow-y-auto">
               <ul className="divide-y divide-border/40">
@@ -527,7 +538,15 @@ export function ModelsTab() {
                       </span>
                       <span className="font-mono">{event.percent?.toFixed(1) ?? "--"}%</span>
                     </div>
-                    <div className="mt-0.5 text-muted-foreground break-words">{event.message}</div>
+                    <div
+                      className={`mt-0.5 break-words ${
+                        event.message.includes("failed")
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {event.message}
+                    </div>
                   </li>
                 ))}
               </ul>
