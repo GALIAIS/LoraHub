@@ -15,6 +15,7 @@ from lorahub.api import app as app_module
 from lorahub.api.dataset_files import _resolve_under_roots
 from lorahub.api.task_sessions import (
     TaskEvent,
+    TaskSession,
     TaskSessionStore,
     default_task_store_path,
 )
@@ -24,6 +25,13 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 _KIND_IMAGE_STUDIO_TAGGING = "image_studio_tagging"
+_ISTaggingStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 def _task_store() -> TaskSessionStore:
@@ -39,13 +47,54 @@ def _persisted_task_result(session_id: str) -> dict[str, Any] | None:
         task = _task_store().get(session_id)
     except Exception:
         return None
-    if (
-        task is None
-        or task.kind != _KIND_IMAGE_STUDIO_TAGGING
-        or not isinstance(task.result, dict)
-    ):
+    if task is None or task.kind != _KIND_IMAGE_STUDIO_TAGGING:
         return None
-    return task.result
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    return _task_to_status_snapshot(task)
+
+
+def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
+    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+        return None
+    metadata = task.metadata
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "tagger": str(metadata.get("tagger") or "wd14"),
+        "model_id": str(metadata.get("model_id") or ""),
+        "device": str(metadata.get("device") or "auto"),
+        "general": 0.35,
+        "character": 0.85,
+        "joytag_threshold": 0.5,
+        "overwrite": bool(metadata.get("overwrite") or False),
+        "recursive": bool(metadata.get("recursive") or False),
+        "include_character": True,
+        "underscores": False,
+        "status": (
+            task.status
+            if task.status in {"interrupted", "failed", "canceled"}
+            else "running"
+        ),
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "image": event.payload.get("image"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "active_provider": "",
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 class ISTaggingStartInput(BaseModel):
@@ -77,7 +126,7 @@ class _ISTaggingSession:
     include_character: bool
     underscores: bool
     task_kind: str | None = None
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _ISTaggingStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -306,7 +355,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
             )
         except InterruptedError:
             with session.lock:
-                session.status = "failed"
+                session.status = "canceled"
                 session.error = "stopped by user"
                 session.finished_at = _time.time()
             session.push("stopped by user")

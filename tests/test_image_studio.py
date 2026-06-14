@@ -739,6 +739,38 @@ def test_image_studio_tagging_status_reads_persisted_result_after_memory_clear(
     assert body["written"] == 3
 
 
+def test_image_studio_tagging_status_recovers_interrupted_task(
+    client: TestClient, sample_dir: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    task = app_module._task_session_store.create(
+        kind="image_studio_tagging",
+        title="wd14:dataset",
+        metadata={
+            "path": str(sample_dir),
+            "tagger": "wd14",
+            "model_id": "wd14-vit-v2",
+            "device": "cpu",
+            "overwrite": True,
+            "recursive": False,
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=52)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._is_tagging_sessions.clear()
+
+    recovered = client.get(f"/api/image-studio/tagging/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 52
+    assert body["error"] == "task interrupted by server restart"
+
+
 def test_annotation_crud_via_api(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     r = client.put("/api/image-studio/annotations", json={

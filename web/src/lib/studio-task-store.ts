@@ -260,6 +260,7 @@ function mapSmartCaptionStatus(s: string): StudioTaskStatus {
       return "completed"
     case "canceled":
     case "cancelled":
+    case "interrupted":
       return "cancelled"
     case "failed":
       return "failed"
@@ -274,6 +275,10 @@ function mapWd14Status(s: string): StudioTaskStatus {
       return "running"
     case "succeeded":
       return "completed"
+    case "canceled":
+    case "cancelled":
+    case "interrupted":
+      return "cancelled"
     case "failed":
       return "failed"
     default:
