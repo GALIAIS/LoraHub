@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from platformdirs import user_state_path
+
 
 TaskStatus = Literal[
     "queued",
@@ -25,6 +27,12 @@ TaskStatus = Literal[
     "canceled",
     "interrupted",
 ]
+
+
+def default_task_store_path() -> Path:
+    path = user_state_path("lorahub", "lorahub") / "tasks.sqlite3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @dataclass(frozen=True, slots=True)

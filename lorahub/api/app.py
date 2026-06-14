@@ -74,6 +74,7 @@ from lorahub.api.session_store import SessionStore, default_session_store_path
 from lorahub.api.settings import SettingsStore
 from lorahub.api.state import JobState
 from lorahub.api.sweep_store import SweepStore, default_sweep_store_path
+from lorahub.api.task_sessions import TaskSessionStore, default_task_store_path
 from lorahub.core.events import EventType, TrainingEvent
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ _image_studio_store: ImageStudioStore | None = None
 # templates). Shares the SQLite file with the studio store but lives in
 # disjoint tables so a tag/template edit can't corrupt per-image rows.
 _image_studio_library: ImageStudioLibrary | None = None
+_task_session_store: TaskSessionStore | None = None
 # Error registry: every uncaught FastAPI exception, every job failure,
 # every preflight 422, every frontend POST /api/error-reports lands here.
 # See lorahub.api.error_reports + .error_reporter for the funnel.
@@ -171,11 +173,19 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     # Sibling stores: sweeps and sessions. Each gets its own SQLite file
     # so a corrupt or aggressively-locked DB on one side doesn't take
     # the rest of the API offline.
-    global _sweep_store, _session_store, _ai_store, _image_studio_store, _image_studio_library, _error_report_store, _error_upstream_dispatcher  # noqa: PLW0603
+    global _sweep_store, _session_store, _ai_store, _image_studio_store, _image_studio_library, _task_session_store, _error_report_store, _error_upstream_dispatcher  # noqa: PLW0603
     if _sweep_store is None:
         _sweep_store = SweepStore(default_sweep_store_path())
     if _session_store is None:
         _session_store = SessionStore(default_session_store_path())
+    if _task_session_store is None:
+        _task_session_store = TaskSessionStore(default_task_store_path())
+        interrupted = _task_session_store.mark_stale_interrupted()
+        if interrupted:
+            log.info(
+                "marked %d background task session(s) interrupted",
+                interrupted,
+            )
     if _ai_store is None:
         _ai_store = AIStore(default_ai_store_path())
     if _error_report_store is None:

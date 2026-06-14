@@ -49,3 +49,9 @@ def test_task_session_store_marks_stale_running_interrupted(tmp_path: Path) -> N
     assert reopened.get(first.id).events[-1].message.startswith(  # type: ignore[union-attr]
         "task interrupted",
     )
+
+
+def test_default_task_store_path_is_named_tasks_db() -> None:
+    from lorahub.api.task_sessions import default_task_store_path
+
+    assert default_task_store_path().name == "tasks.sqlite3"
