@@ -21,7 +21,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from dataclasses import dataclass
+import threading
+import time as _time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -30,9 +33,34 @@ from fastapi import APIRouter, HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_BATCH_RESIZE = "image_studio_batch_resize"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
+
+
+def _persisted_task_result(session_id: str, kind: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != kind or not isinstance(task.result, dict):
+        return None
+    return task.result
 
 
 # --------------------------------------------------------------------------- #
@@ -389,22 +417,175 @@ _PIL_RESAMPLE = {
 }
 
 
-@router.post("/curate/batch-resize")
-def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
-    """Resample images so their short edge equals ``target_short_edge``.
+@dataclass
+class _BatchResizeSession:
+    session_id: str
+    dataset_path: str
+    total: int
+    status: str = "running"
+    processed: int = 0
+    resampled: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[dict[str, str]] = field(default_factory=list)
+    skipped_count: int = 0
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
 
-    Aspect ratio is preserved; long edge scales by the same factor.
-    Backups land in .workbench/backups/.
-    """
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 100.0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "dataset_path": self.dataset_path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 100.0
+                ),
+                "last_image": self.last_image,
+                "resampled": list(self.resampled),
+                "resampled_count": len(self.resampled),
+                "skipped_count": self.skipped_count,
+                "failed": list(self.failed),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+    def add_resampled(self, item: dict[str, Any], image_name: str) -> None:
+        with self._lock:
+            self.resampled.append(item)
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"resized {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed, "item": item},
+        )
+
+    def add_skipped(self, image_name: str) -> None:
+        with self._lock:
+            self.skipped_count += 1
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"skipped {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed},
+        )
+
+    def add_failed(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.failed.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="succeeded" if status == "succeeded" else "failed",
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def fail(self, msg: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="error", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="failed",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+
+_batch_resize_sessions: dict[str, _BatchResizeSession] = {}
+_batch_resize_lock = threading.Lock()
+
+
+def _batch_resize_targets(req: BatchResizeRequest, root: Path) -> list[Path]:
+    if req.paths:
+        return [_resolve_under(req.dataset_path, p) for p in req.paths]
+    return list(_walk_images(root, req.recursive))
+
+
+def _resize_images(
+    req: BatchResizeRequest,
+    targets: list[Path],
+    *,
+    on_resampled: Callable[[dict[str, Any], str], None] | None = None,
+    on_skipped: Callable[[str], None] | None = None,
+    on_failed: Callable[[str, str, str], None] | None = None,
+) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
-
-    targets: list[Path] = []
-    if req.paths:
-        targets = [_resolve_under(req.dataset_path, p) for p in req.paths]
-    else:
-        targets = list(_walk_images(root, req.recursive))
 
     resampled: list[dict[str, Any]] = []
     skipped: list[str] = []
@@ -418,6 +599,8 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
                 short = min(w, h)
                 if short == req.target_short_edge:
                     skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
                     continue
                 if short > req.target_short_edge:
                     # Downscale — always allowed.
@@ -426,6 +609,8 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
                     # Upscale — gated by the flag.
                     if not req.upscale:
                         skipped.append(str(src))
+                        if on_skipped is not None:
+                            on_skipped(src.name)
                         continue
                 scale = req.target_short_edge / short
                 new_w = max(1, round(w * scale))
@@ -434,15 +619,18 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
                 new_img.load()
             _backup_file(req.dataset_path, src)
             new_img.save(src)
-            resampled.append(
-                {
-                    "path": str(src),
-                    "from": [w, h],
-                    "to": [new_w, new_h],
-                },
-            )
+            item = {
+                "path": str(src),
+                "from": [w, h],
+                "to": [new_w, new_h],
+            }
+            resampled.append(item)
+            if on_resampled is not None:
+                on_resampled(item, src.name)
         except (UnidentifiedImageError, OSError) as exc:
             failed.append({"path": str(src), "error": str(exc)})
+            if on_failed is not None:
+                on_failed(str(src), str(exc), src.name)
 
     return {
         "resampled": resampled,
@@ -450,6 +638,87 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
         "skipped_count": len(skipped),
         "failed": failed,
     }
+
+
+@router.post("/curate/batch-resize")
+def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
+    """Resample images so their short edge equals ``target_short_edge``.
+
+    Aspect ratio is preserved; long edge scales by the same factor.
+    Backups land in .workbench/backups/.
+    """
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    return _resize_images(req, _batch_resize_targets(req, root))
+
+
+@router.post("/curate/batch-resize/start", status_code=202)
+def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
+    """Start a persistent background batch-resize session."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    targets = _batch_resize_targets(req, root)
+    task = _task_store().create(
+        kind=_KIND_BATCH_RESIZE,
+        title=f"batch-resize:{root.name}",
+        metadata={
+            "dataset_path": str(root),
+            "paths_count": len(req.paths or []),
+            "target_short_edge": req.target_short_edge,
+            "filter": req.filter,
+            "upscale": req.upscale,
+            "recursive": req.recursive,
+        },
+    )
+    session = _BatchResizeSession(
+        session_id=task.id,
+        dataset_path=str(root),
+        total=len(targets),
+    )
+    session._append_task_event("batch resize queued", percent=0)
+    with _batch_resize_lock:
+        _batch_resize_sessions[session.session_id] = session
+
+    def run() -> None:
+        try:
+            _task_store().update(session.session_id, status="running", percent=0)
+            _resize_images(
+                req,
+                targets,
+                on_resampled=session.add_resampled,
+                on_skipped=session.add_skipped,
+                on_failed=session.add_failed,
+            )
+            session.finish("succeeded")
+        except Exception as exc:  # noqa: BLE001
+            session.fail(str(exc))
+
+    threading.Thread(
+        target=run,
+        name=f"is-batch-resize-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
+    return {
+        "session_id": session.session_id,
+        "total": len(targets),
+        "status_url": (
+            f"/api/image-studio/curate/batch-resize/status/{session.session_id}"
+        ),
+    }
+
+
+@router.get("/curate/batch-resize/status/{session_id}")
+def curate_batch_resize_status(session_id: str) -> dict[str, Any]:
+    with _batch_resize_lock:
+        session = _batch_resize_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _persisted_task_result(session_id, _KIND_BATCH_RESIZE)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(404, "batch-resize session not found")
 
 
 # --------------------------------------------------------------------------- #

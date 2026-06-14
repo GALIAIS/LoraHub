@@ -855,6 +855,63 @@ def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> 
     assert "favourite" in r.json()["errors"][0]["error"]
 
 
+def test_batch_resize_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    response = client.post(
+        "/api/image-studio/curate/batch-resize/start",
+        json={
+            "dataset_path": str(sample_dir),
+            "target_short_edge": 128,
+            "filter": "bilinear",
+            "upscale": True,
+            "recursive": False,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 3
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/batch-resize/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_batch_resize",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert status["resampled_count"] == 3
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["dataset_path"] == str(sample_dir)
+    assert latest["result"]["resampled_count"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    curate_router._batch_resize_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/curate/batch-resize/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["resampled_count"] == 3
+
+
 # --------------------------------------------------------------------------- #
 # Library — store unit tests
 # --------------------------------------------------------------------------- #

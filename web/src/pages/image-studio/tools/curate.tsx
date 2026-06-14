@@ -4,7 +4,7 @@
  * 隔离区直接复用 QuarantinePanel；其他三个轻量自实现。所有写入操作都
  * 自动备份到 .workbench/backups/，UI 上只在按钮 hover / 描述里提一下。
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Calendar,
@@ -18,8 +18,10 @@ import { toast } from "sonner"
 import {
   imageStudioAutoRotate,
   imageStudioBackupsList,
-  imageStudioBatchResize,
+  getImageStudioBatchResizeSession,
+  getLatestTask,
   imageStudioRestoreBackup,
+  startImageStudioBatchResize,
   type BackupEntry,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -110,10 +112,40 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
   const [filter, setFilter] = useState<"lanczos" | "bicubic" | "bilinear">("lanczos")
   const [upscale, setUpscale] = useState(false)
   const [recursive, setRecursive] = useState(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+
+  const latestResizeTask = useQuery({
+    queryKey: ["tasks", "latest", "image_studio_batch_resize"],
+    queryFn: () => getLatestTask("image_studio_batch_resize"),
+    retry: false,
+    staleTime: 10_000,
+  })
+
+  useEffect(() => {
+    if (sessionId != null) return
+    const latest = latestResizeTask.data
+    if (
+      latest?.metadata?.dataset_path === datasetPath &&
+      latest.status === "running"
+    ) {
+      setSessionId(latest.id)
+    }
+  }, [datasetPath, latestResizeTask.data, sessionId])
+
+  const sessionQuery = useQuery({
+    queryKey: ["image-studio", "batch-resize-session", sessionId],
+    queryFn: () => getImageStudioBatchResizeSession(sessionId!),
+    enabled: sessionId != null,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1000 : false,
+  })
+
+  const session = sessionQuery.data
+  const running = session?.status === "running"
 
   const mutation = useMutation({
     mutationFn: () =>
-      imageStudioBatchResize({
+      startImageStudioBatchResize({
         dataset_path: datasetPath,
         target_short_edge: Number(shortEdge),
         filter,
@@ -121,14 +153,11 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
         recursive,
       }),
     onSuccess: (data) => {
+      setSessionId(data.session_id)
       toast.success(
-        `重采样完成：${data.resampled_count} 张，跳过 ${data.skipped_count} 张`,
-        {
-          description:
-            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
-        },
+        `已启动批量缩放：${data.total} 张`,
+        { description: "后台进行，刷新后可恢复进度" },
       )
-      qc.invalidateQueries({ queryKey: ["image-studio"] })
     },
     onError: (err) =>
       toast.error("批量缩放失败", {
@@ -197,16 +226,68 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
           <Button
             size="sm"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !targetOk}
+            disabled={mutation.isPending || running || !targetOk}
             className="w-full gap-1"
           >
-            {mutation.isPending ? (
+            {mutation.isPending || running ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
               <Wrench className="size-3" />
             )}
-            应用批量缩放
+            {running ? "批量缩放中…" : "应用批量缩放"}
           </Button>
+          {session && (
+            <div className="rounded-[4px] border border-border/60 bg-muted/25 p-2 text-[11px]">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-medium">
+                  {session.status === "succeeded"
+                    ? "批量缩放完成"
+                    : session.status === "failed"
+                      ? "批量缩放失败"
+                      : "批量缩放进行中"}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {session.processed} / {session.total}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    session.status === "failed"
+                      ? "bg-destructive"
+                      : "bg-primary",
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, session.percent))}%` }}
+                />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>已重采样 {session.resampled_count}</span>
+                <span>跳过 {session.skipped_count}</span>
+                <span>失败 {session.failed.length}</span>
+                {session.last_image && <span>最近 {session.last_image}</span>}
+              </div>
+              {session.error && (
+                <div className="mt-1 text-destructive">{session.error}</div>
+              )}
+              {session.status !== "running" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px]"
+                  onClick={() => {
+                    setSessionId(null)
+                    qc.invalidateQueries({ queryKey: ["image-studio"] })
+                    qc.invalidateQueries({
+                      queryKey: ["tasks", "latest", "image_studio_batch_resize"],
+                    })
+                  }}
+                >
+                  关闭结果
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>

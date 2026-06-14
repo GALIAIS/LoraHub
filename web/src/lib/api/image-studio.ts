@@ -814,6 +814,48 @@ export async function imageStudioBatchResize(body: {
   })
 }
 
+export interface ImageStudioBatchResizeSession {
+  session_id: string
+  dataset_path: string
+  status: string
+  processed: number
+  total: number
+  percent: number
+  last_image: string
+  resampled: { path: string; from: [number, number]; to: [number, number] }[]
+  resampled_count: number
+  skipped_count: number
+  failed: { path: string; error: string }[]
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export async function startImageStudioBatchResize(body: {
+  dataset_path: string
+  paths?: string[]
+  target_short_edge: number
+  filter?: "lanczos" | "bicubic" | "bilinear"
+  upscale?: boolean
+  recursive?: boolean
+}): Promise<{ session_id: string; total: number; status_url: string }> {
+  return http<{ session_id: string; total: number; status_url: string }>(
+    "/image-studio/curate/batch-resize/start",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function getImageStudioBatchResizeSession(
+  id: string,
+): Promise<ImageStudioBatchResizeSession> {
+  return http<ImageStudioBatchResizeSession>(
+    `/image-studio/curate/batch-resize/status/${encodeURIComponent(id)}`,
+  )
+}
+
 export async function imageStudioBatchByIssue(body: {
   dataset_path: string
   issue_kinds: AuditIssueKind[]
