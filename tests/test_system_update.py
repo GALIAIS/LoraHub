@@ -81,6 +81,25 @@ def _capturing_emit() -> tuple[list[tuple[str, str, str]], Callable[[str, str, s
     return events, emit
 
 
+def test_update_type_payloads_round_trip() -> None:
+    from lorahub.api.system_update_types import CacheBlob, UpdateInfo
+
+    info = UpdateInfo(
+        channel="dev",
+        current="1.0.0",
+        latest="1.0.1",
+        update_available=True,
+        release_url="https://example.invalid/release",
+        is_dirty=True,
+    )
+    blob = CacheBlob(data={"dev": info.to_dict()}, updated_at=12.5)
+
+    assert info.to_dict()["channel"] == "dev"
+    assert info.to_dict()["is_dirty"] is True
+    assert blob.data["dev"]["latest"] == "1.0.1"
+    assert blob.updated_at == 12.5
+
+
 # --------------------------------------------------------------------- #
 # _detect_detached_head
 # --------------------------------------------------------------------- #
