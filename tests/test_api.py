@@ -65,6 +65,7 @@ def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistr
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api import app as app_mod
     from lorahub.api.settings import SettingsStore
+    from lorahub.api.task_sessions import TaskSessionStore
 
     # Isolate the settings store so tests don't read or write the real
     # user-data file. Patch on the imported `app` module — that's the symbol
@@ -85,6 +86,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(app_mod, "_sweep_store", None)
     monkeypatch.setattr(app_mod, "_session_store", None)
     monkeypatch.setattr(app_mod, "_ai_store", None)
+    monkeypatch.setattr(app_mod, "_task_session_store", TaskSessionStore(tmp_path / "tasks.sqlite3"))
     monkeypatch.chdir(tmp_path)
     return TestClient(app_mod.app)
 
@@ -2267,6 +2269,53 @@ def test_models_download_latest_idle(client: TestClient, monkeypatch: pytest.Mon
     body = r.json()
     assert body["status"] == "idle"
     assert body["session_id"] is None
+
+
+def test_models_download_latest_survives_memory_clear(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadProgress, DownloadResult
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        if progress:
+            progress(
+                DownloadProgress(
+                    message="persisted progress",
+                    percent=33,
+                    files_done=1,
+                    files_total=3,
+                ),
+            )
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=1, total_bytes=10)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    response = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(tmp_path / "downloaded")},
+    )
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    latest: dict[str, Any] = {}
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        latest = client.get("/api/models/download/latest").json()
+        if latest.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    models_router._sessions.clear()
+    models_router._latest_session_id = None
+
+    recovered = client.get("/api/models/download/latest").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["events"][-2]["message"] == "persisted progress"
 
 
 def test_models_download_defaults_to_modelscope(

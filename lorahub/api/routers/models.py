@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -13,6 +12,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSession,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.models.downloader import (
     DEFAULT_ALLOW_PATTERNS,
     DEFAULT_IGNORE_PATTERNS,
@@ -24,6 +29,7 @@ from lorahub.core.models.downloader import (
 )
 
 router = APIRouter(prefix="/api")
+_KIND_MODEL_DOWNLOAD = "model_download"
 
 
 class DownloadModelRequest(BaseModel):
@@ -65,11 +71,26 @@ class _DownloadSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def add_progress(self, event: DownloadProgress) -> None:
+        payload = asdict(event)
+        ts = time.time()
         with self.lock:
             if event.percent is not None:
                 self.percent = max(self.percent, min(100, float(event.percent)))
-            self.events.append(asdict(event) | {"ts": time.time()})
+            self.events.append(payload | {"ts": ts})
             self.events = self.events[-200:]
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level="info",
+                    message=event.message,
+                    percent=event.percent,
+                    payload=payload,
+                    ts=ts,
+                ),
+            )
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -96,6 +117,14 @@ _sessions_lock = threading.Lock()
 _latest_session_id: str | None = None
 
 
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
+
+
 def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[str, Any]:
     return {
         "source": req.source,
@@ -117,9 +146,12 @@ def _store_session(session: _DownloadSession) -> None:
 def _get_session(session_id: str) -> _DownloadSession:
     with _sessions_lock:
         session = _sessions.get(session_id)
-    if session is None:
+    if session is not None:
+        return session
+    task = _task_store().get(session_id)
+    if task is None or task.kind != _KIND_MODEL_DOWNLOAD:
         raise HTTPException(status_code=404, detail="download session not found")
-    return session
+    return _session_from_task(task)
 
 
 def _latest_session() -> _DownloadSession | None:
@@ -128,7 +160,45 @@ def _latest_session() -> _DownloadSession | None:
             session = _sessions.get(_latest_session_id)
             if session is not None:
                 return session
-        return max(_sessions.values(), key=lambda s: s.started_at, default=None)
+        session = max(_sessions.values(), key=lambda s: s.started_at, default=None)
+    if session is not None:
+        return session
+    task = _task_store().latest(_KIND_MODEL_DOWNLOAD)
+    if task is None:
+        return None
+    return _session_from_task(task)
+
+
+def _session_from_task(task: TaskSession) -> _DownloadSession:
+    metadata = task.metadata
+    status: Literal["running", "succeeded", "failed"]
+    if task.status == "succeeded":
+        status = "succeeded"
+    elif task.status in {"failed", "interrupted", "canceled"}:
+        status = "failed"
+    else:
+        status = "running"
+
+    return _DownloadSession(
+        session_id=task.id,
+        source=str(metadata.get("source") or "modelscope"),
+        repo_id=str(metadata.get("repo_id") or ""),
+        revision=str(metadata.get("revision") or "master"),
+        target_dir=metadata.get("target_dir"),
+        threads=int(metadata.get("threads") or 4),
+        paths=list(metadata.get("paths") or []),
+        status=status,
+        percent=task.percent,
+        events=[
+            (dict(event.payload) if event.payload else {})
+            | {"message": event.message, "percent": event.percent, "ts": event.ts}
+            for event in task.events
+        ],
+        result=task.result,
+        error=task.error,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
 
 
 def _validate_repo_id(repo_id: str) -> None:
@@ -197,8 +267,20 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
 
     target = Path(req.target_dir).expanduser().resolve() if req.target_dir else None
     download_req = _download_request_from_api(req, target=target, threads=req.threads)
+    task = _task_store().create(
+        kind=_KIND_MODEL_DOWNLOAD,
+        title=f"{req.source}:{req.repo_id}",
+        metadata={
+            "source": req.source,
+            "repo_id": req.repo_id,
+            "revision": req.revision,
+            "target_dir": str(target) if target else None,
+            "threads": req.threads,
+            "paths": list(req.paths),
+        },
+    )
     session = _DownloadSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         source=req.source,
         repo_id=req.repo_id,
         revision=req.revision,
@@ -211,18 +293,37 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
 
     def run() -> None:
         try:
+            _task_store().update(
+                session.session_id,
+                status="running",
+                percent=session.percent,
+            )
             result = download(download_req, session.add_progress)
+            result_payload = _result_payload(req, result)
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100
-                session.result = _result_payload(req, result)
+                session.result = result_payload
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=result_payload,
+                finished=True,
+            )
             session.add_progress(DownloadProgress(message="download complete", percent=100))
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                finished=True,
+            )
             session.add_progress(DownloadProgress(message=f"download failed: {exc}"))
 
     thread = threading.Thread(target=run, name=f"model-download-{session.session_id[:8]}", daemon=True)
