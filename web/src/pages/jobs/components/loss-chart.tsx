@@ -15,7 +15,7 @@
  *     train/val gap band when both curves are present.
  *   - Fullscreen modal for detailed inspection.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CSSProperties } from "react"
 import type { LossTooltip } from "./loss-chart-widgets"
 import { cn } from "@/lib/utils"
@@ -35,6 +35,7 @@ import {
   trendCopy,
   type LossChartProps,
 } from "./loss-chart-model"
+import { useLossChartInteraction } from "./loss-chart-interaction"
 export type { ChartBand, ChartMarker, LossSeries } from "./loss-chart-model"
 
 export function LossChart(props: LossChartProps) {
@@ -84,55 +85,6 @@ function LossChartCore({
     })
   }, [series])
 
-  // ----- View state: x range, log/linear Y axis, gesture mode --------------
-  // We hydrate from sessionStorage on first mount when persistKey is set,
-  // so reloading / re-entering the workbench keeps the user's zoom + log
-  // toggle without polluting the URL.
-  const storageKey = persistKey ? `lorahub.loss.${persistKey}` : null
-  const [yLog, setYLog] = useState<boolean>(() => {
-    if (!storageKey) return false
-    try {
-      const raw = window.sessionStorage.getItem(storageKey)
-      if (raw) return JSON.parse(raw)?.yLog === true
-    } catch {
-      // Ignore corrupt storage.
-    }
-    return false
-  })
-  const [selectMode, setSelectMode] = useState(false)
-  // Null = auto extent. Setting a range puts the chart into "user-zoomed"
-  // mode; live data appended afterwards no longer rescales the view.
-  const [viewRange, setViewRange] = useState<[number, number] | null>(() => {
-    if (!storageKey) return null
-    try {
-      const raw = window.sessionStorage.getItem(storageKey)
-      if (!raw) return null
-      const parsed = JSON.parse(raw)
-      const xr = parsed?.xRange
-      if (Array.isArray(xr) && xr.length === 2 && xr.every(Number.isFinite))
-        return [xr[0], xr[1]]
-    } catch {
-      // Ignore corrupt storage.
-    }
-    return null
-  })
-
-  // Persist on change.
-  useEffect(() => {
-    if (!storageKey) return
-    try {
-      window.sessionStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          xRange: viewRange,
-          yLog,
-        }),
-      )
-    } catch {
-      // Quota exceeded or disabled — silently skip.
-    }
-  }, [storageKey, viewRange, yLog])
-
   // ----- Resampled series (independent of view) ---------------------------
   const prepared = useMemo(() => {
     return series.map((s) => ({
@@ -161,9 +113,45 @@ function LossChartCore({
     return { xMin, xMax }
   }, [visibleSeries])
 
-  const effectiveX = viewRange ?? (fullExtent ? [fullExtent.xMin, fullExtent.xMax] : [0, 1])
-  const xMin = effectiveX[0]
-  const xMax = effectiveX[1]
+  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
+  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
+
+  const baseRange = fullExtent
+    ? ([fullExtent.xMin, fullExtent.xMax] as [number, number])
+    : ([0, 1] as [number, number])
+
+  const {
+    hoverX,
+    onDoubleClick,
+    onPointerDown,
+    onPointerLeave,
+    onPointerMove,
+    onPointerUp,
+    onWheel,
+    reset,
+    selectMode,
+    selectRect,
+    setSelectMode,
+    setYLog,
+    svgRef,
+    viewRange,
+    viewXMax,
+    viewXMin,
+    yLog,
+    zoomBy,
+  } = useLossChartInteraction({
+    persistKey,
+    fullExtent,
+    xMin: baseRange[0],
+    xMax: baseRange[1],
+    innerW,
+  })
+
+  const viewInverseX = useCallback(
+    (px: number) =>
+      viewXMin + ((px - PAD_LEFT) / innerW) * (viewXMax - viewXMin),
+    [viewXMin, viewXMax, innerW],
+  )
 
   // Y extent depends on the X clip (so zooming X recomputes Y).
   const yExtent = useMemo(() => {
@@ -171,7 +159,7 @@ function LossChartCore({
     let hi = -Infinity
     for (const s of visibleSeries) {
       for (const p of s.points) {
-        if (p.step < xMin || p.step > xMax) continue
+        if (p.step < viewXMin || p.step > viewXMax) continue
         if (yLog && p.loss <= 0) continue
         if (p.loss < lo) lo = p.loss
         if (p.loss > hi) hi = p.loss
@@ -181,7 +169,7 @@ function LossChartCore({
     // drawn behind the series gets clipped at the top/bottom edge.
     for (const b of bands) {
       for (const p of b.points) {
-        if (p.step < xMin || p.step > xMax) continue
+        if (p.step < viewXMin || p.step > viewXMax) continue
         if (yLog && (p.lo <= 0 || p.hi <= 0)) continue
         if (p.lo < lo) lo = p.lo
         if (p.hi > hi) hi = p.hi
@@ -200,19 +188,12 @@ function LossChartCore({
     }
     const pad = (hi - lo) * 0.08
     return { lo: lo - pad, hi: hi + pad }
-  }, [visibleSeries, bands, xMin, xMax, yLog])
-
-  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
-  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
+  }, [visibleSeries, bands, viewXMin, viewXMax, yLog])
 
   const xScale = useCallback(
     (step: number) =>
-      PAD_LEFT + ((step - xMin) / (xMax - xMin || 1)) * innerW,
-    [xMin, xMax, innerW],
-  )
-  const inverseX = useCallback(
-    (px: number) => xMin + ((px - PAD_LEFT) / innerW) * (xMax - xMin),
-    [xMin, xMax, innerW],
+      PAD_LEFT + ((step - viewXMin) / (viewXMax - viewXMin || 1)) * innerW,
+    [viewXMin, viewXMax, innerW],
   )
   const yScale = useCallback(
     (loss: number) => {
@@ -247,130 +228,15 @@ function LossChartCore({
   const xTicks = useMemo(() => {
     const out: number[] = []
     for (let i = 0; i <= 4; i += 1)
-      out.push(xMin + ((xMax - xMin) * i) / 4)
+      out.push(viewXMin + ((viewXMax - viewXMin) * i) / 4)
     return out
-  }, [xMin, xMax])
-
-  // ----- Pointer / gesture handling ---------------------------------------
-  const svgRef = useRef<SVGSVGElement | null>(null)
-  const [hoverX, setHoverX] = useState<number | null>(null)
-  // Pan in progress when set; tracks last pointer X in viewBox coords.
-  const panRef = useRef<{ lastVX: number } | null>(null)
-  // Box-select rectangle in viewBox coords.
-  const [selectRect, setSelectRect] = useState<
-    { x0: number; x1: number } | null
-  >(null)
-
-  function clientToViewBox(e: React.PointerEvent | React.WheelEvent): number {
-    const svg = svgRef.current
-    if (!svg) return 0
-    const rect = svg.getBoundingClientRect()
-    return ((e.clientX - rect.left) / rect.width) * VIEW_W
-  }
-
-  function setRangeClamped(lo: number, hi: number) {
-    if (!fullExtent) return
-    const span = hi - lo
-    if (span <= 0) return
-    // Clamp to full extent; refuse to zoom in narrower than 0.5% of full
-    // range — beyond that the chart becomes useless and the user has
-    // no way to read tick labels.
-    const fullSpan = fullExtent.xMax - fullExtent.xMin
-    const minSpan = fullSpan * 0.005
-    if (span < minSpan) return
-    let nlo = Math.max(fullExtent.xMin, lo)
-    let nhi = Math.min(fullExtent.xMax, hi)
-    if (nhi - nlo < minSpan) {
-      const center = (nlo + nhi) / 2
-      nlo = center - minSpan / 2
-      nhi = center + minSpan / 2
-    }
-    if (nlo === fullExtent.xMin && nhi === fullExtent.xMax) {
-      setViewRange(null)
-    } else {
-      setViewRange([nlo, nhi])
-    }
-  }
-
-  function zoomBy(factor: number, anchorVX?: number) {
-    const lo = xMin
-    const hi = xMax
-    const anchor =
-      anchorVX != null ? inverseX(anchorVX) : (lo + hi) / 2
-    const span = (hi - lo) / factor
-    setRangeClamped(anchor - span * ((anchor - lo) / (hi - lo || 1)), anchor + span * ((hi - anchor) / (hi - lo || 1)))
-  }
-
-  function reset() {
-    setViewRange(null)
-    setSelectRect(null)
-  }
-
-  function onWheel(e: React.WheelEvent<SVGSVGElement>) {
-    if (!fullExtent) return
-    e.preventDefault()
-    const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-    zoomBy(factor, clientToViewBox(e))
-  }
-
-  function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.button !== 0) return
-    const vx = clientToViewBox(e)
-    const insideChart = vx >= PAD_LEFT && vx <= VIEW_W - PAD_RIGHT
-    if (!insideChart) return
-    if (selectMode || e.shiftKey) {
-      setSelectRect({ x0: vx, x1: vx })
-      ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-      return
-    }
-    panRef.current = { lastVX: vx }
-    ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-  }
-
-  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    const vx = clientToViewBox(e)
-    setHoverX(vx)
-    if (selectRect) {
-      setSelectRect({ x0: selectRect.x0, x1: vx })
-      return
-    }
-    if (panRef.current) {
-      const dx = vx - panRef.current.lastVX
-      panRef.current.lastVX = vx
-      // Convert pixel dx to data dx and pan.
-      const dataDx = -(dx / innerW) * (xMax - xMin)
-      setRangeClamped(xMin + dataDx, xMax + dataDx)
-    }
-  }
-
-  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
-    panRef.current = null
-    if (selectRect) {
-      const x0 = Math.min(selectRect.x0, selectRect.x1)
-      const x1 = Math.max(selectRect.x0, selectRect.x1)
-      // Only commit if the user actually dragged some distance.
-      if (Math.abs(x1 - x0) > 4) {
-        setRangeClamped(inverseX(x0), inverseX(x1))
-      }
-      setSelectRect(null)
-    }
-    ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
-  }
-
-  function onPointerLeave() {
-    setHoverX(null)
-    panRef.current = null
-  }
-
-  function onDoubleClick() {
-    reset()
-  }
+  }, [viewXMin, viewXMax])
 
   // ----- Crosshair / tooltip data point picking ---------------------------
   const tooltip = useMemo<LossTooltip | null>(() => {
     if (hoverX == null) return null
     if (hoverX < PAD_LEFT || hoverX > VIEW_W - PAD_RIGHT) return null
-    const targetStep = inverseX(hoverX)
+    const targetStep = viewInverseX(hoverX)
     const items: Array<{
       seriesId: string
       label: string
@@ -410,7 +276,7 @@ function LossChartCore({
       items[0],
     ).step
     return { step, items, anchorX: xScale(step) }
-  }, [hoverX, visibleSeries, inverseX, xScale, yScale])
+  }, [hoverX, visibleSeries, viewInverseX, xScale, yScale])
 
   // ----- Train / val gap band --------------------------------------------
   const gapBand = useMemo(() => {
@@ -569,7 +435,7 @@ function LossChartCore({
           {hasData &&
             bands.map((b) => {
               const pts = b.points.filter(
-                (p) => p.step >= xMin && p.step <= xMax,
+                (p) => p.step >= viewXMin && p.step <= viewXMax,
               )
               if (pts.length < 2) return null
               const polyPoints = [
@@ -608,7 +474,7 @@ function LossChartCore({
           {/* Markers */}
           {hasData &&
             markers
-              .filter((m) => m.step >= xMin && m.step <= xMax)
+              .filter((m) => m.step >= viewXMin && m.step <= viewXMax)
               .map((m, i) => {
                 const x = xScale(m.step)
                 const stroke = m.color ?? "var(--chart-3)"
@@ -641,7 +507,7 @@ function LossChartCore({
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 points={s.points
-                  .filter((p) => p.step >= xMin && p.step <= xMax)
+                  .filter((p) => p.step >= viewXMin && p.step <= viewXMax)
                   .map((p) => `${xScale(p.step)},${yScale(p.loss)}`)
                   .join(" ")}
               />
@@ -707,8 +573,8 @@ function LossChartCore({
         markersCount={markers.length}
         xLabel={xLabel}
         zoomedIn={zoomedIn}
-        xMin={xMin}
-        xMax={xMax}
+        xMin={viewXMin}
+        xMax={viewXMax}
         fullXMax={fullExtent?.xMax}
         onToggleSeries={toggleSeries}
         onReset={reset}
