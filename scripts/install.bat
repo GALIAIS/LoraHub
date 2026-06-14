@@ -44,6 +44,8 @@ set "TOOLS_DIR=%CD%\.lorahub"
 set "UV_DIR=%TOOLS_DIR%\uv"
 set "PY_DIR=%TOOLS_DIR%\python"
 set "NODE_DIR=%CD%\.node"
+set "NODE_VERSION=20.19.0"
+set "NODE_MIN_VERSION=20.19.0"
 
 if not defined LORAHUB_NODE_MIRROR set "LORAHUB_NODE_MIRROR=https://nodejs.org/dist"
 
@@ -217,14 +219,19 @@ if exist "%NODE_DIR%\node.exe" (
   if exist "%NODE_DIR%\npm.cmd" (
     set "PATH=%NODE_DIR%;%PATH%"
     for /f "delims=" %%v in ('"%NODE_DIR%\node.exe" --version 2^>nul') do set "NODE_VER=%%v"
-    echo   OK Node.js %NODE_VER% (portable, cached)
-    goto :node_done
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "if ([version]('!NODE_VER:v=!') -ge [version]('%NODE_MIN_VERSION%')) { exit 0 } else { exit 1 }"
+    if not errorlevel 1 (
+      echo   OK Node.js !NODE_VER! (portable, cached)
+      goto :node_done
+    )
+    echo   Cached Node.js !NODE_VER! is below required v%NODE_MIN_VERSION%; reinstalling ...
+    rmdir /s /q "%NODE_DIR%"
   )
 )
 
 echo   Downloading portable Node.js 20 (mirror: %LORAHUB_NODE_MIRROR%) ...
 if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
 if errorlevel 1 (
   echo   [ERROR] Failed to download Node.js.
   goto :fail
@@ -234,7 +241,7 @@ if errorlevel 1 (
   echo   [ERROR] Failed to extract Node.js.
   goto :fail
 )
-rem Flatten: move contents from node-v20.18.1-win-x64\ up to .node\
+rem Flatten: move contents from node-v%NODE_VERSION%-win-x64\ up to .node\
 for /d %%d in ("%NODE_DIR%\node-v*") do (
   xcopy /E /Y /Q "%%d\*" "%NODE_DIR%\" >nul
   rd /s /q "%%d"
