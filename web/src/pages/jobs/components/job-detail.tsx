@@ -12,26 +12,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Button } from "@/components/ui/button"
-import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { PathDisplay } from "@/components/path-display"
 import { toast } from "sonner"
-import {
-  BarChart3,
-  Square,
-  RefreshCw,
-  FolderOpen,
-  Archive,
-  Skull,
-  Pause,
-  Play,
-  Pencil,
-  GitBranch,
-} from "lucide-react"
+import { Archive, Skull } from "lucide-react"
 
-import { StateBadge } from "../../dashboard"
 import { TERMINAL_STATES } from "../utils"
 import { expectedTotalSteps } from "../utils"
 import { OverviewTab } from "./overview-tab"
@@ -40,6 +25,7 @@ import { FilesTab } from "./files-tab"
 import { RunSummaryCard } from "./run-summary-card"
 import { ResumeWithEditDialog } from "./resume-with-edit-dialog"
 import { CloneWithStateDialog } from "./clone-with-state-dialog"
+import { JobDetailHeader } from "./job-detail-header"
 
 type TabKey = "overview" | "events" | "files"
 
@@ -309,192 +295,29 @@ export function JobDetail({
 
   return (
     <div className="flex flex-col min-h-0 h-full">
-      <header className="px-7 py-5 border-b border-border/60 flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1.5">
-            {data && <StateBadge state={data.state} paused={isPaused} />}
-            <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              {stream.status === "open"
-                ? "实时已连接"
-                : stream.status === "closed"
-                  ? "已断开"
-                  : "等待中"}
-            </span>
-          </div>
-          <div className="text-base font-semibold tracking-tight font-mono truncate">
-            {jobId}
-          </div>
-          {data && (
-            <PathDisplay
-              path={data.workspace}
-              tailSegments={3}
-              block
-              className="text-xs text-muted-foreground mt-1"
-            />
-          )}
-          {actionError && (
-            <div className="text-[11px] text-destructive mt-2 break-all">
-              {actionError}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              navigate(
-                showCompareJumpButton
-                  ? `/analysis/compare?ids=${compareIds.join(",")}`
-                  : `/analysis/${jobId}`,
-              )
-            }
-            title={
-              showCompareJumpButton
-                ? "在分析工作台中对比所选任务"
-                : "打开训练分析工作台"
-            }
-          >
-            <BarChart3 className="size-3" />{" "}
-            {showCompareJumpButton ? "对比分析" : "深入分析"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onReveal}
-            disabled={!data || busy !== null}
-            title="在文件管理器中打开工作区" aria-label="在文件管理器中打开工作区"
-          >
-            {busy === "reveal" ? (
-              <Spinner className="size-3" />
-            ) : (
-              <FolderOpen className="size-3" />
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRerun}
-            disabled={!data || busy !== null}
-          >
-            {busy === "rerun" ? (
-              <Spinner className="size-3" />
-            ) : (
-              <RefreshCw className="size-3" />
-            )}{" "}
-            再次运行
-          </Button>
-          {isTerminal && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCloneOpen(true)}
-              disabled={busy !== null || !data?.config_snapshot}
-              title="从某个 saved state 派生新任务（保留 optimizer / lr 进度，不影响原任务）"
-            >
-              <GitBranch className="size-3" /> 派生
-            </Button>
-          )}
-          {isTerminal && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setArchiveOpen(true)}
-              disabled={busy !== null}
-            >
-              {busy === "archive" ? (
-                <Spinner className="size-3" />
-              ) : (
-                <Archive className="size-3" />
-              )}{" "}
-              归档
-            </Button>
-          )}
-          {isResumable && (
-            <>
-              <Button
-                variant="default"
-                size="sm"
-                onClick={onResume}
-                disabled={busy !== null}
-                title="从最新 state + safetensors 续训（保留 optimizer / lr 进度）"
-              >
-                {busy === "resume" ? (
-                  <Spinner className="size-3" />
-                ) : (
-                  <Play className="size-3" />
-                )}{" "}
-                {isPaused ? "继续训练" : "恢复训练"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResumeEditOpen(true)}
-                disabled={busy !== null || !data?.config_snapshot}
-                title="先编辑 lr / dropTokens / 数据集等再续训（权重相关字段会被锁）"
-              >
-                <Pencil className="size-3" /> 编辑
-              </Button>
-            </>
-          )}
-          {isLive && (
-            <>
-              {/* Pause is only meaningful once the trainer subprocess
-                  is actually stepping — preparing means anima_lora is
-                  still in resize / cache_latents / cache_text_embeddings,
-                  with no checkpoint to resume from yet. SIGINT-ing
-                  during preprocess just kills the worker without leaving
-                  resumable state on disk; users should "取消" instead.
-                  Gate the button on state === "running" only. */}
-              {data?.state === "running" ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onPause}
-                  disabled={busy !== null}
-                  title="发送 SIGINT，等待训练写出最新 state 后停止；之后点「继续训练」从此处续"
-                >
-                  {busy === "pause" ? (
-                    <Spinner className="size-3" />
-                  ) : (
-                    <Pause className="size-3" />
-                  )}{" "}
-                  暂停
-                </Button>
-              ) : null}
-              <Button variant="destructive" size="sm" onClick={onCancel}>
-                <Square className="size-3" /> 取消
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setKillOpen(true)}
-                title="强制 SIGKILL 进程组（用于卡死的训练任务）"
-                disabled={busy !== null || !data?.pid}
-              >
-                {busy === "kill" ? (
-                  <Spinner className="size-3" />
-                ) : (
-                  <Skull className="size-3" />
-                )}{" "}
-                强制终止
-              </Button>
-            </>
-          )}
-          {!isLive && data?.state === "interrupted" && data.pid && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setKillOpen(true)}
-              title="任务标记为 interrupted 但 PID 仍可能存活，可强制清理"
-              disabled={busy !== null}
-            >
-              <Skull className="size-3" /> 强制终止
-            </Button>
-          )}
-        </div>
-      </header>
-
+      <JobDetailHeader
+        actionError={actionError}
+        busy={busy}
+        compareIds={compareIds}
+        data={data}
+        isLive={isLive}
+        isPaused={isPaused}
+        isResumable={isResumable}
+        isTerminal={isTerminal}
+        jobId={jobId}
+        showCompareJumpButton={showCompareJumpButton}
+        streamStatus={stream.status}
+        onArchiveOpen={() => setArchiveOpen(true)}
+        onCancel={onCancel}
+        onCloneOpen={() => setCloneOpen(true)}
+        onKillOpen={() => setKillOpen(true)}
+        onNavigateAnalysis={navigate}
+        onPause={onPause}
+        onResume={onResume}
+        onResumeEditOpen={() => setResumeEditOpen(true)}
+        onReveal={onReveal}
+        onRerun={onRerun}
+      />
       <div className="px-7 pt-4">
         <RunSummaryCard
           job={data}
