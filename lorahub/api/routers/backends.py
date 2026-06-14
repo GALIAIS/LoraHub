@@ -42,6 +42,7 @@ from lorahub.core.backends.registry import list_backends
 
 router = APIRouter(prefix="/api")
 _KIND_ANIMA_MODEL_DOWNLOAD = "anima_model_download"
+_KIND_MSVC_INSTALL = "msvc_install"
 
 
 def _task_store() -> TaskSessionStore:
@@ -386,6 +387,7 @@ class _MsvcInstallSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def append_log(self, line: str) -> None:
+        ts = time.time()
         with self.lock:
             self.log.append(line)
             # Cap the buffer — winget can emit hundreds of progress
@@ -393,6 +395,13 @@ class _MsvcInstallSession:
             # the snapshot small enough to JSON-encode cheaply.
             if len(self.log) > 200:
                 self.log = self.log[-200:]
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(level="info", message=line, ts=ts),
+            )
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -409,6 +418,25 @@ class _MsvcInstallSession:
 _msvc_sessions: dict[str, _MsvcInstallSession] = {}
 _msvc_sessions_lock = threading.Lock()
 _msvc_active_session: str | None = None
+
+
+def _msvc_session_from_task(task: TaskSession) -> _MsvcInstallSession:
+    status: Literal["running", "succeeded", "failed"]
+    if task.status == "succeeded":
+        status = "succeeded"
+    elif task.status in {"failed", "interrupted", "canceled"}:
+        status = "failed"
+    else:
+        status = "running"
+
+    return _MsvcInstallSession(
+        session_id=task.id,
+        status=status,
+        log=[event.message for event in task.events],
+        error=task.error,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
 
 
 @router.post("/backends/anima_lora/install-msvc", status_code=202)
@@ -458,7 +486,12 @@ def start_msvc_install() -> dict[str, Any]:
                     },
                 )
 
-    session = _MsvcInstallSession(session_id=uuid.uuid4().hex)
+    task = _task_store().create(
+        kind=_KIND_MSVC_INSTALL,
+        title="anima_lora MSVC Build Tools",
+        metadata={"cmd": list(cmd)},
+    )
+    session = _MsvcInstallSession(session_id=task.id)
     session.append_log("queued: " + " ".join(cmd))
     with _msvc_sessions_lock:
         _msvc_sessions[session.session_id] = session
@@ -468,6 +501,11 @@ def start_msvc_install() -> dict[str, Any]:
         global _msvc_active_session
         import subprocess as _sp  # noqa: PLC0415
         try:
+            _task_store().update(
+                session.session_id,
+                status="running",
+                percent=0,
+            )
             proc = _sp.Popen(
                 cmd,
                 stdout=_sp.PIPE,
@@ -491,11 +529,34 @@ def start_msvc_install() -> dict[str, Any]:
                     session.status = "failed"
                     session.error = f"winget exited with code {rc}"
                 session.finished_at = time.time()
+            if rc == 0:
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result={"returncode": rc},
+                    finished=True,
+                )
+            else:
+                _task_store().update(
+                    session.session_id,
+                    status="failed",
+                    percent=0,
+                    error=f"winget exited with code {rc}",
+                    result={"returncode": rc},
+                    finished=True,
+                )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                finished=True,
+            )
             session.append_log(f"failed: {exc}")
         finally:
             with _msvc_sessions_lock:
@@ -535,6 +596,11 @@ def msvc_install_status() -> dict[str, Any]:
                 default=None,
             )
             if recent is None:
+                task = _task_store().latest(_KIND_MSVC_INSTALL)
+                if task is not None:
+                    return _msvc_session_from_task(task).snapshot() | {
+                        "msvc": detection,
+                    }
                 return {"status": "idle", "msvc": detection}
             return recent.snapshot() | {"msvc": detection}
         session = _msvc_sessions.get(sid)

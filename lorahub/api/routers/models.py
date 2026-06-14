@@ -300,6 +300,7 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
             )
             result = download(download_req, session.add_progress)
             result_payload = _result_payload(req, result)
+            session.add_progress(DownloadProgress(message="download complete", percent=100))
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100
@@ -312,7 +313,6 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
                 result=result_payload,
                 finished=True,
             )
-            session.add_progress(DownloadProgress(message="download complete", percent=100))
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"

@@ -2435,6 +2435,57 @@ def test_anima_model_download_status_survives_memory_clear(
     assert recovered["events"][-1]["message"] == "persisted anima progress"
 
 
+def test_anima_msvc_install_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+    from lorahub.core.backends.anima_lora.msvc import DetectionResult
+
+    class FakeProc:
+        stdout = io.StringIO("installing build tools\ninstall complete\n")
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        backends_router._anima_msvc,
+        "detect",
+        lambda: DetectionResult(installed=False, reason="missing"),
+    )
+    monkeypatch.setattr(
+        backends_router._anima_msvc,
+        "install_command",
+        lambda: ["winget", "install", "buildtools"],
+    )
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *args, **kwargs: FakeProc(),
+    )
+
+    response = client.post("/api/backends/anima_lora/install-msvc")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/install-msvc/status").json()
+        if status.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    backends_router._msvc_sessions.clear()
+    backends_router._msvc_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/install-msvc/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["log"][-1] == "install complete"
+    assert recovered["msvc"]["ok"] is False
+
+
 def test_tasks_latest_list_and_get_routes(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
