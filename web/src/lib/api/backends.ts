@@ -161,7 +161,7 @@ export interface BootstrapEvent {
 }
 
 export interface BootstrapStatus {
-  status: "idle" | "running" | "succeeded" | "failed"
+  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
   session_id: string | null
   events: BootstrapEvent[]
   // Present when a session has been started; absent on the synthetic

@@ -86,6 +86,14 @@ const STEP_PLANS: Record<BackendId, StepDef[]> = {
 
 type StepState = "pending" | "running" | "succeeded" | "failed"
 
+function isTerminalStatus(status: string): boolean {
+  return ["succeeded", "failed", "canceled", "interrupted"].includes(status)
+}
+
+function isRetryableStatus(status: string): boolean {
+  return ["failed", "canceled", "interrupted"].includes(status)
+}
+
 function computeStepStates(
   plan: StepDef[],
   events: BootstrapEvent[],
@@ -109,7 +117,7 @@ function computeStepStates(
           states[i] = "succeeded"
         }
       }
-    } else if (status === "failed") {
+    } else if (isRetryableStatus(status)) {
       states[current] = "failed"
     }
   } else if (status === "succeeded") {
@@ -644,7 +652,7 @@ export function InstallTab() {
   // When an install transitions to a terminal state, refresh the backend
   // catalog so the user sees their new checkout immediately.
   useEffect(() => {
-    if (status === "succeeded" || status === "failed") {
+    if (isTerminalStatus(status)) {
       qc.invalidateQueries({ queryKey: ["settings"] })
       qc.invalidateQueries({ queryKey: ["backends"] })
       qc.invalidateQueries({ queryKey: ["health"] })
@@ -758,7 +766,7 @@ export function InstallTab() {
               )}
               {isRunning
                 ? "安装中…"
-                : status === "failed"
+                : isRetryableStatus(status)
                   ? "重试安装"
                   : descriptor?.ready
                     ? "重新安装"
@@ -883,11 +891,13 @@ export function InstallTab() {
                 failed={failedCount > 0}
               />
               <StepList plan={plan} states={states} />
-              {status === "failed" && lastError && (
+              {isRetryableStatus(status) && lastError && (
                 <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive break-all flex items-start gap-2">
                   <XCircle className="size-4 shrink-0 mt-0.5" />
                   <div>
-                    <div className="font-semibold not-italic">安装失败</div>
+                    <div className="font-semibold not-italic">
+                      {status === "interrupted" ? "安装中断" : "安装失败"}
+                    </div>
                     <div className="mt-0.5 whitespace-pre-wrap">
                       {lastError.message}
                     </div>
