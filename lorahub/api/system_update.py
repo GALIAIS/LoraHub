@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -1218,7 +1219,13 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     if npm is None:
         emit("build", "warn", "npm not found; skipping SPA rebuild.")
         return
-    rc = _stream_subprocess([npm, "run", "build"], cwd=cwd / "web", phase="build", emit=emit)
+    rc = _stream_subprocess(
+        [npm, "run", "build"],
+        cwd=cwd / "web",
+        phase="build",
+        emit=emit,
+        env=_npm_env(Path(npm)),
+    )
     if rc != 0:
         msg = f"npm run build failed (exit {rc})"
         raise RuntimeError(msg)
@@ -1263,16 +1270,31 @@ def _find_npm(repo: Path) -> str | None:
     import shutil  # noqa: PLC0415
     import sys as _sys  # noqa: PLC0415
 
+    env_node_dir = os.environ.get("NODE_DIR")
+    if env_node_dir:
+        cand = Path(env_node_dir) / ("npm.cmd" if _sys.platform == "win32" else "bin/npm")
+        if cand.is_file():
+            return str(cand)
     if _sys.platform == "win32":
         cand = repo / ".node" / "npm.cmd"
         if cand.is_file():
             return str(cand)
     else:
-        cand = repo / ".node" / "bin" / "npm"
-        if cand.is_file():
-            return str(cand)
+        for cand in (
+            repo / ".node" / "bin" / "npm",
+            Path("/root/autodl-tmp/opt/node20/bin/npm"),
+        ):
+            if cand.is_file():
+                return str(cand)
     found = shutil.which("npm")
     return found if found else None
+
+
+def _npm_env(npm: Path) -> dict[str, str]:
+    """Ensure npm lifecycle scripts can find the matching node binary."""
+    env = os.environ.copy()
+    env["PATH"] = f"{npm.parent}{os.pathsep}{env.get('PATH', '')}"
+    return env
 
 
 def _stream_subprocess(
@@ -1281,6 +1303,7 @@ def _stream_subprocess(
     cwd: Path,
     phase: str,
     emit: ProgressCallback,
+    env: dict[str, str] | None = None,
 ) -> int:
     """Run ``cmd`` and forward stdout+stderr lines through ``emit``.
 
@@ -1301,6 +1324,7 @@ def _stream_subprocess(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=env,
     )
     assert proc.stdout is not None  # noqa: S101
     for raw in proc.stdout:
