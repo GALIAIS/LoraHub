@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -19,9 +18,24 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.dataset.captions import CaptionPipeline
 
 router = APIRouter(prefix="/api")
+_KIND_CAPTIONS_NORMALIZE = "captions_normalize"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 class NormalizeCaptionsRequest(BaseModel):
@@ -51,6 +65,7 @@ class NormalizeCaptionsRequest(BaseModel):
 class _CaptionsSession:
     session_id: str
     path: str
+    task_kind: str | None = None
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -68,18 +83,32 @@ class _CaptionsSession:
         percent: float | None = None,
         file: str | None = None,
     ) -> None:
+        ts = time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {
-                    "ts": time.time(),
-                    "message": message,
-                    "percent": self.percent,
-                    "file": file,
-                }
-            )
+            event = {
+                "ts": ts,
+                "message": message,
+                "percent": self.percent,
+                "file": file,
+            }
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -173,12 +202,26 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {target}")
 
-    session = _CaptionsSession(session_id=uuid.uuid4().hex, path=str(target))
+    task = _task_store().create(
+        kind=_KIND_CAPTIONS_NORMALIZE,
+        title=f"captions normalize:{target.name}",
+        metadata={
+            "path": str(target),
+            "recursive": req.recursive,
+            "overwrite": req.overwrite,
+        },
+    )
+    session = _CaptionsSession(
+        session_id=task.id,
+        path=str(target),
+        task_kind=_KIND_CAPTIONS_NORMALIZE,
+    )
     session.push("normalize queued", percent=0)
     _store(session)
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             pipeline = _build_pipeline(req)
             session.push("scanning captions", percent=2)
 
@@ -204,12 +247,26 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
                 session.percent = 100
                 session.finished_at = time.time()
             session.push(f"done — rewrote {written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot() | {"changed": written},
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"normalize failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         finally:
             _persist_captions_snapshot(session)
 

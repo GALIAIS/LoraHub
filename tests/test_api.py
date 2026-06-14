@@ -3055,6 +3055,55 @@ def test_captions_normalize_runs_session_and_rewrites_files(
     assert (data / "a.txt").read_text(encoding="utf-8") == "blue hair"
 
 
+def test_captions_normalize_writes_task_session(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "captions"
+    data.mkdir()
+    (data / "a.txt").write_text("old", encoding="utf-8")
+
+    class FakePipeline:
+        def transform_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            overwrite: bool,
+            progress: Any,
+        ) -> int:
+            target = directory / "a.txt"
+            target.write_text("new", encoding="utf-8")
+            progress(target, 1, 1)
+            return 1
+
+    monkeypatch.setattr(captions_router, "_build_pipeline", lambda _req: FakePipeline())
+
+    response = client.post("/api/captions/normalize", json={"path": str(data)})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=captions_normalize")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(data)
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 1
+    assert latest["events"][-1]["message"].startswith("done")
+
+
 def test_captions_normalize_status_unknown_returns_404(client: TestClient) -> None:
     r = client.get("/api/captions/normalize/does-not-exist")
     assert r.status_code == 404
