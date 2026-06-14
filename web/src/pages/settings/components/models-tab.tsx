@@ -230,6 +230,8 @@ export function ModelsTab() {
     if (!current) return "尚未开始下载"
     if (current.status === "running") return latest?.message ?? "下载进行中"
     if (current.status === "failed") return current.error ?? "下载失败"
+    if (current.status === "canceled") return current.error ?? "下载已取消"
+    if (current.status === "interrupted") return current.error ?? "下载已中断"
     return "下载完成"
   }, [current, latest])
 
@@ -501,7 +503,7 @@ export function ModelsTab() {
             </dl>
           )}
 
-          {result && (
+          {result && current?.status === "succeeded" && (
             <div className="rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-3 space-y-1.5">
               <div className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
                 下载完成
@@ -525,10 +527,14 @@ export function ModelsTab() {
             </div>
           )}
 
-          {current?.status === "failed" && (
+          {current && ["failed", "canceled", "interrupted"].includes(current.status) && (
             <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3 space-y-1.5">
               <div className="text-sm font-semibold text-destructive">
-                下载失败
+                {current.status === "canceled"
+                  ? "下载已取消"
+                  : current.status === "interrupted"
+                    ? "下载已中断"
+                    : "下载失败"}
               </div>
               <div className="text-xs font-mono text-destructive whitespace-pre-wrap break-words">
                 {current.error ?? latest?.message ?? "未知错误"}
