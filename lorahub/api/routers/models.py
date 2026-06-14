@@ -212,6 +212,20 @@ def _validate_repo_id(repo_id: str) -> None:
         raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
 
 
+def _resolve_target_dir(target_dir: str | None) -> Path | None:
+    if not target_dir:
+        return None
+    target = Path(target_dir).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if target.parent == target or target in {cwd, home}:
+        raise HTTPException(
+            status_code=400,
+            detail="target_dir must be a model subdirectory, not root, home, or project root",
+        )
+    return target
+
+
 def _download_request_from_api(
     req: DownloadModelRequest | ListModelFilesRequest,
     *,
@@ -272,7 +286,7 @@ def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
 def download_model(req: DownloadModelRequest) -> dict[str, Any]:
     _validate_repo_id(req.repo_id)
 
-    target = Path(req.target_dir).expanduser().resolve() if req.target_dir else None
+    target = _resolve_target_dir(req.target_dir)
     download_req = _download_request_from_api(req, target=target, threads=req.threads)
     task = _task_store().create(
         kind=_KIND_MODEL_DOWNLOAD,
