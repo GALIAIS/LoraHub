@@ -161,6 +161,26 @@ def test_local_path_move_semantics(tmp_path: Path) -> None:
     assert not (src / "a.txt").exists()
 
 
+def test_local_path_rejects_importing_dataset_into_itself(tmp_path: Path) -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    dst = _make_dataset(tmp_path, "dst")
+    _save_img(dst, "a.png", color=(11, 22, 33))
+
+    with pytest.raises(HTTPException) as exc:
+        intake_local_path(
+            LocalPathRequest(
+                dataset_path=str(dst),
+                source_path=str(dst),
+                skip_duplicates=False,
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert not (dst / "a-2.png").exists()
+
+
 # --------------------------------------------------------------------------- #
 # From-dataset
 # --------------------------------------------------------------------------- #
