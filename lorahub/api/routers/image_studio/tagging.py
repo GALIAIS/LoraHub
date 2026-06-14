@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time as _time
-import uuid as _uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -12,12 +11,27 @@ from typing import TYPE_CHECKING, Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
 from lorahub.api.dataset_files import _resolve_under_roots
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 
 if TYPE_CHECKING:
     from lorahub.core.tagging.base import BaseTagger
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_IMAGE_STUDIO_TAGGING = "image_studio_tagging"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 class ISTaggingStartInput(BaseModel):
@@ -48,6 +62,7 @@ class _ISTaggingSession:
     recursive: bool
     include_character: bool
     underscores: bool
+    task_kind: str | None = None
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -63,13 +78,27 @@ class _ISTaggingSession:
     def push(
         self, message: str, *, percent: float | None = None, image: str | None = None
     ) -> None:
+        ts = _time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {"ts": _time.time(), "message": message, "percent": self.percent, "image": image}
-            )
+            event = {"ts": ts, "message": message, "percent": self.percent, "image": image}
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
 
     def snapshot(self) -> dict[str, Any]:
@@ -104,6 +133,19 @@ class _ISTaggingSession:
 
     def request_stop(self) -> None:
         self._stop_flag = True
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="warn",
+                        message="stop requested",
+                        percent=self.percent,
+                        ts=_time.time(),
+                    ),
+                )
+            except Exception:
+                pass
 
 
 # Module-level registry for active tagging sessions. Stays at module scope so
@@ -139,8 +181,20 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(400, f"not a directory: {target}")
 
+    task = _task_store().create(
+        kind=_KIND_IMAGE_STUDIO_TAGGING,
+        title=f"{req.tagger}:{target.name}",
+        metadata={
+            "path": str(target),
+            "tagger": req.tagger,
+            "model_id": req.model_id or DEFAULT_MODEL,
+            "device": req.device,
+            "overwrite": req.overwrite,
+            "recursive": req.recursive,
+        },
+    )
     session = _ISTaggingSession(
-        session_id=_uuid.uuid4().hex,
+        session_id=task.id,
         path=str(target),
         tagger=req.tagger,
         model_id=req.model_id or DEFAULT_MODEL,
@@ -152,6 +206,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
         recursive=req.recursive,
         include_character=req.include_character,
         underscores=req.underscores,
+        task_kind=_KIND_IMAGE_STUDIO_TAGGING,
     )
     session.push("tagging queued", percent=0)
     with _is_tagging_lock:
@@ -160,6 +215,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             from lorahub.core.tagging.wd14 import (  # noqa: PLC0415
                 CudaUnavailableError,
                 _iter_images,
@@ -181,6 +237,13 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = _time.time()
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result=session.snapshot(),
+                    finished=True,
+                )
                 return
 
             total = len(all_images)
@@ -207,24 +270,52 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
                 session.percent = 100
                 session.finished_at = _time.time()
             session.push(f"done - wrote {session.written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
         except CudaUnavailableError as exc:
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = _time.time()
             session.push(f"cuda unavailable: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         except InterruptedError:
             with session.lock:
                 session.status = "failed"
                 session.error = "stopped by user"
                 session.finished_at = _time.time()
             session.push("stopped by user")
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error="stopped by user",
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = _time.time()
             session.push(f"tagging failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
 
     threading.Thread(
         target=run,

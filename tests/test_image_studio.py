@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -305,6 +306,65 @@ def test_smart_caption_writes_task_session(
     assert latest["metadata"]["path"] == str(sample_dir)
     assert latest["result"]["processed"] == 2
     assert latest["events"][-1]["message"].startswith("finished")
+
+
+def test_image_studio_tagging_writes_task_session(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=kwargs["recursive"]):
+                image.with_suffix(".txt").write_text("studio tag", encoding="utf-8")
+                kwargs["on_progress"](image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "_build_is_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/image-studio/tagging/start",
+        json={"path": str(sample_dir), "device": "cpu", "overwrite": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(f"/api/image-studio/tagging/{session_id}").json()
+        if status["status"] in {"succeeded", "failed"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_tagging",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["metadata"]["tagger"] == "wd14"
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 3
+    assert latest["events"][-1]["message"].startswith("done")
 
 
 def test_annotation_crud_via_api(client: TestClient, sample_dir: Path) -> None:
