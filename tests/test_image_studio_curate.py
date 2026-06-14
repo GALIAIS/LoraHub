@@ -85,6 +85,36 @@ def test_restore_quarantine_returns_files(tmp_path: Path) -> None:
     assert listing["entries"][0]["restored_at"] is not None
 
 
+def test_restore_quarantine_rejects_index_paths_outside_dataset(
+    tmp_path: Path,
+) -> None:
+    d = _seed_dataset(tmp_path)
+    qroot = d / ".workbench" / "quarantine"
+    qroot.mkdir(parents=True)
+    qfile = qroot / "img0.png"
+    qfile.write_bytes(b"quarantined")
+    outside = tmp_path / "outside.png"
+    index = qroot / "index.jsonl"
+    index.write_text(
+        (
+            '{"moved_at":"2026-06-14T00:00:00+00:00",'
+            f'"original_path":"{outside.as_posix()}",'
+            f'"quarantine_path":"{qfile.as_posix()}",'
+            '"caption_quarantine_path":null,"reason":null}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    restored = curate_restore_quarantine(
+        RestoreRequest(dataset_path=str(d), quarantine_paths=[qfile.as_posix()]),
+    )
+
+    assert restored["restored_count"] == 0
+    assert restored["failed"]
+    assert qfile.is_file()
+    assert not outside.exists()
+
+
 def test_quarantine_disambiguates_repeated_names(tmp_path: Path) -> None:
     """Same filename quarantined twice gets ``-2`` suffix on second go."""
     d = _seed_dataset(tmp_path)

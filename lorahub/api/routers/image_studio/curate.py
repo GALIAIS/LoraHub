@@ -596,6 +596,7 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
     the audit trail survives but the entry stops counting as "still
     quarantined".
     """
+    root = Path(req.dataset_path).resolve()
     qroot = _quarantine_root(req.dataset_path)
     index_path = qroot / "index.jsonl"
     if not index_path.is_file():
@@ -624,8 +625,18 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
         if entry["quarantine_path"] not in target_set:
             continue
         try:
-            src = Path(entry["quarantine_path"])
-            dst = Path(entry["original_path"])
+            src = Path(entry["quarantine_path"]).resolve()
+            try:
+                src.relative_to(qroot.resolve())
+            except ValueError:
+                failed.append({"path": str(src), "error": "path is outside quarantine"})
+                continue
+            dst = Path(entry["original_path"]).resolve()
+            try:
+                dst.relative_to(root)
+            except ValueError:
+                failed.append({"path": str(dst), "error": "path is outside dataset"})
+                continue
             if not src.is_file():
                 failed.append(
                     {"path": str(src), "error": "quarantined file missing"},
@@ -636,11 +647,21 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
                 # Original location now occupied — rename incoming file
                 # so we don't clobber whatever is there now.
                 dst = _disambiguate(dst)
-            shutil.move(str(src), str(dst))
             cap_q = entry.get("caption_quarantine_path")
+            cap_q_path: Path | None = None
             if cap_q and Path(cap_q).is_file():
+                cap_q_path = Path(cap_q).resolve()
+                try:
+                    cap_q_path.relative_to(qroot.resolve())
+                except ValueError:
+                    failed.append(
+                        {"path": str(cap_q_path), "error": "caption is outside quarantine"}
+                    )
+                    continue
+            shutil.move(str(src), str(dst))
+            if cap_q_path is not None:
                 cap_dst = dst.with_suffix(".txt")
-                shutil.move(str(cap_q), str(cap_dst))
+                shutil.move(str(cap_q_path), str(cap_dst))
             entry["restored_at"] = timestamp
             entry["restored_path"] = str(dst)
             restored.append(entry)
