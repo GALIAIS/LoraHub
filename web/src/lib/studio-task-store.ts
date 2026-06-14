@@ -21,7 +21,7 @@
  *      subscribe to without coupling to mount lifecycle
  *
  * Two endpoint flavours are supported:
- *   - "sessioned" (smart-caption, quality-score, trigger-words, wd14): server returns session_id,
+ *   - "sessioned" (caption, smart-caption, quality-score, trigger-words, wd14): server returns session_id,
  *     status endpoint exists, full reconnect after reload works
  *   - "in-flight": synchronous endpoints
  *     with no session_id, so the only thing we can do is keep the
@@ -30,6 +30,7 @@
  *     would orphan them anyway — we have no way to find them again).
  */
 import {
+  getCaptionSession,
   getQualitySession,
   getTaggingSession,
   getTriggerWordsSession,
@@ -38,6 +39,7 @@ import {
 } from "@/lib/api"
 
 export type StudioTaskKind =
+  | "caption"
   | "smart-caption"
   | "wd14"
   | "trigger-words"
@@ -168,7 +170,18 @@ async function tick(): Promise<void> {
 
 async function pollOne(task: StudioTaskRecord): Promise<void> {
   try {
-    if (task.kind === "smart-caption") {
+    if (task.kind === "caption") {
+      const snap = await getCaptionSession(task.id)
+      const status = mapSmartCaptionStatus(snap.status)
+      updateTask(task.id, {
+        processed: snap.processed,
+        total: snap.total,
+        lastImage: snap.last_image || undefined,
+        status,
+        errorMsg: snap.error ?? undefined,
+        pollErrors: 0,
+      })
+    } else if (task.kind === "smart-caption") {
       const snap = await http<{
         processed: number
         total: number
@@ -285,7 +298,8 @@ export interface AddTaskInput {
 export function addTask(input: AddTaskInput): StudioTaskRecord {
   const sessioned =
     input.sessioned ??
-    (input.kind === "smart-caption" ||
+    (input.kind === "caption" ||
+      input.kind === "smart-caption" ||
       input.kind === "quality-score" ||
       input.kind === "trigger-words" ||
       input.kind === "wd14")

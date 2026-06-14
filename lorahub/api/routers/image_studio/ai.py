@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from lorahub.core.tagging.wd14 import WD14Tagger
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_CAPTION = "image_studio_caption"
 _KIND_SMART_CAPTION = "image_studio_smart_caption"
 _KIND_QUALITY = "image_studio_quality"
 _KIND_TRIGGER_WORDS = "image_studio_trigger_words"
@@ -234,19 +235,174 @@ class AIBatchCaptionInput(BaseModel):
     skipAnnotated: bool = True
 
 
-@router.post("/ai/caption")
-def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
-    """Queue AI captioning for all images in a directory.
+@dataclass
+class _CaptionSession:
+    session_id: str
+    path: str
+    total: int
+    skipped: int
+    status: str = "running"
+    processed: int = 0
+    results: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[dict[str, str]] = field(default_factory=list)
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    For IS-3 this is synchronous (processes sequentially). A future
-    iteration will use the session pattern for async progress.
-    """
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 100.0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "path": self.path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "skipped": self.skipped,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 100.0
+                ),
+                "last_image": self.last_image,
+                "results": list(self.results),
+                "errors": list(self.errors),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+    def add_result(self, item: dict[str, Any], image_name: str) -> None:
+        with self._lock:
+            self.results.append(item)
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"captioned {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed, "item": item},
+        )
+
+    def add_error(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.errors.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="succeeded" if status == "succeeded" else "failed",
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def fail(self, msg: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="error", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="failed",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+
+_caption_sessions: dict[str, _CaptionSession] = {}
+_caption_lock = threading.Lock()
+
+
+def _caption_images_for_request(
+    body: AIBatchCaptionInput,
+    directory: Path,
+) -> tuple[list[Path], int]:
+    images = _scan_images(directory, body.recursive)
+    skipped = 0
+    if body.skipAnnotated:
+        before = len(images)
+        images = [
+            p for p in images
+            if not (
+                p.with_suffix(".txt").is_file()
+                and p.with_suffix(".txt").stat().st_size > 0
+            )
+        ]
+        skipped = before - len(images)
+    return images, skipped
+
+
+def _caption_images(
+    body: AIBatchCaptionInput,
+    directory: Path,
+    images: list[Path],
+    *,
+    on_result: Callable[[dict[str, Any], str], None] | None = None,
+    on_error: Callable[[str, str, str], None] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    from datetime import UTC, datetime  # noqa: PLC0415
+
     from lorahub.api import app as app_mod  # noqa: PLC0415
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
-
-    directory = _resolve_under_roots(body.path)
-    if not directory.is_dir():
-        raise HTTPException(400, "not a directory")
 
     ai_store = app_mod._ai_store
     if ai_store is None:
@@ -258,16 +414,6 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.task!r}")
 
-    images = _scan_images(directory, body.recursive)
-    skipped = 0
-    if body.skipAnnotated:
-        before = len(images)
-        images = [
-            p for p in images
-            if not (p.with_suffix(".txt").is_file()
-                    and p.with_suffix(".txt").stat().st_size > 0)
-        ]
-        skipped = before - len(images)
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
@@ -320,13 +466,29 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
                 )
             ann.ai_caption = result.content
             ann.ai_caption_provider = f"{result.provider_name}/{result.model_id}"
-            from datetime import UTC, datetime  # noqa: PLC0415
             ann.ai_caption_at = datetime.now(UTC).isoformat()
             store.upsert_annotation(ann)
 
-            results.append({"path": str(img_path), "caption": new_caption})
+            item = {"path": str(img_path), "caption": new_caption}
+            results.append(item)
+            if on_result is not None:
+                on_result(item, img_path.name)
         except Exception as exc:  # noqa: BLE001
             errors.append({"path": str(img_path), "error": str(exc)})
+            if on_error is not None:
+                on_error(str(img_path), str(exc), img_path.name)
+
+    return results, errors
+
+
+@router.post("/ai/caption")
+def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
+    """Caption all images in a directory synchronously, preserving legacy API."""
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+    images, skipped = _caption_images_for_request(body, directory)
+    results, errors = _caption_images(body, directory, images)
 
     return {
         "processed": len(results),
@@ -334,6 +496,86 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
         "results": results,
         "errors": errors,
     }
+
+
+@router.post("/ai/caption/start", status_code=202)
+def ai_batch_caption_start(body: AIBatchCaptionInput) -> dict[str, Any]:
+    """Start a persistent background captioning session."""
+    directory = _resolve_under_roots(body.path)
+    if not directory.is_dir():
+        raise HTTPException(400, "not a directory")
+    # Validate route before returning 202 so configuration errors are immediate.
+    from lorahub.api import app as app_mod  # noqa: PLC0415
+
+    ai_store = app_mod._ai_store
+    if ai_store is None:
+        raise HTTPException(503, "AI store not initialised")
+    route = ai_store.get_route(body.task)
+    if route is None or not (route.provider_id and route.model_id):
+        route = ai_store.get_route("global.default")
+    if route is None or not (route.provider_id and route.model_id):
+        raise HTTPException(409, f"no AI route for task {body.task!r}")
+
+    images, skipped = _caption_images_for_request(body, directory)
+    task = _task_store().create(
+        kind=_KIND_CAPTION,
+        title=f"caption:{directory.name}",
+        metadata={
+            "path": str(directory),
+            "recursive": body.recursive,
+            "task": body.task,
+            "mergeStrategy": body.mergeStrategy,
+            "skipAnnotated": body.skipAnnotated,
+            "skipped": skipped,
+        },
+    )
+    session = _CaptionSession(
+        session_id=task.id,
+        path=str(directory),
+        total=len(images),
+        skipped=skipped,
+    )
+    session._append_task_event("captioning queued", percent=0)
+    with _caption_lock:
+        _caption_sessions[session.session_id] = session
+
+    def run() -> None:
+        try:
+            _task_store().update(session.session_id, status="running", percent=0)
+            _caption_images(
+                body,
+                directory,
+                images,
+                on_result=session.add_result,
+                on_error=session.add_error,
+            )
+            session.finish("succeeded")
+        except Exception as exc:  # noqa: BLE001
+            session.fail(str(exc))
+
+    threading.Thread(
+        target=run,
+        name=f"caption-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
+    return {
+        "session_id": session.session_id,
+        "total": len(images),
+        "skipped": skipped,
+        "status_url": f"/api/image-studio/ai/caption/status/{session.session_id}",
+    }
+
+
+@router.get("/ai/caption/status/{session_id}")
+def ai_batch_caption_status(session_id: str) -> dict[str, Any]:
+    with _caption_lock:
+        session = _caption_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _persisted_task_result(session_id, _KIND_CAPTION)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(404, "caption session not found")
 
 
 class AIBatchQualityInput(BaseModel):

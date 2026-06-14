@@ -473,6 +473,54 @@ export async function imageStudioBatchCaption(params: {
   )
 }
 
+export interface ImageStudioCaptionSession {
+  session_id: string
+  path: string
+  status: string
+  processed: number
+  total: number
+  skipped: number
+  percent: number
+  last_image: string
+  results: { path: string; caption: string }[]
+  errors: { path: string; error: string }[]
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export async function startCaptionSession(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+  mergeStrategy?: string
+  /** Skip images that already have a non-empty .txt sidecar. Default true. */
+  skipAnnotated?: boolean
+}): Promise<{
+  session_id: string
+  total: number
+  skipped: number
+  status_url: string
+}> {
+  return http<{
+    session_id: string
+    total: number
+    skipped: number
+    status_url: string
+  }>("/image-studio/ai/caption/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+export async function getCaptionSession(
+  id: string,
+): Promise<ImageStudioCaptionSession> {
+  return http<ImageStudioCaptionSession>(
+    `/image-studio/ai/caption/status/${encodeURIComponent(id)}`,
+  )
+}
+
 export async function imageStudioBatchQuality(params: {
   path: string
   recursive?: boolean

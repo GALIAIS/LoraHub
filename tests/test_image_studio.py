@@ -284,6 +284,10 @@ def test_smart_caption_writes_task_session(
     )
     assert response.status_code == 202, response.text
     session_id = response.json()["session_id"]
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
 
     deadline = time.time() + 5
     latest: dict | None = None
@@ -340,6 +344,8 @@ def test_smart_caption_status_reads_persisted_result_after_memory_clear(
     )
     assert response.status_code == 202, response.text
     session_id = response.json()["session_id"]
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
 
     deadline = time.time() + 5
     while time.time() < deadline:
@@ -512,6 +518,79 @@ def test_trigger_words_writes_task_session_and_recovers_status(
     )
     assert recovered.status_code == 200, recovered.text
     assert recovered.json()["processed"] == 3
+
+
+def test_ai_caption_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from dataclasses import dataclass
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+    from lorahub.core.ai import client as ai_client
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    @dataclass
+    class FakeAIResult:
+        content: str
+        provider_name: str = "fake"
+        model_id: str = "fake-model"
+        raw: dict[str, Any] | None = None
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+    monkeypatch.setattr(
+        ai_client,
+        "invoke",
+        lambda *_args, **_kwargs: FakeAIResult("caption text"),
+    )
+
+    response = client.post(
+        "/api/image-studio/ai/caption/start",
+        json={"path": str(sample_dir), "recursive": False, "skipAnnotated": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_caption",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 2
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 2
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    ai_router._caption_sessions.clear()
+    recovered = client.get(f"/api/image-studio/ai/caption/status/{session_id}")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["processed"] == 2
 
 
 def test_image_studio_tagging_writes_task_session(

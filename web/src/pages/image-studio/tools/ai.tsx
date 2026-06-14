@@ -2,7 +2,7 @@
  * AI 类工具页面集合。
  *
  *   - ai-smart-caption     : 复用现成的 batch + 全局任务条 (smart-caption 走 sessioned poll)
- *   - ai-caption           : 直接 VLM 写 caption（无 WD14 预处理）
+ *   - ai-caption           : 直接 VLM 写 caption（sessioned poll）
  *   - ai-quality           : 给图打质量分（sessioned poll）
  *   - ai-trigger-words     : 让 VLM 推荐触发词候选（sessioned poll）
  *   - ai-wd14-prefilter    : 单图测试 - 拿到 WD14 标签 + 拼装好的 prompt
@@ -27,10 +27,10 @@ import {
 import { toast } from "sonner"
 import {
   api,
-  imageStudioBatchCaption,
   getTriggerWordsSession,
   imageStudioVlmAnimaRewrite,
   imageStudioWd14Prefilter,
+  startCaptionSession,
   startQualitySession,
   startSmartCaptionSession,
   startTaggingSession,
@@ -41,7 +41,6 @@ import {
 import {
   addTask,
   removeTask,
-  updateTask,
 } from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 import { Button } from "@/components/ui/button"
@@ -60,11 +59,6 @@ import { TriggerPicker } from "../components/library/trigger-picker"
 // 来；首次还没拿到时先用一个真实存在的默认值，避免 401。
 const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 
-const newTaskId = (): string =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-
 // --------------------------------------------------------------------------- //
 // GlobalTaskBanner — 与 dataset-detail 里的 StudioTaskBanner 等价的极简版
 // --------------------------------------------------------------------------- //
@@ -79,7 +73,9 @@ function TaskBanner({ datasetPath }: { datasetPath: string }) {
     ? newest.lastImage.split(/[/\\]/).pop() ?? ""
     : ""
   const label = running
-    ? newest.kind === "smart-caption"
+    ? newest.kind === "caption"
+      ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
+      : newest.kind === "smart-caption"
       ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : newest.kind === "quality-score"
         ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
@@ -306,35 +302,30 @@ export function AiCaptionTool({ datasetPath }: { datasetPath: string }) {
   const [recursive, setRecursive] = useState(true)
 
   const start = async () => {
-    const id = newTaskId()
-    addTask({
-      id,
-      kind: "smart-caption",
-      datasetPath,
-      label: "VLM 批量 caption",
-      sessioned: false,
-    })
     try {
-      const res = await imageStudioBatchCaption({
+      const submit = await startCaptionSession({
         path: datasetPath,
         recursive,
         task: task.trim() || undefined,
         mergeStrategy,
         skipAnnotated,
       })
-      updateTask(id, {
-        status: "completed",
-        processed: res.processed,
-        label: res.skipped
-          ? `VLM caption 完成（跳过 ${res.skipped} 已有）`
-          : "VLM caption 完成",
+      addTask({
+        id: submit.session_id,
+        kind: "caption",
+        datasetPath,
+        label: submit.skipped
+          ? `VLM 批量 caption（跳过 ${submit.skipped} 已有）`
+          : "VLM 批量 caption",
+        total: submit.total,
+      })
+      toast.success("已启动 VLM caption", {
+        description: `共 ${submit.total} 张 · 后台进行 · 刷新后可恢复进度`,
       })
       qc.invalidateQueries({ queryKey: ["image-studio"] })
     } catch (err) {
-      updateTask(id, {
-        status: "failed",
-        errorMsg: err instanceof Error ? err.message : String(err),
-        label: "VLM caption 失败",
+      toast.error("启动失败", {
+        description: err instanceof Error ? err.message : String(err),
       })
     }
   }
