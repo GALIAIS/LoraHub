@@ -2718,6 +2718,30 @@ def test_anima_model_download_failure_status_survives_memory_clear(
     assert recovered["events"][-1]["message"] == "failed: modelscope 503"
 
 
+def test_anima_model_download_status_preserves_interrupted_task(
+    client: TestClient,
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import backends as backends_router
+
+    task = app_module._task_session_store.create(
+        kind="anima_model_download",
+        title="anima_lora models",
+        metadata={"source": "modelscope", "threads": 3},
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=37)
+    app_module._task_session_store.mark_stale_interrupted()
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+
+    assert recovered["session_id"] == task.id
+    assert recovered["status"] == "interrupted"
+    assert recovered["percent"] == 37
+    assert recovered["error"] == "task interrupted by server restart"
+
+
 def test_anima_msvc_install_status_survives_memory_clear(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

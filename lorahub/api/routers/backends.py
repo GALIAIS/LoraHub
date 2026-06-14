@@ -43,6 +43,13 @@ from lorahub.core.backends.registry import list_backends
 router = APIRouter(prefix="/api")
 _KIND_ANIMA_MODEL_DOWNLOAD = "anima_model_download"
 _KIND_MSVC_INSTALL = "msvc_install"
+_ToolTaskStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 def _task_store() -> TaskSessionStore:
@@ -156,7 +163,7 @@ def update_backend(backend_id: str) -> dict[str, Any]:
 class _AnimaModelSession:
     session_id: str
     source: Literal["modelscope", "huggingface"] = "modelscope"
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _ToolTaskStatus = "running"
     percent: float = 0
     files_done: int = 0
     files_total: int = 0
@@ -211,13 +218,11 @@ _anima_active_session: str | None = None
 
 
 def _anima_session_from_task(task: TaskSession) -> _AnimaModelSession:
-    status: Literal["running", "succeeded", "failed"]
-    if task.status == "succeeded":
-        status = "succeeded"
-    elif task.status in {"failed", "interrupted", "canceled"}:
-        status = "failed"
-    else:
-        status = "running"
+    status: _ToolTaskStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
 
     files_done = 0
     files_total = 0
@@ -380,7 +385,7 @@ def anima_model_download_status() -> dict[str, Any]:
 @dataclass(slots=True)
 class _MsvcInstallSession:
     session_id: str
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _ToolTaskStatus = "running"
     log: list[str] = field(default_factory=list)
     error: str | None = None
     started_at: float = field(default_factory=time.time)
@@ -422,13 +427,11 @@ _msvc_active_session: str | None = None
 
 
 def _msvc_session_from_task(task: TaskSession) -> _MsvcInstallSession:
-    status: Literal["running", "succeeded", "failed"]
-    if task.status == "succeeded":
-        status = "succeeded"
-    elif task.status in {"failed", "interrupted", "canceled"}:
-        status = "failed"
-    else:
-        status = "running"
+    status: _ToolTaskStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
 
     return _MsvcInstallSession(
         session_id=task.id,

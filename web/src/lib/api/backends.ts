@@ -119,7 +119,7 @@ export interface AnimaModelDownloadStatus {
   // ``"idle"`` only appears from the GET endpoint when no session has
   // ever started; POST always returns ``"running"`` (or 409 if another
   // download is in flight).
-  status: "idle" | "running" | "succeeded" | "failed"
+  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
   session_id?: string
   source?: "modelscope" | "huggingface"
   percent?: number
@@ -139,7 +139,7 @@ export interface MsvcInstallStatus {
   // percent signal). Server detects MSVC presence on every poll, so
   // ``msvc.ok`` flips to True the moment winget finishes — the UI
   // doesn't need to wait for the next backend-list refresh.
-  status: "idle" | "running" | "succeeded" | "failed"
+  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
   session_id?: string
   log?: string[]
   error?: string | null
