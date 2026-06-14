@@ -197,9 +197,19 @@ class JobStore:
             if not stale_ids:
                 return 0
             placeholders = ", ".join("?" * len(stale_ids))
+            finished_at = datetime.now().astimezone().isoformat()
             conn.execute(
-                f"UPDATE jobs SET state = ? WHERE id IN ({placeholders})",  # noqa: S608
-                (JobState.interrupted.value, *stale_ids),
+                (
+                    "UPDATE jobs SET state = ?, finished_at = ?, "
+                    "error = COALESCE(error, ?) "
+                    f"WHERE id IN ({placeholders})"  # noqa: S608
+                ),
+                (
+                    JobState.interrupted.value,
+                    finished_at,
+                    "interrupted by server restart",
+                    *stale_ids,
+                ),
             )
             if survivors:
                 # Best-effort log so operators can see why some interrupted

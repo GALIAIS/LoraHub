@@ -83,6 +83,11 @@ def test_mark_orphans_interrupted_only_touches_live_states(tmp_path: Path) -> No
     assert states["canceling"] is state.JobState.interrupted
     assert states["succeeded"] is state.JobState.succeeded
     assert states["failed"] is state.JobState.failed
+    interrupted = {r.id: r for r in s.list() if r.state is state.JobState.interrupted}
+    assert interrupted["running"].finished_at is not None
+    assert interrupted["running"].error == "interrupted by server restart"
+    assert interrupted["canceling"].finished_at is not None
+    assert interrupted["canceling"].error == "interrupted by server restart"
 
 
 def test_registry_persists_creates(tmp_path: Path) -> None:
