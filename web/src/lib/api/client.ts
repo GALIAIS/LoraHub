@@ -51,6 +51,7 @@ import type {
   AIInvokeTaskResult,
 } from "./ai"
 import type { SystemSnapshot, UpdateInfo, UpdateEvent } from "./system"
+import type { TaskSessionRecord } from "./tasks"
 import type { MirrorPreset, ProbeResult } from "./network"
 import type {
   SweepSummary,
@@ -472,6 +473,8 @@ export const api = {
       { method: "POST" },
     ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
+  getLatestTask: (kind: string) =>
+    http<TaskSessionRecord>(`/tasks/latest?kind=${encodeURIComponent(kind)}`),
   getSystemVersion: async (
     channel: "dev" | "tag" = "tag",
     force = false,

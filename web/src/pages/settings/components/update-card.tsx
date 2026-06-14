@@ -12,7 +12,7 @@
  *    bootstrap installer panel).
  */
 import { useEffect, useRef, useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
   CheckCircle,
@@ -62,6 +62,32 @@ const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
   error: "失败",
 }
 
+function isUpdateEvent(value: unknown): value is UpdateEvent {
+  if (!value || typeof value !== "object") return false
+  const obj = value as Partial<UpdateEvent>
+  return (
+    typeof obj.phase === "string" &&
+    typeof obj.level === "string" &&
+    typeof obj.message === "string"
+  )
+}
+
+function taskEventsToUpdateEvents(
+  events: Array<{ message: string; level: string; payload?: unknown }>,
+): UpdateEvent[] {
+  return events.map((event) => {
+    if (isUpdateEvent(event.payload)) return event.payload
+    return {
+      phase: event.level === "error" ? "error" : "git",
+      level:
+        event.level === "error" || event.level === "warn"
+          ? event.level
+          : "info",
+      message: event.message,
+    }
+  })
+}
+
 export function UpdateCard() {
   const qc = useQueryClient()
   const [channel, setChannel] = useState<UpdateChannel>("tag")
@@ -81,12 +107,31 @@ export function UpdateCard() {
   const abortRef = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
 
+  const latestUpdateTask = useQuery({
+    queryKey: ["tasks", "latest", "system_update"],
+    queryFn: () => api.getLatestTask("system_update"),
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 3000 : false,
+    throwOnError: false,
+  })
+
   // Auto-scroll the log to the latest line as events stream in.
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight
     }
   }, [events.length])
+
+  useEffect(() => {
+    if (events.length > 0 || running) return
+    const task = latestUpdateTask.data
+    if (!task) return
+    if (task.events.length === 0) return
+    setEvents(taskEventsToUpdateEvents(task.events))
+    setRunning(task.status === "running")
+  }, [events.length, latestUpdateTask.data, running])
 
   const recheck = useMutation({
     mutationFn: () => api.getSystemVersion(channel, true),
@@ -116,6 +161,7 @@ export function UpdateCard() {
       setRunning(false)
       abortRef.current = null
       qc.invalidateQueries({ queryKey: ["system-version"] })
+      qc.invalidateQueries({ queryKey: ["tasks", "latest", "system_update"] })
     }
   }
 
