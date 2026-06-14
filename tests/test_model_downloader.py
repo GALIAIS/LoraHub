@@ -297,6 +297,20 @@ def test_download_refuses_when_selection_is_empty(
         )
 
 
+def test_select_files_rejects_unsafe_remote_paths() -> None:
+    listed = downloader.select_files(
+        [
+            ("model.safetensors", 1),
+            ("../escape.safetensors", 2),
+            ("/absolute.safetensors", 3),
+            ("C:/tmp/drive.safetensors", 4),
+            ("nested/../escape.safetensors", 5),
+        ]
+    )
+
+    assert [file.path for file in listed] == ["model.safetensors"]
+
+
 def test_modelscope_download_uses_parallel_workers_and_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -103,8 +103,14 @@ def _file_size(item: dict[str, Any]) -> int:
         return 0
 
 
-def _normalise_path(path: str) -> str:
-    return path.strip().replace("\\", "/").lstrip("/")
+def _normalise_path(path: str) -> str | None:
+    normalised = path.strip().replace("\\", "/")
+    if not normalised or normalised.startswith("/") or ":" in normalised:
+        return None
+    parts = [part for part in normalised.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    return "/".join(parts)
 
 
 def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
@@ -134,12 +140,16 @@ def select_files(
     allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS,
     ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS,
 ) -> list[RemoteFile]:
-    selected_paths = {_normalise_path(p) for p in paths if _normalise_path(p)}
+    selected_paths = {
+        path
+        for raw in paths
+        if (path := _normalise_path(raw)) is not None
+    }
     out: list[RemoteFile] = []
     seen: set[str] = set()
     for raw_path, size in files:
         path = _normalise_path(raw_path)
-        if not path or path in seen:
+        if path is None or path in seen:
             continue
         seen.add(path)
         selected, reason = _selection_reason(
