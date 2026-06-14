@@ -28,11 +28,14 @@ class AnimaLoraMethodLoraConfig(BaseModel):
 
     # Authoritative algorithm selector. Default ``ortho`` preserves
     # anima's upstream behaviour (OrthoLoRA stack on top of LoRA);
-    # set ``algorithm="lora"`` for the bare-LoRA baseline. Enum values
-    # match the keys in
+    # set ``algorithm="lora"`` for the bare-LoRA baseline. ``tlora`` is
+    # the first-class UI/API name for plain LoRA + timestep rank mask; it
+    # compiles back to anima_lora's existing ``use_timestep_mask`` kwarg.
+    # The other enum values match the keys in
     # ``external/anima_lora/networks/__init__.py::NETWORK_REGISTRY``.
     algorithm: Literal[
         "lora",
+        "tlora",
         "ortho",
         "dora",
         "ia3",
@@ -154,6 +157,12 @@ class AnimaLoraMethodLoraConfig(BaseModel):
 
         # No-op: ``use_X=False`` is just confirming the algorithm not
         # being chosen.
+        if self.algorithm == "tlora" and not self.use_timestep_mask:
+            raise ValueError(
+                "AnimaLoraMethodLoraConfig: algorithm='tlora' requires "
+                "use_timestep_mask=True. Pick algorithm='lora' for plain LoRA "
+                "without timestep rank masking."
+            )
         return self
 
 
@@ -606,5 +615,4 @@ class AnimaLoraOptions(BaseModel):
             msg = "method='ip_adapter' requires the `ipAdapter` sub-config to be set"
             raise ValueError(msg)
         return self
-
 

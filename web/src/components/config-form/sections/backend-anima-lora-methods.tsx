@@ -19,6 +19,7 @@ type LoraAlgorithm = NonNullable<AnimaLoraValue["lora"]>["algorithm"]
 const LORA_ALGORITHM_OPTIONS = [
   { value: "ortho", label: "OrthoLoRA · 默认" },
   { value: "lora", label: "LoRA · 经典低秩 ΔW = BA" },
+  { value: "tlora", label: "T-LoRA · 时间步动态 rank" },
   { value: "dora", label: "DoRA · 方向 / 幅度分离" },
   { value: "dylora", label: "DyLoRA · 训练随机 rank 截断" },
   { value: "glora", label: "GLoRA · LoRA + 每秩对角 gate" },
@@ -34,6 +35,7 @@ const LORA_ALGORITHM_OPTIONS = [
 function usesTimestepMaskControls(algorithm: LoraAlgorithm) {
   return (
     algorithm === "lora" ||
+    algorithm === "tlora" ||
     algorithm === "ortho" ||
     algorithm === "dora" ||
     algorithm === "dylora" ||
@@ -78,6 +80,13 @@ function LoraMethodConfig({
 }) {
   const algorithm = value.lora?.algorithm ?? "ortho"
   const showTimestepMaskControls = usesTimestepMaskControls(algorithm)
+  const isTlora = algorithm === "tlora"
+  const setAlgorithm = (next: string) => {
+    set(["backend", "animaLora", "lora", "algorithm"], next)
+    if (next === "tlora") {
+      set(["backend", "animaLora", "lora", "useTimestepMask"], true)
+    }
+  }
 
   return (
     <Section
@@ -92,7 +101,7 @@ function LoraMethodConfig({
       >
         <EnumSelect
           value={algorithm}
-          onChange={(s) => set(["backend", "animaLora", "lora", "algorithm"], s)}
+          onChange={setAlgorithm}
           options={LORA_ALGORITHM_OPTIONS}
         />
       </Row>
@@ -129,13 +138,18 @@ function LoraMethodConfig({
       {showTimestepMaskControls && (
         <Row
           label="启用时间步 mask"
-          description="T-LoRA — 时间步相关的 rank mask,叠在任何带 LoRA legs 的算法上。"
+          description={
+            isTlora
+              ? "T-LoRA 固定启用时间步相关 rank mask；如需关闭，请选择 LoRA。"
+              : "T-LoRA 时间步相关 rank mask，可叠在带 LoRA legs 的算法上。"
+          }
         >
           <ToggleSwitch
-            checked={value.lora?.useTimestepMask ?? true}
+            checked={isTlora ? true : (value.lora?.useTimestepMask ?? true)}
             onCheckedChange={(c) =>
               set(["backend", "animaLora", "lora", "useTimestepMask"], c)
             }
+            disabled={isTlora}
           />
         </Row>
       )}

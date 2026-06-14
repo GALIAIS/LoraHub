@@ -427,6 +427,7 @@ export interface ConfigFormValue {
       lora?: {
         algorithm?:
           | "lora"
+          | "tlora"
           | "ortho"
           | "dora"
           | "ia3"

@@ -399,6 +399,7 @@ export const EnumSelect = memo(function EnumSelect({
 interface ToggleProps {
   checked: boolean
   onCheckedChange: (next: boolean) => void
+  disabled?: boolean
 }
 
 /**
@@ -409,10 +410,15 @@ interface ToggleProps {
 export const ToggleSwitch = memo(function ToggleSwitch({
   checked,
   onCheckedChange,
+  disabled,
 }: ToggleProps) {
   const readOnly = useReadOnly()
   return (
-    <RawSwitch checked={checked} onCheckedChange={onCheckedChange} disabled={readOnly} />
+    <RawSwitch
+      checked={checked}
+      onCheckedChange={onCheckedChange}
+      disabled={readOnly || disabled}
+    />
   )
 })
 

@@ -18,6 +18,7 @@ from lorahub.core.config.schema import (
     AnimaLoraMethodChimeraConfig,
     AnimaLoraMethodEasyControlConfig,
     AnimaLoraMethodIPAdapterConfig,
+    AnimaLoraMethodLoraConfig,
     AnimaLoraMethodPostfixConfig,
     AnimaLoraOptions,
     BackendConfig,
@@ -66,6 +67,19 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.chimera is None
     assert opts.easycontrol is None
     assert opts.ip_adapter is None
+
+
+def test_tlora_algorithm_requires_timestep_mask() -> None:
+    """T-LoRA is the public name for plain LoRA + timestep rank masking."""
+    cfg = AnimaLoraMethodLoraConfig(algorithm="tlora")
+    assert cfg.algorithm == "tlora"
+    assert cfg.use_timestep_mask is True
+
+    with pytest.raises(pydantic.ValidationError, match="use_timestep_mask=True"):
+        AnimaLoraMethodLoraConfig(
+            algorithm="tlora",
+            use_timestep_mask=False,
+        )
 
 
 def test_method_postfix_requires_subconfig() -> None:
