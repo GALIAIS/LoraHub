@@ -140,6 +140,7 @@ def update_backend(backend_id: str) -> dict[str, Any]:
 @dataclass(slots=True)
 class _AnimaModelSession:
     session_id: str
+    source: Literal["modelscope", "huggingface"] = "modelscope"
     status: Literal["running", "succeeded", "failed"] = "running"
     percent: float = 0
     files_done: int = 0
@@ -162,6 +163,7 @@ class _AnimaModelSession:
         with self.lock:
             return {
                 "session_id": self.session_id,
+                "source": self.source,
                 "status": self.status,
                 "percent": self.percent,
                 "files_done": self.files_done,
@@ -212,7 +214,9 @@ def start_anima_model_download() -> dict[str, Any]:
         global _anima_active_session
         try:
             _download_anima_models(
+                source=session.source,
                 huggingface_token=settings.huggingface_token,
+                modelscope_token=settings.modelscope_token,
                 proxy=settings.download_proxy,
                 threads=3,
                 progress=session.add_event,

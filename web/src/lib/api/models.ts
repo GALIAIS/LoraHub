@@ -35,6 +35,16 @@ export interface ModelDownloadSession {
   finished_at: number | null
 }
 
+export interface LatestModelDownloadSession
+  extends Partial<Omit<ModelDownloadSession, "session_id" | "status">> {
+  session_id: string | null
+  status: "idle" | "running" | "succeeded" | "failed"
+  events: ModelDownloadEvent[]
+  result: ModelDownloadSession["result"]
+  error: string | null
+  percent: number
+}
+
 export interface RemoteModelFile {
   path: string
   size: number

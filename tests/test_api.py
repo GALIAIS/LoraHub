@@ -2177,7 +2177,7 @@ def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> N
 def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     r = client.post(
         "/api/models/download",
-        json={"source": "huggingface", "repo_id": "no-slash"},
+        json={"repo_id": "no-slash"},
     )
     assert r.status_code == 400
     assert "owner/name" in r.json()["detail"]
@@ -2249,6 +2249,54 @@ def test_models_download_starts_session_and_reports_progress(
     assert seen_paths == [("weights.bin",)]
     assert seen_endpoints == [None]
 
+    latest = client.get("/api/models/download/latest").json()
+    assert latest["session_id"] == body["session_id"]
+    assert latest["status"] == "succeeded"
+    assert latest["source"] == "modelscope"
+
+
+def test_models_download_latest_idle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.routers import models as models_router
+
+    monkeypatch.setattr(models_router, "_latest_session_id", None)
+    models_router._sessions.clear()
+
+    r = client.get("/api/models/download/latest")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "idle"
+    assert body["session_id"] is None
+
+
+def test_models_download_defaults_to_modelscope(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadResult
+
+    seen_sources: list[str] = []
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        seen_sources.append(req.source)
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=0, total_bytes=0)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    r = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(tmp_path / "downloaded")},
+    )
+
+    assert r.status_code == 202
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen_sources:
+        time.sleep(0.01)
+    assert seen_sources == ["modelscope"]
+
 
 def test_models_files_lists_remote_selection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -2275,6 +2323,29 @@ def test_models_files_lists_remote_selection(
     assert body["selected_count"] == 1
     assert body["selected_bytes"] == 100
     assert [f["path"] for f in body["files"]] == ["README.md", "model.safetensors"]
+
+
+def test_anima_model_download_defaults_to_modelscope(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+
+    seen: list[tuple[str, str | None]] = []
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        seen.append((kwargs["source"], kwargs.get("modelscope_token")))
+
+    monkeypatch.setattr(backends_router, "_download_anima_models", fake_download_anima_models)
+
+    r = client.post("/api/backends/anima_lora/download-models")
+
+    assert r.status_code == 202
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen:
+        time.sleep(0.01)
+    assert seen and seen[0][0] == "modelscope"
 
 
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:

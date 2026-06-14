@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api")
 
 
 class DownloadModelRequest(BaseModel):
-    source: Literal["huggingface", "modelscope"]
+    source: Literal["huggingface", "modelscope"] = "modelscope"
     repo_id: str
     revision: str = "master"
     target_dir: str | None = None
@@ -38,7 +38,7 @@ class DownloadModelRequest(BaseModel):
 
 
 class ListModelFilesRequest(BaseModel):
-    source: Literal["huggingface", "modelscope"]
+    source: Literal["huggingface", "modelscope"] = "modelscope"
     repo_id: str
     revision: str = "master"
     paths: list[str] = Field(default_factory=list, max_length=2048)
@@ -93,6 +93,7 @@ class _DownloadSession:
 
 _sessions: dict[str, _DownloadSession] = {}
 _sessions_lock = threading.Lock()
+_latest_session_id: str | None = None
 
 
 def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[str, Any]:
@@ -107,8 +108,10 @@ def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[s
 
 
 def _store_session(session: _DownloadSession) -> None:
+    global _latest_session_id
     with _sessions_lock:
         _sessions[session.session_id] = session
+        _latest_session_id = session.session_id
 
 
 def _get_session(session_id: str) -> _DownloadSession:
@@ -117,6 +120,15 @@ def _get_session(session_id: str) -> _DownloadSession:
     if session is None:
         raise HTTPException(status_code=404, detail="download session not found")
     return session
+
+
+def _latest_session() -> _DownloadSession | None:
+    with _sessions_lock:
+        if _latest_session_id is not None:
+            session = _sessions.get(_latest_session_id)
+            if session is not None:
+                return session
+        return max(_sessions.values(), key=lambda s: s.started_at, default=None)
 
 
 def _validate_repo_id(repo_id: str) -> None:
@@ -215,6 +227,21 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
 
     thread = threading.Thread(target=run, name=f"model-download-{session.session_id[:8]}", daemon=True)
     thread.start()
+    return session.snapshot()
+
+
+@router.get("/models/download/latest")
+def latest_model_download_status() -> dict[str, Any]:
+    session = _latest_session()
+    if session is None:
+        return {
+            "session_id": None,
+            "status": "idle",
+            "events": [],
+            "result": None,
+            "error": None,
+            "percent": 0,
+        }
     return session.snapshot()
 
 

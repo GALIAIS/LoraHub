@@ -121,6 +121,7 @@ export interface AnimaModelDownloadStatus {
   // download is in flight).
   status: "idle" | "running" | "succeeded" | "failed"
   session_id?: string
+  source?: "modelscope" | "huggingface"
   percent?: number
   files_done?: number
   files_total?: number

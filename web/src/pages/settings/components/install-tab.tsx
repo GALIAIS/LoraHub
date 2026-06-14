@@ -286,7 +286,7 @@ function AnimaModelDownloadCard({
           </div>
           <div className="mt-0.5 leading-relaxed">
             训练 / 推理需要 3 个 safetensors 检查点（DiT 基模型、Qwen3 文本编码器、
-            Qwen Image VAE），从 HuggingFace
+            Qwen Image VAE），默认从 ModelScope
             <code className="mx-1 text-foreground">circlestone-labs/Anima</code>
             下载约 <strong className="text-foreground">14 GB</strong>，存放到项目根
             <code className="mx-1 text-foreground">models/</code>
@@ -342,6 +342,7 @@ function AnimaModelDownloadCard({
           </div>
           {lastEvent && (
             <div className="font-mono text-[10px] text-muted-foreground/80 break-all">
+              {status?.source ? `${status.source}: ` : ""}
               {lastEvent.message}
             </div>
           )}

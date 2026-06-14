@@ -32,6 +32,7 @@ import type {
 import type { SettingsState, SettingsResponse } from "./settings"
 import type { DatasetScanResponse, DatasetCaptionResponse } from "./datasets"
 import type {
+  LatestModelDownloadSession,
   ModelDownloadSession,
   RemoteModelFilesResponse,
   ScannedModelsResponse,
@@ -369,6 +370,8 @@ export const api = {
     }),
   getModelDownload: (sessionId: string) =>
     http<ModelDownloadSession>(`/models/download/${sessionId}`),
+  getLatestModelDownload: () =>
+    http<LatestModelDownloadSession>("/models/download/latest"),
   scanModels: (root?: string) => {
     const qs = root ? `?root=${encodeURIComponent(root)}` : ""
     return http<ScannedModelsResponse>(`/models/scan${qs}`)

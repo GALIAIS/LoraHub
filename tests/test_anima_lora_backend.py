@@ -36,6 +36,7 @@ from lorahub.core.config.schema import (
     TrainingConfig,
 )
 from lorahub.core.events import EventType
+from lorahub.core.models.downloader import DownloadProgress
 
 # --------------------------------------------------------------------------- #
 # Bootstrap — vendored discovery + env var override + corruption detection
@@ -146,6 +147,17 @@ def test_anima_model_download_uses_env_hf_endpoint(
     monkeypatch.setattr(al_models, "_link_anima_models_dir", lambda: None)
     endpoints: list[str | None] = []
 
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            endpoints.append(endpoint)
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            siblings = [
+                type("Sibling", (), {"rfilename": repo_path, "size": 1})()
+                for _, _, repo_path in al_models._TARGETS
+            ]
+            return type("Info", (), {"siblings": siblings})()
+
     def fake_hf_hub_download(**kw: Any) -> str:
         endpoints.append(kw.get("endpoint"))
         cached = Path(kw["local_dir"]) / kw["filename"]
@@ -156,13 +168,42 @@ def test_anima_model_download_uses_env_hf_endpoint(
     fake_hub = type(
         "FakeHub",
         (),
-        {"hf_hub_download": staticmethod(fake_hf_hub_download)},
+        {"HfApi": FakeApi, "hf_hub_download": staticmethod(fake_hf_hub_download)},
     )
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
 
+    al_models.download_models(source="huggingface", threads=1)
+
+    assert endpoints == ["https://hf-mirror.com"] * 4
+    for path in al_models.expected_files():
+        assert path.is_file()
+
+
+def test_anima_model_download_defaults_to_modelscope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_models, "models_root", lambda: tmp_path / "models")
+    monkeypatch.setattr(al_models, "_link_anima_models_dir", lambda: None)
+    seen: dict[str, Any] = {}
+
+    def fake_download(req: Any, progress: Any = None) -> None:
+        seen["source"] = req.source
+        seen["repo_id"] = req.repo_id
+        seen["paths"] = req.paths
+        for path in req.paths:
+            out = req.target_dir / path
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"model")
+        if progress:
+            progress(DownloadProgress("done", 100, 3, 3, 0, 0))
+
+    monkeypatch.setattr(al_models, "download", fake_download)
+
     al_models.download_models(threads=1)
 
-    assert endpoints == ["https://hf-mirror.com"] * 3
+    assert seen["source"] == "modelscope"
+    assert seen["repo_id"] == al_models.ANIMA_REPO_ID
+    assert set(seen["paths"]) == {target[2] for target in al_models._TARGETS}
     for path in al_models.expected_files():
         assert path.is_file()
 

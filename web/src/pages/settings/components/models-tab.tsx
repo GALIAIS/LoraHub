@@ -52,9 +52,11 @@ const SOURCE_LABEL: Record<Source, string> = {
 }
 
 const SOURCE_OPTIONS: { value: Source; label: string }[] = [
-  { value: "huggingface", label: SOURCE_LABEL.huggingface },
   { value: "modelscope", label: SOURCE_LABEL.modelscope },
+  { value: "huggingface", label: SOURCE_LABEL.huggingface },
 ]
+
+const MODEL_DOWNLOAD_SESSION_KEY = "lorahub:model-download-session-id"
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B"
@@ -69,16 +71,7 @@ function formatBytes(n: number): string {
 }
 
 export function ModelsTab() {
-  const settings = useQuery({
-    queryKey: ["settings"],
-    queryFn: api.getSettings,
-    staleTime: 30_000,
-  })
-
-  const preferModelscope = settings.data?.settings.modelscope_enabled ?? false
-  const [source, setSource] = useState<Source>(
-    preferModelscope ? "modelscope" : "huggingface",
-  )
+  const [source, setSource] = useState<Source>("modelscope")
   const [repoId, setRepoId] = useState("")
   const [revision, setRevision] = useState("")
   const [targetDir, setTargetDir] = useState("")
@@ -87,9 +80,27 @@ export function ModelsTab() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [lastListedKey, setLastListedKey] = useState("")
 
+  const latestDownload = useQuery({
+    queryKey: ["model-download-latest"],
+    queryFn: api.getLatestModelDownload,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 800 : false,
+    staleTime: 400,
+  })
+
   useEffect(() => {
-    setSource((current) => (current ? current : preferModelscope ? "modelscope" : "huggingface"))
-  }, [preferModelscope])
+    const stored = window.localStorage.getItem(MODEL_DOWNLOAD_SESSION_KEY)
+    if (stored) setSessionId(stored)
+  }, [])
+
+  useEffect(() => {
+    const latest = latestDownload.data
+    if (!latest?.session_id) return
+    if (latest.status === "running" || !sessionId) {
+      setSessionId(latest.session_id)
+      window.localStorage.setItem(MODEL_DOWNLOAD_SESSION_KEY, latest.session_id)
+    }
+  }, [latestDownload.data, sessionId])
 
   const startDownload = useMutation({
     mutationFn: () =>
@@ -101,7 +112,10 @@ export function ModelsTab() {
         threads,
         paths: Array.from(selectedPaths),
       }),
-    onSuccess: (session) => setSessionId(session.session_id),
+    onSuccess: (session) => {
+      setSessionId(session.session_id)
+      window.localStorage.setItem(MODEL_DOWNLOAD_SESSION_KEY, session.session_id)
+    },
   })
 
   const fileList = useMutation({
@@ -135,13 +149,20 @@ export function ModelsTab() {
     staleTime: 400,
   })
 
-  const current = session.data ?? startDownload.data ?? null
+  const latestCurrent =
+    latestDownload.data?.session_id &&
+    latestDownload.data.status !== "idle" &&
+    (!sessionId || latestDownload.data.session_id === sessionId)
+      ? latestDownload.data
+      : null
+  const current = session.data ?? startDownload.data ?? latestCurrent ?? null
   const error = (startDownload.error as Error | undefined) ?? (session.error as Error | undefined)
   const ready = repoId.includes("/") && repoId.trim().length > 2
   const running = current?.status === "running" || startDownload.isPending
   const listing = fileList.isPending
   const latest = current?.events.at(-1)
   const percent = Math.max(0, Math.min(100, current?.percent ?? 0))
+  const currentSource = current?.source
   const listed = fileList.data?.files ?? []
   const selectedFiles = listed.filter((file) => selectedPaths.has(file.path))
   const selectedBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0)
@@ -380,7 +401,9 @@ export function ModelsTab() {
         <CardContent className="space-y-4">
           <Progress value={percent} className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-2">
             <ProgressLabel className="text-xs text-muted-foreground truncate">
-              {current ? `${SOURCE_LABEL[current.source]} · ${current.repo_id}` : "等待任务"}
+              {currentSource && current?.repo_id
+                ? `${SOURCE_LABEL[currentSource]} · ${current.repo_id}`
+                : "等待任务"}
             </ProgressLabel>
             <div className="text-xs font-mono tabular-nums text-muted-foreground text-right min-w-[5ch]">
               {percent.toFixed(1)}%
@@ -448,7 +471,7 @@ export function ModelsTab() {
             </div>
           ) : (
             <div className="text-[11px] text-muted-foreground/80">
-              大模型下载可能耗时较长。开始后保持服务运行即可，刷新页面仍可通过会话接口查询最近任务。
+              大模型下载可能耗时较长。开始后保持服务运行即可，刷新页面会自动恢复最近任务。
             </div>
           )}
         </CardContent>
