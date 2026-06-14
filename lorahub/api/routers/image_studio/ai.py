@@ -16,8 +16,14 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from lorahub.api import app as app_module
 from lorahub.api.dataset_files import _resolve_under_roots
 from lorahub.api.image_studio_store import ImageAnnotation, ImageStudioStore
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 
 from ._shared import _file_sha256, _scan_images, _store
 
@@ -25,6 +31,15 @@ if TYPE_CHECKING:
     from lorahub.core.tagging.wd14 import WD14Tagger
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_SMART_CAPTION = "image_studio_smart_caption"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 def _ulid_safe() -> str:
@@ -48,6 +63,7 @@ class _SmartCaptionSession:
     session_id: str
     path: str
     total: int
+    task_kind: str | None = None
     status: str = "running"  # running / succeeded / failed / canceled
     processed: int = 0
     results: list[dict[str, Any]] = field(default_factory=list)
@@ -64,25 +80,47 @@ class _SmartCaptionSession:
             self.results.append(item)
             self.processed += 1
             self.last_image = image_name
+            processed = self.processed
+        self._append_task_event(
+            f"captioned {image_name}",
+            percent=self.percent,
+            payload={"image": image_name, "processed": processed, "item": item},
+        )
 
     def add_error(self, path: str, msg: str, image_name: str) -> None:
         with self._lock:
             self.errors.append({"path": path, "error": msg})
             self.processed += 1
             self.last_image = image_name
+            processed = self.processed
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=self.percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
 
     def set_error(self, msg: str) -> None:
         with self._lock:
             self.error = msg
+        self._append_task_event(msg, level="error", percent=self.percent)
 
     def finish(self, status: str) -> None:
         with self._lock:
             self.status = status
             self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        self._finalize_task(status)
 
     def request_stop(self) -> None:
         with self._lock:
             self._stop_flag = True
+        self._append_task_event("cancel requested", level="warn", percent=self.percent)
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -108,6 +146,55 @@ class _SmartCaptionSession:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
             }
+
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 0.0
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if not self.task_kind:
+            return
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+    def _finalize_task(self, status: str) -> None:
+        if not self.task_kind:
+            return
+        task_status = "succeeded"
+        if status == "failed":
+            task_status = "failed"
+        elif status == "canceled":
+            task_status = "canceled"
+        try:
+            _task_store().update(
+                self.session_id,
+                status=task_status,  # type: ignore[arg-type]
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
 
 
 # Module-level session registry. Same shape as the tagging tab — the only
@@ -1257,10 +1344,35 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     else:
         skipped = 0
     store = _store()
+    task = _task_store().create(
+        kind=_KIND_SMART_CAPTION,
+        title=f"smart caption:{directory.name}",
+        metadata={
+            "path": str(directory),
+            "recursive": body.recursive,
+            "visionTask": body.visionTask,
+            "captionMode": body.captionMode,
+            "captionSource": body.captionSource,
+            "skipExisting": body.skipExisting,
+            "skipped": skipped,
+            "total": len(images),
+        },
+    )
     session = _SmartCaptionSession(
-        session_id=str(_ulid_safe()),
+        session_id=task.id,
         path=str(directory),
         total=len(images),
+        task_kind=_KIND_SMART_CAPTION,
+    )
+    _task_store().append_event(
+        session.session_id,
+        TaskEvent(
+            level="info",
+            message="smart caption queued",
+            percent=0,
+            payload={"total": len(images), "skipped": skipped},
+            ts=_time.time(),
+        ),
     )
     with _smart_caption_lock:
         _smart_caption_sessions[session.session_id] = session
@@ -1380,6 +1492,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                 s1_queue.task_done()
 
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             # Producer pool — small, GPU-bound. We use the executor as
             # a futures collector so we can apply a per-image timeout
             # against stage 1 (a hung WD14 forward shouldn't stall
@@ -1906,4 +2019,3 @@ def ai_batch_trigger_words(body: TriggerWordsBatchInput) -> dict[str, Any]:
         "errors": errors,
         "dataset_top": dataset_top,
     }
-

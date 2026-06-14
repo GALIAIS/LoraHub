@@ -25,6 +25,7 @@ from lorahub.api.image_studio_library import (
     TagEntry,
     TriggerWordEntry,
 )
+from lorahub.api.task_sessions import TaskSessionStore
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +198,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     monkeypatch.setattr(app_module, "_image_studio_store", store)
     library = ImageStudioLibrary(tmp_path / "is.sqlite")
     monkeypatch.setattr(app_module, "_image_studio_library", library)
+    monkeypatch.setattr(app_module, "_task_session_store", TaskSessionStore(tmp_path / "tasks.sqlite3"))
     with TestClient(app_module.app) as c:
         yield c
 
@@ -246,6 +248,63 @@ def test_get_image(client: TestClient, sample_dir: Path) -> None:
     assert body["caption"] == "caption for a"
     assert body["phash"] == {}
     assert body["pendingOps"] == []
+
+
+def test_smart_caption_writes_task_session(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.ai_store import AIRoute
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+
+    response = client.post(
+        "/api/image-studio/ai/smart-caption",
+        json={
+            "path": str(sample_dir),
+            "skipExisting": True,
+            "useWd14": False,
+            "captionMode": "style",
+            "triggerWord": "teststyle",
+            "concurrency": 1,
+            "taggerConcurrency": 1,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/smart-caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_smart_caption",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 2
+    assert latest["events"][-1]["message"].startswith("finished")
 
 
 def test_annotation_crud_via_api(client: TestClient, sample_dir: Path) -> None:
