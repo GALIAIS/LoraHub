@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Bot,
@@ -39,6 +39,11 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import {
+  Field,
+  KeyRuntimeBadge,
+  makeDraft,
+} from "./ai-provider-form-support"
 
 const SELECTION_MODES: { value: AIKeySelectionMode; label: string }[] = [
   { value: "round_robin", label: "轮询" },
@@ -138,51 +143,6 @@ export function ProvidersPanel() {
       </div>
     </div>
   )
-}
-
-interface KeyDraftLocal {
-  id: string | null
-  preview: string
-  value: string
-  requestCount?: number
-  successCount?: number
-  failureCount?: number
-  cooldownUntil?: string | null
-  lastError?: string | null
-}
-
-function makeDraft(provider: AIProviderRecord | null): {
-  name: string
-  baseUrl: string
-  organization: string
-  project: string
-  enabled: boolean
-  selectionMode: AIKeySelectionMode
-  keys: KeyDraftLocal[]
-  headersJson: string
-} {
-  return {
-    name: provider?.name ?? "",
-    baseUrl: provider?.baseUrl ?? "",
-    organization: provider?.organization ?? "",
-    project: provider?.project ?? "",
-    enabled: provider?.enabled ?? true,
-    selectionMode: provider?.apiKeySelectionMode ?? "round_robin",
-    keys: provider?.apiKeys.map((k) => ({
-      id: k.id,
-      preview: k.preview,
-      value: "",
-      requestCount: k.runtime.requestCount,
-      successCount: k.runtime.successCount,
-      failureCount: k.runtime.failureCount,
-      cooldownUntil: k.runtime.cooldownUntil,
-      lastError: k.runtime.lastError,
-    })) ?? [],
-    headersJson:
-      provider && Object.keys(provider.headers).length > 0
-        ? JSON.stringify(provider.headers, null, 2)
-        : "",
-  }
 }
 
 function ProviderForm({
@@ -537,52 +497,5 @@ function ProviderForm({
         </div>
       )}
     </Card>
-  )
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string
-  hint?: string
-  children: ReactNode
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-[11px]">{label}</Label>
-      {children}
-      {hint && (
-        <p className="text-[10px] text-muted-foreground/85 leading-relaxed">
-          {hint}
-        </p>
-      )}
-    </div>
-  )
-}
-
-function KeyRuntimeBadge({ k }: { k: KeyDraftLocal }) {
-  const onCooldown = !!k.cooldownUntil && new Date(k.cooldownUntil) > new Date()
-  return (
-    <div className="flex items-center gap-2 text-[10px] font-mono text-muted-foreground">
-      <span>请求 {k.requestCount ?? 0}</span>
-      <span className="text-emerald-600 dark:text-emerald-400">
-        ✓{k.successCount ?? 0}
-      </span>
-      <span className="text-destructive">
-        ✗{k.failureCount ?? 0}
-      </span>
-      {onCooldown && (
-        <Badge variant="destructive" className="text-[9px] rounded-[2px]">
-          冷却中
-        </Badge>
-      )}
-      {k.lastError && (
-        <span className="truncate text-destructive/85" title={k.lastError}>
-          · {k.lastError}
-        </span>
-      )}
-    </div>
   )
 }
