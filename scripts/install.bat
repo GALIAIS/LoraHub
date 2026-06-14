@@ -265,18 +265,30 @@ echo.
 
 rem ---- [6/6] Install frontend dependencies --------------------------
 echo [6/6] Installing frontend dependencies (web/) ...
-if exist "web\node_modules\vite" (
-  echo   OK web\node_modules already exists
+set "NEEDS_NPM_INSTALL=0"
+if not exist "web\node_modules" set "NEEDS_NPM_INSTALL=1"
+if not exist "web\node_modules\.package-lock.json" set "NEEDS_NPM_INSTALL=1"
+if exist "web\node_modules\.package-lock.json" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-Item 'web\package-lock.json').LastWriteTimeUtc -gt (Get-Item 'web\node_modules\.package-lock.json').LastWriteTimeUtc -or (Get-Item 'web\package.json').LastWriteTimeUtc -gt (Get-Item 'web\node_modules\.package-lock.json').LastWriteTimeUtc) { exit 1 } else { exit 0 }"
+  if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
+)
+if "%NEEDS_NPM_INSTALL%"=="0" (
+  echo   OK web\node_modules already matches package lock
 ) else (
   pushd "web" || (
     echo   [ERROR] Cannot enter web directory
     goto :fail
   )
-  call npm.cmd install
+  for /f "delims=" %%r in ('npm.cmd config get registry 2^>nul') do set "NPM_REGISTRY_NOW=%%r"
+  echo   npm registry: !NPM_REGISTRY_NOW!
+  echo   running npm ci (verbose log: web\_npm_install.log) ...
+  call npm.cmd ci --verbose --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=2 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=20000 > _npm_install.log 2>&1
   set "NPM_RC=!errorlevel!"
+  type _npm_install.log
   popd
   if not "!NPM_RC!"=="0" (
-    echo   [ERROR] npm install failed.
+    echo   [ERROR] npm ci failed.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path 'web\_npm_install.log' -Tail 40"
     echo   If your network blocks registry.npmjs.org, retry with the
     echo   China-mirror wrapper:  scripts\install-cn.bat
     goto :fail

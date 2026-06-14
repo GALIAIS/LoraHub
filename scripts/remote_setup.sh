@@ -138,10 +138,17 @@ build_frontend() {
     needs_install=1
   fi
   if (( needs_install )); then
-    log "npm install (registry: ${NPM_REGISTRY})"
-    "${NODE_DIR}/bin/npm" install --registry="${NPM_REGISTRY}" \
+    log "npm ci (registry: ${NPM_REGISTRY}; log: /root/_npm_install.log)"
+    "${NODE_DIR}/bin/npm" ci --registry="${NPM_REGISTRY}" \
+      --verbose \
+      --no-audit \
+      --no-fund \
+      --fetch-timeout=60000 \
+      --fetch-retries=2 \
+      --fetch-retry-mintimeout=5000 \
+      --fetch-retry-maxtimeout=20000 \
       > /root/_npm_install.log 2>&1 || {
-      err "npm install failed; tail of log:"
+      err "npm ci failed; tail of log:"
       tail -30 /root/_npm_install.log >&2
       return 1
     }

@@ -254,12 +254,36 @@ echo ""
 # ---- [6/6] Install frontend dependencies ----------------------------
 echo "[6/6] Installing frontend dependencies (web/) ..."
 # npm reads NPM_CONFIG_REGISTRY natively when set.
-if [ -d "web/node_modules/vite" ]; then
-    echo "  OK web/node_modules already exists"
+needs_npm_install=0
+if [ ! -d "web/node_modules" ]; then
+    needs_npm_install=1
+elif [ ! -f "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+elif [ "web/package-lock.json" -nt "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+elif [ "web/package.json" -nt "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+fi
+
+if [ "$needs_npm_install" = "0" ]; then
+    echo "  OK web/node_modules already matches package lock"
 else
     cd web
-    npm install
+    echo "  npm registry: $(npm config get registry)"
+    echo "  running npm ci (verbose log: web/_npm_install.log) ..."
+    npm ci --verbose --no-audit --no-fund \
+        --fetch-timeout=60000 \
+        --fetch-retries=2 \
+        --fetch-retry-mintimeout=5000 \
+        --fetch-retry-maxtimeout=20000 \
+        2>&1 | tee _npm_install.log
+    npm_rc=${PIPESTATUS[0]}
     cd "$ROOT"
+    if [ "$npm_rc" -ne 0 ]; then
+        echo "  [ERROR] npm ci failed; tail of web/_npm_install.log:"
+        tail -40 web/_npm_install.log || true
+        exit 1
+    fi
     echo "  OK Frontend dependencies installed"
 fi
 echo ""
