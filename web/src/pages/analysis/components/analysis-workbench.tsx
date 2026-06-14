@@ -16,21 +16,21 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type JobDetail, type JobSummary } from "@/lib/api"
-import {
-  LossChart,
-  type ChartBand,
-  type ChartMarker,
-  type LossSeries,
-} from "../../jobs/components/loss-chart"
+import { LossChart } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
+import {
+  buildAllMarkers,
+  buildChangepoints,
+  buildCheckpointMarkers,
+  buildLossBands,
+  buildLossSeries,
+} from "./analysis-chart-model"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
 import { ViewModeSwitcher } from "./analysis-view-switcher"
 import { CheckpointPlayback } from "./checkpoint-playback"
 import { DiagnosisBanner } from "./diagnosis-banner"
 import { EffectivenessPanel } from "./effectiveness-panel"
-import { rollingQuartiles, type BandPoint } from "./loss-stats"
 import { MetricGrid } from "./metric-grid"
-import { analyseChangepoints } from "./pelt"
 import { StageTimeline } from "./stage-timeline"
 import {
   defaultPanels,
@@ -46,7 +46,6 @@ import {
   formatXTick,
   loadXMode,
   saveXMode,
-  xMapper,
   xModeLabel,
   type XMode,
 } from "./x-axis-mode"
@@ -63,8 +62,6 @@ import { WandbTab } from "../panels/wandb-tab"
 
 type BottomTabKey = "stats" | "table" | "samples" | "ai"
 type ViewKind = "builtin" | "wandb"
-
-const EMA_ALPHA = 0.1
 
 export function AnalysisWorkbench({
   job,
@@ -184,199 +181,51 @@ export function AnalysisWorkbench({
     staleTime: 30_000,
   })
 
-  const lossSeries: LossSeries[] = useMemo(() => {
-    const allLossPoints = (metrics.data?.loss ?? []).filter(
-      (p): p is { step: number; loss: number; epoch?: number | null; ts: number } =>
-        typeof p.loss === "number" && Number.isFinite(p.loss),
-    )
-    const map = xMapper(xMode, metrics.data ?? null)
-    // Maintain a step → mapped-X table so all derived series (median,
-    // EMA, val) use the same X coordinate as the raw series.
-    const stepToX = new Map<number, number>()
-    for (const p of allLossPoints) {
-      stepToX.set(p.step, map(p))
-    }
-    const trainPoints = allLossPoints.map((p) => ({
-      step: stepToX.get(p.step) ?? map(p),
-      loss: p.loss,
-    }))
-    const out: LossSeries[] = []
-    if (trainPoints.length > 0) {
-      // Use rolling median as the primary line — diffusion training loss
-      // is high-variance noise around a slowly-moving signal, so a
-      // single raw line over-emphasises step-to-step jitter. Raw stays
-      // visible as a faint dashed reference; the IQR band conveys
-      // dispersion without forcing the user to read variance from
-      // chart wiggle.
-      const robust =
-        trainPoints.length >= 8 ? rollingQuartiles(trainPoints) : null
-      if (robust) {
-        out.push({
-          id: `${job.id}-train-median`,
-          label: "训练 loss · 中位数",
-          color: "var(--chart-1)",
-          points: robust.median,
-        })
-        out.push({
-          id: `${job.id}-train-raw`,
-          label: "原始采样",
-          color: "var(--chart-1)",
-          dashed: true,
-          points: trainPoints,
-        })
-      } else {
-        out.push({
-          id: `${job.id}-train`,
-          label: "训练 loss",
-          color: "var(--chart-1)",
-          points: trainPoints,
-        })
-      }
-      if (trainPoints.length >= 6) {
-        let acc = trainPoints[0].loss
-        const ema = trainPoints.map((p) => {
-          acc = EMA_ALPHA * p.loss + (1 - EMA_ALPHA) * acc
-          return { step: p.step, loss: acc }
-        })
-        out.push({
-          id: `${job.id}-train-ema`,
-          label: `EMA α=${EMA_ALPHA}`,
-          color: "var(--chart-1)",
-          dashed: true,
-          points: ema,
-        })
-      }
-    }
-    const valPoints = (metrics.data?.val_loss ?? []).filter(
-      (p): p is { epoch: number; val_loss: number; step?: number | null; ts: number } =>
-        typeof p.val_loss === "number" && Number.isFinite(p.val_loss),
-    )
-    if (valPoints.length > 0) {
-      const epochToStep = new Map<number, number>()
-      for (const p of metrics.data?.loss ?? []) {
-        if (typeof p.epoch === "number" && typeof p.step === "number") {
-          epochToStep.set(p.epoch, p.step)
-        }
-      }
-      const lastTrainStep = allLossPoints.length
-        ? allLossPoints[allLossPoints.length - 1].step
-        : 0
-      const mapped = valPoints.map((p) => {
-        const stepHint =
-          typeof p.step === "number"
-            ? p.step
-            : (epochToStep.get(p.epoch) ?? (lastTrainStep || p.epoch))
-        const x = map({
-          step: stepHint,
-          epoch: p.epoch,
-          ts: p.ts,
-        })
-        return { step: x, loss: p.val_loss }
-      })
-      out.push({
-        id: `${job.id}-val`,
-        label: "验证 loss",
-        color: "var(--chart-2)",
-        points: mapped,
-      })
-    }
-    // Reference-run overlay — drawn as a faint dashed line behind the
-    // primary series so users can compare "is this run beating my best
-    // baseline" without leaving the page.
-    if (
-      referenceRun &&
-      referenceRun.jobId !== job.id &&
-      referenceMetrics.data
-    ) {
-      const refMap = xMapper(xMode, referenceMetrics.data)
-      const refPoints = (referenceMetrics.data.loss ?? [])
-        .filter(
-          (p): p is { step: number; loss: number; epoch?: number | null; ts: number } =>
-            typeof p.loss === "number" && Number.isFinite(p.loss),
-        )
-        .map((p) => ({ step: refMap(p), loss: p.loss }))
-      if (refPoints.length > 0) {
-        out.push({
-          id: `${job.id}-ref`,
-          label: `参考 ${referenceRun.label}`,
-          color: "color-mix(in oklch, var(--muted-foreground) 80%, transparent)",
-          dashed: true,
-          points: refPoints,
-        })
-      }
-    }
-    return out
-  }, [metrics.data, job.id, xMode, referenceRun, referenceMetrics.data])
+  const lossSeries = useMemo(
+    () =>
+      buildLossSeries({
+        metrics: metrics.data,
+        jobId: job.id,
+        xMode,
+        referenceRun,
+        referenceMetrics: referenceMetrics.data,
+      }),
+    [metrics.data, job.id, xMode, referenceRun, referenceMetrics.data],
+  )
 
-  const checkpointMarkers: ChartMarker[] = useMemo(() => {
-    const map = xMapper(xMode, metrics.data ?? null)
-    return (metrics.data?.checkpoints ?? [])
-      .filter((c): c is { path: string; step: number; ts: number } =>
-        typeof c.step === "number" && Number.isFinite(c.step),
-      )
-      .map((c) => ({
-        step: map(c),
-        label: c.path,
-        color: "var(--chart-3)",
-      }))
-  }, [metrics.data, xMode])
+  const checkpointMarkers = useMemo(
+    () => buildCheckpointMarkers(metrics.data, xMode),
+    [metrics.data, xMode],
+  )
 
   // IQR band for the training loss — drawn behind the median line so
   // users can read dispersion at a glance instead of guessing it from
   // the noise envelope of the raw curve.
-  const lossBands: ChartBand[] = useMemo(() => {
-    const points = (metrics.data?.loss ?? []).filter(
-      (p): p is { step: number; loss: number; epoch?: number | null; ts: number } =>
-        typeof p.loss === "number" && Number.isFinite(p.loss),
-    )
-    if (points.length < 8) return []
-    const map = xMapper(xMode, metrics.data ?? null)
-    const series: BandPoint[] = rollingQuartiles(
-      points.map((p) => ({ step: map(p), loss: p.loss })),
-    ).band
-    return [
-      {
-        id: "train-iqr",
-        color: "color-mix(in oklch, var(--chart-1) 18%, transparent)",
-        points: series,
-      },
-    ]
-  }, [metrics.data, xMode])
+  const lossBands = useMemo(
+    () => buildLossBands(metrics.data, xMode),
+    [metrics.data, xMode],
+  )
 
   // PELT changepoint analysis — used by the stage timeline below the
   // KPI strip and also overlaid as cyan dashed lines on the loss chart.
   // PELT runs on raw step-axis losses (segment cost is identical under
   // X transforms); we then translate the resulting changepoint X values
   // through the mapper for the markers.
-  const changepoints = useMemo(() => {
-    const points = (metrics.data?.loss ?? [])
-      .filter(
-        (p): p is { step: number; loss: number; ts: number } =>
-          typeof p.loss === "number" && Number.isFinite(p.loss),
-      )
-      .map((p) => ({ step: p.step, loss: p.loss }))
-    return analyseChangepoints(points)
-  }, [metrics.data])
+  const changepoints = useMemo(
+    () => buildChangepoints(metrics.data),
+    [metrics.data],
+  )
 
-  const allMarkers: ChartMarker[] = useMemo(() => {
-    const map = xMapper(xMode, metrics.data ?? null)
-    // Reproduce the loss timestamp for each changepoint step so the
-    // mapper has wallclock data to work with.
-    const stepToSample = new Map<
-      number,
-      { step: number; epoch?: number | null; ts: number }
-    >()
-    for (const p of metrics.data?.loss ?? []) {
-      if (typeof p.step === "number")
-        stepToSample.set(p.step, { step: p.step, epoch: p.epoch, ts: p.ts })
-    }
-    const out: ChartMarker[] = [...checkpointMarkers]
-    for (const s of changepoints.changepointSteps) {
-      const sample = stepToSample.get(s) ?? { step: s, ts: 0 }
-      out.push({ step: map(sample), color: "var(--chart-2)" })
-    }
-    return out
-  }, [checkpointMarkers, changepoints.changepointSteps, metrics.data, xMode])
+  const allMarkers = useMemo(
+    () =>
+      buildAllMarkers({
+        metrics: metrics.data,
+        xMode,
+        checkpointMarkers,
+        changepointSteps: changepoints.changepointSteps,
+      }),
+    [checkpointMarkers, changepoints.changepointSteps, metrics.data, xMode],
+  )
 
   const totalPoints = metrics.data?.loss?.length ?? 0
   // Estimated training progress in [0..1] for context-aware tone
