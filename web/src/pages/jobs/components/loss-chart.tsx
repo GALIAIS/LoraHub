@@ -17,10 +17,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties } from "react"
-import { AlertTriangle, Eye, EyeOff } from "lucide-react"
+import type { LossTooltip } from "./loss-chart-widgets"
 import { cn } from "@/lib/utils"
 import { downsamplePoints } from "../utils"
 import { FullscreenModal } from "./loss-chart-fullscreen"
+import { LegendRow, TooltipCard, TrendBadge } from "./loss-chart-widgets"
 import { ChartToolbar } from "./chart-toolbar"
 import {
   MAX_POINTS,
@@ -366,7 +367,7 @@ function LossChartCore({
   }
 
   // ----- Crosshair / tooltip data point picking ---------------------------
-  const tooltip = useMemo(() => {
+  const tooltip = useMemo<LossTooltip | null>(() => {
     if (hoverX == null) return null
     if (hoverX < PAD_LEFT || hoverX > VIEW_W - PAD_RIGHT) return null
     const targetStep = inverseX(hoverX)
@@ -462,28 +463,7 @@ function LossChartCore({
   return (
     <div className={cn("relative w-full", className)}>
       <div className="absolute right-2 top-2 z-10 flex items-start gap-2">
-        {trend && (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1 rounded-[3px] border px-1.5 py-0.5 text-[10.5px] font-medium",
-              trend.tone === "danger"
-                ? "border-destructive/40 bg-destructive/10 text-destructive"
-                : trend.tone === "ok"
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                  : "border-border bg-muted text-muted-foreground",
-            )}
-          >
-            {trend.tone === "danger" && (
-              <AlertTriangle className="size-3" aria-hidden />
-            )}
-            {trend.label}
-            {overfitSignal?.gap != null && (
-              <span className="ml-1 tabular-nums text-muted-foreground/80">
-                Δ{formatLoss(overfitSignal.gap)}
-              </span>
-            )}
-          </span>
-        )}
+        <TrendBadge trend={trend} gap={overfitSignal?.gap} />
         <button
           type="button"
           onClick={() => setYLog((v) => !v)}
@@ -718,90 +698,21 @@ function LossChartCore({
         </svg>
       </div>
 
-      {/* Tooltip card */}
-      {tooltip && (
-        <div className="pointer-events-none absolute right-2 bottom-12 max-w-[260px] rounded-[5px] border border-border/60 bg-background/95 backdrop-blur-sm shadow-[var(--panel-shadow)] px-2.5 py-1.5 text-[11px] tabular-nums">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            step {tooltip.step}
-          </div>
-          <ul className="mt-0.5 space-y-0.5">
-            {tooltip.items.map((it) => (
-              <li
-                key={it.seriesId}
-                className="flex items-center gap-1.5 whitespace-nowrap"
-              >
-                <span
-                  className="inline-block size-2 rounded-full"
-                  style={{ background: it.color }}
-                />
-                <span className="text-foreground/85">{it.label}</span>
-                <span className="ml-auto text-foreground/95">
-                  {formatLoss(it.loss)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <TooltipCard tooltip={tooltip} />
 
       {/* Legend / range chip row */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1 text-[11px]">
-        {prepared.map((s) => {
-          const off = !!hidden[s.id]
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => toggleSeries(s.id)}
-              className={cn(
-                "group inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-0.5 transition-colors",
-                off
-                  ? "border-border/40 text-muted-foreground/70"
-                  : "border-border/60 bg-muted/40 text-foreground/85",
-              )}
-              title={off ? "点击显示" : "点击隐藏"}
-            >
-              {off ? (
-                <EyeOff className="size-3" />
-              ) : (
-                <span
-                  className="inline-block h-[2px] w-3 align-middle"
-                  style={{ background: s.color }}
-                  aria-hidden
-                />
-              )}
-              <span className={cn(off && "line-through")}>{s.label}</span>
-            </button>
-          )
-        })}
-        {markers.length > 0 && (
-          <span className="text-[10px] text-muted-foreground/70">
-            · {markers.length} 个检查点标记
-          </span>
-        )}
-        {xLabel && (
-          <span className="text-[10px] text-muted-foreground/70">
-            · X: {xLabel}
-          </span>
-        )}
-        {zoomedIn && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">
-            <Eye className="size-3" />
-            视图 {Math.round(xMin)} – {Math.round(xMax)}
-          </span>
-        )}
-        {zoomedIn && fullExtent && fullExtent.xMax > xMax && (
-          <button
-            type="button"
-            onClick={reset}
-            className="inline-flex items-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
-            title="新数据已超出视图，点击跟随到最新"
-          >
-            <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-            +{Math.round(fullExtent.xMax - xMax)} 步未显示 · 跟随
-          </button>
-        )}
-      </div>
+      <LegendRow
+        series={prepared}
+        hidden={hidden}
+        markersCount={markers.length}
+        xLabel={xLabel}
+        zoomedIn={zoomedIn}
+        xMin={xMin}
+        xMax={xMax}
+        fullXMax={fullExtent?.xMax}
+        onToggleSeries={toggleSeries}
+        onReset={reset}
+      />
     </div>
   )
 }
