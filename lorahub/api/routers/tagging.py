@@ -31,6 +31,13 @@ from lorahub.core.tagging.wd14 import (
 router = APIRouter(prefix="/api")
 _KIND_TAGGING = "tagging"
 _KIND_ANIMA_CAPTION = "anima_caption"
+_TaggingStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 def _task_store() -> TaskSessionStore:
@@ -71,7 +78,7 @@ class _TaggingSession:
     include_character: bool
     underscores: bool
     task_kind: str | None = None
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _TaggingStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -181,13 +188,11 @@ def _tagging_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
     if isinstance(task.result, dict):
         return task.result
     metadata = task.metadata
-    status: Literal["running", "succeeded", "failed"]
-    if task.status == "succeeded":
-        status = "succeeded"
-    elif task.status in {"failed", "interrupted", "canceled"}:
-        status = "failed"
-    else:
-        status = "running"
+    status: _TaggingStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
     return {
         "session_id": task.id,
         "path": str(metadata.get("path") or ""),

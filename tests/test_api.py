@@ -3060,6 +3060,38 @@ def test_tagging_status_reads_task_session_after_memory_clear(
     assert body["written"] == 1
 
 
+def test_tagging_status_preserves_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="tagging",
+        title="tagging:wd14",
+        metadata={
+            "path": str(data),
+            "tagger": "wd14",
+            "model_id": "wd14-vit-v2",
+            "device": "cpu",
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=28)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._sessions.clear()
+
+    recovered = client.get(f"/api/tagging/tag/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 28
+    assert body["error"] == "task interrupted by server restart"
+
+
 def test_tagging_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/tagging/tag/does-not-exist")
     assert r.status_code == 404
