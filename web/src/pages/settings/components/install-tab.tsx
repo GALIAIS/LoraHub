@@ -179,10 +179,10 @@ function ProgressBar({
         </span>
         <span className="font-mono tabular-nums">{pct.toFixed(0)}%</span>
       </div>
-      <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+      <div className="shiro-progress-track h-1.5">
         <div
           className={cn(
-            "h-full transition-[width] duration-300",
+            "shiro-progress-fill",
             failed ? "bg-destructive" : "bg-emerald-500",
           )}
           style={{ width: `${pct}%` }}
@@ -331,10 +331,10 @@ function AnimaModelDownloadCard({
             </span>
             <span className="font-mono tabular-nums">{percent.toFixed(0)}%</span>
           </div>
-          <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+          <div className="shiro-progress-track h-1.5">
             <div
               className={cn(
-                "h-full transition-[width] duration-300",
+                "shiro-progress-fill",
                 failed ? "bg-destructive" : "bg-emerald-500",
               )}
               style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}

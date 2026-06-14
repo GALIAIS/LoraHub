@@ -23,6 +23,7 @@ from pathlib import Path
 
 from lorahub.core.backends._common.installer import ProgressCallback
 from lorahub.core.backends.errors import BootstrapError
+from lorahub.core.paths import project_root
 from lorahub.core.toolchain import uv as _uv
 
 # anima_lora is vendored — no remote URL to clone from. We keep this
@@ -66,6 +67,14 @@ class BootstrapPlan:
             return self.venv_dir / "Scripts" / "python.exe"
         return self.venv_dir / "bin" / "python"
 
+    @property
+    def uv_cache_dir(self) -> Path:
+        return project_root() / ".cache" / "uv"
+
+    @property
+    def temp_dir(self) -> Path:
+        return project_root() / ".cache" / "tmp"
+
 
 def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     """Run ``uv sync`` inside the vendored anima_lora directory.
@@ -85,6 +94,7 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
     if plan.base_python is not None:
         args += ["--python", str(plan.base_python)]
     label = f"uv sync -> {plan.venv_dir}"
+    env = _uv_sync_env(plan)
     try:
         # ``run_uv`` injects ``--default-index <plan.pypi_index>`` when
         # the caller didn't already pin one. The named ``pytorch-cu124``
@@ -93,9 +103,38 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
         # (accelerate, diffusers, transformers, ~30 deps) get routed
         # through the user's mirror, which is still a useful speedup
         # in regions where pypi.org is slow.
-        _uv.run_uv(args, step=label, progress=progress, pypi_index=plan.pypi_index)
+        _uv.run_uv(
+            args,
+            step=label,
+            progress=progress,
+            pypi_index=plan.pypi_index,
+            env=env,
+        )
     except RuntimeError as exc:
         raise BootstrapError("uv sync anima_lora", 1) from exc
+
+
+def _uv_sync_env(plan: BootstrapPlan) -> dict[str, str]:
+    """Keep uv's large torch extraction cache on the project volume by default."""
+    import os
+
+    env: dict[str, str] = {}
+    if not os.environ.get("UV_CACHE_DIR"):
+        plan.uv_cache_dir.mkdir(parents=True, exist_ok=True)
+        env["UV_CACHE_DIR"] = str(plan.uv_cache_dir)
+
+    if sys.platform == "win32":
+        if not os.environ.get("TEMP"):
+            plan.temp_dir.mkdir(parents=True, exist_ok=True)
+            env["TEMP"] = str(plan.temp_dir)
+        if not os.environ.get("TMP"):
+            plan.temp_dir.mkdir(parents=True, exist_ok=True)
+            env["TMP"] = str(plan.temp_dir)
+    elif not os.environ.get("TMPDIR"):
+        plan.temp_dir.mkdir(parents=True, exist_ok=True)
+        env["TMPDIR"] = str(plan.temp_dir)
+
+    return env
 
 
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:

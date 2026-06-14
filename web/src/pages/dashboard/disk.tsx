@@ -59,9 +59,9 @@ export const DiskSection = memo(function DiskSection({ disks }: { disks: SystemD
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+                      <div className="shiro-progress-track flex-1 h-1.5">
                         <div
-                          className={cn("h-full transition-[width]", tone.bar)}
+                          className={cn("shiro-progress-fill", tone.bar)}
                           style={{ width: `${Math.max(0, Math.min(100, d.percent))}%` }}
                         />
                       </div>

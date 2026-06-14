@@ -42,9 +42,9 @@ export const BatteryCard = memo(function BatteryCard({ battery }: { battery: Sys
         </div>
       </CardHeader>
       <CardContent>
-        <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
+        <div className="shiro-progress-track h-1.5">
           <div
-            className={cn("h-full transition-[width]", batteryTone.bar)}
+            className={cn("shiro-progress-fill", batteryTone.bar)}
             style={{ width: `${percent}%` }}
           />
         </div>

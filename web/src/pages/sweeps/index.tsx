@@ -287,7 +287,7 @@ function DistributionBar({ sweep }: { sweep: SweepSummary }) {
   const total = sweep.total || 1
   return (
     <div
-      className="h-1.5 w-full rounded-[2px] bg-border/60 flex overflow-hidden"
+      className="shiro-progress-track h-1.5 w-full flex"
       title={segments
         .filter((s) => s.count > 0)
         .map((s) => `${s.label} ${s.count}`)
@@ -297,7 +297,7 @@ function DistributionBar({ sweep }: { sweep: SweepSummary }) {
         seg.count > 0 ? (
           <div
             key={seg.key}
-            className={cn("h-full", STATE_COLORS[seg.key])}
+            className={cn("shiro-progress-fill", STATE_COLORS[seg.key])}
             style={{ width: `${(seg.count / total) * 100}%` }}
           />
         ) : null,
@@ -419,13 +419,13 @@ function SweepSummaryHeader({ sweep }: { sweep: SweepDetail }) {
       </div>
       <div className="space-y-1.5">
         <div
-          className="h-2.5 w-full rounded-[2px] bg-border/60 flex overflow-hidden"
+          className="shiro-progress-track h-2.5 w-full flex"
         >
           {segments.map((seg) =>
             seg.count > 0 ? (
               <div
                 key={seg.key}
-                className={cn("h-full", STATE_COLORS[seg.key])}
+                className={cn("shiro-progress-fill", STATE_COLORS[seg.key])}
                 style={{ width: `${(seg.count / total) * 100}%` }}
                 title={`${seg.label} ${seg.count}`}
               />
@@ -440,7 +440,7 @@ function SweepSummaryHeader({ sweep }: { sweep: SweepDetail }) {
             >
               <span
                 className={cn(
-                  "inline-block size-2 rounded-[2px]",
+                  "inline-block size-2 rounded-full",
                   STATE_COLORS[seg.key],
                 )}
               />

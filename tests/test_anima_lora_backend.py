@@ -19,6 +19,7 @@ test_anima_lora_schema.py (cut0 file).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -27,6 +28,7 @@ import pytest
 
 from lorahub.core.backends.anima_lora import AnimaLoraBackend
 from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap
+from lorahub.core.backends.anima_lora import installer as al_installer
 from lorahub.core.backends.anima_lora.parser import parse_line
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.config.schema import (
@@ -91,6 +93,48 @@ def test_bootstrap_env_var_override(
     env = al_bootstrap.resolve()
     # Env var wins over the vendored default.
     assert env.repo_path == fake.resolve()
+
+
+def test_installer_uv_sync_env_defaults_to_project_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_installer, "project_root", lambda: tmp_path)
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("TEMP", raising=False)
+    monkeypatch.delenv("TMP", raising=False)
+
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+    env = al_installer._uv_sync_env(plan)
+
+    assert env["UV_CACHE_DIR"] == str(tmp_path / ".cache" / "uv")
+    if sys.platform == "win32":
+        assert env["TEMP"] == str(tmp_path / ".cache" / "tmp")
+        assert env["TMP"] == str(tmp_path / ".cache" / "tmp")
+    else:
+        assert env["TMPDIR"] == str(tmp_path / ".cache" / "tmp")
+
+
+def test_installer_uv_sync_env_preserves_user_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_installer, "project_root", lambda: tmp_path)
+    monkeypatch.setenv("UV_CACHE_DIR", "/custom/uv-cache")
+    if sys.platform == "win32":
+        monkeypatch.setenv("TEMP", "C:\\custom\\tmp")
+        monkeypatch.setenv("TMP", "C:\\custom\\tmp")
+    else:
+        monkeypatch.setenv("TMPDIR", "/custom/tmp")
+
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+    env = al_installer._uv_sync_env(plan)
+
+    assert "UV_CACHE_DIR" not in env
+    if sys.platform == "win32":
+        assert "TEMP" not in env
+        assert "TMP" not in env
+    else:
+        assert "TMPDIR" not in env
 
 
 # --------------------------------------------------------------------------- #

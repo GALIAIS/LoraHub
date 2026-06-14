@@ -13,7 +13,6 @@ import {
   ArrowDown,
   ArrowUp,
   Cpu,
-  Download,
   MemoryStick,
   Sparkles,
   Wifi,
@@ -257,7 +256,7 @@ function UpdateBadge() {
     <Link
       to="/settings?tab=environment"
       className={cn(
-        "ml-auto inline-flex items-center gap-1.5 rounded-[2px] border border-primary/40",
+        "ml-auto inline-flex items-center gap-1.5 rounded-[6px] border border-primary/40",
         "bg-primary/10 px-2 py-0.5 text-[11px] text-primary",
         "hover:bg-primary/15 transition-colors",
       )}
@@ -267,7 +266,6 @@ function UpdateBadge() {
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/50" />
         <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
       </span>
-      <Download className="size-3" />
       新版本 {label}
     </Link>
   )
