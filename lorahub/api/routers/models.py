@@ -30,6 +30,13 @@ from lorahub.core.models.downloader import (
 
 router = APIRouter(prefix="/api")
 _KIND_MODEL_DOWNLOAD = "model_download"
+_DownloadStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 class DownloadModelRequest(BaseModel):
@@ -63,7 +70,7 @@ class _DownloadSession:
     paths: list[str]
     allow_patterns: list[str] = field(default_factory=list)
     ignore_patterns: list[str] = field(default_factory=list)
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _DownloadStatus = "running"
     percent: float = 0
     events: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None
@@ -175,13 +182,11 @@ def _latest_session() -> _DownloadSession | None:
 
 def _session_from_task(task: TaskSession) -> _DownloadSession:
     metadata = task.metadata
-    status: Literal["running", "succeeded", "failed"]
-    if task.status == "succeeded":
-        status = "succeeded"
-    elif task.status in {"failed", "interrupted", "canceled"}:
-        status = "failed"
-    else:
-        status = "running"
+    status: _DownloadStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
 
     return _DownloadSession(
         session_id=task.id,

@@ -2530,6 +2530,39 @@ def test_models_download_latest_survives_memory_clear(
     assert recovered["events"][-2]["message"] == "persisted progress"
 
 
+def test_models_download_latest_preserves_interrupted_task(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import models as models_router
+
+    task = app_module._task_session_store.create(
+        kind="model_download",
+        title="modelscope:owner/name",
+        metadata={
+            "source": "modelscope",
+            "repo_id": "owner/name",
+            "revision": "master",
+            "target_dir": None,
+            "threads": 4,
+            "paths": [],
+            "allow_patterns": [],
+            "ignore_patterns": [],
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=61)
+    app_module._task_session_store.mark_stale_interrupted()
+    models_router._sessions.clear()
+    models_router._latest_session_id = None
+
+    recovered = client.get("/api/models/download/latest").json()
+
+    assert recovered["session_id"] == task.id
+    assert recovered["status"] == "interrupted"
+    assert recovered["percent"] == 61
+    assert recovered["error"] == "task interrupted by server restart"
+
+
 def test_models_download_defaults_to_modelscope(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
