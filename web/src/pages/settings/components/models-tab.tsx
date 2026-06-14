@@ -9,7 +9,7 @@ import {
   Rows3,
   ServerCog,
 } from "lucide-react"
-import { api } from "@/lib/api"
+import { ApiError, api } from "@/lib/api"
 import type { RemoteModelFile } from "@/lib/api/models"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -193,6 +193,15 @@ export function ModelsTab() {
       query.state.data?.status === "running" || !query.state.data ? 800 : false,
     staleTime: 400,
   })
+
+  useEffect(() => {
+    if (!(session.error instanceof ApiError) || session.error.status !== 404) {
+      return
+    }
+    setSessionId(null)
+    window.localStorage.removeItem(MODEL_DOWNLOAD_SESSION_KEY)
+    void latestDownload.refetch()
+  }, [latestDownload, session.error])
 
   const latestCurrent =
     latestDownload.data?.session_id &&
