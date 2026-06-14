@@ -1089,6 +1089,38 @@ def test_auto_rotate_writes_task_session_and_recovers_status(
     assert recovered.json()["skipped_count"] == 3
 
 
+def test_ai_task_status_snapshot_recovers_running_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers.image_studio.ai_tasks import (
+        get_task_store,
+        persisted_task_result,
+    )
+
+    task_store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    monkeypatch.setattr(app_module, "_task_session_store", task_store)
+
+    task = get_task_store().create(
+        kind="image_studio_caption",
+        title="Caption",
+        metadata={"path": "/datasets/anime", "total": 4, "skipped": 1},
+    )
+    task_store.update(task.id, status="running", percent=25)
+
+    recovered = persisted_task_result(task.id, "image_studio_caption")
+
+    assert recovered is not None
+    assert recovered["session_id"] == task.id
+    assert recovered["path"] == "/datasets/anime"
+    assert recovered["status"] == "running"
+    assert recovered["total"] == 4
+    assert recovered["skipped"] == 1
+    assert recovered["percent"] == 25
+    assert recovered["results"] == []
+    assert recovered["errors"] == []
+
+
 # --------------------------------------------------------------------------- #
 # Library — store unit tests
 # --------------------------------------------------------------------------- #
