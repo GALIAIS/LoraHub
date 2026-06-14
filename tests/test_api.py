@@ -465,9 +465,22 @@ def test_resume_dp_happy_path_relaunches_in_place_with_resume_argv(
 
 
 def test_cancel_queued_job_short_circuits_to_canceled(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job pending on the worker deque must cancel without launching."""
+    from lorahub.api import scheduler as sched_module
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.canceled: list[str] = []
+
+        def cancel_pending(self, job_id: str) -> bool:
+            self.canceled.append(job_id)
+            return True
+
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(sched_module, "scheduler", fake_scheduler)
+
     ws = tmp_path / "ws"
     ws.mkdir()
     job = state.registry.create(workspace=ws, config_snapshot={})
@@ -479,6 +492,7 @@ def test_cancel_queued_job_short_circuits_to_canceled(
     body = r.json()
     assert body["state"] == "canceled"
     assert body["finished_at"] is not None
+    assert fake_scheduler.canceled == [job.id]
 
 
 def test_enqueue_launch_passes_cuda_visible_devices_from_slot(

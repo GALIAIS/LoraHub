@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.jobs_helpers import (
     _TERMINAL_STATES,
@@ -1000,7 +1001,11 @@ def cancel_job(
         return job.to_summary()
     if job.state is JobState.queued:
         # Worker hasn't claimed it yet — flip directly so the closure
-        # short-circuits when its slot eventually pops the deque.
+        # short-circuits if its slot already popped the deque. Also drop
+        # it from the scheduler's pending queue when it has not been
+        # claimed yet, so canceled jobs do not build up as no-op work.
+        with contextlib.suppress(Exception):
+            sched.scheduler.cancel_pending(job.id)
         job.state = JobState.canceled
         job.finished_at = datetime.now(UTC)
         state.registry.update(job)
