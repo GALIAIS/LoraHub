@@ -19,16 +19,16 @@ import {
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioBatchDelete,
-  imageStudioBatchTriggerWords,
+  getTriggerWordsSession,
   startQualitySession,
   startSmartCaptionSession,
   startTaggingSession,
+  startTriggerWordsSession,
 } from "@/lib/api"
 import type { ImageStudioItem } from "@/lib/api"
 import {
   addTask,
   removeTask,
-  updateTask,
   type StudioTaskRecord,
 } from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
@@ -139,6 +139,25 @@ export function DatasetDetail() {
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })
     }
   }, [terminalSig, queryClient])
+
+  useEffect(() => {
+    const completedTrigger = [...studioTasks]
+      .filter((t) => t.kind === "trigger-words" && t.status === "completed")
+      .sort((a, b) => b.startedAt - a.startedAt)[0]
+    if (!completedTrigger) return
+    let cancelled = false
+    getTriggerWordsSession(completedTrigger.id)
+      .then((snap) => {
+        if (!cancelled) setTriggerWordTop(snap.dataset_top)
+      })
+      .catch(() => {
+        // The task banner already reports status polling failures; this
+        // summary panel is helpful but non-critical.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [terminalSig, studioTasks])
 
   const setPage = (p: number) => {
     const next = new URLSearchParams(params)
@@ -317,14 +336,6 @@ export function DatasetDetail() {
     setShowAiBulk(false)
     const taskPath = (params.path as string) || path
 
-    // Synthetic id for remaining synchronous kinds without a server
-    // session_id. crypto.randomUUID is everywhere we run; the fallback
-    // is just defensive.
-    const newId = (): string =>
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-
     try {
       switch (tab) {
         case "smart-caption": {
@@ -390,40 +401,21 @@ export function DatasetDetail() {
           return
         }
         case "trigger-words": {
-          // Dedicated per-image trigger-word VLM analysis. Each image
-          // gets 1-3 candidate phrases stored on its annotation, and
-          // the response carries a dataset-level top-N ranking we
-          // surface once the batch finishes.
-          const id = newId()
+          const submit = await startTriggerWordsSession({
+            path: taskPath,
+            recursive,
+            skipAnalyzed: params.skipAnalyzed as boolean | undefined,
+          })
           addTask({
-            id,
+            id: submit.session_id,
             kind: "trigger-words",
             datasetPath: taskPath,
-            label: "分析触发词",
-            sessioned: false,
+            label: submit.skipped
+              ? `分析触发词（跳过 ${submit.skipped} 已分析）`
+              : "分析触发词",
+            total: submit.total,
           })
-          try {
-            const res = await imageStudioBatchTriggerWords({
-              path: taskPath,
-              recursive,
-              skipAnalyzed: params.skipAnalyzed as boolean | undefined,
-            })
-            setTriggerWordTop(res.dataset_top)
-            updateTask(id, {
-              status: "completed",
-              processed: res.processed,
-              label: res.skipped
-                ? `触发词分析完成（跳过 ${res.skipped} 已分析）`
-                : "触发词分析完成",
-            })
-          } catch (err) {
-            updateTask(id, {
-              status: "failed",
-              errorMsg: err instanceof Error ? err.message : String(err),
-              label: "触发词分析失败",
-            })
-          }
-          break
+          return
         }
       }
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })

@@ -4,7 +4,7 @@
  *   - ai-smart-caption     : 复用现成的 batch + 全局任务条 (smart-caption 走 sessioned poll)
  *   - ai-caption           : 直接 VLM 写 caption（无 WD14 预处理）
  *   - ai-quality           : 给图打质量分（sessioned poll）
- *   - ai-trigger-words     : 让 VLM 推荐触发词候选（in-flight task）
+ *   - ai-trigger-words     : 让 VLM 推荐触发词候选（sessioned poll）
  *   - ai-wd14-prefilter    : 单图测试 - 拿到 WD14 标签 + 拼装好的 prompt
  *   - ai-vlm-anima-rewrite : 单图测试 - 把上一个的产出喂给 VLM 写 caption
  *
@@ -28,12 +28,13 @@ import { toast } from "sonner"
 import {
   api,
   imageStudioBatchCaption,
-  imageStudioBatchTriggerWords,
+  getTriggerWordsSession,
   imageStudioVlmAnimaRewrite,
   imageStudioWd14Prefilter,
   startQualitySession,
   startSmartCaptionSession,
   startTaggingSession,
+  startTriggerWordsSession,
   type ImageStudioTriggerWordsResult,
   type Wd14PrefilterResult,
 } from "@/lib/api"
@@ -81,6 +82,8 @@ function TaskBanner({ datasetPath }: { datasetPath: string }) {
     ? newest.kind === "smart-caption"
       ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : newest.kind === "quality-score"
+        ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
+      : newest.kind === "trigger-words"
         ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : newest.kind === "wd14"
         ? `${newest.label}中… ${newest.processed ?? 0}/${newest.total ?? "?"}`
@@ -484,38 +487,52 @@ export function AiTriggerWordsTool({ datasetPath }: { datasetPath: string }) {
   const [topN, setTopN] = useState<ImageStudioTriggerWordsResult["dataset_top"] | null>(
     null,
   )
+  const terminalSig = useStudioTasksFor(datasetPath)
+    .filter((t) => t.kind === "trigger-words" && t.status === "completed")
+    .map((t) => `${t.id}:${t.status}`)
+    .join(",")
+
+  useEffect(() => {
+    if (!terminalSig) return
+    const id = terminalSig.split(":")[0]
+    let cancelled = false
+    getTriggerWordsSession(id)
+      .then((snap) => {
+        if (!cancelled) setTopN(snap.dataset_top)
+      })
+      .catch(() => {
+        // The banner covers task failures; the top-N panel is optional.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [terminalSig])
 
   const start = async () => {
-    const id = newTaskId()
     setTopN(null)
-    addTask({
-      id,
-      kind: "trigger-words",
-      datasetPath,
-      label: "分析触发词",
-      sessioned: false,
-    })
     try {
-      const res = await imageStudioBatchTriggerWords({
+      const submit = await startTriggerWordsSession({
         path: datasetPath,
         recursive,
         task: task.trim() || undefined,
         skipAnalyzed,
       })
-      setTopN(res.dataset_top)
-      updateTask(id, {
-        status: "completed",
-        processed: res.processed,
-        label: res.skipped
-          ? `触发词分析完成（跳过 ${res.skipped} 已分析）`
-          : "触发词分析完成",
+      addTask({
+        id: submit.session_id,
+        kind: "trigger-words",
+        datasetPath,
+        label: submit.skipped
+          ? `分析触发词（跳过 ${submit.skipped} 已分析）`
+          : "分析触发词",
+        total: submit.total,
+      })
+      toast.success("已启动触发词分析", {
+        description: `共 ${submit.total} 张 · 后台进行 · 刷新后可恢复进度`,
       })
       qc.invalidateQueries({ queryKey: ["image-studio"] })
     } catch (err) {
-      updateTask(id, {
-        status: "failed",
-        errorMsg: err instanceof Error ? err.message : String(err),
-        label: "触发词分析失败",
+      toast.error("启动失败", {
+        description: err instanceof Error ? err.message : String(err),
       })
     }
   }

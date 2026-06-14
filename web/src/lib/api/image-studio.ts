@@ -561,6 +561,54 @@ export async function imageStudioBatchTriggerWords(params: {
   )
 }
 
+export interface ImageStudioTriggerWordsSession {
+  session_id: string
+  path: string
+  status: string
+  processed: number
+  total: number
+  skipped: number
+  percent: number
+  last_image: string
+  results: { path: string; triggers: string[] }[]
+  errors: { path: string; error: string }[]
+  dataset_top: { trigger: string; count: number }[]
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export async function startTriggerWordsSession(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+  /** Skip images that already have a stored trigger word suggestion. Default true. */
+  skipAnalyzed?: boolean
+}): Promise<{
+  session_id: string
+  total: number
+  skipped: number
+  status_url: string
+}> {
+  return http<{
+    session_id: string
+    total: number
+    skipped: number
+    status_url: string
+  }>("/image-studio/ai/trigger-words/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+export async function getTriggerWordsSession(
+  id: string,
+): Promise<ImageStudioTriggerWordsSession> {
+  return http<ImageStudioTriggerWordsSession>(
+    `/image-studio/ai/trigger-words/status/${encodeURIComponent(id)}`,
+  )
+}
+
 // ─── Image Studio: Audit ─────────────────────────────────────────────
 
 export interface AuditHistogramBucket {
