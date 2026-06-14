@@ -2435,6 +2435,34 @@ def test_anima_model_download_status_survives_memory_clear(
     assert recovered["events"][-1]["message"] == "persisted anima progress"
 
 
+def test_tasks_latest_list_and_get_routes(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.task_sessions import TaskEvent, TaskSessionStore
+
+    store = TaskSessionStore(tmp_path / "tasks-routes.sqlite3")
+    monkeypatch.setattr(app_module, "_task_session_store", store)
+    session = store.create(
+        kind="model_download",
+        title="owner/name",
+        metadata={"repo_id": "owner/name"},
+    )
+    store.append_event(session.id, TaskEvent(level="info", message="hello", percent=1))
+
+    latest = client.get("/api/tasks/latest?kind=model_download")
+    assert latest.status_code == 200
+    assert latest.json()["id"] == session.id
+
+    listing = client.get("/api/tasks?kind=model_download")
+    assert listing.status_code == 200
+    assert listing.json()["tasks"][0]["id"] == session.id
+
+    single = client.get(f"/api/tasks/{session.id}")
+    assert single.status_code == 200
+    assert single.json()["events"][0]["message"] == "hello"
+
+
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/models/download/missing")
     assert r.status_code == 404

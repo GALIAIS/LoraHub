@@ -30,6 +30,7 @@ from .storage import router as storage_router
 from .sweeps import router as sweeps_router
 from .system import router as system_router
 from .tagging import router as tagging_router
+from .tasks import router as tasks_router
 from .terminal import router as terminal_router
 from .wandb_routes import router as wandb_router
 
@@ -54,6 +55,7 @@ all_routers: list[APIRouter] = [
     sweeps_router,
     system_router,
     tagging_router,
+    tasks_router,
     terminal_router,
     wandb_router,
 ]
