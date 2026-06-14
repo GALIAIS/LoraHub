@@ -939,6 +939,29 @@ def test_batch_delete(client: TestClient, sample_dir: Path) -> None:
     assert not (sample_dir / "c.png").exists()
 
 
+def test_batch_delete_handles_same_name_in_different_dirs(
+    client: TestClient, sample_dir: Path
+) -> None:
+    nested = sample_dir / "nested"
+    nested.mkdir()
+    first = sample_dir / "same.png"
+    second = nested / "same.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    r = client.post(
+        "/api/image-studio/dedupe/batch-delete",
+        json={"paths": [str(first), str(second)]},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deletedCount"] == 2
+    assert body["errors"] == []
+    assert not first.exists()
+    assert not second.exists()
+
+
 def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     # Mark as favorite

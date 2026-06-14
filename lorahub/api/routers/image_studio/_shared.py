@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json as json_stdlib
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -94,17 +95,28 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    idx = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}-{idx}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
 def _soft_delete(file_path: Path) -> None:
     """Move file + sidecar to trash directory."""
     from datetime import UTC, datetime  # noqa: PLC0415
 
     trash_dir = Path("runs") / "_image_studio_trash" / datetime.now(UTC).strftime("%Y-%m-%d")
     trash_dir.mkdir(parents=True, exist_ok=True)
-    dest = trash_dir / file_path.name
-    file_path.rename(dest)
+    dest = _unique_path(trash_dir / file_path.name)
     caption = file_path.with_suffix(".txt")
+    shutil.move(str(file_path), str(dest))
     if caption.is_file():
-        caption.rename(trash_dir / caption.name)
+        shutil.move(str(caption), str(dest.with_suffix(".txt")))
 
 
 def _sse_event(event: str, data: dict[str, Any]) -> str:
