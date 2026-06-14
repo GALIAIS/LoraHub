@@ -879,6 +879,25 @@ def kill_job(job_id: str) -> dict[str, Any]:
     if job.error is None:
         job.error = "force-killed via /api/jobs/{id}/kill"
     state.registry.update(job)
+    from lorahub.api.error_reporter import capture  # noqa: PLC0415
+
+    with contextlib.suppress(Exception):
+        capture(
+            severity="warn",
+            source="backend.job",
+            category="force_kill",
+            title=f"training job force-killed: {job.id[-12:]}",
+            message=job.error or "force-killed via /api/jobs/{id}/kill",
+            job_id=job.id,
+            context={
+                "workspace": str(job.workspace),
+                "pid": pid,
+                "killed_process_group": killed_group,
+                "killed_pid_only": killed_pid,
+                "already_gone": already_gone,
+                "warning": error,
+            },
+        )
     # Sweep feedback: a forcibly-killed sweep child still owes its
     # parent a (probably bad) score so TPE doesn't keep proposing
     # this region. ``report_terminal_job`` reads whatever metrics

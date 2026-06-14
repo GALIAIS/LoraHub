@@ -1292,9 +1292,15 @@ def test_kill_job_without_pid_returns_409(
 
 
 def test_kill_dead_pid_still_flips_state_to_interrupted(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job whose PID is already gone — kill should not raise; flip state."""
+    from lorahub.api import app as app_module
+    from lorahub.api.error_reports import ErrorReportStore
+
+    report_store = ErrorReportStore(tmp_path / "errors.sqlite")
+    monkeypatch.setattr(app_module, "_error_report_store", report_store, raising=False)
+
     ws = tmp_path / "ws"
     ws.mkdir()
     job = state.registry.create(workspace=ws, config_snapshot={})
@@ -1313,6 +1319,11 @@ def test_kill_dead_pid_still_flips_state_to_interrupted(
         refreshed = state.registry.get(job.id)
         assert refreshed is not None
         assert refreshed.state is state.JobState.interrupted
+        reports = report_store.list(source="backend.job")
+        assert any(
+            r.category == "force_kill" and r.job_id == job.id
+            for r in reports
+        )
 
 
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
