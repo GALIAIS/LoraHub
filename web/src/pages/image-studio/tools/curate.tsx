@@ -16,11 +16,12 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import {
-  imageStudioAutoRotate,
   imageStudioBackupsList,
+  getImageStudioAutoRotateSession,
   getImageStudioBatchResizeSession,
   getLatestTask,
   imageStudioRestoreBackup,
+  startImageStudioAutoRotate,
   startImageStudioBatchResize,
   type BackupEntry,
 } from "@/lib/api"
@@ -44,22 +45,49 @@ import { cn } from "@/lib/utils"
 export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const [recursive, setRecursive] = useState(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+
+  const latestRotateTask = useQuery({
+    queryKey: ["tasks", "latest", "image_studio_auto_rotate"],
+    queryFn: () => getLatestTask("image_studio_auto_rotate"),
+    retry: false,
+    staleTime: 10_000,
+  })
+
+  useEffect(() => {
+    if (sessionId != null) return
+    const latest = latestRotateTask.data
+    if (
+      latest?.metadata?.dataset_path === datasetPath &&
+      latest.status === "running"
+    ) {
+      setSessionId(latest.id)
+    }
+  }, [datasetPath, latestRotateTask.data, sessionId])
+
+  const sessionQuery = useQuery({
+    queryKey: ["image-studio", "auto-rotate-session", sessionId],
+    queryFn: () => getImageStudioAutoRotateSession(sessionId!),
+    enabled: sessionId != null,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1000 : false,
+  })
+
+  const session = sessionQuery.data
+  const running = session?.status === "running"
 
   const mutation = useMutation({
     mutationFn: () =>
-      imageStudioAutoRotate({
+      startImageStudioAutoRotate({
         dataset_path: datasetPath,
         recursive,
       }),
     onSuccess: (data) => {
+      setSessionId(data.session_id)
       toast.success(
-        `自动旋转完成：${data.rotated_count} 张应用，${data.skipped_count} 张跳过`,
-        {
-          description:
-            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
-        },
+        `已启动自动旋转：${data.total} 张`,
+        { description: "后台进行，刷新后可恢复进度" },
       )
-      qc.invalidateQueries({ queryKey: ["image-studio"] })
     },
     onError: (err) =>
       toast.error("自动旋转失败", {
@@ -86,16 +114,68 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
           <Button
             size="sm"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || running}
             className="w-full gap-1"
           >
-            {mutation.isPending ? (
+            {mutation.isPending || running ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
               <RotateCw className="size-3" />
             )}
-            对整个数据集应用 EXIF 旋转
+            {running ? "自动旋转中…" : "对整个数据集应用 EXIF 旋转"}
           </Button>
+          {session && (
+            <div className="rounded-[4px] border border-border/60 bg-muted/25 p-2 text-[11px]">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-medium">
+                  {session.status === "succeeded"
+                    ? "自动旋转完成"
+                    : session.status === "failed"
+                      ? "自动旋转失败"
+                      : "自动旋转进行中"}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {session.processed} / {session.total}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    session.status === "failed"
+                      ? "bg-destructive"
+                      : "bg-primary",
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, session.percent))}%` }}
+                />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>已旋转 {session.rotated_count}</span>
+                <span>跳过 {session.skipped_count}</span>
+                <span>失败 {session.failed.length}</span>
+                {session.last_image && <span>最近 {session.last_image}</span>}
+              </div>
+              {session.error && (
+                <div className="mt-1 text-destructive">{session.error}</div>
+              )}
+              {session.status !== "running" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px]"
+                  onClick={() => {
+                    setSessionId(null)
+                    qc.invalidateQueries({ queryKey: ["image-studio"] })
+                    qc.invalidateQueries({
+                      queryKey: ["tasks", "latest", "image_studio_auto_rotate"],
+                    })
+                  }}
+                >
+                  关闭结果
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>

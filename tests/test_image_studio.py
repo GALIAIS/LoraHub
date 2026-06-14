@@ -912,6 +912,61 @@ def test_batch_resize_writes_task_session_and_recovers_status(
     assert recovered.json()["resampled_count"] == 3
 
 
+def test_auto_rotate_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    response = client.post(
+        "/api/image-studio/curate/auto-rotate/start",
+        json={
+            "dataset_path": str(sample_dir),
+            "recursive": False,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 3
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_auto_rotate",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert status["rotated_count"] == 0
+    assert status["skipped_count"] == 3
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["dataset_path"] == str(sample_dir)
+    assert latest["result"]["skipped_count"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    curate_router._auto_rotate_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["skipped_count"] == 3
+
+
 # --------------------------------------------------------------------------- #
 # Library — store unit tests
 # --------------------------------------------------------------------------- #

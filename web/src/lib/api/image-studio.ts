@@ -758,6 +758,45 @@ export async function imageStudioAutoRotate(body: {
   })
 }
 
+export interface ImageStudioAutoRotateSession {
+  session_id: string
+  dataset_path: string
+  status: string
+  processed: number
+  total: number
+  percent: number
+  last_image: string
+  rotated: string[]
+  rotated_count: number
+  skipped_count: number
+  failed: { path: string; error: string }[]
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export async function startImageStudioAutoRotate(body: {
+  dataset_path: string
+  paths?: string[]
+  recursive?: boolean
+}): Promise<{ session_id: string; total: number; status_url: string }> {
+  return http<{ session_id: string; total: number; status_url: string }>(
+    "/image-studio/curate/auto-rotate/start",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function getImageStudioAutoRotateSession(
+  id: string,
+): Promise<ImageStudioAutoRotateSession> {
+  return http<ImageStudioAutoRotateSession>(
+    `/image-studio/curate/auto-rotate/status/${encodeURIComponent(id)}`,
+  )
+}
+
 export async function imageStudioQuarantine(body: {
   dataset_path: string
   paths: string[]

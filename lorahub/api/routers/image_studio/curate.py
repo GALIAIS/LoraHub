@@ -42,6 +42,7 @@ from lorahub.api.task_sessions import (
 )
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_AUTO_ROTATE = "image_studio_auto_rotate"
 _KIND_BATCH_RESIZE = "image_studio_batch_resize"
 
 
@@ -154,8 +155,172 @@ class AutoRotateRequest(BaseModel):
     recursive: bool = True
 
 
-@router.post("/curate/auto-rotate")
-def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
+@dataclass
+class _AutoRotateSession:
+    session_id: str
+    dataset_path: str
+    total: int
+    status: str = "running"
+    processed: int = 0
+    rotated: list[str] = field(default_factory=list)
+    failed: list[dict[str, str]] = field(default_factory=list)
+    skipped_count: int = 0
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 100.0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "dataset_path": self.dataset_path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 100.0
+                ),
+                "last_image": self.last_image,
+                "rotated": list(self.rotated),
+                "rotated_count": len(self.rotated),
+                "skipped_count": self.skipped_count,
+                "failed": list(self.failed),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+    def add_rotated(self, path: str, image_name: str) -> None:
+        with self._lock:
+            self.rotated.append(path)
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"rotated {image_name}",
+            percent=percent,
+            payload={"path": path, "image": image_name, "processed": processed},
+        )
+
+    def add_skipped(self, image_name: str) -> None:
+        with self._lock:
+            self.skipped_count += 1
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"skipped {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed},
+        )
+
+    def add_failed(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.failed.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="succeeded" if status == "succeeded" else "failed",
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def fail(self, msg: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="error", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="failed",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+
+_auto_rotate_sessions: dict[str, _AutoRotateSession] = {}
+_auto_rotate_lock = threading.Lock()
+
+
+def _auto_rotate_targets(req: AutoRotateRequest, root: Path) -> list[Path]:
+    if req.paths:
+        return [_resolve_under(req.dataset_path, p) for p in req.paths]
+    return list(_walk_images(root, req.recursive))
+
+
+def _auto_rotate_images(
+    req: AutoRotateRequest,
+    targets: list[Path],
+    *,
+    on_rotated: Callable[[str, str], None] | None = None,
+    on_skipped: Callable[[str], None] | None = None,
+    on_failed: Callable[[str, str, str], None] | None = None,
+) -> dict[str, Any]:
     """Apply EXIF orientation, write pixels back, strip the EXIF tag.
 
     Idempotent: a file whose orientation is already 1 (or missing)
@@ -164,13 +329,6 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
-
-    targets: list[Path] = []
-    if req.paths:
-        targets = [_resolve_under(req.dataset_path, p) for p in req.paths]
-    else:
-        for f in _walk_images(root, req.recursive):
-            targets.append(f)
 
     rotated: list[str] = []
     skipped: list[str] = []
@@ -183,21 +341,30 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
                 orientation = exif.get(0x0112) if exif else None
                 if not orientation or orientation == 1:
                     skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
                     continue
                 # ``exif_transpose`` reads the orientation tag and
                 # returns a pixel-rotated copy with the tag dropped.
                 rotated_img = ImageOps.exif_transpose(img)
                 if rotated_img is None:
                     skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
                     continue
                 rotated_img.load()
             _backup_file(req.dataset_path, src)
             # Pillow's save infers format from the file path. Drop EXIF
             # so the next reader doesn't double-rotate.
             rotated_img.save(src, exif=b"")
-            rotated.append(str(src))
+            path = str(src)
+            rotated.append(path)
+            if on_rotated is not None:
+                on_rotated(path, src.name)
         except (UnidentifiedImageError, OSError) as exc:
             failed.append({"path": str(src), "error": str(exc)})
+            if on_failed is not None:
+                on_failed(str(src), str(exc), src.name)
 
     return {
         "rotated": rotated,
@@ -205,6 +372,80 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
         "skipped_count": len(skipped),
         "failed": failed,
     }
+
+
+@router.post("/curate/auto-rotate")
+def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
+    """Apply EXIF orientation synchronously for legacy callers."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    return _auto_rotate_images(req, _auto_rotate_targets(req, root))
+
+
+@router.post("/curate/auto-rotate/start", status_code=202)
+def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
+    """Start a persistent background auto-rotate session."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    targets = _auto_rotate_targets(req, root)
+    task = _task_store().create(
+        kind=_KIND_AUTO_ROTATE,
+        title=f"auto-rotate:{root.name}",
+        metadata={
+            "dataset_path": str(root),
+            "paths_count": len(req.paths or []),
+            "recursive": req.recursive,
+        },
+    )
+    session = _AutoRotateSession(
+        session_id=task.id,
+        dataset_path=str(root),
+        total=len(targets),
+    )
+    session._append_task_event("auto rotate queued", percent=0)
+    with _auto_rotate_lock:
+        _auto_rotate_sessions[session.session_id] = session
+
+    def run() -> None:
+        try:
+            _task_store().update(session.session_id, status="running", percent=0)
+            _auto_rotate_images(
+                req,
+                targets,
+                on_rotated=session.add_rotated,
+                on_skipped=session.add_skipped,
+                on_failed=session.add_failed,
+            )
+            session.finish("succeeded")
+        except Exception as exc:  # noqa: BLE001
+            session.fail(str(exc))
+
+    threading.Thread(
+        target=run,
+        name=f"is-auto-rotate-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
+    return {
+        "session_id": session.session_id,
+        "total": len(targets),
+        "status_url": (
+            f"/api/image-studio/curate/auto-rotate/status/{session.session_id}"
+        ),
+    }
+
+
+@router.get("/curate/auto-rotate/status/{session_id}")
+def curate_auto_rotate_status(session_id: str) -> dict[str, Any]:
+    with _auto_rotate_lock:
+        session = _auto_rotate_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _persisted_task_result(session_id, _KIND_AUTO_ROTATE)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(404, "auto-rotate session not found")
 
 
 # --------------------------------------------------------------------------- #
