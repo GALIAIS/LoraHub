@@ -250,8 +250,12 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     workers = max(1, min(req.threads, len(files) or 1))
     completed = 0
     bytes_done = 0
+    failures: list[tuple[str, str]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fetch, name, size) for name, size in files]
+        futures = {
+            executor.submit(fetch, name, size): name
+            for name, size in files
+        }
         for future in as_completed(futures):
             completed += 1
             try:
@@ -259,7 +263,9 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                 bytes_done += size
                 message = f"hf: [{completed}/{len(files)}] {name}"
             except Exception as exc:  # noqa: BLE001
-                message = f"hf: [{completed}/{len(files)}] skip: {exc}"
+                name = futures[future]
+                failures.append((name, str(exc)))
+                message = f"hf: [{completed}/{len(files)}] failed {name}: {exc}"
             percent = 5 + (completed / len(files) * 95) if files else 100
             _emit(
                 progress,
@@ -272,6 +278,11 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                     bytes_total=bytes_total,
                 ),
             )
+    if failures:
+        detail = "; ".join(f"{name}: {error}" for name, error in failures[:5])
+        if len(failures) > 5:
+            detail = f"{detail}; +{len(failures) - 5} more"
+        raise RuntimeError(f"hf download failed for {len(failures)} file(s): {detail}")
 
     file_count = len(files)
     _emit(
@@ -385,6 +396,7 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     total = 0
     completed = 0
     workers = max(1, min(req.threads, len(files) or 1))
+    failures: list[tuple[str, str]] = []
 
     def submit_file(it: dict[str, Any]) -> tuple[str, int]:
         path = str(it.get("Path") or it.get("FilePath") or "")
@@ -395,7 +407,10 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(submit_file, it) for it in files]
+        futures = {
+            executor.submit(submit_file, it): str(it.get("Path") or it.get("FilePath") or "")
+            for it in files
+        }
         for future in as_completed(futures):
             completed += 1
             try:
@@ -403,7 +418,9 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                 total += n
                 message = f"ms: [{completed}/{len(files)}] {path}"
             except Exception as exc:  # noqa: BLE001
-                message = f"ms: [{completed}/{len(files)}] skip: {exc}"
+                path = futures[future]
+                failures.append((path, str(exc)))
+                message = f"ms: [{completed}/{len(files)}] failed {path}: {exc}"
             percent = 5 + (completed / len(files) * 95) if files else 100
             _emit(
                 progress,
@@ -416,6 +433,11 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                     bytes_total=bytes_total,
                 ),
             )
+    if failures:
+        detail = "; ".join(f"{path}: {error}" for path, error in failures[:5])
+        if len(failures) > 5:
+            detail = f"{detail}; +{len(failures) - 5} more"
+        raise RuntimeError(f"ms download failed for {len(failures)} file(s): {detail}")
     _emit(
         progress,
         DownloadProgress(

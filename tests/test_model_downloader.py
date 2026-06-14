@@ -128,6 +128,48 @@ def test_huggingface_download_honours_explicit_paths(
     assert result.total_bytes == 20
 
 
+def test_huggingface_download_fails_when_any_selected_file_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    siblings = [
+        types.SimpleNamespace(rfilename="ok.safetensors", size=10),
+        types.SimpleNamespace(rfilename="broken.safetensors", size=20),
+    ]
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            pass
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        filename = kw["filename"]
+        if filename == "broken.safetensors":
+            raise RuntimeError("network reset")
+        out = Path(kw["local_dir"]) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x" * 10)
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    events: list[downloader.DownloadProgress] = []
+    with pytest.raises(RuntimeError, match="broken.safetensors"):
+        downloader.download(
+            DownloadRequest(
+                source="huggingface",
+                repo_id="owner/name",
+                target_dir=tmp_path / "hf",
+                threads=2,
+            ),
+            events.append,
+        )
+
+    assert any("failed" in event.message for event in events)
+
+
 def test_huggingface_download_uses_env_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -308,3 +350,45 @@ def test_modelscope_download_uses_parallel_workers_and_progress(
     assert (tmp_path / "ms" / "nested" / "b.bin").is_file()
     assert any(event.files_done == 2 and event.percent == 100 for event in events)
     assert worker_names
+
+
+def test_modelscope_download_fails_when_any_selected_file_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = [
+        {"Path": "ok.bin", "Size": 3},
+        {"Path": "broken.bin", "Size": 4},
+    ]
+
+    def list_files(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        return files
+
+    def download_file(
+        _repo_id: str,
+        _revision: str,
+        file_path: str,
+        target: Path,
+        _token: str | None,
+    ) -> int:
+        if file_path == "broken.bin":
+            raise RuntimeError("connection closed")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"ok")
+        return 2
+
+    monkeypatch.setattr(downloader, "_ms_list_files", list_files)
+    monkeypatch.setattr(downloader, "_ms_download_file", download_file)
+
+    events: list[downloader.DownloadProgress] = []
+    with pytest.raises(RuntimeError, match="broken.bin"):
+        downloader.download(
+            DownloadRequest(
+                source="modelscope",
+                repo_id="owner/name",
+                target_dir=tmp_path / "ms",
+                threads=2,
+            ),
+            events.append,
+        )
+
+    assert any("failed" in event.message for event in events)
