@@ -293,9 +293,8 @@ export function NetworkTab() {
             HuggingFace 镜像
           </CardTitle>
           <CardDescription>
-            模型下载后端会直接使用该 endpoint，训练 / 标注子进程启动时也会注入
-            <code className="text-foreground"> HF_ENDPOINT </code>。
-            已设置同名环境变量时环境变量优先。
+            内置模型下载会直接使用这里的 endpoint。训练 / 标注子进程启动时会在未设置
+            <code className="text-foreground"> HF_ENDPOINT </code> 的情况下自动注入。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
