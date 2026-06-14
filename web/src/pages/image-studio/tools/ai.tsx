@@ -3,7 +3,7 @@
  *
  *   - ai-smart-caption     : 复用现成的 batch + 全局任务条 (smart-caption 走 sessioned poll)
  *   - ai-caption           : 直接 VLM 写 caption（无 WD14 预处理）
- *   - ai-quality           : 给图打质量分（in-flight task）
+ *   - ai-quality           : 给图打质量分（sessioned poll）
  *   - ai-trigger-words     : 让 VLM 推荐触发词候选（in-flight task）
  *   - ai-wd14-prefilter    : 单图测试 - 拿到 WD14 标签 + 拼装好的 prompt
  *   - ai-vlm-anima-rewrite : 单图测试 - 把上一个的产出喂给 VLM 写 caption
@@ -28,10 +28,10 @@ import { toast } from "sonner"
 import {
   api,
   imageStudioBatchCaption,
-  imageStudioBatchQuality,
   imageStudioBatchTriggerWords,
   imageStudioVlmAnimaRewrite,
   imageStudioWd14Prefilter,
+  startQualitySession,
   startSmartCaptionSession,
   startTaggingSession,
   type ImageStudioTriggerWordsResult,
@@ -80,6 +80,8 @@ function TaskBanner({ datasetPath }: { datasetPath: string }) {
   const label = running
     ? newest.kind === "smart-caption"
       ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
+      : newest.kind === "quality-score"
+        ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : newest.kind === "wd14"
         ? `${newest.label}中… ${newest.processed ?? 0}/${newest.total ?? "?"}`
         : `${newest.label}中…`
@@ -402,34 +404,29 @@ export function AiQualityTool({ datasetPath }: { datasetPath: string }) {
   const [recursive, setRecursive] = useState(true)
 
   const start = async () => {
-    const id = newTaskId()
-    addTask({
-      id,
-      kind: "quality-score",
-      datasetPath,
-      label: "质量评分",
-      sessioned: false,
-    })
     try {
-      const res = await imageStudioBatchQuality({
+      const submit = await startQualitySession({
         path: datasetPath,
         recursive,
         task: task.trim() || undefined,
         skipScored,
       })
-      updateTask(id, {
-        status: "completed",
-        processed: res.processed,
-        label: res.skipped
-          ? `质量评分完成（跳过 ${res.skipped} 已评分）`
-          : "质量评分完成",
+      addTask({
+        id: submit.session_id,
+        kind: "quality-score",
+        datasetPath,
+        label: submit.skipped
+          ? `质量评分（跳过 ${submit.skipped} 已评分）`
+          : "质量评分",
+        total: submit.total,
+      })
+      toast.success("已启动质量评分", {
+        description: `共 ${submit.total} 张 · 后台进行 · 刷新后可恢复进度`,
       })
       qc.invalidateQueries({ queryKey: ["image-studio"] })
     } catch (err) {
-      updateTask(id, {
-        status: "failed",
-        errorMsg: err instanceof Error ? err.message : String(err),
-        label: "质量评分失败",
+      toast.error("启动失败", {
+        description: err instanceof Error ? err.message : String(err),
       })
     }
   }

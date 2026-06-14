@@ -21,15 +21,16 @@
  *      subscribe to without coupling to mount lifecycle
  *
  * Two endpoint flavours are supported:
- *   - "sessioned" (smart-caption, wd14): server returns session_id,
+ *   - "sessioned" (smart-caption, quality-score, wd14): server returns session_id,
  *     status endpoint exists, full reconnect after reload works
- *   - "in-flight" (quality-score, trigger-words): synchronous endpoints
+ *   - "in-flight" (trigger-words): synchronous endpoints
  *     with no session_id, so the only thing we can do is keep the
  *     promise alive across navigations within the same page-load.
  *     These records are NOT persisted to localStorage (a page reload
  *     would orphan them anyway — we have no way to find them again).
  */
 import {
+  getQualitySession,
   getTaggingSession,
   http,
   type TaggingSession,
@@ -186,6 +187,17 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
         errorMsg: snap.error ?? undefined,
         pollErrors: 0,
       })
+    } else if (task.kind === "quality-score") {
+      const snap = await getQualitySession(task.id)
+      const status = mapSmartCaptionStatus(snap.status)
+      updateTask(task.id, {
+        processed: snap.processed,
+        total: snap.total,
+        lastImage: snap.last_image || undefined,
+        status,
+        errorMsg: snap.error ?? undefined,
+        pollErrors: 0,
+      })
     } else if (task.kind === "wd14") {
       const snap: TaggingSession = await getTaggingSession(task.id)
       const status = mapWd14Status(snap.status)
@@ -261,7 +273,9 @@ export interface AddTaskInput {
 export function addTask(input: AddTaskInput): StudioTaskRecord {
   const sessioned =
     input.sessioned ??
-    (input.kind === "smart-caption" || input.kind === "wd14")
+    (input.kind === "smart-caption" ||
+      input.kind === "quality-score" ||
+      input.kind === "wd14")
   const record: StudioTaskRecord = {
     id: input.id,
     kind: input.kind,

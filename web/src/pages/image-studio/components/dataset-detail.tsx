@@ -19,8 +19,8 @@ import {
   imageStudioAddOp,
   imageStudioApplyOps,
   imageStudioBatchDelete,
-  imageStudioBatchQuality,
   imageStudioBatchTriggerWords,
+  startQualitySession,
   startSmartCaptionSession,
   startTaggingSession,
 } from "@/lib/api"
@@ -317,8 +317,9 @@ export function DatasetDetail() {
     setShowAiBulk(false)
     const taskPath = (params.path as string) || path
 
-    // Synthetic id for kinds without a server session_id. crypto.randomUUID
-    // is everywhere we run; the fallback is just defensive.
+    // Synthetic id for remaining synchronous kinds without a server
+    // session_id. crypto.randomUUID is everywhere we run; the fallback
+    // is just defensive.
     const newId = (): string =>
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
@@ -372,40 +373,21 @@ export function DatasetDetail() {
           return
         }
         case "quality-score": {
-          // Synchronous server endpoint with no session_id. The task is
-          // tracked in the store as "in-flight" so the banner survives a
-          // navigate-away within the same page-load. A hard reload mid-run
-          // can't reconnect (no handle to look up) — that's documented
-          // upstream and acceptable for these short batches.
-          const id = newId()
+          const submit = await startQualitySession({
+            path: taskPath,
+            recursive,
+            skipScored: params.skipScored as boolean | undefined,
+          })
           addTask({
-            id,
+            id: submit.session_id,
             kind: "quality-score",
             datasetPath: taskPath,
-            label: "质量评分",
-            sessioned: false,
+            label: submit.skipped
+              ? `质量评分（跳过 ${submit.skipped} 已评分）`
+              : "质量评分",
+            total: submit.total,
           })
-          try {
-            const res = await imageStudioBatchQuality({
-              path: taskPath,
-              recursive,
-              skipScored: params.skipScored as boolean | undefined,
-            })
-            updateTask(id, {
-              status: "completed",
-              processed: res.processed,
-              label: res.skipped
-                ? `质量评分完成（跳过 ${res.skipped} 已评分）`
-                : "质量评分完成",
-            })
-          } catch (err) {
-            updateTask(id, {
-              status: "failed",
-              errorMsg: err instanceof Error ? err.message : String(err),
-              label: "质量评分失败",
-            })
-          }
-          break
+          return
         }
         case "trigger-words": {
           // Dedicated per-image trigger-word VLM analysis. Each image

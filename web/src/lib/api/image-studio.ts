@@ -489,6 +489,53 @@ export async function imageStudioBatchQuality(params: {
   )
 }
 
+export interface ImageStudioQualitySession {
+  session_id: string
+  path: string
+  status: string
+  processed: number
+  total: number
+  skipped: number
+  percent: number
+  last_image: string
+  results: unknown[]
+  errors: { path: string; error: string }[]
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+export async function startQualitySession(params: {
+  path: string
+  recursive?: boolean
+  task?: string
+  /** Skip images that already have an AI quality score. Default true. */
+  skipScored?: boolean
+}): Promise<{
+  session_id: string
+  total: number
+  skipped: number
+  status_url: string
+}> {
+  return http<{
+    session_id: string
+    total: number
+    skipped: number
+    status_url: string
+  }>("/image-studio/ai/quality/start", {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+export async function getQualitySession(
+  id: string,
+): Promise<ImageStudioQualitySession> {
+  return http<ImageStudioQualitySession>(
+    `/image-studio/ai/quality/status/${encodeURIComponent(id)}`,
+  )
+}
+
 export interface ImageStudioTriggerWordsResult {
   processed: number
   skipped?: number
