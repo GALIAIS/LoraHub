@@ -46,6 +46,7 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const [recursive, setRecursive] = useState(true)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null)
 
   const latestRotateTask = useQuery({
     queryKey: ["tasks", "latest", "image_studio_auto_rotate"],
@@ -59,11 +60,11 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
     const latest = latestRotateTask.data
     if (
       latest?.metadata?.dataset_path === datasetPath &&
-      latest.status === "running"
+      latest.id !== dismissedSessionId
     ) {
       setSessionId(latest.id)
     }
-  }, [datasetPath, latestRotateTask.data, sessionId])
+  }, [datasetPath, dismissedSessionId, latestRotateTask.data, sessionId])
 
   const sessionQuery = useQuery({
     queryKey: ["image-studio", "auto-rotate-session", sessionId],
@@ -83,6 +84,7 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
         recursive,
       }),
     onSuccess: (data) => {
+      setDismissedSessionId(null)
       setSessionId(data.session_id)
       toast.success(
         `已启动自动旋转：${data.total} 张`,
@@ -164,6 +166,7 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
                   variant="outline"
                   className="mt-2 h-7 text-[11px]"
                   onClick={() => {
+                    setDismissedSessionId(session.session_id)
                     setSessionId(null)
                     qc.invalidateQueries({ queryKey: ["image-studio"] })
                     qc.invalidateQueries({
@@ -193,6 +196,7 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
   const [upscale, setUpscale] = useState(false)
   const [recursive, setRecursive] = useState(true)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null)
 
   const latestResizeTask = useQuery({
     queryKey: ["tasks", "latest", "image_studio_batch_resize"],
@@ -206,11 +210,11 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
     const latest = latestResizeTask.data
     if (
       latest?.metadata?.dataset_path === datasetPath &&
-      latest.status === "running"
+      latest.id !== dismissedSessionId
     ) {
       setSessionId(latest.id)
     }
-  }, [datasetPath, latestResizeTask.data, sessionId])
+  }, [datasetPath, dismissedSessionId, latestResizeTask.data, sessionId])
 
   const sessionQuery = useQuery({
     queryKey: ["image-studio", "batch-resize-session", sessionId],
@@ -233,6 +237,7 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
         recursive,
       }),
     onSuccess: (data) => {
+      setDismissedSessionId(null)
       setSessionId(data.session_id)
       toast.success(
         `已启动批量缩放：${data.total} 张`,
@@ -356,6 +361,7 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
                   variant="outline"
                   className="mt-2 h-7 text-[11px]"
                   onClick={() => {
+                    setDismissedSessionId(session.session_id)
                     setSessionId(null)
                     qc.invalidateQueries({ queryKey: ["image-studio"] })
                     qc.invalidateQueries({
