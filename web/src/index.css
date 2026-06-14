@@ -160,10 +160,15 @@
   --panel-line-strong: oklch(0.18 0.01 255 / 0.28);
   --panel-fill: color-mix(in oklab, var(--card) 96%, transparent);
   --panel-fill-strong: color-mix(in oklab, var(--card) 90%, var(--background) 10%);
-  --warning-stripe: oklch(0.24 0.02 90 / 0.16);
-  --crosshair-line: oklch(0.18 0.01 255 / 0.16);
-  --shiro-cut: 14px;
-  --shiro-cut-sm: 10px;
+  --surface-border: color-mix(in oklab, var(--border) 86%, transparent);
+  --surface-border-hover: color-mix(in oklab, var(--foreground) 18%, var(--border) 82%);
+  --surface-hover: color-mix(in oklab, var(--card) 92%, var(--muted) 8%);
+  --control-fill: color-mix(in oklab, var(--background) 82%, var(--card) 18%);
+  --control-fill-hover: color-mix(in oklab, var(--muted) 54%, var(--card) 46%);
+  --control-border: color-mix(in oklab, var(--border) 88%, transparent);
+  --control-border-hover: color-mix(in oklab, var(--foreground) 22%, var(--border) 78%);
+  --state-hover: color-mix(in oklab, var(--muted) 52%, transparent);
+  --state-selected: color-mix(in oklab, var(--primary) 10%, var(--muted) 90%);
   --shell-shadow: 0 28px 60px -34px rgb(9 14 21 / 0.28);
   --panel-shadow:
     0 1px 0 rgb(255 255 255 / 0.58) inset,
@@ -173,6 +178,10 @@
     0 1px 0 rgb(255 255 255 / 0.68) inset,
     0 0 0 1px rgb(15 23 42 / 0.05),
     0 24px 50px -28px rgb(15 23 42 / 0.28);
+  --surface-shadow-hover:
+    0 1px 0 rgb(255 255 255 / 0.62) inset,
+    0 0 0 1px rgb(15 23 42 / 0.045),
+    0 20px 44px -32px rgb(15 23 42 / 0.26);
 }
 
 html,
@@ -381,10 +390,15 @@ code {
   --panel-line-strong: oklch(0.98 0.006 95 / 0.18);
   --panel-fill: color-mix(in oklab, var(--card) 94%, transparent);
   --panel-fill-strong: color-mix(in oklab, var(--card) 90%, black 10%);
-  --warning-stripe: oklch(0.86 0.01 95 / 0.14);
-  --crosshair-line: oklch(0.98 0.006 95 / 0.12);
-  --shiro-cut: 14px;
-  --shiro-cut-sm: 10px;
+  --surface-border: color-mix(in oklab, var(--border) 84%, transparent);
+  --surface-border-hover: color-mix(in oklab, var(--foreground) 16%, var(--border) 84%);
+  --surface-hover: color-mix(in oklab, var(--card) 86%, white 3%);
+  --control-fill: color-mix(in oklab, var(--input) 44%, transparent);
+  --control-fill-hover: color-mix(in oklab, var(--input) 66%, transparent);
+  --control-border: color-mix(in oklab, var(--input) 88%, transparent);
+  --control-border-hover: color-mix(in oklab, var(--foreground) 18%, var(--input) 82%);
+  --state-hover: color-mix(in oklab, var(--muted) 62%, transparent);
+  --state-selected: color-mix(in oklab, var(--primary) 12%, var(--muted) 88%);
   --shell-shadow: 0 30px 60px -34px rgb(0 0 0 / 0.5);
   --panel-shadow:
     0 1px 0 rgb(255 255 255 / 0.04) inset,
@@ -394,6 +408,10 @@ code {
     0 1px 0 rgb(255 255 255 / 0.06) inset,
     0 0 0 1px rgb(255 255 255 / 0.04),
     0 24px 50px -28px rgb(0 0 0 / 0.6);
+  --surface-shadow-hover:
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 0 0 1px rgb(255 255 255 / 0.04),
+    0 22px 46px -30px rgb(0 0 0 / 0.66);
 }
 
 :root[data-theme-accent="cyan"] {
@@ -469,14 +487,11 @@ code {
     pointer-events: none;
     background-image:
       radial-gradient(circle at 50% 50%, var(--shell-dot) 0 0.75px, transparent 1px),
-      linear-gradient(90deg, transparent 0 calc(25% - 0.5px), var(--crosshair-line) calc(25% - 0.5px) calc(25% + 0.5px), transparent calc(25% + 0.5px) calc(75% - 0.5px), var(--crosshair-line) calc(75% - 0.5px) calc(75% + 0.5px), transparent calc(75% + 0.5px)),
-      linear-gradient(transparent 0 calc(25% - 0.5px), var(--crosshair-line) calc(25% - 0.5px) calc(25% + 0.5px), transparent calc(25% + 0.5px) calc(75% - 0.5px), var(--crosshair-line) calc(75% - 0.5px) calc(75% + 0.5px), transparent calc(75% + 0.5px)),
       linear-gradient(var(--shell-grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px),
-      linear-gradient(var(--shell-grid-strong) 1px, transparent 1px),
-      linear-gradient(90deg, var(--shell-grid-strong) 1px, transparent 1px);
-    background-size: 18px 18px, 120px 120px, 120px 120px, 24px 24px, 24px 24px, 96px 96px, 96px 96px;
-    background-position: 0 0, 0 0, 0 0, 0 0, 0 0, -1px -1px, -1px -1px;
+      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px);
+    background-size: 20px 20px, 32px 32px, 32px 32px;
+    background-position: 0 0, 0 0, 0 0;
+    opacity: 0.7;
   }
   html {
     @apply font-sans;
@@ -505,10 +520,12 @@ code {
   }
 
   .shiro-toolbar {
+    border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
     background:
-      linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--panel-fill) 96%, transparent) 10px),
-      linear-gradient(to bottom, color-mix(in oklab, var(--card) 96%, white 4%), color-mix(in oklab, var(--card) 88%, var(--background) 12%));
-    box-shadow: var(--panel-shadow);
+      linear-gradient(to bottom, color-mix(in oklab, var(--card) 98%, white 2%), color-mix(in oklab, var(--card) 92%, var(--background) 8%));
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, white 50%, transparent),
+      0 12px 30px -28px rgb(15 23 42 / 0.28);
     transition:
       background-image 180ms ease,
       box-shadow 180ms ease;
@@ -516,7 +533,10 @@ code {
 
   .dark .shiro-toolbar {
     background:
-      linear-gradient(to bottom, color-mix(in oklab, var(--card) 92%, white 3%), color-mix(in oklab, var(--card) 88%, black 12%));
+      linear-gradient(to bottom, color-mix(in oklab, var(--card) 92%, white 3%), color-mix(in oklab, var(--card) 90%, black 10%));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 12px 30px -28px rgb(0 0 0 / 0.75);
   }
 
   .shiro-panel-muted {
@@ -630,24 +650,11 @@ code {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border-radius: 6px;
-    border: 1px solid color-mix(in oklab, var(--border) 92%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(to bottom, color-mix(in oklab, var(--popover) 98%, transparent), color-mix(in oklab, var(--popover) 92%, var(--background) 8%));
+      linear-gradient(to bottom, color-mix(in oklab, var(--popover) 98%, transparent), color-mix(in oklab, var(--popover) 94%, var(--background) 6%));
     box-shadow: var(--panel-shadow-strong);
-  }
-
-  .shiro-modal-surface::before {
-    content: "";
-    position: absolute;
-    pointer-events: none;
-    inset: 0;
-    background:
-      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(225deg, var(--panel-line-strong) 0 1px, transparent 1px) top right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(45deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat;
-    opacity: 0.85;
   }
 
   .shiro-modal-surface > * {
@@ -716,49 +723,11 @@ code {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 92%, transparent)),
-      linear-gradient(135deg, color-mix(in oklab, var(--shell-glow) 88%, transparent), transparent 48%);
+      linear-gradient(180deg, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 94%, transparent));
     box-shadow: var(--panel-shadow-strong);
-  }
-
-  .shiro-hero-panel::before,
-  .shiro-hero-panel::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
-
-  .shiro-hero-panel::before {
-    background:
-      linear-gradient(135deg, transparent 0 calc(var(--shiro-cut) - 1px), color-mix(in oklab, var(--panel-line-strong) 100%, transparent) calc(var(--shiro-cut) - 1px) var(--shiro-cut), transparent var(--shiro-cut)) top left / calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px) no-repeat,
-      linear-gradient(315deg, transparent 0 calc(var(--shiro-cut) - 1px), color-mix(in oklab, var(--panel-line-strong) 100%, transparent) calc(var(--shiro-cut) - 1px) var(--shiro-cut), transparent var(--shiro-cut)) bottom right / calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px) no-repeat,
-      linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-line) 100%, transparent) 26%, transparent 65%),
-      linear-gradient(var(--shell-grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--shell-grid) 1px, transparent 1px);
-    background-size:
-      calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px),
-      calc(var(--shiro-cut) + 2px) calc(var(--shiro-cut) + 2px),
-      100% 1px,
-      20px 20px,
-      20px 20px;
-    background-repeat: no-repeat, no-repeat, no-repeat, repeat, repeat;
-    background-position: top left, bottom right, bottom 18px left 0, 0 0, 0 0;
-    opacity: 0.92;
-  }
-
-  .shiro-hero-panel::after {
-    inset: 10px;
-    border: 1px solid color-mix(in oklab, var(--panel-line) 100%, transparent);
-    background:
-      repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--warning-stripe) 100%, transparent) 10px 12px),
-      linear-gradient(90deg, transparent 0 calc(100% - 8rem), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(100% - 8rem) calc(100% - 5rem), transparent calc(100% - 5rem));
-    background-size: 7rem 7rem, 100% 100%;
-    background-position: right 1.25rem bottom 1.25rem, 0 0;
-    background-repeat: no-repeat;
-    opacity: 0.52;
   }
 
   .shiro-hero-panel > * {
@@ -802,46 +771,22 @@ code {
        longer need to repeat the value (and the matching border /
        box-shadow utilities) on every `<Card>`. Tighter / looser radii
        still work via Tailwind class overrides on the Card itself. */
-    border-radius: 6px;
-    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(to bottom, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 90%, transparent)),
-      linear-gradient(90deg, transparent, color-mix(in oklab, var(--shell-grid) 60%, transparent) 50%, transparent);
+      linear-gradient(to bottom, color-mix(in oklab, var(--panel-fill-strong) 98%, transparent), color-mix(in oklab, var(--panel-fill) 92%, transparent));
     box-shadow: var(--panel-shadow);
     transition:
+      background-image 180ms ease,
       border-color 180ms ease,
       box-shadow 180ms ease;
   }
 
-  .shiro-surface::before,
-  .shiro-surface::after {
-    content: "";
-    position: absolute;
-    pointer-events: none;
-    inset: 0;
-    contain: strict;
-  }
-
-  .shiro-surface::before {
+  .shiro-surface:is(:hover, :focus-within) {
+    border-color: var(--surface-border-hover);
     background:
-      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(225deg, var(--panel-line-strong) 0 1px, transparent 1px) top right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(45deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(to right, transparent, var(--panel-line), transparent) top / 100% 1px no-repeat,
-      linear-gradient(to right, transparent, var(--panel-line), transparent) bottom / 100% 1px no-repeat;
-    opacity: 0.95;
-  }
-
-  .shiro-surface::after {
-    inset: 7px;
-    border: 1px solid color-mix(in oklab, var(--panel-line) 90%, transparent);
-    opacity: 0.65;
-    background:
-      linear-gradient(135deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) top left / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
-      linear-gradient(225deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) top right / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
-      linear-gradient(315deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) bottom right / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat,
-      linear-gradient(45deg, transparent 0 calc(var(--shiro-cut-sm) - 1px), color-mix(in oklab, var(--panel-line) 100%, transparent) calc(var(--shiro-cut-sm) - 1px) var(--shiro-cut-sm), transparent var(--shiro-cut-sm)) bottom left / calc(var(--shiro-cut-sm) + 2px) calc(var(--shiro-cut-sm) + 2px) no-repeat;
+      linear-gradient(to bottom, color-mix(in oklab, var(--surface-hover) 98%, transparent), color-mix(in oklab, var(--panel-fill) 94%, transparent));
+    box-shadow: var(--surface-shadow-hover);
   }
 
   .shiro-surface > * {
@@ -860,50 +805,15 @@ code {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border: 1px solid color-mix(in oklab, var(--border) 94%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
       linear-gradient(180deg, color-mix(in oklab, var(--card) 90%, black 10%), color-mix(in oklab, var(--card) 74%, black 26%));
     box-shadow: var(--panel-shadow);
   }
 
-  .shiro-viewport::before,
-  .shiro-viewport::after {
-    content: "";
-    position: absolute;
-    pointer-events: none;
-    inset: 0;
-    z-index: 1;
-  }
-
-  .shiro-viewport::before {
-    inset: 10px;
-    border: 1px solid color-mix(in oklab, var(--panel-line) 100%, transparent);
-    opacity: 0.7;
-    background:
-      linear-gradient(to right, transparent 46%, color-mix(in oklab, var(--crosshair-line) 100%, transparent) 46% 54%, transparent 54%),
-      linear-gradient(transparent 46%, color-mix(in oklab, var(--crosshair-line) 100%, transparent) 46% 54%, transparent 54%);
-    background-size: 14px 1px, 1px 14px;
-    background-position: center center, center center;
-    background-repeat: no-repeat;
-  }
-
-  .shiro-viewport::after {
-    background:
-      linear-gradient(90deg, transparent 0 calc(100% - 32px), color-mix(in oklab, var(--warning-stripe) 100%, transparent) calc(100% - 32px)),
-      repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in oklab, var(--warning-stripe) 100%, transparent) 6px 8px);
-    background-size: 100% 100%, 26px 26px;
-    background-position: 0 0, right bottom;
-    background-repeat: no-repeat;
-    opacity: 0.4;
-  }
-
   .shiro-viewport-video-stage {
     background: #000;
-  }
-
-  .shiro-viewport-video-stage::before,
-  .shiro-viewport-video-stage::after {
-    display: none;
   }
 
   .shiro-viewport-video-stage video {
@@ -943,44 +853,54 @@ code {
     justify-content: center;
     width: 2.5rem;
     height: 2.5rem;
-    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 32%, transparent)),
-      linear-gradient(135deg, transparent 0 12px, color-mix(in oklab, var(--panel-line) 100%, transparent) 12px 13px, transparent 13px);
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 32%, transparent));
     box-shadow: var(--panel-shadow);
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .shiro-icon-chip:is(:hover, :focus-within) {
+    border-color: var(--surface-border-hover);
+    box-shadow: var(--surface-shadow-hover);
   }
 
   .shiro-stat-block {
     position: relative;
     overflow: hidden;
-    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 30%, transparent)),
-      linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-line) 100%, transparent) 50%, transparent);
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 30%, transparent));
     box-shadow: var(--panel-shadow);
+    transition:
+      border-color 160ms ease,
+      background-image 160ms ease,
+      box-shadow 160ms ease;
   }
 
-  .shiro-stat-block::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      linear-gradient(135deg, var(--panel-line-strong) 0 1px, transparent 1px) top left / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat,
-      linear-gradient(315deg, var(--panel-line-strong) 0 1px, transparent 1px) bottom right / var(--shiro-cut-sm) var(--shiro-cut-sm) no-repeat;
-    opacity: 0.8;
+  .shiro-stat-block:is(:hover, :focus-within) {
+    border-color: var(--surface-border-hover);
+    box-shadow: var(--surface-shadow-hover);
   }
 
   .shiro-table-shell {
-    border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
-    background: color-mix(in oklab, var(--panel-fill) 95%, transparent);
+    border: 1px solid var(--surface-border);
+    border-radius: 8px;
+    background: color-mix(in oklab, var(--panel-fill) 96%, transparent);
     box-shadow: var(--panel-shadow);
   }
 
   .shiro-scroll-shell {
-    border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+    border: 1px solid var(--surface-border);
+    border-radius: 8px;
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--muted) 28%, transparent), transparent),
+      linear-gradient(180deg, color-mix(in oklab, var(--muted) 20%, transparent), transparent),
       color-mix(in oklab, var(--panel-fill) 94%, transparent);
     box-shadow: inset 0 1px 0 color-mix(in oklab, white 40%, transparent);
   }
@@ -997,6 +917,11 @@ code {
     justify-content: center;
     gap: 1rem;
     text-align: center;
+    border: 1px dashed color-mix(in oklab, var(--border) 82%, transparent);
+    border-radius: 8px;
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--muted) 20%, transparent), transparent 70%),
+      color-mix(in oklab, var(--panel-fill) 82%, transparent);
   }
 
   .shiro-data-grid {
@@ -1006,17 +931,26 @@ code {
   }
 
   .shiro-data-cell {
-    border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+    border-radius: 8px;
+    border: 1px solid var(--surface-border);
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 28%, transparent)),
-      linear-gradient(135deg, transparent 0 10px, color-mix(in oklab, var(--panel-line) 100%, transparent) 10px 11px, transparent 11px);
+      linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--muted) 28%, transparent));
     box-shadow: var(--panel-shadow);
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .shiro-data-cell:is(:hover, :focus-within) {
+    border-color: var(--surface-border-hover);
+    box-shadow: var(--surface-shadow-hover);
   }
 
   .shiro-code-shell {
-    border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+    border: 1px solid var(--surface-border);
+    border-radius: 8px;
     background:
-      linear-gradient(180deg, color-mix(in oklab, var(--muted) 24%, transparent), transparent),
+      linear-gradient(180deg, color-mix(in oklab, var(--muted) 20%, transparent), transparent),
       color-mix(in oklab, var(--panel-fill) 94%, transparent);
     box-shadow: inset 0 1px 0 color-mix(in oklab, white 36%, transparent);
   }

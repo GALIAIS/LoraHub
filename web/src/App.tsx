@@ -301,10 +301,10 @@ export default function App() {
                     type="button"
                     onClick={(e) => runThemeChange(e, () => setMode(value))}
                     className={cn(
-                      "h-7 rounded-[2px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors",
+                      "h-7 rounded-[6px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors duration-150",
                       mode === value
-                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "border-sidebar-border/60 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
+                        : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
                     )}
                     title={label}
                   >
@@ -325,10 +325,10 @@ export default function App() {
                     type="button"
                     onClick={(e) => runThemeChange(e, () => setAccent(item.value))}
                     className={cn(
-                      "h-7 rounded-[2px] border px-2 text-[11px] transition-colors",
+                      "h-7 rounded-[6px] border px-2 text-[11px] transition-colors duration-150",
                       accent === item.value
-                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "border-sidebar-border/60 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
+                        : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
                     )}
                   >
                     {item.label}
