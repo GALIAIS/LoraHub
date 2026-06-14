@@ -253,6 +253,22 @@ def test_dataset_name_endpoints_reject_dot_paths(
     assert (tmp_path / "outside.txt").is_file()
 
 
+def test_dataset_upload_normalizes_plain_file_names(
+    client: TestClient, tmp_path: Path
+) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    r = client.post(
+        "/api/image-studio/datasets/dataset/upload",
+        files={"files": ("..\\escape.png", b"not-image", "image/png")},
+    )
+
+    assert r.status_code == 200, r.text
+    assert not (tmp_path / "escape.png").exists()
+    assert (dataset / "escape.png").read_bytes() == b"not-image"
+
+
 def test_get_image(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     r = client.get("/api/image-studio/image", params={"path": img_path})

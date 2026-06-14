@@ -206,6 +206,22 @@ def _is_caption_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in _CAPTION_SUFFIXES
 
 
+def _upload_basename(filename: str) -> str:
+    return Path(filename.replace("\\", "/")).name
+
+
+def _safe_upload_target(dest: Path, filename: str) -> Path | None:
+    basename = _upload_basename(filename)
+    if not basename:
+        return None
+    target = (dest / basename).resolve()
+    try:
+        target.relative_to(dest.resolve())
+    except ValueError:
+        return None
+    return target
+
+
 def _extract_archive(
     archive_path: Path,
     dest: Path,
@@ -227,11 +243,12 @@ def _extract_archive(
                 for info in zf.infolist():
                     if info.is_dir():
                         continue
-                    fname = Path(info.filename).name
-                    if not fname:
+                    target = _safe_upload_target(dest, info.filename)
+                    if target is None:
                         continue
-                    if _is_image_file(fname) or (keep_captions and _is_caption_file(fname)):
-                        target = dest / fname
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -247,11 +264,12 @@ def _extract_archive(
                 for member in tf.getmembers():
                     if not member.isfile():
                         continue
-                    fname = Path(member.name).name
-                    if not fname:
+                    target = _safe_upload_target(dest, member.name)
+                    if target is None:
                         continue
-                    if _is_image_file(fname) or (keep_captions and _is_caption_file(fname)):
-                        target = dest / fname
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -268,11 +286,12 @@ def _extract_archive(
             import py7zr  # noqa: PLC0415
             with py7zr.SevenZipFile(archive_path, "r") as sz:
                 for fname, bio in sz.read().items():
-                    base = Path(fname).name
-                    if not base:
+                    target = _safe_upload_target(dest, fname)
+                    if target is None:
                         continue
-                    if _is_image_file(base) or (keep_captions and _is_caption_file(base)):
-                        target = dest / base
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -360,7 +379,10 @@ async def upload_to_dataset(
                 finally:
                     os.unlink(tmp.name)
             elif _is_image_file(filename) or (keepCaptions and _is_caption_file(filename)):
-                target = ds_path / filename
+                target = _safe_upload_target(ds_path, filename)
+                if target is None:
+                    all_errors.append(f"skipped unsafe filename: {filename}")
+                    continue
                 target = _resolve_conflict(target, onConflict)
                 if target is not None:
                     content = await upload.read()
