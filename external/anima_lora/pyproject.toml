@@ -80,7 +80,10 @@ dependencies = [
     "yarl>=1.23.0",
     "spandrel>=0.4.2",
     "sqlalchemy>=2.1.0b2",
-    "aiohttp>=3.13.5",
+    # Keep aiohttp on stable 3.x. With ``prerelease = "allow"`` enabled
+    # for torch nightlies, an unconstrained upper bound can resolve to
+    # aiohttp 4.0 alpha source builds that fail on CPython 3.13.
+    "aiohttp>=3.13.5,<4",
     "comfy-cli>=1.7.3",
     "comfy-aimdo>=0.2.14",
     "av>=17.0.1",

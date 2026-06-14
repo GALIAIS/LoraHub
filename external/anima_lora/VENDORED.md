@@ -49,6 +49,9 @@ Changes vendored on top of upstream. Each entry should describe the
 * `gui/`, `output/`, `post_image_dataset/` — runtime scratch the
   trainer writes during a run. Excluded from git via the repo-root
   `.gitignore`.
+* `pyproject.toml` — keeps `aiohttp` constrained to stable 3.x so the
+  global `prerelease = "allow"` setting used for torch nightlies does
+  not pull `aiohttp 4.0.0a1` source builds on CPython 3.13.
 
 ### Selected upstream fixes (2026-05-24 cherry-pick)
 
