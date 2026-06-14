@@ -2397,6 +2397,44 @@ def test_anima_model_download_defaults_to_modelscope(
     assert seen and seen[0][0] == "modelscope"
 
 
+def test_anima_model_download_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+    from lorahub.core.backends.anima_lora.models import DownloadEvent
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        progress = kwargs.get("progress")
+        if progress:
+            progress(DownloadEvent("persisted anima progress", 55, 1, 3))
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/download-models/status").json()
+        if status.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["events"][-1]["message"] == "persisted anima progress"
+
+
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
     r = client.get("/api/models/download/missing")
     assert r.status_code == 404
