@@ -302,7 +302,7 @@ export function AnalysisWorkbench({
 
   return (
     <div className="flex flex-col min-h-0">
-      <div className="px-7 pt-4 border-b border-border/40 bg-background/40">
+      <div className="overflow-x-auto border-b border-border/40 bg-background/40 px-4 pt-3 md:px-7 md:pt-4">
         <Tabs value={viewKind} onValueChange={(v) => setViewKind(v as ViewKind)}>
           <TabsList variant="line" className="gap-3">
             <TabsTrigger value="builtin" className="text-[12px]">
@@ -330,7 +330,7 @@ export function AnalysisWorkbench({
         <>
           <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
-      <div className="px-7 py-4 space-y-4">
+      <div className="space-y-4 px-4 py-4 md:px-7">
         {/* View-mode switcher: live / postmortem / custom. Mode picks
             sensible defaults for which heavy panels are open by
             default; manual toggles flip into custom and persist. */}
@@ -445,7 +445,7 @@ export function AnalysisWorkbench({
           value={bottomTab}
           onValueChange={(v) => setBottomTab(v as BottomTabKey)}
         >
-          <div className="border-y border-border/60 bg-muted/40 px-3.5 py-1.5 rounded-t-[6px]">
+          <div className="overflow-x-auto rounded-t-[6px] border-y border-border/60 bg-muted/40 px-3.5 py-1.5">
             <TabsList variant="line" className="gap-3">
               <TabsTrigger value="stats" className="text-[11.5px]">
                 序列统计{" "}

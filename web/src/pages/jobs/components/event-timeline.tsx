@@ -84,11 +84,11 @@ export function EventTimeline({
   }, [filteredMilestones, query])
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[300px_1fr] overflow-hidden rounded-[6px] border border-border/60 bg-background">
+    <div className="grid h-full min-h-0 grid-rows-[minmax(180px,38%)_1fr] overflow-hidden rounded-[6px] border border-border/60 bg-background md:grid-cols-[300px_1fr] md:grid-rows-none">
       {/* LEFT: rail */}
-      <div className="flex min-h-0 flex-col border-r border-border/60 bg-muted/20">
+      <div className="flex min-h-0 flex-col border-b border-border/60 bg-muted/20 md:border-b-0 md:border-r">
         <div className="border-b border-border/60 px-3 py-2">
-          <div className="mb-1.5 flex items-center gap-1">
+          <div className="no-scrollbar mb-1.5 flex items-center gap-1 overflow-x-auto">
             {FILTER_CHIPS.map((c) => {
               const active = filterId === c.id
               const n =
@@ -161,7 +161,7 @@ export function EventTimeline({
         )}
       </div>
       {/* RIGHT: detail */}
-      <div className="min-h-0">
+      <div className="min-h-0 overflow-hidden">
         <DetailPane
           milestone={selected}
           events={events}

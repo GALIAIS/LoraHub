@@ -73,7 +73,7 @@ export function JobDetailHeader({
   onRerun,
 }: JobDetailHeaderProps) {
   return (
-    <header className="px-7 py-5 border-b border-border/60 flex items-start gap-4">
+    <header className="space-y-3 border-b border-border/60 px-4 pb-4 pt-12 md:flex md:items-start md:gap-4 md:space-y-0 md:px-7 md:py-5">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1.5">
           {data && <StateBadge state={data.state} paused={isPaused} />}
@@ -102,7 +102,7 @@ export function JobDetailHeader({
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="no-scrollbar -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-0.5 md:mx-0 md:shrink-0 md:overflow-visible md:px-0">
         <Button
           variant="outline"
           size="sm"
@@ -118,9 +118,10 @@ export function JobDetailHeader({
               ? "在分析工作台中对比所选任务"
               : "打开训练分析工作台"
           }
+          className="shrink-0"
         >
           <BarChart3 className="size-3" />{" "}
-          {showCompareJumpButton ? "对比分析" : "深入分析"}
+          <span>{showCompareJumpButton ? "对比分析" : "深入分析"}</span>
         </Button>
         <Button
           variant="outline"
@@ -129,6 +130,7 @@ export function JobDetailHeader({
           disabled={!data || busy !== null}
           title="在文件管理器中打开工作区"
           aria-label="在文件管理器中打开工作区"
+          className="shrink-0"
         >
           {busy === "reveal" ? (
             <Spinner className="size-3" />
@@ -141,13 +143,14 @@ export function JobDetailHeader({
           size="sm"
           onClick={onRerun}
           disabled={!data || busy !== null}
+          className="shrink-0"
         >
           {busy === "rerun" ? (
             <Spinner className="size-3" />
           ) : (
             <RefreshCw className="size-3" />
           )}{" "}
-          再次运行
+          <span>再次运行</span>
         </Button>
         {isTerminal && (
           <Button
@@ -156,8 +159,9 @@ export function JobDetailHeader({
             onClick={onCloneOpen}
             disabled={busy !== null || !data?.config_snapshot}
             title="从某个 saved state 派生新任务（保留 optimizer / lr 进度，不影响原任务）"
+            className="shrink-0"
           >
-            <GitBranch className="size-3" /> 派生
+            <GitBranch className="size-3" /> <span>派生</span>
           </Button>
         )}
         {isTerminal && (
@@ -166,13 +170,14 @@ export function JobDetailHeader({
             size="sm"
             onClick={onArchiveOpen}
             disabled={busy !== null}
+            className="shrink-0"
           >
             {busy === "archive" ? (
               <Spinner className="size-3" />
             ) : (
               <Archive className="size-3" />
             )}{" "}
-            归档
+            <span>归档</span>
           </Button>
         )}
         {isResumable && (
@@ -183,13 +188,14 @@ export function JobDetailHeader({
               onClick={onResume}
               disabled={busy !== null}
               title="从最新 state + safetensors 续训（保留 optimizer / lr 进度）"
+              className="shrink-0"
             >
               {busy === "resume" ? (
                 <Spinner className="size-3" />
               ) : (
                 <Play className="size-3" />
               )}{" "}
-              {isPaused ? "继续训练" : "恢复训练"}
+              <span>{isPaused ? "继续训练" : "恢复训练"}</span>
             </Button>
             <Button
               variant="outline"
@@ -197,8 +203,9 @@ export function JobDetailHeader({
               onClick={onResumeEditOpen}
               disabled={busy !== null || !data?.config_snapshot}
               title="先编辑 lr / dropTokens / 数据集等再续训（权重相关字段会被锁）"
+              className="shrink-0"
             >
-              <Pencil className="size-3" /> 编辑
+              <Pencil className="size-3" /> <span>编辑</span>
             </Button>
           </>
         )}
@@ -211,17 +218,18 @@ export function JobDetailHeader({
                 onClick={onPause}
                 disabled={busy !== null}
                 title="发送 SIGINT，等待训练写出最新 state 后停止；之后点「继续训练」从此处续"
+                className="shrink-0"
               >
                 {busy === "pause" ? (
                   <Spinner className="size-3" />
                 ) : (
                   <Pause className="size-3" />
                 )}{" "}
-                暂停
+                <span>暂停</span>
               </Button>
             ) : null}
-            <Button variant="destructive" size="sm" onClick={onCancel}>
-              <Square className="size-3" /> 取消
+            <Button variant="destructive" size="sm" onClick={onCancel} className="shrink-0">
+              <Square className="size-3" /> <span>取消</span>
             </Button>
             <Button
               variant="destructive"
@@ -229,13 +237,14 @@ export function JobDetailHeader({
               onClick={onKillOpen}
               title="强制 SIGKILL 进程组（用于卡死的训练任务）"
               disabled={busy !== null || !data?.pid}
+              className="shrink-0"
             >
               {busy === "kill" ? (
                 <Spinner className="size-3" />
               ) : (
                 <Skull className="size-3" />
               )}{" "}
-              强制终止
+              <span>强制终止</span>
             </Button>
           </>
         )}
@@ -246,8 +255,9 @@ export function JobDetailHeader({
             onClick={onKillOpen}
             title="任务标记为 interrupted 但 PID 仍可能存活，可强制清理"
             disabled={busy !== null}
+            className="shrink-0"
           >
-            <Skull className="size-3" /> 强制终止
+            <Skull className="size-3" /> <span>强制终止</span>
           </Button>
         )}
       </div>

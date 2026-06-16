@@ -281,6 +281,8 @@ export function ConfigsPage() {
       <WorkbenchSplitLayout
         sidebarOpen={sidebarOpen}
         sidebarWidth="minmax(240px,300px)"
+        mobileSidebarTitle="训练配置列表"
+        mobileSidebarDescription="筛选配置、选择模板、新建或导入训练配置。"
         sidebar={
           <>
         <div className="flex items-center justify-between px-4 pt-3">
@@ -292,6 +294,7 @@ export function ConfigsPage() {
             variant="ghost"
             onClick={() => setSidebarOpen(false)}
             title="收起侧栏"
+            className="hidden md:inline-flex"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -356,7 +359,7 @@ export function ConfigsPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />

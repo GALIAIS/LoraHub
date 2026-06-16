@@ -276,6 +276,8 @@ export function JobsPage() {
       <WorkbenchSplitLayout
         sidebarOpen={sidebarOpen}
         sidebarWidth="minmax(280px,340px)"
+        mobileSidebarTitle="训练任务列表"
+        mobileSidebarDescription="筛选训练任务、选择任务、进入对比或批量归档。"
         sidebar={
           <>
         <div className="flex items-center justify-between px-4 pt-3">
@@ -287,6 +289,7 @@ export function JobsPage() {
             variant="ghost"
             onClick={() => setSidebarOpen(false)}
             title="收起侧栏"
+            className="hidden md:inline-flex"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -408,7 +411,7 @@ export function JobsPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />

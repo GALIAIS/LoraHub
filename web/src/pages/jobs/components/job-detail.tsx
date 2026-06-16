@@ -318,7 +318,7 @@ export function JobDetail({
         onReveal={onReveal}
         onRerun={onRerun}
       />
-      <div className="px-7 pt-4">
+      <div className="px-4 pt-4 md:px-7">
         <RunSummaryCard
           job={data}
           metrics={summaryMetrics.data}
@@ -331,7 +331,7 @@ export function JobDetail({
         onValueChange={(v) => setTab(v as TabKey)}
         className="flex-1 min-h-0 flex flex-col"
       >
-        <div className="px-7 pt-4 pb-2 border-b border-border/60 bg-background/40">
+        <div className="overflow-x-auto border-b border-border/60 bg-background/40 px-4 pb-2 pt-4 md:px-7">
           <TabsList variant="line">
             <TabsTrigger value="overview">概览</TabsTrigger>
             <TabsTrigger value="events">事件</TabsTrigger>
@@ -342,7 +342,7 @@ export function JobDetail({
         <div className="flex-1 min-h-0 overflow-hidden">
           <TabsContent value="overview" className="h-full">
             <ScrollArea className="h-full">
-              <div className="px-7 py-5">
+              <div className="px-4 py-4 md:px-7 md:py-5">
                 <OverviewTab
                   jobId={jobId}
                   job={data}
@@ -353,7 +353,7 @@ export function JobDetail({
             </ScrollArea>
           </TabsContent>
           <TabsContent value="events" className="h-full">
-            <div className="px-7 py-5 h-full min-h-0 flex flex-col">
+            <div className="flex h-full min-h-0 flex-col px-4 py-4 md:px-7 md:py-5">
               <EventsTab
                 events={events}
                 status={stream.status}
@@ -364,7 +364,7 @@ export function JobDetail({
           </TabsContent>
           <TabsContent value="files" className="h-full">
             <ScrollArea className="h-full">
-              <div className="px-7 py-5">
+              <div className="px-4 py-4 md:px-7 md:py-5">
                 <FilesTab jobId={jobId} jobState={data?.state} />
               </div>
             </ScrollArea>

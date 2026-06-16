@@ -89,6 +89,7 @@ export function OverviewTab({
   })
 
   const m = metrics.data
+  const latestMetricPoint = m?.loss?.length ? m.loss[m.loss.length - 1] : null
 
   const stepSamples = useMemo(() => extractStepSamples(events), [events])
   const recentStepSamples = useMemo(
@@ -130,7 +131,9 @@ export function OverviewTab({
   }, [stepSamples, fallbackTotalSteps])
 
   const currentStep =
-    stepSamples.length > 0 ? stepSamples[stepSamples.length - 1].step : null
+    stepSamples.length > 0
+      ? stepSamples[stepSamples.length - 1].step
+      : (latestMetricPoint?.step ?? null)
 
   const etaSeconds = useMemo(() => {
     if (!isActive) return null
@@ -181,7 +184,7 @@ export function OverviewTab({
   return (
     <div className="space-y-5">
       <TrainingFeatureBadges configSnapshot={job?.config_snapshot} />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="状态" value={job?.state ? stateLabel(job.state) : "—"} />
         <Stat
           label="进度"
@@ -193,6 +196,10 @@ export function OverviewTab({
                     ? lastStep.payload.total_steps
                     : totalSteps) ?? "?"
                 }`
+              : latestMetricPoint
+                ? `${latestMetricPoint.step ?? "?"} / ${
+                    m?.total_steps ?? totalSteps ?? "?"
+                  }`
               : "—"
           }
         />
@@ -201,6 +208,8 @@ export function OverviewTab({
           value={
             typeof lastStep?.payload.loss === "number"
               ? (lastStep.payload.loss as number).toFixed(4)
+              : typeof latestMetricPoint?.loss === "number"
+                ? latestMetricPoint.loss.toFixed(4)
               : "—"
           }
         />
@@ -231,7 +240,7 @@ export function OverviewTab({
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
             最终统计
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
             <Stat label="总用时" value={fmtDuration(finalDuration)} />
             <Stat
               label="平均吞吐"
@@ -257,7 +266,7 @@ export function OverviewTab({
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
           指标摘要
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
           <Stat
             label="首步时间"
             value={m?.first_step_ts ? fmtUnixSeconds(m.first_step_ts) : "—"}
@@ -278,7 +287,7 @@ export function OverviewTab({
         <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
           产物计数
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           <Stat label="检查点" value={m ? String(m.checkpoints.length) : "—"} />
           <Stat label="样本" value={m ? String(m.samples.length) : "—"} />
           <Stat label="回合事件" value={m ? String(m.epochs.length) : "—"} />
@@ -290,7 +299,7 @@ export function OverviewTab({
           <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
             任务时间
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
             <Stat
               label="创建于"
               value={

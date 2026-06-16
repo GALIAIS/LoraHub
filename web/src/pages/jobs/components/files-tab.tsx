@@ -31,7 +31,34 @@ function FileTable({
   // a card it's nested inside. Inside files-tab the wrapper card is the
   // chrome owner; a borderless native table tucks neatly under it.
   return (
-    <table className="w-full text-[12px] border-collapse">
+    <>
+    <div className="divide-y divide-border/50 md:hidden">
+      {files.map((f) => (
+        <div key={f.path} className="px-3 py-2.5">
+          <div className="min-w-0 font-mono text-[12px] break-all">{f.path}</div>
+          <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <span className="tabular-nums">{fmtBytes(f.size_bytes)}</span>
+            <span className="truncate text-right">{fmtUnixSeconds(f.modified_at)}</span>
+          </div>
+          <div className="mt-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => window.open(api.jobFileUrl(jobId, f.path))}
+              className="h-7 w-full text-[11px]"
+            >
+              {actionIcon === "download" ? (
+                <Download className="size-3" />
+              ) : (
+                <ExternalLink className="size-3" />
+              )}
+              {actionLabel}
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+    <table className="hidden w-full border-collapse text-[12px] md:table">
       <thead className="sticky top-0 z-10 bg-muted/40 backdrop-blur-sm">
         <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
           <th className="px-3 py-2 font-medium">路径</th>
@@ -77,6 +104,7 @@ function FileTable({
         ))}
       </tbody>
     </table>
+    </>
   )
 }
 

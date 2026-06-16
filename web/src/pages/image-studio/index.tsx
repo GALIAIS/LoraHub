@@ -68,6 +68,8 @@ function ImageStudioPage() {
       <WorkbenchSplitLayout
         sidebarWidth="max-content"
         asideClassName="bg-transparent"
+        mobileSidebarTitle="图像工作台导航"
+        mobileSidebarDescription="选择数据集、切换导入审计标注输出阶段或打开工具库。"
         sidebar={
           <StudioSidebar
             datasetPath={datasetPath}

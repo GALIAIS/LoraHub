@@ -149,6 +149,8 @@ export function AnalysisPage() {
       sidebarOpen={sidebarOpen}
       sidebarWidth="minmax(260px,300px)"
       transitionClassName="duration-300"
+      mobileSidebarTitle="训练分析任务"
+      mobileSidebarDescription="搜索任务、切换分析对象或进入多任务对比。"
       sidebar={
         <>
         <header className="px-4 pt-4 pb-2 space-y-2.5">
@@ -164,7 +166,7 @@ export function AnalysisPage() {
               variant="ghost"
               onClick={() => setSidebarOpen(false)}
               title="收起侧栏"
-              className="size-7 p-0 shrink-0"
+              className="hidden size-7 shrink-0 p-0 md:inline-flex"
             >
               <PanelLeftClose className="size-4" />
             </Button>
@@ -246,7 +248,7 @@ export function AnalysisPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
@@ -265,7 +267,7 @@ export function AnalysisPage() {
 
         {(activeJob || isCompareRoute) && (
           <>
-            <header className="px-7 py-4 border-b border-border/60 flex items-start justify-between gap-4">
+            <header className="flex items-start justify-between gap-4 border-b border-border/60 px-4 pb-4 pt-12 md:px-7 md:py-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   {activeJob && <StateBadge state={activeJob.state} />}
@@ -311,7 +313,7 @@ export function AnalysisPage() {
 
             {isCompareRoute && (
               <ScrollArea className="flex-1 min-h-0">
-                <div className="px-7 py-5">
+                <div className="px-4 py-4 md:px-7 md:py-5">
                   <CompareTab compareIds={compareIds} />
                 </div>
               </ScrollArea>
@@ -460,7 +462,7 @@ function EmptyState({
 
   return (
     <div className="flex-1 overflow-auto">
-      <div className="max-w-3xl mx-auto px-7 py-8 space-y-6">
+      <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-7 md:py-8">
         <div className="space-y-1">
           <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground/80">
             训练分析

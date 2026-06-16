@@ -68,6 +68,14 @@ const NAV_GROUPS: Array<{ key: string; label: string }> = [
   { key: "system", label: "系统" },
 ]
 
+const MOBILE_NAV = [
+  "/",
+  "/jobs",
+  "/analysis",
+  "/configs",
+  "/image-studio",
+] as const
+
 type ThemeMode = "light" | "dark" | "system"
 type AccentTheme = "slate" | "cyan" | "amber" | "rose"
 
@@ -364,7 +372,7 @@ export default function App() {
           </header>
 
           {/* Page content */}
-          <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden pb-[calc(4.25rem+env(safe-area-inset-bottom))] md:pb-0">
             <Suspense
               fallback={
                 <div
@@ -381,9 +389,55 @@ export default function App() {
               </ErrorBoundary>
             </Suspense>
           </div>
+          <MobileBottomNav isRouteActive={isRouteActive} prefetchRoute={prefetchRoute} />
         </div>
       </SidebarInset>
     </SidebarProvider>
+  )
+}
+
+function MobileBottomNav({
+  isRouteActive,
+  prefetchRoute,
+}: {
+  isRouteActive: (href: string) => boolean
+  prefetchRoute: (routeKey: AppRouteModuleKey) => void
+}) {
+  const items = MOBILE_NAV
+    .map((href) => NAV.find((item) => item.to === href))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-background/92 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-[0_-18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-xl md:hidden"
+      aria-label="移动端主导航"
+    >
+      <div className="grid grid-cols-5 gap-1">
+        {items.map((item) => {
+          const active = isRouteActive(item.to)
+          const Icon = item.icon
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              onPointerDown={() => prefetchRoute(item.routeKey)}
+              onMouseEnter={() => prefetchRoute(item.routeKey)}
+              onFocus={() => prefetchRoute(item.routeKey)}
+              className={cn(
+                "flex min-w-0 flex-col items-center justify-center gap-1 rounded-[8px] px-1 py-1.5 text-[10px] font-medium transition",
+                active
+                  ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
+                  : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+              )}
+            >
+              <Icon className="size-4 shrink-0" />
+              <span className="max-w-full truncate leading-none">{item.label}</span>
+            </NavLink>
+          )
+        })}
+      </div>
+    </nav>
   )
 }
 

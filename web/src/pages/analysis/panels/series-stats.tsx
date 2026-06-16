@@ -119,7 +119,8 @@ export function SeriesStatsCard({
             尚无可统计的曲线。
           </div>
         ) : (
-          <table className="w-full text-[11px] tabular-nums">
+          <div className="overflow-x-auto">
+          <table className="min-w-[620px] w-full text-[11px] tabular-nums">
             <thead className="border-b border-border/60 text-muted-foreground">
               <tr className="text-left">
                 <th className="px-3 py-2 font-medium text-[10px] uppercase tracking-[0.12em]">
@@ -175,6 +176,7 @@ export function SeriesStatsCard({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </CardContent>
     </Card>
