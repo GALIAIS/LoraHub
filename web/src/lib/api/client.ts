@@ -655,10 +655,14 @@ export const api = {
    * — letting the browser save-as instead of buffering the whole
    * archive in memory.
    */
-  artifactZipUrl: (job_id: string, include: string[] = ["checkpoints"]) =>
+  artifactZipUrl: (
+    job_id: string,
+    include: string[] = ["checkpoints"],
+    format = "zip",
+  ) =>
     `/api/artifacts/${encodeURIComponent(job_id)}/zip?include=${encodeURIComponent(
       include.join(","),
-    )}`,
+    )}&format=${encodeURIComponent(format)}`,
   artifactSingleUrl: (job_id: string, path: string) =>
     `/api/jobs/${encodeURIComponent(job_id)}/files/raw?path=${encodeURIComponent(path)}`,
   deleteArtifactFile: (job_id: string, path: string) =>

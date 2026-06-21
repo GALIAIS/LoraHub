@@ -12,7 +12,11 @@ from typing import Dict, List, Optional
 import torch
 
 from library.log import setup_logging
-from networks import NETWORK_REGISTRY, resolve_network_spec
+from networks import (
+    NETWORK_REGISTRY,
+    _normalize_lycoris_kwargs,
+    resolve_network_spec,
+)
 from networks.methods.repa import REPAHead
 from networks.lora_anima.config import LoRANetworkCfg
 from networks.lora_anima.loading import (
@@ -112,6 +116,7 @@ def create_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
+    kwargs = _normalize_lycoris_kwargs(kwargs)
     spec = resolve_network_spec(kwargs)
 
     # Deprecated 2026-06-10 (accepted so old snapshot TOMLs replay): the

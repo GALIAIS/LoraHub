@@ -170,9 +170,12 @@ class JoyTagger:
         underscores: bool = False,
         include_character: bool = True,  # noqa: ARG002 — symmetry with WD14
         on_progress: Callable[[Path, JoyTagResult], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> list[JoyTagResult]:
         results: list[JoyTagResult] = []
         for img in _iter_images(directory, recursive=recursive):
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
             caption_path = img.with_suffix(".txt")
             if skip_existing and caption_path.exists() and caption_path.stat().st_size > 0:
                 continue

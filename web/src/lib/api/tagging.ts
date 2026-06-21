@@ -66,3 +66,12 @@ export async function getTaggingSession(
 ): Promise<TaggingSession> {
   return http<TaggingSession>(`/tagging/tag/${sessionId}`)
 }
+
+export async function stopTaggingSession(
+  sessionId: string,
+): Promise<{ session_id: string; status: string }> {
+  return http<{ session_id: string; status: string }>(
+    `/tagging/tag/${encodeURIComponent(sessionId)}/stop`,
+    { method: "POST" },
+  )
+}

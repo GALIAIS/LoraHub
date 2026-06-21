@@ -1089,6 +1089,68 @@ def test_auto_rotate_writes_task_session_and_recovers_status(
     assert recovered.json()["skipped_count"] == 3
 
 
+def test_auto_rotate_stop_marks_session_canceled(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_auto_rotate_images(
+        *_args: Any,
+        should_stop: Any = None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        entered.set()
+        assert release.wait(5)
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
+        return {"rotated": [], "rotated_count": 0, "skipped_count": 0, "failed": []}
+
+    monkeypatch.setattr(curate_router, "_auto_rotate_images", fake_auto_rotate_images)
+
+    response = client.post(
+        "/api/image-studio/curate/auto-rotate/start",
+        json={"dataset_path": str(sample_dir), "recursive": False},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stop = client.post(f"/api/image-studio/curate/auto-rotate/stop/{session_id}")
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["status"] == "stop_requested"
+    release.set()
+
+    deadline = time.time() + 5
+    status: dict[str, Any] = {}
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            break
+        time.sleep(0.02)
+
+    assert status["status"] == "canceled", status
+    assert status["error"] == "stopped by user"
+    latest: dict[str, Any] = {}
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        latest = client.get("/api/tasks/latest?kind=image_studio_auto_rotate").json()
+        if latest["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert latest["id"] == session_id
+    assert latest["status"] == "canceled"
+
+
 def test_ai_task_status_snapshot_recovers_running_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

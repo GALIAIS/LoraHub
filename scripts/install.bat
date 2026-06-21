@@ -188,7 +188,7 @@ if defined VENV_VALID (
     echo   [ERROR] Failed to create venv.
     goto :fail
   )
-  echo   OK .venv created (seeded with pip / setuptools / wheel)
+  echo   OK .venv created ^(seeded with pip / setuptools / wheel^)
 )
 set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 echo.
@@ -221,7 +221,7 @@ if exist "%NODE_DIR%\node.exe" (
     for /f "delims=" %%v in ('"%NODE_DIR%\node.exe" --version 2^>nul') do set "NODE_VER=%%v"
     powershell -NoProfile -ExecutionPolicy Bypass -Command "if ([version]('!NODE_VER:v=!') -ge [version]('%NODE_MIN_VERSION%')) { exit 0 } else { exit 1 }"
     if not errorlevel 1 (
-      echo   OK Node.js !NODE_VER! (portable, cached)
+      echo   OK Node.js !NODE_VER! ^(portable, cached^)
       goto :node_done
     )
     echo   Cached Node.js !NODE_VER! is below required v%NODE_MIN_VERSION%; reinstalling ...
@@ -281,8 +281,8 @@ if "%NEEDS_NPM_INSTALL%"=="0" (
   )
   for /f "delims=" %%r in ('npm.cmd config get registry 2^>nul') do set "NPM_REGISTRY_NOW=%%r"
   echo   npm registry: !NPM_REGISTRY_NOW!
-  echo   running npm ci (verbose log: web\_npm_install.log) ...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath 'npm.cmd' -ArgumentList @('ci','--verbose','--no-audit','--no-fund','--fetch-timeout=60000','--fetch-retries=2','--fetch-retry-mintimeout=5000','--fetch-retry-maxtimeout=20000') -RedirectStandardOutput '_npm_install.log' -RedirectStandardError '_npm_install.log.err' -PassThru -NoNewWindow; while (-not $p.HasExited) { Write-Host ('  npm ci still running ... (' + (Get-Date -Format 'HH:mm:ss') + ')'); Start-Sleep -Seconds 15 }; if (Test-Path '_npm_install.log.err') { Get-Content '_npm_install.log.err' | Add-Content '_npm_install.log'; Remove-Item '_npm_install.log.err' -Force }; exit $p.ExitCode"
+  echo   running npm ci ^(verbose log: web\_npm_install.log^) ...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%npm-ci-with-log.ps1"
   set "NPM_RC=!errorlevel!"
   popd
   if not "!NPM_RC!"=="0" (

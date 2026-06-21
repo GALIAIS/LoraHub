@@ -14,7 +14,7 @@ import {
   ThroughputSwitcher,
   ThroughputTile,
 } from "./realtime-tile"
-import { fmtDuration, fmtUnixSeconds, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
+import { fmtDuration, stateLabel, TERMINAL_STATES, ACTIVE_STATES } from "../utils"
 import { TrainingFeatureBadges } from "./training-feature-badges"
 
 const THROUGHPUT_WINDOW = 60
@@ -182,44 +182,11 @@ export function OverviewTab({
   }, [m])
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <TrainingFeatureBadges configSnapshot={job?.config_snapshot} />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Stat label="状态" value={job?.state ? stateLabel(job.state) : "—"} />
-        <Stat
-          label="进度"
-          value={
-            lastStep
-              ? `${lastStep.payload.step ?? "?"} / ${
-                  (typeof lastStep.payload.total_steps === "number" &&
-                  lastStep.payload.total_steps > 0
-                    ? lastStep.payload.total_steps
-                    : totalSteps) ?? "?"
-                }`
-              : latestMetricPoint
-                ? `${latestMetricPoint.step ?? "?"} / ${
-                    m?.total_steps ?? totalSteps ?? "?"
-                  }`
-              : "—"
-          }
-        />
-        <Stat
-          label="最新损失"
-          value={
-            typeof lastStep?.payload.loss === "number"
-              ? (lastStep.payload.loss as number).toFixed(4)
-              : typeof latestMetricPoint?.loss === "number"
-                ? latestMetricPoint.loss.toFixed(4)
-              : "—"
-          }
-        />
-      </div>
 
       {isActive ? (
         <div>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
-            实时
-          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             <GpuLiveTile gpu={liveGpu} active={isActive} />
             <ThroughputTile
@@ -237,9 +204,6 @@ export function OverviewTab({
         </div>
       ) : isTerminal ? (
         <div>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
-            最终统计
-          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
             <Stat label="总用时" value={fmtDuration(finalDuration)} />
             <Stat
@@ -262,44 +226,51 @@ export function OverviewTab({
         </div>
       ) : null}
 
-      <div>
-        <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
-          指标摘要
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+      <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="状态" value={job?.state ? stateLabel(job.state) : "—"} />
           <Stat
-            label="首步时间"
-            value={m?.first_step_ts ? fmtUnixSeconds(m.first_step_ts) : "—"}
+            label="进度"
+            value={
+              lastStep
+                ? `${lastStep.payload.step ?? "?"} / ${
+                    (typeof lastStep.payload.total_steps === "number" &&
+                    lastStep.payload.total_steps > 0
+                      ? lastStep.payload.total_steps
+                      : totalSteps) ?? "?"
+                  }`
+                : latestMetricPoint
+                  ? `${latestMetricPoint.step ?? "?"} / ${
+                      m?.total_steps ?? totalSteps ?? "?"
+                    }`
+                : "—"
+            }
           />
           <Stat
-            label="最新步时间"
-            value={m?.last_step_ts ? fmtUnixSeconds(m.last_step_ts) : "—"}
+            label="最新损失"
+            value={
+              typeof lastStep?.payload.loss === "number"
+                ? (lastStep.payload.loss as number).toFixed(4)
+                : typeof latestMetricPoint?.loss === "number"
+                  ? latestMetricPoint.loss.toFixed(4)
+                  : "—"
+            }
           />
           <Stat label="累计用时" value={fmtDuration(m?.duration_s)} />
-          <Stat
-            label="已采样步数"
-            value={m ? String(m.loss.length) : "—"}
-          />
         </div>
-      </div>
-
-      <div>
-        <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
-          产物计数
-        </div>
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="grid grid-cols-3 gap-2">
           <Stat label="检查点" value={m ? String(m.checkpoints.length) : "—"} />
           <Stat label="样本" value={m ? String(m.samples.length) : "—"} />
-          <Stat label="回合事件" value={m ? String(m.epochs.length) : "—"} />
+          <Stat label="采样步" value={m ? String(m.loss.length) : "—"} />
         </div>
       </div>
 
       {job && (
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2">
+        <details className="rounded-[6px] border border-border/60 bg-background">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
             任务时间
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
+          </summary>
+          <div className="grid grid-cols-1 gap-3 border-t border-border/60 p-3 sm:grid-cols-3">
             <Stat
               label="创建于"
               value={
@@ -321,7 +292,7 @@ export function OverviewTab({
               }
             />
           </div>
-        </div>
+        </details>
       )}
     </div>
   )

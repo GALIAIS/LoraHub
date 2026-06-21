@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { Loader2 } from "lucide-react"
 
-import type { StudioTaskRecord } from "@/lib/studio-task-store"
+import { cancelTask, type StudioTaskRecord } from "@/lib/studio-task-store"
 import {
   Select,
   SelectContent,
@@ -149,7 +149,15 @@ export function StudioTaskBanner({
           {task.errorMsg}
         </span>
       )}
-      {!running && (
+      {running ? (
+        <button
+          type="button"
+          onClick={() => void cancelTask(task)}
+          className="ml-auto text-xs text-muted-foreground hover:text-destructive"
+        >
+          停止
+        </button>
+      ) : (
         <button
           type="button"
           onClick={onDismiss}

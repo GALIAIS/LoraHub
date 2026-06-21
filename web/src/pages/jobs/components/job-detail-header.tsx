@@ -102,7 +102,7 @@ export function JobDetailHeader({
           </div>
         )}
       </div>
-      <div className="no-scrollbar -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-0.5 md:mx-0 md:shrink-0 md:overflow-visible md:px-0">
+      <div className="-mx-1 flex flex-wrap items-center gap-2 px-1 md:mx-0 md:shrink-0 md:flex-nowrap md:justify-end md:px-0">
         <Button
           variant="outline"
           size="sm"

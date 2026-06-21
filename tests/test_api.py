@@ -257,6 +257,45 @@ def test_recent_events_replay_from_workspace_jsonl(
     assert events == [expected.to_dict()]
 
 
+def test_recent_events_prefers_full_workspace_jsonl_over_memory_tail(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    first = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 1, "loss": 0.4},
+        timestamp=1_700_000_001,
+        job_id=job.id,
+    )
+    second = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 2, "loss": 0.3},
+        timestamp=1_700_000_002,
+        job_id=job.id,
+    )
+    third = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 3, "loss": 0.2},
+        timestamp=1_700_000_003,
+        job_id=job.id,
+    )
+    (ws / "events.jsonl").write_text(
+        first.to_json() + "\n" + second.to_json() + "\n",
+        encoding="utf-8",
+    )
+    state.registry.record_event(job.id, second)
+    state.registry.record_event(job.id, third)
+
+    events = client.get(f"/api/jobs/{job.id}/events?limit=10").json()["events"]
+
+    assert events == [first.to_dict(), second.to_dict(), third.to_dict()]
+
+
 def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -1724,6 +1763,47 @@ def test_job_files_raw_serves_workspace_file(
     assert r.content == b"hello\n"
 
 
+def test_job_files_raw_supports_range_resume(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"0123456789")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw",
+        params={"path": "model.safetensors"},
+        headers={"Range": "bytes=2-5"},
+    )
+
+    assert r.status_code == 206
+    assert r.content == b"2345"
+    assert r.headers["accept-ranges"] == "bytes"
+    assert r.headers["content-range"] == "bytes 2-5/10"
+    assert r.headers["content-length"] == "4"
+    assert "etag" in r.headers
+    assert "last-modified" in r.headers
+
+
+def test_job_files_raw_rejects_unsatisfiable_range(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-bad-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"0123456789")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw",
+        params={"path": "model.safetensors"},
+        headers={"Range": "bytes=99-100"},
+    )
+
+    assert r.status_code == 416
+    assert r.headers["content-range"] == "bytes */10"
+
+
 def test_job_metrics_parses_events_jsonl(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -2955,6 +3035,7 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
             underscores: bool,
             include_character: bool,
             on_progress: Any = None,
+            should_stop: Any = None,
         ) -> list[Any]:
             captured["params"] = {
                 "directory": str(directory),
@@ -2967,6 +3048,8 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
 
             results: list[Any] = []
             for image in _iter_images(directory, recursive=recursive):
+                if should_stop is not None and should_stop():
+                    raise InterruptedError("stopped by user")
                 if write_caption:
                     image.with_suffix(".txt").write_text("1girl, blue hair", encoding="utf-8")
                 if on_progress is not None:
@@ -3057,6 +3140,69 @@ def test_tagging_writes_task_session(
     assert latest["status"] == "succeeded"
     assert latest["result"]["written"] == 1
     assert latest["events"][-1]["message"].startswith("done")
+
+
+def test_tagging_stop_marks_session_canceled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake image bytes")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(
+            self,
+            _directory: Path,
+            *,
+            should_stop: Any = None,
+            **_kwargs: Any,
+        ) -> list[Any]:
+            entered.set()
+            assert release.wait(5)
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
+            return []
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu"},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stop = client.post(f"/api/tagging/tag/{session_id}/stop")
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["status"] == "stop_requested"
+    release.set()
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/tagging/tag/{session_id}").json()
+        if final["status"] in ("succeeded", "failed", "canceled"):
+            break
+        time.sleep(0.02)
+
+    assert final["status"] == "canceled", final
+    assert final["error"] == "stopped by user"
+    latest = client.get("/api/tasks/latest?kind=tagging").json()
+    assert latest["id"] == session_id
+    assert latest["status"] == "canceled"
 
 
 def test_tagging_status_reads_task_session_after_memory_clear(
@@ -5114,6 +5260,190 @@ def test_artifacts_zip_honours_include_query(
     archive = zipfile.ZipFile(io.BytesIO(r.content))
     names = set(archive.namelist())
     assert names == {"model.safetensors", "output/sample.png"}
+
+
+def test_artifacts_archive_supports_tar_gz_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / "ws-tar-gz"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=tar.gz")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/gzip"
+    assert 'filename="' in r.headers["content-disposition"]
+    assert r.headers["content-disposition"].endswith('.tar.gz"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz")
+    assert archive.getnames() == ["model.safetensors"]
+    extracted = archive.extractfile("model.safetensors")
+    assert extracted is not None
+    assert extracted.read() == b"weights"
+
+
+def test_artifacts_archive_supports_plain_tar_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / "ws-tar"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=tar")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/x-tar"
+    assert r.headers["content-disposition"].endswith('.tar"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode="r:")
+    assert archive.getnames() == ["model.safetensors"]
+
+
+@pytest.mark.parametrize(
+    ("archive_format", "mode", "content_type", "extension"),
+    [
+        ("tar.bz2", "r:bz2", "application/x-bzip2", ".tar.bz2"),
+        ("tar.xz", "r:xz", "application/x-xz", ".tar.xz"),
+    ],
+)
+def test_artifacts_archive_supports_extra_tar_compressions(
+    client: TestClient,
+    tmp_path: Path,
+    archive_format: str,
+    mode: str,
+    content_type: str,
+    extension: str,
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / f"ws-{archive_format.replace('.', '-')}"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format={archive_format}")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == content_type
+    assert r.headers["content-disposition"].endswith(f'{extension}"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode=mode)
+    assert archive.getnames() == ["model.safetensors"]
+
+
+def test_artifacts_archive_rejects_unknown_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-bad-format"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=rar")
+
+    assert r.status_code == 422
+    assert "unknown archive format" in r.json()["detail"].lower()
+
+
+def test_artifacts_archive_range_resume_works_for_tar_gz(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-tar-gz-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights-payload")
+    job_id = _make_job_with_workspace(ws)
+
+    full = client.get(f"/api/artifacts/{job_id}/zip?format=tar.gz")
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    total = len(full.content)
+
+    part = client.get(
+        f"/api/artifacts/{job_id}/zip?format=tar.gz",
+        headers={"Range": "bytes=4-15"},
+    )
+
+    assert part.status_code == 206
+    assert part.content == full.content[4:16]
+    assert part.headers["content-range"] == f"bytes 4-15/{total}"
+    assert part.headers["content-length"] == "12"
+
+
+def test_artifacts_zip_supports_range_resume(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-zip-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights-payload")
+    job_id = _make_job_with_workspace(ws)
+
+    full = client.get(f"/api/artifacts/{job_id}/zip")
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    total = len(full.content)
+    assert total > 20
+
+    part = client.get(
+        f"/api/artifacts/{job_id}/zip",
+        headers={"Range": "bytes=4-15"},
+    )
+
+    assert part.status_code == 206
+    assert part.content == full.content[4:16]
+    assert part.headers["content-range"] == f"bytes 4-15/{total}"
+    assert part.headers["content-length"] == "12"
+    assert "etag" in part.headers
+
+
+def test_artifacts_zip_cache_invalidates_when_source_file_changes(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import zipfile
+
+    ws = tmp_path / "ws-zip-cache"
+    ws.mkdir()
+    model = ws / "model.safetensors"
+    model.write_bytes(b"first")
+    job_id = _make_job_with_workspace(ws)
+
+    first = client.get(f"/api/artifacts/{job_id}/zip")
+    assert first.status_code == 200
+
+    model.write_bytes(b"second-payload")
+    second = client.get(f"/api/artifacts/{job_id}/zip")
+    assert second.status_code == 200
+
+    archive = zipfile.ZipFile(io.BytesIO(second.content))
+    assert archive.read("model.safetensors") == b"second-payload"
+    assert second.headers["etag"] != first.headers["etag"]
+
+
+def test_artifacts_zip_cache_reuses_archive_when_sources_are_unchanged(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-zip-reuse"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"stable")
+    job_id = _make_job_with_workspace(ws)
+
+    first = client.get(f"/api/artifacts/{job_id}/zip")
+    second = client.get(f"/api/artifacts/{job_id}/zip")
+
+    assert second.status_code == 200
+    assert second.content == first.content
+    assert second.headers["etag"] == first.headers["etag"]
+    assert (
+        second.headers["content-disposition"]
+        == first.headers["content-disposition"]
+    )
 
 
 def test_artifacts_zip_excludes_resume_state_safetensors(

@@ -160,6 +160,25 @@ def test_tag_directory_skips_existing(tmp_path: Path, fake_tagger: wd14.WD14Tagg
     assert (tmp_path / "img.txt").read_text() == "existing"
 
 
+def test_tag_directory_honors_stop_before_each_image(
+    tmp_path: Path, fake_tagger: wd14.WD14Tagger
+) -> None:
+    for i in range(3):
+        img = tmp_path / f"img_{i}.png"
+        _make_image(img)
+        img.with_suffix(".txt").write_text("existing", encoding="utf-8")
+
+    calls = 0
+
+    def should_stop() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 2
+
+    with pytest.raises(InterruptedError, match="stopped by user"):
+        fake_tagger.tag_directory(tmp_path, skip_existing=True, should_stop=should_stop)
+
+
 def test_tag_directory_overwrites_when_asked(
     tmp_path: Path, fake_tagger: wd14.WD14Tagger
 ) -> None:

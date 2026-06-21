@@ -263,7 +263,7 @@ export function DatasetDetail() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <DatasetDetailToolbar
         datasetName={datasetName}
         path={path}
@@ -319,7 +319,7 @@ export function DatasetDetail() {
       {view === "duplicates" ? (
         <DuplicatesView path={path} recursive={recursive} />
       ) : (
-        <div className="flex flex-1 min-h-0">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {showFilters && (
             <FilterPanel
               filters={filters}
@@ -330,7 +330,7 @@ export function DatasetDetail() {
             />
           )}
 
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="min-w-0 flex-1 overflow-y-auto p-3">
             {listQuery.isLoading && (
               <div className="flex items-center justify-center h-32 text-muted-foreground">
                 加载中…

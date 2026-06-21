@@ -287,6 +287,8 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
             tagger = _build_is_tagger(req)
             session.push(f"loading {req.tagger}")
             tagger.load()
+            if session.should_stop:
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.active_provider = tagger.active_provider
             session.push(f"running on {tagger.active_provider}", percent=2)
@@ -294,6 +296,8 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
             all_images = list(_iter_images(target, recursive=req.recursive))
             with session.lock:
                 session.total = len(all_images)
+            if session.should_stop:
+                raise InterruptedError("stopped by user")
             if not all_images:
                 session.push("no images found", percent=100)
                 with session.lock:
@@ -327,7 +331,10 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
                 underscores=req.underscores,
                 include_character=req.include_character,
                 on_progress=on_progress,
+                should_stop=lambda: session.should_stop,
             )
+            if session.should_stop:
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100

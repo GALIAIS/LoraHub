@@ -345,6 +345,21 @@ export function removeTask(id: string): void {
   if (next.length !== tasks.length) commit(next)
 }
 
+export async function cancelTask(task: Pick<StudioTaskRecord, "id" | "kind">): Promise<void> {
+  const path =
+    task.kind === "caption"
+      ? `/image-studio/ai/caption/cancel/${encodeURIComponent(task.id)}`
+      : task.kind === "smart-caption"
+        ? `/image-studio/ai/smart-caption/cancel/${encodeURIComponent(task.id)}`
+        : task.kind === "quality-score"
+          ? `/image-studio/ai/quality/cancel/${encodeURIComponent(task.id)}`
+          : task.kind === "trigger-words"
+            ? `/image-studio/ai/trigger-words/cancel/${encodeURIComponent(task.id)}`
+            : `/tagging/tag/${encodeURIComponent(task.id)}/stop`
+  await http(path, { method: "POST" })
+  updateTask(task.id, { errorMsg: "正在停止..." })
+}
+
 /** Mark all terminal tasks (completed/failed/cancelled) for a dataset as dismissed. */
 export function dismissTerminalFor(datasetPath: string): void {
   const next = tasks.filter(

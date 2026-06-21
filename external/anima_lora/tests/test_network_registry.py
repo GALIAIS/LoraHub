@@ -62,6 +62,7 @@ def test_all_network_kwargs_is_union_of_shared_and_specs():
             f"{spec.name}.kwarg_flags has keys missing from all_network_kwargs(): "
             f"{set(spec.kwarg_flags) - all_kw}"
         )
+    assert {"algo", "factor", "lokr_factor"}.issubset(all_kw)
 
 
 def test_hydra_router_kwargs_registered():
@@ -111,6 +112,45 @@ def test_hydra_router_kwargs_registered():
 def test_resolve_precedence(kwargs, expected):
     spec = resolve_network_spec(kwargs)
     assert spec.name == expected
+
+
+@pytest.mark.parametrize(
+    "algo, expected",
+    [
+        ("lora", "lora"),
+        ("locon", "lora"),
+        ("tlora", "lora"),
+        ("loha", "loha"),
+        ("lokr", "lokr"),
+        ("ia3", "ia3"),
+        ("dylora", "dylora"),
+        ("full", "full"),
+        ("diag-oft", "diag_oft"),
+        ("diag_oft", "diag_oft"),
+        ("boft", "boft"),
+        ("glora", "glora"),
+    ],
+)
+def test_resolve_accepts_lycoris_algo_aliases(algo, expected):
+    spec = resolve_network_spec({"algo": algo})
+    assert spec.name == expected
+
+
+def test_resolve_lycoris_algo_tlora_enables_timestep_mask():
+    from networks import _normalize_lycoris_kwargs
+
+    kwargs = _normalize_lycoris_kwargs({"algo": "tlora"})
+    assert kwargs["use_timestep_mask"] == "true"
+    assert resolve_network_spec(kwargs).name == "lora"
+
+
+def test_resolve_lycoris_factor_alias_for_lokr():
+    from networks import _normalize_lycoris_kwargs
+
+    kwargs = _normalize_lycoris_kwargs({"algo": "lokr", "factor": "12"})
+    assert kwargs["use_lokr"] == "true"
+    assert kwargs["lokr_factor"] == "12"
+    assert resolve_network_spec(kwargs).name == "lokr"
 
 
 # ---------------------------------------------------------------------------

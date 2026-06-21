@@ -31,10 +31,15 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # set ``algorithm="lora"`` for the bare-LoRA baseline. ``tlora`` is
     # the first-class UI/API name for plain LoRA + timestep rank mask; it
     # compiles back to anima_lora's existing ``use_timestep_mask`` kwarg.
-    # The other enum values match the keys in
+    # Canonical enum values match the keys in
     # ``external/anima_lora/networks/__init__.py::NETWORK_REGISTRY``.
+    # LyCORIS-compatible spellings are accepted and normalized in
+    # ``_normalise`` so imported kohya/LyCORIS configs can use familiar
+    # names such as ``locon`` / ``diag-oft`` / ``lycoris_lokr`` without
+    # forcing a separate vendored runtime.
     algorithm: Literal[
         "lora",
+        "locon",
         "tlora",
         "ortho",
         "dora",
@@ -47,6 +52,19 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         "boft",
         "glora",
         "vera",
+        "lycoris_lora",
+        "lycoris_locon",
+        "lycoris_tlora",
+        "lycoris_ia3",
+        "lycoris_lokr",
+        "lycoris_loha",
+        "lycoris_dylora",
+        "lycoris_full",
+        "diag-oft",
+        "lycoris_diag_oft",
+        "lycoris_diag-oft",
+        "lycoris_boft",
+        "lycoris_glora",
     ] = "ortho"
 
     # ---- Legacy boolean toggles (deprecated) ----
@@ -100,6 +118,28 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         ("use_ortho", "ortho"),
     )
 
+    _ALGORITHM_ALIASES: ClassVar[dict[str, str]] = {
+        "locon": "lora",
+        "lycoris_lora": "lora",
+        "lycoris_locon": "lora",
+        "lycoris_tlora": "tlora",
+        "lycoris_ia3": "ia3",
+        "lycoris_lokr": "lokr",
+        "lycoris_loha": "loha",
+        "lycoris_dylora": "dylora",
+        "lycoris_full": "full",
+        "diag-oft": "diag_oft",
+        "lycoris_diag_oft": "diag_oft",
+        "lycoris_diag-oft": "diag_oft",
+        "lycoris_boft": "boft",
+        "lycoris_glora": "glora",
+    }
+
+    @classmethod
+    def canonical_algorithm(cls, algorithm: str) -> str:
+        """Return the internal NetworkSpec key for a public algorithm name."""
+        return cls._ALGORITHM_ALIASES.get(algorithm, algorithm)
+
     @model_validator(mode="after")
     def _normalise(self) -> AnimaLoraMethodLoraConfig:
         """Reconcile ``algorithm`` with the legacy ``use_X`` shadows.
@@ -132,6 +172,11 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         # work). Pydantic v2 exposes ``model_fields_set`` (via the
         # internal ``__pydantic_fields_set__``) to disambiguate.
         algorithm_explicit = "algorithm" in self.__pydantic_fields_set__
+        object.__setattr__(
+            self,
+            "algorithm",
+            self.canonical_algorithm(self.algorithm),
+        )
 
         if explicit_true:
             field = explicit_true[0]
@@ -615,4 +660,3 @@ class AnimaLoraOptions(BaseModel):
             msg = "method='ip_adapter' requires the `ipAdapter` sub-config to be set"
             raise ValueError(msg)
         return self
-

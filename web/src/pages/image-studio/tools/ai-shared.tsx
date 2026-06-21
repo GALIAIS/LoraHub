@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { Loader2, X } from "lucide-react"
 
-import { removeTask } from "@/lib/studio-task-store"
+import { cancelTask, removeTask } from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 
 // ai-bulk-modal.tsx 里同款 fallback。WD14 模型清单从 /tagging/wd14/models
@@ -45,7 +45,16 @@ export function TaskBanner({ datasetPath }: { datasetPath: string }) {
           {newest.errorMsg}
         </span>
       )}
-      {!running && (
+      {running ? (
+        <button
+          type="button"
+          onClick={() => void cancelTask(newest)}
+          className="ml-auto text-xs text-muted-foreground hover:text-destructive"
+          title="停止"
+        >
+          停止
+        </button>
+      ) : (
         <button
           type="button"
           onClick={() => removeTask(newest.id)}

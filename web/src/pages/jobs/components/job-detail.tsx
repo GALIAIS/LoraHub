@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { api, useJobStream } from "@/lib/api"
+import { api, useJobStream, type TrainingEvent } from "@/lib/api"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +27,31 @@ import { ResumeWithEditDialog } from "./resume-with-edit-dialog"
 import { CloneWithStateDialog } from "./clone-with-state-dialog"
 import { JobDetailHeader } from "./job-detail-header"
 
-type TabKey = "overview" | "events" | "files"
+type TabKey = "monitor" | "logs" | "files"
+
+function eventIdentity(event: TrainingEvent): string {
+  return [
+    event.type,
+    event.timestamp,
+    event.job_id ?? "",
+    JSON.stringify(event.payload ?? {}),
+  ].join("|")
+}
+
+function mergeEvents(
+  history: TrainingEvent[] | undefined,
+  live: TrainingEvent[],
+): TrainingEvent[] {
+  const merged: TrainingEvent[] = []
+  const seen = new Set<string>()
+  for (const event of [...(history ?? []), ...live]) {
+    const key = eventIdentity(event)
+    if (seen.has(key)) continue
+    merged.push(event)
+    seen.add(key)
+  }
+  return merged.sort((a, b) => a.timestamp - b.timestamp)
+}
 
 export function JobDetail({
   jobId,
@@ -42,7 +66,7 @@ export function JobDetail({
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [tab, setTab] = useState<TabKey>("overview")
+  const [tab, setTab] = useState<TabKey>("monitor")
   const job = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => api.getJob(jobId),
@@ -72,6 +96,19 @@ export function JobDetail({
     staleTime: 2_000,
   })
   const stream = useJobStream(jobId)
+  const eventHistory = useQuery({
+    queryKey: ["job-events", jobId],
+    queryFn: () => api.getEvents(jobId, 5000),
+    refetchInterval: (query) => {
+      const j = job.data
+      const terminal = j ? TERMINAL_STATES.has(j.state) : false
+      const events = query.state.data?.events ?? []
+      const hasDone = events.some((event) => event.type === "done")
+      if (terminal || hasDone) return false
+      return 10_000
+    },
+    staleTime: 5_000,
+  })
   const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill" | "pause" | "resume">(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
@@ -107,7 +144,10 @@ export function JobDetail({
   }, [job.data, datasetScan.data])
 
   const data = job.data
-  const events = stream.events
+  const events = useMemo(
+    () => mergeEvents(eventHistory.data?.events, stream.events),
+    [eventHistory.data?.events, stream.events],
+  )
   // "Live" = the job slot is held by us — running, preparing
   // (anima_lora preprocess phase), queued (waiting for the slot),
   // or canceling (we already asked it to stop). All four states
@@ -318,31 +358,31 @@ export function JobDetail({
         onReveal={onReveal}
         onRerun={onRerun}
       />
-      <div className="px-4 pt-4 md:px-7">
-        <RunSummaryCard
-          job={data}
-          metrics={summaryMetrics.data}
-          fallbackTotalSteps={fallbackTotalSteps}
-        />
-      </div>
 
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as TabKey)}
         className="flex-1 min-h-0 flex flex-col"
       >
-        <div className="overflow-x-auto border-b border-border/60 bg-background/40 px-4 pb-2 pt-4 md:px-7">
+        <div className="overflow-x-auto border-b border-border/60 bg-background/40 px-4 py-2 md:px-7">
           <TabsList variant="line">
-            <TabsTrigger value="overview">概览</TabsTrigger>
-            <TabsTrigger value="events">事件</TabsTrigger>
-            <TabsTrigger value="files">产物文件</TabsTrigger>
+            <TabsTrigger value="monitor">监控</TabsTrigger>
+            <TabsTrigger value="logs">日志</TabsTrigger>
+            <TabsTrigger value="files">产物</TabsTrigger>
           </TabsList>
         </div>
 
         <div className="flex-1 min-h-0 overflow-hidden">
-          <TabsContent value="overview" className="h-full">
+          <TabsContent value="monitor" className="h-full">
             <ScrollArea className="h-full">
               <div className="px-4 py-4 md:px-7 md:py-5">
+                <div className="mb-4">
+                  <RunSummaryCard
+                    job={data}
+                    metrics={summaryMetrics.data}
+                    fallbackTotalSteps={fallbackTotalSteps}
+                  />
+                </div>
                 <OverviewTab
                   jobId={jobId}
                   job={data}
@@ -352,11 +392,18 @@ export function JobDetail({
               </div>
             </ScrollArea>
           </TabsContent>
-          <TabsContent value="events" className="h-full">
+          <TabsContent value="logs" className="h-full">
             <div className="flex h-full min-h-0 flex-col px-4 py-4 md:px-7 md:py-5">
               <EventsTab
                 events={events}
                 status={stream.status}
+                historyStatus={
+                  eventHistory.isLoading
+                    ? "loading"
+                    : eventHistory.isError
+                      ? "error"
+                      : "ready"
+                }
                 jobId={jobId}
                 fallbackTotalSteps={fallbackTotalSteps}
               />

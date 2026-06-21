@@ -30,16 +30,58 @@ const LORA_ALGORITHM_OPTIONS = [
   { value: "boft", label: "BOFT · 蝴蝶级联正交" },
   { value: "vera", label: "VeRA · 冻结随机投影 + 缩放向量" },
   { value: "full", label: "Full · 自由 ΔW Parameter (baseline)" },
+  { value: "lycoris_locon", label: "LyCORIS LoCon · LoRA/LoCon 兼容" },
+  { value: "lycoris_tlora", label: "LyCORIS T-LoRA · 时间步感知 LoRA" },
+  { value: "lycoris_loha", label: "LyCORIS LoHa · Hadamard 分解" },
+  { value: "lycoris_lokr", label: "LyCORIS LoKr · Kronecker 分解" },
+  { value: "lycoris_ia3", label: "LyCORIS IA³ · 通道缩放" },
+  { value: "lycoris_dylora", label: "LyCORIS DyLoRA · 动态 rank" },
+  { value: "lycoris_diag_oft", label: "LyCORIS Diag-OFT · 块正交" },
+  { value: "lycoris_boft", label: "LyCORIS BOFT · 蝴蝶正交" },
+  { value: "lycoris_glora", label: "LyCORIS GLoRA · gated LoRA" },
+  { value: "lycoris_full", label: "LyCORIS Full · Native fine-tuning" },
 ] as const
 
+function canonicalAlgorithm(algorithm: LoraAlgorithm) {
+  switch (algorithm) {
+    case "locon":
+    case "lycoris_lora":
+    case "lycoris_locon":
+      return "lora"
+    case "lycoris_tlora":
+      return "tlora"
+    case "lycoris_ia3":
+      return "ia3"
+    case "lycoris_lokr":
+      return "lokr"
+    case "lycoris_loha":
+      return "loha"
+    case "lycoris_dylora":
+      return "dylora"
+    case "lycoris_full":
+      return "full"
+    case "diag-oft":
+    case "lycoris_diag_oft":
+    case "lycoris_diag-oft":
+      return "diag_oft"
+    case "lycoris_boft":
+      return "boft"
+    case "lycoris_glora":
+      return "glora"
+    default:
+      return algorithm
+  }
+}
+
 function usesTimestepMaskControls(algorithm: LoraAlgorithm) {
+  const canonical = canonicalAlgorithm(algorithm)
   return (
-    algorithm === "lora" ||
-    algorithm === "tlora" ||
-    algorithm === "ortho" ||
-    algorithm === "dora" ||
-    algorithm === "dylora" ||
-    algorithm === "glora"
+    canonical === "lora" ||
+    canonical === "tlora" ||
+    canonical === "ortho" ||
+    canonical === "dora" ||
+    canonical === "dylora" ||
+    canonical === "glora"
   )
 }
 
@@ -79,11 +121,12 @@ function LoraMethodConfig({
   errorMap: ErrorMap
 }) {
   const algorithm = value.lora?.algorithm ?? "ortho"
+  const canonical = canonicalAlgorithm(algorithm)
   const showTimestepMaskControls = usesTimestepMaskControls(algorithm)
-  const isTlora = algorithm === "tlora"
+  const isTlora = canonical === "tlora"
   const setAlgorithm = (next: string) => {
     set(["backend", "animaLora", "lora", "algorithm"], next)
-    if (next === "tlora") {
+    if (canonicalAlgorithm(next as LoraAlgorithm) === "tlora") {
       set(["backend", "animaLora", "lora", "useTimestepMask"], true)
     }
   }
@@ -105,7 +148,7 @@ function LoraMethodConfig({
           options={LORA_ALGORITHM_OPTIONS}
         />
       </Row>
-      {algorithm === "lokr" && (
+      {canonical === "lokr" && (
         <Row
           label="LoKr factor"
           description="将 (out, in) 拆为 (a×c, b×d) 的最大块大小。8 是 LyCORIS 默认；越大 W₁ 表达力越强，LoRA 边项越小。"
@@ -120,7 +163,7 @@ function LoraMethodConfig({
           />
         </Row>
       )}
-      {algorithm === "boft" && (
+      {canonical === "boft" && (
         <Row
           label="BOFT 蝴蝶层数"
           description="蝴蝶旋转的级联深度；m ≥ log₂(out_dim) 即可张满 SO(out_dim)。默认 4 已足够。"

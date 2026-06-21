@@ -1085,6 +1085,56 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
         )
 
 
+def test_lycoris_algorithm_aliases_compile_to_anima_network_flags(
+    tmp_path: Path,
+) -> None:
+    """LyCORIS public names reuse anima_lora's native PEFT implementations."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    cases = [
+        ("lycoris_locon", "use_ortho=false"),
+        ("lycoris_tlora", "use_ortho=false"),
+        ("lycoris_loha", "use_loha=true"),
+        ("lycoris_lokr", "use_lokr=true"),
+        ("lycoris_ia3", "use_ia3=true"),
+        ("lycoris_dylora", "use_dylora=true"),
+        ("lycoris_full", "use_full=true"),
+        ("lycoris_diag-oft", "use_diag_oft=true"),
+        ("lycoris_boft", "use_boft=true"),
+        ("lycoris_glora", "use_glora=true"),
+    ]
+    for i, (algo, expected) in enumerate(cases):
+        sub = tmp_path / f"lycoris_{i}"
+        sub.mkdir()
+        opts = AnimaLoraOptions(
+            lora=AnimaLoraMethodLoraConfig(
+                algorithm=algo,
+                lokr_factor=12,
+            ),
+        )
+        cfg = _config(sub, opts)
+        argv, files = compile_config(cfg, sub / "ws")
+        network_args = _argv_pairs(argv, files).get("--network_args", [])
+        assert expected in network_args, (
+            f"algorithm={algo!r} should emit {expected!r}; "
+            f"network_args={network_args}"
+        )
+
+    sub = tmp_path / "lycoris_lokr_factor"
+    sub.mkdir()
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            algorithm="lycoris_lokr",
+            lokr_factor=12,
+        ),
+    )
+    cfg = _config(sub, opts)
+    argv, files = compile_config(cfg, sub / "ws")
+    network_args = _argv_pairs(argv, files).get("--network_args", [])
+    assert "use_lokr=true" in network_args
+    assert "lokr_factor=12" in network_args
+
+
 def test_legacy_bool_back_compat(tmp_path: Path) -> None:
     """Setting only ``use_X=True`` (no enum) still works — bool wins."""
     from lorahub.core.config.schema import AnimaLoraMethodLoraConfig

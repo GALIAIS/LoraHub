@@ -44,6 +44,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 const TERMINAL_STATES = new Set([
   "succeeded",
@@ -51,6 +58,16 @@ const TERMINAL_STATES = new Set([
   "canceled",
   "interrupted",
 ])
+
+const ARCHIVE_FORMAT_OPTIONS = [
+  { value: "zip", label: "ZIP" },
+  { value: "tar.gz", label: "TAR.GZ" },
+  { value: "tar.xz", label: "TAR.XZ" },
+  { value: "tar.bz2", label: "TAR.BZ2" },
+  { value: "tar", label: "TAR" },
+] as const
+
+type ArchiveFormat = (typeof ARCHIVE_FORMAT_OPTIONS)[number]["value"]
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"
@@ -206,8 +223,8 @@ export function ArtifactsPage() {
             <ArtifactCard
               key={row.job_id}
               row={row}
-              onZipDownload={(include) => {
-                const url = api.artifactZipUrl(row.job_id, include)
+              onZipDownload={(include, format) => {
+                const url = api.artifactZipUrl(row.job_id, include, format)
                 window.open(url, "_blank", "noopener,noreferrer")
               }}
               onFileDownload={(path) => {
@@ -268,7 +285,7 @@ export function ArtifactsPage() {
 
 interface ArtifactCardProps {
   row: ArtifactRow
-  onZipDownload: (include: string[]) => void
+  onZipDownload: (include: string[], format: ArchiveFormat) => void
   onFileDownload: (path: string) => void
   onFileDelete: (path: string) => void
   onWorkspaceDelete: () => void
@@ -283,6 +300,7 @@ function ArtifactCard({
   onWorkspaceDelete,
   fileBusy,
 }: ArtifactCardProps) {
+  const [archiveFormat, setArchiveFormat] = useState<ArchiveFormat>("zip")
   const isTerminal = TERMINAL_STATES.has(row.state)
   const stateBadgeTone =
     row.state === "succeeded"
@@ -325,21 +343,38 @@ function ArtifactCard({
               checkpoint · {formatBytes(row.total_bytes)}
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Select
+              value={archiveFormat}
+              onValueChange={(value) => setArchiveFormat(value as ArchiveFormat)}
+            >
+              <SelectTrigger className="h-8 w-[104px] text-[11px]">
+                <SelectValue aria-label="归档格式" />
+              </SelectTrigger>
+              <SelectContent>
+                {ARCHIVE_FORMAT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onZipDownload(["checkpoints"])}
+              onClick={() => onZipDownload(["checkpoints"], archiveFormat)}
               disabled={!row.exists || row.checkpoint_count === 0}
               className="gap-1 h-8"
             >
               <FileArchive className="size-3" />
-              下载 checkpoints (zip)
+              下载 checkpoints
             </Button>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onZipDownload(["checkpoints", "samples"])}
+              onClick={() =>
+                onZipDownload(["checkpoints", "samples"], archiveFormat)
+              }
               disabled={!row.exists || row.checkpoint_count + row.sample_count === 0}
               className="gap-1 h-8"
               title="包含 sample 预览图"

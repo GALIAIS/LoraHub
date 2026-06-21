@@ -236,6 +236,7 @@ class _CaptionSession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -305,7 +306,7 @@ class _CaptionSession:
         try:
             _task_store().update(
                 self.session_id,
-                status="succeeded" if status == "succeeded" else "failed",
+                status="succeeded" if status == "succeeded" else "canceled",
                 percent=100 if status == "succeeded" else self.percent,
                 result=self.snapshot(),
                 error=self.error,
@@ -313,6 +314,15 @@ class _CaptionSession:
             )
         except Exception:
             pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
 
     def fail(self, msg: str) -> None:
         with self._lock:
@@ -385,6 +395,7 @@ def _caption_images(
     *,
     on_result: Callable[[dict[str, Any], str], None] | None = None,
     on_error: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     from datetime import UTC, datetime  # noqa: PLC0415
 
@@ -406,6 +417,8 @@ def _caption_images(
 
     store = _store()
     for img_path in images:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             import base64  # noqa: PLC0415
             import mimetypes  # noqa: PLC0415
@@ -535,8 +548,11 @@ def ai_batch_caption_start(body: AIBatchCaptionInput) -> dict[str, Any]:
                 images,
                 on_result=session.add_result,
                 on_error=session.add_error,
+                should_stop=session.should_stop,
             )
-            session.finish("succeeded")
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.finish("canceled")
         except Exception as exc:  # noqa: BLE001
             session.fail(str(exc))
 
@@ -565,6 +581,16 @@ def ai_batch_caption_status(session_id: str) -> dict[str, Any]:
     raise HTTPException(404, "caption session not found")
 
 
+@router.post("/ai/caption/cancel/{session_id}")
+def ai_batch_caption_cancel(session_id: str) -> dict[str, Any]:
+    with _caption_lock:
+        session = _caption_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "caption session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
+
+
 class AIBatchQualityInput(BaseModel):
     path: str
     recursive: bool = False
@@ -589,6 +615,7 @@ class _QualitySession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -658,7 +685,7 @@ class _QualitySession:
         try:
             _task_store().update(
                 self.session_id,
-                status="succeeded" if status == "succeeded" else "failed",
+                status="succeeded" if status == "succeeded" else "canceled",
                 percent=100 if status == "succeeded" else self.percent,
                 result=self.snapshot(),
                 error=self.error,
@@ -666,6 +693,15 @@ class _QualitySession:
             )
         except Exception:
             pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
 
     def fail(self, msg: str) -> None:
         with self._lock:
@@ -719,6 +755,7 @@ def _score_quality_images(
     *,
     on_result: Callable[[dict[str, Any], str], None] | None = None,
     on_error: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     from datetime import UTC, datetime  # noqa: PLC0415
 
@@ -740,6 +777,8 @@ def _score_quality_images(
     errors: list[dict[str, str]] = []
 
     for img_path in images:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             import base64  # noqa: PLC0415
             import json as json_mod  # noqa: PLC0415
@@ -896,8 +935,11 @@ def ai_batch_quality_start(body: AIBatchQualityInput) -> dict[str, Any]:
                 images,
                 on_result=session.add_result,
                 on_error=session.add_error,
+                should_stop=session.should_stop,
             )
-            session.finish("succeeded")
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.finish("canceled")
         except Exception as exc:  # noqa: BLE001
             session.fail(str(exc))
 
@@ -924,6 +966,16 @@ def ai_batch_quality_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(404, "quality session not found")
+
+
+@router.post("/ai/quality/cancel/{session_id}")
+def ai_batch_quality_cancel(session_id: str) -> dict[str, Any]:
+    with _quality_lock:
+        session = _quality_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "quality session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #
@@ -2399,6 +2451,7 @@ class _TriggerWordsSession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -2470,7 +2523,7 @@ class _TriggerWordsSession:
         try:
             _task_store().update(
                 self.session_id,
-                status="succeeded" if status == "succeeded" else "failed",
+                status="succeeded" if status == "succeeded" else "canceled",
                 percent=100 if status == "succeeded" else self.percent,
                 result=self.snapshot(),
                 error=self.error,
@@ -2478,6 +2531,15 @@ class _TriggerWordsSession:
             )
         except Exception:
             pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
 
     def fail(self, msg: str) -> None:
         with self._lock:
@@ -2552,6 +2614,7 @@ def _analyze_trigger_words_images(
     *,
     on_result: Callable[[dict[str, Any], str], None] | None = None,
     on_error: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, Any]]]:
     from collections import Counter  # noqa: PLC0415
     from datetime import UTC, datetime  # noqa: PLC0415
@@ -2582,6 +2645,8 @@ def _analyze_trigger_words_images(
             counter.update(ann_existing.ai_trigger_words)
 
     for img_path in images:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             import base64  # noqa: PLC0415
             import mimetypes  # noqa: PLC0415
@@ -2725,8 +2790,14 @@ def ai_batch_trigger_words_start(body: TriggerWordsBatchInput) -> dict[str, Any]
                 images,
                 on_result=session.add_result,
                 on_error=session.add_error,
+                should_stop=session.should_stop,
             )
-            session.finish("succeeded", dataset_top)
+            session.finish(
+                "canceled" if session.should_stop() else "succeeded",
+                dataset_top,
+            )
+        except InterruptedError:
+            session.finish("canceled", [])
         except Exception as exc:  # noqa: BLE001
             session.fail(str(exc))
 
@@ -2753,3 +2824,13 @@ def ai_batch_trigger_words_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(404, "trigger-words session not found")
+
+
+@router.post("/ai/trigger-words/cancel/{session_id}")
+def ai_batch_trigger_words_cancel(session_id: str) -> dict[str, Any]:
+    with _trigger_words_lock:
+        session = _trigger_words_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "trigger-words session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}

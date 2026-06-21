@@ -24,10 +24,22 @@ export { ImageStudioPage }
 //  - "library" — 跨数据集的工具库（标签词典 / 触发词 / Prompt 模板）
 type StageOrTools = StageId | "tools" | "library"
 
+const STAGE_META: Record<StageId, { label: string; hint: string }> = {
+  intake: { label: "导入", hint: "补充来源图片，不离开当前数据集网格" },
+  audit: { label: "审计", hint: "扫描问题后回到网格处理图片" },
+  curate: { label: "整理", hint: "查看、筛选、批量处理图片" },
+  annotate: { label: "标注", hint: "维护 caption、标签和触发词" },
+  ship: { label: "输出", hint: "检查训练就绪状态并导出" },
+}
+
+function isDatasetStage(stage: StageOrTools): stage is StageId {
+  return stage !== "tools" && stage !== "library"
+}
+
 function ImageStudioPage() {
   const [params, setParams] = useSearchParams()
   const datasetPath = params.get("path") || ""
-  const stageParam = (params.get("stage") || "tools") as StageOrTools
+  const stageParam = (params.get("stage") || (datasetPath ? "curate" : "tools")) as StageOrTools
   const [showCreate, setShowCreate] = useState(false)
   const queryClient = useQueryClient()
 
@@ -52,7 +64,10 @@ function ImageStudioPage() {
   const selectDataset = (path: string) => {
     const next = new URLSearchParams(params)
     next.set("path", path)
-    if (!next.get("stage")) next.set("stage", "tools")
+    const currentStage = next.get("stage")
+    if (!currentStage || currentStage === "tools" || currentStage === "library") {
+      next.set("stage", "curate")
+    }
     setParams(next)
   }
 
@@ -85,29 +100,13 @@ function ImageStudioPage() {
             <ToolsGrid datasetPath={datasetPath} />
           )}
           {stageParam === "library" && <LibraryPage />}
-          {stageParam !== "tools" &&
-            stageParam !== "library" &&
+          {isDatasetStage(stageParam) &&
             !datasetPath && (
               <EmptyState onCreateDataset={() => setShowCreate(true)} />
             )}
-          {stageParam !== "tools" &&
-            stageParam !== "library" &&
+          {isDatasetStage(stageParam) &&
             datasetPath && (
-              <>
-                {stageParam === "intake" && (
-                  <IntakeStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "audit" && (
-                  <AuditStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "curate" && <DatasetDetail />}
-                {stageParam === "annotate" && (
-                  <AnnotateStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "ship" && (
-                  <ShipStage datasetPath={datasetPath} />
-                )}
-              </>
+              <DatasetWorkspace stage={stageParam} datasetPath={datasetPath} />
             )}
         </div>
       </WorkbenchSplitLayout>
@@ -121,6 +120,50 @@ function ImageStudioPage() {
       )}
     </>
   )
+}
+
+function DatasetWorkspace({
+  stage,
+  datasetPath,
+}: {
+  stage: StageId
+  datasetPath: string
+}) {
+  if (stage === "curate") {
+    return <DatasetDetail />
+  }
+  const meta = STAGE_META[stage]
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_minmax(240px,38vh)] 2xl:grid-cols-[minmax(0,1fr)_minmax(560px,640px)] 2xl:grid-rows-[minmax(0,1fr)]">
+      <div className="min-h-0 min-w-0 overflow-hidden">
+        <DatasetDetail />
+      </div>
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-t border-border/60 bg-background 2xl:border-l 2xl:border-t-0">
+        <div className="shrink-0 border-b border-border/60 px-3 py-2">
+          <div className="text-sm font-medium">{meta.label}</div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            {meta.hint}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <StagePanel stage={stage} datasetPath={datasetPath} />
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function StagePanel({
+  stage,
+  datasetPath,
+}: {
+  stage: Exclude<StageId, "curate">
+  datasetPath: string
+}) {
+  if (stage === "intake") return <IntakeStage datasetPath={datasetPath} />
+  if (stage === "audit") return <AuditStage datasetPath={datasetPath} />
+  if (stage === "annotate") return <AnnotateStage datasetPath={datasetPath} />
+  return <ShipStage datasetPath={datasetPath} />
 }
 
 function EmptyState({ onCreateDataset }: { onCreateDataset: () => void }) {

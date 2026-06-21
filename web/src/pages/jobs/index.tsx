@@ -280,16 +280,12 @@ export function JobsPage() {
         mobileSidebarDescription="筛选训练任务、选择任务、进入对比或批量归档。"
         sidebar={
           <>
-        <div className="flex items-center justify-between px-4 pt-3">
-          <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            训练任务
-          </span>
+        <div className="hidden items-center justify-end border-b border-border/60 px-3 py-2 md:flex">
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setSidebarOpen(false)}
             title="收起侧栏"
-            className="hidden md:inline-flex"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -411,7 +407,7 @@ export function JobsPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />

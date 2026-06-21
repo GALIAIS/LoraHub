@@ -199,6 +199,7 @@ class _AutoRotateSession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -280,13 +281,48 @@ class _AutoRotateSession:
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
+        task_status = (
+            "succeeded"
+            if status == "succeeded"
+            else "canceled"
+            if status == "canceled"
+            else "failed"
+        )
         try:
             _task_store().update(
                 self.session_id,
-                status="succeeded" if status == "succeeded" else "failed",
+                status=task_status,
                 percent=100 if status == "succeeded" else self.percent,
                 result=self.snapshot(),
                 error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+        self._append_task_event("stop requested", level="warn", percent=percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
+
+    def cancel(self, msg: str = "stopped by user") -> None:
+        with self._lock:
+            self.status = "canceled"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="warn", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="canceled",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
                 finished=True,
             )
         except Exception:
@@ -350,6 +386,7 @@ def _auto_rotate_images(
     on_rotated: Callable[[str, str], None] | None = None,
     on_skipped: Callable[[str], None] | None = None,
     on_failed: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Apply EXIF orientation, write pixels back, strip the EXIF tag.
 
@@ -365,6 +402,8 @@ def _auto_rotate_images(
     failed: list[dict[str, str]] = []
 
     for src in targets:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             with Image.open(src) as img:
                 exif = img.getexif()
@@ -447,8 +486,11 @@ def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
                 on_rotated=session.add_rotated,
                 on_skipped=session.add_skipped,
                 on_failed=session.add_failed,
+                should_stop=session.should_stop,
             )
-            session.finish("succeeded")
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.cancel()
         except Exception as exc:  # noqa: BLE001
             session.fail(str(exc))
 
@@ -476,6 +518,16 @@ def curate_auto_rotate_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(404, "auto-rotate session not found")
+
+
+@router.post("/curate/auto-rotate/stop/{session_id}")
+def curate_auto_rotate_stop(session_id: str) -> dict[str, Any]:
+    with _auto_rotate_lock:
+        session = _auto_rotate_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "auto-rotate session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #
@@ -723,6 +775,7 @@ class _BatchResizeSession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -804,13 +857,48 @@ class _BatchResizeSession:
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
+        task_status = (
+            "succeeded"
+            if status == "succeeded"
+            else "canceled"
+            if status == "canceled"
+            else "failed"
+        )
         try:
             _task_store().update(
                 self.session_id,
-                status="succeeded" if status == "succeeded" else "failed",
+                status=task_status,
                 percent=100 if status == "succeeded" else self.percent,
                 result=self.snapshot(),
                 error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+        self._append_task_event("stop requested", level="warn", percent=percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
+
+    def cancel(self, msg: str = "stopped by user") -> None:
+        with self._lock:
+            self.status = "canceled"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="warn", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="canceled",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
                 finished=True,
             )
         except Exception:
@@ -874,6 +962,7 @@ def _resize_images(
     on_resampled: Callable[[dict[str, Any], str], None] | None = None,
     on_skipped: Callable[[str], None] | None = None,
     on_failed: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
@@ -885,6 +974,8 @@ def _resize_images(
     resample = _PIL_RESAMPLE[req.filter]
 
     for src in targets:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             with Image.open(src) as img:
                 w, h = img.size
@@ -982,8 +1073,11 @@ def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
                 on_resampled=session.add_resampled,
                 on_skipped=session.add_skipped,
                 on_failed=session.add_failed,
+                should_stop=session.should_stop,
             )
-            session.finish("succeeded")
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.cancel()
         except Exception as exc:  # noqa: BLE001
             session.fail(str(exc))
 
@@ -1011,6 +1105,16 @@ def curate_batch_resize_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(404, "batch-resize session not found")
+
+
+@router.post("/curate/batch-resize/stop/{session_id}")
+def curate_batch_resize_stop(session_id: str) -> dict[str, Any]:
+    with _batch_resize_lock:
+        session = _batch_resize_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "batch-resize session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #

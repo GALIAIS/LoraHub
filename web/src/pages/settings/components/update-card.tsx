@@ -62,6 +62,8 @@ const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
   error: "失败",
 }
 
+const ACTIVE_UPDATE_TASK_STATUSES = new Set(["pending", "running"])
+
 function isUpdateEvent(value: unknown): value is UpdateEvent {
   if (!value || typeof value !== "object") return false
   const obj = value as Partial<UpdateEvent>
@@ -128,9 +130,10 @@ export function UpdateCard() {
     if (events.length > 0 || running) return
     const task = latestUpdateTask.data
     if (!task) return
+    if (!ACTIVE_UPDATE_TASK_STATUSES.has(task.status)) return
     if (task.events.length === 0) return
     setEvents(taskEventsToUpdateEvents(task.events))
-    setRunning(task.status === "running")
+    setRunning(task.status === "running" || task.status === "pending")
   }, [events.length, latestUpdateTask.data, running])
 
   const recheck = useMutation({

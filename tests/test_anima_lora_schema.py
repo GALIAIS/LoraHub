@@ -82,6 +82,27 @@ def test_tlora_algorithm_requires_timestep_mask() -> None:
         )
 
 
+def test_lycoris_algorithm_aliases_normalize_to_anima_registry_keys() -> None:
+    """LyCORIS/kohya-style names are accepted but compile through local modules."""
+    cases = {
+        "locon": "lora",
+        "lycoris_locon": "lora",
+        "lycoris_tlora": "tlora",
+        "lycoris_loha": "loha",
+        "lycoris_lokr": "lokr",
+        "lycoris_ia3": "ia3",
+        "lycoris_dylora": "dylora",
+        "lycoris_full": "full",
+        "diag-oft": "diag_oft",
+        "lycoris_diag-oft": "diag_oft",
+        "lycoris_boft": "boft",
+        "lycoris_glora": "glora",
+    }
+    for raw, canonical in cases.items():
+        cfg = AnimaLoraMethodLoraConfig(algorithm=raw)
+        assert cfg.algorithm == canonical
+
+
 def test_method_postfix_requires_subconfig() -> None:
     """Picking method='postfix' without filling `postfix` is a user error."""
     with pytest.raises(pydantic.ValidationError, match="postfix"):

@@ -66,6 +66,15 @@ export async function getImageStudioAutoRotateSession(
   )
 }
 
+export async function stopImageStudioAutoRotateSession(
+  id: string,
+): Promise<{ session_id: string; status: string }> {
+  return http<{ session_id: string; status: string }>(
+    `/image-studio/curate/auto-rotate/stop/${encodeURIComponent(id)}`,
+    { method: "POST" },
+  )
+}
+
 export async function imageStudioQuarantine(body: {
   dataset_path: string
   paths: string[]
@@ -161,6 +170,15 @@ export async function getImageStudioBatchResizeSession(
 ): Promise<ImageStudioBatchResizeSession> {
   return http<ImageStudioBatchResizeSession>(
     `/image-studio/curate/batch-resize/status/${encodeURIComponent(id)}`,
+  )
+}
+
+export async function stopImageStudioBatchResizeSession(
+  id: string,
+): Promise<{ session_id: string; status: string }> {
+  return http<{ session_id: string; status: string }>(
+    `/image-studio/curate/batch-resize/stop/${encodeURIComponent(id)}`,
+    { method: "POST" },
   )
 }
 

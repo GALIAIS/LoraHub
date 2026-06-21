@@ -46,6 +46,10 @@ Changes vendored on top of upstream. Each entry should describe the
   algorithm implementations LoraHub registered (DoRA, IA3, LoKr, LoHA,
   DyLoRA, Full, Diag-OFT, BOFT, GLoRA, VeRA). Filenames mirror the
   algorithm enum on `AnimaLoraMethodLoraConfig.algorithm`.
+* `networks/__init__.py` — accepts LyCORIS/kohya-compatible
+  `network_args` selectors (`algo=locon|loha|lokr|ia3|dylora|full|diag-oft|boft|glora|tlora`)
+  and maps them onto the native anima_lora `NetworkSpec` registry.
+  `factor=` is normalized to `lokr_factor=` for LoKr compatibility.
 * `gui/`, `output/`, `post_image_dataset/` — runtime scratch the
   trainer writes during a run. Excluded from git via the repo-root
   `.gitignore`.

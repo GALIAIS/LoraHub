@@ -153,81 +153,10 @@ export function StudioSidebar({
           )}
         </div>
 
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
-          {/* "全部工具" / "工具库" 两个虚拟 stage 入口 — 独立于数据集,常驻顶部。 */}
-          <div className="px-1.5 pb-1 space-y-0.5">
-            {collapsed ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        data-active={stage === "tools" ? "true" : undefined}
-                        className={iconButtonClass}
-                      />
-                    }
-                    onClick={() => onSelectStage("tools")}
-                  >
-                    <LayoutGrid className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipContent side="right">全部工具</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        data-active={stage === "library" ? "true" : undefined}
-                        className={iconButtonClass}
-                      />
-                    }
-                    onClick={() => onSelectStage("library")}
-                  >
-                    <Library className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipContent side="right">工具库</TooltipContent>
-                </Tooltip>
-              </>
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  onClick={() => onSelectStage("tools")}
-                  variant="ghost"
-                  size="sm"
-                  data-active={stage === "tools" ? "true" : undefined}
-                  className={navButtonClass}
-                >
-                  <LayoutGrid className="size-3.5 shrink-0" />
-                  <span>全部工具</span>
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => onSelectStage("library")}
-                  variant="ghost"
-                  size="sm"
-                  data-active={stage === "library" ? "true" : undefined}
-                  className={navButtonClass}
-                >
-                  <Library className="size-3.5 shrink-0" />
-                  <span>工具库</span>
-                </Button>
-              </>
-            )}
-          </div>
-          <div className="mx-2 my-1 border-t" />
-
           {!collapsed && (
             <div className="px-2 pb-1">
-              <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                数据集
-              </p>
+              <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">数据集</p>
             </div>
           )}
           <nav className="flex flex-col gap-0.5 px-1.5">
@@ -316,9 +245,7 @@ export function StudioSidebar({
               <div className="mx-2 my-2 border-t" />
               {!collapsed && (
                 <div className="px-2 pb-1">
-                  <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    处理阶段
-                  </p>
+                  <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">处理阶段</p>
                 </div>
               )}
               <nav className="flex flex-col gap-0.5 px-1.5">
@@ -359,6 +286,78 @@ export function StudioSidebar({
               </nav>
             </>
           )}
+
+          <div className="mx-2 my-2 border-t" />
+          {!collapsed && (
+            <div className="px-2 pb-1">
+              <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">辅助</p>
+            </div>
+          )}
+          <div className="px-1.5 pb-1 space-y-0.5">
+            {collapsed ? (
+              <>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        data-active={stage === "tools" ? "true" : undefined}
+                        className={iconButtonClass}
+                      />
+                    }
+                    onClick={() => onSelectStage("tools")}
+                  >
+                    <LayoutGrid className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right">工具目录</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        data-active={stage === "library" ? "true" : undefined}
+                        className={iconButtonClass}
+                      />
+                    }
+                    onClick={() => onSelectStage("library")}
+                  >
+                    <Library className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right">工具库</TooltipContent>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  onClick={() => onSelectStage("tools")}
+                  variant="ghost"
+                  size="sm"
+                  data-active={stage === "tools" ? "true" : undefined}
+                  className={navButtonClass}
+                >
+                  <LayoutGrid className="size-3.5 shrink-0" />
+                  <span>工具目录</span>
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => onSelectStage("library")}
+                  variant="ghost"
+                  size="sm"
+                  data-active={stage === "library" ? "true" : undefined}
+                  className={navButtonClass}
+                >
+                  <Library className="size-3.5 shrink-0" />
+                  <span>工具库</span>
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Footer */}

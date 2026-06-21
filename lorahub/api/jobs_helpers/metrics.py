@@ -437,13 +437,36 @@ def _downsample(points: list[dict[str, Any]], target: int) -> list[dict[str, Any
     return [points[i] for i in indices if 0 <= i < n]
 
 
+def _event_key(event: TrainingEvent) -> tuple[str, float, str | None, str]:
+    payload = json.dumps(
+        event.payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return (event.type.value, event.timestamp, event.job_id, payload)
+
+
 def _job_events(job: state.JobRecord, limit: int | None = None) -> list[TrainingEvent]:
-    events = list(job.events)
-    if not events:
-        event_log = job.workspace / "events.jsonl"
-        if event_log.is_file():
-            with contextlib.suppress(Exception):
-                events = list(JsonlEventSink.replay(event_log))
+    events: list[TrainingEvent] = []
+    event_log = job.workspace / "events.jsonl"
+    if event_log.is_file():
+        with contextlib.suppress(Exception):
+            events = list(JsonlEventSink.replay(event_log))
+
+    # The in-memory deque is a bounded live tail. For long runs it may hold
+    # only the newest ~1k events while events.jsonl has the full history.
+    # Read disk first, then append any live tail entries that have not landed
+    # on disk yet so HTTP history and SSE replay stay complete.
+    seen = {_event_key(event) for event in events}
+    for event in job.events:
+        key = _event_key(event)
+        if key in seen:
+            continue
+        events.append(event)
+        seen.add(key)
+
     if limit is not None:
         events = events[-max(limit, 0) :]
     return events

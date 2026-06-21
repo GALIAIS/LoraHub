@@ -88,6 +88,7 @@ class _TaggingSession:
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+    stop_requested: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def push(self, message: str, *, percent: float | None = None, image: str | None = None) -> None:
@@ -138,6 +139,15 @@ class _TaggingSession:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
             }
+
+    def request_stop(self) -> None:
+        with self.lock:
+            self.stop_requested = True
+        self.push("stop requested")
+
+    def should_stop(self) -> bool:
+        with self.lock:
+            return self.stop_requested
 
 
 _sessions: dict[str, _TaggingSession] = {}
@@ -334,6 +344,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             tagger = _build_tagger(req)
             session.push(f"loading {req.tagger}")
             tagger.load()
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.active_provider = tagger.active_provider
             session.push(f"running on {tagger.active_provider}", percent=2)
@@ -345,6 +357,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             all_images = list(_iter_images(target, recursive=req.recursive))
             with session.lock:
                 session.total = len(all_images)
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             if not all_images:
                 session.push("no images found", percent=100)
                 with session.lock:
@@ -363,6 +377,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             total = len(all_images)
 
             def on_progress(image: Path, _result: object) -> None:
+                if session.should_stop():
+                    raise InterruptedError("stopped by user")
                 with session.lock:
                     session.written += 1
                     pct = min(100.0, 2 + 98 * session.written / max(total, 1))
@@ -376,7 +392,10 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                 underscores=req.underscores,
                 include_character=req.include_character,
                 on_progress=on_progress,
+                should_stop=session.should_stop,
             )
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100
@@ -399,6 +418,19 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                 session.session_id,
                 status="failed",
                 error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
+        except InterruptedError:
+            with session.lock:
+                session.status = "canceled"
+                session.error = "stopped by user"
+                session.finished_at = time.time()
+            session.push("stopped by user")
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error="stopped by user",
                 result=session.snapshot(),
                 finished=True,
             )
@@ -437,6 +469,13 @@ def tag_dataset_status(session_id: str) -> dict[str, Any]:
     if task is not None:
         return task
     raise HTTPException(status_code=404, detail="tagging session not found")
+
+
+@router.post("/tagging/tag/{session_id}/stop")
+def stop_tag_dataset(session_id: str) -> dict[str, Any]:
+    session = _get(session_id)
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 @router.get("/tagging/tag")

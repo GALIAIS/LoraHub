@@ -23,6 +23,8 @@ import {
   imageStudioRestoreBackup,
   startImageStudioAutoRotate,
   startImageStudioBatchResize,
+  stopImageStudioAutoRotateSession,
+  stopImageStudioBatchResizeSession,
   type BackupEntry,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -97,6 +99,17 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
       }),
   })
 
+  const stopMutation = useMutation({
+    mutationFn: () => stopImageStudioAutoRotateSession(session!.session_id),
+    onSuccess: () => {
+      void sessionQuery.refetch()
+    },
+    onError: (err) =>
+      toast.error("停止失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
+
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
       <section className="rounded-md border border-border/60 bg-card flex flex-col">
@@ -160,7 +173,17 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
               {session.error && (
                 <div className="mt-1 text-destructive">{session.error}</div>
               )}
-              {session.status !== "running" && (
+              {session.status === "running" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px] text-destructive"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                >
+                  {stopMutation.isPending ? "停止中..." : "停止"}
+                </Button>
+              ) : (
                 <Button
                   size="sm"
                   variant="outline"
@@ -251,6 +274,17 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
   })
 
   const targetOk = Number(shortEdge) >= 128 && Number(shortEdge) <= 4096
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopImageStudioBatchResizeSession(session!.session_id),
+    onSuccess: () => {
+      void sessionQuery.refetch()
+    },
+    onError: (err) =>
+      toast.error("停止失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
 
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
@@ -355,7 +389,17 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
               {session.error && (
                 <div className="mt-1 text-destructive">{session.error}</div>
               )}
-              {session.status !== "running" && (
+              {session.status === "running" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px] text-destructive"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                >
+                  {stopMutation.isPending ? "停止中..." : "停止"}
+                </Button>
+              ) : (
                 <Button
                   size="sm"
                   variant="outline"

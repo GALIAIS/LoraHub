@@ -427,6 +427,7 @@ export interface ConfigFormValue {
       lora?: {
         algorithm?:
           | "lora"
+          | "locon"
           | "tlora"
           | "ortho"
           | "dora"
@@ -439,6 +440,19 @@ export interface ConfigFormValue {
           | "boft"
           | "glora"
           | "vera"
+          | "lycoris_lora"
+          | "lycoris_locon"
+          | "lycoris_tlora"
+          | "lycoris_ia3"
+          | "lycoris_lokr"
+          | "lycoris_loha"
+          | "lycoris_dylora"
+          | "lycoris_full"
+          | "diag-oft"
+          | "lycoris_diag_oft"
+          | "lycoris_diag-oft"
+          | "lycoris_boft"
+          | "lycoris_glora"
         useOrtho?: boolean | null
         useDora?: boolean | null
         useIa3?: boolean | null

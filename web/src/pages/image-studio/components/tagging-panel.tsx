@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Tag } from "lucide-react"
-import { api } from "@/lib/api"
+import { api, stopTaggingSession } from "@/lib/api"
 import type { TaggingSession } from "@/lib/api"
 
 interface TaggingPanelProps {
@@ -80,12 +80,27 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
     enabled: !!sessionId,
     refetchInterval: (query) => {
       const d = query.state.data as TaggingSession | undefined
-      if (d && (d.status === "succeeded" || d.status === "failed")) return false
+      if (
+        d &&
+        (d.status === "succeeded" ||
+          d.status === "failed" ||
+          d.status === "canceled" ||
+          d.status === "interrupted")
+      ) {
+        return false
+      }
       return 2000
     },
   })
 
   const session = sessionQuery.data
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopTaggingSession(session!.session_id),
+    onSuccess: () => {
+      void sessionQuery.refetch()
+    },
+  })
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -204,7 +219,16 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
           {session.error && (
             <p className="mt-1 text-destructive">{session.error}</p>
           )}
-          {session.status !== "running" && (
+          {session.status === "running" ? (
+            <button
+              type="button"
+              className="mt-2 rounded border border-destructive/40 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
+              onClick={() => stopMutation.mutate()}
+              disabled={stopMutation.isPending}
+            >
+              {stopMutation.isPending ? "停止中..." : "停止"}
+            </button>
+          ) : (
             <button
               type="button"
               className="mt-2 rounded border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"

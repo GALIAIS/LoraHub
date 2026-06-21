@@ -30,6 +30,7 @@ from lorahub.core.backends.anima_lora import AnimaLoraBackend
 from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap
 from lorahub.core.backends.anima_lora import installer as al_installer
 from lorahub.core.backends.anima_lora import models as al_models
+from lorahub.core.backends.anima_lora.backend import _prepare_sample_prompts_file
 from lorahub.core.backends.anima_lora.parser import parse_line
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.config.schema import (
@@ -338,11 +339,54 @@ def _config(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     )
 
 
+def _sample_tokens(width: int, height: int) -> int:
+    return (width // 16) * (height // 16)
+
+
 def test_backend_name_and_supported_archs() -> None:
     b = AnimaLoraBackend()
     assert b.name == "anima_lora"
     archs = {a.value for a in b.supported_archs}
     assert archs == {"anima"}
+
+
+def test_sample_prompts_clamp_912x1632_to_static_token_budget(
+    tmp_path: Path,
+) -> None:
+    """Regression for DiT sample unpad crash: 912x1632 is 5814 tokens."""
+    cfg = _config(tmp_path)
+    cfg.sampling.enabled = True
+    cfg.sampling.resolution = [912, 1632]
+    cfg.sampling.seed = 123
+
+    workspace = tmp_path / "ws"
+    _prepare_sample_prompts_file(cfg, workspace)
+
+    body = (workspace / "_lorahub_sample_prompts.txt").read_text(encoding="utf-8")
+    assert "--w 768 --h 1360" in body
+    assert _sample_tokens(768, 1360) <= 4096
+
+
+def test_existing_sample_prompts_are_rewritten_when_over_static_budget(
+    tmp_path: Path,
+) -> None:
+    cfg = _config(tmp_path)
+    cfg.sampling.enabled = True
+    cfg.sampling.resolution = [912, 1632]
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text(
+        "character portrait --w 912 --h 1632 --s 24 --l 5.0\n",
+        encoding="utf-8",
+    )
+    cfg.sampling.prompts_file = prompts
+
+    workspace = tmp_path / "ws"
+    _prepare_sample_prompts_file(cfg, workspace)
+
+    assert cfg.sampling.prompts_file == workspace / "_lorahub_anima_sample_prompts.txt"
+    body = cfg.sampling.prompts_file.read_text(encoding="utf-8")
+    assert "--w 768 --h 1360" in body
+    assert "--s 24 --l 5.0" in body
 
 
 def test_validate_anima_arch_clean(tmp_path: Path) -> None:
