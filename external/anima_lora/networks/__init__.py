@@ -116,6 +116,8 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "channel_scaling_alpha",
     # Memory-saving down-projection autograd (classic LoRA only; bitwise-equal grads)
     "use_custom_down_autograd",
+    # SVD-Down init for plain LoRA: "kaiming" | "weight_svd".
+    "down_init",
     # Variant selectors (read by resolve_network_spec)
     # LyCORIS-compatible selector aliases. ``algo`` mirrors
     # lycoris.kohya's public network_arg surface; the ``use_*`` flags

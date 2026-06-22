@@ -101,6 +101,18 @@ Applied piecewise from upstream commits past the 2026-05-22 base import:
   signature changes. LoraHub also emits `use_cmmd = false` explicitly
   and train.py prints `validation loss=...` so the wrapper can surface
   validation events.
+* **Checkpoint layout + SVD-Down backports** (reviewed against upstream
+  `71c7c8c`, applied selectively on 2026-06-22): epoch/step checkpoints
+  and their matching `*-state` directories now write under a per-run
+  `<output_name>/` directory, while final and rolling auto-resume files
+  stay in the output root so LoraHub artifact discovery and resume logic
+  remain compatible. The plain LoRA path also accepts
+  `network_args = ["down_init=weight_svd"]`, a conservative backport of
+  upstream's SVD-Down initialization from `2674b59`; LoraHub exposes it
+  as `backend.animaLora.lora.downInit` for `algorithm="lora"` and
+  `algorithm="tlora"` only. Text-embedding preprocessing now encodes
+  missing caption sidecars as `""`, matching the training dataset loader
+  and upstream's missing-caption cache behavior.
 
 ### Intentionally deferred upstream changes
 
@@ -128,6 +140,23 @@ require a coordinated wrapper migration:
   daemon / PySide6 / install.ps1 surface is intentionally
   out-of-tree (see "Excluded paths" / "Why vendor instead of
   submodule" above).
+* **Upstream GUI / daemon queue changes** (through upstream `71c7c8c`,
+  2026-06-22): upstream's latest commits are primarily PySide caption
+  editor UI, GUI preload, and daemon queue behavior. LoraHub does not
+  use upstream's GUI or daemon queue, so these are intentionally not
+  copied.
+* **Turbo distillation refactor + SVD-Down turbo knobs** (upstream
+  `2674b59`): deferred. Upstream moved turbo into
+  `scripts/distill_turbo/config.py` / `distill.py` and threads
+  `student_down_init` / `fake_down_init` through that new structure.
+  LoraHub's vendored copy still uses the older single-file
+  `scripts/distill_turbo.py`; partially adding the new knobs would
+  create a schema surface the runner cannot execute safely.
+* **Training knob pruning and uncond-sidecar relocation** (upstream
+  `772dda7`, `380414f`, `eb20053`): deferred. LoraHub's schema,
+  compiler, and resume/checkpoint policies still expose LR scheduler,
+  checkpoint-rotation, CPU-offload, and the older uncond-sidecar layout;
+  those need a coordinated wrapper migration before adoption.
 
 If you add a non-trivial modification, drop the diff (or a brief
 description) into `patches/NNNN_<slug>.md` so the next re-sync can

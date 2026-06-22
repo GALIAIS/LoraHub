@@ -204,6 +204,7 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     # assert pairs["--preset"] == ["default"]  # method/preset gone — driven by config_file
     network_args = pairs["--network_args"]
     assert "use_ortho=true" in network_args
+    assert "down_init=kaiming" in network_args
     assert "use_timestep_mask=true" in network_args
     assert "min_rank=16" in network_args
     assert any(p.startswith("alpha_rank_scale=") for p in network_args)
@@ -237,6 +238,24 @@ def test_tlora_algorithm_emits_plain_lora_with_timestep_mask(tmp_path: Path) -> 
     assert "alpha_rank_scale=0.75" in network_args
     assert "use_ortho=false" in network_args
     assert not any(arg.startswith("use_tlora=") for arg in network_args)
+
+
+def test_svd_down_init_emits_network_arg(tmp_path: Path) -> None:
+    """SVD-Down rides anima_lora's network_args surface."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            algorithm="lora",
+            down_init="weight_svd",
+        ),
+    )
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    network_args = _argv_pairs(argv, files)["--network_args"]
+
+    assert "use_ortho=false" in network_args
+    assert "down_init=weight_svd" in network_args
 
 
 def test_postfix_method_emits_network_args(tmp_path: Path) -> None:

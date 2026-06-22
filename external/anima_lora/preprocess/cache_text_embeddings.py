@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Cache text encoder (Qwen3) outputs for all captioned images in a dataset directory.
+"""Cache text encoder (Qwen3) outputs for dataset images.
 
-Reads .txt caption sidecars, tokenizes with Qwen3 + T5, encodes through the
+Reads .txt caption sidecars when present, tokenizes with Qwen3 + T5, encodes through the
 Qwen3 text encoder, and optionally runs the LLM adapter to produce crossattn_emb.
 Saves results as *_anima_te.safetensors alongside each image.
 
@@ -238,8 +238,8 @@ def main() -> None:
     )
     encoding_strategy = AnimaTextEncodingStrategy()
 
-    # Collect images that have caption sidecars. Mirror the resize filter so
-    # we don't cache TE for images that would be dropped at resize time.
+    # Collect images. Mirror the resize filter so we don't cache TE for images
+    # that would be dropped at resize time.
     if args.recursive:
         candidates = sorted(
             p
@@ -272,8 +272,6 @@ def main() -> None:
         if p.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         caption_path = p.with_suffix(".txt")
-        if not caption_path.exists():
-            continue
         if args.min_pixels > 0:
             try:
                 with Image.open(p) as im:
@@ -285,10 +283,12 @@ def main() -> None:
                 skipped_small += 1
                 continue
         # An empty caption file is a valid explicit empty caption
-        # (unconditional / style-LoRA training) — encode "" rather than
-        # dropping the image, so the cached set matches the training
-        # dataset.
-        caption = caption_path.read_text(encoding="utf-8").strip().split("\n")[0]
+        # (unconditional / style-LoRA training). Missing caption files also
+        # become "" to match the training dataset loader.
+        if caption_path.exists():
+            caption = caption_path.read_text(encoding="utf-8").strip().split("\n")[0]
+        else:
+            caption = ""
         entries.append((p, caption))
 
     if skipped_small:

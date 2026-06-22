@@ -604,6 +604,9 @@ class LoRANetwork(torch.nn.Module):
                 extra_kwargs = {}
                 if effective_module_class == OrthoLoRAModule:
                     pass  # no extra kwargs — SVD init reads from org_module directly
+                elif effective_module_class == LoRAModule:
+                    if cfg.down_init != "kaiming":
+                        extra_kwargs["down_init"] = cfg.down_init
                 elif effective_module_class == LoKrModule:
                     extra_kwargs["factor"] = getattr(cfg, "lokr_factor", 8)
                 elif effective_module_class == BOFTModule:
