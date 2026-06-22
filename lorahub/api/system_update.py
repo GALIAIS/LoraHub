@@ -1188,15 +1188,52 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     if npm is None:
         emit("build", "warn", "npm not found; skipping SPA rebuild.")
         return
+    web = cwd / "web"
+    _ensure_frontend_deps(web, npm=Path(npm), emit=emit)
     rc = _stream_subprocess(
         [npm, "run", "build"],
-        cwd=cwd / "web",
+        cwd=web,
         phase="build",
         emit=emit,
         env=_npm_env(Path(npm)),
     )
     if rc != 0:
         msg = f"npm run build failed (exit {rc})"
+        raise RuntimeError(msg)
+
+
+def _ensure_frontend_deps(web: Path, *, npm: Path, emit: ProgressCallback) -> None:
+    env = _npm_env(npm)
+    rc = _stream_subprocess(
+        [str(npm), "ls", "--depth=0"],
+        cwd=web,
+        phase="build",
+        emit=emit,
+        env=env,
+    )
+    if rc == 0:
+        emit("build", "info", "web dependencies already installed")
+        return
+    emit("build", "warn", "web dependencies incomplete; running npm ci")
+    rc = _stream_subprocess(
+        [
+            str(npm),
+            "ci",
+            "--verbose",
+            "--no-audit",
+            "--no-fund",
+            "--fetch-timeout=60000",
+            "--fetch-retries=2",
+            "--fetch-retry-mintimeout=5000",
+            "--fetch-retry-maxtimeout=20000",
+        ],
+        cwd=web,
+        phase="build",
+        emit=emit,
+        env=env,
+    )
+    if rc != 0:
+        msg = f"npm ci failed (exit {rc})"
         raise RuntimeError(msg)
 
 
