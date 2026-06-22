@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import type { TrainingEvent } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -230,10 +229,7 @@ export function TerminalLog({
     if (typeof window === "undefined") return
     window.localStorage.setItem(STYLE_KEY, darkMode ? "1" : "0")
   }, [darkMode])
-  // Virtuoso handle for programmatic scrollToIndex (clear screen,
-  // tail-follow). The list automatically virtualises so a 5k-line
-  // tail no longer pegs the main thread on each new step event.
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
   // True while the user is parked at the bottom; auto-follow only
   // engages while this is set. We *don't* mirror the autoScroll
   // toggle here — that's the user's stated intent; this is the
@@ -259,24 +255,18 @@ export function TerminalLog({
     return lines.filter((l) => stripAnsi(l.message).toLowerCase().includes(q))
   }, [lines, query])
 
-  // Track the user's scroll position so we know whether to keep snapping
-  // the viewport to the bottom on new lines. Virtuoso fires this whenever
-  // the list reaches / leaves its bottom edge.
-  // (Switch state is the user's hard preference; `atBottom` is the
-  // runtime guard against fighting their scroll.)
-  function onAtBottomChange(next: boolean) {
-    setAtBottom(next)
-  }
-
   useEffect(() => {
     if (!autoScroll || !atBottom) return
-    if (filteredLines.length === 0) return
-    virtuosoRef.current?.scrollToIndex({
-      index: filteredLines.length - 1,
-      align: "end",
-      behavior: "auto",
-    })
+    const el = scrollerRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
   }, [filteredLines, autoScroll, atBottom])
+
+  function onScroll() {
+    const el = scrollerRef.current
+    if (!el) return
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_TO_BOTTOM_PX)
+  }
 
   function clearScreen() {
     setClearAfter(events.length)
@@ -318,7 +308,7 @@ export function TerminalLog({
   return (
     <div
       className={cn(
-        "flex-1 min-h-0 flex flex-col rounded-[6px] border overflow-hidden",
+        "h-full flex-1 min-h-0 flex flex-col rounded-[6px] border overflow-hidden",
         surfaceClass,
       )}
     >
@@ -400,34 +390,17 @@ export function TerminalLog({
                 : "屏幕已清空，等待新日志…"}
           </div>
         ) : (
-          <Virtuoso
-            ref={virtuosoRef}
-            // Re-mount the inner scroller when the filter / clear cursor
-            // changes so the virtual list resets to the new dataset.
-            // Without this it tries to preserve scroll offset against
-            // an unrelated row at the same index.
-            key={`${query}|${clearAfter}`}
-            className="absolute inset-0 size-full"
-            data={filteredLines}
-            // Open at the bottom — without this prop Virtuoso anchors
-            // the first paint to index 0 (top), and a user navigating
-            // back to the events tab sees stale lines instead of the
-            // freshly-arrived tail. Indexing the last row makes the
-            // initial layout pin the viewport to the bottom; subsequent
-            // appends are handled by ``followOutput`` below. Guarded
-            // so empty data doesn't pass a negative index.
-            initialTopMostItemIndex={Math.max(0, filteredLines.length - 1)}
-            atBottomStateChange={onAtBottomChange}
-            atBottomThreshold={STICK_TO_BOTTOM_PX}
-            // Snap to the bottom when the user is already there and
-            // new lines arrive — Virtuoso handles this internally far
-            // better than our ref-based scrollTop math could.
-            followOutput={(isAtBottom) => (isAtBottom ? "auto" : false)}
-            itemContent={(_index, line) => {
+          <div
+            ref={scrollerRef}
+            onScroll={onScroll}
+            className="absolute inset-0 overflow-y-auto"
+          >
+            {filteredLines.map((line) => {
               const chunks = parseAnsi(line.message)
               const toneClass = tonePalette[line.tone]
               return (
                 <div
+                  key={line.key}
                   className={cn(
                     "grid grid-cols-[86px_minmax(116px,auto)_minmax(0,1fr)] items-baseline gap-2 border-l-2 px-3 py-[2px]",
                     line.borderClass,
@@ -460,9 +433,8 @@ export function TerminalLog({
                   </span>
                 </div>
               )
-            }}
-            computeItemKey={(_i, line) => line.key}
-          />
+            })}
+          </div>
         )}
       </div>
     </div>
