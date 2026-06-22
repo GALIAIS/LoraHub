@@ -108,7 +108,7 @@ function channelVersionTone(channel: UpdateChannel): string {
 function currentDetailLabel(
   info: ReturnType<typeof useSystemVersion>["data"],
 ): string {
-  return info?.current_commit?.slice(0, 7) ?? info?.current ?? "—"
+  return info?.current ?? "—"
 }
 
 function remoteDetailLabel(
@@ -284,6 +284,11 @@ export function UpdateCard() {
             <code className={cn("font-mono text-[12px] font-medium", versionTone)}>
               {currentDetailLabel(info)}
             </code>
+            {info?.current_commit && (
+              <code className={cn("font-mono text-[11px]", versionTone)}>
+                {info.current_commit.slice(0, 7)}
+              </code>
+            )}
             {info?.version_source && info.version_source !== "hatch-vcs" && (
               <Badge
                 variant="outline"
