@@ -480,6 +480,7 @@ def _refresh_dev(cwd: Path) -> dict[str, Any]:
     return {
         "tag_name": None,
         "version_str": short_sha or "dev",
+        "commit": sha or None,
         "release_notes": msg.split("\n", 1)[0][:300],
         "published_at": (info.get("commit") or {}).get("committer", {}).get("date") or None,
     }
@@ -502,9 +503,11 @@ def _refresh_tag() -> dict[str, Any]:
         return _refresh_tag_via_tags_api()
 
     tag = str(info.get("tag_name") or "")
+    commit = str((info.get("target_commitish") or "")).strip() or None
     return {
         "tag_name": tag or None,
         "version_str": _normalize_version(tag) if tag else "",
+        "commit": commit,
         "release_notes": str(info.get("body") or "")[:8000],
         "published_at": str(info.get("published_at") or "") or None,
     }
@@ -556,10 +559,11 @@ def _refresh_tag_via_tags_api() -> dict[str, Any]:
         return _empty_tag_payload()
 
     candidates.sort(key=lambda t: t[0], reverse=True)
-    best_ver, best_name, _sha = candidates[0]
+    best_ver, best_name, sha = candidates[0]
     return {
         "tag_name": best_name,
         "version_str": str(best_ver),
+        "commit": sha or None,
         # Lightweight tags don't carry release notes; the UI just gets
         # an empty string and the "open in GitHub" link still works.
         "release_notes": "",
@@ -571,9 +575,37 @@ def _empty_tag_payload() -> dict[str, Any]:
     return {
         "tag_name": None,
         "version_str": "",
+        "commit": None,
         "release_notes": "",
         "published_at": None,
     }
+
+
+def _current_commit(cwd: Path | None) -> str | None:
+    if cwd is None:
+        return None
+    out = _git(["rev-parse", "HEAD"], cwd=cwd)
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def _remote_tag_commit(cwd: Path | None, tag_name: str | None) -> str | None:
+    if cwd is None or not tag_name:
+        return None
+    # Annotated tags need the peeled ^{} ref; lightweight tags only
+    # have the direct ref. Query both without relying on local stale tags.
+    for ref in (f"refs/tags/{tag_name}^{{}}", f"refs/tags/{tag_name}"):
+        out = _git(["ls-remote", "--tags", "origin", ref], cwd=cwd)
+        if out.returncode != 0:
+            continue
+        line = out.stdout.strip().splitlines()
+        if not line:
+            continue
+        sha = line[0].split()[0].strip()
+        if sha:
+            return sha
+    return None
 
 
 def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
@@ -591,6 +623,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     is_dirty = _detect_dirty(cwd) if cwd else False
     current, version_source = _resolve_version()
     is_git_checkout = cwd is not None
+    current_commit = _current_commit(cwd)
 
     blob = _read_cache()
     cached = blob.data.get(channel)
@@ -608,6 +641,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                 "is_dirty": is_dirty,
                 "version_source": version_source,
                 "git_checkout": is_git_checkout,
+                "current_commit": current_commit,
             }
         )
         return info
@@ -627,6 +661,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                     "is_dirty": is_dirty,
                     "version_source": version_source,
                     "git_checkout": is_git_checkout,
+                    "current_commit": current_commit,
                 }
             )
             info.error = f"refresh failed: {exc}"
@@ -642,17 +677,31 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             error=f"refresh failed: {exc}",
             version_source=version_source,
             git_checkout=is_git_checkout,
+            current_commit=current_commit,
         )
 
     latest = remote["version_str"] or None
+    latest_commit = (
+        _remote_tag_commit(cwd, remote.get("tag_name"))
+        if channel == "tag"
+        else remote.get("commit")
+    )
+    if latest_commit is None:
+        latest_commit = remote.get("commit")
     update_available = False
     if channel == "tag" and latest:
-        update_available = _compare_versions(latest, current) > 0
+        version_cmp = _compare_versions(latest, current)
+        update_available = version_cmp > 0 or (
+            version_cmp == 0
+            and bool(latest_commit)
+            and bool(current_commit)
+            and latest_commit != current_commit
+        )
     elif channel == "dev" and latest and cwd:
         # For dev, "update available" means HEAD is not on the
         # remote sha. We compare short SHA prefixes via git
         # rev-parse so a forced reset still counts as up-to-date.
-        head = _git(["rev-parse", "HEAD"], cwd=cwd).stdout.strip()
+        head = current_commit or ""
         update_available = bool(head) and not head.startswith(latest)
 
     info = UpdateInfo(
@@ -666,6 +715,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         is_dirty=is_dirty,
         tag_name=remote["tag_name"],
         published_at=remote["published_at"],
+        current_commit=current_commit,
+        latest_commit=latest_commit,
         version_source=version_source,
         git_checkout=is_git_checkout,
     )
@@ -1130,9 +1181,12 @@ def _restore_configs(
 
 
 def _fetch(cwd: Path, emit: ProgressCallback) -> None:
-    emit("git", "info", "git fetch --tags origin")
+    emit("git", "info", "git fetch --tags --force origin")
     rc = _stream_subprocess(
-        ["git", "fetch", "--tags", "--prune", "origin"], cwd=cwd, phase="git", emit=emit,
+        ["git", "fetch", "--tags", "--force", "--prune", "origin"],
+        cwd=cwd,
+        phase="git",
+        emit=emit,
     )
     if rc != 0:
         msg = f"git fetch failed (exit {rc})"

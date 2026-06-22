@@ -377,7 +377,7 @@ export function TerminalLog({
       </div>
       <div
         className={cn(
-          "flex-1 min-h-0 relative",
+          "flex-1 min-h-0 flex flex-col",
           bodyTextDefault,
         )}
       >
@@ -393,7 +393,7 @@ export function TerminalLog({
           <div
             ref={scrollerRef}
             onScroll={onScroll}
-            className="absolute inset-0 overflow-y-auto"
+            className="min-h-0 flex-1 overflow-y-auto"
           >
             {filteredLines.map((line) => {
               const chunks = parseAnsi(line.message)

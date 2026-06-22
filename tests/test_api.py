@@ -146,7 +146,7 @@ def test_system_update_writes_task_session(
 
     def fake_apply(**kwargs: Any) -> None:
         progress = kwargs["progress"]
-        progress("git", "info", "git fetch --tags origin")
+        progress("git", "info", "git fetch --tags --force origin")
         progress("done", "info", "update applied")
 
     monkeypatch.setattr(system_router.system_update, "apply", fake_apply)
@@ -164,7 +164,7 @@ def test_system_update_writes_task_session(
     assert body["status"] == "succeeded"
     assert body["metadata"]["channel"] == "dev"
     assert [event["message"] for event in body["events"]][-2:] == [
-        "git fetch --tags origin",
+        "git fetch --tags --force origin",
         "update applied",
     ]
 

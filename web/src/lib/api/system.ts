@@ -191,13 +191,15 @@ export interface UpdateInfo {
   error: string | null
   tag_name: string | null
   published_at: string | null
+  current_commit?: string | null
+  latest_commit?: string | null
   /**
    * Where the `current` version string was sourced from. Anything
    * other than `hatch-vcs` means the install can't read its own git
    * tags (typical for ZIP-extracted trees) — the UI surfaces a
    * tooltip so users understand the version may lag a commit.
    */
-  version_source: "hatch-vcs" | "dist-metadata" | "changelog" | "fallback"
+  version_source: "git-describe" | "hatch-vcs" | "dist-metadata" | "changelog" | "fallback"
   /**
    * `false` iff this install is not a real git checkout. The
    * updater can't function on a ZIP extract (no tree to checkout),

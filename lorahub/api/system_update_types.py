@@ -27,6 +27,8 @@ class UpdateInfo:
     # Optional metadata: tag-only (None for "dev" channel).
     tag_name: str | None = None
     published_at: str | None = None
+    current_commit: str | None = None
+    latest_commit: str | None = None
     # Where the ``current`` string was sourced from. ``hatch-vcs``
     # is the canonical path (real git checkout, real install). The
     # other values mark a degraded discovery; values match

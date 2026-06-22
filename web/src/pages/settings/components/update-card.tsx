@@ -246,6 +246,11 @@ export function UpdateCard() {
           <span className="text-muted-foreground">当前版本</span>
           <span className="flex items-center gap-2 flex-wrap">
             <code className="font-mono text-[12px]">{info?.current ?? "—"}</code>
+            {info?.current_commit && (
+              <code className="font-mono text-[11px] text-muted-foreground">
+                {info.current_commit.slice(0, 7)}
+              </code>
+            )}
             {info?.version_source && info.version_source !== "hatch-vcs" && (
               <Badge
                 variant="outline"
@@ -268,9 +273,16 @@ export function UpdateCard() {
           </span>
 
           <span className="text-muted-foreground">远端版本</span>
-          <code className="font-mono text-[12px]">
-            {info?.tag_name ?? info?.latest ?? "—"}
-          </code>
+          <span className="flex items-center gap-2 flex-wrap">
+            <code className="font-mono text-[12px]">
+              {info?.tag_name ?? info?.latest ?? "—"}
+            </code>
+            {info?.latest_commit && (
+              <code className="font-mono text-[11px] text-muted-foreground">
+                {info.latest_commit.slice(0, 7)}
+              </code>
+            )}
+          </span>
 
           <span className="text-muted-foreground">最近检查</span>
           <span className="text-[12px] text-muted-foreground">{checkedAt}</span>
