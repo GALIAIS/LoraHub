@@ -13,6 +13,7 @@ const REPO_URL = "https://github.com/GALIAIS/LoraHub"
 const ISSUES_URL = `${REPO_URL}/issues`
 const RELEASES_URL = `${REPO_URL}/releases`
 const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`
+const QQ_GROUP_URL = "https://qm.qq.com/q/YfjMJqatKQ"
 
 interface ExternalAnchorProps {
   href: string
@@ -162,6 +163,14 @@ export function AboutTab() {
               </dt>
               <dd>
                 <ExternalAnchor href={ISSUES_URL}>Issues</ExternalAnchor>
+              </dd>
+            </div>
+            <div className="space-y-1">
+              <dt className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                QQ群
+              </dt>
+              <dd>
+                <ExternalAnchor href={QQ_GROUP_URL}>1098319682</ExternalAnchor>
               </dd>
             </div>
             <div className="space-y-1">

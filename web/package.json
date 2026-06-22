@@ -14,9 +14,17 @@
     "@fontsource-variable/geist": "^5.2.8",
     "@radix-ui/react-context-menu": "^2.2.16",
     "@tanstack/react-query": "^5.97.0",
+    "@visx/curve": "^4.0.1-alpha.0",
+    "@visx/event": "^4.0.1-alpha.0",
+    "@visx/grid": "^4.0.1-alpha.0",
+    "@visx/responsive": "^4.0.1-alpha.0",
+    "@visx/scale": "^4.0.1-alpha.0",
+    "@visx/shape": "^4.0.1-alpha.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "d3-array": "^3.2.4",
     "lucide-react": "^0.479.0",
+    "motion": "^12.40.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^9.1.0",
@@ -24,7 +32,7 @@
     "react-virtuoso": "^4.18.7",
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^2.5.0"
+    "tailwind-merge": "^2.6.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",

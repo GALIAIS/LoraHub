@@ -590,6 +590,51 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
     assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "7"}
 
 
+def test_failed_job_reports_once_for_noisy_error_logs(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api import jobs_helpers
+    from lorahub.api.error_reports import ErrorReportStore
+    from lorahub.core.backends.base import TrainingHandle
+
+    report_store = ErrorReportStore(tmp_path / "errors.sqlite")
+    monkeypatch.setattr(app_module, "_error_report_store", report_store, raising=False)
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+        ) -> TrainingHandle:
+            def wait(_timeout: float | None) -> int:
+                on_event(TrainingEvent(type=EventType.log, payload={"level": "error", "message": "Traceback chunk"}))
+                on_event(TrainingEvent(type=EventType.log, payload={"level": "error", "message": "RuntimeError: boom"}))
+                on_event(TrainingEvent(type=EventType.diagnostic_warning, payload={"severity": "error", "category": "oom", "message": "OOM"}))
+                on_event(TrainingEvent(type=EventType.done, payload={"returncode": 1}))
+                return 1
+
+            return TrainingHandle(job_id="fake", pid=0, _stop_fn=lambda _g: None, _wait_fn=wait)
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+    final = _wait_terminal(client, job_id, timeout=5.0)
+
+    assert final["state"] == "failed", final
+    reports = report_store.list(source="backend.job")
+    assert len(reports) == 1
+    assert reports[0].job_id == job_id
+    assert reports[0].context["returncode"] == 1
+
+
 # --------------------------------------------------------------------------- #
 # Config template browsing
 # --------------------------------------------------------------------------- #

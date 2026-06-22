@@ -30,14 +30,11 @@ import {
 } from "../components/multi-line-chart"
 
 const SERIES_COLORS = [
-  "#60a5fa",
-  "#34d399",
-  "#f472b6",
-  "#fbbf24",
-  "#a78bfa",
-  "#f87171",
-  "#22d3ee",
-  "#a3e635",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
 ]
 
 interface WandbTabProps {

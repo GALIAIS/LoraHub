@@ -1,6 +1,7 @@
 # Classic LoRA. `merge_to` bakes a checkpoint slice into the base Linear/Conv2d
 # weight; `fuse_weight` bakes the live delta and turns forward into a no-op.
 
+import logging
 import math
 from typing import Dict, List
 
@@ -9,6 +10,8 @@ import torch
 from networks.attn_fuse import match_fused_spec
 from networks.lora_modules.base import BaseLoRAModule
 from networks.lora_modules.custom_autograd import lora_down_project
+
+logger = logging.getLogger(__name__)
 
 
 class LoRAModule(BaseLoRAModule):
@@ -25,6 +28,7 @@ class LoRAModule(BaseLoRAModule):
         rank_dropout=None,
         module_dropout=None,
         channel_scale=None,
+        down_init="kaiming",
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
         super().__init__(
@@ -59,6 +63,13 @@ class LoRAModule(BaseLoRAModule):
         torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
         torch.nn.init.zeros_(self.lora_up.weight)
 
+        if down_init == "weight_svd":
+            self._init_down_weight_svd(org_module)
+        elif down_init != "kaiming":
+            raise ValueError(
+                f"down_init={down_init!r}: expected 'kaiming' or 'weight_svd'."
+            )
+
         self._register_channel_scale(self.lora_down.weight.data, channel_scale)
 
         # Opt-in (Linear-only): save bf16 x instead of fp32 x_lora for backward.
@@ -71,6 +82,23 @@ class LoRAModule(BaseLoRAModule):
         # handle for fuse/unfuse.
         self.org_module_ref = [org_module]
         self._fused = False
+
+    def _init_down_weight_svd(self, org_module: torch.nn.Module) -> None:
+        """Seed Linear lora_down from W0's top-r right singular vectors."""
+        if not isinstance(self.lora_down, torch.nn.Linear):
+            logger.warning(
+                "down_init='weight_svd' is Linear-only; %s keeps Kaiming.",
+                self.lora_name,
+            )
+            return
+        W = org_module.weight.data.float()
+        rank = self.lora_dim
+        q = min(rank + 6, min(W.shape))
+        _, _, V = torch.svd_lowrank(W, q=q, niter=2)
+        svd_rank = min(rank, V.shape[1])
+        with torch.no_grad():
+            v_r = (V[:, :svd_rank].T / math.sqrt(3)).to(self.lora_down.weight.dtype)
+            self.lora_down.weight[:svd_rank].copy_(v_r)
 
     def forward(self, x):
         if not self.enabled or self._fused:

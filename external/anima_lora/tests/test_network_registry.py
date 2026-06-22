@@ -90,6 +90,20 @@ def test_hydra_router_kwargs_registered():
     assert must_have.issubset(set(all_network_kwargs()))
 
 
+def test_svd_down_init_kwarg_registered():
+    assert "down_init" in set(all_network_kwargs())
+
+
+def test_svd_down_init_keeps_extra_rank_rows_when_rank_exceeds_layer_dim():
+    from networks.lora_modules.lora import LoRAModule
+
+    base = torch.nn.Linear(3, 2, bias=False)
+    mod = LoRAModule("svd_tiny", base, lora_dim=8, alpha=8, down_init="weight_svd")
+
+    assert mod.lora_down.weight.shape == (8, 3)
+    assert torch.isfinite(mod.lora_down.weight).all()
+
+
 # ---------------------------------------------------------------------------
 # resolve_network_spec precedence
 # ---------------------------------------------------------------------------

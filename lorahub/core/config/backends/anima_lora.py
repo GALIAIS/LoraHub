@@ -89,6 +89,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # algorithm; ignored otherwise).
     lokr_factor: int = Field(8, ge=1)
     boft_factors: int = Field(4, ge=1)
+    down_init: Literal["kaiming", "weight_svd"] = "kaiming"
 
     # T-LoRA timestep mask: high noise → low rank, low noise → full rank.
     # Composes with any LoRA-leg algorithm; a no-op for atomic variants
@@ -207,6 +208,11 @@ class AnimaLoraMethodLoraConfig(BaseModel):
                 "AnimaLoraMethodLoraConfig: algorithm='tlora' requires "
                 "use_timestep_mask=True. Pick algorithm='lora' for plain LoRA "
                 "without timestep rank masking."
+            )
+        if self.down_init == "weight_svd" and self.algorithm not in ("lora", "tlora"):
+            raise ValueError(
+                "AnimaLoraMethodLoraConfig: down_init='weight_svd' is only "
+                "supported for algorithm='lora' or algorithm='tlora'."
             )
         return self
 

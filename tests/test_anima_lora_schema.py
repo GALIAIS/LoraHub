@@ -82,6 +82,20 @@ def test_tlora_algorithm_requires_timestep_mask() -> None:
         )
 
 
+def test_svd_down_init_is_plain_lora_only() -> None:
+    cfg = AnimaLoraMethodLoraConfig(
+        algorithm="lora",
+        down_init="weight_svd",
+    )
+    assert cfg.down_init == "weight_svd"
+
+    with pytest.raises(pydantic.ValidationError, match="weight_svd"):
+        AnimaLoraMethodLoraConfig(
+            algorithm="ortho",
+            down_init="weight_svd",
+        )
+
+
 def test_lycoris_algorithm_aliases_normalize_to_anima_registry_keys() -> None:
     """LyCORIS/kohya-style names are accepted but compile through local modules."""
     cases = {

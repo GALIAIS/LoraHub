@@ -795,6 +795,7 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
         pieces.append(f"{flag}={'true' if algo == chosen else 'false'}")
     pieces.append(f"lokr_factor={sub.lokr_factor}")
     pieces.append(f"boft_factors={sub.boft_factors}")
+    pieces.append(f"down_init={sub.down_init}")
     use_timestep_mask = sub.use_timestep_mask or sub.algorithm == "tlora"
     pieces.append(
         f"use_timestep_mask={'true' if use_timestep_mask else 'false'}",

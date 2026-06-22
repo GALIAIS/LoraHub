@@ -260,6 +260,7 @@ class LoRANetworkCfg:
     # (``OrthoLoRA`` / ``OrthoHydra``) and this field is informational.
     use_ortho: bool = False
     ortho_init_std: float = 0.02
+    down_init: Literal["kaiming", "weight_svd"] = "kaiming"
 
     # LoKr factor (consumed only when ``use_lokr=True``). Selects the
     # ``(a, c)`` split of out_dim and ``(b, d)`` split of in_dim for the
@@ -460,6 +461,12 @@ class LoRANetworkCfg:
 
         use_ortho = _as_bool(kwargs.get("use_ortho"))
         ortho_init_std = float(kwargs.get("ortho_init_std", 0.02))
+        down_init_raw = str(kwargs.get("down_init", "kaiming"))
+        if down_init_raw not in ("kaiming", "weight_svd"):
+            raise ValueError(
+                f"down_init={down_init_raw!r}: expected 'kaiming' or 'weight_svd'."
+            )
+        down_init: Literal["kaiming", "weight_svd"] = down_init_raw  # type: ignore[assignment]
         lokr_factor = int(kwargs.get("lokr_factor", 8))
         boft_factors = int(kwargs.get("boft_factors", 4))
 
@@ -578,6 +585,14 @@ class LoRANetworkCfg:
                 f"use_moe_style={use_moe_style!r}, route_per_layer={route_per_layer}, "
                 f"router_source={router_source!r}."
             )
+        if down_init != "kaiming" and (
+            module_class is not LoRAModule or use_ortho or use_moe_style is not False
+        ):
+            raise ValueError(
+                "down_init='weight_svd' is only supported by the plain LoRA "
+                "module. Choose algorithm='lora'/'tlora' without MoE, or set "
+                "down_init='kaiming'."
+            )
         if not route_per_layer and router_source == "input":
             raise ValueError(
                 "router_source='input' requires route_per_layer=True — no "
@@ -630,6 +645,7 @@ class LoRANetworkCfg:
             router_tau=router_tau,
             use_ortho=use_ortho,
             ortho_init_std=ortho_init_std,
+            down_init=down_init,
             lokr_factor=lokr_factor,
             boft_factors=boft_factors,
             fera_fecl_weight=fera_fecl_weight,
