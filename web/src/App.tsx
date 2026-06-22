@@ -77,16 +77,8 @@ const MOBILE_NAV = [
 ] as const
 
 type ThemeMode = "light" | "dark" | "system"
-type AccentTheme = "slate" | "cyan" | "amber" | "rose"
 
 const THEME_MODE_KEY = "lorahub.theme.mode"
-const ACCENT_KEY = "lorahub.theme.accent"
-const ACCENTS: Array<{ value: AccentTheme; label: string }> = [
-  { value: "slate", label: "石墨" },
-  { value: "cyan", label: "青蓝" },
-  { value: "amber", label: "琥珀" },
-  { value: "rose", label: "蔷薇" },
-]
 
 export default function App() {
   const location = useLocation()
@@ -95,11 +87,6 @@ export default function App() {
     if (typeof window === "undefined") return "system"
     const stored = window.localStorage.getItem(THEME_MODE_KEY)
     return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
-  })
-  const [accent, setAccent] = useState<AccentTheme>(() => {
-    if (typeof window === "undefined") return "slate"
-    const stored = window.localStorage.getItem(ACCENT_KEY)
-    return stored === "cyan" || stored === "amber" || stored === "rose" ? stored : "slate"
   })
 
   useEffect(() => {
@@ -111,18 +98,18 @@ export default function App() {
       const dark = mode === "dark" || (mode === "system" && media.matches)
       root.classList.toggle("dark", dark)
       root.dataset.themeMode = mode
-      root.dataset.themeAccent = accent
+      root.removeAttribute("data-theme-accent")
       window.localStorage.setItem(THEME_MODE_KEY, mode)
-      window.localStorage.setItem(ACCENT_KEY, accent)
+      window.localStorage.removeItem("lorahub.theme.accent")
     }
 
     apply()
     media.addEventListener("change", apply)
     return () => media.removeEventListener("change", apply)
-  }, [mode, accent])
+  }, [mode])
 
   // Run a quick cross-fade transition class for one frame pair after
-  // mode/accent changes so the swap from one palette to the other
+  // mode changes so the swap from one palette to the other
   // doesn't feel like a hard cut. View-Transitions-capable browsers
   // get a radial reveal instead (driven by handleThemeChange below).
   const isFirstThemeRun = useRef(true)
@@ -143,7 +130,7 @@ export default function App() {
       window.clearTimeout(id)
       root.classList.remove("theme-transition")
     }
-  }, [mode, accent])
+  }, [mode])
 
   // Eagerly warm every route chunk during browser idle time so the
   // first click on a nav item never pays a network round-trip. We
@@ -250,12 +237,9 @@ export default function App() {
 
       {/* --- Sidebar --- */}
       <Sidebar variant="inset">
-        <SidebarHeader className="border-b border-sidebar-border/70 px-4 py-4">
+        <SidebarHeader className="border-b border-sidebar-border/70 px-4 py-3">
           <div className="px-1">
-            <div className="shiro-kicker">LoraHub</div>
-            <div className="mt-1 text-xs leading-5 text-sidebar-foreground/66">
-              LoRA 训练工作台
-            </div>
+            <div className="text-sm font-semibold tracking-tight">LoraHub</div>
             <SidebarVersionStack />
           </div>
         </SidebarHeader>
@@ -293,56 +277,31 @@ export default function App() {
         </SidebarContent>
 
         <SidebarFooter className="border-t border-sidebar-border/70 px-4 py-4">
-          <div className="space-y-3 px-1">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-                <Monitor className="size-3" /> 外观
-              </div>
-              <div className="grid grid-cols-3 gap-1">
-                {([
-                  { value: "light" as const, icon: Sun, label: "浅色" },
-                  { value: "dark" as const, icon: Moon, label: "深色" },
-                  { value: "system" as const, icon: Monitor, label: "系统" },
-                ]).map(({ value, icon: Icon, label }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={(e) => runThemeChange(e, () => setMode(value))}
-                    className={cn(
-                      "h-7 rounded-[6px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors duration-150",
-                      mode === value
-                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
-                        : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
-                    )}
-                    title={label}
-                  >
-                    <Icon className="size-3" />
-                  </button>
-                ))}
-              </div>
+          <div className="space-y-1.5 px-1">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
+              <Monitor className="size-3" /> 外观
             </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-                <Palette className="size-3" /> 主题色
-              </div>
-              <div className="grid grid-cols-2 gap-1">
-                {ACCENTS.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    onClick={(e) => runThemeChange(e, () => setAccent(item.value))}
-                    className={cn(
-                      "h-7 rounded-[6px] border px-2 text-[11px] transition-colors duration-150",
-                      accent === item.value
-                        ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
-                        : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+            <div className="grid grid-cols-3 gap-1">
+              {([
+                { value: "light" as const, icon: Sun, label: "浅色" },
+                { value: "dark" as const, icon: Moon, label: "深色" },
+                { value: "system" as const, icon: Monitor, label: "系统" },
+              ]).map(({ value, icon: Icon, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={(e) => runThemeChange(e, () => setMode(value))}
+                  className={cn(
+                    "h-7 rounded-[6px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors duration-150",
+                    mode === value
+                      ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
+                      : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
+                  )}
+                  title={label}
+                >
+                  <Icon className="size-3" />
+                </button>
+              ))}
             </div>
           </div>
         </SidebarFooter>
@@ -358,11 +317,7 @@ export default function App() {
                 <SidebarTrigger />
                 <div className="hidden h-8 w-px bg-border/70 md:block" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-3">
-                    <div className="shiro-kicker">LoraHub</div>
-                    <div className="shiro-microcopy">[SYS.OK]</div>
-                  </div>
-                  <div className="mt-1 truncate text-base font-semibold tracking-[-0.01em]">
+                  <div className="truncate text-base font-semibold tracking-[-0.01em]">
                     {resolvedTitle}
                   </div>
                 </div>
@@ -444,7 +399,7 @@ function MobileBottomNav({
 /**
  * Version chips under the sidebar subtitle.
  *
- * Layout: two stacked rows — Frontend on top, Backend below — sitting
+ * Layout: two stacked rows: Frontend on top, Backend below, sitting
  * under the "LoRA 训练工作台" tagline. The vertical stack reads cleanly
  * even when the two version strings disagree by length, and keeps the
  * existing kicker / subtitle / chips rhythm intact.
@@ -470,7 +425,7 @@ function SidebarVersionStack() {
     ? "text-amber-700 dark:text-amber-400"
     : "text-sidebar-foreground/55"
   const title = mismatch
-    ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit — 多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
+    ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit,多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
     : loading
       ? "正在读取后端版本…"
       : `前端 ${frontendDisplay} · 后端 ${backendDisplay} (同一 commit)`

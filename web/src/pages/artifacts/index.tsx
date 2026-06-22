@@ -18,7 +18,6 @@ import {
   FileArchive,
   FolderOpen,
   Loader2,
-  Package,
   RefreshCw,
   Trash2,
 } from "lucide-react"
@@ -82,7 +81,7 @@ function formatBytes(bytes: number): string {
 }
 
 function formatTime(iso: string | null | undefined): string {
-  if (!iso) return "—"
+  if (!iso) return "-"
   try {
     return new Date(iso).toLocaleString()
   } catch {
@@ -156,54 +155,36 @@ export function ArtifactsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-5 w-full">
-        <header className="space-y-1">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            产物归档
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Package className="size-5 text-muted-foreground" />
-            训练产物
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            跨任务汇总 LoRA / checkpoint 文件,支持单独下载、批量打包,或删除整个工作区。
-          </p>
-        </header>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="space-y-0.5">
-                <CardTitle className="text-base">总览</CardTitle>
-                <CardDescription>
-                  {rows.length} 个 job · {totalCheckpoints} 个 checkpoint ·{" "}
-                  {formatBytes(totalBytes)}
-                </CardDescription>
+      <div className="px-4 py-4 md:px-6 md:py-5 space-y-4 w-full">
+        <Card size="sm">
+          <CardContent className="px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="按 job id / output 名 / 路径过滤"
+                className="h-8 min-w-[18rem] flex-1 font-mono text-xs"
+              />
+              <div className="text-xs text-muted-foreground">
+                {rows.length} 个 job · {totalCheckpoints} 个 checkpoint ·{" "}
+                {formatBytes(totalBytes)}
               </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder="按 job id / output 名 / 路径过滤"
-                  className="h-8 w-64 font-mono text-xs"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={refresh}
-                  disabled={list.isFetching}
-                  className="gap-1"
-                >
-                  {list.isFetching ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3" />
-                  )}
-                  刷新
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={refresh}
+                disabled={list.isFetching}
+                className="ml-auto gap-1"
+              >
+                {list.isFetching ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3" />
+                )}
+                刷新
+              </Button>
             </div>
-          </CardHeader>
+          </CardContent>
         </Card>
 
         {list.isError && (
@@ -253,12 +234,12 @@ export function ArtifactsPage() {
                 即将物理删除 <code className="font-mono text-xs">{confirmDelete?.workspace}</code>。
               </span>
               <span className="block">
-                此操作不可恢复 —— 不同于「归档」,这里不会移动到 _archive/,
+                此操作不可恢复。不同于「归档」,这里不会移动到 _archive/,
                 而是直接 rmtree 整个目录,并从任务列表中移除该记录。
               </span>
               <span className="block text-amber-700 dark:text-amber-400">
-                ⚠ {confirmDelete?.checkpoint_count ?? 0} 个 checkpoint
-                共计 {formatBytes(confirmDelete?.total_bytes ?? 0)} 将被删除。
+                将删除 {confirmDelete?.checkpoint_count ?? 0} 个 checkpoint
+                共计 {formatBytes(confirmDelete?.total_bytes ?? 0)}。
               </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -312,7 +293,7 @@ function ArtifactCard({
           : "bg-muted text-muted-foreground border-border"
 
   return (
-    <Card>
+    <Card size="sm">
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -390,7 +371,7 @@ function ArtifactCard({
               className="gap-1 h-8"
               title={
                 !isTerminal
-                  ? "任务未结束 —— 取消后才能删除工作区"
+                  ? "任务未结束,取消后才能删除工作区"
                   : "永久删除整个 workspace 目录"
               }
             >

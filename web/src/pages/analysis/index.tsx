@@ -32,7 +32,6 @@ import { useJobsList } from "@/lib/queries/jobs"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { PathDisplay } from "@/components/path-display"
 import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { cn } from "@/lib/utils"
 import {
@@ -248,7 +247,7 @@ export function AnalysisPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
@@ -267,9 +266,9 @@ export function AnalysisPage() {
 
         {(activeJob || isCompareRoute) && (
           <>
-            <header className="flex items-start justify-between gap-4 border-b border-border/60 px-4 pb-4 pt-12 md:px-7 md:py-4">
+            <header className="flex items-center justify-between gap-3 border-b border-border/60 px-4 pb-3 pt-12 md:px-7 md:py-3">
               <div className="min-w-0">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2">
                   {activeJob && <StateBadge state={activeJob.state} />}
                   <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
                     {isCompareRoute
@@ -278,20 +277,12 @@ export function AnalysisPage() {
                         ? STATE_LABELS[activeJob.state] ?? activeJob.state
                         : ""}
                   </span>
+                  <span className="font-mono text-[12px] truncate">
+                    {isCompareRoute
+                      ? compareIds.map((id) => id.slice(-8)).join(" · ")
+                      : activeJob?.id.slice(-12)}
+                  </span>
                 </div>
-                <div className="font-mono text-[14px] truncate">
-                  {isCompareRoute
-                    ? compareIds.map((id) => id.slice(-8)).join(" · ")
-                    : activeJob?.id}
-                </div>
-                {activeJob?.workspace && !isCompareRoute && (
-                  <PathDisplay
-                    path={activeJob.workspace}
-                    tailSegments={3}
-                    block
-                    className="text-xs text-muted-foreground mt-1"
-                  />
-                )}
               </div>
               {activeJob && !isCompareRoute && (
                 <Button
@@ -463,18 +454,6 @@ function EmptyState({
   return (
     <div className="flex-1 overflow-auto">
       <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-7 md:py-8">
-        <div className="space-y-1">
-          <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            训练分析
-          </div>
-          <h2 className="text-[18px] font-semibold tracking-tight">
-            选择任务开始分析
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            最近的 6 个任务已列在下方；勾选两个或更多进入对比模式。也可以直接在左侧搜索具体的 ID。
-          </p>
-        </div>
-
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {recent.map((j) => {
             const checked = picks.includes(j.id)

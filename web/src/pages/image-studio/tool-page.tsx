@@ -9,7 +9,7 @@
  * 选择数据集的提示，避免下游 panel 跑崩。
  */
 import { useQuery } from "@tanstack/react-query"
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { ChevronLeft, FolderOpen } from "lucide-react"
 import { datasetList } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -51,17 +51,8 @@ export function ToolPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="border-b px-6 py-3">
-        <nav className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Link to="/image-studio" className="hover:text-foreground">
-            工具广场
-          </Link>
-          <span>/</span>
-          <span>{category?.label ?? tool.category}</span>
-          <span>/</span>
-          <span className="text-foreground">{tool.label}</span>
-        </nav>
-        <div className="mt-1.5 flex items-center gap-2">
+      <header className="border-b px-4 py-2 md:px-6">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             onClick={() => navigate("/image-studio")}
@@ -72,7 +63,12 @@ export function ToolPage() {
             <ChevronLeft className="size-3.5" />
           </Button>
           <Icon className="size-4 text-muted-foreground" />
-          <h1 className="text-sm font-semibold">{tool.label}</h1>
+          <h1 className="text-sm font-semibold" title={tool.description}>
+            {tool.label}
+          </h1>
+          <span className="text-[11px] text-muted-foreground">
+            {category?.label ?? tool.category}
+          </span>
           {tool.async && (
             <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
               异步
@@ -83,19 +79,18 @@ export function ToolPage() {
               写入
             </span>
           )}
+          {tool.requiresDataset && (
+            <DatasetSelectorRow
+              datasetPath={datasetPath}
+              onChange={(p) => {
+                const next = new URLSearchParams(params)
+                if (p) next.set("path", p)
+                else next.delete("path")
+                setParams(next, { replace: true })
+              }}
+            />
+          )}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">{tool.description}</p>
-        {tool.requiresDataset && (
-          <DatasetSelectorRow
-            datasetPath={datasetPath}
-            onChange={(p) => {
-              const next = new URLSearchParams(params)
-              if (p) next.set("path", p)
-              else next.delete("path")
-              setParams(next, { replace: true })
-            }}
-          />
-        )}
       </header>
 
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -124,7 +119,7 @@ function DatasetSelectorRow({
   })
   const datasets = datasetsQuery.data?.datasets ?? []
   return (
-    <label className="mt-2 flex items-center gap-2">
+    <label className="ml-auto flex items-center gap-2">
       <FolderOpen className="size-3.5 text-muted-foreground" />
       <span className="text-[11px] text-muted-foreground">数据集</span>
       <select
@@ -132,7 +127,7 @@ function DatasetSelectorRow({
         onChange={(e) => onChange(e.target.value)}
         className="rounded border bg-background px-2 py-1 text-xs"
       >
-        <option value="">— 选择数据集 —</option>
+        <option value="">选择数据集</option>
         {datasets.map((d) => (
           <option key={d.name} value={d.path}>
             {d.name} ({d.imageCount})

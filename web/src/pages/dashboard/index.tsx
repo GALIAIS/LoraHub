@@ -66,17 +66,8 @@ export function DashboardPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-6 w-full">
-        <header className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-              实时概览
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight">数据面板</h1>
-            <p className="text-sm text-muted-foreground">
-              硬件资源、训练任务、后端连通状态实时聚合。
-            </p>
-          </div>
+      <div className="px-4 py-4 md:px-6 md:py-5 space-y-4 w-full">
+        <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Badge
               variant={liveStream ? "default" : "outline"}
@@ -93,40 +84,52 @@ export function DashboardPage() {
               </Badge>
             )}
           </div>
-        </header>
+        </div>
 
         {snapshot && <JobStatGrid stats={stats} />}
 
         {snapshot ? (
           <>
-            <HostInfoCard snapshot={snapshot} />
-            <CpuMemoryCard snapshot={snapshot} />
-            {snapshot.processes !== undefined && (
-              <TopProcessesCard processes={snapshot.processes ?? []} />
-            )}
-            {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
-            <GpuSection
-              gpus={snapshot.gpus}
-              hasNvidiaSmi={snapshot.has_nvidia_smi}
-              system={snapshot.host.system}
-            />
-            {snapshot.gpu_processes !== undefined && (
-              <GpuProcessesCard processes={snapshot.gpu_processes ?? []} />
-            )}
-            <DiskSection disks={snapshot.disks} />
-            {snapshot.disk_io !== undefined && (
-              <DiskIoCard io={snapshot.disk_io ?? null} />
-            )}
-            {snapshot.network?.interfaces !== undefined && (
-              <NetworkInterfacesCard interfaces={snapshot.network?.interfaces ?? []} />
-            )}
-            {(snapshot.network?.tcp_connections !== undefined ||
-              snapshot.network?.public_ip !== undefined) && (
-              <NetworkSummaryCard
-                tcp={snapshot.network?.tcp_connections ?? null}
-                publicIp={snapshot.network?.public_ip ?? null}
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+              <GpuSection
+                gpus={snapshot.gpus}
+                hasNvidiaSmi={snapshot.has_nvidia_smi}
+                system={snapshot.host.system}
               />
-            )}
+              <DiskSection disks={snapshot.disks} />
+            </div>
+
+            <RecentJobsCard jobs={allJobs} />
+
+            <details className="rounded-[6px] border border-border/60 bg-background/60">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                系统诊断详情
+              </summary>
+              <div className="space-y-4 border-t border-border/60 p-4">
+                <HostInfoCard snapshot={snapshot} />
+                <CpuMemoryCard snapshot={snapshot} />
+                {snapshot.processes !== undefined && (
+                  <TopProcessesCard processes={snapshot.processes ?? []} />
+                )}
+                {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
+                {snapshot.gpu_processes !== undefined && (
+                  <GpuProcessesCard processes={snapshot.gpu_processes ?? []} />
+                )}
+                {snapshot.disk_io !== undefined && (
+                  <DiskIoCard io={snapshot.disk_io ?? null} />
+                )}
+                {snapshot.network?.interfaces !== undefined && (
+                  <NetworkInterfacesCard interfaces={snapshot.network?.interfaces ?? []} />
+                )}
+                {(snapshot.network?.tcp_connections !== undefined ||
+                  snapshot.network?.public_ip !== undefined) && (
+                  <NetworkSummaryCard
+                    tcp={snapshot.network?.tcp_connections ?? null}
+                    publicIp={snapshot.network?.public_ip ?? null}
+                  />
+                )}
+              </div>
+            </details>
           </>
         ) : (
           <Card>
@@ -136,8 +139,6 @@ export function DashboardPage() {
             </CardContent>
           </Card>
         )}
-
-        <RecentJobsCard jobs={allJobs} />
       </div>
     </div>
   )

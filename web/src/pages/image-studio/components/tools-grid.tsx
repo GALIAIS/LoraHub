@@ -22,15 +22,7 @@ export function ToolsGrid({ datasetPath }: Props) {
   const hasDataset = Boolean(datasetPath)
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-base font-semibold">全部工具</h1>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {hasDataset
-            ? "点任意工具进入独立的工具页，每个工具自己一个 URL。"
-            : "先在左侧选一个数据集 — 跨数据集工具（工具库）不受影响。"}
-        </p>
-      </header>
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5 space-y-5">
         {TOOL_CATEGORIES.map((cat) => {
           const tools = TOOLS.filter((t) => t.category === cat.id)
           if (tools.length === 0) return null

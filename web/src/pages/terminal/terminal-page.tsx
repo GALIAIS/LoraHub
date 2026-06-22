@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ShieldAlert, Terminal as TerminalIcon } from "lucide-react"
+import { ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
 import {
   terminalExec,
@@ -220,21 +220,7 @@ export function TerminalPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-5 w-full max-w-[1400px]">
-        <header className="space-y-1">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            后端 · venv 维护
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight inline-flex items-center gap-2">
-            <TerminalIcon className="size-5 text-muted-foreground" />
-            终端
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            选择已安装的后端，在它的虚拟环境中跑 pip / uv / python 命令。
-            默认仅允许包管理类命令，可在 设置 中开启自由模式。
-          </p>
-        </header>
-
+      <div className="flex min-h-full max-w-[1400px] flex-col gap-3 px-4 py-4 md:px-6 md:py-5">
         <BackendPicker
           sessions={sessions}
           selected={backendId}

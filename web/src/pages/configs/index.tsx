@@ -359,7 +359,7 @@ export function ConfigsPage() {
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 hidden shadow-[var(--panel-shadow)] md:inline-flex"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />

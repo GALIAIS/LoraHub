@@ -6,7 +6,7 @@ import {
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { SweepDetailPanel } from "./sweep-detail"
 import { SweepSidebar } from "./sweep-sidebar"
 
@@ -48,21 +48,12 @@ export function SweepsPage() {
   }, [list, selectedId])
 
   return (
-    <div
-      className={cn(
-        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
-        sidebarOpen
-          ? "grid-cols-[minmax(240px,300px)_1fr]"
-          : "grid-cols-[0px_1fr]",
-      )}
-    >
-      <aside
-        className={cn(
-          "shiro-page-aside flex flex-col min-h-0 min-w-0 overflow-hidden",
-          !sidebarOpen && "pointer-events-none opacity-0",
-        )}
-        aria-hidden={!sidebarOpen}
-      >
+    <WorkbenchSplitLayout
+      sidebarOpen={sidebarOpen}
+      sidebarWidth="minmax(240px,300px)"
+      mobileSidebarTitle="参数搜索列表"
+      mobileSidebarDescription="选择 sweep，查看变体、最佳 trial 和任务状态。"
+      sidebar={
         <SweepSidebar
           list={list}
           loading={sweeps.isLoading}
@@ -70,15 +61,14 @@ export function SweepsPage() {
           onSelect={setSelectedId}
           onClose={() => setSidebarOpen(false)}
         />
-      </aside>
-
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+      }
+    >
         {!sidebarOpen && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
@@ -95,7 +85,6 @@ export function SweepsPage() {
             </div>
           </div>
         )}
-      </section>
-    </div>
+    </WorkbenchSplitLayout>
   )
 }

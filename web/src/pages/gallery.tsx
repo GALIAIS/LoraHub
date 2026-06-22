@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Images, Search, X } from "lucide-react"
+import { Images, Search, SlidersHorizontal, X } from "lucide-react"
 import { api, type SampleGalleryItem } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { Button } from "@/components/ui/button"
@@ -127,23 +127,19 @@ export function GalleryPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-6 w-full">
-        <header className="space-y-1">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            训练产物
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight inline-flex items-center gap-2">
-            <Images className="size-5 text-muted-foreground" />
-            样图画廊
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            汇总所有任务工作区里的样图，按修改时间倒序展示。
-          </p>
-        </header>
-
-        <Card>
-          <CardContent className="px-4 py-3 space-y-3">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="px-4 py-4 md:px-6 md:py-5 space-y-4 w-full">
+        <Card size="sm">
+          <CardContent className="px-3 py-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[14rem] flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/70" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="搜文件名 / 配置名 / 任务名"
+                  className="h-8 pl-8 text-[12px]"
+                />
+              </div>
               <Pagination
                 total={total}
                 pageSize={pageSize}
@@ -151,7 +147,6 @@ export function GalleryPage() {
                 onPageChange={setPage}
                 pageSizeOptions={PAGE_SIZE_OPTIONS}
                 onPageSizeChange={setPageSize}
-                className="flex-1"
               />
               {(selectedJobIds.length > 0 ||
                 selectedConfigs.length > 0 ||
@@ -170,75 +165,77 @@ export function GalleryPage() {
                 </Button>
               )}
             </div>
-            <div className="relative max-w-md">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/70" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜文件名 / 配置名 / 任务名"
-                className="h-8 pl-8 text-[12px]"
-              />
-            </div>
-            <JobFilterChips
-              jobs={allJobs}
-              selectedJobIds={selectedJobIds}
-              onToggle={(id) =>
-                setSelectedJobIds((prev) =>
-                  prev.includes(id)
-                    ? prev.filter((p) => p !== id)
-                    : [...prev, id],
-                )
-              }
-              onSelectAll={() =>
-                setSelectedJobIds(allJobs.map((j) => j.id))
-              }
-              onClear={() => setSelectedJobIds([])}
-            />
-            {configOptions.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
-                  <span>按配置筛选</span>
-                  {selectedConfigs.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedConfigs([])}
-                      className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      清除
-                    </button>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {configOptions.map(({ name, count }) => {
-                    const isActive = selectedConfigs.includes(name)
-                    return (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() =>
-                          setSelectedConfigs((prev) =>
-                            prev.includes(name)
-                              ? prev.filter((p) => p !== name)
-                              : [...prev, name],
-                          )
-                        }
-                        className={cn(
-                          "rounded-[3px] border px-2 py-1 text-[11px] transition-colors",
-                          isActive
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border/60 bg-background/60 text-muted-foreground hover:bg-muted/40",
-                        )}
-                      >
-                        <span>{name}</span>
-                        <span className="ml-1 text-muted-foreground/70 tabular-nums">
-                          ({count})
-                        </span>
-                      </button>
+            <details className="rounded-[4px] border border-border/60 bg-muted/20">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground hover:text-foreground">
+                <SlidersHorizontal className="size-3.5" />
+                <span className="font-medium text-foreground">筛选条件</span>
+                <span className="tabular-nums">
+                  任务 {selectedJobIds.length || "全部"} / 配置 {selectedConfigs.length || "全部"}
+                </span>
+              </summary>
+              <div className="max-h-[14rem] space-y-3 overflow-y-auto border-t border-border/60 px-3 py-3">
+                <JobFilterChips
+                  jobs={allJobs}
+                  selectedJobIds={selectedJobIds}
+                  onToggle={(id) =>
+                    setSelectedJobIds((prev) =>
+                      prev.includes(id)
+                        ? prev.filter((p) => p !== id)
+                        : [...prev, id],
                     )
-                  })}
-                </div>
+                  }
+                  onSelectAll={() =>
+                    setSelectedJobIds(allJobs.map((j) => j.id))
+                  }
+                  onClear={() => setSelectedJobIds([])}
+                />
+                {configOptions.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
+                      <span>按配置筛选</span>
+                      {selectedConfigs.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedConfigs([])}
+                          className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          清除
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {configOptions.map(({ name, count }) => {
+                        const isActive = selectedConfigs.includes(name)
+                        return (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() =>
+                              setSelectedConfigs((prev) =>
+                                prev.includes(name)
+                                  ? prev.filter((p) => p !== name)
+                                  : [...prev, name],
+                              )
+                            }
+                            className={cn(
+                              "rounded-[3px] border px-2 py-1 text-[11px] transition-colors",
+                              isActive
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border/60 bg-background/60 text-muted-foreground hover:bg-muted/40",
+                            )}
+                          >
+                            <span>{name}</span>
+                            <span className="ml-1 text-muted-foreground/70 tabular-nums">
+                              ({count})
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
+            </details>
           </CardContent>
         </Card>
 
