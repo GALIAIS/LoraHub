@@ -90,10 +90,21 @@ function taskEventsToUpdateEvents(
   })
 }
 
+function channelVersionLabel(
+  info: ReturnType<typeof useSystemVersion>["data"],
+  channel: UpdateChannel,
+): string {
+  if (!info) return "检查中"
+  if (channel === "tag") return info.tag_name ?? (info.latest ? `v${info.latest}` : "—")
+  return info.latest_commit?.slice(0, 7) ?? info.latest ?? "—"
+}
+
 export function UpdateCard() {
   const qc = useQueryClient()
   const [channel, setChannel] = useState<UpdateChannel>("tag")
-  const version = useSystemVersion(channel)
+  const tagVersion = useSystemVersion("tag")
+  const devVersion = useSystemVersion("dev")
+  const version = channel === "tag" ? tagVersion : devVersion
   const [restart, setRestart] = useState(true)
   const [build, setBuild] = useState(true)
   // ``force`` discards local changes (git reset --hard + clean -fd)
@@ -234,10 +245,16 @@ export function UpdateCard() {
         <Tabs value={channel} onValueChange={(v) => setChannel(v as UpdateChannel)}>
           <TabsList variant="line" className="h-8">
             <TabsTrigger value="tag" className="text-xs">
-              发布版（tag）
+              <span>正式版</span>
+              <span className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+                {channelVersionLabel(tagVersion.data, "tag")}
+              </span>
             </TabsTrigger>
             <TabsTrigger value="dev" className="text-xs">
-              开发版（dev）
+              <span>Dev</span>
+              <span className="font-mono text-[11px] text-sky-700 dark:text-sky-400">
+                {channelVersionLabel(devVersion.data, "dev")}
+              </span>
             </TabsTrigger>
           </TabsList>
         </Tabs>
