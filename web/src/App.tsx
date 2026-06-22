@@ -404,8 +404,7 @@ function MobileBottomNav({
  * even when the two version strings disagree by length, and keeps the
  * existing kicker / subtitle / chips rhythm intact.
  *
- * Version values use separate tones so the two rows are easy to scan.
- * Both values turn amber together when frontend and backend resolve to
+ * Both rows turn amber together when frontend and backend resolve to
  * *different commits*. We compare commit shas first (the canonical
  * answer); when shas match we display the same canonical string on both
  * sides, since git-describe ("last tag") and hatch-vcs ("next tag")
@@ -425,12 +424,9 @@ function SidebarVersionStack() {
   const labelTone = mismatch
     ? "text-amber-700 dark:text-amber-400"
     : "text-sidebar-foreground/55"
-  const frontendTone = mismatch
+  const valueTone = mismatch
     ? "text-amber-700 dark:text-amber-400"
-    : "text-emerald-700 dark:text-emerald-400"
-  const backendTone = mismatch
-    ? "text-amber-700 dark:text-amber-400"
-    : "text-sky-700 dark:text-sky-400"
+    : "text-sidebar-foreground/80"
   const title = mismatch
     ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit,多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
     : loading
@@ -448,11 +444,11 @@ function SidebarVersionStack() {
     >
       <span className="inline-flex items-center gap-1">
         <span className={cn("w-[3.5rem]", labelTone)}>Frontend</span>
-        <span className={cn("font-medium", frontendTone)}>{frontendDisplay}</span>
+        <span className={cn("font-medium", valueTone)}>{frontendDisplay}</span>
       </span>
       <span className="inline-flex items-center gap-1">
         <span className={cn("w-[3.5rem]", labelTone)}>Backend</span>
-        <span className={cn("font-medium", backendTone)}>
+        <span className={cn("font-medium", valueTone)}>
           {loading && backendDisplay === "?" ? "…" : backendDisplay}
         </span>
       </span>

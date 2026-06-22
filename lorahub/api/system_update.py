@@ -632,6 +632,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         and not force
         and (time.time() - blob.updated_at) < CACHE_TTL_SECONDS
     )
+    if fresh_enough and channel == "tag" and cached.get("tag_name") and not cached.get("latest_commit"):
+        fresh_enough = False
 
     if fresh_enough:
         info = UpdateInfo(

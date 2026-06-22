@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import subprocess
 import tarfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -614,6 +615,48 @@ def test_check_tag_detects_retagged_same_version(
 
     assert info.update_available is True
     assert info.current_commit == "oldsha"
+    assert info.latest_commit == "newsha"
+
+
+def test_check_tag_refreshes_cached_payload_without_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.system_update_types import CacheBlob, UpdateInfo
+
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.7", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.0.7",
+            "version_str": "1.0.7",
+            "commit": "newsha",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    cached = UpdateInfo(
+        channel="tag",
+        current="1.0.7",
+        latest="1.0.7",
+        update_available=False,
+        release_url=su.WEB_RELEASES_URL,
+        tag_name="v1.0.7",
+        latest_commit=None,
+    ).to_dict()
+    monkeypatch.setattr(
+        su,
+        "_read_cache",
+        lambda: CacheBlob(data={"tag": cached}, updated_at=time.time()),
+    )
+    monkeypatch.setattr(su, "_write_cache", lambda blob: None)
+
+    info = su.check(channel="tag")
+
     assert info.latest_commit == "newsha"
 
 
