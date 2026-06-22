@@ -404,12 +404,13 @@ function MobileBottomNav({
  * even when the two version strings disagree by length, and keeps the
  * existing kicker / subtitle / chips rhythm intact.
  *
- * Both rows turn amber together when frontend and backend resolve
- * to *different commits*. We compare commit shas first (the canonical
- * answer); when shas match we display the same canonical string on
- * both sides, since git-describe ("last tag") and hatch-vcs ("next tag")
- * disagree on the textual base of every untagged commit and showing
- * both raw views would falsely suggest drift.
+ * Version values use separate tones so the two rows are easy to scan.
+ * Both values turn amber together when frontend and backend resolve to
+ * *different commits*. We compare commit shas first (the canonical
+ * answer); when shas match we display the same canonical string on both
+ * sides, since git-describe ("last tag") and hatch-vcs ("next tag")
+ * disagree on the textual base of every untagged commit and showing both
+ * raw views would falsely suggest drift.
  *
  * Clicking jumps to the About page where the long-form mismatch card
  * spells out the recovery commands (`lorahub manage build`, etc.).
@@ -421,9 +422,15 @@ function SidebarVersionStack() {
     mismatch,
     loading,
   } = useVersionInfo()
-  const tone = mismatch
+  const labelTone = mismatch
     ? "text-amber-700 dark:text-amber-400"
     : "text-sidebar-foreground/55"
+  const frontendTone = mismatch
+    ? "text-amber-700 dark:text-amber-400"
+    : "text-emerald-700 dark:text-emerald-400"
+  const backendTone = mismatch
+    ? "text-amber-700 dark:text-amber-400"
+    : "text-sky-700 dark:text-sky-400"
   const title = mismatch
     ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit,多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
     : loading
@@ -436,17 +443,18 @@ function SidebarVersionStack() {
       className={cn(
         "mt-2 flex flex-col gap-0.5 font-mono tabular-nums tracking-tight transition-colors",
         "text-[10px] leading-snug",
-        tone,
         "hover:text-sidebar-accent-foreground",
       )}
     >
       <span className="inline-flex items-center gap-1">
-        <span className="opacity-70 w-[3.5rem]">Frontend</span>
-        <span>{frontendDisplay}</span>
+        <span className={cn("w-[3.5rem]", labelTone)}>Frontend</span>
+        <span className={cn("font-medium", frontendTone)}>{frontendDisplay}</span>
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="opacity-70 w-[3.5rem]">Backend</span>
-        <span>{loading && backendDisplay === "?" ? "…" : backendDisplay}</span>
+        <span className={cn("w-[3.5rem]", labelTone)}>Backend</span>
+        <span className={cn("font-medium", backendTone)}>
+          {loading && backendDisplay === "?" ? "…" : backendDisplay}
+        </span>
       </span>
     </NavLink>
   )

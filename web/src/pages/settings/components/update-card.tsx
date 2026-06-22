@@ -99,6 +99,18 @@ function channelVersionLabel(
   return info.latest_commit?.slice(0, 7) ?? info.latest ?? "—"
 }
 
+function channelVersionTone(channel: UpdateChannel): string {
+  return channel === "tag"
+    ? "text-emerald-700 dark:text-emerald-400"
+    : "text-sky-700 dark:text-sky-400"
+}
+
+function channelCommitTone(channel: UpdateChannel): string {
+  return channel === "tag"
+    ? "text-emerald-600/80 dark:text-emerald-300/80"
+    : "text-sky-600/80 dark:text-sky-300/80"
+}
+
 export function UpdateCard() {
   const qc = useQueryClient()
   const [channel, setChannel] = useState<UpdateChannel>("tag")
@@ -195,6 +207,8 @@ export function UpdateCard() {
   }
 
   const info = version.data
+  const versionTone = channelVersionTone(channel)
+  const commitTone = channelCommitTone(channel)
   const checkedAt = info?.checked_at
     ? new Date(info.checked_at).toLocaleString()
     : "—"
@@ -262,9 +276,11 @@ export function UpdateCard() {
         <div className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
           <span className="flex items-center gap-2 flex-wrap">
-            <code className="font-mono text-[12px]">{info?.current ?? "—"}</code>
+            <code className={cn("font-mono text-[12px] font-medium", versionTone)}>
+              {info?.current ?? "—"}
+            </code>
             {info?.current_commit && (
-              <code className="font-mono text-[11px] text-muted-foreground">
+              <code className={cn("font-mono text-[11px]", commitTone)}>
                 {info.current_commit.slice(0, 7)}
               </code>
             )}
@@ -291,11 +307,11 @@ export function UpdateCard() {
 
           <span className="text-muted-foreground">远端版本</span>
           <span className="flex items-center gap-2 flex-wrap">
-            <code className="font-mono text-[12px]">
+            <code className={cn("font-mono text-[12px] font-medium", versionTone)}>
               {info?.tag_name ?? info?.latest ?? "—"}
             </code>
             {info?.latest_commit && (
-              <code className="font-mono text-[11px] text-muted-foreground">
+              <code className={cn("font-mono text-[11px]", commitTone)}>
                 {info.latest_commit.slice(0, 7)}
               </code>
             )}
