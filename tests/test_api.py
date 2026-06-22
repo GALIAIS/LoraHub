@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from lorahub.api import state
 from lorahub.core.config.schema import TrainingConfig
-from lorahub.core.events import EventType, TrainingEvent
+from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 
 def _make_stub_sd_scripts(root: Path) -> Path:
@@ -65,6 +65,7 @@ def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistr
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api import app as app_mod
     from lorahub.api.settings import SettingsStore
+    from lorahub.api.task_sessions import TaskSessionStore
 
     # Isolate the settings store so tests don't read or write the real
     # user-data file. Patch on the imported `app` module — that's the symbol
@@ -85,6 +86,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(app_mod, "_sweep_store", None)
     monkeypatch.setattr(app_mod, "_session_store", None)
     monkeypatch.setattr(app_mod, "_ai_store", None)
+    monkeypatch.setattr(app_mod, "_task_session_store", TaskSessionStore(tmp_path / "tasks.sqlite3"))
     monkeypatch.chdir(tmp_path)
     return TestClient(app_mod.app)
 
@@ -119,6 +121,52 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "version" in body
     assert "backend" in body
     assert "sd_scripts_path" in body["backend"]
+
+
+def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
+    from lorahub.api.routers import system as system_router
+
+    assert system_router._UPDATE_LOCK.acquire(blocking=False)
+    try:
+        r = client.post(
+            "/api/system/update",
+            json={"channel": "dev", "build": False, "restart": False},
+        )
+    finally:
+        system_router._UPDATE_LOCK.release()
+
+    assert r.status_code == 409
+    assert "already running" in r.text
+
+
+def test_system_update_writes_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import system as system_router
+
+    def fake_apply(**kwargs: Any) -> None:
+        progress = kwargs["progress"]
+        progress("git", "info", "git fetch --tags origin")
+        progress("done", "info", "update applied")
+
+    monkeypatch.setattr(system_router.system_update, "apply", fake_apply)
+
+    response = client.post(
+        "/api/system/update",
+        json={"channel": "dev", "build": False, "restart": False},
+    )
+    assert response.status_code == 200, response.text
+    assert "update applied" in response.text
+
+    latest = client.get("/api/tasks/latest?kind=system_update")
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["status"] == "succeeded"
+    assert body["metadata"]["channel"] == "dev"
+    assert [event["message"] for event in body["events"]][-2:] == [
+        "git fetch --tags origin",
+        "update applied",
+    ]
 
 
 def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
@@ -207,6 +255,45 @@ def test_recent_events_replay_from_workspace_jsonl(
     events = client.get(f"/api/jobs/{job.id}/events").json()["events"]
 
     assert events == [expected.to_dict()]
+
+
+def test_recent_events_prefers_full_workspace_jsonl_over_memory_tail(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    first = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 1, "loss": 0.4},
+        timestamp=1_700_000_001,
+        job_id=job.id,
+    )
+    second = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 2, "loss": 0.3},
+        timestamp=1_700_000_002,
+        job_id=job.id,
+    )
+    third = TrainingEvent(
+        type=EventType.step,
+        payload={"step": 3, "loss": 0.2},
+        timestamp=1_700_000_003,
+        job_id=job.id,
+    )
+    (ws / "events.jsonl").write_text(
+        first.to_json() + "\n" + second.to_json() + "\n",
+        encoding="utf-8",
+    )
+    state.registry.record_event(job.id, second)
+    state.registry.record_event(job.id, third)
+
+    events = client.get(f"/api/jobs/{job.id}/events?limit=10").json()["events"]
+
+    assert events == [first.to_dict(), second.to_dict(), third.to_dict()]
 
 
 def test_websocket_replays_workspace_jsonl_for_rehydrated_job(
@@ -417,9 +504,22 @@ def test_resume_dp_happy_path_relaunches_in_place_with_resume_argv(
 
 
 def test_cancel_queued_job_short_circuits_to_canceled(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job pending on the worker deque must cancel without launching."""
+    from lorahub.api import scheduler as sched_module
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.canceled: list[str] = []
+
+        def cancel_pending(self, job_id: str) -> bool:
+            self.canceled.append(job_id)
+            return True
+
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(sched_module, "scheduler", fake_scheduler)
+
     ws = tmp_path / "ws"
     ws.mkdir()
     job = state.registry.create(workspace=ws, config_snapshot={})
@@ -431,6 +531,7 @@ def test_cancel_queued_job_short_circuits_to_canceled(
     body = r.json()
     assert body["state"] == "canceled"
     assert body["finished_at"] is not None
+    assert fake_scheduler.canceled == [job.id]
 
 
 def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
@@ -1230,9 +1331,15 @@ def test_kill_job_without_pid_returns_409(
 
 
 def test_kill_dead_pid_still_flips_state_to_interrupted(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job whose PID is already gone — kill should not raise; flip state."""
+    from lorahub.api import app as app_module
+    from lorahub.api.error_reports import ErrorReportStore
+
+    report_store = ErrorReportStore(tmp_path / "errors.sqlite")
+    monkeypatch.setattr(app_module, "_error_report_store", report_store, raising=False)
+
     ws = tmp_path / "ws"
     ws.mkdir()
     job = state.registry.create(workspace=ws, config_snapshot={})
@@ -1251,6 +1358,11 @@ def test_kill_dead_pid_still_flips_state_to_interrupted(
         refreshed = state.registry.get(job.id)
         assert refreshed is not None
         assert refreshed.state is state.JobState.interrupted
+        reports = report_store.list(source="backend.job")
+        assert any(
+            r.category == "force_kill" and r.job_id == job.id
+            for r in reports
+        )
 
 
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
@@ -1414,6 +1526,97 @@ def test_bootstrap_succeeds_with_stub(
     assert "info" in levels  # at least one progress step was buffered
 
 
+def test_bootstrap_writes_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed bootstrap should also appear in the generic task center."""
+    import time
+
+    from lorahub.api import app as app_mod
+
+    def builder(_req: object) -> Any:
+        def runner(progress: Any) -> None:
+            progress("clone")
+            progress("install requirements")
+
+        return runner
+
+    monkeypatch.setattr(app_mod, "_build_bootstrap_runner", builder)
+
+    response = client.post("/api/backend/bootstrap", json={"backend": "kohya"})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=backend_bootstrap")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.05)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["backend"] == "kohya"
+    assert [event["message"] for event in latest["events"]][-2:] == [
+        "install requirements",
+        "kohya backend installed",
+    ]
+
+
+def test_bootstrap_status_recovers_latest_task_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_mod
+    from lorahub.api.task_sessions import TaskEvent
+
+    store = app_mod._task_session_store
+    assert store is not None
+    task = store.create(
+        kind="backend_bootstrap",
+        title="kohya backend bootstrap",
+        metadata={"backend": "kohya"},
+    )
+    result = {
+        "status": "succeeded",
+        "session_id": task.id,
+        "backend": "kohya",
+        "events": [
+            {
+                "level": "done",
+                "step": "complete",
+                "message": "kohya backend installed",
+                "ts": 1.0,
+            },
+        ],
+    }
+    store.append_event(
+        task.id,
+        TaskEvent(level="done", message="kohya backend installed", percent=100),
+    )
+    store.update(
+        task.id,
+        status="succeeded",
+        percent=100,
+        result=result,
+        finished=True,
+    )
+    monkeypatch.setattr(app_mod, "_bootstrap_session", None)
+    monkeypatch.setattr(app_mod, "_session_store", None)
+
+    response = client.get("/api/backend/bootstrap/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "succeeded"
+    assert body["backend"] == "kohya"
+    assert body["events"][-1]["message"] == "kohya backend installed"
+
+
 # --------------------------------------------------------------------------- #
 # System telemetry
 # --------------------------------------------------------------------------- #
@@ -1558,6 +1761,47 @@ def test_job_files_raw_serves_workspace_file(
     )
     assert r.status_code == 200
     assert r.content == b"hello\n"
+
+
+def test_job_files_raw_supports_range_resume(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"0123456789")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw",
+        params={"path": "model.safetensors"},
+        headers={"Range": "bytes=2-5"},
+    )
+
+    assert r.status_code == 206
+    assert r.content == b"2345"
+    assert r.headers["accept-ranges"] == "bytes"
+    assert r.headers["content-range"] == "bytes 2-5/10"
+    assert r.headers["content-length"] == "4"
+    assert "etag" in r.headers
+    assert "last-modified" in r.headers
+
+
+def test_job_files_raw_rejects_unsatisfiable_range(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "run-bad-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"0123456789")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(
+        f"/api/jobs/{job_id}/files/raw",
+        params={"path": "model.safetensors"},
+        headers={"Range": "bytes=99-100"},
+    )
+
+    assert r.status_code == 416
+    assert r.headers["content-range"] == "bytes */10"
 
 
 def test_job_metrics_parses_events_jsonl(
@@ -2158,13 +2402,80 @@ def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> N
     assert "HF_ENDPOINT" not in env_overrides(s)
 
 
+def test_env_overrides_injects_download_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.settings import Settings, env_overrides
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(download_proxy="socks5h://127.0.0.1:7890")
+
+    out = env_overrides(s)
+
+    assert out["HTTPS_PROXY"] == "socks5h://127.0.0.1:7890"
+    assert out["HTTP_PROXY"] == "socks5h://127.0.0.1:7890"
+    assert out["ALL_PROXY"] == "socks5h://127.0.0.1:7890"
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://existing")
+    out = env_overrides(s)
+    assert "HTTPS_PROXY" not in out
+    assert out["HTTP_PROXY"] == "socks5h://127.0.0.1:7890"
+
+
 def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     r = client.post(
         "/api/models/download",
-        json={"source": "huggingface", "repo_id": "no-slash"},
+        json={"repo_id": "no-slash"},
     )
     assert r.status_code == 400
     assert "owner/name" in r.json()["detail"]
+
+
+def test_models_download_rejects_unsafe_selected_path(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import models as models_router
+
+    calls = 0
+
+    def fake_download(req: Any, progress: Any = None) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("download must not start for unsafe selected paths")
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+
+    r = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "paths": ["../escape.safetensors"]},
+    )
+
+    assert r.status_code == 400
+    assert "invalid selected path" in r.json()["detail"]
+    assert calls == 0
+
+
+@pytest.mark.parametrize("target_dir", [".", Path(".").resolve().anchor])
+def test_models_download_rejects_dangerous_target_dir(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, target_dir: str
+) -> None:
+    from lorahub.api.routers import models as models_router
+
+    calls = 0
+
+    def fake_download(req: Any, progress: Any = None) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("download must not start for unsafe target_dir")
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    r = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": target_dir},
+    )
+
+    assert r.status_code == 400
+    assert "target_dir" in r.json()["detail"]
+    assert calls == 0
 
 
 def test_models_download_starts_session_and_reports_progress(
@@ -2176,9 +2487,17 @@ def test_models_download_starts_session_and_reports_progress(
     from lorahub.core.models.downloader import DownloadProgress, DownloadResult
 
     seen_threads: list[int] = []
+    seen_paths: list[tuple[str, ...]] = []
+    seen_allow_patterns: list[tuple[str, ...]] = []
+    seen_ignore_patterns: list[tuple[str, ...]] = []
+    seen_endpoints: list[str | None] = []
 
     def fake_download(req: Any, progress: Any = None) -> DownloadResult:
         seen_threads.append(req.threads)
+        seen_paths.append(tuple(req.paths))
+        seen_allow_patterns.append(tuple(req.allow_patterns))
+        seen_ignore_patterns.append(tuple(req.ignore_patterns))
+        seen_endpoints.append(req.huggingface_endpoint)
         target = req.target_dir or tmp_path / "model"
         target.mkdir(parents=True, exist_ok=True)
         if progress:
@@ -2204,6 +2523,9 @@ def test_models_download_starts_session_and_reports_progress(
             "repo_id": "owner/name",
             "target_dir": str(tmp_path / "downloaded"),
             "threads": 3,
+            "paths": ["weights.bin"],
+            "allow_patterns": ["*.bin"],
+            "ignore_patterns": ["README*"],
         },
     )
 
@@ -2225,6 +2547,440 @@ def test_models_download_starts_session_and_reports_progress(
     assert status["result"]["files"] == 1
     assert status["events"][-1]["message"].startswith("download complete")
     assert seen_threads == [3]
+    assert seen_paths == [("weights.bin",)]
+    assert seen_allow_patterns == [("*.bin",)]
+    assert seen_ignore_patterns == [("README*",)]
+    assert seen_endpoints == [None]
+
+    latest = client.get("/api/models/download/latest").json()
+    assert latest["session_id"] == body["session_id"]
+    assert latest["status"] == "succeeded"
+    assert latest["source"] == "modelscope"
+    task = client.get(f"/api/tasks/{body['session_id']}").json()
+    assert task["metadata"]["allow_patterns"] == ["*.bin"]
+    assert task["metadata"]["ignore_patterns"] == ["README*"]
+
+
+def test_models_download_uses_saved_huggingface_endpoint(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadResult
+
+    settings = app_module._settings_store.load()
+    settings.huggingface_endpoint = "https://hf-mirror.com/"
+    app_module._settings_store.save(settings)
+    seen_endpoints: list[str | None] = []
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        seen_endpoints.append(req.huggingface_endpoint)
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=1, total_bytes=1)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    response = client.post(
+        "/api/models/download",
+        json={
+            "source": "huggingface",
+            "repo_id": "owner/name",
+            "target_dir": str(tmp_path / "downloaded"),
+        },
+    )
+    assert response.status_code == 202
+
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen_endpoints:
+        time.sleep(0.01)
+    assert seen_endpoints == ["https://hf-mirror.com/"]
+
+
+def test_models_download_latest_idle(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.routers import models as models_router
+
+    monkeypatch.setattr(models_router, "_latest_session_id", None)
+    models_router._sessions.clear()
+
+    r = client.get("/api/models/download/latest")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "idle"
+    assert body["session_id"] is None
+
+
+def test_models_download_latest_survives_memory_clear(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadProgress, DownloadResult
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        if progress:
+            progress(
+                DownloadProgress(
+                    message="persisted progress",
+                    percent=33,
+                    files_done=1,
+                    files_total=3,
+                ),
+            )
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=1, total_bytes=10)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    response = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(tmp_path / "downloaded")},
+    )
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    latest: dict[str, Any] = {}
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        latest = client.get("/api/models/download/latest").json()
+        if latest.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    models_router._sessions.clear()
+    models_router._latest_session_id = None
+
+    recovered = client.get("/api/models/download/latest").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["events"][-2]["message"] == "persisted progress"
+
+
+def test_models_download_latest_preserves_interrupted_task(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import models as models_router
+
+    task = app_module._task_session_store.create(
+        kind="model_download",
+        title="modelscope:owner/name",
+        metadata={
+            "source": "modelscope",
+            "repo_id": "owner/name",
+            "revision": "master",
+            "target_dir": None,
+            "threads": 4,
+            "paths": [],
+            "allow_patterns": [],
+            "ignore_patterns": [],
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=61)
+    app_module._task_session_store.mark_stale_interrupted()
+    models_router._sessions.clear()
+    models_router._latest_session_id = None
+
+    recovered = client.get("/api/models/download/latest").json()
+
+    assert recovered["session_id"] == task.id
+    assert recovered["status"] == "interrupted"
+    assert recovered["percent"] == 61
+    assert recovered["error"] == "task interrupted by server restart"
+
+
+def test_models_download_defaults_to_modelscope(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadResult
+
+    seen_sources: list[str] = []
+
+    def fake_download(req: Any, progress: Any = None) -> DownloadResult:
+        seen_sources.append(req.source)
+        target = req.target_dir or tmp_path / "model"
+        target.mkdir(parents=True, exist_ok=True)
+        return DownloadResult(target=target, files=0, total_bytes=0)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    r = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(tmp_path / "downloaded")},
+    )
+
+    assert r.status_code == 202
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen_sources:
+        time.sleep(0.01)
+    assert seen_sources == ["modelscope"]
+
+
+def test_models_files_lists_remote_selection(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import RemoteFile
+
+    def fake_list(req: Any) -> list[RemoteFile]:
+        assert req.repo_id == "owner/name"
+        return [
+            RemoteFile("README.md", 10, False, "ignored by default"),
+            RemoteFile("model.safetensors", 100, True, "model asset"),
+        ]
+
+    monkeypatch.setattr(models_router, "list_remote_files", fake_list)
+
+    r = client.post(
+        "/api/models/files",
+        json={"source": "huggingface", "repo_id": "owner/name", "revision": "main"},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["selected_count"] == 1
+    assert body["selected_bytes"] == 100
+    assert [f["path"] for f in body["files"]] == ["README.md", "model.safetensors"]
+
+
+def test_anima_model_download_defaults_to_modelscope(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+
+    seen: list[tuple[str, str | None]] = []
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        seen.append((kwargs["source"], kwargs.get("modelscope_token")))
+
+    monkeypatch.setattr(backends_router, "_download_anima_models", fake_download_anima_models)
+
+    r = client.post("/api/backends/anima_lora/download-models")
+
+    assert r.status_code == 202
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen:
+        time.sleep(0.01)
+    assert seen and seen[0][0] == "modelscope"
+
+
+def test_anima_model_download_uses_saved_huggingface_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import backends as backends_router
+
+    settings = app_module._settings_store.load()
+    settings.huggingface_endpoint = "https://hf-mirror.com/"
+    app_module._settings_store.save(settings)
+    seen: list[str | None] = []
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        seen.append(kwargs.get("huggingface_endpoint"))
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+
+    deadline = time.time() + 3
+    while time.time() < deadline and not seen:
+        time.sleep(0.01)
+    assert seen == ["https://hf-mirror.com/"]
+
+
+def test_anima_model_download_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+    from lorahub.core.backends.anima_lora.models import DownloadEvent
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        progress = kwargs.get("progress")
+        if progress:
+            progress(DownloadEvent("persisted anima progress", 55, 1, 3))
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/download-models/status").json()
+        if status.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["events"][-1]["message"] == "persisted anima progress"
+
+
+def test_anima_model_download_failure_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+
+    def fake_download_anima_models(**_kwargs: Any) -> None:
+        raise RuntimeError("modelscope 503")
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    status: dict[str, Any] = {}
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/download-models/status").json()
+        if status.get("status") == "failed":
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "failed"
+    assert status["session_id"] == session_id
+    assert status["error"] == "modelscope 503"
+
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "failed"
+    assert recovered["error"] == "modelscope 503"
+    assert recovered["events"][-1]["message"] == "failed: modelscope 503"
+
+
+def test_anima_model_download_status_preserves_interrupted_task(
+    client: TestClient,
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import backends as backends_router
+
+    task = app_module._task_session_store.create(
+        kind="anima_model_download",
+        title="anima_lora models",
+        metadata={"source": "modelscope", "threads": 3},
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=37)
+    app_module._task_session_store.mark_stale_interrupted()
+    backends_router._anima_sessions.clear()
+    backends_router._anima_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/download-models/status").json()
+
+    assert recovered["session_id"] == task.id
+    assert recovered["status"] == "interrupted"
+    assert recovered["percent"] == 37
+    assert recovered["error"] == "task interrupted by server restart"
+
+
+def test_anima_msvc_install_status_survives_memory_clear(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+    from lorahub.core.backends.anima_lora.msvc import DetectionResult
+
+    class FakeProc:
+        stdout = io.StringIO("installing build tools\ninstall complete\n")
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        backends_router._anima_msvc,
+        "detect",
+        lambda: DetectionResult(installed=False, reason="missing"),
+    )
+    monkeypatch.setattr(
+        backends_router._anima_msvc,
+        "install_command",
+        lambda: ["winget", "install", "buildtools"],
+    )
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *args, **kwargs: FakeProc(),
+    )
+
+    response = client.post("/api/backends/anima_lora/install-msvc")
+    assert response.status_code == 202
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        status = client.get("/api/backends/anima_lora/install-msvc/status").json()
+        if status.get("status") == "succeeded":
+            break
+        time.sleep(0.01)
+
+    backends_router._msvc_sessions.clear()
+    backends_router._msvc_active_session = None
+
+    recovered = client.get("/api/backends/anima_lora/install-msvc/status").json()
+    assert recovered["session_id"] == session_id
+    assert recovered["status"] == "succeeded"
+    assert recovered["log"][-1] == "install complete"
+    assert recovered["msvc"]["ok"] is False
+
+
+def test_tasks_latest_list_and_get_routes(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.task_sessions import TaskEvent, TaskSessionStore
+
+    store = TaskSessionStore(tmp_path / "tasks-routes.sqlite3")
+    monkeypatch.setattr(app_module, "_task_session_store", store)
+    session = store.create(
+        kind="model_download",
+        title="owner/name",
+        metadata={"repo_id": "owner/name"},
+    )
+    store.append_event(session.id, TaskEvent(level="info", message="hello", percent=1))
+
+    latest = client.get("/api/tasks/latest?kind=model_download")
+    assert latest.status_code == 200
+    assert latest.json()["id"] == session.id
+
+    listing = client.get("/api/tasks?kind=model_download")
+    assert listing.status_code == 200
+    assert listing.json()["tasks"][0]["id"] == session.id
+
+    single = client.get(f"/api/tasks/{session.id}")
+    assert single.status_code == 200
+    assert single.json()["events"][0]["message"] == "hello"
 
 
 def test_models_download_status_unknown_session_returns_404(client: TestClient) -> None:
@@ -2279,6 +3035,7 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
             underscores: bool,
             include_character: bool,
             on_progress: Any = None,
+            should_stop: Any = None,
         ) -> list[Any]:
             captured["params"] = {
                 "directory": str(directory),
@@ -2291,6 +3048,8 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
 
             results: list[Any] = []
             for image in _iter_images(directory, recursive=recursive):
+                if should_stop is not None and should_stop():
+                    raise InterruptedError("stopped by user")
                 if write_caption:
                     image.with_suffix(".txt").write_text("1girl, blue hair", encoding="utf-8")
                 if on_progress is not None:
@@ -2330,6 +3089,202 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
     # Captions actually landed on disk.
     for name in ("a", "b", "c"):
         assert (data / f"{name}.txt").read_text(encoding="utf-8") == "1girl, blue hair"
+
+
+def test_tagging_writes_task_session(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake image bytes")
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            image = directory / "a.png"
+            image.with_suffix(".txt").write_text("1girl", encoding="utf-8")
+            kwargs["on_progress"](image, object())
+            return [object()]
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu"},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=tagging")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(data)
+    assert latest["metadata"]["tagger"] == "wd14"
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 1
+    assert latest["events"][-1]["message"].startswith("done")
+
+
+def test_tagging_stop_marks_session_canceled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake image bytes")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(
+            self,
+            _directory: Path,
+            *,
+            should_stop: Any = None,
+            **_kwargs: Any,
+        ) -> list[Any]:
+            entered.set()
+            assert release.wait(5)
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
+            return []
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu"},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stop = client.post(f"/api/tagging/tag/{session_id}/stop")
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["status"] == "stop_requested"
+    release.set()
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/tagging/tag/{session_id}").json()
+        if final["status"] in ("succeeded", "failed", "canceled"):
+            break
+        time.sleep(0.02)
+
+    assert final["status"] == "canceled", final
+    assert final["error"] == "stopped by user"
+    latest = client.get("/api/tasks/latest?kind=tagging").json()
+    assert latest["id"] == session_id
+    assert latest["status"] == "canceled"
+
+
+def test_tagging_status_reads_task_session_after_memory_clear(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "a.png").write_bytes(b"fake image bytes")
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            image = directory / "a.png"
+            image.with_suffix(".txt").write_text("1girl", encoding="utf-8")
+            kwargs["on_progress"](image, object())
+            return [object()]
+
+    monkeypatch.setattr(tagging_router, "_build_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/tagging/tag",
+        json={"path": str(data), "device": "cpu"},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/tagging/tag/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.02)
+
+    tagging_router._sessions.clear()
+    recovered = client.get(f"/api/tagging/tag/{session_id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["path"] == str(data)
+    assert body["status"] == "succeeded"
+    assert body["written"] == 1
+
+
+def test_tagging_status_preserves_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "dataset"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="tagging",
+        title="tagging:wd14",
+        metadata={
+            "path": str(data),
+            "tagger": "wd14",
+            "model_id": "wd14-vit-v2",
+            "device": "cpu",
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=28)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._sessions.clear()
+
+    recovered = client.get(f"/api/tagging/tag/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 28
+    assert body["error"] == "task interrupted by server restart"
 
 
 def test_tagging_status_unknown_session_returns_404(client: TestClient) -> None:
@@ -2415,6 +3370,93 @@ def test_tagging_rejects_bad_tagger_value(client: TestClient, tmp_path: Path) ->
         json={"path": str(data), "tagger": "blip"},
     )
     assert r.status_code == 422
+
+
+def test_anima_caption_writes_task_session(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "captioned"
+    data.mkdir()
+    caption = data / "a.txt"
+    caption.write_text("old", encoding="utf-8")
+
+    class FakeTransformer:
+        def transform_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            overwrite: bool,
+            progress: Any,
+        ) -> int:
+            target = directory / "a.txt"
+            target.write_text("new", encoding="utf-8")
+            progress(target)
+            return 1
+
+    monkeypatch.setattr(
+        tagging_router,
+        "_build_anima_transformer",
+        lambda _req: FakeTransformer(),
+    )
+
+    response = client.post("/api/anima/caption", json={"path": str(data)})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=anima_caption")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(data)
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 1
+    assert latest["events"][-1]["message"].startswith("done")
+    assert caption.read_text(encoding="utf-8") == "new"
+
+
+def test_anima_caption_status_recovers_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "captioned"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="anima_caption",
+        title="anima caption:captioned",
+        metadata={
+            "path": str(data),
+            "dataset_tag": "style",
+            "overwrite": False,
+            "recursive": False,
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=39)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._anima_sessions.clear()
+
+    recovered = client.get(f"/api/anima/caption/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 39
+    assert body["error"] == "task interrupted by server restart"
 
 
 def test_tagging_wd14_catalog_lists_all_curated_models(client: TestClient) -> None:
@@ -2591,6 +3633,82 @@ def test_captions_normalize_runs_session_and_rewrites_files(
     assert (data / "a.txt").read_text(encoding="utf-8") == "blue hair"
 
 
+def test_captions_normalize_writes_task_session(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "captions"
+    data.mkdir()
+    (data / "a.txt").write_text("old", encoding="utf-8")
+
+    class FakePipeline:
+        def transform_directory(
+            self,
+            directory: Path,
+            *,
+            recursive: bool,
+            overwrite: bool,
+            progress: Any,
+        ) -> int:
+            target = directory / "a.txt"
+            target.write_text("new", encoding="utf-8")
+            progress(target, 1, 1)
+            return 1
+
+    monkeypatch.setattr(captions_router, "_build_pipeline", lambda _req: FakePipeline())
+
+    response = client.post("/api/captions/normalize", json={"path": str(data)})
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        r = client.get("/api/tasks/latest?kind=captions_normalize")
+        if r.status_code == 200:
+            latest = r.json()
+            if latest["status"] == "succeeded":
+                break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(data)
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 1
+    assert latest["events"][-1]["message"].startswith("done")
+
+
+def test_captions_normalize_status_recovers_interrupted_task(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "captions"
+    data.mkdir()
+    task = app_module._task_session_store.create(
+        kind="captions_normalize",
+        title="captions normalize:captions",
+        metadata={"path": str(data), "recursive": False, "overwrite": False},
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=45)
+    app_module._task_session_store.mark_stale_interrupted()
+    captions_router._sessions.clear()
+
+    recovered = client.get(f"/api/captions/normalize/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 45
+    assert body["error"] == "task interrupted by server restart"
+
+
 def test_captions_normalize_status_unknown_returns_404(client: TestClient) -> None:
     r = client.get("/api/captions/normalize/does-not-exist")
     assert r.status_code == 404
@@ -2704,6 +3822,55 @@ def test_samples_sorted_newest_first(client: TestClient, tmp_path: Path) -> None
     r = client.get("/api/samples")
     paths = [item["path"] for item in r.json()["items"]]
     assert paths == ["new.png", "old.png"]
+
+
+def test_samples_exclude_grid_artifacts(client: TestClient, tmp_path: Path) -> None:
+    """Contact-sheet/grid images are derived previews, not per-prompt samples."""
+    ws = tmp_path / "run"
+    ws.mkdir()
+    (ws / "sample-1.png").write_bytes(_png_bytes())
+    grids = ws / "samples" / "grids"
+    grids.mkdir(parents=True)
+    (grids / "sample-grid.png").write_bytes(_png_bytes())
+    anima_grids = ws / "ckpt" / "sample" / "grids"
+    anima_grids.mkdir(parents=True)
+    (anima_grids / "anima_lora_e000001.png").write_bytes(_png_bytes())
+    state.registry.create(workspace=ws, config_snapshot={})
+
+    r = client.get("/api/samples")
+    assert r.status_code == 200
+    paths = [item["path"] for item in r.json()["items"]]
+    assert paths == ["sample-1.png"]
+
+    files = client.get(f"/api/jobs/{state.registry.list()[0].id}/files")
+    assert files.status_code == 200
+    assert [item["path"] for item in files.json()["samples"]] == ["sample-1.png"]
+
+
+def test_metrics_exclude_grid_sample_events(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "run"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    with JsonlEventSink(ws / "events.jsonl") as sink:
+        sink(
+            TrainingEvent(
+                type=EventType.sample_ready,
+                payload={"path": "sample-1.png"},
+                job_id=job.id,
+            )
+        )
+        sink(
+            TrainingEvent(
+                type=EventType.sample_ready,
+                payload={"path": "samples/grids/sample-grid.png", "kind": "grid"},
+                job_id=job.id,
+            )
+        )
+
+    r = client.get(f"/api/jobs/{job.id}/metrics")
+    assert r.status_code == 200
+    samples = r.json()["samples"]
+    assert [item["path"] for item in samples] == ["sample-1.png"]
 
 
 # --------------------------------------------------------------------------- #
@@ -4095,6 +5262,190 @@ def test_artifacts_zip_honours_include_query(
     assert names == {"model.safetensors", "output/sample.png"}
 
 
+def test_artifacts_archive_supports_tar_gz_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / "ws-tar-gz"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=tar.gz")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/gzip"
+    assert 'filename="' in r.headers["content-disposition"]
+    assert r.headers["content-disposition"].endswith('.tar.gz"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz")
+    assert archive.getnames() == ["model.safetensors"]
+    extracted = archive.extractfile("model.safetensors")
+    assert extracted is not None
+    assert extracted.read() == b"weights"
+
+
+def test_artifacts_archive_supports_plain_tar_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / "ws-tar"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=tar")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/x-tar"
+    assert r.headers["content-disposition"].endswith('.tar"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode="r:")
+    assert archive.getnames() == ["model.safetensors"]
+
+
+@pytest.mark.parametrize(
+    ("archive_format", "mode", "content_type", "extension"),
+    [
+        ("tar.bz2", "r:bz2", "application/x-bzip2", ".tar.bz2"),
+        ("tar.xz", "r:xz", "application/x-xz", ".tar.xz"),
+    ],
+)
+def test_artifacts_archive_supports_extra_tar_compressions(
+    client: TestClient,
+    tmp_path: Path,
+    archive_format: str,
+    mode: str,
+    content_type: str,
+    extension: str,
+) -> None:
+    import io
+    import tarfile
+
+    ws = tmp_path / f"ws-{archive_format.replace('.', '-')}"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format={archive_format}")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == content_type
+    assert r.headers["content-disposition"].endswith(f'{extension}"')
+    archive = tarfile.open(fileobj=io.BytesIO(r.content), mode=mode)
+    assert archive.getnames() == ["model.safetensors"]
+
+
+def test_artifacts_archive_rejects_unknown_format(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-bad-format"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights")
+    job_id = _make_job_with_workspace(ws)
+
+    r = client.get(f"/api/artifacts/{job_id}/zip?format=rar")
+
+    assert r.status_code == 422
+    assert "unknown archive format" in r.json()["detail"].lower()
+
+
+def test_artifacts_archive_range_resume_works_for_tar_gz(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-tar-gz-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights-payload")
+    job_id = _make_job_with_workspace(ws)
+
+    full = client.get(f"/api/artifacts/{job_id}/zip?format=tar.gz")
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    total = len(full.content)
+
+    part = client.get(
+        f"/api/artifacts/{job_id}/zip?format=tar.gz",
+        headers={"Range": "bytes=4-15"},
+    )
+
+    assert part.status_code == 206
+    assert part.content == full.content[4:16]
+    assert part.headers["content-range"] == f"bytes 4-15/{total}"
+    assert part.headers["content-length"] == "12"
+
+
+def test_artifacts_zip_supports_range_resume(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-zip-range"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"weights-payload")
+    job_id = _make_job_with_workspace(ws)
+
+    full = client.get(f"/api/artifacts/{job_id}/zip")
+    assert full.status_code == 200
+    assert full.headers["accept-ranges"] == "bytes"
+    total = len(full.content)
+    assert total > 20
+
+    part = client.get(
+        f"/api/artifacts/{job_id}/zip",
+        headers={"Range": "bytes=4-15"},
+    )
+
+    assert part.status_code == 206
+    assert part.content == full.content[4:16]
+    assert part.headers["content-range"] == f"bytes 4-15/{total}"
+    assert part.headers["content-length"] == "12"
+    assert "etag" in part.headers
+
+
+def test_artifacts_zip_cache_invalidates_when_source_file_changes(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import io
+    import zipfile
+
+    ws = tmp_path / "ws-zip-cache"
+    ws.mkdir()
+    model = ws / "model.safetensors"
+    model.write_bytes(b"first")
+    job_id = _make_job_with_workspace(ws)
+
+    first = client.get(f"/api/artifacts/{job_id}/zip")
+    assert first.status_code == 200
+
+    model.write_bytes(b"second-payload")
+    second = client.get(f"/api/artifacts/{job_id}/zip")
+    assert second.status_code == 200
+
+    archive = zipfile.ZipFile(io.BytesIO(second.content))
+    assert archive.read("model.safetensors") == b"second-payload"
+    assert second.headers["etag"] != first.headers["etag"]
+
+
+def test_artifacts_zip_cache_reuses_archive_when_sources_are_unchanged(
+    client: TestClient, tmp_path: Path
+) -> None:
+    ws = tmp_path / "ws-zip-reuse"
+    ws.mkdir()
+    (ws / "model.safetensors").write_bytes(b"stable")
+    job_id = _make_job_with_workspace(ws)
+
+    first = client.get(f"/api/artifacts/{job_id}/zip")
+    second = client.get(f"/api/artifacts/{job_id}/zip")
+
+    assert second.status_code == 200
+    assert second.content == first.content
+    assert second.headers["etag"] == first.headers["etag"]
+    assert (
+        second.headers["content-disposition"]
+        == first.headers["content-disposition"]
+    )
+
+
 def test_artifacts_zip_excludes_resume_state_safetensors(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -4215,6 +5566,22 @@ def test_artifacts_delete_workspace_refuses_nonterminal_jobs(
     assert ws.exists()
 
 
+def test_artifacts_delete_workspace_refuses_dangerous_workspace(
+    client: TestClient,
+) -> None:
+    job_id = _make_job_with_workspace(Path.cwd())
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    r = client.delete(f"/api/artifacts/{job_id}/workspace")
+
+    assert r.status_code == 400
+    assert "workspace" in r.json()["detail"]
+    assert state.registry.get(job_id) is not None
+
+
 def test_artifacts_delete_workspace_terminal_clears_tree_and_record(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -4235,4 +5602,3 @@ def test_artifacts_delete_workspace_terminal_clears_tree_and_record(
     assert body["deleted"] is True
     assert not ws.exists()
     assert state.registry.get(job_id) is None
-

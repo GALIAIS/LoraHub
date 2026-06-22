@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import shutil
+from fnmatch import fnmatch
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -12,8 +12,41 @@ from typing import Any, Literal
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from lorahub.core.net import hf_endpoint, proxy_env
+
 ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
+
+DEFAULT_ALLOW_PATTERNS: tuple[str, ...] = (
+    "*.safetensors",
+    "*.ckpt",
+    "*.pt",
+    "*.pth",
+    "*.bin",
+    "*.gguf",
+    "*.onnx",
+    "*.json",
+    "*.txt",
+    "*.model",
+    "*.vocab",
+    "*.merges",
+)
+
+DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
+    ".gitattributes",
+    "README*",
+    "LICENSE*",
+    "*.md",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.webp",
+    "*.gif",
+    "*.mp4",
+    "*.zip",
+    "*.tar",
+    "*.tar.gz",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +60,9 @@ class DownloadRequest:
     modelscope_token: str | None = None
     threads: int = 4
     proxy: str | None = None  # socks5h://user:pass@host:port or http://...
+    paths: tuple[str, ...] = ()
+    allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS
+    ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +82,14 @@ class DownloadProgress:
     bytes_total: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class RemoteFile:
+    path: str
+    size: int
+    selected: bool
+    reason: str
+
+
 def _emit(progress: ProgressCallback | None, event: DownloadProgress) -> None:
     if progress:
         progress(event)
@@ -57,6 +101,67 @@ def _file_size(item: dict[str, Any]) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalise_path(path: str) -> str | None:
+    normalised = path.strip().replace("\\", "/")
+    if not normalised or normalised.startswith("/") or ":" in normalised:
+        return None
+    parts = [part for part in normalised.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return any(fnmatch(path, pat) or fnmatch(name, pat) for pat in patterns)
+
+
+def _selection_reason(
+    path: str,
+    selected_paths: set[str],
+    allow_patterns: tuple[str, ...],
+    ignore_patterns: tuple[str, ...],
+) -> tuple[bool, str]:
+    if selected_paths:
+        return (path in selected_paths, "selected" if path in selected_paths else "not selected")
+    if _matches_any(path, ignore_patterns):
+        return False, "ignored by default"
+    if _matches_any(path, allow_patterns):
+        return True, "model asset"
+    return False, "not a model asset"
+
+
+def select_files(
+    files: list[tuple[str, int]],
+    *,
+    paths: tuple[str, ...] = (),
+    allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS,
+    ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS,
+) -> list[RemoteFile]:
+    selected_paths: set[str] = set()
+    for raw in paths:
+        path = _normalise_path(raw)
+        if path is None:
+            raise ValueError(f"invalid selected path: {raw!r}")
+        selected_paths.add(path)
+    out: list[RemoteFile] = []
+    seen: set[str] = set()
+    for raw_path, size in files:
+        path = _normalise_path(raw_path)
+        if path is None or path in seen:
+            continue
+        seen.add(path)
+        selected, reason = _selection_reason(
+            path,
+            selected_paths,
+            allow_patterns,
+            ignore_patterns,
+        )
+        out.append(RemoteFile(path=path, size=size, selected=selected, reason=reason))
+    out.sort(key=lambda f: f.path.lower())
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -95,12 +200,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
-    endpoint = (req.huggingface_endpoint or "").rstrip("/") or None
+    endpoint = hf_endpoint(req.huggingface_endpoint)
     token = (req.huggingface_token or "").strip() or None
-    if req.proxy:
-        os.environ["HTTPS_PROXY"] = req.proxy
-        os.environ["HTTP_PROXY"] = req.proxy
-        os.environ["ALL_PROXY"] = req.proxy
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
@@ -112,12 +213,27 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
+    with proxy_env(req.proxy):
+        remote_files = select_files(
+            _hf_list_files(req.repo_id, revision, endpoint, token=token),
+            paths=req.paths,
+            allow_patterns=req.allow_patterns,
+            ignore_patterns=req.ignore_patterns,
+        )
+    files = [(f.path, f.size) for f in remote_files if f.selected]
     bytes_total = sum(size for _, size in files)
+    if remote_files and not files:
+        msg = (
+            "no files selected for download; list the remote files and select "
+            "the required weights/config/tokenizer files explicitly"
+        )
+        raise ValueError(msg)
     _emit(
         progress,
         DownloadProgress(
-            message=f"hf: {len(files)} files to download",
+            message=(
+                f"hf: {len(files)}/{len(remote_files)} files selected for download"
+            ),
             percent=5 if files else 100,
             files_total=len(files),
             bytes_total=bytes_total,
@@ -135,7 +251,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             kw["endpoint"] = endpoint
         if token:
             kw["token"] = token
-        hf_hub_download(**kw)
+        with proxy_env(req.proxy):
+            hf_hub_download(**kw)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
             size = (target / name).stat().st_size
@@ -144,8 +261,12 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     workers = max(1, min(req.threads, len(files) or 1))
     completed = 0
     bytes_done = 0
+    failures: list[tuple[str, str]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(fetch, name, size) for name, size in files]
+        futures = {
+            executor.submit(fetch, name, size): name
+            for name, size in files
+        }
         for future in as_completed(futures):
             completed += 1
             try:
@@ -153,7 +274,9 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                 bytes_done += size
                 message = f"hf: [{completed}/{len(files)}] {name}"
             except Exception as exc:  # noqa: BLE001
-                message = f"hf: [{completed}/{len(files)}] skip: {exc}"
+                name = futures[future]
+                failures.append((name, str(exc)))
+                message = f"hf: [{completed}/{len(files)}] failed {name}: {exc}"
             percent = 5 + (completed / len(files) * 95) if files else 100
             _emit(
                 progress,
@@ -166,6 +289,11 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                     bytes_total=bytes_total,
                 ),
             )
+    if failures:
+        detail = "; ".join(f"{name}: {error}" for name, error in failures[:5])
+        if len(failures) > 5:
+            detail = f"{detail}; +{len(failures) - 5} more"
+        raise RuntimeError(f"hf download failed for {len(failures)} file(s): {detail}")
 
     file_count = len(files)
     _emit(
@@ -223,22 +351,26 @@ def _ms_download_file(
         headers["Authorization"] = f"Bearer {token}"
     req = Request(url, headers=headers)
     target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f"{target.name}.part")
+    if partial.exists():
+        partial.unlink()
     bytes_written = 0
-    with urlopen(req, timeout=120) as resp, target.open("wb") as fh:  # noqa: S310
-        while True:
-            chunk = resp.read(64 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
-            bytes_written += len(chunk)
+    try:
+        with urlopen(req, timeout=120) as resp, partial.open("wb") as fh:  # noqa: S310
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                bytes_written += len(chunk)
+        partial.replace(target)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
     return bytes_written
 
 
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
-    if req.proxy:
-        os.environ["HTTPS_PROXY"] = req.proxy
-        os.environ["HTTP_PROXY"] = req.proxy
-        os.environ["ALL_PROXY"] = req.proxy
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
     _emit(
@@ -248,12 +380,33 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             percent=2,
         ),
     )
-    files = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    with proxy_env(req.proxy):
+        listed = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    by_path: dict[str, dict[str, Any]] = {}
+    for it in listed:
+        path = _normalise_path(str(it.get("Path") or it.get("FilePath") or ""))
+        if path:
+            by_path[path] = it
+    remote_files = select_files(
+        [(path, _file_size(it)) for path, it in by_path.items()],
+        paths=req.paths,
+        allow_patterns=req.allow_patterns,
+        ignore_patterns=req.ignore_patterns,
+    )
+    files = [by_path[f.path] for f in remote_files if f.selected]
     bytes_total = sum(_file_size(it) for it in files)
+    if remote_files and not files:
+        msg = (
+            "no files selected for download; list the remote files and select "
+            "the required weights/config/tokenizer files explicitly"
+        )
+        raise ValueError(msg)
     _emit(
         progress,
         DownloadProgress(
-            message=f"ms: {len(files)} files to download",
+            message=(
+                f"ms: {len(files)}/{len(remote_files)} files selected for download"
+            ),
             percent=5 if files else 100,
             files_total=len(files),
             bytes_total=bytes_total,
@@ -262,16 +415,21 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     total = 0
     completed = 0
     workers = max(1, min(req.threads, len(files) or 1))
+    failures: list[tuple[str, str]] = []
 
     def submit_file(it: dict[str, Any]) -> tuple[str, int]:
         path = str(it.get("Path") or it.get("FilePath") or "")
         if not path:
             return "", 0
         out = target / path
-        return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
+        with proxy_env(req.proxy):
+            return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(submit_file, it) for it in files]
+        futures = {
+            executor.submit(submit_file, it): str(it.get("Path") or it.get("FilePath") or "")
+            for it in files
+        }
         for future in as_completed(futures):
             completed += 1
             try:
@@ -279,7 +437,9 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                 total += n
                 message = f"ms: [{completed}/{len(files)}] {path}"
             except Exception as exc:  # noqa: BLE001
-                message = f"ms: [{completed}/{len(files)}] skip: {exc}"
+                path = futures[future]
+                failures.append((path, str(exc)))
+                message = f"ms: [{completed}/{len(files)}] failed {path}: {exc}"
             percent = 5 + (completed / len(files) * 95) if files else 100
             _emit(
                 progress,
@@ -292,6 +452,11 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
                     bytes_total=bytes_total,
                 ),
             )
+    if failures:
+        detail = "; ".join(f"{path}: {error}" for path, error in failures[:5])
+        if len(failures) > 5:
+            detail = f"{detail}; +{len(failures) - 5} more"
+        raise RuntimeError(f"ms download failed for {len(failures)} file(s): {detail}")
     _emit(
         progress,
         DownloadProgress(
@@ -320,6 +485,35 @@ def download(req: DownloadRequest, progress: ProgressCallback | None = None) -> 
     raise ValueError(msg)
 
 
+def list_remote_files(req: DownloadRequest) -> list[RemoteFile]:
+    """List remote repo files and mark the default download selection."""
+    if req.source == "huggingface":
+        endpoint = hf_endpoint(req.huggingface_endpoint)
+        token = (req.huggingface_token or "").strip() or None
+        revision = "main" if req.revision == "master" else req.revision
+        with proxy_env(req.proxy):
+            files = _hf_list_files(req.repo_id, revision, endpoint, token=token)
+    elif req.source == "modelscope":
+        with proxy_env(req.proxy):
+            items = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+        files = [
+            (
+                str(it.get("Path") or it.get("FilePath") or ""),
+                _file_size(it),
+            )
+            for it in items
+        ]
+    else:
+        msg = f"unknown source: {req.source!r}"
+        raise ValueError(msg)
+    return select_files(
+        files,
+        paths=req.paths,
+        allow_patterns=req.allow_patterns,
+        ignore_patterns=req.ignore_patterns,
+    )
+
+
 def cleanup_partial(target: Path) -> None:
     """Best-effort cleanup of a half-finished download directory."""
     if target.is_dir():
@@ -330,7 +524,9 @@ __all__ = [
     "DownloadProgress",
     "DownloadRequest",
     "DownloadResult",
+    "RemoteFile",
     "Source",
     "cleanup_partial",
     "download",
+    "list_remote_files",
 ]

@@ -19,6 +19,8 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from lorahub.api.task_sessions import TaskEvent
+
 
 class BootstrapRequest(BaseModel):
     backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
@@ -44,9 +46,16 @@ class _BootstrapSession:
     _STATUS_SUCCEEDED = "succeeded"
     _STATUS_FAILED = "failed"
 
-    def __init__(self, session_id: str, backend: str = "kohya") -> None:
+    def __init__(
+        self,
+        session_id: str,
+        backend: str = "kohya",
+        *,
+        task_kind: str | None = None,
+    ) -> None:
         self.session_id = session_id
         self.backend = backend
+        self.task_kind = task_kind
         self.status: str = self._STATUS_RUNNING
         self.events: list[dict[str, Any]] = []
         self._listeners: list[asyncio.Queue[dict[str, Any]]] = []
@@ -90,6 +99,7 @@ class _BootstrapSession:
         self._thread.start()
 
     def _run(self, runner: Callable[[Callable[[str], None]], None]) -> None:
+        self._mark_task_running()
         try:
             runner(lambda step: self._emit("info", step, message=step))
         except Exception as exc:  # noqa: BLE001 — surface any installer failure
@@ -112,6 +122,7 @@ class _BootstrapSession:
             listeners = list(self._listeners)
         for queue in listeners:
             self._dispatch(queue, event)
+        self._append_task_event(event)
 
     def _finalize(self, status: str) -> None:
         with self._lock:
@@ -121,6 +132,7 @@ class _BootstrapSession:
         sentinel: dict[str, Any] = {"step": "__terminal__", "level": status}
         for queue in listeners:
             self._dispatch(queue, sentinel)
+        self._finalize_task(status)
         # Persist the terminal snapshot so a server restart can still
         # show "what happened" to past installs. Best-effort — a corrupt
         # session DB must never sink the live install.
@@ -140,6 +152,74 @@ class _BootstrapSession:
         # Loop already torn down — listener is gone, drop the event.
         with contextlib.suppress(RuntimeError):
             loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def _mark_task_running(self) -> None:
+        if not self.task_kind:
+            return
+        try:
+            from lorahub.api import app as _app  # noqa: PLC0415
+
+            store = getattr(_app, "_task_session_store", None)
+            if store is not None:
+                store.update(self.session_id, status="running", percent=0)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _append_task_event(self, event: dict[str, Any]) -> None:
+        if not self.task_kind:
+            return
+        try:
+            from lorahub.api import app as _app  # noqa: PLC0415
+
+            store = getattr(_app, "_task_session_store", None)
+            if store is not None:
+                store.append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level=str(event.get("level") or "info"),
+                        message=str(event.get("message") or event.get("step") or ""),
+                        payload=dict(event),
+                        ts=float(event.get("ts") or datetime.now(UTC).timestamp()),
+                    ),
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _finalize_task(self, status: str) -> None:
+        if not self.task_kind:
+            return
+        try:
+            from lorahub.api import app as _app  # noqa: PLC0415
+
+            store = getattr(_app, "_task_session_store", None)
+            if store is not None:
+                if status == self._STATUS_SUCCEEDED:
+                    store.update(
+                        self.session_id,
+                        status="succeeded",
+                        percent=100,
+                        result=self.to_status_payload(),
+                        finished=True,
+                    )
+                else:
+                    payload = self.to_status_payload()
+                    last_error = next(
+                        (
+                            event.get("message")
+                            for event in reversed(payload.get("events", []))
+                            if event.get("level") == "error"
+                        ),
+                        None,
+                    )
+                    store.update(
+                        self.session_id,
+                        status="failed",
+                        error=str(last_error or "bootstrap failed"),
+                        result=payload,
+                        finished=True,
+                    )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def default_build_bootstrap_runner(

@@ -20,9 +20,10 @@ from lorahub.api.bootstrap_session import (
     _bootstrap_lock,
     _BootstrapSession,
 )
-from lorahub.api.helpers import ulid_new
+from lorahub.api.task_sessions import TaskSessionStore, default_task_store_path
 
 router = APIRouter(prefix="/api")
+_KIND_BACKEND_BOOTSTRAP = "backend_bootstrap"
 
 
 @router.get("/backend/bootstrap/status")
@@ -56,15 +57,62 @@ def list_bootstrap_sessions(limit: int = 20) -> dict[str, Any]:
 def _latest_persisted_bootstrap() -> dict[str, Any] | None:
     try:
         store = getattr(app_module, "_session_store", None)
-        if store is None:
-            return None
-        rows = store.list_recent("bootstrap", limit=1)
+        rows = store.list_recent("bootstrap", limit=1) if store is not None else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if rows:
+        snap = rows[0].get("snapshot")
+        if isinstance(snap, dict):
+            return snap
+    try:
+        task = _task_store().latest(_KIND_BACKEND_BOOTSTRAP)
     except Exception:  # noqa: BLE001
         return None
-    if not rows:
+    if task is None:
         return None
-    snap = rows[0].get("snapshot")
-    return snap if isinstance(snap, dict) else None
+    if isinstance(task.result, dict):
+        return task.result
+    return {
+        "status": task.status,
+        "session_id": task.id,
+        "backend": str(task.metadata.get("backend") or ""),
+        "events": [
+            {
+                "level": event.level,
+                "message": event.message,
+                "ts": event.ts,
+                **event.payload,
+            }
+            for event in task.events
+        ],
+        "error": task.error,
+    }
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
+
+
+def _new_bootstrap_session(
+    *,
+    backend: str,
+    title: str,
+    metadata: dict[str, Any],
+) -> _BootstrapSession:
+    task = _task_store().create(
+        kind=_KIND_BACKEND_BOOTSTRAP,
+        title=title,
+        metadata={"backend": backend, **metadata},
+    )
+    return _BootstrapSession(
+        session_id=task.id,
+        backend=backend,
+        task_kind=_KIND_BACKEND_BOOTSTRAP,
+    )
 
 
 @router.post("/backend/bootstrap", status_code=202)
@@ -78,7 +126,20 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
         # Resolve the runner first — this validates the target dir before we
         # spin a thread. HTTPException raised here surfaces as a 4xx directly.
         runner = app_module._build_bootstrap_runner(req)
-        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
+        sess = _new_bootstrap_session(
+            backend=req.backend,
+            title=f"{req.backend} backend bootstrap",
+            metadata={
+                "operation": "bootstrap",
+                "target": req.target,
+                "cuda": req.cuda,
+                "torch_version": req.torch_version,
+                "torchvision_version": req.torchvision_version,
+                "install_xformers": req.install_xformers,
+                "install_deepspeed": req.install_deepspeed,
+                "force": req.force,
+            },
+        )
         app_module._bootstrap_session = sess
 
     loop = asyncio.get_running_loop()
@@ -104,7 +165,11 @@ async def install_deps(req: InstallDepsRequest) -> dict[str, Any]:
                 status_code=409, detail="a bootstrap session is already running"
             )
         runner = _build_deps_runner(req)
-        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
+        sess = _new_bootstrap_session(
+            backend=req.backend,
+            title=f"{req.backend} dependency install",
+            metadata={"operation": "install_deps"},
+        )
         app_module._bootstrap_session = sess
 
     loop = asyncio.get_running_loop()
@@ -287,7 +352,11 @@ async def install_flash_attn(req: InstallFlashAttnRequest) -> dict[str, Any]:
                 status_code=409, detail="a bootstrap session is already running"
             )
         runner = _build_flash_attn2_runner(req)
-        sess = _BootstrapSession(session_id=str(ulid_new()), backend=req.backend)
+        sess = _new_bootstrap_session(
+            backend=req.backend,
+            title=f"{req.backend} FlashAttention {req.version} install",
+            metadata={"operation": "install_flash_attn", "version": req.version},
+        )
         app_module._bootstrap_session = sess
 
     loop = asyncio.get_running_loop()

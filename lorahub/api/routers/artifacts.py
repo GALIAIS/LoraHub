@@ -28,14 +28,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import tarfile
+import threading
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 
 from lorahub.api import state
 from lorahub.api.jobs_helpers import (
@@ -47,7 +50,6 @@ from lorahub.api.jobs_helpers.resume_dispatch import (
     _iter_state_dirs,
 )
 from lorahub.api.state import JobState
-from lorahub.api.zip_stream import ZipStream
 from lorahub.core.config.schema import TrainingConfig
 
 log = logging.getLogger(__name__)
@@ -66,6 +68,46 @@ _TERMINAL_STATES = (
 # wants the preview grid alongside the LoRA; ``logs`` and ``other``
 # are the long-tail.
 _VALID_BUCKETS: frozenset[str] = frozenset({"checkpoints", "samples", "logs", "other"})
+_VALID_ARCHIVE_FORMATS: frozenset[str] = frozenset(
+    {"zip", "tar", "tar.gz", "tar.bz2", "tar.xz"}
+)
+_ARCHIVE_MEDIA_TYPES: dict[str, str] = {
+    "zip": "application/zip",
+    "tar": "application/x-tar",
+    "tar.gz": "application/gzip",
+    "tar.bz2": "application/x-bzip2",
+    "tar.xz": "application/x-xz",
+}
+_TAR_MODES: dict[str, str] = {
+    "tar": "w:",
+    "tar.gz": "w:gz",
+    "tar.bz2": "w:bz2",
+    "tar.xz": "w:xz",
+}
+
+
+def _is_same_or_parent(target: Path, child: Path) -> bool:
+    try:
+        child.relative_to(target)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_workspace_delete_target(workspace: Path) -> Path:
+    target = workspace.expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if (
+        target.parent == target
+        or _is_same_or_parent(target, cwd)
+        or _is_same_or_parent(target, home)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="refusing to delete unsafe workspace path",
+        )
+    return target
 
 
 def _job_artifact_summary(job_id: str, workspace: Path) -> dict[str, Any]:
@@ -118,39 +160,135 @@ def list_artifacts() -> dict[str, Any]:
     return {"jobs": rows}
 
 
-def _iter_zip_chunks(
+def _zip_cache_root() -> Path:
+    """Project-local cache for resumable artifact ZIP downloads."""
+    root = Path.cwd() / "runs" / "_download_cache" / "artifacts"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _artifact_zip_cache_key(
+    *,
+    job_id: str,
+    include: set[str],
+    archive_format: str,
     workspace: Path,
     relpaths: Iterable[Path],
-) -> Iterable[bytes]:
-    """Stream a ZIP archive of the listed files chunk-by-chunk.
+) -> str:
+    """Hash the requested artifact set and file metadata.
 
-    Uses a non-seekable stream wrapper so ZipFile emits data
-    descriptors instead of seeking back to patch local headers —
-    this lets us drain the buffer between files without corrupting
-    offsets.
+    Dynamic ZIP streams cannot be resumed safely because the byte stream
+    is regenerated on every request. The cache key makes the archive a
+    normal stable file as long as the source artifacts are unchanged.
     """
-    stream = ZipStream()
-    with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as zf:
-        for rel in relpaths:
-            full = (workspace / rel).resolve()
-            try:
-                full.relative_to(workspace.resolve())
-            except ValueError:
-                continue
-            if not full.is_file():
-                continue
-            arcname = rel.as_posix()
-            try:
-                zf.write(full, arcname=arcname)
-            except OSError as exc:
-                log.warning("artifacts zip: skipping %s — %s", full, exc)
-                continue
-            chunk = stream.drain()
-            if chunk:
-                yield chunk
-    tail = stream.drain()
-    if tail:
-        yield tail
+    import hashlib  # noqa: PLC0415
+
+    h = hashlib.sha256()
+    h.update(job_id.encode("utf-8", "surrogateescape"))
+    h.update(b"\0")
+    h.update(",".join(sorted(include)).encode("utf-8", "surrogateescape"))
+    h.update(b"\0")
+    h.update(archive_format.encode("ascii"))
+    root = workspace.resolve()
+    for rel in sorted({r.as_posix() for r in relpaths}):
+        full = (root / rel).resolve()
+        try:
+            full.relative_to(root)
+            stat = full.stat()
+        except (OSError, ValueError):
+            continue
+        if not full.is_file():
+            continue
+        h.update(b"\0")
+        h.update(rel.encode("utf-8", "surrogateescape"))
+        h.update(b":")
+        h.update(str(stat.st_size).encode("ascii"))
+        h.update(b":")
+        h.update(str(stat.st_mtime_ns).encode("ascii"))
+    return h.hexdigest()[:32]
+
+
+def _materialise_artifact_zip(
+    *,
+    job_id: str,
+    include: set[str],
+    archive_format: str,
+    workspace: Path,
+    relpaths: Iterable[Path],
+) -> Path:
+    """Build or reuse a stable archive file for a job artifact selection."""
+    key = _artifact_zip_cache_key(
+        job_id=job_id,
+        include=include,
+        archive_format=archive_format,
+        workspace=workspace,
+        relpaths=relpaths,
+    )
+    dest = _zip_cache_root() / f"{job_id}-{key}.{archive_format}"
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+
+    root = workspace.resolve()
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.unlink(missing_ok=True)
+    try:
+        relnames = sorted({r.as_posix() for r in relpaths})
+        if archive_format == "zip":
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+                for rel in relnames:
+                    full = (root / rel).resolve()
+                    try:
+                        full.relative_to(root)
+                    except ValueError:
+                        continue
+                    if not full.is_file():
+                        continue
+                    try:
+                        zf.write(full, arcname=rel)
+                    except OSError as exc:
+                        log.warning("artifacts archive: skipping %s — %s", full, exc)
+                        continue
+        else:
+            mode = _TAR_MODES[archive_format]
+            with tarfile.open(tmp, mode, format=tarfile.PAX_FORMAT) as tf:
+                for rel in relnames:
+                    full = (root / rel).resolve()
+                    try:
+                        full.relative_to(root)
+                    except ValueError:
+                        continue
+                    if not full.is_file():
+                        continue
+                    try:
+                        tf.add(full, arcname=rel, recursive=False)
+                    except OSError as exc:
+                        log.warning("artifacts archive: skipping %s — %s", full, exc)
+                        continue
+        tmp.replace(dest)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dest
+
+
+def _validate_archive_format(raw: str) -> str:
+    fmt = raw.strip().lower()
+    aliases = {
+        "tgz": "tar.gz",
+        "tbz": "tar.bz2",
+        "tbz2": "tar.bz2",
+        "txz": "tar.xz",
+    }
+    fmt = aliases.get(fmt, fmt)
+    if fmt not in _VALID_ARCHIVE_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "unknown archive format: "
+                f"{raw!r}; valid={sorted(_VALID_ARCHIVE_FORMATS)}"
+            ),
+        )
+    return fmt
 
 
 def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConfig | None) -> list[dict[str, Any]]:
@@ -281,8 +419,12 @@ def download_zip(
         default="checkpoints",
         description="Comma-separated buckets to include: checkpoints,samples,logs,other.",
     ),
-) -> StreamingResponse:
-    """Stream the job workspace as a ZIP, filtered to the requested buckets.
+    format: str = Query(  # noqa: A002
+        default="zip",
+        description="Archive format: zip, tar, tar.gz, tar.bz2, tar.xz.",
+    ),
+) -> FileResponse:
+    """Stream the job workspace as an archive, filtered to requested buckets.
 
     Default is ``checkpoints`` only — the LoRA weights are what people
     actually ship; samples and logs balloon the archive without
@@ -302,6 +444,7 @@ def download_zip(
     if not job.workspace.is_dir():
         raise HTTPException(status_code=404, detail="workspace missing on disk")
 
+    archive_format = _validate_archive_format(format)
     requested = {b.strip() for b in include.split(",") if b.strip()}
     invalid = requested - _VALID_BUCKETS
     if invalid:
@@ -332,16 +475,23 @@ def download_zip(
         out = cfg.get("output")
         if isinstance(out, dict) and isinstance(out.get("name"), str):
             output_name = out["name"]
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    filename = f"{output_name}_{job_id[-8:]}_{timestamp}.zip"
+    zip_path = _materialise_artifact_zip(
+        job_id=job_id,
+        include=requested,
+        archive_format=archive_format,
+        workspace=job.workspace,
+        relpaths=rels,
+    )
+    timestamp = datetime.fromtimestamp(zip_path.stat().st_mtime, UTC).strftime(
+        "%Y%m%d_%H%M%S"
+    )
+    filename = f"{output_name}_{job_id[-8:]}_{timestamp}.{archive_format}"
 
-    return StreamingResponse(
-        _iter_zip_chunks(job.workspace, rels),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Accel-Buffering": "no",
-        },
+    return FileResponse(
+        zip_path,
+        media_type=_ARCHIVE_MEDIA_TYPES[archive_format],
+        filename=filename,
+        content_disposition_type="attachment",
     )
 
 
@@ -391,21 +541,22 @@ def delete_workspace(job_id: str) -> dict[str, Any]:
                 f"job is {job.state.value}; cancel it before deleting the workspace"
             ),
         )
-    if not job.workspace.exists():
+    target = _validate_workspace_delete_target(job.workspace)
+    if not target.exists():
         # Drop the registry row anyway so the artifacts page doesn't
         # keep showing a phantom entry.
         state.registry.delete(job.id)
         return {"deleted": False, "reason": "workspace missing on disk"}
 
     try:
-        shutil.rmtree(job.workspace)
+        shutil.rmtree(target)
     except OSError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"rmtree failed: {exc}",
         ) from exc
     state.registry.delete(job.id)
-    return {"deleted": True, "workspace": str(job.workspace)}
+    return {"deleted": True, "workspace": str(target)}
 
 
 __all__ = ["router"]

@@ -8,18 +8,37 @@ side-effect leakage.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 
-def _hf_endpoint() -> str | None:
-    """Read the configured HF endpoint from settings (lazy import to avoid cycles)."""
+def _clean_endpoint(value: str | None) -> str | None:
+    return (value or "").strip().rstrip("/") or None
+
+
+def hf_endpoint(explicit: str | None = None) -> str | None:
+    """Resolve the HF endpoint from explicit input, env, then settings."""
+    if ep := _clean_endpoint(explicit):
+        return ep
+    if ep := _clean_endpoint(os.environ.get("HF_ENDPOINT")):
+        return ep
+    if ep := _clean_endpoint(os.environ.get("HUGGINGFACE_HUB_ENDPOINT")):
+        return ep
     try:
         from lorahub.api import app as _app  # noqa: PLC0415
 
         settings = _app._settings_store.load()
-        return (settings.huggingface_endpoint or "").strip().rstrip("/") or None
+        if ep := _clean_endpoint(settings.huggingface_endpoint):
+            return ep
     except Exception:  # noqa: BLE001
-        return os.environ.get("HF_ENDPOINT") or None
+        pass
+    return None
+
+
+def _hf_endpoint(explicit: str | None = None) -> str | None:
+    """Backward-compatible alias for older internal imports."""
+    return hf_endpoint(explicit)
 
 
 def _download_proxy() -> str | None:
@@ -37,7 +56,7 @@ def hf_api(**kwargs: Any) -> Any:
     """Create an HfApi instance with the configured endpoint."""
     from huggingface_hub import HfApi  # noqa: PLC0415
 
-    endpoint = kwargs.pop("endpoint", None) or _hf_endpoint()
+    endpoint = hf_endpoint(kwargs.pop("endpoint", None))
     return HfApi(endpoint=endpoint, **kwargs)
 
 
@@ -64,7 +83,7 @@ def hf_download(
     """
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
-    ep = endpoint or _hf_endpoint()
+    ep = hf_endpoint(endpoint)
     kw: dict[str, Any] = {
         "repo_id": repo_id,
         "filename": filename,
@@ -94,7 +113,7 @@ def subprocess_env(
     environ plus any overrides from Settings.
     """
     env = dict(os.environ)
-    endpoint = _hf_endpoint()
+    endpoint = hf_endpoint()
     if endpoint:
         env["HF_ENDPOINT"] = endpoint
         env["HUGGINGFACE_HUB_ENDPOINT"] = endpoint
@@ -107,3 +126,25 @@ def subprocess_env(
     if extra:
         env.update(extra)
     return env
+
+
+@contextmanager
+def proxy_env(proxy: str | None) -> Iterator[None]:
+    """Temporarily expose proxy vars for libraries that only read os.environ."""
+    value = (proxy or "").strip()
+    if not value:
+        yield
+        return
+
+    names = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
+    previous = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ[name] = value
+        yield
+    finally:
+        for name, old in previous.items():
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old

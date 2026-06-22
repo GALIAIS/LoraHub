@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +11,12 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.dataset.anima import AnimaDatasetTransformer
 from lorahub.core.tagging.base import BaseTagger
 from lorahub.core.tagging.joytag import DEFAULT_THRESHOLD as JOYTAG_DEFAULT_THRESHOLD
@@ -24,6 +29,24 @@ from lorahub.core.tagging.wd14 import (
 )
 
 router = APIRouter(prefix="/api")
+_KIND_TAGGING = "tagging"
+_KIND_ANIMA_CAPTION = "anima_caption"
+_TaggingStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
+_AnimaCaptionStatus = _TaggingStatus
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 class TagDatasetRequest(BaseModel):
@@ -55,7 +78,8 @@ class _TaggingSession:
     recursive: bool
     include_character: bool
     underscores: bool
-    status: Literal["running", "succeeded", "failed"] = "running"
+    task_kind: str | None = None
+    status: _TaggingStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -64,16 +88,31 @@ class _TaggingSession:
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+    stop_requested: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def push(self, message: str, *, percent: float | None = None, image: str | None = None) -> None:
+        ts = time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {"ts": time.time(), "message": message, "percent": self.percent, "image": image}
-            )
+            event = {"ts": ts, "message": message, "percent": self.percent, "image": image}
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -100,6 +139,15 @@ class _TaggingSession:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
             }
+
+    def request_stop(self) -> None:
+        with self.lock:
+            self.stop_requested = True
+        self.push("stop requested")
+
+    def should_stop(self) -> bool:
+        with self.lock:
+            return self.stop_requested
 
 
 _sessions: dict[str, _TaggingSession] = {}
@@ -139,6 +187,54 @@ def _get_persisted_tagging(session_id: str) -> dict[str, Any] | None:
         return None
     snap = row.get("snapshot")
     return snap if isinstance(snap, dict) else None
+
+
+def _tagging_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != _KIND_TAGGING:
+        return None
+    if isinstance(task.result, dict):
+        return task.result
+    metadata = task.metadata
+    status: _TaggingStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "tagger": str(metadata.get("tagger") or "wd14"),
+        "model_id": str(metadata.get("model_id") or DEFAULT_MODEL),
+        "device": str(metadata.get("device") or "auto"),
+        "general": 0.35,
+        "character": 0.85,
+        "joytag_threshold": JOYTAG_DEFAULT_THRESHOLD,
+        "overwrite": bool(metadata.get("overwrite") or False),
+        "recursive": bool(metadata.get("recursive") or False),
+        "include_character": True,
+        "underscores": False,
+        "status": status,
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "image": event.payload.get("image"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "active_provider": "",
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 def _persist_tagging_snapshot(session: Any) -> None:
@@ -212,8 +308,20 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {target}")
 
+    task = _task_store().create(
+        kind=_KIND_TAGGING,
+        title=f"{req.tagger}:{target.name}",
+        metadata={
+            "path": str(target),
+            "tagger": req.tagger,
+            "model_id": req.model_id,
+            "device": req.device,
+            "overwrite": req.overwrite,
+            "recursive": req.recursive,
+        },
+    )
     session = _TaggingSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         path=str(target),
         tagger=req.tagger,
         model_id=req.model_id,
@@ -225,15 +333,19 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
         recursive=req.recursive,
         include_character=req.include_character,
         underscores=req.underscores,
+        task_kind=_KIND_TAGGING,
     )
     session.push("tagging queued", percent=0)
     _store(session)
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             tagger = _build_tagger(req)
             session.push(f"loading {req.tagger}")
             tagger.load()
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.active_provider = tagger.active_provider
             session.push(f"running on {tagger.active_provider}", percent=2)
@@ -245,17 +357,28 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             all_images = list(_iter_images(target, recursive=req.recursive))
             with session.lock:
                 session.total = len(all_images)
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             if not all_images:
                 session.push("no images found", percent=100)
                 with session.lock:
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result=session.snapshot(),
+                    finished=True,
+                )
                 return
 
             total = len(all_images)
 
             def on_progress(image: Path, _result: object) -> None:
+                if session.should_stop():
+                    raise InterruptedError("stopped by user")
                 with session.lock:
                     session.written += 1
                     pct = min(100.0, 2 + 98 * session.written / max(total, 1))
@@ -269,24 +392,61 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
                 underscores=req.underscores,
                 include_character=req.include_character,
                 on_progress=on_progress,
+                should_stop=session.should_stop,
             )
+            if session.should_stop():
+                raise InterruptedError("stopped by user")
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100
                 session.finished_at = time.time()
             session.push(f"done — wrote {session.written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
         except CudaUnavailableError as exc:
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"cuda unavailable: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
+        except InterruptedError:
+            with session.lock:
+                session.status = "canceled"
+                session.error = "stopped by user"
+                session.finished_at = time.time()
+            session.push("stopped by user")
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error="stopped by user",
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"tagging failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         finally:
             _persist_tagging_snapshot(session)
 
@@ -305,7 +465,17 @@ def tag_dataset_status(session_id: str) -> dict[str, Any]:
     persisted = _get_persisted_tagging(session_id)
     if persisted is not None:
         return persisted
+    task = _tagging_snapshot_from_task(session_id)
+    if task is not None:
+        return task
     raise HTTPException(status_code=404, detail="tagging session not found")
+
+
+@router.post("/tagging/tag/{session_id}/stop")
+def stop_tag_dataset(session_id: str) -> dict[str, Any]:
+    session = _get(session_id)
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 @router.get("/tagging/tag")
@@ -361,7 +531,8 @@ class _AnimaSession:
     safety: str | None
     overwrite: bool
     recursive: bool
-    status: Literal["running", "succeeded", "failed"] = "running"
+    task_kind: str | None = None
+    status: _AnimaCaptionStatus = "running"
     percent: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
     written: int = 0
@@ -372,13 +543,27 @@ class _AnimaSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def push(self, message: str, *, percent: float | None = None, file: str | None = None) -> None:
+        ts = time.time()
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            self.events.append(
-                {"ts": time.time(), "message": message, "percent": self.percent, "file": file}
-            )
+            event = {"ts": ts, "message": message, "percent": self.percent, "file": file}
+            self.events.append(event)
             self.events = self.events[-200:]
+        if self.task_kind:
+            try:
+                _task_store().append_event(
+                    self.session_id,
+                    TaskEvent(
+                        level="info",
+                        message=message,
+                        percent=event["percent"],
+                        payload=event,
+                        ts=ts,
+                    ),
+                )
+            except Exception:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -420,6 +605,53 @@ def _get_anima(session_id: str) -> _AnimaSession:
     return session
 
 
+def _anima_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != _KIND_ANIMA_CAPTION:
+        return None
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+        return None
+    metadata = task.metadata
+    return {
+        "session_id": task.id,
+        "path": str(metadata.get("path") or ""),
+        "dataset_tag": metadata.get("dataset_tag"),
+        "quality": None,
+        "score": None,
+        "year": None,
+        "safety": None,
+        "overwrite": bool(metadata.get("overwrite") or False),
+        "recursive": bool(metadata.get("recursive") or False),
+        "status": (
+            task.status
+            if task.status in {"interrupted", "failed", "canceled"}
+            else "running"
+        ),
+        "percent": task.percent,
+        "events": [
+            {
+                "ts": event.ts,
+                "message": event.message,
+                "percent": event.percent if event.percent is not None else task.percent,
+                "file": event.payload.get("file"),
+            }
+            for event in task.events
+        ],
+        "written": 0,
+        "total": None,
+        "error": task.error,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
+
+
 # Indirection for tests so they can swap the transformer without monkey-patching
 # the dataset module directly.
 def _build_anima_transformer(req: AnimaCaptionRequest) -> AnimaDatasetTransformer:
@@ -438,8 +670,18 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"not a directory: {target}")
 
+    task = _task_store().create(
+        kind=_KIND_ANIMA_CAPTION,
+        title=f"anima caption:{target.name}",
+        metadata={
+            "path": str(target),
+            "dataset_tag": req.dataset_tag,
+            "overwrite": req.overwrite,
+            "recursive": req.recursive,
+        },
+    )
     session = _AnimaSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         path=str(target),
         dataset_tag=req.dataset_tag,
         quality=req.quality,
@@ -448,12 +690,14 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
         safety=req.safety,
         overwrite=req.overwrite,
         recursive=req.recursive,
+        task_kind=_KIND_ANIMA_CAPTION,
     )
     session.push("anima caption queued", percent=0)
     _store_anima(session)
 
     def run() -> None:
         try:
+            _task_store().update(session.session_id, status="running", percent=0)
             transformer = _build_anima_transformer(req)
 
             # Pre-count for percent display.
@@ -468,6 +712,13 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result=session.snapshot(),
+                    finished=True,
+                )
                 return
 
             total = len(captions)
@@ -490,12 +741,26 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                 session.percent = 100
                 session.finished_at = time.time()
             session.push(f"done — wrote {written} caption(s)", percent=100)
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
             session.push(f"anima caption failed: {exc}")
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         finally:
             _persist_tagging_snapshot(session)
 
@@ -511,6 +776,9 @@ def anima_caption_status(session_id: str) -> dict[str, Any]:
         session = _anima_sessions.get(session_id)
     if session is not None:
         return session.snapshot()
+    task = _anima_snapshot_from_task(session_id)
+    if task is not None:
+        return task
     persisted = _get_persisted_tagging(session_id)
     if persisted is not None:
         return persisted

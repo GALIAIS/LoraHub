@@ -246,11 +246,11 @@ function DupeMemberTile({
   const [broken, setBroken] = useState(false)
   return (
     <div
-      className={`relative flex flex-col overflow-hidden rounded border ${
+      className={`relative flex w-full max-w-full min-w-0 flex-col overflow-hidden rounded border ${
         isKeep ? "border-green-500/50 ring-1 ring-green-500/30" : ""
       } ${isSelected ? "border-destructive ring-1 ring-destructive/30" : ""}`}
     >
-      <div className="aspect-square overflow-hidden bg-muted">
+      <div className="aspect-square w-full overflow-hidden bg-muted">
         {broken ? (
           <div className="w-full h-full grid place-items-center text-muted-foreground/70 text-[10px] gap-1 flex-col flex">
             <ImageOff className="size-4" />
@@ -265,17 +265,17 @@ function DupeMemberTile({
           />
         )}
       </div>
-      <div className="flex items-center gap-1 px-1.5 py-1">
+      <div className="flex min-w-0 items-center gap-1 px-1.5 py-1">
         <input
           type="checkbox"
           checked={isSelected}
           onChange={onToggle}
-          className="size-3"
+          className="size-3 shrink-0"
           disabled={isKeep}
           title={isKeep ? "建议保留这一张" : "勾选后会一并删除"}
         />
         <span
-          className="flex-1 truncate text-[10px]"
+          className="min-w-0 flex-1 truncate text-[10px]"
           title={path}
         >
           {path.split(/[/\\]/).pop()}

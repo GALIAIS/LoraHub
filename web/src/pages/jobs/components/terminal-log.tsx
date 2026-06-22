@@ -306,8 +306,8 @@ export function TerminalLog({
     ? "text-zinc-500 shrink-0 tabular-nums"
     : "text-muted-foreground/70 shrink-0 tabular-nums"
   const levelClass = darkMode
-    ? "text-zinc-400 shrink-0 w-[72px] tracking-wide"
-    : "text-muted-foreground/80 shrink-0 w-[72px] tracking-wide"
+    ? "min-w-[116px] text-zinc-400 tracking-wide"
+    : "min-w-[116px] text-muted-foreground/80 tracking-wide"
   const bodyTextDefault = darkMode
     ? "font-mono text-[12px] leading-[1.5] text-zinc-100"
     : "font-mono text-[12px] leading-[1.5] text-foreground/90"
@@ -429,7 +429,7 @@ export function TerminalLog({
               return (
                 <div
                   className={cn(
-                    "px-3 py-[2px] flex gap-2 items-baseline border-l-2",
+                    "grid grid-cols-[86px_minmax(116px,auto)_minmax(0,1fr)] items-baseline gap-2 border-l-2 px-3 py-[2px]",
                     line.borderClass,
                     rowHoverClass,
                   )}
@@ -438,7 +438,7 @@ export function TerminalLog({
                   <span className={levelClass}>{line.level}</span>
                   <span
                     className={cn(
-                      "whitespace-pre-wrap break-all flex-1",
+                      "min-w-0 whitespace-pre-wrap break-all",
                       toneClass,
                     )}
                   >

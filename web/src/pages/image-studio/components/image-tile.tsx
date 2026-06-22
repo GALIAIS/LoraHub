@@ -45,7 +45,7 @@ export function ImageTile({
           type="button"
           onClick={handleClick}
           onDoubleClick={onDoubleClick}
-          className={`group relative flex flex-col overflow-hidden rounded-md border transition-colors ${
+          className={`group relative flex w-full max-w-full min-w-0 flex-col overflow-hidden rounded-md border transition-colors ${
             selected
               ? "border-primary ring-2 ring-primary/30"
               : multiSelected
@@ -70,16 +70,18 @@ export function ImageTile({
               />
             )}
           </div>
-          <div className="flex items-center gap-1 px-1.5 py-1">
+          <div className="flex min-w-0 items-center gap-1 px-1.5 py-1">
             {multiSelected && (
               <span className="size-3 rounded-sm border border-blue-500 bg-blue-500/20 shrink-0" />
             )}
-            <span className="flex-1 truncate text-left text-[11px]">{item.name}</span>
+            <span className="min-w-0 flex-1 truncate text-left text-[11px]">
+              {item.name}
+            </span>
             {item.annotation?.favorite && (
-              <Heart className="size-3 fill-rose-500 text-rose-500" />
+              <Heart className="size-3 shrink-0 fill-rose-500 text-rose-500" />
             )}
             {item.annotation?.softDeleted && (
-              <Trash2 className="size-3 text-muted-foreground" />
+              <Trash2 className="size-3 shrink-0 text-muted-foreground" />
             )}
           </div>
           {!item.captionExists && (

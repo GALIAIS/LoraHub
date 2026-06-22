@@ -67,6 +67,10 @@ export interface SamplingPromptValue {
   seed?: number | null
   width?: number | null
   height?: number | null
+  /** Anima flow-matching sampler. `null` = backend default (euler). */
+  sampler?: "euler" | "er_sde" | "lcm" | null
+  /** Flow-matching schedule shift. `null` = upstream default 5.0. */
+  flowShift?: number | null
 }
 
 export interface SamplingOutputsValue {
@@ -423,6 +427,8 @@ export interface ConfigFormValue {
       lora?: {
         algorithm?:
           | "lora"
+          | "locon"
+          | "tlora"
           | "ortho"
           | "dora"
           | "ia3"
@@ -434,6 +440,19 @@ export interface ConfigFormValue {
           | "boft"
           | "glora"
           | "vera"
+          | "lycoris_lora"
+          | "lycoris_locon"
+          | "lycoris_tlora"
+          | "lycoris_ia3"
+          | "lycoris_lokr"
+          | "lycoris_loha"
+          | "lycoris_dylora"
+          | "lycoris_full"
+          | "diag-oft"
+          | "lycoris_diag_oft"
+          | "lycoris_diag-oft"
+          | "lycoris_boft"
+          | "lycoris_glora"
         useOrtho?: boolean | null
         useDora?: boolean | null
         useIa3?: boolean | null

@@ -122,6 +122,16 @@ class JobScheduler:
         with self._cv:
             return [t.job_id for t in self._queue]
 
+    def cancel_pending(self, job_id: str) -> bool:
+        """Remove a job from the pending queue before a worker claims it."""
+        with self._cv:
+            for idx, task in enumerate(self._queue):
+                if task.job_id == job_id:
+                    del self._queue[idx]
+                    self._cv.notify_all()
+                    return True
+        return False
+
     def start(self) -> None:
         """Spawn worker threads. Idempotent."""
         with self._cv:
@@ -287,4 +297,3 @@ scheduler = JobScheduler(concurrency=1)
 
 
 __all__ = ["JobScheduler", "RejectCallback", "TaskFn", "scheduler"]
-

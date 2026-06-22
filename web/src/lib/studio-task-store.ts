@@ -21,21 +21,25 @@
  *      subscribe to without coupling to mount lifecycle
  *
  * Two endpoint flavours are supported:
- *   - "sessioned" (smart-caption, wd14): server returns session_id,
+ *   - "sessioned" (caption, smart-caption, quality-score, trigger-words, wd14): server returns session_id,
  *     status endpoint exists, full reconnect after reload works
- *   - "in-flight" (quality-score, trigger-words): synchronous endpoints
+ *   - "in-flight": synchronous endpoints
  *     with no session_id, so the only thing we can do is keep the
  *     promise alive across navigations within the same page-load.
  *     These records are NOT persisted to localStorage (a page reload
  *     would orphan them anyway — we have no way to find them again).
  */
 import {
+  getCaptionSession,
+  getQualitySession,
   getTaggingSession,
+  getTriggerWordsSession,
   http,
   type TaggingSession,
 } from "@/lib/api"
 
 export type StudioTaskKind =
+  | "caption"
   | "smart-caption"
   | "wd14"
   | "trigger-words"
@@ -166,7 +170,18 @@ async function tick(): Promise<void> {
 
 async function pollOne(task: StudioTaskRecord): Promise<void> {
   try {
-    if (task.kind === "smart-caption") {
+    if (task.kind === "caption") {
+      const snap = await getCaptionSession(task.id)
+      const status = mapSmartCaptionStatus(snap.status)
+      updateTask(task.id, {
+        processed: snap.processed,
+        total: snap.total,
+        lastImage: snap.last_image || undefined,
+        status,
+        errorMsg: snap.error ?? undefined,
+        pollErrors: 0,
+      })
+    } else if (task.kind === "smart-caption") {
       const snap = await http<{
         processed: number
         total: number
@@ -177,6 +192,28 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
       }>(
         `/image-studio/ai/smart-caption/status/${encodeURIComponent(task.id)}`,
       )
+      const status = mapSmartCaptionStatus(snap.status)
+      updateTask(task.id, {
+        processed: snap.processed,
+        total: snap.total,
+        lastImage: snap.last_image || undefined,
+        status,
+        errorMsg: snap.error ?? undefined,
+        pollErrors: 0,
+      })
+    } else if (task.kind === "quality-score") {
+      const snap = await getQualitySession(task.id)
+      const status = mapSmartCaptionStatus(snap.status)
+      updateTask(task.id, {
+        processed: snap.processed,
+        total: snap.total,
+        lastImage: snap.last_image || undefined,
+        status,
+        errorMsg: snap.error ?? undefined,
+        pollErrors: 0,
+      })
+    } else if (task.kind === "trigger-words") {
+      const snap = await getTriggerWordsSession(task.id)
       const status = mapSmartCaptionStatus(snap.status)
       updateTask(task.id, {
         processed: snap.processed,
@@ -223,6 +260,7 @@ function mapSmartCaptionStatus(s: string): StudioTaskStatus {
       return "completed"
     case "canceled":
     case "cancelled":
+    case "interrupted":
       return "cancelled"
     case "failed":
       return "failed"
@@ -237,6 +275,10 @@ function mapWd14Status(s: string): StudioTaskStatus {
       return "running"
     case "succeeded":
       return "completed"
+    case "canceled":
+    case "cancelled":
+    case "interrupted":
+      return "cancelled"
     case "failed":
       return "failed"
     default:
@@ -261,7 +303,11 @@ export interface AddTaskInput {
 export function addTask(input: AddTaskInput): StudioTaskRecord {
   const sessioned =
     input.sessioned ??
-    (input.kind === "smart-caption" || input.kind === "wd14")
+    (input.kind === "caption" ||
+      input.kind === "smart-caption" ||
+      input.kind === "quality-score" ||
+      input.kind === "trigger-words" ||
+      input.kind === "wd14")
   const record: StudioTaskRecord = {
     id: input.id,
     kind: input.kind,
@@ -297,6 +343,21 @@ export function updateTask(
 export function removeTask(id: string): void {
   const next = tasks.filter((t) => t.id !== id)
   if (next.length !== tasks.length) commit(next)
+}
+
+export async function cancelTask(task: Pick<StudioTaskRecord, "id" | "kind">): Promise<void> {
+  const path =
+    task.kind === "caption"
+      ? `/image-studio/ai/caption/cancel/${encodeURIComponent(task.id)}`
+      : task.kind === "smart-caption"
+        ? `/image-studio/ai/smart-caption/cancel/${encodeURIComponent(task.id)}`
+        : task.kind === "quality-score"
+          ? `/image-studio/ai/quality/cancel/${encodeURIComponent(task.id)}`
+          : task.kind === "trigger-words"
+            ? `/image-studio/ai/trigger-words/cancel/${encodeURIComponent(task.id)}`
+            : `/tagging/tag/${encodeURIComponent(task.id)}/stop`
+  await http(path, { method: "POST" })
+  updateTask(task.id, { errorMsg: "正在停止..." })
 }
 
 /** Mark all terminal tasks (completed/failed/cancelled) for a dataset as dismissed. */

@@ -87,6 +87,27 @@ def test_scheduler_exposes_queue_depth_and_pending_ids() -> None:
     sched.stop(timeout=2.0)
 
 
+def test_scheduler_can_cancel_pending_job_before_worker_picks_it() -> None:
+    sched = JobScheduler(concurrency=1)
+    barrier = threading.Event()
+    ran = threading.Event()
+
+    def block(_slot: int) -> None:
+        barrier.wait(timeout=2.0)
+
+    sched.submit("hold", block)
+    sched.submit("queued", lambda _slot: ran.set())
+    time.sleep(0.05)
+
+    assert sched.cancel_pending("queued") is True
+    assert sched.pending_job_ids() == []
+
+    barrier.set()
+    time.sleep(0.1)
+    assert not ran.is_set()
+    sched.stop(timeout=2.0)
+
+
 def test_scheduler_exposes_available_slots_for_multi_gpu() -> None:
     sched = JobScheduler(concurrency=2, available_slots=[3, 5])
     slots_seen: list[int] = []

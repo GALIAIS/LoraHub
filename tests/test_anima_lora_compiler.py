@@ -169,6 +169,25 @@ def test_max_steps_unset_emits_method_max_train_epochs(tmp_path: Path) -> None:
     assert pairs["--max_train_epochs"] == [str(opts.max_train_epochs)]
 
 
+def test_use_cmmd_false_is_emitted(tmp_path: Path) -> None:
+    """Explicitly disabling CMMD must override upstream's true default."""
+    opts = AnimaLoraOptions(use_cmmd=False)
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["use_cmmd"] is False
+
+
+def test_use_cmmd_true_is_emitted(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(use_cmmd=True)
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["use_cmmd"] is True
+
+
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
 
@@ -196,6 +215,28 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     assert len(files) == 1
     [only_path] = list(files.keys())
     assert only_path.name == "_lorahub_anima_config.toml"
+
+
+def test_tlora_algorithm_emits_plain_lora_with_timestep_mask(tmp_path: Path) -> None:
+    """T-LoRA maps to anima_lora's existing timestep mask network args."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            algorithm="tlora",
+            min_rank=8,
+            alpha_rank_scale=0.75,
+        ),
+    )
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    network_args = _argv_pairs(argv, files)["--network_args"]
+
+    assert "use_timestep_mask=true" in network_args
+    assert "min_rank=8" in network_args
+    assert "alpha_rank_scale=0.75" in network_args
+    assert "use_ortho=false" in network_args
+    assert not any(arg.startswith("use_tlora=") for arg in network_args)
 
 
 def test_postfix_method_emits_network_args(tmp_path: Path) -> None:
@@ -1012,6 +1053,7 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
 
     cases = [
         ("lora", "use_ortho=false"),  # plain LoRA — every selector false
+        ("tlora", "use_ortho=false"),  # plain LoRA + timestep mask
         ("ortho", "use_ortho=true"),
         ("dora", "use_dora=true"),
         ("ia3", "use_ia3=true"),
@@ -1041,6 +1083,56 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
             f"algorithm={algo!r} should emit {expected!r}; "
             f"network_args={network_args}"
         )
+
+
+def test_lycoris_algorithm_aliases_compile_to_anima_network_flags(
+    tmp_path: Path,
+) -> None:
+    """LyCORIS public names reuse anima_lora's native PEFT implementations."""
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    cases = [
+        ("lycoris_locon", "use_ortho=false"),
+        ("lycoris_tlora", "use_ortho=false"),
+        ("lycoris_loha", "use_loha=true"),
+        ("lycoris_lokr", "use_lokr=true"),
+        ("lycoris_ia3", "use_ia3=true"),
+        ("lycoris_dylora", "use_dylora=true"),
+        ("lycoris_full", "use_full=true"),
+        ("lycoris_diag-oft", "use_diag_oft=true"),
+        ("lycoris_boft", "use_boft=true"),
+        ("lycoris_glora", "use_glora=true"),
+    ]
+    for i, (algo, expected) in enumerate(cases):
+        sub = tmp_path / f"lycoris_{i}"
+        sub.mkdir()
+        opts = AnimaLoraOptions(
+            lora=AnimaLoraMethodLoraConfig(
+                algorithm=algo,
+                lokr_factor=12,
+            ),
+        )
+        cfg = _config(sub, opts)
+        argv, files = compile_config(cfg, sub / "ws")
+        network_args = _argv_pairs(argv, files).get("--network_args", [])
+        assert expected in network_args, (
+            f"algorithm={algo!r} should emit {expected!r}; "
+            f"network_args={network_args}"
+        )
+
+    sub = tmp_path / "lycoris_lokr_factor"
+    sub.mkdir()
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            algorithm="lycoris_lokr",
+            lokr_factor=12,
+        ),
+    )
+    cfg = _config(sub, opts)
+    argv, files = compile_config(cfg, sub / "ws")
+    network_args = _argv_pairs(argv, files).get("--network_args", [])
+    assert "use_lokr=true" in network_args
+    assert "lokr_factor=12" in network_args
 
 
 def test_legacy_bool_back_compat(tmp_path: Path) -> None:

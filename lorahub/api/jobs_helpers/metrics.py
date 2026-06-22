@@ -35,6 +35,8 @@ _SKIP_DIR_NAMES = {
     "post_image_dataset",
 }
 _SKIP_SUFFIXES = {".tmp"}
+_DERIVED_SAMPLE_DIR_NAMES = {"grids", "grid", "animations", "animation"}
+_DERIVED_SAMPLE_KINDS = {"grid", "animation"}
 
 # Cap on the number of loss points returned by /metrics. Anything beyond this
 # gets uniformly downsampled so the response stays bounded for very long runs.
@@ -68,9 +70,28 @@ def _classify_artifact(rel: Path) -> str:
         return "other"
     if suffix in _CHECKPOINT_SUFFIXES:
         return "checkpoints"
-    if suffix in _SAMPLE_SUFFIXES:
+    if suffix in _SAMPLE_SUFFIXES and not _is_derived_sample_path(rel):
         return "samples"
     return "other"
+
+
+def _is_derived_sample_path(path: str | Path | None) -> bool:
+    """Return True for grid/contact-sheet/animation artifacts.
+
+    These are useful secondary previews, but treating them as ordinary
+    per-prompt samples pollutes the gallery and checkpoint playback.
+    """
+    if path is None:
+        return False
+    rel = Path(str(path).replace("\\", "/"))
+    return any(part.lower() in _DERIVED_SAMPLE_DIR_NAMES for part in rel.parts[:-1])
+
+
+def _is_derived_sample_event(payload: dict[str, Any]) -> bool:
+    kind = payload.get("kind")
+    if isinstance(kind, str) and kind.strip().lower() in _DERIVED_SAMPLE_KINDS:
+        return True
+    return _is_derived_sample_path(payload.get("path"))
 
 
 def _list_workspace_files(workspace: Path) -> dict[str, list[dict[str, Any]]]:
@@ -267,6 +288,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                     }
                 )
             elif etype == EventType.sample_ready.value:
+                if _is_derived_sample_event(payload):
+                    continue
                 samples.append({"path": payload.get("path"), "ts": ts})
             elif etype == EventType.gpu_sample.value:
                 gpu_samples.append(
@@ -414,13 +437,36 @@ def _downsample(points: list[dict[str, Any]], target: int) -> list[dict[str, Any
     return [points[i] for i in indices if 0 <= i < n]
 
 
+def _event_key(event: TrainingEvent) -> tuple[str, float, str | None, str]:
+    payload = json.dumps(
+        event.payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return (event.type.value, event.timestamp, event.job_id, payload)
+
+
 def _job_events(job: state.JobRecord, limit: int | None = None) -> list[TrainingEvent]:
-    events = list(job.events)
-    if not events:
-        event_log = job.workspace / "events.jsonl"
-        if event_log.is_file():
-            with contextlib.suppress(Exception):
-                events = list(JsonlEventSink.replay(event_log))
+    events: list[TrainingEvent] = []
+    event_log = job.workspace / "events.jsonl"
+    if event_log.is_file():
+        with contextlib.suppress(Exception):
+            events = list(JsonlEventSink.replay(event_log))
+
+    # The in-memory deque is a bounded live tail. For long runs it may hold
+    # only the newest ~1k events while events.jsonl has the full history.
+    # Read disk first, then append any live tail entries that have not landed
+    # on disk yet so HTTP history and SSE replay stay complete.
+    seen = {_event_key(event) for event in events}
+    for event in job.events:
+        key = _event_key(event)
+        if key in seen:
+            continue
+        events.append(event)
+        seen.add(key)
+
     if limit is not None:
         events = events[-max(limit, 0) :]
     return events
@@ -435,6 +481,8 @@ __all__ = [
     "_downsample",
     "_empty_overfit_signal",
     "_job_events",
+    "_is_derived_sample_event",
+    "_is_derived_sample_path",
     "_list_workspace_files",
     "_media_type_for",
     "_read_metrics",

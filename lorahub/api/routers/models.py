@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -13,22 +12,52 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSession,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.models.downloader import (
+    DEFAULT_ALLOW_PATTERNS,
+    DEFAULT_IGNORE_PATTERNS,
     DownloadProgress,
     DownloadRequest,
     DownloadResult,
     download,
+    list_remote_files,
+    select_files,
 )
 
 router = APIRouter(prefix="/api")
+_KIND_MODEL_DOWNLOAD = "model_download"
+_DownloadStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
 
 
 class DownloadModelRequest(BaseModel):
-    source: Literal["huggingface", "modelscope"]
+    source: Literal["huggingface", "modelscope"] = "modelscope"
     repo_id: str
     revision: str = "master"
     target_dir: str | None = None
     threads: int = Field(default=4, ge=1, le=16)
+    paths: list[str] = Field(default_factory=list, max_length=2048)
+    allow_patterns: list[str] | None = None
+    ignore_patterns: list[str] | None = None
+
+
+class ListModelFilesRequest(BaseModel):
+    source: Literal["huggingface", "modelscope"] = "modelscope"
+    repo_id: str
+    revision: str = "master"
+    paths: list[str] = Field(default_factory=list, max_length=2048)
+    allow_patterns: list[str] | None = None
+    ignore_patterns: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -39,7 +68,10 @@ class _DownloadSession:
     revision: str
     target_dir: str | None
     threads: int
-    status: Literal["running", "succeeded", "failed"] = "running"
+    paths: list[str]
+    allow_patterns: list[str] = field(default_factory=list)
+    ignore_patterns: list[str] = field(default_factory=list)
+    status: _DownloadStatus = "running"
     percent: float = 0
     events: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] | None = None
@@ -49,11 +81,26 @@ class _DownloadSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def add_progress(self, event: DownloadProgress) -> None:
+        payload = asdict(event)
+        ts = time.time()
         with self.lock:
             if event.percent is not None:
                 self.percent = max(self.percent, min(100, float(event.percent)))
-            self.events.append(asdict(event) | {"ts": time.time()})
+            self.events.append(payload | {"ts": ts})
             self.events = self.events[-200:]
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level="info",
+                    message=event.message,
+                    percent=event.percent,
+                    payload=payload,
+                    ts=ts,
+                ),
+            )
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -64,6 +111,9 @@ class _DownloadSession:
                 "revision": self.revision,
                 "target_dir": self.target_dir,
                 "threads": self.threads,
+                "paths": list(self.paths),
+                "allow_patterns": list(self.allow_patterns),
+                "ignore_patterns": list(self.ignore_patterns),
                 "status": self.status,
                 "percent": self.percent,
                 "events": list(self.events),
@@ -76,6 +126,15 @@ class _DownloadSession:
 
 _sessions: dict[str, _DownloadSession] = {}
 _sessions_lock = threading.Lock()
+_latest_session_id: str | None = None
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[str, Any]:
@@ -90,26 +149,106 @@ def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[s
 
 
 def _store_session(session: _DownloadSession) -> None:
+    global _latest_session_id
     with _sessions_lock:
         _sessions[session.session_id] = session
+        _latest_session_id = session.session_id
 
 
 def _get_session(session_id: str) -> _DownloadSession:
     with _sessions_lock:
         session = _sessions.get(session_id)
-    if session is None:
+    if session is not None:
+        return session
+    task = _task_store().get(session_id)
+    if task is None or task.kind != _KIND_MODEL_DOWNLOAD:
         raise HTTPException(status_code=404, detail="download session not found")
-    return session
+    return _session_from_task(task)
 
 
-@router.post("/models/download", status_code=202)
-def download_model(req: DownloadModelRequest) -> dict[str, Any]:
-    if not req.repo_id or "/" not in req.repo_id:
+def _latest_session() -> _DownloadSession | None:
+    with _sessions_lock:
+        if _latest_session_id is not None:
+            session = _sessions.get(_latest_session_id)
+            if session is not None:
+                return session
+        session = max(_sessions.values(), key=lambda s: s.started_at, default=None)
+    if session is not None:
+        return session
+    task = _task_store().latest(_KIND_MODEL_DOWNLOAD)
+    if task is None:
+        return None
+    return _session_from_task(task)
+
+
+def _session_from_task(task: TaskSession) -> _DownloadSession:
+    metadata = task.metadata
+    status: _DownloadStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
+
+    return _DownloadSession(
+        session_id=task.id,
+        source=str(metadata.get("source") or "modelscope"),
+        repo_id=str(metadata.get("repo_id") or ""),
+        revision=str(metadata.get("revision") or "master"),
+        target_dir=metadata.get("target_dir"),
+        threads=int(metadata.get("threads") or 4),
+        paths=list(metadata.get("paths") or []),
+        allow_patterns=list(metadata.get("allow_patterns") or []),
+        ignore_patterns=list(metadata.get("ignore_patterns") or []),
+        status=status,
+        percent=task.percent,
+        events=[
+            (dict(event.payload) if event.payload else {})
+            | {"message": event.message, "percent": event.percent, "ts": event.ts}
+            for event in task.events
+        ],
+        result=task.result,
+        error=task.error,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
+
+
+def _validate_repo_id(repo_id: str) -> None:
+    if not repo_id or "/" not in repo_id:
         raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
 
+
+def _validate_selected_paths(paths: list[str]) -> None:
+    if not paths:
+        return
+    try:
+        select_files([], paths=tuple(paths))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _resolve_target_dir(target_dir: str | None) -> Path | None:
+    if not target_dir:
+        return None
+    target = Path(target_dir).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if target.parent == target or target in {cwd, home}:
+        raise HTTPException(
+            status_code=400,
+            detail="target_dir must be a model subdirectory, not root, home, or project root",
+        )
+    return target
+
+
+def _download_request_from_api(
+    req: DownloadModelRequest | ListModelFilesRequest,
+    *,
+    target: Path | None = None,
+    threads: int = 4,
+) -> DownloadRequest:
     settings = app_module._settings_store.load()
-    target = Path(req.target_dir).expanduser().resolve() if req.target_dir else None
-    download_req = DownloadRequest(
+    return DownloadRequest(
         source=req.source,
         repo_id=req.repo_id,
         revision=req.revision,
@@ -117,38 +256,135 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
         huggingface_endpoint=settings.huggingface_endpoint,
         huggingface_token=settings.huggingface_token,
         modelscope_token=settings.modelscope_token,
-        threads=req.threads,
+        threads=threads,
         proxy=settings.download_proxy,
+        paths=tuple(req.paths),
+        allow_patterns=(
+            tuple(req.allow_patterns)
+            if req.allow_patterns is not None
+            else DEFAULT_ALLOW_PATTERNS
+        ),
+        ignore_patterns=(
+            tuple(req.ignore_patterns)
+            if req.ignore_patterns is not None
+            else DEFAULT_IGNORE_PATTERNS
+        ),
+    )
+
+
+@router.post("/models/files")
+def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
+    _validate_repo_id(req.repo_id)
+    _validate_selected_paths(req.paths)
+    files = list_remote_files(_download_request_from_api(req))
+    selected = [f for f in files if f.selected]
+    return {
+        "source": req.source,
+        "repo_id": req.repo_id,
+        "revision": req.revision,
+        "files": [
+            {
+                "path": f.path,
+                "size": f.size,
+                "selected": f.selected,
+                "reason": f.reason,
+            }
+            for f in files
+        ],
+        "selected_count": len(selected),
+        "selected_bytes": sum(f.size for f in selected),
+        "total_count": len(files),
+        "total_bytes": sum(f.size for f in files),
+    }
+
+
+@router.post("/models/download", status_code=202)
+def download_model(req: DownloadModelRequest) -> dict[str, Any]:
+    _validate_repo_id(req.repo_id)
+    _validate_selected_paths(req.paths)
+
+    target = _resolve_target_dir(req.target_dir)
+    download_req = _download_request_from_api(req, target=target, threads=req.threads)
+    task = _task_store().create(
+        kind=_KIND_MODEL_DOWNLOAD,
+        title=f"{req.source}:{req.repo_id}",
+        metadata={
+            "source": req.source,
+            "repo_id": req.repo_id,
+            "revision": req.revision,
+            "target_dir": str(target) if target else None,
+            "threads": req.threads,
+            "paths": list(req.paths),
+            "allow_patterns": list(download_req.allow_patterns),
+            "ignore_patterns": list(download_req.ignore_patterns),
+        },
     )
     session = _DownloadSession(
-        session_id=uuid.uuid4().hex,
+        session_id=task.id,
         source=req.source,
         repo_id=req.repo_id,
         revision=req.revision,
         target_dir=str(target) if target else None,
         threads=req.threads,
+        paths=list(req.paths),
+        allow_patterns=list(download_req.allow_patterns),
+        ignore_patterns=list(download_req.ignore_patterns),
     )
     session.add_progress(DownloadProgress(message="download queued", percent=0))
     _store_session(session)
 
     def run() -> None:
         try:
+            _task_store().update(
+                session.session_id,
+                status="running",
+                percent=session.percent,
+            )
             result = download(download_req, session.add_progress)
+            result_payload = _result_payload(req, result)
+            session.add_progress(DownloadProgress(message="download complete", percent=100))
             with session.lock:
                 session.status = "succeeded"
                 session.percent = 100
-                session.result = _result_payload(req, result)
+                session.result = result_payload
                 session.finished_at = time.time()
-            session.add_progress(DownloadProgress(message="download complete", percent=100))
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                result=result_payload,
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                finished=True,
+            )
             session.add_progress(DownloadProgress(message=f"download failed: {exc}"))
 
     thread = threading.Thread(target=run, name=f"model-download-{session.session_id[:8]}", daemon=True)
     thread.start()
+    return session.snapshot()
+
+
+@router.get("/models/download/latest")
+def latest_model_download_status() -> dict[str, Any]:
+    session = _latest_session()
+    if session is None:
+        return {
+            "session_id": None,
+            "status": "idle",
+            "events": [],
+            "result": None,
+            "error": None,
+            "percent": 0,
+        }
     return session.snapshot()
 
 

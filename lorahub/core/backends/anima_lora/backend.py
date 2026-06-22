@@ -13,6 +13,8 @@ non-anima archs land in the kohya / dp backends instead.
 
 from __future__ import annotations
 
+import math
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -201,6 +203,8 @@ class AnimaLoraBackend:
             msg = f"anima_lora auto-preprocess failed: {e}"
             raise CompilationError(msg) from e
 
+        _prepare_sample_prompts_file(cfg, workspace)
+
         # Branch: turbo distillation (scripts/distill_turbo.py) vs the
         # regular train.py path. Turbo is picked when the recipe has
         # backend.animaLora.turbo populated; both paths share workspace
@@ -218,12 +222,6 @@ class AnimaLoraBackend:
         for path, content in files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-
-        # Sampling fallback: if cfg.sampling.enabled but no prompts_file
-        # was supplied by the user, materialise a per-job prompts file
-        # under the workspace seeded from the dataset captions. The
-        # compiler already pointed train.py at this exact path.
-        _ensure_sample_prompts_file(cfg, workspace)
 
         job_id = str(ulid.new())
         runner: AnimaLoraRunner | AnimaLoraTurboRunner
@@ -378,6 +376,8 @@ _FALLBACK_PROMPT = "a high quality detailed illustration"
 # Cap so we don't spend a chunk of every epoch on samples — anima
 # generates one image per prompt per cadence tick.
 _MAX_FALLBACK_PROMPTS = 3
+_ANIMA_SAMPLE_SAFE_PROMPTS_FILENAME = "_lorahub_anima_sample_prompts.txt"
+_PROMPT_DIM_FLAG_RE = re.compile(r"(?<!\S)--(?P<flag>[wh])\s+(?P<value>\d+)(?!\S)")
 
 
 def _gather_dataset_captions(source: Path, limit: int) -> list[str]:
@@ -410,24 +410,29 @@ def _gather_dataset_captions(source: Path, limit: int) -> list[str]:
     return out
 
 
-def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
-    """Write a fallback prompts file under the workspace if needed.
+def _prepare_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
+    """Ensure anima sampling uses dimensions compatible with static padding.
 
-    No-op when sampling is disabled, when the user provided a custom
-    prompts file (compiler already points at it), or when the file
-    already exists from a prior launch (resume / restart). The fallback
-    appends ``--w / --h / --d / --s / --l`` per-line overrides so anima
-    honours the recipe's resolution / seed / step count / CFG without
-    a global default change.
+    The DiT sample path reuses the training model. In legacy
+    ``static_token_count`` mode, sample image patches must fit the same
+    ``(width // 16) * (height // 16)`` token budget as the compiled
+    training buckets. Over-budget prompt sizes fail later with an opaque
+    ``unflatten`` shape error, so LoraHub clamps only preview dimensions
+    before launching train.py.
     """
     sampling = cfg.sampling
-    if not sampling.enabled or sampling.prompts_file is not None:
+    if not sampling.enabled:
         return
+    if sampling.prompts_file is not None:
+        _sanitize_existing_sample_prompts_file(cfg, workspace)
+        return
+    _ensure_sample_prompts_file(cfg, workspace)
+
+
+def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
+    """Write a fallback prompts file under the workspace if needed."""
+    sampling = cfg.sampling
     target = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
-    if target.is_file():
-        # Idempotent — keep whatever the previous run wrote so a resume
-        # generates samples that line up visually.
-        return
 
     captions = _gather_dataset_captions(
         Path(str(cfg.dataset.source)), _MAX_FALLBACK_PROMPTS
@@ -437,6 +442,7 @@ def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
 
     width = sampling.resolution[0] if sampling.resolution else 1024
     height = sampling.resolution[1] if len(sampling.resolution) > 1 else width
+    width, height = _clamp_sample_dimensions(cfg, int(width), int(height))
     seed_part = ""
     # ``sampling.seed`` is the *training* seed; ``-1`` is the legacy
     # ComfyUI-style "randomise at run time" sentinel that the lifecycle
@@ -456,6 +462,144 @@ def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
     body = "\n".join(prompt + suffix for prompt in captions) + "\n"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(body, encoding="utf-8")
+
+
+def _sanitize_existing_sample_prompts_file(
+    cfg: TrainingConfig,
+    workspace: Path,
+) -> None:
+    source = Path(str(cfg.sampling.prompts_file))
+    if not source.is_file() or source.suffix.lower() != ".txt":
+        return
+    target = workspace / _ANIMA_SAMPLE_SAFE_PROMPTS_FILENAME
+    changed = False
+    safe_lines: list[str] = []
+    for raw_line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        line, line_changed = _clamp_prompt_line_dimensions(cfg, raw_line)
+        safe_lines.append(line)
+        changed = changed or line_changed
+    if not changed:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(safe_lines) + "\n", encoding="utf-8")
+    cfg.sampling.prompts_file = target
+
+
+def _clamp_prompt_line_dimensions(
+    cfg: TrainingConfig,
+    line: str,
+) -> tuple[str, bool]:
+    flags: dict[str, int] = {}
+    for match in _PROMPT_DIM_FLAG_RE.finditer(line):
+        flags[match.group("flag").lower()] = int(match.group("value"))
+    if "w" not in flags and "h" not in flags:
+        return line, False
+
+    fallback_width = (
+        cfg.sampling.resolution[0] if cfg.sampling.resolution else 1024
+    )
+    fallback_height = (
+        cfg.sampling.resolution[1]
+        if len(cfg.sampling.resolution) > 1
+        else fallback_width
+    )
+    width = flags.get("w", int(fallback_width))
+    height = flags.get("h", int(fallback_height))
+    safe_width, safe_height = _clamp_sample_dimensions(cfg, width, height)
+    if safe_width == width and safe_height == height:
+        return line, False
+
+    found = {"w": False, "h": False}
+
+    def replace(match: re.Match[str]) -> str:
+        flag = match.group("flag").lower()
+        found[flag] = True
+        value = safe_width if flag == "w" else safe_height
+        return f"--{flag} {value}"
+
+    updated = _PROMPT_DIM_FLAG_RE.sub(replace, line)
+    if not found["w"]:
+        updated = f"{updated} --w {safe_width}"
+    if not found["h"]:
+        updated = f"{updated} --h {safe_height}"
+    return updated, True
+
+
+def _clamp_sample_dimensions(
+    cfg: TrainingConfig,
+    width: int,
+    height: int,
+) -> tuple[int, int]:
+    opts = cfg.backend.anima_lora
+    token_budget = None
+    if opts is not None and not opts.enable_native_flatten:
+        token_budget = opts.static_token_count
+    if token_budget is None:
+        return (
+            _align_sample_dimension(width),
+            _align_sample_dimension(height),
+        )
+
+    width = _align_sample_dimension(width)
+    height = _align_sample_dimension(height)
+    if _sample_token_count(width, height) <= token_budget:
+        return width, height
+
+    scale = math.sqrt(token_budget / _sample_token_count(width, height))
+    safe_width = _align_sample_dimension(math.floor(width * scale), mode="floor")
+    safe_height = _align_sample_dimension(math.floor(height * scale), mode="floor")
+    while _sample_token_count(safe_width, safe_height) > token_budget:
+        if safe_width >= safe_height and safe_width > 64:
+            safe_width -= 16
+        elif safe_height > 64:
+            safe_height -= 16
+        else:
+            break
+    return _fill_sample_token_budget(
+        safe_width,
+        safe_height,
+        token_budget=token_budget,
+        target_ratio=width / height,
+    )
+
+
+def _fill_sample_token_budget(
+    width: int,
+    height: int,
+    *,
+    token_budget: int,
+    target_ratio: float,
+) -> tuple[int, int]:
+    while True:
+        candidates = [
+            (width + 16, height),
+            (width, height + 16),
+        ]
+        candidates = [
+            candidate
+            for candidate in candidates
+            if _sample_token_count(*candidate) <= token_budget
+        ]
+        if not candidates:
+            return width, height
+        width, height = min(
+            candidates,
+            key=lambda candidate: (
+                abs(math.log((candidate[0] / candidate[1]) / target_ratio)),
+                -_sample_token_count(*candidate),
+            ),
+        )
+
+
+def _align_sample_dimension(value: int | float, *, mode: str = "nearest") -> int:
+    value = max(64, int(value))
+    if mode == "floor":
+        return max(64, value - value % 16)
+    return max(64, value - value % 16)
+
+
+def _sample_token_count(width: int, height: int) -> int:
+    return max(1, width // 16) * max(1, height // 16)
 
 
 def _ensure_wandb_if_enabled(

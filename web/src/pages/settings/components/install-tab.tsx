@@ -3,8 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
   ArrowDownToLine,
-  Check,
-  CircleDashed,
   Download,
   Loader2,
   RefreshCw,
@@ -13,13 +11,10 @@ import {
 import {
   api,
   useBootstrapStream,
-  type AnimaLoraBackendStatus,
-  type AnimaModelDownloadStatus,
   type BackendDescriptor,
   type BackendId,
   type BackendUpdateCheck,
   type BootstrapEvent,
-  type MsvcInstallStatus,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -38,456 +33,18 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { BackendStatusCard } from "./backend-status-card"
-
-// Per-backend ordered step plan + a regex matching each step's progress
-// message. Keep these in sync with the corresponding installer.bootstrap()
-// implementation in lorahub/core/backends/<id>/installer.py.
-//
-// The patterns are anchored with a leading ^ wherever feasible so that
-// indented git-progress lines emitted by run_step (`  Receiving objects:
-// 23%`) never accidentally match. Matching is case-insensitive.
-type StepDef = { id: string; label: string; match: RegExp }
-
-const STEP_PLANS: Record<BackendId, StepDef[]> = {
-  kohya: [
-    { id: "clone", label: "克隆仓库", match: /^clone\s+kohya-ss\//i },
-    // installer prints `uv venv -> .../venv (python=...)` (see
-    // lorahub/core/toolchain/uv.py::create_venv). We also accept a
-    // permissive form so a future label change still highlights this step.
-    { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
-    { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
-    {
-      id: "requirements",
-      label: "安装 kohya requirements",
-      match: /kohya\s+requirements/i,
-    },
-    { id: "xformers", label: "安装 xformers", match: /^install\s+xformers/i },
-  ],
-  "diffusion-pipe": [
-    { id: "clone", label: "克隆仓库", match: /^clone\s+tdrussell\//i },
-    { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
-    { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
-    {
-      id: "requirements",
-      label: "安装 diffusion-pipe requirements",
-      match: /diffusion-pipe\s+requirements/i,
-    },
-    { id: "deepspeed", label: "安装 DeepSpeed", match: /^install\s+deepspeed/i },
-  ],
-  // anima_lora ships vendored under external/anima_lora — no clone
-  // needed. The single install step is `uv sync` against the bundled
-  // pyproject.toml + uv.lock, which materialises a dedicated `.venv`
-  // (CPython 3.13 + torch nightly + accelerate + diffusers). Surface
-  // it as one step so the progress UI lines up with kohya / dp.
-  anima_lora: [
-    { id: "sync", label: "uv sync (创建 .venv + 装依赖)", match: /^uv\s+sync/i },
-  ],
-}
-
-type StepState = "pending" | "running" | "succeeded" | "failed"
-
-function computeStepStates(
-  plan: StepDef[],
-  events: BootstrapEvent[],
-  status: string,
-): { states: StepState[]; current: number } {
-  const states: StepState[] = plan.map(() => "pending")
-  let current = -1
-  for (const ev of events) {
-    if (ev.level !== "info") continue
-    const idx = plan.findIndex((s) => s.match.test(ev.message))
-    if (idx < 0) continue
-    if (current >= 0 && current < plan.length) states[current] = "succeeded"
-    current = idx
-    states[idx] = "running"
-  }
-  if (current >= 0) {
-    if (status === "succeeded") {
-      // Mark every step done; some plans skip optional ones (xformers off etc.)
-      for (let i = 0; i < states.length; i += 1) {
-        if (states[i] === "pending" || states[i] === "running") {
-          states[i] = "succeeded"
-        }
-      }
-    } else if (status === "failed") {
-      states[current] = "failed"
-    }
-  } else if (status === "succeeded") {
-    // No info events arrived (shouldn't happen in practice); still mark done.
-    for (let i = 0; i < states.length; i += 1) states[i] = "succeeded"
-  }
-  return { states, current }
-}
-
-function StepIcon({ state }: { state: StepState }) {
-  if (state === "succeeded")
-    return <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-  if (state === "running")
-    return <Loader2 className="size-3.5 animate-spin text-amber-600 dark:text-amber-400" />
-  if (state === "failed") return <XCircle className="size-3.5 text-destructive" />
-  return <CircleDashed className="size-3.5 text-muted-foreground/60" />
-}
-
-function StepList({
-  plan,
-  states,
-}: {
-  plan: StepDef[]
-  states: StepState[]
-}) {
-  return (
-    <ol className="rounded-[4px] border border-border/60 bg-muted/30 divide-y divide-border/40">
-      {plan.map((s, i) => {
-        const state = states[i]
-        return (
-          <li
-            key={s.id}
-            className={cn(
-              "px-3 py-2 flex items-center gap-3 text-xs",
-              state === "running" && "bg-amber-500/5",
-              state === "failed" && "bg-destructive/5",
-              state === "succeeded" && "text-muted-foreground",
-            )}
-          >
-            <StepIcon state={state} />
-            <span className="flex-1">{s.label}</span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-              {state === "pending" ? "等待" : state === "running" ? "进行中" : state === "succeeded" ? "完成" : "失败"}
-            </span>
-          </li>
-        )
-      })}
-    </ol>
-  )
-}
-
-function ProgressBar({
-  done,
-  total,
-  failed,
-}: {
-  done: number
-  total: number
-  failed: boolean
-}) {
-  const pct = total > 0 ? Math.min(100, Math.max(0, (done / total) * 100)) : 0
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-[11px] text-muted-foreground">
-        <span>
-          已完成 {done} / {total}
-        </span>
-        <span className="font-mono tabular-nums">{pct.toFixed(0)}%</span>
-      </div>
-      <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
-        <div
-          className={cn(
-            "h-full transition-[width] duration-300",
-            failed ? "bg-destructive" : "bg-emerald-500",
-          )}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const tone =
-    status === "succeeded"
-      ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/5"
-      : status === "failed"
-        ? "text-destructive border-destructive/40 bg-destructive/5"
-        : status === "running"
-          ? "text-amber-600 dark:text-amber-400 border-amber-500/40 bg-amber-500/5"
-          : "text-muted-foreground border-border/60 bg-muted/30"
-  const label =
-    status === "succeeded"
-      ? "已完成"
-      : status === "failed"
-        ? "失败"
-        : status === "running"
-          ? "运行中"
-          : "空闲"
-  return (
-    <span
-      className={cn(
-        "px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] rounded-[3px] border font-mono",
-        tone,
-      )}
-    >
-      {label}
-    </span>
-  )
-}
-
-function EventLog({ events }: { events: BootstrapEvent[] }) {
-  return (
-    <div className="rounded-[4px] border border-border/60 bg-zinc-950 dark:bg-zinc-900 max-h-72 overflow-y-auto">
-      <ol className="divide-y divide-zinc-800/60 font-mono text-[11px]">
-        {events.map((ev, idx) => (
-          <li
-            key={`${ev.ts}-${idx}`}
-            className={cn(
-              "px-3 py-1.5 flex items-start gap-2",
-              ev.level === "error"
-                ? "text-red-400 bg-red-950/40 border-l-2 border-l-red-500"
-                : ev.level === "done"
-                  ? "text-emerald-400"
-                  : "text-zinc-100",
-            )}
-          >
-            <span className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 w-12 shrink-0 pt-0.5">
-              {ev.level}
-            </span>
-            <span className="break-all">{ev.message}</span>
-          </li>
-        ))}
-      </ol>
-    </div>
-  )
-}
-
-/**
- * One-click download for the three multi-GB anima checkpoints (DiT,
- * Qwen3 TE, Qwen Image VAE). Renders only when ``uv sync`` finished
- * but the files aren't on disk yet — i.e. the venv is ready and the
- * user only needs the weights to start training. Shows live progress
- * while a download is running and a clear "all set" state once done.
- */
-function AnimaModelDownloadCard({
-  missing,
-  status,
-  isPending,
-  onDownload,
-  error,
-}: {
-  missing: string[]
-  status: AnimaModelDownloadStatus | undefined
-  isPending: boolean
-  onDownload: () => void
-  error: string | null
-}) {
-  const isRunning = status?.status === "running"
-  const failed = status?.status === "failed"
-  const succeeded = status?.status === "succeeded" && missing.length === 0
-  const percent = status?.percent ?? 0
-  const filesDone = status?.files_done ?? 0
-  const filesTotal = status?.files_total ?? missing.length
-  const lastEvent = status?.events?.[status.events.length - 1]
-
-  return (
-    <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-3 space-y-2.5">
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-        <div className="flex-1 text-xs text-amber-700 dark:text-amber-400">
-          <div className="font-semibold text-foreground">
-            anima 模型未就绪
-          </div>
-          <div className="mt-0.5 leading-relaxed">
-            训练 / 推理需要 3 个 safetensors 检查点（DiT 基模型、Qwen3 文本编码器、
-            Qwen Image VAE），从 HuggingFace
-            <code className="mx-1 text-foreground">circlestone-labs/Anima</code>
-            下载约 <strong className="text-foreground">14 GB</strong>，存放到项目根
-            <code className="mx-1 text-foreground">models/</code>
-            目录。
-          </div>
-          {missing.length > 0 && !succeeded && (
-            <ul className="mt-1.5 ml-2 font-mono text-[11px] space-y-0.5 text-muted-foreground">
-              {missing.map((f) => (
-                <li key={f}>· {f}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <Button
-          size="sm"
-          variant={succeeded ? "outline" : "default"}
-          disabled={isRunning || isPending || succeeded}
-          onClick={onDownload}
-        >
-          {isRunning || isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : succeeded ? (
-            <Check className="size-3" />
-          ) : (
-            <Download className="size-3" />
-          )}
-          {isRunning
-            ? "下载中…"
-            : succeeded
-              ? "已完成"
-              : failed
-                ? "重试"
-                : "下载模型"}
-        </Button>
-      </div>
-
-      {(isRunning || filesDone > 0) && filesTotal > 0 && (
-        <div className="space-y-1">
-          <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>
-              已完成 {filesDone} / {filesTotal} 文件
-            </span>
-            <span className="font-mono tabular-nums">{percent.toFixed(0)}%</span>
-          </div>
-          <div className="h-1.5 rounded-[1px] bg-muted/40 overflow-hidden">
-            <div
-              className={cn(
-                "h-full transition-[width] duration-300",
-                failed ? "bg-destructive" : "bg-emerald-500",
-              )}
-              style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
-            />
-          </div>
-          {lastEvent && (
-            <div className="font-mono text-[10px] text-muted-foreground/80 break-all">
-              {lastEvent.message}
-            </div>
-          )}
-        </div>
-      )}
-
-      {(failed || error) && (
-        <div className="rounded-[3px] border border-destructive/40 bg-destructive/5 px-2.5 py-1.5 text-[11px] font-mono text-destructive break-all">
-          {status?.error || error}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * Visual Studio Build Tools (MSVC) install card.
- *
- * Renders only when the anima_lora venv is ready but Windows MSVC
- * is missing. anima's ``--torch_compile`` path drives PyTorch
- * Inductor to JIT through triton-windows; without ``cl.exe`` the
- * trainer crashes inside the first compile pass with a TypeError
- * from triton's MSVC discovery — a failure mode that has no
- * obvious connection to the user's config and is hard to diagnose
- * after the fact. The button shells out to ``winget install
- * Microsoft.VisualStudio.2022.BuildTools`` with the C++ workload +
- * Win 11 SDK pre-selected; the tail of winget's output is mirrored
- * into the log block below the button so the user can see when
- * MSI installers are still spinning vs actually wedged.
- */
-function MsvcInstallCard({
-  detection,
-  status,
-  isPending,
-  onInstall,
-  error,
-}: {
-  detection: AnimaLoraBackendStatus["msvc"]
-  status: MsvcInstallStatus | undefined
-  isPending: boolean
-  onInstall: () => void
-  error: string | null
-}) {
-  const isRunning = status?.status === "running"
-  const failed = status?.status === "failed"
-  const succeeded = status?.msvc?.ok || status?.status === "succeeded"
-  const log = status?.log ?? []
-  const lastLine = log.length > 0 ? log[log.length - 1] : null
-
-  return (
-    <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/5 px-3 py-3 space-y-2.5">
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-        <div className="flex-1 text-xs text-amber-700 dark:text-amber-400">
-          <div className="font-semibold text-foreground">
-            缺少 Visual Studio Build Tools
-          </div>
-          <div className="mt-0.5 leading-relaxed">
-            anima_lora 训练默认开启
-            <code className="mx-1 text-foreground">torch.compile</code>
-            ，PyTorch Inductor 需要通过 triton-windows 调用
-            <code className="mx-1 text-foreground">cl.exe</code>
-            。否则首次编译就会崩溃，无法继续训练。
-          </div>
-          <div className="mt-1 leading-relaxed">
-            点击下方按钮调用
-            <code className="mx-1 text-foreground">winget</code>
-            自动安装
-            <strong className="mx-0.5 text-foreground">
-              Build Tools for Visual Studio 2022
-            </strong>
-            （含 C++ 工作负载与 Windows 11 SDK，约 1.5–2 GB）。不会安装完整的 Visual Studio IDE。
-          </div>
-          {detection.reason && (
-            <div className="mt-1 font-mono text-[10px] text-muted-foreground/80 break-all">
-              {detection.reason}
-            </div>
-          )}
-          {!detection.winget_available && (
-            <div className="mt-1.5 text-[11px]">
-              <strong className="text-foreground">winget 不可用</strong>
-              ，需要手动下载安装：
-              <a
-                href="https://aka.ms/vs/17/release/vs_BuildTools.exe"
-                target="_blank"
-                rel="noreferrer"
-                className="ml-1 underline"
-              >
-                vs_BuildTools.exe
-              </a>
-            </div>
-          )}
-        </div>
-        <Button
-          size="sm"
-          variant={succeeded ? "outline" : "default"}
-          disabled={
-            isRunning || isPending || succeeded || !detection.winget_available
-          }
-          onClick={onInstall}
-        >
-          {isRunning || isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : succeeded ? (
-            <Check className="size-3" />
-          ) : (
-            <Download className="size-3" />
-          )}
-          {isRunning
-            ? "安装中…"
-            : succeeded
-              ? "已安装"
-              : failed
-                ? "重试"
-                : "一键安装"}
-        </Button>
-      </div>
-
-      {(isRunning || lastLine) && (
-        <div className="space-y-1">
-          {lastLine && (
-            <div className="font-mono text-[10px] text-muted-foreground/80 break-all">
-              {lastLine}
-            </div>
-          )}
-          {log.length > 1 && (
-            <details className="text-[10px] text-muted-foreground/70">
-              <summary className="cursor-pointer select-none">
-                查看完整日志（{log.length} 行）
-              </summary>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-[3px] border border-border/60 bg-muted/20 px-2 py-1.5 font-mono text-[10px] text-foreground/70">
-                {log.join("\n")}
-              </pre>
-            </details>
-          )}
-        </div>
-      )}
-
-      {(failed || error) && (
-        <div className="rounded-[3px] border border-destructive/40 bg-destructive/5 px-2.5 py-1.5 text-[11px] font-mono text-destructive break-all">
-          {status?.error || error}
-        </div>
-      )}
-    </div>
-  )
-}
+import { AnimaModelDownloadCard, MsvcInstallCard } from "./install-action-cards"
+import {
+  EventLog,
+  ProgressBar,
+  STEP_PLANS,
+  StatusBadge,
+  StepList,
+  computeStepStates,
+  isRetryableStatus,
+  isTerminalStatus,
+  type StepDef,
+} from "./install-progress"
 
 /**
  * One-click install panel. The user picks a backend, hits 安装, and the
@@ -643,7 +200,7 @@ export function InstallTab() {
   // When an install transitions to a terminal state, refresh the backend
   // catalog so the user sees their new checkout immediately.
   useEffect(() => {
-    if (status === "succeeded" || status === "failed") {
+    if (isTerminalStatus(status)) {
       qc.invalidateQueries({ queryKey: ["settings"] })
       qc.invalidateQueries({ queryKey: ["backends"] })
       qc.invalidateQueries({ queryKey: ["health"] })
@@ -757,7 +314,7 @@ export function InstallTab() {
               )}
               {isRunning
                 ? "安装中…"
-                : status === "failed"
+                : isRetryableStatus(status)
                   ? "重试安装"
                   : descriptor?.ready
                     ? "重新安装"
@@ -882,11 +439,13 @@ export function InstallTab() {
                 failed={failedCount > 0}
               />
               <StepList plan={plan} states={states} />
-              {status === "failed" && lastError && (
+              {isRetryableStatus(status) && lastError && (
                 <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive break-all flex items-start gap-2">
                   <XCircle className="size-4 shrink-0 mt-0.5" />
                   <div>
-                    <div className="font-semibold not-italic">安装失败</div>
+                    <div className="font-semibold not-italic">
+                      {status === "interrupted" ? "安装中断" : "安装失败"}
+                    </div>
                     <div className="mt-0.5 whitespace-pre-wrap">
                       {lastError.message}
                     </div>

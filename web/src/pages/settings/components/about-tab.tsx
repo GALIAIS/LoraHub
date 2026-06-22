@@ -111,15 +111,15 @@ export function AboutTab() {
                 <ul className="list-disc pl-5 space-y-0.5 font-mono text-[11px] text-amber-900/85 dark:text-amber-200/90">
                   <li>
                     <code>lorahub manage build</code>
-                    {" "}— 仅重建前端
+                    {" "}: 仅重建前端
                   </li>
                   <li>
                     <code>lorahub manage update</code>
-                    {" "}— 拉新代码 + 重装依赖 + 重建前端
+                    {" "}: 拉新代码 + 重装依赖 + 重建前端
                   </li>
                   <li>
                     <code>scripts\run.bat dev</code>
-                    {" "}— Vite 热更新（开发模式）
+                    {" "}: Vite 热更新（开发模式）
                   </li>
                 </ul>
               </div>

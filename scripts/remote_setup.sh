@@ -28,16 +28,36 @@ PYPI_INDEX="${LORAHUB_PYPI_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 NPM_REGISTRY="${LORAHUB_NPM_REGISTRY:-https://registry.npmmirror.com}"
 GH_PROXY="${LORAHUB_GH_PROXY:-https://gh-proxy.org/}"
 
-NODE_VERSION="20.18.1"
+NODE_VERSION="20.19.0"
+NODE_MIN_VERSION="20.19.0"
 UV_VERSION="latest"
 
 log() { printf '\033[36m[setup]\033[0m %s\n' "$*"; }
 err() { printf '\033[31m[setup error]\033[0m %s\n' "$*" >&2; }
 
+version_ge() {
+  local a b i ai bi IFS=.
+  read -r -a a <<< "${1#v}"
+  read -r -a b <<< "${2#v}"
+  for i in 0 1 2; do
+    ai="${a[$i]:-0}"
+    bi="${b[$i]:-0}"
+    if ((10#$ai > 10#$bi)); then return 0; fi
+    if ((10#$ai < 10#$bi)); then return 1; fi
+  done
+  return 0
+}
+
 ensure_node() {
   if [[ -x "${NODE_DIR}/bin/node" ]]; then
-    log "Node already at ${NODE_DIR} ($(${NODE_DIR}/bin/node -v))"
-    return 0
+    local current
+    current="$(${NODE_DIR}/bin/node -v)"
+    if version_ge "$current" "$NODE_MIN_VERSION"; then
+      log "Node already at ${NODE_DIR} (${current})"
+      return 0
+    fi
+    log "Cached Node ${current} is below required v${NODE_MIN_VERSION}; reinstalling"
+    rm -rf "${NODE_DIR}"
   fi
   log "Installing Node ${NODE_VERSION} portable to ${NODE_DIR}"
   mkdir -p "$(dirname "${NODE_DIR}")"
@@ -118,10 +138,17 @@ build_frontend() {
     needs_install=1
   fi
   if (( needs_install )); then
-    log "npm install (registry: ${NPM_REGISTRY})"
-    "${NODE_DIR}/bin/npm" install --registry="${NPM_REGISTRY}" \
+    log "npm ci (registry: ${NPM_REGISTRY}; log: /root/_npm_install.log)"
+    "${NODE_DIR}/bin/npm" ci --registry="${NPM_REGISTRY}" \
+      --verbose \
+      --no-audit \
+      --no-fund \
+      --fetch-timeout=60000 \
+      --fetch-retries=2 \
+      --fetch-retry-mintimeout=5000 \
+      --fetch-retry-maxtimeout=20000 \
       > /root/_npm_install.log 2>&1 || {
-      err "npm install failed; tail of log:"
+      err "npm ci failed; tail of log:"
       tail -30 /root/_npm_install.log >&2
       return 1
     }

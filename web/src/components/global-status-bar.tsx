@@ -13,7 +13,6 @@ import {
   ArrowDown,
   ArrowUp,
   Cpu,
-  Download,
   MemoryStick,
   Sparkles,
   Wifi,
@@ -49,11 +48,13 @@ export function GlobalStatusBar() {
   ).length
 
   return (
-    <div className="shrink-0 border-b border-border/60 bg-background/80 backdrop-blur px-4 py-1.5 flex items-center gap-x-5 gap-y-1 flex-wrap text-[11px]">
+    <div className="shrink-0 border-b border-border/60 bg-background/80 backdrop-blur px-3 py-1.5 text-[11px] md:px-4">
+      <div className="no-scrollbar flex items-center gap-x-4 gap-y-1 overflow-x-auto md:flex-wrap md:overflow-visible">
       <ConnectionDot live={stream.status === "open"} />
       {snapshot ? (
         <>
           <Chip
+            className="hidden md:inline-flex"
             icon={<Cpu className="size-3" />}
             label="CPU"
             value={
@@ -64,6 +65,7 @@ export function GlobalStatusBar() {
             tone={toneForPercent(snapshot.cpu.usage_percent)}
           />
           <Chip
+            className="hidden sm:inline-flex"
             icon={<MemoryStick className="size-3" />}
             label="内存"
             value={`${snapshot.memory.percent.toFixed(0)}%`}
@@ -97,6 +99,7 @@ export function GlobalStatusBar() {
                 tone="text-emerald-700 dark:text-emerald-400"
               />
               <Chip
+                className="hidden md:inline-flex"
                 icon={<ArrowUp className="size-3 text-primary" />}
                 label="上传"
                 value={fmtRate(snapshot.network.bytes_sent_per_sec)}
@@ -118,6 +121,7 @@ export function GlobalStatusBar() {
         <span className="text-muted-foreground/70">正在连接系统监控…</span>
       )}
       <UpdateBadge />
+      </div>
     </div>
   )
 }
@@ -143,16 +147,18 @@ function Chip({
   value,
   sub,
   tone,
+  className,
 }: {
   icon: React.ReactNode
   label: string
   value: string
   sub?: string
   tone: string
+  className?: string
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 min-w-0 shrink-0"
+      className={cn("inline-flex items-center gap-1.5 min-w-0 shrink-0", className)}
       title={sub ?? undefined}
     >
       <span className="text-muted-foreground/70 shrink-0">{icon}</span>
@@ -257,7 +263,7 @@ function UpdateBadge() {
     <Link
       to="/settings?tab=environment"
       className={cn(
-        "ml-auto inline-flex items-center gap-1.5 rounded-[2px] border border-primary/40",
+        "ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-primary/40",
         "bg-primary/10 px-2 py-0.5 text-[11px] text-primary",
         "hover:bg-primary/15 transition-colors",
       )}
@@ -267,7 +273,6 @@ function UpdateBadge() {
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/50" />
         <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
       </span>
-      <Download className="size-3" />
       新版本 {label}
     </Link>
   )

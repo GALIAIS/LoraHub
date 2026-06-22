@@ -44,6 +44,8 @@ set "TOOLS_DIR=%CD%\.lorahub"
 set "UV_DIR=%TOOLS_DIR%\uv"
 set "PY_DIR=%TOOLS_DIR%\python"
 set "NODE_DIR=%CD%\.node"
+set "NODE_VERSION=20.19.0"
+set "NODE_MIN_VERSION=20.19.0"
 
 if not defined LORAHUB_NODE_MIRROR set "LORAHUB_NODE_MIRROR=https://nodejs.org/dist"
 
@@ -186,7 +188,7 @@ if defined VENV_VALID (
     echo   [ERROR] Failed to create venv.
     goto :fail
   )
-  echo   OK .venv created (seeded with pip / setuptools / wheel)
+  echo   OK .venv created ^(seeded with pip / setuptools / wheel^)
 )
 set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 echo.
@@ -217,14 +219,19 @@ if exist "%NODE_DIR%\node.exe" (
   if exist "%NODE_DIR%\npm.cmd" (
     set "PATH=%NODE_DIR%;%PATH%"
     for /f "delims=" %%v in ('"%NODE_DIR%\node.exe" --version 2^>nul') do set "NODE_VER=%%v"
-    echo   OK Node.js %NODE_VER% (portable, cached)
-    goto :node_done
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "if ([version]('!NODE_VER:v=!') -ge [version]('%NODE_MIN_VERSION%')) { exit 0 } else { exit 1 }"
+    if not errorlevel 1 (
+      echo   OK Node.js !NODE_VER! ^(portable, cached^)
+      goto :node_done
+    )
+    echo   Cached Node.js !NODE_VER! is below required v%NODE_MIN_VERSION%; reinstalling ...
+    rmdir /s /q "%NODE_DIR%"
   )
 )
 
 echo   Downloading portable Node.js 20 (mirror: %LORAHUB_NODE_MIRROR%) ...
 if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v20.18.1/node-v20.18.1-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
 if errorlevel 1 (
   echo   [ERROR] Failed to download Node.js.
   goto :fail
@@ -234,7 +241,7 @@ if errorlevel 1 (
   echo   [ERROR] Failed to extract Node.js.
   goto :fail
 )
-rem Flatten: move contents from node-v20.18.1-win-x64\ up to .node\
+rem Flatten: move contents from node-v%NODE_VERSION%-win-x64\ up to .node\
 for /d %%d in ("%NODE_DIR%\node-v*") do (
   xcopy /E /Y /Q "%%d\*" "%NODE_DIR%\" >nul
   rd /s /q "%%d"
@@ -258,18 +265,29 @@ echo.
 
 rem ---- [6/6] Install frontend dependencies --------------------------
 echo [6/6] Installing frontend dependencies (web/) ...
-if exist "web\node_modules\vite" (
-  echo   OK web\node_modules already exists
+set "NEEDS_NPM_INSTALL=0"
+if not exist "web\node_modules" set "NEEDS_NPM_INSTALL=1"
+if not exist "web\node_modules\.package-lock.json" set "NEEDS_NPM_INSTALL=1"
+if exist "web\node_modules\.package-lock.json" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-Item 'web\package-lock.json').LastWriteTimeUtc -gt (Get-Item 'web\node_modules\.package-lock.json').LastWriteTimeUtc -or (Get-Item 'web\package.json').LastWriteTimeUtc -gt (Get-Item 'web\node_modules\.package-lock.json').LastWriteTimeUtc) { exit 1 } else { exit 0 }"
+  if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
+)
+if "%NEEDS_NPM_INSTALL%"=="0" (
+  echo   OK web\node_modules already matches package lock
 ) else (
   pushd "web" || (
     echo   [ERROR] Cannot enter web directory
     goto :fail
   )
-  call npm.cmd install
+  for /f "delims=" %%r in ('npm.cmd config get registry 2^>nul') do set "NPM_REGISTRY_NOW=%%r"
+  echo   npm registry: !NPM_REGISTRY_NOW!
+  echo   running npm ci ^(verbose log: web\_npm_install.log^) ...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%npm-ci-with-log.ps1"
   set "NPM_RC=!errorlevel!"
   popd
   if not "!NPM_RC!"=="0" (
-    echo   [ERROR] npm install failed.
+    echo   [ERROR] npm ci failed.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Path 'web\_npm_install.log' -Tail 40"
     echo   If your network blocks registry.npmjs.org, retry with the
     echo   China-mirror wrapper:  scripts\install-cn.bat
     goto :fail

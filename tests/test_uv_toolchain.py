@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,8 +13,9 @@ from lorahub.core.toolchain import uv as _uv
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_uv, "_UV_CACHED", None, raising=False)
+    monkeypatch.setattr(_uv, "_local_uv_path", lambda: tmp_path / "uv")
 
 
 def test_find_uv_returns_path_when_on_system(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,6 +88,25 @@ def test_create_venv_returns_python_path(
     expected_dir = target / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
     assert py.parent == expected_dir
     assert py.name in {"python.exe", "python"}
+
+
+def test_run_uv_merges_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
+    captured: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        captured.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(_uv.subprocess, "run", fake_run)
+
+    _uv.run_uv(["sync"], step="sync", env={"UV_CACHE_DIR": "/work/.cache/uv"})
+
+    cmd, kwargs = captured[0]
+    assert cmd == ["/fake/uv", "sync"]
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["UV_CACHE_DIR"] == "/work/.cache/uv"
 
 
 def test_venv_python_picks_right_layout_per_platform(tmp_path: Path) -> None:

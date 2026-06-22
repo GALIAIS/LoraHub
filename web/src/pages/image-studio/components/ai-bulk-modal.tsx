@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { X, Sparkles, BookOpen } from "lucide-react"
 import { api } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 import type { AiBulkTab } from "./types"
 import { TriggerPicker } from "./library/trigger-picker"
 
@@ -383,20 +384,21 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
         </div>
 
         <div className="flex justify-end gap-2 border-t px-4 py-3">
-          <button
+          <Button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-xs hover:bg-muted"
+            variant="ghost"
+            size="sm"
           >
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={handleStart}
-            className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+            size="sm"
           >
             开始执行
-          </button>
+          </Button>
         </div>
       </div>
     </div>

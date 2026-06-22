@@ -156,38 +156,8 @@ export function DatasetsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-8 py-7 space-y-5 w-full">
-        <header className="space-y-1">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            数据集管理
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight">数据集</h1>
-          <p className="text-sm text-muted-foreground">
-            从下拉中选择数据集，预览缩略图，点击「编辑」修改 caption。
-          </p>
-        </header>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <CardTitle className="text-base">选择数据集</CardTitle>
-                <CardDescription>
-                  从 <code className="font-mono">datasets/</code> 下的子目录里挑一个，
-                  或切到「高级」输入任意路径。
-                </CardDescription>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setAdvanced(!advanced)}
-                className="gap-1 text-[11px]"
-              >
-                <Pencil className="size-3" />
-                {advanced ? "切回下拉" : "高级（输入路径）"}
-              </Button>
-            </div>
-          </CardHeader>
+      <div className="px-4 py-4 md:px-6 md:py-5 space-y-4 w-full">
+        <Card size="sm">
           <CardContent className="space-y-3">
             {!advanced && (
               <div className="flex gap-2 flex-wrap items-center">
@@ -206,7 +176,7 @@ export function DatasetsPage() {
                         datasetsList.isLoading
                           ? "加载数据集…"
                           : knownDatasets.length === 0
-                            ? "datasets/ 下尚无数据集 · 切换高级模式输入路径"
+                            ? "datasets/ 下尚无数据集"
                             : "选择数据集…"
                       }
                     />
@@ -229,6 +199,15 @@ export function DatasetsPage() {
                   title="递归扫描所有子目录"
                 >
                   递归
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setAdvanced(true)}
+                  className="gap-1 text-[11px]"
+                >
+                  <Pencil className="size-3" />
+                  输入路径
                 </Button>
                 {!datasetsList.isLoading &&
                   knownDatasets.length === 0 && (
@@ -264,6 +243,15 @@ export function DatasetsPage() {
                   title="递归扫描所有子目录"
                 >
                   递归
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  type="button"
+                  onClick={() => setAdvanced(false)}
+                  className="gap-1 text-[11px]"
+                >
+                  切回下拉
                 </Button>
               </form>
             )}
@@ -312,11 +300,11 @@ export function DatasetsPage() {
               />
             </div>
 
-            <Card>
-              <CardHeader className="pb-3">
+            <Card size="sm">
+              <CardHeader className="pb-2">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div>
-                    <CardTitle className="text-base">样本预览</CardTitle>
+                    <CardTitle className="text-sm">样本预览</CardTitle>
                     <CardDescription className="font-mono break-all">
                       {data.path}
                     </CardDescription>
@@ -364,28 +352,23 @@ export function DatasetsPage() {
                   pageSizeOptions={PAGE_SIZE_OPTIONS}
                   onPageSizeChange={setPageSize}
                 />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="px-4 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">用此数据集训练</div>
-                  <div className="text-xs text-muted-foreground">
-                    跳转到训练配置页，自动预填{" "}
-                    <code className="font-mono text-foreground">dataset.source</code>。
+                <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                  <div className="min-w-0 text-xs text-muted-foreground">
+                    跳转到训练配置页并预填{" "}
+                    <code className="font-mono text-foreground">dataset.source</code>
                   </div>
+                  <Button
+                    size="sm"
+                    disabled={!canTrain}
+                    onClick={() =>
+                      navigate("/configs", {
+                        state: { overrideDataset: data.path },
+                      })
+                    }
+                  >
+                    <Play className="size-3.5" /> 训练
+                  </Button>
                 </div>
-                <Button
-                  disabled={!canTrain}
-                  onClick={() =>
-                    navigate("/configs", {
-                      state: { overrideDataset: data.path },
-                    })
-                  }
-                >
-                  <Play className="size-3.5" /> 训练
-                </Button>
               </CardContent>
             </Card>
           </>
@@ -415,7 +398,7 @@ function DatasetStat({
 }) {
   const toneStyle = tone === "warning" ? "text-amber-700 dark:text-amber-400" : "text-foreground"
   return (
-    <Card>
+    <Card size="sm">
       <CardContent className="px-4 py-3">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
           {icon}

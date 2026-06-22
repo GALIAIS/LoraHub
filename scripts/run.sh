@@ -27,7 +27,15 @@ WEB_PORT="6006"
 
 # ---- Add project-local tools to PATH --------------------------------
 [ -d "$ROOT/.lorahub/uv" ] && export PATH="$ROOT/.lorahub/uv:$PATH"
-[ -f "$ROOT/.node/bin/node" ] && export PATH="$ROOT/.node/bin:$PATH"
+NODE_BIN=""
+if [ -n "${NODE_DIR:-}" ] && [ -f "$NODE_DIR/bin/node" ]; then
+    NODE_BIN="$NODE_DIR/bin"
+elif [ -f "$ROOT/.node/bin/node" ]; then
+    NODE_BIN="$ROOT/.node/bin"
+elif [ -f "/root/autodl-tmp/opt/node20/bin/node" ]; then
+    NODE_BIN="/root/autodl-tmp/opt/node20/bin"
+fi
+[ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
 
 # ---- Resolve Python --------------------------------------------------
 if [ ! -f ".venv/bin/python" ]; then
@@ -48,7 +56,7 @@ fi
 # both noisy on stdout, both quit together). Keep the legacy two-child
 # logic for `dev` only.
 if [[ "$MODE" == "dev" ]]; then
-    if [[ ! -f "$ROOT/.node/bin/node" ]]; then
+    if [[ -z "$NODE_BIN" ]]; then
         echo "[ERROR] Portable Node.js missing. Run scripts/install.sh first."
         exit 1
     fi

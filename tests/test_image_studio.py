@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ from lorahub.api.image_studio_library import (
     TagEntry,
     TriggerWordEntry,
 )
+from lorahub.api.task_sessions import TaskSessionStore
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +199,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     monkeypatch.setattr(app_module, "_image_studio_store", store)
     library = ImageStudioLibrary(tmp_path / "is.sqlite")
     monkeypatch.setattr(app_module, "_image_studio_library", library)
+    monkeypatch.setattr(app_module, "_task_session_store", TaskSessionStore(tmp_path / "tasks.sqlite3"))
     with TestClient(app_module.app) as c:
         yield c
 
@@ -236,6 +239,36 @@ def test_list_pagination(client: TestClient, sample_dir: Path) -> None:
     assert len(r2.json()["items"]) == 1
 
 
+def test_dataset_name_endpoints_reject_dot_paths(
+    client: TestClient, tmp_path: Path
+) -> None:
+    dataset = tmp_path / "safe"
+    dataset.mkdir()
+    (tmp_path / "outside.txt").write_text("keep", encoding="utf-8")
+
+    r = client.delete("/api/image-studio/datasets/..%5C")
+    assert r.status_code in (400, 404), r.text
+
+    assert dataset.is_dir()
+    assert (tmp_path / "outside.txt").is_file()
+
+
+def test_dataset_upload_normalizes_plain_file_names(
+    client: TestClient, tmp_path: Path
+) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    r = client.post(
+        "/api/image-studio/datasets/dataset/upload",
+        files={"files": ("..\\escape.png", b"not-image", "image/png")},
+    )
+
+    assert r.status_code == 200, r.text
+    assert not (tmp_path / "escape.png").exists()
+    assert (dataset / "escape.png").read_bytes() == b"not-image"
+
+
 def test_get_image(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     r = client.get("/api/image-studio/image", params={"path": img_path})
@@ -246,6 +279,526 @@ def test_get_image(client: TestClient, sample_dir: Path) -> None:
     assert body["caption"] == "caption for a"
     assert body["phash"] == {}
     assert body["pendingOps"] == []
+
+
+def test_smart_caption_writes_task_session(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.ai_store import AIRoute
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+
+    response = client.post(
+        "/api/image-studio/ai/smart-caption",
+        json={
+            "path": str(sample_dir),
+            "skipExisting": True,
+            "useWd14": False,
+            "captionMode": "style",
+            "triggerWord": "teststyle",
+            "concurrency": 1,
+            "taggerConcurrency": 1,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
+
+    deadline = time.time() + 5
+    latest: dict | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/smart-caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_smart_caption",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 2
+    assert latest["events"][-1]["message"].startswith("finished")
+
+
+def test_smart_caption_status_reads_persisted_result_after_memory_clear(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+
+    response = client.post(
+        "/api/image-studio/ai/smart-caption",
+        json={
+            "path": str(sample_dir),
+            "skipExisting": True,
+            "useWd14": False,
+            "concurrency": 1,
+            "taggerConcurrency": 1,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 2
+    assert response.json()["skipped"] == 1
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/smart-caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            break
+        time.sleep(0.02)
+
+    ai_router._smart_caption_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/ai/smart-caption/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["status"] == "succeeded"
+    assert body["processed"] == 2
+
+
+@pytest.mark.parametrize(
+    ("kind", "url"),
+    [
+        ("image_studio_smart_caption", "/api/image-studio/ai/smart-caption/status/{sid}"),
+        ("image_studio_quality", "/api/image-studio/ai/quality/status/{sid}"),
+        ("image_studio_caption", "/api/image-studio/ai/caption/status/{sid}"),
+        ("image_studio_trigger_words", "/api/image-studio/ai/trigger-words/status/{sid}"),
+        ("image_studio_auto_rotate", "/api/image-studio/curate/auto-rotate/status/{sid}"),
+        ("image_studio_batch_resize", "/api/image-studio/curate/batch-resize/status/{sid}"),
+    ],
+)
+def test_image_studio_status_recovers_interrupted_task_without_result(
+    client: TestClient, sample_dir: Path, kind: str, url: str
+) -> None:
+    task = app_module._task_session_store.create(
+        kind=kind,
+        title="interrupted task",
+        metadata={"path": str(sample_dir), "dataset_path": str(sample_dir), "total": 3},
+    )
+    app_module._task_session_store.update(
+        task.id,
+        status="running",
+        percent=42,
+    )
+    app_module._task_session_store.mark_stale_interrupted()
+
+    recovered = client.get(url.format(sid=task.id))
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 42
+    assert body["error"] == "task interrupted by server restart"
+    assert body["events"][-1]["message"] == "task interrupted by server restart"
+
+
+def test_ai_quality_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from dataclasses import dataclass
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+    from lorahub.core.ai import client as ai_client
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="quality.score",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    @dataclass
+    class FakeAIResult:
+        content: str
+        provider_name: str = "fake"
+        model_id: str = "fake-model"
+        raw: dict[str, Any] | None = None
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+    monkeypatch.setattr(
+        ai_client,
+        "invoke",
+        lambda *_args, **_kwargs: FakeAIResult(
+            '{"score": 80, "label": "good", "reason": "sharp"}',
+        ),
+    )
+
+    response = client.post(
+        "/api/image-studio/ai/quality/start",
+        json={"path": str(sample_dir), "recursive": False, "skipScored": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/quality/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_quality",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    ai_router._quality_sessions.clear()
+    recovered = client.get(f"/api/image-studio/ai/quality/status/{session_id}")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["processed"] == 3
+
+
+def test_trigger_words_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from dataclasses import dataclass
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+    from lorahub.core.ai import client as ai_client
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="trigger.words",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    @dataclass
+    class FakeAIResult:
+        content: str
+        provider_name: str = "fake"
+        model_id: str = "fake-model"
+        raw: dict[str, Any] | None = None
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+    monkeypatch.setattr(
+        ai_client,
+        "invoke",
+        lambda *_args, **_kwargs: FakeAIResult(
+            '{"triggers": ["crimson cloak", "star wand"]}',
+        ),
+    )
+
+    response = client.post(
+        "/api/image-studio/ai/trigger-words/start",
+        json={"path": str(sample_dir), "recursive": False, "skipAnalyzed": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/trigger-words/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_trigger_words",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert status["dataset_top"][0] == {"trigger": "crimson cloak", "count": 3}
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    ai_router._trigger_words_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/ai/trigger-words/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["processed"] == 3
+
+
+def test_ai_caption_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from dataclasses import dataclass
+
+    from lorahub.api.ai_store import AIRoute
+    from lorahub.api.routers.image_studio import ai as ai_router
+    from lorahub.core.ai import client as ai_client
+
+    class FakeAIStore:
+        def get_route(self, _task_id: str) -> AIRoute:
+            return AIRoute(
+                task_id="tagging.assist",
+                provider_id="fake-provider",
+                model_id="fake-model",
+            )
+
+    @dataclass
+    class FakeAIResult:
+        content: str
+        provider_name: str = "fake"
+        model_id: str = "fake-model"
+        raw: dict[str, Any] | None = None
+
+    monkeypatch.setattr(app_module, "_ai_store", FakeAIStore())
+    monkeypatch.setattr(
+        ai_client,
+        "invoke",
+        lambda *_args, **_kwargs: FakeAIResult("caption text"),
+    )
+
+    response = client.post(
+        "/api/image-studio/ai/caption/start",
+        json={"path": str(sample_dir), "recursive": False, "skipAnnotated": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/ai/caption/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_caption",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 2
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["result"]["processed"] == 2
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    ai_router._caption_sessions.clear()
+    recovered = client.get(f"/api/image-studio/ai/caption/status/{session_id}")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["processed"] == 2
+
+
+def test_image_studio_tagging_writes_task_session(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=kwargs["recursive"]):
+                image.with_suffix(".txt").write_text("studio tag", encoding="utf-8")
+                kwargs["on_progress"](image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "_build_is_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/image-studio/tagging/start",
+        json={"path": str(sample_dir), "device": "cpu", "overwrite": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(f"/api/image-studio/tagging/{session_id}").json()
+        if status["status"] in {"succeeded", "failed"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_tagging",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["metadata"]["path"] == str(sample_dir)
+    assert latest["metadata"]["tagger"] == "wd14"
+    assert latest["status"] == "succeeded"
+    assert latest["result"]["written"] == 3
+    assert latest["events"][-1]["message"].startswith("done")
+
+
+def test_image_studio_tagging_status_reads_persisted_result_after_memory_clear(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def load(self) -> None:
+            pass
+
+        def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
+            from lorahub.core.tagging.wd14 import _iter_images  # noqa: PLC0415
+
+            results: list[Any] = []
+            for image in _iter_images(directory, recursive=kwargs["recursive"]):
+                image.with_suffix(".txt").write_text("studio tag", encoding="utf-8")
+                kwargs["on_progress"](image, object())
+                results.append(object())
+            return results
+
+    monkeypatch.setattr(tagging_router, "_build_is_tagger", lambda _req: FakeTagger())
+
+    response = client.post(
+        "/api/image-studio/tagging/start",
+        json={"path": str(sample_dir), "device": "cpu", "overwrite": True},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(f"/api/image-studio/tagging/{session_id}").json()
+        if status["status"] in {"succeeded", "failed"}:
+            break
+        time.sleep(0.02)
+
+    tagging_router._is_tagging_sessions.clear()
+    recovered = client.get(f"/api/image-studio/tagging/{session_id}")
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == session_id
+    assert body["status"] == "succeeded"
+    assert body["written"] == 3
+
+
+def test_image_studio_tagging_status_recovers_interrupted_task(
+    client: TestClient, sample_dir: Path
+) -> None:
+    from lorahub.api import app as app_module
+    from lorahub.api.routers.image_studio import tagging as tagging_router
+
+    task = app_module._task_session_store.create(
+        kind="image_studio_tagging",
+        title="wd14:dataset",
+        metadata={
+            "path": str(sample_dir),
+            "tagger": "wd14",
+            "model_id": "wd14-vit-v2",
+            "device": "cpu",
+            "overwrite": True,
+            "recursive": False,
+        },
+    )
+    app_module._task_session_store.update(task.id, status="running", percent=52)
+    app_module._task_session_store.mark_stale_interrupted()
+    tagging_router._is_tagging_sessions.clear()
+
+    recovered = client.get(f"/api/image-studio/tagging/{task.id}")
+
+    assert recovered.status_code == 200, recovered.text
+    body = recovered.json()
+    assert body["session_id"] == task.id
+    assert body["status"] == "interrupted"
+    assert body["percent"] == 52
+    assert body["error"] == "task interrupted by server restart"
 
 
 def test_annotation_crud_via_api(client: TestClient, sample_dir: Path) -> None:
@@ -386,6 +939,29 @@ def test_batch_delete(client: TestClient, sample_dir: Path) -> None:
     assert not (sample_dir / "c.png").exists()
 
 
+def test_batch_delete_handles_same_name_in_different_dirs(
+    client: TestClient, sample_dir: Path
+) -> None:
+    nested = sample_dir / "nested"
+    nested.mkdir()
+    first = sample_dir / "same.png"
+    second = nested / "same.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    r = client.post(
+        "/api/image-studio/dedupe/batch-delete",
+        json={"paths": [str(first), str(second)]},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deletedCount"] == 2
+    assert body["errors"] == []
+    assert not first.exists()
+    assert not second.exists()
+
+
 def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> None:
     img_path = str(sample_dir / "a.png")
     # Mark as favorite
@@ -399,6 +975,212 @@ def test_batch_delete_blocks_favorites(client: TestClient, sample_dir: Path) -> 
     assert r.json()["deletedCount"] == 0
     assert len(r.json()["errors"]) == 1
     assert "favourite" in r.json()["errors"][0]["error"]
+
+
+def test_batch_resize_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    response = client.post(
+        "/api/image-studio/curate/batch-resize/start",
+        json={
+            "dataset_path": str(sample_dir),
+            "target_short_edge": 128,
+            "filter": "bilinear",
+            "upscale": True,
+            "recursive": False,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 3
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/batch-resize/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_batch_resize",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert status["resampled_count"] == 3
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["dataset_path"] == str(sample_dir)
+    assert latest["result"]["resampled_count"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    curate_router._batch_resize_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/curate/batch-resize/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["resampled_count"] == 3
+
+
+def test_auto_rotate_writes_task_session_and_recovers_status(
+    client: TestClient,
+    sample_dir: Path,
+) -> None:
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    response = client.post(
+        "/api/image-studio/curate/auto-rotate/start",
+        json={
+            "dataset_path": str(sample_dir),
+            "recursive": False,
+        },
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert response.json()["total"] == 3
+
+    deadline = time.time() + 5
+    status: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            latest_response = client.get(
+                "/api/tasks/latest?kind=image_studio_auto_rotate",
+            )
+            if latest_response.status_code == 200:
+                latest = latest_response.json()
+            break
+        time.sleep(0.02)
+
+    assert status is not None
+    assert status["status"] == "succeeded"
+    assert status["processed"] == 3
+    assert status["rotated_count"] == 0
+    assert status["skipped_count"] == 3
+    assert latest is not None
+    assert latest["id"] == session_id
+    assert latest["status"] == "succeeded"
+    assert latest["metadata"]["dataset_path"] == str(sample_dir)
+    assert latest["result"]["skipped_count"] == 3
+    assert latest["events"][-1]["message"].startswith("finished")
+
+    curate_router._auto_rotate_sessions.clear()
+    recovered = client.get(
+        f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["skipped_count"] == 3
+
+
+def test_auto_rotate_stop_marks_session_canceled(
+    client: TestClient,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers.image_studio import curate as curate_router
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_auto_rotate_images(
+        *_args: Any,
+        should_stop: Any = None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        entered.set()
+        assert release.wait(5)
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
+        return {"rotated": [], "rotated_count": 0, "skipped_count": 0, "failed": []}
+
+    monkeypatch.setattr(curate_router, "_auto_rotate_images", fake_auto_rotate_images)
+
+    response = client.post(
+        "/api/image-studio/curate/auto-rotate/start",
+        json={"dataset_path": str(sample_dir), "recursive": False},
+    )
+    assert response.status_code == 202, response.text
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stop = client.post(f"/api/image-studio/curate/auto-rotate/stop/{session_id}")
+    assert stop.status_code == 200, stop.text
+    assert stop.json()["status"] == "stop_requested"
+    release.set()
+
+    deadline = time.time() + 5
+    status: dict[str, Any] = {}
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/image-studio/curate/auto-rotate/status/{session_id}",
+        ).json()
+        if status["status"] in {"succeeded", "failed", "canceled"}:
+            break
+        time.sleep(0.02)
+
+    assert status["status"] == "canceled", status
+    assert status["error"] == "stopped by user"
+    latest: dict[str, Any] = {}
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        latest = client.get("/api/tasks/latest?kind=image_studio_auto_rotate").json()
+        if latest["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert latest["id"] == session_id
+    assert latest["status"] == "canceled"
+
+
+def test_ai_task_status_snapshot_recovers_running_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers.image_studio.ai_tasks import (
+        get_task_store,
+        persisted_task_result,
+    )
+
+    task_store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    monkeypatch.setattr(app_module, "_task_session_store", task_store)
+
+    task = get_task_store().create(
+        kind="image_studio_caption",
+        title="Caption",
+        metadata={"path": "/datasets/anime", "total": 4, "skipped": 1},
+    )
+    task_store.update(task.id, status="running", percent=25)
+
+    recovered = persisted_task_result(task.id, "image_studio_caption")
+
+    assert recovered is not None
+    assert recovered["session_id"] == task.id
+    assert recovered["path"] == "/datasets/anime"
+    assert recovered["status"] == "running"
+    assert recovered["total"] == 4
+    assert recovered["skipped"] == 1
+    assert recovered["percent"] == 25
+    assert recovered["results"] == []
+    assert recovered["errors"] == []
 
 
 # --------------------------------------------------------------------------- #

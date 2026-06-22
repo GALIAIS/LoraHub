@@ -39,13 +39,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import subprocess
 import tarfile
 import tempfile
 import time
-from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -53,13 +54,17 @@ from typing import Any, Literal
 from packaging.version import InvalidVersion, Version
 from platformdirs import user_state_path
 
-ChannelName = Literal["dev", "tag"]
+from lorahub.api.system_update_types import (
+    CacheBlob,
+    ChannelName,
+    ProgressCallback,
+    UpdateInfo,
+)
 
 # Pre-v1.0.4 the rolling channel was called "main". Old on-disk
 # update-cache.json files and any client that hard-coded the name
 # get translated transparently in :func:`check`.
 _LEGACY_CHANNEL_ALIASES: dict[str, ChannelName] = {"main": "dev"}
-ProgressCallback = Callable[[str, str, str], None]
 
 GITHUB_OWNER = "GALIAIS"
 GITHUB_REPO = "LoraHub"
@@ -83,42 +88,7 @@ def _cache_file() -> Path:
     return _state_dir() / "update-cache.json"
 
 
-@dataclass
-class UpdateInfo:
-    """Snapshot of remote-vs-local state for one channel."""
-
-    channel: ChannelName
-    current: str
-    latest: str | None
-    update_available: bool
-    release_url: str
-    release_notes: str = ""
-    checked_at: str = ""
-    is_dirty: bool = False
-    error: str | None = None
-    # Optional metadata: tag-only (None for "dev" channel).
-    tag_name: str | None = None
-    published_at: str | None = None
-    # Where the ``current`` string was sourced from. ``hatch-vcs``
-    # is the canonical path (real git checkout, real install). The
-    # other values mark a degraded discovery — UI shows a tooltip so
-    # users understand why the version might lag a commit. Values
-    # match ``_VERSION_SOURCES``.
-    version_source: str = "hatch-vcs"
-    # ``True`` iff this install is a real ``git`` checkout (i.e. the
-    # in-app updater can actually run). ZIP-extracted trees set this
-    # to False and the UI greys out the apply button instead of
-    # raising ``RuntimeError`` mid-flight when the user clicks it.
-    git_checkout: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class _CacheBlob:
-    data: dict[str, dict[str, Any]] = field(default_factory=dict)  # channel -> UpdateInfo dict
-    updated_at: float = 0.0
+_CacheBlob = CacheBlob
 
 
 def _now_iso() -> str:
@@ -1218,7 +1188,13 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     if npm is None:
         emit("build", "warn", "npm not found; skipping SPA rebuild.")
         return
-    rc = _stream_subprocess([npm, "run", "build"], cwd=cwd / "web", phase="build", emit=emit)
+    rc = _stream_subprocess(
+        [npm, "run", "build"],
+        cwd=cwd / "web",
+        phase="build",
+        emit=emit,
+        env=_npm_env(Path(npm)),
+    )
     if rc != 0:
         msg = f"npm run build failed (exit {rc})"
         raise RuntimeError(msg)
@@ -1263,16 +1239,31 @@ def _find_npm(repo: Path) -> str | None:
     import shutil  # noqa: PLC0415
     import sys as _sys  # noqa: PLC0415
 
+    env_node_dir = os.environ.get("NODE_DIR")
+    if env_node_dir:
+        cand = Path(env_node_dir) / ("npm.cmd" if _sys.platform == "win32" else "bin/npm")
+        if cand.is_file():
+            return str(cand)
     if _sys.platform == "win32":
         cand = repo / ".node" / "npm.cmd"
         if cand.is_file():
             return str(cand)
     else:
-        cand = repo / ".node" / "bin" / "npm"
-        if cand.is_file():
-            return str(cand)
+        for cand in (
+            repo / ".node" / "bin" / "npm",
+            Path("/root/autodl-tmp/opt/node20/bin/npm"),
+        ):
+            if cand.is_file():
+                return str(cand)
     found = shutil.which("npm")
     return found if found else None
+
+
+def _npm_env(npm: Path) -> dict[str, str]:
+    """Ensure npm lifecycle scripts can find the matching node binary."""
+    env = os.environ.copy()
+    env["PATH"] = f"{npm.parent}{os.pathsep}{env.get('PATH', '')}"
+    return env
 
 
 def _stream_subprocess(
@@ -1281,6 +1272,7 @@ def _stream_subprocess(
     cwd: Path,
     phase: str,
     emit: ProgressCallback,
+    env: dict[str, str] | None = None,
 ) -> int:
     """Run ``cmd`` and forward stdout+stderr lines through ``emit``.
 
@@ -1301,6 +1293,7 @@ def _stream_subprocess(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=env,
     )
     assert proc.stdout is not None  # noqa: S101
     for raw in proc.stdout:

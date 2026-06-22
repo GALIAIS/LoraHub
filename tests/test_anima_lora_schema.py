@@ -18,6 +18,7 @@ from lorahub.core.config.schema import (
     AnimaLoraMethodChimeraConfig,
     AnimaLoraMethodEasyControlConfig,
     AnimaLoraMethodIPAdapterConfig,
+    AnimaLoraMethodLoraConfig,
     AnimaLoraMethodPostfixConfig,
     AnimaLoraOptions,
     BackendConfig,
@@ -66,6 +67,40 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.chimera is None
     assert opts.easycontrol is None
     assert opts.ip_adapter is None
+
+
+def test_tlora_algorithm_requires_timestep_mask() -> None:
+    """T-LoRA is the public name for plain LoRA + timestep rank masking."""
+    cfg = AnimaLoraMethodLoraConfig(algorithm="tlora")
+    assert cfg.algorithm == "tlora"
+    assert cfg.use_timestep_mask is True
+
+    with pytest.raises(pydantic.ValidationError, match="use_timestep_mask=True"):
+        AnimaLoraMethodLoraConfig(
+            algorithm="tlora",
+            use_timestep_mask=False,
+        )
+
+
+def test_lycoris_algorithm_aliases_normalize_to_anima_registry_keys() -> None:
+    """LyCORIS/kohya-style names are accepted but compile through local modules."""
+    cases = {
+        "locon": "lora",
+        "lycoris_locon": "lora",
+        "lycoris_tlora": "tlora",
+        "lycoris_loha": "loha",
+        "lycoris_lokr": "lokr",
+        "lycoris_ia3": "ia3",
+        "lycoris_dylora": "dylora",
+        "lycoris_full": "full",
+        "diag-oft": "diag_oft",
+        "lycoris_diag-oft": "diag_oft",
+        "lycoris_boft": "boft",
+        "lycoris_glora": "glora",
+    }
+    for raw, canonical in cases.items():
+        cfg = AnimaLoraMethodLoraConfig(algorithm=raw)
+        assert cfg.algorithm == canonical
 
 
 def test_method_postfix_requires_subconfig() -> None:

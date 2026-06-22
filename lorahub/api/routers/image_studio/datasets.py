@@ -36,6 +36,33 @@ def _datasets_root() -> Path:
     return root.resolve()
 
 
+def _validate_dataset_name(name: str) -> str:
+    """Return the canonical dataset name, rejecting traversal-like values."""
+    canonical = name.strip()
+    if (
+        not canonical
+        or canonical in {".", ".."}
+        or "/" in canonical
+        or "\\" in canonical
+        or ".." in canonical
+    ):
+        raise HTTPException(400, "invalid dataset name")
+    return canonical
+
+
+def _dataset_path_by_name(name: str) -> Path:
+    root = _datasets_root()
+    canonical = _validate_dataset_name(name)
+    ds_path = (root / canonical).resolve()
+    try:
+        ds_path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(400, "invalid dataset name") from exc
+    if ds_path == root:
+        raise HTTPException(400, "invalid dataset name")
+    return ds_path
+
+
 def _read_dataset_meta(ds_path: Path) -> dict[str, Any]:
     meta_file = ds_path / _DATASET_META_FILE
     if meta_file.is_file():
@@ -102,13 +129,8 @@ class CreateDatasetInput(BaseModel):
 @router.post("/datasets")
 def create_dataset(body: CreateDatasetInput) -> dict[str, Any]:
     """Create a new dataset directory with metadata."""
-    root = _datasets_root()
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(400, "dataset name is required")
-    if "/" in name or "\\" in name or ".." in name:
-        raise HTTPException(400, "invalid dataset name")
-    ds_path = root / name
+    name = _validate_dataset_name(body.name)
+    ds_path = _dataset_path_by_name(name)
     if ds_path.exists():
         raise HTTPException(409, f"dataset '{name}' already exists")
     ds_path.mkdir(parents=True)
@@ -124,8 +146,7 @@ def create_dataset(body: CreateDatasetInput) -> dict[str, Any]:
 
 @router.get("/datasets/{name}/meta")
 def get_dataset_meta(name: str) -> dict[str, Any]:
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     return _read_dataset_meta(ds_path)
@@ -139,8 +160,7 @@ class UpdateDatasetMetaInput(BaseModel):
 
 @router.put("/datasets/{name}/meta")
 def update_dataset_meta(name: str, body: UpdateDatasetMetaInput) -> dict[str, Any]:
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     meta = _read_dataset_meta(ds_path)
@@ -157,14 +177,14 @@ def update_dataset_meta(name: str, body: UpdateDatasetMetaInput) -> dict[str, An
 @router.delete("/datasets/{name}")
 def delete_dataset(name: str) -> dict[str, Any]:
     """Move dataset to trash (not permanent delete)."""
-    root = _datasets_root()
-    ds_path = root / name
+    canonical = _validate_dataset_name(name)
+    ds_path = _dataset_path_by_name(canonical)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
     from datetime import UTC, datetime  # noqa: PLC0415
     trash = Path("runs") / "_dataset_trash" / datetime.now(UTC).strftime("%Y-%m-%d")
     trash.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(ds_path), str(trash / name))
+    shutil.move(str(ds_path), str(trash / canonical))
     return {"ok": True}
 
 
@@ -184,6 +204,22 @@ def _is_image_file(filename: str) -> bool:
 
 def _is_caption_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in _CAPTION_SUFFIXES
+
+
+def _upload_basename(filename: str) -> str:
+    return Path(filename.replace("\\", "/")).name
+
+
+def _safe_upload_target(dest: Path, filename: str) -> Path | None:
+    basename = _upload_basename(filename)
+    if not basename:
+        return None
+    target = (dest / basename).resolve()
+    try:
+        target.relative_to(dest.resolve())
+    except ValueError:
+        return None
+    return target
 
 
 def _extract_archive(
@@ -207,11 +243,12 @@ def _extract_archive(
                 for info in zf.infolist():
                     if info.is_dir():
                         continue
-                    fname = Path(info.filename).name
-                    if not fname:
+                    target = _safe_upload_target(dest, info.filename)
+                    if target is None:
                         continue
-                    if _is_image_file(fname) or (keep_captions and _is_caption_file(fname)):
-                        target = dest / fname
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -227,11 +264,12 @@ def _extract_archive(
                 for member in tf.getmembers():
                     if not member.isfile():
                         continue
-                    fname = Path(member.name).name
-                    if not fname:
+                    target = _safe_upload_target(dest, member.name)
+                    if target is None:
                         continue
-                    if _is_image_file(fname) or (keep_captions and _is_caption_file(fname)):
-                        target = dest / fname
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -248,11 +286,12 @@ def _extract_archive(
             import py7zr  # noqa: PLC0415
             with py7zr.SevenZipFile(archive_path, "r") as sz:
                 for fname, bio in sz.read().items():
-                    base = Path(fname).name
-                    if not base:
+                    target = _safe_upload_target(dest, fname)
+                    if target is None:
                         continue
-                    if _is_image_file(base) or (keep_captions and _is_caption_file(base)):
-                        target = dest / base
+                    if _is_image_file(target.name) or (
+                        keep_captions and _is_caption_file(target.name)
+                    ):
                         target = _resolve_conflict(target, on_conflict)
                         if target is None:
                             continue
@@ -298,8 +337,7 @@ async def upload_to_dataset(
 
     Returns SSE stream with progress events.
     """
-    root = _datasets_root()
-    ds_path = root / name
+    ds_path = _dataset_path_by_name(name)
     if not ds_path.is_dir():
         raise HTTPException(404, "dataset not found")
 
@@ -341,7 +379,10 @@ async def upload_to_dataset(
                 finally:
                     os.unlink(tmp.name)
             elif _is_image_file(filename) or (keepCaptions and _is_caption_file(filename)):
-                target = ds_path / filename
+                target = _safe_upload_target(ds_path, filename)
+                if target is None:
+                    all_errors.append(f"skipped unsafe filename: {filename}")
+                    continue
                 target = _resolve_conflict(target, onConflict)
                 if target is not None:
                     content = await upload.read()

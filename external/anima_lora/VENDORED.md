@@ -46,9 +46,16 @@ Changes vendored on top of upstream. Each entry should describe the
   algorithm implementations LoraHub registered (DoRA, IA3, LoKr, LoHA,
   DyLoRA, Full, Diag-OFT, BOFT, GLoRA, VeRA). Filenames mirror the
   algorithm enum on `AnimaLoraMethodLoraConfig.algorithm`.
+* `networks/__init__.py` — accepts LyCORIS/kohya-compatible
+  `network_args` selectors (`algo=locon|loha|lokr|ia3|dylora|full|diag-oft|boft|glora|tlora`)
+  and maps them onto the native anima_lora `NetworkSpec` registry.
+  `factor=` is normalized to `lokr_factor=` for LoKr compatibility.
 * `gui/`, `output/`, `post_image_dataset/` — runtime scratch the
   trainer writes during a run. Excluded from git via the repo-root
   `.gitignore`.
+* `pyproject.toml` — keeps `aiohttp` constrained to stable 3.x so the
+  global `prerelease = "allow"` setting used for torch nightlies does
+  not pull `aiohttp 4.0.0a1` source builds on CPython 3.13.
 
 ### Selected upstream fixes (2026-05-24 cherry-pick)
 
@@ -83,6 +90,17 @@ Applied piecewise from upstream commits past the 2026-05-22 base import:
   the step boundary lets the runtime reclaim the slots safely.
   Wrapped in try/except so older torch builds without the helper
   silently skip (those builds default to no cudagraphs anyway).
+* **June 2026 stability cherry-picks** (upstream `6c15855` /
+  `8c2005c` / `fea3433` / `d47207e` / `6a89efe`, applied selectively
+  on 2026-06-11): ported the useful backend-safe pieces without the
+  GUI/runtime-harness migration. Sample/validation VAE decode now parks
+  the DiT on CPU and moves decoded pixels back to CPU before training
+  resumes; LoRA-family rank GEMMs avoid fp32 upcast from AdaLN fp32
+  activations by computing in the model output dtype; stale
+  torch.compile inductor caches are cleared when the compile shape
+  signature changes. LoraHub also emits `use_cmmd = false` explicitly
+  and train.py prints `validation loss=...` so the wrapper can surface
+  validation events.
 
 ### Intentionally deferred upstream changes
 

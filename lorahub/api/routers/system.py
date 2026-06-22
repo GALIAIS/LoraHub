@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
@@ -23,11 +24,18 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from lorahub.api.runtime_bind import read_runtime_bind, restart_args
 from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
     attention_backends_for_gpu,
     collect_snapshot,
+)
+from lorahub.api import app as app_module
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
 )
 
 router = APIRouter(prefix="/api")
@@ -139,6 +147,17 @@ def system_cluster() -> dict[str, Any]:
 # v1.0.4 rename) keep working — system_update.check rewrites it
 # through ``_LEGACY_CHANNEL_ALIASES``.
 _VALID_CHANNELS = ("dev", "tag", "main")
+_UPDATE_LOCK = threading.Lock()
+_UPDATE_SSE_PING_INTERVAL = 15.0
+_KIND_SYSTEM_UPDATE = "system_update"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 @router.get("/system/version")
@@ -183,19 +202,42 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
     """
     if req.channel not in _VALID_CHANNELS:
         raise HTTPException(422, f"channel must be one of {_VALID_CHANNELS}")
+    if not _UPDATE_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "system update is already running")
 
+    task = _task_store().create(
+        kind=_KIND_SYSTEM_UPDATE,
+        title=f"system update:{req.channel}",
+        metadata={
+            "channel": req.channel,
+            "build": req.build,
+            "restart": req.restart,
+            "force": req.force,
+        },
+    )
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
     def emit(phase: str, level: str, message: str) -> None:
+        event = {"phase": phase, "level": level, "message": message}
+        try:
+            _task_store().append_event(
+                task.id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    payload=event,
+                    ts=time.time(),
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         # Cross-thread put_nowait via the running event loop.
-        loop.call_soon_threadsafe(
-            queue.put_nowait,
-            {"phase": phase, "level": level, "message": message},
-        )
+        loop.call_soon_threadsafe(queue.put_nowait, event)
 
     def runner() -> None:
         try:
+            _task_store().update(task.id, status="running", percent=0)
             system_update.apply(
                 channel=req.channel,
                 build=req.build,
@@ -204,16 +246,40 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
             )
         except Exception as exc:  # noqa: BLE001
             emit("error", "error", f"{type(exc).__name__}: {exc}")
+            _task_store().update(
+                task.id,
+                status="failed",
+                error=str(exc),
+                result={"channel": req.channel, "build": req.build},
+                finished=True,
+            )
             loop.call_soon_threadsafe(queue.put_nowait, None)
+            _UPDATE_LOCK.release()
             return
-        if req.restart:
-            emit("restart", "info", "scheduling service restart in 1.5s")
-            # Defer the actual restart so the SSE stream has time to
-            # flush the final event to the browser before uvicorn
-            # shuts down. We use a daemon thread instead of asyncio
-            # because the executor that ran apply() has already gone.
-            threading.Timer(1.5, _trigger_restart).start()
-        loop.call_soon_threadsafe(queue.put_nowait, None)
+        try:
+            _task_store().update(
+                task.id,
+                status="succeeded",
+                percent=100,
+                result={"channel": req.channel, "build": req.build},
+                finished=True,
+            )
+            if req.restart:
+                bind = read_runtime_bind()
+                suffix = (
+                    f" on {bind.host}:{bind.port}"
+                    if bind is not None
+                    else " with the current command"
+                )
+                emit("restart", "info", f"scheduling service restart{suffix} in 1.5s")
+                # Defer the actual restart so the SSE stream has time to
+                # flush the final event to the browser before uvicorn
+                # shuts down. We use a daemon thread instead of asyncio
+                # because the executor that ran apply() has already gone.
+                threading.Timer(1.5, _trigger_restart).start()
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+            _UPDATE_LOCK.release()
 
     threading.Thread(
         target=runner, name="system-update", daemon=True
@@ -221,8 +287,16 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
 
     async def stream() -> AsyncIterator[bytes]:
         # SSE framing: each event is "data: <json>\n\n".
+        yield b": lorahub system update stream\n\n"
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=_UPDATE_SSE_PING_INTERVAL,
+                )
+            except asyncio.TimeoutError:
+                yield b": ping\n\n"
+                continue
             if event is None:
                 break
             yield (f"data: {json.dumps(event, ensure_ascii=False)}\n\n").encode("utf-8")
@@ -249,7 +323,7 @@ def _trigger_restart() -> None:
     import os
     import sys
 
-    args = [sys.executable, *sys.argv]
+    args = restart_args(sys.executable, sys.argv)
     if sys.platform == "win32":
         # Spawn detached child running same argv, then bail.
         import subprocess

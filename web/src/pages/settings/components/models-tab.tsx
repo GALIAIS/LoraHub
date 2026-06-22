@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
-import { Download, ExternalLink, Loader2, Rows3, ServerCog } from "lucide-react"
-import { api } from "@/lib/api"
+import {
+  Check,
+  Download,
+  ExternalLink,
+  FileSearch,
+  Loader2,
+  Rows3,
+  ServerCog,
+} from "lucide-react"
+import type { RemoteModelFile } from "@/lib/api/models"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -25,18 +32,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-
-type Source = "huggingface" | "modelscope"
-
-const SOURCE_LABEL: Record<Source, string> = {
-  huggingface: "HuggingFace",
-  modelscope: "ModelScope",
-}
-
-const SOURCE_OPTIONS: { value: Source; label: string }[] = [
-  { value: "huggingface", label: SOURCE_LABEL.huggingface },
-  { value: "modelscope", label: SOURCE_LABEL.modelscope },
-]
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  SOURCE_LABEL,
+  SOURCE_OPTIONS,
+  clampThreadCount,
+  togglePath,
+  useModelDownloadPanel,
+  type Source,
+} from "../hooks/use-model-download-panel"
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B"
@@ -51,61 +62,40 @@ function formatBytes(n: number): string {
 }
 
 export function ModelsTab() {
-  const settings = useQuery({
-    queryKey: ["settings"],
-    queryFn: api.getSettings,
-    staleTime: 30_000,
-  })
-
-  const preferModelscope = settings.data?.settings.modelscope_enabled ?? false
-  const [source, setSource] = useState<Source>(
-    preferModelscope ? "modelscope" : "huggingface",
-  )
-  const [repoId, setRepoId] = useState("")
-  const [revision, setRevision] = useState("")
-  const [targetDir, setTargetDir] = useState("")
-  const [threads, setThreads] = useState(4)
-  const [sessionId, setSessionId] = useState<string | null>(null)
-
-  useEffect(() => {
-    setSource((current) => (current ? current : preferModelscope ? "modelscope" : "huggingface"))
-  }, [preferModelscope])
-
-  const startDownload = useMutation({
-    mutationFn: () =>
-      api.downloadModel({
-        source,
-        repo_id: repoId.trim(),
-        revision: revision.trim() || (source === "modelscope" ? "master" : "main"),
-        target_dir: targetDir.trim() || undefined,
-        threads,
-      }),
-    onSuccess: (session) => setSessionId(session.session_id),
-  })
-
-  const session = useQuery({
-    queryKey: ["model-download", sessionId],
-    queryFn: () => api.getModelDownload(sessionId!),
-    enabled: !!sessionId,
-    refetchInterval: (query) =>
-      query.state.data?.status === "running" || !query.state.data ? 800 : false,
-    staleTime: 400,
-  })
-
-  const current = session.data ?? startDownload.data ?? null
-  const error = (startDownload.error as Error | undefined) ?? (session.error as Error | undefined)
-  const ready = repoId.includes("/") && repoId.trim().length > 2
-  const running = current?.status === "running" || startDownload.isPending
-  const latest = current?.events.at(-1)
-  const percent = Math.max(0, Math.min(100, current?.percent ?? 0))
-
-  const result = current?.result
-  const summary = useMemo(() => {
-    if (!current) return "尚未开始下载"
-    if (current.status === "running") return latest?.message ?? "下载进行中"
-    if (current.status === "failed") return current.error ?? "下载失败"
-    return "下载完成"
-  }, [current, latest])
+  const {
+    source,
+    setSource,
+    repoId,
+    setRepoId,
+    revision,
+    setRevision,
+    targetDir,
+    setTargetDir,
+    threads,
+    setThreads,
+    allowPatterns,
+    setAllowPatterns,
+    ignorePatterns,
+    setIgnorePatterns,
+    selectedPaths,
+    setSelectedPaths,
+    startDownload,
+    fileList,
+    current,
+    error,
+    ready,
+    running,
+    listing,
+    latest,
+    percent,
+    currentSource,
+    listed,
+    selectedBytes,
+    staleList,
+    canDownload,
+    result,
+    summary,
+  } = useModelDownloadPanel()
 
   return (
     <div className="space-y-5 w-full">
@@ -116,8 +106,8 @@ export function ModelsTab() {
             模型下载
           </CardTitle>
           <CardDescription>
-            支持 HuggingFace 与 ModelScope。下载在后端线程中运行，本页会轮询显示进度；
-            多线程数量会传给下载器，HuggingFace 使用 `max_workers`，ModelScope 使用线程池。
+            支持 HuggingFace 与 ModelScope。先读取仓库文件清单，只下载勾选的模型权重、
+            配置和 tokenizer 文件，避免把仓库里的预览图、文档和无关变体一起拉下来。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -175,13 +165,42 @@ export function ModelsTab() {
                 <ServerCog className="size-3.5" /> 1-16 个并发 worker
               </div>
             </div>
+
+            <Label className="text-xs">包含规则</Label>
+            <Input
+              value={allowPatterns}
+              onChange={(e) => setAllowPatterns(e.target.value)}
+              className="font-mono"
+              placeholder="*.safetensors, *.json, tokenizer/*"
+            />
+
+            <Label className="text-xs">忽略规则</Label>
+            <Input
+              value={ignorePatterns}
+              onChange={(e) => setIgnorePatterns(e.target.value)}
+              className="font-mono"
+              placeholder="README*, *.png, *.mp4"
+            />
           </div>
 
           <div className="flex items-center gap-3 pt-1">
             <Button
               size="sm"
+              variant="outline"
+              onClick={() => fileList.mutate()}
+              disabled={!ready || running || listing}
+            >
+              {listing ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <FileSearch className="size-3" />
+              )}
+              {listing ? "读取中" : "读取文件清单"}
+            </Button>
+            <Button
+              size="sm"
               onClick={() => startDownload.mutate()}
-              disabled={!ready || running}
+              disabled={!canDownload}
             >
               {running ? (
                 <Loader2 className="size-3 animate-spin" />
@@ -190,6 +209,10 @@ export function ModelsTab() {
               )}
               {running ? "下载中" : "开始下载"}
             </Button>
+            <div className="text-xs text-muted-foreground">
+              已选 {selectedPaths.size} 个文件 · {formatBytes(selectedBytes)}
+              {staleList && listed.length > 0 ? " · 清单需刷新" : ""}
+            </div>
             <a
               href={
                 source === "modelscope"
@@ -210,6 +233,96 @@ export function ModelsTab() {
               {error.message}
             </div>
           )}
+          {fileList.error && (
+            <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-mono text-destructive whitespace-pre-wrap break-words">
+              {(fileList.error as Error).message}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileSearch className="size-4 text-muted-foreground" />
+            远端文件清单
+          </CardTitle>
+          <CardDescription>
+            默认规则只选择模型运行需要的资产。可以手动调整，下载请求只会包含当前勾选项。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() => setSelectedPaths(new Set(listed.map((file) => file.path)))}
+            >
+              全选
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() => setSelectedPaths(new Set())}
+            >
+              清空
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={listed.length === 0 || running}
+              onClick={() =>
+                setSelectedPaths(
+                  new Set(
+                    listed
+                      .filter((file) => file.selected)
+                      .map((file) => file.path),
+                  ),
+                )
+              }
+            >
+              恢复推荐
+            </Button>
+            {fileList.data && (
+              <div className="ml-auto text-xs text-muted-foreground">
+                推荐 {fileList.data.selected_count}/{fileList.data.total_count} ·{" "}
+                {formatBytes(fileList.data.selected_bytes)} /{" "}
+                {formatBytes(fileList.data.total_bytes)}
+              </div>
+            )}
+          </div>
+
+          {listed.length > 0 ? (
+            <div className="max-h-[360px] overflow-y-auto rounded-[6px] border border-border/60">
+              <Table className="text-xs">
+                <TableHeader className="sticky top-0 z-[1]">
+                  <TableRow>
+                    <TableHead className="w-11"></TableHead>
+                    <TableHead>路径</TableHead>
+                    <TableHead className="w-28 text-right">大小</TableHead>
+                    <TableHead className="w-36">规则</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {listed.map((file) => (
+                    <RemoteFileRow
+                      key={file.path}
+                      file={file}
+                      checked={selectedPaths.has(file.path)}
+                      disabled={running}
+                      onToggle={() => togglePath(file.path, setSelectedPaths)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <div className="rounded-[6px] border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+              输入仓库 ID 后读取文件清单。下载前需要至少选择一个文件。
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -224,7 +337,9 @@ export function ModelsTab() {
         <CardContent className="space-y-4">
           <Progress value={percent} className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-2">
             <ProgressLabel className="text-xs text-muted-foreground truncate">
-              {current ? `${SOURCE_LABEL[current.source]} · ${current.repo_id}` : "等待任务"}
+              {currentSource && current?.repo_id
+                ? `${SOURCE_LABEL[currentSource]} · ${current.repo_id}`
+                : "等待任务"}
             </ProgressLabel>
             <div className="text-xs font-mono tabular-nums text-muted-foreground text-right min-w-[5ch]">
               {percent.toFixed(1)}%
@@ -246,10 +361,11 @@ export function ModelsTab() {
                 value={`${formatBytes(latest?.bytes_done ?? result?.total_bytes ?? 0)} / ${formatBytes(latest?.bytes_total ?? result?.total_bytes ?? 0)}`}
               />
               <ProgressStat label="状态" value={current.status} />
+              <ProgressStat label="选择" value={`${current.paths?.length ?? 0}`} />
             </dl>
           )}
 
-          {result && (
+          {result && current?.status === "succeeded" && (
             <div className="rounded-[4px] border border-emerald-500/40 bg-emerald-500/5 px-4 py-3 space-y-1.5">
               <div className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
                 下载完成
@@ -273,6 +389,21 @@ export function ModelsTab() {
             </div>
           )}
 
+          {current && ["failed", "canceled", "interrupted"].includes(current.status) && (
+            <div className="rounded-[4px] border border-destructive/40 bg-destructive/5 px-4 py-3 space-y-1.5">
+              <div className="text-sm font-semibold text-destructive">
+                {current.status === "canceled"
+                  ? "下载已取消"
+                  : current.status === "interrupted"
+                    ? "下载已中断"
+                    : "下载失败"}
+              </div>
+              <div className="text-xs font-mono text-destructive whitespace-pre-wrap break-words">
+                {current.error ?? latest?.message ?? "未知错误"}
+              </div>
+            </div>
+          )}
+
           {current?.events.length ? (
             <div className="rounded-[4px] border border-border/60 bg-muted/25 max-h-56 overflow-y-auto">
               <ul className="divide-y divide-border/40">
@@ -284,14 +415,22 @@ export function ModelsTab() {
                       </span>
                       <span className="font-mono">{event.percent?.toFixed(1) ?? "--"}%</span>
                     </div>
-                    <div className="mt-0.5 text-muted-foreground break-words">{event.message}</div>
+                    <div
+                      className={`mt-0.5 break-words ${
+                        event.message.includes("failed")
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {event.message}
+                    </div>
                   </li>
                 ))}
               </ul>
             </div>
           ) : (
             <div className="text-[11px] text-muted-foreground/80">
-              大模型下载可能耗时较长。开始后保持服务运行即可，刷新页面仍可通过会话接口查询最近任务。
+              大模型下载可能耗时较长。开始后保持服务运行即可，刷新页面会自动恢复最近任务。
             </div>
           )}
         </CardContent>
@@ -313,7 +452,45 @@ function ProgressStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function clampThreadCount(value: number): number {
-  if (!Number.isFinite(value)) return 1
-  return Math.max(1, Math.min(16, Math.round(value)))
+function RemoteFileRow({
+  file,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  file: RemoteModelFile
+  checked: boolean
+  disabled: boolean
+  onToggle: () => void
+}) {
+  return (
+    <TableRow data-state={checked ? "selected" : undefined}>
+      <TableCell className="w-11">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={onToggle}
+          className="size-4 rounded-[4px] border border-border accent-primary"
+          aria-label={`选择 ${file.path}`}
+        />
+      </TableCell>
+      <TableCell className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {checked && <Check className="size-3 text-primary shrink-0" />}
+          <span className="font-mono truncate" title={file.path}>
+            {file.path}
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="text-right font-mono tabular-nums">
+        {formatBytes(file.size)}
+      </TableCell>
+      <TableCell>
+        <Badge variant={file.selected ? "secondary" : "outline"} className="text-[10px]">
+          {file.reason}
+        </Badge>
+      </TableCell>
+    </TableRow>
+  )
 }

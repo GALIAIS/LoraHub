@@ -41,9 +41,18 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from platformdirs import user_state_path
 from rich.console import Console
 
+from lorahub.api.runtime_bind import (
+    clear_runtime_bind,
+    log_file,
+    pid_file,
+    port_file,
+    read_runtime_bind,
+    record_current_process_bind,
+    state_dir,
+    write_runtime_bind,
+)
 from lorahub.cli._i18n import t
 
 console = Console()
@@ -59,21 +68,19 @@ service_app = typer.Typer(
 
 def _state_dir() -> Path:
     """Per-user runtime state — pid, log, last-chosen-port."""
-    p = user_state_path("lorahub", "lorahub")
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    return state_dir()
 
 
 def _pid_file() -> Path:
-    return _state_dir() / "uvicorn.pid"
+    return pid_file()
 
 
 def _port_file() -> Path:
-    return _state_dir() / "uvicorn.port"
+    return port_file()
 
 
 def _log_file() -> Path:
-    return _state_dir() / "uvicorn.log"
+    return log_file()
 
 
 def _read_pid() -> int | None:
@@ -88,8 +95,7 @@ def _read_pid() -> int | None:
     if not _pid_alive(pid):
         # Stale pid file — clean up so callers don't confuse themselves
         # over a terminated daemon.
-        p.unlink(missing_ok=True)
-        _port_file().unlink(missing_ok=True)
+        clear_runtime_bind(keep_bind=True)
         return None
     return pid
 
@@ -219,6 +225,7 @@ def start(
             err_console.print(t("serve.api_extras_missing"))
             raise typer.Exit(code=1) from exc
         console.print(t("service.foreground_banner", host=host, port=port))
+        record_current_process_bind(host, port)
         uvicorn.run(
             "lorahub.api.app:app",
             host=host,
@@ -269,8 +276,7 @@ def start(
             close_fds=True,
         )
 
-    _pid_file().write_text(f"{proc.pid}\n")
-    _port_file().write_text(f"{port}\n")
+    write_runtime_bind(host, port, pid=proc.pid)
 
     console.print(t("service.started", pid=proc.pid, port=port))
     console.print(t("service.log_path", path=log))
@@ -283,13 +289,8 @@ def start(
 
 
 def _read_port() -> int | None:
-    p = _port_file()
-    if not p.is_file():
-        return None
-    try:
-        return int(p.read_text().strip())
-    except (ValueError, OSError):
-        return None
+    bind = read_runtime_bind()
+    return bind.port if bind is not None else None
 
 
 @service_app.command(help=t("service.stop.help"))
@@ -335,8 +336,7 @@ def stop(
             with __import__("contextlib").suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
 
-    _pid_file().unlink(missing_ok=True)
-    _port_file().unlink(missing_ok=True)
+    clear_runtime_bind(keep_bind=True)
     console.print(t("service.stopped", pid=pid))
 
 
@@ -348,7 +348,17 @@ def restart(
         typer.Option(help=t("service.start.port_help")),
     ] = 0,
 ) -> None:
-    """Stop the daemon (if running) and start a fresh one."""
+    """Stop the daemon (if running) and start a fresh one.
+
+    When ``--port`` is omitted, reuse the last successful service port.
+    This keeps ``lorahub service restart`` and the in-app updater from
+    moving the UI to a random address after a restart.
+    """
+    previous = read_runtime_bind()
+    if port == 0 and previous is not None:
+        port = previous.port
+        if host == "127.0.0.1":
+            host = previous.host
     if _read_pid() is not None:
         stop()
         time.sleep(0.5)

@@ -48,6 +48,8 @@ TOOLS_DIR="$ROOT/.lorahub"
 UV_DIR="$TOOLS_DIR/uv"
 PY_DIR="$TOOLS_DIR/python"
 NODE_DIR="$ROOT/.node"
+NODE_VERSION="20.19.0"
+NODE_MIN_VERSION="20.19.0"
 
 GH_PROXY="${LORAHUB_GH_PROXY:-}"
 NODE_MIRROR="${LORAHUB_NODE_MIRROR:-https://nodejs.org/dist}"
@@ -64,6 +66,20 @@ if [ -n "${UV_INDEX_URL:-}" ];       then echo "  PyPI:      $UV_INDEX_URL";    
 if [ "$NODE_MIRROR" != "https://nodejs.org/dist" ]; then echo "  Node:      $NODE_MIRROR"; fi
 if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then echo "  npm:       $NPM_CONFIG_REGISTRY";    fi
 echo ""
+
+version_ge() {
+    # Return true when $1 >= $2 for dotted numeric versions.
+    local a b IFS=.
+    read -r -a a <<< "${1#v}"
+    read -r -a b <<< "${2#v}"
+    for i in 0 1 2; do
+        local ai="${a[$i]:-0}"
+        local bi="${b[$i]:-0}"
+        if ((10#$ai > 10#$bi)); then return 0; fi
+        if ((10#$ai < 10#$bi)); then return 1; fi
+    done
+    return 0
+}
 
 # ---- [1/6] Install uv locally ---------------------------------------
 echo "[1/6] Installing uv ..."
@@ -195,8 +211,20 @@ echo "[5/6] Installing Node.js ..."
 # CI vs VPS" problems.
 if [ -f "$NODE_DIR/bin/node" ] && [ -f "$NODE_DIR/bin/npm" ]; then
     export PATH="$NODE_DIR/bin:$PATH"
-    echo "  OK Node.js $(node --version) (portable, cached)"
+    CACHED_NODE_VERSION="$(node --version)"
+    if version_ge "$CACHED_NODE_VERSION" "$NODE_MIN_VERSION"; then
+        echo "  OK Node.js $CACHED_NODE_VERSION (portable, cached)"
+    else
+        echo "  Cached Node.js $CACHED_NODE_VERSION is below required v$NODE_MIN_VERSION; reinstalling ..."
+        rm -rf "$NODE_DIR"
+        mkdir -p "$NODE_DIR"
+        NEED_NODE_INSTALL=1
+    fi
 else
+    NEED_NODE_INSTALL=1
+fi
+
+if [ "${NEED_NODE_INSTALL:-0}" = "1" ]; then
     echo "  Downloading portable Node.js 20 (mirror: $NODE_MIRROR) ..."
     mkdir -p "$NODE_DIR"
     ARCH=$(uname -m)
@@ -206,7 +234,7 @@ else
         armv7l)  NODE_ARCH="armv7l" ;;
         *)       echo "  [ERROR] Unsupported architecture: $ARCH"; exit 1 ;;
     esac
-    NODE_VER="v20.18.1"
+    NODE_VER="v${NODE_VERSION}"
     NODE_TAR="node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
     NODE_URL="${NODE_MIRROR%/}/${NODE_VER}/${NODE_TAR}"
     echo "  fetching $NODE_URL"
@@ -226,12 +254,42 @@ echo ""
 # ---- [6/6] Install frontend dependencies ----------------------------
 echo "[6/6] Installing frontend dependencies (web/) ..."
 # npm reads NPM_CONFIG_REGISTRY natively when set.
-if [ -d "web/node_modules/vite" ]; then
-    echo "  OK web/node_modules already exists"
+needs_npm_install=0
+if [ ! -d "web/node_modules" ]; then
+    needs_npm_install=1
+elif [ ! -f "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+elif [ "web/package-lock.json" -nt "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+elif [ "web/package.json" -nt "web/node_modules/.package-lock.json" ]; then
+    needs_npm_install=1
+fi
+
+if [ "$needs_npm_install" = "0" ]; then
+    echo "  OK web/node_modules already matches package lock"
 else
     cd web
-    npm install
+    echo "  npm registry: $(npm config get registry)"
+    echo "  running npm ci (verbose log: web/_npm_install.log) ..."
+    npm ci --verbose --no-audit --no-fund \
+        --fetch-timeout=60000 \
+        --fetch-retries=2 \
+        --fetch-retry-mintimeout=5000 \
+        --fetch-retry-maxtimeout=20000 \
+        > _npm_install.log 2>&1 &
+    npm_pid=$!
+    while kill -0 "$npm_pid" 2>/dev/null; do
+        echo "  npm ci still running ... ($(date '+%H:%M:%S'))"
+        sleep 15
+    done
+    wait "$npm_pid"
+    npm_rc=$?
     cd "$ROOT"
+    if [ "$npm_rc" -ne 0 ]; then
+        echo "  [ERROR] npm ci failed; tail of web/_npm_install.log:"
+        tail -40 web/_npm_install.log || true
+        exit 1
+    fi
     echo "  OK Frontend dependencies installed"
 fi
 echo ""

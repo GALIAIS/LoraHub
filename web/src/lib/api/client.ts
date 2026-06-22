@@ -31,7 +31,12 @@ import type {
 } from "./backends"
 import type { SettingsState, SettingsResponse } from "./settings"
 import type { DatasetScanResponse, DatasetCaptionResponse } from "./datasets"
-import type { ModelDownloadSession, ScannedModelsResponse } from "./models"
+import type {
+  LatestModelDownloadSession,
+  ModelDownloadSession,
+  RemoteModelFilesResponse,
+  ScannedModelsResponse,
+} from "./models"
 import type { TaggingSession, TagDatasetRequest } from "./tagging"
 import type {
   AIProviderRecord,
@@ -46,6 +51,7 @@ import type {
   AIInvokeTaskResult,
 } from "./ai"
 import type { SystemSnapshot, UpdateInfo, UpdateEvent } from "./system"
+import type { TaskSessionRecord } from "./tasks"
 import type { MirrorPreset, ProbeResult } from "./network"
 import type {
   SweepSummary,
@@ -344,14 +350,33 @@ export const api = {
       revision?: string
       target_dir?: string | null
       threads?: number
+      paths?: string[]
+      allow_patterns?: string[]
+      ignore_patterns?: string[]
     },
   ) =>
     http<ModelDownloadSession>("/models/download", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  listModelFiles: (
+    body: {
+      source: "huggingface" | "modelscope"
+      repo_id: string
+      revision?: string
+      paths?: string[]
+      allow_patterns?: string[]
+      ignore_patterns?: string[]
+    },
+  ) =>
+    http<RemoteModelFilesResponse>("/models/files", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getModelDownload: (sessionId: string) =>
     http<ModelDownloadSession>(`/models/download/${sessionId}`),
+  getLatestModelDownload: () =>
+    http<LatestModelDownloadSession>("/models/download/latest"),
   scanModels: (root?: string) => {
     const qs = root ? `?root=${encodeURIComponent(root)}` : ""
     return http<ScannedModelsResponse>(`/models/scan${qs}`)
@@ -448,6 +473,8 @@ export const api = {
       { method: "POST" },
     ),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
+  getLatestTask: (kind: string) =>
+    http<TaskSessionRecord>(`/tasks/latest?kind=${encodeURIComponent(kind)}`),
   getSystemVersion: async (
     channel: "dev" | "tag" = "tag",
     force = false,
@@ -628,10 +655,14 @@ export const api = {
    * — letting the browser save-as instead of buffering the whole
    * archive in memory.
    */
-  artifactZipUrl: (job_id: string, include: string[] = ["checkpoints"]) =>
+  artifactZipUrl: (
+    job_id: string,
+    include: string[] = ["checkpoints"],
+    format = "zip",
+  ) =>
     `/api/artifacts/${encodeURIComponent(job_id)}/zip?include=${encodeURIComponent(
       include.join(","),
-    )}`,
+    )}&format=${encodeURIComponent(format)}`,
   artifactSingleUrl: (job_id: string, path: string) =>
     `/api/jobs/${encodeURIComponent(job_id)}/files/raw?path=${encodeURIComponent(path)}`,
   deleteArtifactFile: (job_id: string, path: string) =>

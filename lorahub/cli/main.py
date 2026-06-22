@@ -567,7 +567,10 @@ def serve(
         err_console.print(t("serve.api_extras_missing"))
         raise typer.Exit(code=1) from exc
 
+    from lorahub.api.runtime_bind import record_current_process_bind  # noqa: PLC0415
+
     console.print(t("serve.banner", host=host, port=port))
+    record_current_process_bind(host, port)
     uvicorn.run(
         "lorahub.api.app:app",
         host=host,

@@ -21,7 +21,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from dataclasses import dataclass
+import threading
+import time as _time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -30,9 +33,65 @@ from fastapi import APIRouter, HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
+from lorahub.api import app as app_module
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSession,
+    TaskSessionStore,
+    default_task_store_path,
+)
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_KIND_AUTO_ROTATE = "image_studio_auto_rotate"
+_KIND_BATCH_RESIZE = "image_studio_batch_resize"
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
+
+
+def _persisted_task_result(session_id: str, kind: str) -> dict[str, Any] | None:
+    try:
+        task = _task_store().get(session_id)
+    except Exception:
+        return None
+    if task is None or task.kind != kind:
+        return None
+    return _task_to_status_snapshot(task)
+
+
+def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
+    if isinstance(task.result, dict):
+        result = dict(task.result)
+        result.setdefault("events", [event.to_dict() for event in task.events])
+        return result
+    if task.status in {"queued", "running", "interrupted", "failed", "canceled"}:
+        metadata = task.metadata
+        return {
+            "session_id": task.id,
+            "dataset_path": str(metadata.get("dataset_path") or metadata.get("path") or ""),
+            "status": task.status,
+            "processed": 0,
+            "total": int(metadata.get("total") or metadata.get("selected") or 0),
+            "percent": task.percent,
+            "last_image": "",
+            "rotated": [],
+            "rotated_count": 0,
+            "resampled": [],
+            "resampled_count": 0,
+            "skipped_count": int(metadata.get("skipped") or 0),
+            "failed": [],
+            "error": task.error,
+            "started_at": task.started_at,
+            "finished_at": task.finished_at,
+            "events": [event.to_dict() for event in task.events],
+        }
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -126,8 +185,209 @@ class AutoRotateRequest(BaseModel):
     recursive: bool = True
 
 
-@router.post("/curate/auto-rotate")
-def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
+@dataclass
+class _AutoRotateSession:
+    session_id: str
+    dataset_path: str
+    total: int
+    status: str = "running"
+    processed: int = 0
+    rotated: list[str] = field(default_factory=list)
+    failed: list[dict[str, str]] = field(default_factory=list)
+    skipped_count: int = 0
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
+
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 100.0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "dataset_path": self.dataset_path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 100.0
+                ),
+                "last_image": self.last_image,
+                "rotated": list(self.rotated),
+                "rotated_count": len(self.rotated),
+                "skipped_count": self.skipped_count,
+                "failed": list(self.failed),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+    def add_rotated(self, path: str, image_name: str) -> None:
+        with self._lock:
+            self.rotated.append(path)
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"rotated {image_name}",
+            percent=percent,
+            payload={"path": path, "image": image_name, "processed": processed},
+        )
+
+    def add_skipped(self, image_name: str) -> None:
+        with self._lock:
+            self.skipped_count += 1
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"skipped {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed},
+        )
+
+    def add_failed(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.failed.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        task_status = (
+            "succeeded"
+            if status == "succeeded"
+            else "canceled"
+            if status == "canceled"
+            else "failed"
+        )
+        try:
+            _task_store().update(
+                self.session_id,
+                status=task_status,
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+        self._append_task_event("stop requested", level="warn", percent=percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
+
+    def cancel(self, msg: str = "stopped by user") -> None:
+        with self._lock:
+            self.status = "canceled"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="warn", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="canceled",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def fail(self, msg: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="error", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="failed",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+
+_auto_rotate_sessions: dict[str, _AutoRotateSession] = {}
+_auto_rotate_lock = threading.Lock()
+
+
+def _auto_rotate_targets(req: AutoRotateRequest, root: Path) -> list[Path]:
+    if req.paths:
+        return [_resolve_under(req.dataset_path, p) for p in req.paths]
+    return list(_walk_images(root, req.recursive))
+
+
+def _auto_rotate_images(
+    req: AutoRotateRequest,
+    targets: list[Path],
+    *,
+    on_rotated: Callable[[str, str], None] | None = None,
+    on_skipped: Callable[[str], None] | None = None,
+    on_failed: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """Apply EXIF orientation, write pixels back, strip the EXIF tag.
 
     Idempotent: a file whose orientation is already 1 (or missing)
@@ -137,39 +397,43 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
 
-    targets: list[Path] = []
-    if req.paths:
-        targets = [_resolve_under(req.dataset_path, p) for p in req.paths]
-    else:
-        for f in _walk_images(root, req.recursive):
-            targets.append(f)
-
     rotated: list[str] = []
     skipped: list[str] = []
     failed: list[dict[str, str]] = []
 
     for src in targets:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             with Image.open(src) as img:
                 exif = img.getexif()
                 orientation = exif.get(0x0112) if exif else None
                 if not orientation or orientation == 1:
                     skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
                     continue
                 # ``exif_transpose`` reads the orientation tag and
                 # returns a pixel-rotated copy with the tag dropped.
                 rotated_img = ImageOps.exif_transpose(img)
                 if rotated_img is None:
                     skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
                     continue
                 rotated_img.load()
             _backup_file(req.dataset_path, src)
             # Pillow's save infers format from the file path. Drop EXIF
             # so the next reader doesn't double-rotate.
             rotated_img.save(src, exif=b"")
-            rotated.append(str(src))
+            path = str(src)
+            rotated.append(path)
+            if on_rotated is not None:
+                on_rotated(path, src.name)
         except (UnidentifiedImageError, OSError) as exc:
             failed.append({"path": str(src), "error": str(exc)})
+            if on_failed is not None:
+                on_failed(str(src), str(exc), src.name)
 
     return {
         "rotated": rotated,
@@ -177,6 +441,93 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
         "skipped_count": len(skipped),
         "failed": failed,
     }
+
+
+@router.post("/curate/auto-rotate")
+def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
+    """Apply EXIF orientation synchronously for legacy callers."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    return _auto_rotate_images(req, _auto_rotate_targets(req, root))
+
+
+@router.post("/curate/auto-rotate/start", status_code=202)
+def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
+    """Start a persistent background auto-rotate session."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    targets = _auto_rotate_targets(req, root)
+    task = _task_store().create(
+        kind=_KIND_AUTO_ROTATE,
+        title=f"auto-rotate:{root.name}",
+        metadata={
+            "dataset_path": str(root),
+            "paths_count": len(req.paths or []),
+            "recursive": req.recursive,
+        },
+    )
+    session = _AutoRotateSession(
+        session_id=task.id,
+        dataset_path=str(root),
+        total=len(targets),
+    )
+    session._append_task_event("auto rotate queued", percent=0)
+    with _auto_rotate_lock:
+        _auto_rotate_sessions[session.session_id] = session
+
+    def run() -> None:
+        try:
+            _task_store().update(session.session_id, status="running", percent=0)
+            _auto_rotate_images(
+                req,
+                targets,
+                on_rotated=session.add_rotated,
+                on_skipped=session.add_skipped,
+                on_failed=session.add_failed,
+                should_stop=session.should_stop,
+            )
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.cancel()
+        except Exception as exc:  # noqa: BLE001
+            session.fail(str(exc))
+
+    threading.Thread(
+        target=run,
+        name=f"is-auto-rotate-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
+    return {
+        "session_id": session.session_id,
+        "total": len(targets),
+        "status_url": (
+            f"/api/image-studio/curate/auto-rotate/status/{session.session_id}"
+        ),
+    }
+
+
+@router.get("/curate/auto-rotate/status/{session_id}")
+def curate_auto_rotate_status(session_id: str) -> dict[str, Any]:
+    with _auto_rotate_lock:
+        session = _auto_rotate_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _persisted_task_result(session_id, _KIND_AUTO_ROTATE)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(404, "auto-rotate session not found")
+
+
+@router.post("/curate/auto-rotate/stop/{session_id}")
+def curate_auto_rotate_stop(session_id: str) -> dict[str, Any]:
+    with _auto_rotate_lock:
+        session = _auto_rotate_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "auto-rotate session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #
@@ -297,6 +648,7 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
     the audit trail survives but the entry stops counting as "still
     quarantined".
     """
+    root = Path(req.dataset_path).resolve()
     qroot = _quarantine_root(req.dataset_path)
     index_path = qroot / "index.jsonl"
     if not index_path.is_file():
@@ -325,8 +677,18 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
         if entry["quarantine_path"] not in target_set:
             continue
         try:
-            src = Path(entry["quarantine_path"])
-            dst = Path(entry["original_path"])
+            src = Path(entry["quarantine_path"]).resolve()
+            try:
+                src.relative_to(qroot.resolve())
+            except ValueError:
+                failed.append({"path": str(src), "error": "path is outside quarantine"})
+                continue
+            dst = Path(entry["original_path"]).resolve()
+            try:
+                dst.relative_to(root)
+            except ValueError:
+                failed.append({"path": str(dst), "error": "path is outside dataset"})
+                continue
             if not src.is_file():
                 failed.append(
                     {"path": str(src), "error": "quarantined file missing"},
@@ -337,11 +699,21 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
                 # Original location now occupied — rename incoming file
                 # so we don't clobber whatever is there now.
                 dst = _disambiguate(dst)
-            shutil.move(str(src), str(dst))
             cap_q = entry.get("caption_quarantine_path")
+            cap_q_path: Path | None = None
             if cap_q and Path(cap_q).is_file():
+                cap_q_path = Path(cap_q).resolve()
+                try:
+                    cap_q_path.relative_to(qroot.resolve())
+                except ValueError:
+                    failed.append(
+                        {"path": str(cap_q_path), "error": "caption is outside quarantine"}
+                    )
+                    continue
+            shutil.move(str(src), str(dst))
+            if cap_q_path is not None:
                 cap_dst = dst.with_suffix(".txt")
-                shutil.move(str(cap_q), str(cap_dst))
+                shutil.move(str(cap_q_path), str(cap_dst))
             entry["restored_at"] = timestamp
             entry["restored_path"] = str(dst)
             restored.append(entry)
@@ -389,6 +761,268 @@ _PIL_RESAMPLE = {
 }
 
 
+@dataclass
+class _BatchResizeSession:
+    session_id: str
+    dataset_path: str
+    total: int
+    status: str = "running"
+    processed: int = 0
+    resampled: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[dict[str, str]] = field(default_factory=list)
+    skipped_count: int = 0
+    error: str | None = None
+    last_image: str = ""
+    started_at: float = field(default_factory=_time.time)
+    finished_at: float | None = None
+    _stop_flag: bool = field(default=False, repr=False)
+
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def percent(self) -> float:
+        with self._lock:
+            return 100.0 * self.processed / self.total if self.total > 0 else 100.0
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "session_id": self.session_id,
+                "dataset_path": self.dataset_path,
+                "status": self.status,
+                "processed": self.processed,
+                "total": self.total,
+                "percent": (
+                    100.0 * self.processed / self.total
+                    if self.total > 0
+                    else 100.0
+                ),
+                "last_image": self.last_image,
+                "resampled": list(self.resampled),
+                "resampled_count": len(self.resampled),
+                "skipped_count": self.skipped_count,
+                "failed": list(self.failed),
+                "error": self.error,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+            }
+
+    def add_resampled(self, item: dict[str, Any], image_name: str) -> None:
+        with self._lock:
+            self.resampled.append(item)
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"resized {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed, "item": item},
+        )
+
+    def add_skipped(self, image_name: str) -> None:
+        with self._lock:
+            self.skipped_count += 1
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"skipped {image_name}",
+            percent=percent,
+            payload={"image": image_name, "processed": processed},
+        )
+
+    def add_failed(self, path: str, msg: str, image_name: str) -> None:
+        with self._lock:
+            self.failed.append({"path": path, "error": msg})
+            self.processed += 1
+            self.last_image = image_name
+            processed = self.processed
+            percent = 100.0 * processed / self.total if self.total > 0 else 100.0
+        self._append_task_event(
+            f"failed {image_name}: {msg}",
+            level="error",
+            percent=percent,
+            payload={
+                "path": path,
+                "image": image_name,
+                "error": msg,
+                "processed": processed,
+            },
+        )
+
+    def finish(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+            self.finished_at = _time.time()
+        self._append_task_event(f"finished: {status}", percent=self.percent)
+        task_status = (
+            "succeeded"
+            if status == "succeeded"
+            else "canceled"
+            if status == "canceled"
+            else "failed"
+        )
+        try:
+            _task_store().update(
+                self.session_id,
+                status=task_status,
+                percent=100 if status == "succeeded" else self.percent,
+                result=self.snapshot(),
+                error=self.error,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._stop_flag = True
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+        self._append_task_event("stop requested", level="warn", percent=percent)
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_flag
+
+    def cancel(self, msg: str = "stopped by user") -> None:
+        with self._lock:
+            self.status = "canceled"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="warn", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="canceled",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def fail(self, msg: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = msg
+            self.finished_at = _time.time()
+        self._append_task_event(msg, level="error", percent=self.percent)
+        try:
+            _task_store().update(
+                self.session_id,
+                status="failed",
+                percent=self.percent,
+                result=self.snapshot(),
+                error=msg,
+                finished=True,
+            )
+        except Exception:
+            pass
+
+    def _append_task_event(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        percent: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level=level,
+                    message=message,
+                    percent=percent,
+                    payload=payload or {},
+                    ts=_time.time(),
+                ),
+            )
+        except Exception:
+            pass
+
+
+_batch_resize_sessions: dict[str, _BatchResizeSession] = {}
+_batch_resize_lock = threading.Lock()
+
+
+def _batch_resize_targets(req: BatchResizeRequest, root: Path) -> list[Path]:
+    if req.paths:
+        return [_resolve_under(req.dataset_path, p) for p in req.paths]
+    return list(_walk_images(root, req.recursive))
+
+
+def _resize_images(
+    req: BatchResizeRequest,
+    targets: list[Path],
+    *,
+    on_resampled: Callable[[dict[str, Any], str], None] | None = None,
+    on_skipped: Callable[[str], None] | None = None,
+    on_failed: Callable[[str, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+
+    resampled: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    failed: list[dict[str, str]] = []
+    resample = _PIL_RESAMPLE[req.filter]
+
+    for src in targets:
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
+        try:
+            with Image.open(src) as img:
+                w, h = img.size
+                short = min(w, h)
+                if short == req.target_short_edge:
+                    skipped.append(str(src))
+                    if on_skipped is not None:
+                        on_skipped(src.name)
+                    continue
+                if short > req.target_short_edge:
+                    # Downscale — always allowed.
+                    pass
+                else:
+                    # Upscale — gated by the flag.
+                    if not req.upscale:
+                        skipped.append(str(src))
+                        if on_skipped is not None:
+                            on_skipped(src.name)
+                        continue
+                scale = req.target_short_edge / short
+                new_w = max(1, round(w * scale))
+                new_h = max(1, round(h * scale))
+                new_img = img.resize((new_w, new_h), resample=resample)
+                new_img.load()
+            _backup_file(req.dataset_path, src)
+            new_img.save(src)
+            item = {
+                "path": str(src),
+                "from": [w, h],
+                "to": [new_w, new_h],
+            }
+            resampled.append(item)
+            if on_resampled is not None:
+                on_resampled(item, src.name)
+        except (UnidentifiedImageError, OSError) as exc:
+            failed.append({"path": str(src), "error": str(exc)})
+            if on_failed is not None:
+                on_failed(str(src), str(exc), src.name)
+
+    return {
+        "resampled": resampled,
+        "resampled_count": len(resampled),
+        "skipped_count": len(skipped),
+        "failed": failed,
+    }
+
+
 @router.post("/curate/batch-resize")
 def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
     """Resample images so their short edge equals ``target_short_edge``.
@@ -399,57 +1033,88 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
+    return _resize_images(req, _batch_resize_targets(req, root))
 
-    targets: list[Path] = []
-    if req.paths:
-        targets = [_resolve_under(req.dataset_path, p) for p in req.paths]
-    else:
-        targets = list(_walk_images(root, req.recursive))
 
-    resampled: list[dict[str, Any]] = []
-    skipped: list[str] = []
-    failed: list[dict[str, str]] = []
-    resample = _PIL_RESAMPLE[req.filter]
+@router.post("/curate/batch-resize/start", status_code=202)
+def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
+    """Start a persistent background batch-resize session."""
+    root = Path(req.dataset_path).resolve()
+    if not root.is_dir():
+        raise HTTPException(404, f"dataset not found: {root}")
+    targets = _batch_resize_targets(req, root)
+    task = _task_store().create(
+        kind=_KIND_BATCH_RESIZE,
+        title=f"batch-resize:{root.name}",
+        metadata={
+            "dataset_path": str(root),
+            "paths_count": len(req.paths or []),
+            "target_short_edge": req.target_short_edge,
+            "filter": req.filter,
+            "upscale": req.upscale,
+            "recursive": req.recursive,
+        },
+    )
+    session = _BatchResizeSession(
+        session_id=task.id,
+        dataset_path=str(root),
+        total=len(targets),
+    )
+    session._append_task_event("batch resize queued", percent=0)
+    with _batch_resize_lock:
+        _batch_resize_sessions[session.session_id] = session
 
-    for src in targets:
+    def run() -> None:
         try:
-            with Image.open(src) as img:
-                w, h = img.size
-                short = min(w, h)
-                if short == req.target_short_edge:
-                    skipped.append(str(src))
-                    continue
-                if short > req.target_short_edge:
-                    # Downscale — always allowed.
-                    pass
-                else:
-                    # Upscale — gated by the flag.
-                    if not req.upscale:
-                        skipped.append(str(src))
-                        continue
-                scale = req.target_short_edge / short
-                new_w = max(1, round(w * scale))
-                new_h = max(1, round(h * scale))
-                new_img = img.resize((new_w, new_h), resample=resample)
-                new_img.load()
-            _backup_file(req.dataset_path, src)
-            new_img.save(src)
-            resampled.append(
-                {
-                    "path": str(src),
-                    "from": [w, h],
-                    "to": [new_w, new_h],
-                },
+            _task_store().update(session.session_id, status="running", percent=0)
+            _resize_images(
+                req,
+                targets,
+                on_resampled=session.add_resampled,
+                on_skipped=session.add_skipped,
+                on_failed=session.add_failed,
+                should_stop=session.should_stop,
             )
-        except (UnidentifiedImageError, OSError) as exc:
-            failed.append({"path": str(src), "error": str(exc)})
+            session.finish("canceled" if session.should_stop() else "succeeded")
+        except InterruptedError:
+            session.cancel()
+        except Exception as exc:  # noqa: BLE001
+            session.fail(str(exc))
 
+    threading.Thread(
+        target=run,
+        name=f"is-batch-resize-{session.session_id[:8]}",
+        daemon=True,
+    ).start()
     return {
-        "resampled": resampled,
-        "resampled_count": len(resampled),
-        "skipped_count": len(skipped),
-        "failed": failed,
+        "session_id": session.session_id,
+        "total": len(targets),
+        "status_url": (
+            f"/api/image-studio/curate/batch-resize/status/{session.session_id}"
+        ),
     }
+
+
+@router.get("/curate/batch-resize/status/{session_id}")
+def curate_batch_resize_status(session_id: str) -> dict[str, Any]:
+    with _batch_resize_lock:
+        session = _batch_resize_sessions.get(session_id)
+    if session is not None:
+        return session.snapshot()
+    persisted = _persisted_task_result(session_id, _KIND_BATCH_RESIZE)
+    if persisted is not None:
+        return persisted
+    raise HTTPException(404, "batch-resize session not found")
+
+
+@router.post("/curate/batch-resize/stop/{session_id}")
+def curate_batch_resize_stop(session_id: str) -> dict[str, Any]:
+    with _batch_resize_lock:
+        session = _batch_resize_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "batch-resize session not found")
+    session.request_stop()
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #

@@ -114,7 +114,7 @@ export const SamplingFields = memo(function SamplingFields({
           </Row>
           <Row
             label="随机种子"
-            description="-1 = 每次训练随机抽取（与 ComfyUI 同义）；填具体数字即固定种子；🎲 立刻生成新值并固定。"
+            description="-1 = 每次训练随机抽取（与 ComfyUI 同义）；填具体数字即固定种子；骰子按钮会立刻生成新值并固定。"
           >
             <SeedInput
               value={v.seed ?? -1}
@@ -181,6 +181,7 @@ export const SamplingFields = memo(function SamplingFields({
         onOpenChange={setPromptsOpen}
         initial={prompts}
         defaultResolution={resTuple}
+        triggerWord={v.triggerWord ?? null}
         onSave={(next: SamplingPromptValue[]) =>
           set(["sampling", "prompts"], next)
         }

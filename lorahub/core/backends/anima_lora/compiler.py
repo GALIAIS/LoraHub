@@ -423,8 +423,9 @@ def _render_full_config(
     cfg_dict["mixed_precision"] = opts.mixed_precision
 
     # ---- Validation ----
-    if opts.use_cmmd:
-        cfg_dict["use_cmmd"] = True
+    # Upstream defaults ``use_cmmd`` to true. Emit both true and false so
+    # LoraHub's UI value wins instead of letting argparse fall back.
+    cfg_dict["use_cmmd"] = bool(opts.use_cmmd)
     if opts.validation_seed is not None:
         cfg_dict["validation_seed"] = int(opts.validation_seed)
     if opts.validation_sample_steps is not None:
@@ -773,6 +774,7 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
     sub = opts.lora
     flag_for_algorithm: dict[str, str | None] = {
         "lora": None,
+        "tlora": None,
         "ortho": "use_ortho",
         "dora": "use_dora",
         "ia3": "use_ia3",
@@ -793,8 +795,9 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
         pieces.append(f"{flag}={'true' if algo == chosen else 'false'}")
     pieces.append(f"lokr_factor={sub.lokr_factor}")
     pieces.append(f"boft_factors={sub.boft_factors}")
+    use_timestep_mask = sub.use_timestep_mask or sub.algorithm == "tlora"
     pieces.append(
-        f"use_timestep_mask={'true' if sub.use_timestep_mask else 'false'}",
+        f"use_timestep_mask={'true' if use_timestep_mask else 'false'}",
     )
     pieces.append(f"min_rank={sub.min_rank}")
     pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")

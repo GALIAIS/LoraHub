@@ -7,6 +7,7 @@ import { api, type JobSummary } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { readBool, readList, useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { cn } from "@/lib/utils"
 import { JobsToolbar } from "./components/jobs-toolbar"
 import { JobRow } from "./components/job-row"
 import { JobDetail } from "./components/job-detail"
@@ -272,25 +272,15 @@ export function JobsPage() {
   })
 
   return (
-    <div
-      className={cn(
-        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
-        sidebarOpen
-          ? "grid-cols-[minmax(280px,340px)_1fr]"
-          : "grid-cols-[0px_1fr]",
-      )}
-    >
-      <aside
-        className={cn(
-          "shiro-page-aside flex flex-col min-h-0 min-w-0 overflow-hidden",
-          !sidebarOpen && "pointer-events-none opacity-0",
-        )}
-        aria-hidden={!sidebarOpen}
-      >
-        <div className="flex items-center justify-between px-4 pt-3">
-          <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
-            训练任务
-          </span>
+    <>
+      <WorkbenchSplitLayout
+        sidebarOpen={sidebarOpen}
+        sidebarWidth="minmax(280px,340px)"
+        mobileSidebarTitle="训练任务列表"
+        mobileSidebarDescription="筛选训练任务、选择任务、进入对比或批量归档。"
+        sidebar={
+          <>
+        <div className="hidden items-center justify-end border-b border-border/60 px-3 py-2 md:flex">
           <Button
             size="sm"
             variant="ghost"
@@ -409,15 +399,15 @@ export function JobsPage() {
             })}
           </ul>
         </ScrollArea>
-      </aside>
-
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+          </>
+        }
+      >
         {!sidebarOpen && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
@@ -436,7 +426,7 @@ export function JobsPage() {
             从列表中选择一个任务以查看事件流。
           </div>
         )}
-      </section>
+      </WorkbenchSplitLayout>
 
       <AlertDialog
         open={bulkArchiveOpen}
@@ -476,6 +466,6 @@ export function JobsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }

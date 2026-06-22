@@ -12,7 +12,11 @@ from typing import Dict, List, Optional
 import torch
 
 from library.log import setup_logging
-from networks import NETWORK_REGISTRY, resolve_network_spec
+from networks import (
+    NETWORK_REGISTRY,
+    _normalize_lycoris_kwargs,
+    resolve_network_spec,
+)
 from networks.methods.repa import REPAHead
 from networks.lora_anima.config import LoRANetworkCfg
 from networks.lora_anima.loading import (
@@ -112,16 +116,26 @@ def create_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
+    kwargs = _normalize_lycoris_kwargs(kwargs)
     spec = resolve_network_spec(kwargs)
 
-    # Memory-saving down-projection autograd (classic LoRA only). Saves the
-    # low-precision x instead of the fp32-cast input; fp32 bottleneck matmul
-    # and gradients are preserved bitwise. See `networks/lora_modules/custom_autograd.py`.
+    # Deprecated 2026-06-10 (accepted so old snapshot TOMLs replay): the
+    # fp32-bottleneck down-projection autograd was removed. Training GEMMs now
+    # run in the model compute dtype (``org_forwarded.dtype`` = the frozen
+    # base's bf16 output). Keying off the activation dtype was wrong because
+    # AdaLN can hand these Linears fp32 under autocast, silently upcasting the
+    # rank path and the channel-scale rebalance activation.
     use_custom_down_autograd = kwargs.get("use_custom_down_autograd", "false")
     if isinstance(use_custom_down_autograd, str):
         use_custom_down_autograd = use_custom_down_autograd.lower() == "true"
     else:
         use_custom_down_autograd = bool(use_custom_down_autograd)
+    if use_custom_down_autograd:
+        logger.info(
+            "use_custom_down_autograd is deprecated and ignored "
+            "(rank GEMMs now run in the model compute dtype)"
+        )
+        use_custom_down_autograd = False
 
     channel_scales_dict = _load_channel_scales(kwargs)
 

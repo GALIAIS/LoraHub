@@ -15,12 +15,13 @@
  * Heavy lifting matches `<LossChart>` so users only have to learn one
  * gesture vocabulary across the workbench.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import { Eye, EyeOff, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ChartToolbar } from "../../jobs/components/chart-toolbar"
+import { useMultiLineChartInteraction } from "./multi-line-chart-interaction"
 
 export interface MultiLinePoint {
   x: number
@@ -108,37 +109,6 @@ function Core({
     [series, hidden],
   )
 
-  // ----- View state with sessionStorage hydration -------------------------
-  const storageKey = persistKey ? `lorahub.multi.${persistKey}` : null
-  const [viewRange, setViewRange] = useState<[number, number] | null>(() => {
-    if (!storageKey) return null
-    try {
-      const raw = window.sessionStorage.getItem(storageKey)
-      if (!raw) return null
-      const parsed = JSON.parse(raw)
-      if (
-        Array.isArray(parsed?.xRange) &&
-        parsed.xRange.length === 2 &&
-        parsed.xRange.every(Number.isFinite)
-      )
-        return [parsed.xRange[0], parsed.xRange[1]]
-    } catch {
-      // ignore corrupt storage
-    }
-    return null
-  })
-  useEffect(() => {
-    if (!storageKey) return
-    try {
-      window.sessionStorage.setItem(
-        storageKey,
-        JSON.stringify({ xRange: viewRange }),
-      )
-    } catch {
-      // quota or disabled — silently skip
-    }
-  }, [storageKey, viewRange])
-
   // ----- Extents ----------------------------------------------------------
   const fullExtent = useMemo(() => {
     let xMin = Infinity
@@ -155,10 +125,32 @@ function Core({
     return { xMin, xMax }
   }, [visible])
 
-  const effectiveX = viewRange ?? (fullExtent ? [fullExtent.xMin, fullExtent.xMax] : [0, 1])
-  const xMin = effectiveX[0]
-  const xMax = effectiveX[1]
-  const xSpan = xMax - xMin || 1
+  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
+  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
+  const {
+    hoverX,
+    inverseX,
+    onDoubleClick,
+    onPointerDown,
+    onPointerLeave,
+    onPointerMove,
+    onPointerUp,
+    onWheel,
+    reset,
+    svgRef,
+    viewRange,
+    xMax,
+    xMin,
+    xSpan,
+    zoomBy,
+  } = useMultiLineChartInteraction({
+    persistKey,
+    fullExtent,
+    innerW,
+    padLeft: PAD_LEFT,
+    padRight: PAD_RIGHT,
+    viewW: VIEW_W,
+  })
 
   const axisStats = useMemo(() => {
     const left: number[] = []
@@ -196,15 +188,8 @@ function Core({
   const hasRight = axisStats.right.length > 0
 
   // ----- Scales -----------------------------------------------------------
-  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
-  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
-
   const xScale = useCallback(
     (x: number) => PAD_LEFT + ((x - xMin) / xSpan) * innerW,
-    [xMin, xSpan, innerW],
-  )
-  const inverseX = useCallback(
-    (px: number) => xMin + ((px - PAD_LEFT) / innerW) * xSpan,
     [xMin, xSpan, innerW],
   )
   const yScale = useCallback(
@@ -229,90 +214,6 @@ function Core({
   }, [xMin, xSpan])
 
   const hasData = !!fullExtent
-
-  // ----- Pointer / gestures ----------------------------------------------
-  const svgRef = useRef<SVGSVGElement | null>(null)
-  const panRef = useRef<{ lastVX: number } | null>(null)
-  const [hoverX, setHoverX] = useState<number | null>(null)
-
-  function clientToVB(e: React.PointerEvent | React.WheelEvent): number {
-    const svg = svgRef.current
-    if (!svg) return 0
-    const rect = svg.getBoundingClientRect()
-    return ((e.clientX - rect.left) / rect.width) * VIEW_W
-  }
-
-  function setRangeClamped(lo: number, hi: number) {
-    if (!fullExtent) return
-    const span = hi - lo
-    if (span <= 0) return
-    const fullSpan = fullExtent.xMax - fullExtent.xMin
-    const minSpan = fullSpan * 0.005
-    if (span < minSpan) return
-    let nlo = Math.max(fullExtent.xMin, lo)
-    let nhi = Math.min(fullExtent.xMax, hi)
-    if (nhi - nlo < minSpan) {
-      const center = (nlo + nhi) / 2
-      nlo = center - minSpan / 2
-      nhi = center + minSpan / 2
-    }
-    if (nlo === fullExtent.xMin && nhi === fullExtent.xMax) {
-      setViewRange(null)
-    } else {
-      setViewRange([nlo, nhi])
-    }
-  }
-
-  function zoomBy(factor: number, anchorVX?: number) {
-    const lo = xMin
-    const hi = xMax
-    const anchor = anchorVX != null ? inverseX(anchorVX) : (lo + hi) / 2
-    const span = (hi - lo) / factor
-    setRangeClamped(
-      anchor - span * ((anchor - lo) / (hi - lo || 1)),
-      anchor + span * ((hi - anchor) / (hi - lo || 1)),
-    )
-  }
-
-  function reset() {
-    setViewRange(null)
-  }
-
-  function onWheel(e: React.WheelEvent<SVGSVGElement>) {
-    if (!fullExtent) return
-    e.preventDefault()
-    const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-    zoomBy(factor, clientToVB(e))
-  }
-
-  function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.button !== 0) return
-    const vx = clientToVB(e)
-    if (vx < PAD_LEFT || vx > VIEW_W - PAD_RIGHT) return
-    panRef.current = { lastVX: vx }
-    ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-  }
-  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    const vx = clientToVB(e)
-    setHoverX(vx)
-    if (panRef.current) {
-      const dx = vx - panRef.current.lastVX
-      panRef.current.lastVX = vx
-      const dataDx = -(dx / innerW) * xSpan
-      setRangeClamped(xMin + dataDx, xMax + dataDx)
-    }
-  }
-  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
-    panRef.current = null
-    ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
-  }
-  function onPointerLeave() {
-    panRef.current = null
-    setHoverX(null)
-  }
-  function onDoubleClick() {
-    reset()
-  }
 
   // ----- Tooltip / crosshair ---------------------------------------------
   const tooltip = useMemo(() => {

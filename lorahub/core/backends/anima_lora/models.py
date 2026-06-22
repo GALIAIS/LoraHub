@@ -5,8 +5,8 @@ Anima needs three safetensors checkpoints to run inference / training:
   - text_encoders/qwen_3_06b_base.safetensors      (Qwen3 TE)
   - vae/qwen_image_vae.safetensors                 (Qwen Image VAE)
 
-All three live in the HuggingFace repo ``circlestone-labs/Anima`` under
-``split_files/{kind}/{name}.safetensors``. The trainer reads them via
+All three live in the ModelScope / HuggingFace repo ``circlestone-labs/Anima``
+under ``split_files/{kind}/{name}.safetensors``. The trainer reads them via
 relative paths from its own cwd (``external/anima_lora/``), so we
 download into ``<lorahub_root>/models/{kind}/`` (the unified models
 directory) and link ``external/anima_lora/models`` -> the project
@@ -18,17 +18,21 @@ place — re-running the download is a no-op.
 
 from __future__ import annotations
 
-import os
-import shutil
 import sys
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from lorahub.core.backends.anima_lora.bootstrap import default_repo_path
+from lorahub.core.models.downloader import (
+    DownloadProgress,
+    DownloadRequest,
+    download,
+)
 
 ProgressCallback = Callable[["DownloadEvent"], None]
+Source = Literal["modelscope", "huggingface"]
 
 ANIMA_REPO_ID = "circlestone-labs/Anima"
 
@@ -126,8 +130,10 @@ def _link_anima_models_dir() -> None:
 
 def download_models(
     *,
+    source: Source = "modelscope",
     huggingface_endpoint: str | None = None,
     huggingface_token: str | None = None,
+    modelscope_token: str | None = None,
     proxy: str | None = None,
     threads: int = 3,
     progress: ProgressCallback | None = None,
@@ -138,15 +144,6 @@ def download_models(
     same per-file event shape as the existing ``models/download``
     endpoint so the front end can render a uniform progress UI.
     """
-    from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
-    endpoint = (huggingface_endpoint or "").rstrip("/") or None
-    token = (huggingface_token or "").strip() or None
-    if proxy:
-        os.environ["HTTPS_PROXY"] = proxy
-        os.environ["HTTP_PROXY"] = proxy
-        os.environ["ALL_PROXY"] = proxy
-
     root = models_root()
     root.mkdir(parents=True, exist_ok=True)
     for sub, _, _ in _TARGETS:
@@ -170,69 +167,64 @@ def download_models(
     if progress:
         progress(
             DownloadEvent(
-                f"hf: {total} anima model file(s) to download from {ANIMA_REPO_ID}",
+                f"{source}: {total} anima model file(s) to download from {ANIMA_REPO_ID}",
                 2,
                 0,
                 total,
             )
         )
 
-    def fetch(sub: str, name: str, repo_path: str) -> str:
-        kw: dict[str, object] = {
-            "repo_id": ANIMA_REPO_ID,
-            "filename": repo_path,
-            "local_dir": str(root),
-        }
-        if endpoint:
-            kw["endpoint"] = endpoint
-        if token:
-            kw["token"] = token
-        cached = hf_hub_download(**kw)
-        # hf_hub_download writes under <local_dir>/split_files/<kind>/<name>.
-        # Move the file to <local_dir>/<kind>/<name> so anima's trainer
-        # picks it up at the expected path.
-        cached_path = Path(cached)
+    paths = tuple(repo_path for _, _, repo_path in pending)
+
+    def forward(event: DownloadProgress) -> None:
+        if progress:
+            progress(
+                DownloadEvent(
+                    message=event.message,
+                    percent=event.percent if event.percent is not None else 0,
+                    files_done=event.files_done,
+                    files_total=event.files_total,
+                )
+            )
+
+    download(
+        DownloadRequest(
+            source=source,
+            repo_id=ANIMA_REPO_ID,
+            revision="master" if source == "modelscope" else "main",
+            target_dir=root,
+            huggingface_endpoint=huggingface_endpoint,
+            huggingface_token=huggingface_token,
+            modelscope_token=modelscope_token,
+            threads=threads,
+            proxy=proxy,
+            paths=paths,
+        ),
+        forward,
+    )
+
+    for sub, name, repo_path in pending:
+        cached_path = root / repo_path
         dest = root / sub / name
-        if cached_path.resolve() != dest.resolve():
+        if cached_path.is_file() and cached_path.resolve() != dest.resolve():
             dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.exists():
                 dest.unlink()
-            shutil.move(str(cached_path), str(dest))
-        return f"{sub}/{name}"
+            cached_path.replace(dest)
 
-    workers = max(1, min(threads, total))
-    completed = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(fetch, sub, name, rp) for sub, name, rp in pending]
-        for fut in as_completed(futures):
-            completed += 1
-            try:
-                done_name = fut.result()
-                msg = f"hf: [{completed}/{total}] {done_name}"
-            except Exception as exc:  # noqa: BLE001
-                msg = f"hf: [{completed}/{total}] failed: {exc}"
-            if progress:
-                progress(
-                    DownloadEvent(
-                        message=msg,
-                        percent=2 + (completed / total) * 95,
-                        files_done=completed,
-                        files_total=total,
-                    )
-                )
-
-    # Clean up the intermediate split_files/ directory hf_hub_download leaves behind.
     leftover = root / "split_files"
     if leftover.is_dir():
+        import shutil  # noqa: PLC0415
+
         shutil.rmtree(leftover, ignore_errors=True)
 
     _link_anima_models_dir()
     if progress:
         progress(
             DownloadEvent(
-                message=f"done — {completed}/{total} files",
+                message=f"done — {total}/{total} files",
                 percent=100,
-                files_done=completed,
+                files_done=total,
                 files_total=total,
             )
         )

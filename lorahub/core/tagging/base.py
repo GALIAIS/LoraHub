@@ -22,6 +22,7 @@ TaggerKind = Literal["wd14", "joytag"]
 # (image_path, native_per_image_result) — the second arg is intentionally
 # typed as Any because each tagger has its own result dataclass.
 ProgressCallback = Callable[[Path, Any], None]
+StopCallback = Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,7 @@ class BaseTagger(Protocol):
         underscores: bool = False,
         include_character: bool = True,
         on_progress: ProgressCallback | None = None,
+        should_stop: StopCallback | None = None,
     ) -> Sequence[Any]:
         """Tag every image under `directory` and (optionally) write `.txt` captions.
 
@@ -87,6 +89,7 @@ class BaseTagger(Protocol):
 __all__ = [
     "BaseTagger",
     "ProgressCallback",
+    "StopCallback",
     "TaggerKind",
     "TaggingProgress",
 ]

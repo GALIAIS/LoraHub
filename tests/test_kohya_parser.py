@@ -200,6 +200,16 @@ def test_validation_loss_emits_validation_event() -> None:
     assert ev.job_id == "J1"
 
 
+def test_eval_loss_emits_validation_event() -> None:
+    """Some trainers report held-out loss as eval_loss instead of val_loss."""
+    ev = parse_line("epoch 4 step 768 eval_loss=0.412", job_id="J1")
+    assert ev is not None
+    assert ev.type is EventType.validation
+    assert ev.payload["val_loss"] == 0.412
+    assert ev.payload.get("epoch") == 4
+    assert ev.payload.get("step") == 768
+
+
 def test_oom_runtime_error_emits_oom_event() -> None:
     """Legacy `RuntimeError: CUDA out of memory` becomes an `oom` event."""
     ev = parse_line("RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB")

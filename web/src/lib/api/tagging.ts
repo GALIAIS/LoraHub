@@ -18,7 +18,7 @@ export interface TaggingSession {
   recursive: boolean
   include_character: boolean
   underscores: boolean
-  status: "running" | "succeeded" | "failed"
+  status: "running" | "succeeded" | "failed" | "canceled" | "interrupted"
   percent: number
   events: TaggingEvent[]
   written: number
@@ -65,4 +65,13 @@ export async function getTaggingSession(
   sessionId: string,
 ): Promise<TaggingSession> {
   return http<TaggingSession>(`/tagging/tag/${sessionId}`)
+}
+
+export async function stopTaggingSession(
+  sessionId: string,
+): Promise<{ session_id: string; status: string }> {
+  return http<{ session_id: string; status: string }>(
+    `/tagging/tag/${encodeURIComponent(sessionId)}/stop`,
+    { method: "POST" },
+  )
 }

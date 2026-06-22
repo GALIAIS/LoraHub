@@ -54,7 +54,7 @@ export function Pagination({
             <select
               value={safeSize}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="h-7 rounded-[3px] border border-border/60 bg-background px-1.5 font-mono text-[11px]"
+              className="h-7 rounded-[6px] border border-[var(--control-border)] bg-[var(--control-fill)] px-1.5 font-mono text-[11px] outline-none transition-colors hover:border-[var(--control-border-hover)] hover:bg-[var(--control-fill-hover)] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35"
             >
               {pageSizeOptions.map((opt) => (
                 <option key={opt} value={opt}>

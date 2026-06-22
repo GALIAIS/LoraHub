@@ -117,6 +117,10 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     # Memory-saving down-projection autograd (classic LoRA only; bitwise-equal grads)
     "use_custom_down_autograd",
     # Variant selectors (read by resolve_network_spec)
+    # LyCORIS-compatible selector aliases. ``algo`` mirrors
+    # lycoris.kohya's public network_arg surface; the ``use_*`` flags
+    # below remain anima_lora's canonical internal selectors.
+    "algo",
     "use_ortho",
     "use_dora",
     "use_ia3",
@@ -132,6 +136,9 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     # split of out_dim and (b, d) split of in_dim. Larger factor → more
     # expressive W₁ matrix, smaller LoRA leg.
     "lokr_factor",
+    # LyCORIS-compatible spelling for LoKr factor. Normalized to
+    # ``lokr_factor`` by ``_normalize_lycoris_kwargs``.
+    "factor",
     # BOFT factor (only consumed when use_boft=True). Number of
     # butterfly stages composed into the rotation; ≥ log_2(out_dim)
     # is sufficient to span SO(out_dim). Default 4 follows upstream.
@@ -168,6 +175,22 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "repa_encoder_dim",
     "repa_lr_scale",
 )
+
+
+_LYCORIS_ALGO_TO_FLAG: Dict[str, Optional[str]] = {
+    "lora": None,
+    "locon": None,
+    "tlora": "use_timestep_mask",
+    "loha": "use_loha",
+    "lokr": "use_lokr",
+    "ia3": "use_ia3",
+    "dylora": "use_dylora",
+    "full": "use_full",
+    "diag_oft": "use_diag_oft",
+    "diag-oft": "use_diag_oft",
+    "boft": "use_boft",
+    "glora": "use_glora",
+}
 
 
 def _post_init_hydra(network: Any, kwargs: Mapping[str, Any]) -> None:
@@ -416,6 +439,36 @@ def _parse_bool_flag(kwargs: Mapping[str, Any], key: str) -> bool:
     return str(v).lower() == "true"
 
 
+def _normalize_lycoris_kwargs(kwargs: Mapping[str, Any]) -> Dict[str, Any]:
+    """Accept LyCORIS/kohya style ``network_args`` on anima_lora.
+
+    LoraHub's typed compiler emits the canonical ``use_lokr=true`` style
+    flags. Direct users often bring configs from ``lycoris.kohya`` with
+    ``algo=lokr`` / ``factor=8``. Normalize those aliases here so both
+    surfaces hit the same native anima_lora modules and save handlers.
+    """
+    normalized = dict(kwargs)
+    raw_algo = normalized.get("algo")
+    if raw_algo is not None and str(raw_algo).strip():
+        algo = str(raw_algo).strip().lower()
+        if algo.startswith("lycoris_"):
+            algo = algo.removeprefix("lycoris_")
+        if algo not in _LYCORIS_ALGO_TO_FLAG:
+            raise ValueError(
+                f"LyCORIS algo={raw_algo!r} is not supported by this "
+                "anima_lora build. Supported values: "
+                f"{sorted(_LYCORIS_ALGO_TO_FLAG)}"
+            )
+        flag = _LYCORIS_ALGO_TO_FLAG[algo]
+        if flag is not None and flag not in normalized:
+            normalized[flag] = "true"
+
+    if "factor" in normalized and "lokr_factor" not in normalized:
+        normalized["lokr_factor"] = normalized["factor"]
+
+    return normalized
+
+
 def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     """Resolve which NetworkSpec to instantiate from create_network kwargs.
 
@@ -434,6 +487,8 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     the hood (OrthoHydra parameterization), but uses K_c + K_f instead of
     a single ``num_experts`` — the user only sets the chimera flag.
     """
+    kwargs = _normalize_lycoris_kwargs(kwargs)
+
     use_ortho = _parse_bool_flag(kwargs, "use_ortho")
     use_dora = _parse_bool_flag(kwargs, "use_dora")
     use_ia3 = _parse_bool_flag(kwargs, "use_ia3")

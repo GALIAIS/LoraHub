@@ -1,13 +1,11 @@
 /**
  * SamplesGallery — virtualised-friendly grid of sample-image artifacts
- * grouped by epoch / step (parsed from the filename), with a lightbox
- * for full-size inspection.
+ * grouped by epoch / step (parsed from the path).
  */
-import { useMemo, useState } from "react"
-import { ImageIcon, X } from "lucide-react"
+import { useMemo } from "react"
+import { ImageIcon } from "lucide-react"
 import { api, type JobFile } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 interface SampleEntry extends JobFile {
@@ -19,26 +17,46 @@ function parseSampleMeta(path: string): {
   epoch: number | null
   step: number | null
 } {
-  const name = path.split(/[\\/]/).pop() ?? ""
-  const epochMatch = name.match(/e(?:poch)?[-_]?(\d+)/i)
-  const stepMatch = name.match(/s(?:tep)?[-_]?(\d+)/i)
+  const normalized = path.replace(/\\/g, "/")
+  const name = normalized.split("/").pop() ?? ""
+  const compact = name.match(/^(?<epoch>\d+)[_-](?<step>\d{3,})(?:[_-]|$)/)
+  const epochMatch =
+    normalized.match(/(?:^|[/_-])e(?:poch)?[-_]?(\d+)(?:[/_.-]|$)/i) ??
+    normalized.match(/(?:^|[/_-])epoch[-_]?(\d+)(?:[/_.-]|$)/i)
+  const stepMatch =
+    normalized.match(/(?:^|[/_-])s(?:tep)?[-_]?(\d+)(?:[/_.-]|$)/i) ??
+    normalized.match(/(?:^|[/_-])step[-_]?(\d+)(?:[/_.-]|$)/i) ??
+    name.match(/(?:^|_)(\d{3,})_\d+_\d{10,14}(?:_|\.|$)/)
   return {
-    epoch: epochMatch ? Number(epochMatch[1]) : null,
-    step: stepMatch ? Number(stepMatch[1]) : null,
+    epoch: compact?.groups?.epoch
+      ? Number(compact.groups.epoch)
+      : epochMatch
+        ? Number(epochMatch[1])
+        : null,
+    step: compact?.groups?.step
+      ? Number(compact.groups.step)
+      : stepMatch
+        ? Number(stepMatch[1])
+        : null,
   }
+}
+
+function openExternal(url: string): void {
+  window.open(url, "_blank", "noopener,noreferrer")
 }
 
 export function SamplesGallery({
   jobId,
   samples,
   loading,
+  triggerWord,
 }: {
   jobId: string
   samples: JobFile[]
   loading: boolean
+  /** 触发词，作为 LoRA 预览图的橙色角标文字。null = 显示 LORA。*/
+  triggerWord?: string | null
 }) {
-  const [openSrc, setOpenSrc] = useState<string | null>(null)
-
   const enriched = useMemo<SampleEntry[]>(() => {
     return samples
       .map((s) => ({ ...s, ...parseSampleMeta(s.path) }))
@@ -83,18 +101,27 @@ export function SamplesGallery({
               const url = api.jobFileUrl(jobId, s.path)
               const name = s.path.split(/[\\/]/).pop() ?? s.path
               const isBaseline = s.step === 0 || (s.step == null && s.epoch === 0)
+              // 触发词 ASCII 化作为左上角橙色角标文字，超长截断；
+              // 缺失时退回到字面 LORA。
+              const loraBadge = (triggerWord || "").trim() || "LORA"
+              const loraBadgeShort =
+                loraBadge.length > 18 ? loraBadge.slice(0, 17) + "…" : loraBadge
               return (
                 <button
                   key={s.path}
                   type="button"
-                  onClick={() => setOpenSrc(url)}
+                  onClick={() => openExternal(url)}
                   className={cn(
                     "group relative aspect-square overflow-hidden rounded-[4px] border bg-muted/20 transition",
                     isBaseline
                       ? "border-sky-400/70 ring-1 ring-sky-400/30 hover:border-sky-500"
-                      : "border-border/60 hover:border-primary/60",
+                      : "border-amber-400/60 hover:border-amber-500/80",
                   )}
-                  title={isBaseline ? `[基模] ${name}` : name}
+                  title={
+                    isBaseline
+                      ? `[基模] ${name}`
+                      : `[${loraBadge}] ${name}`
+                  }
                 >
                   <img
                     src={url}
@@ -102,9 +129,16 @@ export function SamplesGallery({
                     loading="lazy"
                     className="h-full w-full object-cover transition group-hover:scale-105"
                   />
-                  {isBaseline && (
+                  {isBaseline ? (
                     <div className="pointer-events-none absolute inset-x-0 top-0 bg-sky-500/80 px-1 py-px text-center text-[9px] font-medium text-white leading-tight">
                       BASE
+                    </div>
+                  ) : (
+                    <div
+                      className="pointer-events-none absolute left-0 top-0 max-w-[80%] truncate bg-amber-500/85 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-white leading-tight rounded-br-[3px] shadow-sm"
+                      title={loraBadge}
+                    >
+                      {loraBadgeShort}
                     </div>
                   )}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
@@ -120,31 +154,6 @@ export function SamplesGallery({
           </div>
         </div>
       </CardContent>
-      {openSrc && <Lightbox src={openSrc} onClose={() => setOpenSrc(null)} />}
     </Card>
-  )
-}
-
-function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
-      onClick={onClose}
-    >
-      <Button
-        variant="ghost"
-        size="sm"
-        className="absolute top-4 right-4 text-white hover:bg-white/10"
-        onClick={onClose}
-      >
-        <X className="size-4" />
-      </Button>
-      <img
-        src={src}
-        alt="sample preview"
-        className="max-h-[90vh] max-w-[90vw] rounded-[4px] object-contain shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
   )
 }

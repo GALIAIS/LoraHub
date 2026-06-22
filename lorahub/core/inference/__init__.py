@@ -66,6 +66,11 @@ class PromptSpec:
     steps: int | None = None
     cfg: float | None = None
     negative: str | None = None
+    # Anima flow-matching sampler (--ss in the kohya prompts file format).
+    # Upstream choices: euler / er_sde / lcm. None = use anima_minimal default.
+    sampler: str | None = None
+    # Flow-matching schedule shift (--fs). None = use anima default 5.0.
+    flow_shift: float | None = None
     # Original line index (for stable filenames).
     index: int = 0
 
@@ -112,7 +117,11 @@ def _parse_line(line: str, *, index: int) -> PromptSpec:
                 spec.cfg = float(value)
             elif key == "n":
                 spec.negative = value
-            # `g`/`ss`/`cn`/`i`/etc. — dropped; the preview pipeline
+            elif key == "ss":
+                spec.sampler = value
+            elif key == "fs":
+                spec.flow_shift = float(value)
+            # `g`/`cn`/`i`/etc. — dropped; the preview pipeline
             # doesn't model conditioning beyond the basics.
         except (ValueError, TypeError):
             log.warning("preview prompt %d: bad --%s %r", index, key, value)

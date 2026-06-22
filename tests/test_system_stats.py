@@ -67,6 +67,83 @@ def _fake_io_counters(values: dict[str, tuple[int, int]]) -> dict[str, SimpleNam
     }
 
 
+def test_system_snapshot_types_serialize_nested_stats() -> None:
+    from lorahub.api.system_stats_types import (
+        CpuStats,
+        DiskIoDevice,
+        DiskIoStats,
+        HostInfo,
+        InterfaceAddress,
+        MemoryStats,
+        NetworkInterfaceStats,
+        NetworkStats,
+        SystemSnapshot,
+    )
+
+    snapshot = SystemSnapshot(
+        timestamp=1.0,
+        host=HostInfo(hostname="host", system="Linux", release="6", python="3"),
+        cpu=CpuStats(cores_logical=2, cores_physical=1, usage_percent=12.5),
+        memory=MemoryStats(
+            total_bytes=100,
+            used_bytes=40,
+            available_bytes=60,
+            percent=40.0,
+        ),
+        disks=[],
+        gpus=[],
+        has_psutil=True,
+        has_nvidia_smi=False,
+        network=NetworkStats(
+            bytes_sent_total=10,
+            bytes_recv_total=20,
+            bytes_sent_per_sec=1.5,
+            bytes_recv_per_sec=2.5,
+            interfaces=[
+                NetworkInterfaceStats(
+                    name="eth0",
+                    is_up=True,
+                    speed_mbps=1000,
+                    mtu=1500,
+                    addresses=[InterfaceAddress(family="IPv4", address="10.0.0.2")],
+                    bytes_sent_total=10,
+                    bytes_recv_total=20,
+                    bytes_sent_per_sec=1.5,
+                    bytes_recv_per_sec=2.5,
+                    packets_sent_total=1,
+                    packets_recv_total=2,
+                    errors_in=0,
+                    errors_out=0,
+                    drops_in=0,
+                    drops_out=0,
+                ),
+            ],
+        ),
+        disk_io=DiskIoStats(
+            read_bytes_total=1,
+            write_bytes_total=2,
+            read_bytes_per_sec=3.0,
+            write_bytes_per_sec=4.0,
+            read_ops_per_sec=5.0,
+            write_ops_per_sec=6.0,
+            per_device=[
+                DiskIoDevice(
+                    device="sda",
+                    read_bytes_per_sec=3.0,
+                    write_bytes_per_sec=4.0,
+                    read_ops_per_sec=5.0,
+                    write_ops_per_sec=6.0,
+                ),
+            ],
+        ),
+    )
+
+    data = snapshot.to_dict()
+
+    assert data["network"]["interfaces"][0]["addresses"][0]["address"] == "10.0.0.2"
+    assert data["disk_io"]["per_device"][0]["device"] == "sda"
+
+
 # --------------------------------------------------------------------------- #
 # Per-NIC categorisation                                                      #
 # --------------------------------------------------------------------------- #

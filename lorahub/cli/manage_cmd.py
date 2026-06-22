@@ -288,7 +288,12 @@ def build() -> None:
         err_console.print(t("manage.build.no_npm"))
         raise typer.Exit(code=1)
     web = root / "web"
-    rc = subprocess.run([str(npm), "run", "build"], cwd=web, check=False).returncode  # noqa: S603
+    rc = subprocess.run(  # noqa: S603
+        [str(npm), "run", "build"],
+        cwd=web,
+        check=False,
+        env=_npm_env(npm),
+    ).returncode
     if rc != 0:
         err_console.print(t("manage.build.npm_failed"))
         raise typer.Exit(code=rc)
@@ -297,16 +302,32 @@ def build() -> None:
 
 def _find_npm(root: Path) -> Path | None:
     """Locate the npm shim — prefer the portable Node, fall back to PATH."""
+    env_node_dir = os.environ.get("NODE_DIR")
+    if env_node_dir:
+        cand = Path(env_node_dir) / ("npm.cmd" if sys.platform == "win32" else "bin/npm")
+        if cand.is_file():
+            return cand
     if sys.platform == "win32":
         cand = root / ".node" / "npm.cmd"
         if cand.is_file():
             return cand
     else:
-        cand = root / ".node" / "bin" / "npm"
-        if cand.is_file():
-            return cand
+        for cand in (
+            root / ".node" / "bin" / "npm",
+            Path("/root/autodl-tmp/opt/node20/bin/npm"),
+        ):
+            if cand.is_file():
+                return cand
     found = shutil.which("npm")
     return Path(found) if found else None
+
+
+def _npm_env(npm: Path) -> dict[str, str]:
+    """Ensure npm lifecycle scripts can find the matching node binary."""
+    env = os.environ.copy()
+    bin_dir = npm.parent
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return env
 
 
 __all__ = ["manage_app"]

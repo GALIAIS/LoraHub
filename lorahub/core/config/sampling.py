@@ -34,6 +34,11 @@ class PromptSpec(BaseModel):
     seed: int | None = None
     width: int | None = Field(default=None, ge=64)
     height: int | None = Field(default=None, ge=64)
+    # anima_lora flow-matching sampler. Upstream supports euler / er_sde / lcm
+    # only; K-diffusion samplers (dpmpp / heun) don't apply to flow-matching.
+    sampler: str | None = Field(default=None, pattern=r"^(euler|er_sde|lcm)$")
+    # Flow-matching schedule shift; upstream default 5.0.
+    flow_shift: float | None = Field(default=None, gt=0)
 
 
 class SamplingOutputs(BaseModel):

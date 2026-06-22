@@ -5,8 +5,8 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { api, type ConfigListEntry } from "@/lib/api"
 import { useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { cn } from "@/lib/utils"
 import { ConfigRow } from "./components/config-row"
 import { ConfigPreview } from "./components/config-preview"
 import { ConfigEditor } from "./components/config-editor"
@@ -277,21 +277,14 @@ export function ConfigsPage() {
   }
 
   return (
-    <div
-      className={cn(
-        "grid h-full min-h-0 overflow-hidden grid-rows-[1fr] transition-[grid-template-columns] duration-200",
-        sidebarOpen
-          ? "grid-cols-[minmax(240px,300px)_1fr]"
-          : "grid-cols-[0px_1fr]",
-      )}
-    >
-      <aside
-        className={cn(
-          "shiro-page-aside flex flex-col min-h-0 min-w-0 overflow-hidden",
-          !sidebarOpen && "pointer-events-none opacity-0",
-        )}
-        aria-hidden={!sidebarOpen}
-      >
+    <>
+      <WorkbenchSplitLayout
+        sidebarOpen={sidebarOpen}
+        sidebarWidth="minmax(240px,300px)"
+        mobileSidebarTitle="训练配置列表"
+        mobileSidebarDescription="筛选配置、选择模板、新建或导入训练配置。"
+        sidebar={
+          <>
         <div className="flex items-center justify-between px-4 pt-3">
           <span className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80">
             训练配置
@@ -301,6 +294,7 @@ export function ConfigsPage() {
             variant="ghost"
             onClick={() => setSidebarOpen(false)}
             title="收起侧栏"
+            className="hidden md:inline-flex"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -357,15 +351,15 @@ export function ConfigsPage() {
             })}
           </ul>
         </ScrollArea>
-      </aside>
-
-      <section className="min-w-0 min-h-0 flex flex-col bg-background/60 overflow-hidden relative">
+          </>
+        }
+      >
         {!sidebarOpen && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => setSidebarOpen(true)}
-            className="absolute left-3 top-3 z-10 shadow-[var(--panel-shadow)]"
+            className="absolute left-3 top-3 z-10 hidden md:inline-flex"
             title="展开侧栏"
           >
             <PanelLeftOpen className="size-4" />
@@ -391,7 +385,7 @@ export function ConfigsPage() {
         ) : (
           <ConfigEditor mode={mode} setMode={setMode} />
         )}
-      </section>
+      </WorkbenchSplitLayout>
 
       <DuplicateDialog
         open={rowDialog?.action === "duplicate"}
@@ -434,6 +428,6 @@ export function ConfigsPage() {
         onOpenChange={setImportOpen}
         onImported={(name) => setMode({ kind: "preview", name })}
       />
-    </div>
+    </>
   )
 }

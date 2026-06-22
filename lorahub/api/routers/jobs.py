@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.jobs_helpers import (
     _TERMINAL_STATES,
@@ -878,6 +879,25 @@ def kill_job(job_id: str) -> dict[str, Any]:
     if job.error is None:
         job.error = "force-killed via /api/jobs/{id}/kill"
     state.registry.update(job)
+    from lorahub.api.error_reporter import capture  # noqa: PLC0415
+
+    with contextlib.suppress(Exception):
+        capture(
+            severity="warn",
+            source="backend.job",
+            category="force_kill",
+            title=f"training job force-killed: {job.id[-12:]}",
+            message=job.error or "force-killed via /api/jobs/{id}/kill",
+            job_id=job.id,
+            context={
+                "workspace": str(job.workspace),
+                "pid": pid,
+                "killed_process_group": killed_group,
+                "killed_pid_only": killed_pid,
+                "already_gone": already_gone,
+                "warning": error,
+            },
+        )
     # Sweep feedback: a forcibly-killed sweep child still owes its
     # parent a (probably bad) score so TPE doesn't keep proposing
     # this region. ``report_terminal_job`` reads whatever metrics
@@ -1000,7 +1020,11 @@ def cancel_job(
         return job.to_summary()
     if job.state is JobState.queued:
         # Worker hasn't claimed it yet — flip directly so the closure
-        # short-circuits when its slot eventually pops the deque.
+        # short-circuits if its slot already popped the deque. Also drop
+        # it from the scheduler's pending queue when it has not been
+        # claimed yet, so canceled jobs do not build up as no-op work.
+        with contextlib.suppress(Exception):
+            sched.scheduler.cancel_pending(job.id)
         job.state = JobState.canceled
         job.finished_at = datetime.now(UTC)
         state.registry.update(job)

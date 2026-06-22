@@ -15,106 +15,28 @@
  *     train/val gap band when both curves are present.
  *   - Fullscreen modal for detailed inspection.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CSSProperties } from "react"
-import { createPortal } from "react-dom"
-import { AlertTriangle, Eye, EyeOff, X } from "lucide-react"
+import type { LossTooltip } from "./loss-chart-widgets"
 import { cn } from "@/lib/utils"
-import type { OverfitSignal } from "@/lib/api"
 import { downsamplePoints } from "../utils"
+import { FullscreenModal } from "./loss-chart-fullscreen"
+import { LegendRow, TooltipCard, TrendBadge } from "./loss-chart-widgets"
 import { ChartToolbar } from "./chart-toolbar"
-
-export interface LossSeries {
-  id: string
-  label: string
-  color: string
-  // `dashed` is reserved for derived overlays (EMA smoothing, baselines)
-  // so users can tell them apart from primary measurements at a glance.
-  dashed?: boolean
-  points: { step: number; loss: number }[]
-}
-
-// Optional vertical guides — used by the metrics tab to mark every
-// checkpoint save on the loss chart so the user can correlate
-// loss inflections with what artefact was written at that step.
-export interface ChartMarker {
-  step: number
-  label?: string
-  color?: string
-}
-
-// Optional confidence band drawn behind the primary series. Used by the
-// analysis workbench to render a rolling IQR (Q25..Q75) underneath the
-// median line so high-variance diffusion losses don't read as a single
-// line. The band itself isn't a series — it can't be toggled in the
-// legend and doesn't carry tooltip values.
-export interface ChartBand {
-  id: string
-  color: string
-  /** Same step axis as the series. lo/hi are absolute loss values. */
-  points: { step: number; lo: number; hi: number }[]
-}
-
-const VIEW_W = 800
-const VIEW_H = 300
-const PAD_LEFT = 52
-const PAD_RIGHT = 16
-const PAD_TOP = 14
-const PAD_BOTTOM = 28
-const MAX_POINTS = 1500
-
-function formatLoss(v: number): string {
-  if (!Number.isFinite(v)) return "—"
-  if (Math.abs(v) >= 100) return v.toFixed(1)
-  if (Math.abs(v) >= 1) return v.toFixed(3)
-  return v.toFixed(4)
-}
-
-function trendCopy(trend: OverfitSignal["trend"]): {
-  label: string
-  tone: "ok" | "muted" | "danger"
-} | null {
-  switch (trend) {
-    case "improving":
-      return { label: "持续下降", tone: "ok" }
-    case "flat":
-      return { label: "已平台", tone: "muted" }
-    case "overfitting":
-      return { label: "疑似过拟合", tone: "danger" }
-    default:
-      return null
-  }
-}
-
-interface LossChartProps {
-  series: LossSeries[]
-  className?: string
-  emptyHint?: string
-  overfitSignal?: OverfitSignal | null
-  markers?: ChartMarker[]
-  /** Optional confidence band(s) drawn behind the primary series. */
-  bands?: ChartBand[]
-  /**
-   * Label rendered next to the X-axis ticks. Defaults to "step" — the
-   * analysis workbench overrides this when the user toggles the X
-   * axis to epoch or wallclock-seconds.
-   */
-  xLabel?: string
-  /**
-   * Custom formatter for X-axis tick values. Defaults to integer
-   * rendering; the workbench passes a duration formatter when the
-   * X axis is wallclock-seconds.
-   */
-  xTickFormat?: (v: number) => string
-  /**
-   * Stable key used to persist the user's view (zoom range, log toggle)
-   * across re-renders within a session. Pass the active job id when the
-   * chart shows one job's loss; pass `null` to skip persistence.
-   */
-  persistKey?: string | null
-  /** Internally toggled; do not pass from the outside. */
-  fullscreen?: boolean
-}
+import {
+  MAX_POINTS,
+  PAD_BOTTOM,
+  PAD_LEFT,
+  PAD_RIGHT,
+  PAD_TOP,
+  VIEW_H,
+  VIEW_W,
+  formatLoss,
+  trendCopy,
+  type LossChartProps,
+} from "./loss-chart-model"
+import { useLossChartInteraction } from "./loss-chart-interaction"
+export type { ChartBand, ChartMarker, LossSeries } from "./loss-chart-model"
 
 export function LossChart(props: LossChartProps) {
   const [fullscreen, setFullscreen] = useState(false)
@@ -163,55 +85,6 @@ function LossChartCore({
     })
   }, [series])
 
-  // ----- View state: x range, log/linear Y axis, gesture mode --------------
-  // We hydrate from sessionStorage on first mount when persistKey is set,
-  // so reloading / re-entering the workbench keeps the user's zoom + log
-  // toggle without polluting the URL.
-  const storageKey = persistKey ? `lorahub.loss.${persistKey}` : null
-  const [yLog, setYLog] = useState<boolean>(() => {
-    if (!storageKey) return false
-    try {
-      const raw = window.sessionStorage.getItem(storageKey)
-      if (raw) return JSON.parse(raw)?.yLog === true
-    } catch {
-      // Ignore corrupt storage.
-    }
-    return false
-  })
-  const [selectMode, setSelectMode] = useState(false)
-  // Null = auto extent. Setting a range puts the chart into "user-zoomed"
-  // mode; live data appended afterwards no longer rescales the view.
-  const [viewRange, setViewRange] = useState<[number, number] | null>(() => {
-    if (!storageKey) return null
-    try {
-      const raw = window.sessionStorage.getItem(storageKey)
-      if (!raw) return null
-      const parsed = JSON.parse(raw)
-      const xr = parsed?.xRange
-      if (Array.isArray(xr) && xr.length === 2 && xr.every(Number.isFinite))
-        return [xr[0], xr[1]]
-    } catch {
-      // Ignore corrupt storage.
-    }
-    return null
-  })
-
-  // Persist on change.
-  useEffect(() => {
-    if (!storageKey) return
-    try {
-      window.sessionStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          xRange: viewRange,
-          yLog,
-        }),
-      )
-    } catch {
-      // Quota exceeded or disabled — silently skip.
-    }
-  }, [storageKey, viewRange, yLog])
-
   // ----- Resampled series (independent of view) ---------------------------
   const prepared = useMemo(() => {
     return series.map((s) => ({
@@ -240,9 +113,45 @@ function LossChartCore({
     return { xMin, xMax }
   }, [visibleSeries])
 
-  const effectiveX = viewRange ?? (fullExtent ? [fullExtent.xMin, fullExtent.xMax] : [0, 1])
-  const xMin = effectiveX[0]
-  const xMax = effectiveX[1]
+  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
+  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
+
+  const baseRange = fullExtent
+    ? ([fullExtent.xMin, fullExtent.xMax] as [number, number])
+    : ([0, 1] as [number, number])
+
+  const {
+    hoverX,
+    onDoubleClick,
+    onPointerDown,
+    onPointerLeave,
+    onPointerMove,
+    onPointerUp,
+    onWheel,
+    reset,
+    selectMode,
+    selectRect,
+    setSelectMode,
+    setYLog,
+    svgRef,
+    viewRange,
+    viewXMax,
+    viewXMin,
+    yLog,
+    zoomBy,
+  } = useLossChartInteraction({
+    persistKey,
+    fullExtent,
+    xMin: baseRange[0],
+    xMax: baseRange[1],
+    innerW,
+  })
+
+  const viewInverseX = useCallback(
+    (px: number) =>
+      viewXMin + ((px - PAD_LEFT) / innerW) * (viewXMax - viewXMin),
+    [viewXMin, viewXMax, innerW],
+  )
 
   // Y extent depends on the X clip (so zooming X recomputes Y).
   const yExtent = useMemo(() => {
@@ -250,7 +159,7 @@ function LossChartCore({
     let hi = -Infinity
     for (const s of visibleSeries) {
       for (const p of s.points) {
-        if (p.step < xMin || p.step > xMax) continue
+        if (p.step < viewXMin || p.step > viewXMax) continue
         if (yLog && p.loss <= 0) continue
         if (p.loss < lo) lo = p.loss
         if (p.loss > hi) hi = p.loss
@@ -260,7 +169,7 @@ function LossChartCore({
     // drawn behind the series gets clipped at the top/bottom edge.
     for (const b of bands) {
       for (const p of b.points) {
-        if (p.step < xMin || p.step > xMax) continue
+        if (p.step < viewXMin || p.step > viewXMax) continue
         if (yLog && (p.lo <= 0 || p.hi <= 0)) continue
         if (p.lo < lo) lo = p.lo
         if (p.hi > hi) hi = p.hi
@@ -279,19 +188,12 @@ function LossChartCore({
     }
     const pad = (hi - lo) * 0.08
     return { lo: lo - pad, hi: hi + pad }
-  }, [visibleSeries, bands, xMin, xMax, yLog])
-
-  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
-  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
+  }, [visibleSeries, bands, viewXMin, viewXMax, yLog])
 
   const xScale = useCallback(
     (step: number) =>
-      PAD_LEFT + ((step - xMin) / (xMax - xMin || 1)) * innerW,
-    [xMin, xMax, innerW],
-  )
-  const inverseX = useCallback(
-    (px: number) => xMin + ((px - PAD_LEFT) / innerW) * (xMax - xMin),
-    [xMin, xMax, innerW],
+      PAD_LEFT + ((step - viewXMin) / (viewXMax - viewXMin || 1)) * innerW,
+    [viewXMin, viewXMax, innerW],
   )
   const yScale = useCallback(
     (loss: number) => {
@@ -326,130 +228,15 @@ function LossChartCore({
   const xTicks = useMemo(() => {
     const out: number[] = []
     for (let i = 0; i <= 4; i += 1)
-      out.push(xMin + ((xMax - xMin) * i) / 4)
+      out.push(viewXMin + ((viewXMax - viewXMin) * i) / 4)
     return out
-  }, [xMin, xMax])
-
-  // ----- Pointer / gesture handling ---------------------------------------
-  const svgRef = useRef<SVGSVGElement | null>(null)
-  const [hoverX, setHoverX] = useState<number | null>(null)
-  // Pan in progress when set; tracks last pointer X in viewBox coords.
-  const panRef = useRef<{ lastVX: number } | null>(null)
-  // Box-select rectangle in viewBox coords.
-  const [selectRect, setSelectRect] = useState<
-    { x0: number; x1: number } | null
-  >(null)
-
-  function clientToViewBox(e: React.PointerEvent | React.WheelEvent): number {
-    const svg = svgRef.current
-    if (!svg) return 0
-    const rect = svg.getBoundingClientRect()
-    return ((e.clientX - rect.left) / rect.width) * VIEW_W
-  }
-
-  function setRangeClamped(lo: number, hi: number) {
-    if (!fullExtent) return
-    const span = hi - lo
-    if (span <= 0) return
-    // Clamp to full extent; refuse to zoom in narrower than 0.5% of full
-    // range — beyond that the chart becomes useless and the user has
-    // no way to read tick labels.
-    const fullSpan = fullExtent.xMax - fullExtent.xMin
-    const minSpan = fullSpan * 0.005
-    if (span < minSpan) return
-    let nlo = Math.max(fullExtent.xMin, lo)
-    let nhi = Math.min(fullExtent.xMax, hi)
-    if (nhi - nlo < minSpan) {
-      const center = (nlo + nhi) / 2
-      nlo = center - minSpan / 2
-      nhi = center + minSpan / 2
-    }
-    if (nlo === fullExtent.xMin && nhi === fullExtent.xMax) {
-      setViewRange(null)
-    } else {
-      setViewRange([nlo, nhi])
-    }
-  }
-
-  function zoomBy(factor: number, anchorVX?: number) {
-    const lo = xMin
-    const hi = xMax
-    const anchor =
-      anchorVX != null ? inverseX(anchorVX) : (lo + hi) / 2
-    const span = (hi - lo) / factor
-    setRangeClamped(anchor - span * ((anchor - lo) / (hi - lo || 1)), anchor + span * ((hi - anchor) / (hi - lo || 1)))
-  }
-
-  function reset() {
-    setViewRange(null)
-    setSelectRect(null)
-  }
-
-  function onWheel(e: React.WheelEvent<SVGSVGElement>) {
-    if (!fullExtent) return
-    e.preventDefault()
-    const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-    zoomBy(factor, clientToViewBox(e))
-  }
-
-  function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.button !== 0) return
-    const vx = clientToViewBox(e)
-    const insideChart = vx >= PAD_LEFT && vx <= VIEW_W - PAD_RIGHT
-    if (!insideChart) return
-    if (selectMode || e.shiftKey) {
-      setSelectRect({ x0: vx, x1: vx })
-      ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-      return
-    }
-    panRef.current = { lastVX: vx }
-    ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-  }
-
-  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    const vx = clientToViewBox(e)
-    setHoverX(vx)
-    if (selectRect) {
-      setSelectRect({ x0: selectRect.x0, x1: vx })
-      return
-    }
-    if (panRef.current) {
-      const dx = vx - panRef.current.lastVX
-      panRef.current.lastVX = vx
-      // Convert pixel dx to data dx and pan.
-      const dataDx = -(dx / innerW) * (xMax - xMin)
-      setRangeClamped(xMin + dataDx, xMax + dataDx)
-    }
-  }
-
-  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
-    panRef.current = null
-    if (selectRect) {
-      const x0 = Math.min(selectRect.x0, selectRect.x1)
-      const x1 = Math.max(selectRect.x0, selectRect.x1)
-      // Only commit if the user actually dragged some distance.
-      if (Math.abs(x1 - x0) > 4) {
-        setRangeClamped(inverseX(x0), inverseX(x1))
-      }
-      setSelectRect(null)
-    }
-    ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
-  }
-
-  function onPointerLeave() {
-    setHoverX(null)
-    panRef.current = null
-  }
-
-  function onDoubleClick() {
-    reset()
-  }
+  }, [viewXMin, viewXMax])
 
   // ----- Crosshair / tooltip data point picking ---------------------------
-  const tooltip = useMemo(() => {
+  const tooltip = useMemo<LossTooltip | null>(() => {
     if (hoverX == null) return null
     if (hoverX < PAD_LEFT || hoverX > VIEW_W - PAD_RIGHT) return null
-    const targetStep = inverseX(hoverX)
+    const targetStep = viewInverseX(hoverX)
     const items: Array<{
       seriesId: string
       label: string
@@ -489,7 +276,7 @@ function LossChartCore({
       items[0],
     ).step
     return { step, items, anchorX: xScale(step) }
-  }, [hoverX, visibleSeries, inverseX, xScale, yScale])
+  }, [hoverX, visibleSeries, viewInverseX, xScale, yScale])
 
   // ----- Train / val gap band --------------------------------------------
   const gapBand = useMemo(() => {
@@ -542,28 +329,7 @@ function LossChartCore({
   return (
     <div className={cn("relative w-full", className)}>
       <div className="absolute right-2 top-2 z-10 flex items-start gap-2">
-        {trend && (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1 rounded-[3px] border px-1.5 py-0.5 text-[10.5px] font-medium",
-              trend.tone === "danger"
-                ? "border-destructive/40 bg-destructive/10 text-destructive"
-                : trend.tone === "ok"
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                  : "border-border bg-muted text-muted-foreground",
-            )}
-          >
-            {trend.tone === "danger" && (
-              <AlertTriangle className="size-3" aria-hidden />
-            )}
-            {trend.label}
-            {overfitSignal?.gap != null && (
-              <span className="ml-1 tabular-nums text-muted-foreground/80">
-                Δ{formatLoss(overfitSignal.gap)}
-              </span>
-            )}
-          </span>
-        )}
+        <TrendBadge trend={trend} gap={overfitSignal?.gap} />
         <button
           type="button"
           onClick={() => setYLog((v) => !v)}
@@ -669,7 +435,7 @@ function LossChartCore({
           {hasData &&
             bands.map((b) => {
               const pts = b.points.filter(
-                (p) => p.step >= xMin && p.step <= xMax,
+                (p) => p.step >= viewXMin && p.step <= viewXMax,
               )
               if (pts.length < 2) return null
               const polyPoints = [
@@ -708,7 +474,7 @@ function LossChartCore({
           {/* Markers */}
           {hasData &&
             markers
-              .filter((m) => m.step >= xMin && m.step <= xMax)
+              .filter((m) => m.step >= viewXMin && m.step <= viewXMax)
               .map((m, i) => {
                 const x = xScale(m.step)
                 const stroke = m.color ?? "var(--chart-3)"
@@ -741,7 +507,7 @@ function LossChartCore({
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 points={s.points
-                  .filter((p) => p.step >= xMin && p.step <= xMax)
+                  .filter((p) => p.step >= viewXMin && p.step <= viewXMax)
                   .map((p) => `${xScale(p.step)},${yScale(p.loss)}`)
                   .join(" ")}
               />
@@ -798,138 +564,21 @@ function LossChartCore({
         </svg>
       </div>
 
-      {/* Tooltip card */}
-      {tooltip && (
-        <div className="pointer-events-none absolute right-2 bottom-12 max-w-[260px] rounded-[5px] border border-border/60 bg-background/95 backdrop-blur-sm shadow-[var(--panel-shadow)] px-2.5 py-1.5 text-[11px] tabular-nums">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            step {tooltip.step}
-          </div>
-          <ul className="mt-0.5 space-y-0.5">
-            {tooltip.items.map((it) => (
-              <li
-                key={it.seriesId}
-                className="flex items-center gap-1.5 whitespace-nowrap"
-              >
-                <span
-                  className="inline-block size-2 rounded-full"
-                  style={{ background: it.color }}
-                />
-                <span className="text-foreground/85">{it.label}</span>
-                <span className="ml-auto text-foreground/95">
-                  {formatLoss(it.loss)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <TooltipCard tooltip={tooltip} />
 
       {/* Legend / range chip row */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1 text-[11px]">
-        {prepared.map((s) => {
-          const off = !!hidden[s.id]
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => toggleSeries(s.id)}
-              className={cn(
-                "group inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-0.5 transition-colors",
-                off
-                  ? "border-border/40 text-muted-foreground/70"
-                  : "border-border/60 bg-muted/40 text-foreground/85",
-              )}
-              title={off ? "点击显示" : "点击隐藏"}
-            >
-              {off ? (
-                <EyeOff className="size-3" />
-              ) : (
-                <span
-                  className="inline-block h-[2px] w-3 align-middle"
-                  style={{ background: s.color }}
-                  aria-hidden
-                />
-              )}
-              <span className={cn(off && "line-through")}>{s.label}</span>
-            </button>
-          )
-        })}
-        {markers.length > 0 && (
-          <span className="text-[10px] text-muted-foreground/70">
-            · {markers.length} 个检查点标记
-          </span>
-        )}
-        {xLabel && (
-          <span className="text-[10px] text-muted-foreground/70">
-            · X: {xLabel}
-          </span>
-        )}
-        {zoomedIn && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">
-            <Eye className="size-3" />
-            视图 {Math.round(xMin)} – {Math.round(xMax)}
-          </span>
-        )}
-        {zoomedIn && fullExtent && fullExtent.xMax > xMax && (
-          <button
-            type="button"
-            onClick={reset}
-            className="inline-flex items-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
-            title="新数据已超出视图，点击跟随到最新"
-          >
-            <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-            +{Math.round(fullExtent.xMax - xMax)} 步未显示 · 跟随
-          </button>
-        )}
-      </div>
+      <LegendRow
+        series={prepared}
+        hidden={hidden}
+        markersCount={markers.length}
+        xLabel={xLabel}
+        zoomedIn={zoomedIn}
+        xMin={viewXMin}
+        xMax={viewXMax}
+        fullXMax={fullExtent?.xMax}
+        onToggleSeries={toggleSeries}
+        onReset={reset}
+      />
     </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Fullscreen modal
-// ---------------------------------------------------------------------------
-
-function FullscreenModal({
-  children,
-  onClose,
-}: {
-  children: React.ReactNode
-  onClose: () => void
-}) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
-
-  // Portal to <body> so the modal escapes any ancestor stacking context
-  // (parent Cards / Tabs panels often create one via transform / isolate
-  // / will-change). Without this a sibling chart Card rendered later in
-  // the DOM can paint on top of our "fullscreen" view.
-  if (typeof document === "undefined") return null
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-6"
-      onClick={onClose}
-    >
-      <div
-        className="relative w-[92vw] max-w-[1400px] rounded-[6px] border border-border/60 bg-background p-4 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-3 top-3 z-20 inline-flex size-7 items-center justify-center rounded-[3px] text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="关闭全屏"
-        >
-          <X className="size-4" />
-        </button>
-        {children}
-      </div>
-    </div>,
-    document.body,
   )
 }

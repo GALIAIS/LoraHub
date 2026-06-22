@@ -19,6 +19,7 @@ test_anima_lora_schema.py (cut0 file).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -27,12 +28,16 @@ import pytest
 
 from lorahub.core.backends.anima_lora import AnimaLoraBackend
 from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap
+from lorahub.core.backends.anima_lora import installer as al_installer
+from lorahub.core.backends.anima_lora import models as al_models
+from lorahub.core.backends.anima_lora.backend import _prepare_sample_prompts_file
 from lorahub.core.backends.anima_lora.parser import parse_line
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.config.schema import (
     TrainingConfig,
 )
 from lorahub.core.events import EventType
+from lorahub.core.models.downloader import DownloadProgress
 
 # --------------------------------------------------------------------------- #
 # Bootstrap — vendored discovery + env var override + corruption detection
@@ -93,6 +98,117 @@ def test_bootstrap_env_var_override(
     assert env.repo_path == fake.resolve()
 
 
+def test_installer_uv_sync_env_defaults_to_project_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_installer, "project_root", lambda: tmp_path)
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.delenv("TEMP", raising=False)
+    monkeypatch.delenv("TMP", raising=False)
+
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+    env = al_installer._uv_sync_env(plan)
+
+    assert env["UV_CACHE_DIR"] == str(tmp_path / ".cache" / "uv")
+    if sys.platform == "win32":
+        assert env["TEMP"] == str(tmp_path / ".cache" / "tmp")
+        assert env["TMP"] == str(tmp_path / ".cache" / "tmp")
+    else:
+        assert env["TMPDIR"] == str(tmp_path / ".cache" / "tmp")
+
+
+def test_installer_uv_sync_env_preserves_user_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_installer, "project_root", lambda: tmp_path)
+    monkeypatch.setenv("UV_CACHE_DIR", "/custom/uv-cache")
+    if sys.platform == "win32":
+        monkeypatch.setenv("TEMP", "C:\\custom\\tmp")
+        monkeypatch.setenv("TMP", "C:\\custom\\tmp")
+    else:
+        monkeypatch.setenv("TMPDIR", "/custom/tmp")
+
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+    env = al_installer._uv_sync_env(plan)
+
+    assert "UV_CACHE_DIR" not in env
+    if sys.platform == "win32":
+        assert "TEMP" not in env
+        assert "TMP" not in env
+    else:
+        assert "TMPDIR" not in env
+
+
+def test_anima_model_download_uses_env_hf_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.com/")
+    monkeypatch.setattr(al_models, "models_root", lambda: tmp_path / "models")
+    monkeypatch.setattr(al_models, "_link_anima_models_dir", lambda: None)
+    endpoints: list[str | None] = []
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            endpoints.append(endpoint)
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            siblings = [
+                type("Sibling", (), {"rfilename": repo_path, "size": 1})()
+                for _, _, repo_path in al_models._TARGETS
+            ]
+            return type("Info", (), {"siblings": siblings})()
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        endpoints.append(kw.get("endpoint"))
+        cached = Path(kw["local_dir"]) / kw["filename"]
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b"model")
+        return str(cached)
+
+    fake_hub = type(
+        "FakeHub",
+        (),
+        {"HfApi": FakeApi, "hf_hub_download": staticmethod(fake_hf_hub_download)},
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    al_models.download_models(source="huggingface", threads=1)
+
+    assert endpoints == ["https://hf-mirror.com"] * 4
+    for path in al_models.expected_files():
+        assert path.is_file()
+
+
+def test_anima_model_download_defaults_to_modelscope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(al_models, "models_root", lambda: tmp_path / "models")
+    monkeypatch.setattr(al_models, "_link_anima_models_dir", lambda: None)
+    seen: dict[str, Any] = {}
+
+    def fake_download(req: Any, progress: Any = None) -> None:
+        seen["source"] = req.source
+        seen["repo_id"] = req.repo_id
+        seen["paths"] = req.paths
+        for path in req.paths:
+            out = req.target_dir / path
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"model")
+        if progress:
+            progress(DownloadProgress("done", 100, 3, 3, 0, 0))
+
+    monkeypatch.setattr(al_models, "download", fake_download)
+
+    al_models.download_models(threads=1)
+
+    assert seen["source"] == "modelscope"
+    assert seen["repo_id"] == al_models.ANIMA_REPO_ID
+    assert set(seen["paths"]) == {target[2] for target in al_models._TARGETS}
+    for path in al_models.expected_files():
+        assert path.is_file()
+
+
 # --------------------------------------------------------------------------- #
 # Parser — every recognised line shape produces the right event type
 # --------------------------------------------------------------------------- #
@@ -146,6 +262,16 @@ def test_parser_validation_loss_emits_validation_event() -> None:
     assert ev.payload["val_loss"] == pytest.approx(0.187)
     assert ev.payload["epoch"] == 3
     assert ev.payload["step"] == 512
+
+
+def test_parser_eval_loss_emits_validation_event() -> None:
+    line = "eval_loss=0.231 epoch=4 step=768"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type == EventType.validation
+    assert ev.payload["val_loss"] == pytest.approx(0.231)
+    assert ev.payload["epoch"] == 4
+    assert ev.payload["step"] == 768
 
 
 def test_parser_unknown_line_falls_to_log() -> None:
@@ -213,11 +339,54 @@ def _config(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     )
 
 
+def _sample_tokens(width: int, height: int) -> int:
+    return (width // 16) * (height // 16)
+
+
 def test_backend_name_and_supported_archs() -> None:
     b = AnimaLoraBackend()
     assert b.name == "anima_lora"
     archs = {a.value for a in b.supported_archs}
     assert archs == {"anima"}
+
+
+def test_sample_prompts_clamp_912x1632_to_static_token_budget(
+    tmp_path: Path,
+) -> None:
+    """Regression for DiT sample unpad crash: 912x1632 is 5814 tokens."""
+    cfg = _config(tmp_path)
+    cfg.sampling.enabled = True
+    cfg.sampling.resolution = [912, 1632]
+    cfg.sampling.seed = 123
+
+    workspace = tmp_path / "ws"
+    _prepare_sample_prompts_file(cfg, workspace)
+
+    body = (workspace / "_lorahub_sample_prompts.txt").read_text(encoding="utf-8")
+    assert "--w 768 --h 1360" in body
+    assert _sample_tokens(768, 1360) <= 4096
+
+
+def test_existing_sample_prompts_are_rewritten_when_over_static_budget(
+    tmp_path: Path,
+) -> None:
+    cfg = _config(tmp_path)
+    cfg.sampling.enabled = True
+    cfg.sampling.resolution = [912, 1632]
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text(
+        "character portrait --w 912 --h 1632 --s 24 --l 5.0\n",
+        encoding="utf-8",
+    )
+    cfg.sampling.prompts_file = prompts
+
+    workspace = tmp_path / "ws"
+    _prepare_sample_prompts_file(cfg, workspace)
+
+    assert cfg.sampling.prompts_file == workspace / "_lorahub_anima_sample_prompts.txt"
+    body = cfg.sampling.prompts_file.read_text(encoding="utf-8")
+    assert "--w 768 --h 1360" in body
+    assert "--s 24 --l 5.0" in body
 
 
 def test_validate_anima_arch_clean(tmp_path: Path) -> None:

@@ -263,6 +263,15 @@ def intake_local_path(req: LocalPathRequest) -> dict[str, Any]:
     """
     dst = _ensure_dataset(req.dataset_path)
     src = _resolve_external(req.source_path)
+    if src.resolve() == dst.resolve():
+        raise HTTPException(400, "source and destination are the same dataset")
+    if src.is_dir():
+        try:
+            src.resolve().relative_to(dst.resolve())
+        except ValueError:
+            pass
+        else:
+            raise HTTPException(400, "source is inside destination dataset")
 
     candidates: list[Path] = []
     if src.is_file():

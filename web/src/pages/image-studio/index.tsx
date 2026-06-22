@@ -2,7 +2,10 @@ import { useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { ImageIcon, Plus } from "lucide-react"
 import { datasetCreate } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
 import { StudioSidebar } from "./components/studio-sidebar"
 import { DatasetDetail } from "./components/dataset-detail"
 import { IntakeStage } from "./components/stages/intake-stage"
@@ -21,10 +24,22 @@ export { ImageStudioPage }
 //  - "library" — 跨数据集的工具库（标签词典 / 触发词 / Prompt 模板）
 type StageOrTools = StageId | "tools" | "library"
 
+const STAGE_META: Record<StageId, { label: string; hint: string }> = {
+  intake: { label: "导入", hint: "补充来源图片，不离开当前数据集网格" },
+  audit: { label: "审计", hint: "扫描问题后回到网格处理图片" },
+  curate: { label: "整理", hint: "查看、筛选、批量处理图片" },
+  annotate: { label: "标注", hint: "维护 caption、标签和触发词" },
+  ship: { label: "输出", hint: "检查训练就绪状态并导出" },
+}
+
+function isDatasetStage(stage: StageOrTools): stage is StageId {
+  return stage !== "tools" && stage !== "library"
+}
+
 function ImageStudioPage() {
   const [params, setParams] = useSearchParams()
   const datasetPath = params.get("path") || ""
-  const stageParam = (params.get("stage") || "tools") as StageOrTools
+  const stageParam = (params.get("stage") || (datasetPath ? "curate" : "tools")) as StageOrTools
   const [showCreate, setShowCreate] = useState(false)
   const queryClient = useQueryClient()
 
@@ -49,7 +64,10 @@ function ImageStudioPage() {
   const selectDataset = (path: string) => {
     const next = new URLSearchParams(params)
     next.set("path", path)
-    if (!next.get("stage")) next.set("stage", "tools")
+    const currentStage = next.get("stage")
+    if (!currentStage || currentStage === "tools" || currentStage === "library") {
+      next.set("stage", "curate")
+    }
     setParams(next)
   }
 
@@ -61,47 +79,37 @@ function ImageStudioPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full">
-      <StudioSidebar
-        datasetPath={datasetPath}
-        stage={stageParam}
-        onSelectDataset={selectDataset}
-        onSelectStage={selectStage}
-        onCreateDataset={() => setShowCreate(true)}
-      />
-
-      <main className="flex-1 min-w-0 flex flex-col min-h-0">
+    <>
+      <WorkbenchSplitLayout
+        sidebarWidth="max-content"
+        asideClassName="bg-transparent"
+        mobileSidebarTitle="图像工作台导航"
+        mobileSidebarDescription="选择数据集、切换导入审计标注输出阶段或打开工具库。"
+        sidebar={
+          <StudioSidebar
+            datasetPath={datasetPath}
+            stage={stageParam}
+            onSelectDataset={selectDataset}
+            onSelectStage={selectStage}
+            onCreateDataset={() => setShowCreate(true)}
+          />
+        }
+      >
         <div className="flex-1 min-h-0 overflow-hidden">
           {stageParam === "tools" && (
             <ToolsGrid datasetPath={datasetPath} />
           )}
           {stageParam === "library" && <LibraryPage />}
-          {stageParam !== "tools" &&
-            stageParam !== "library" &&
+          {isDatasetStage(stageParam) &&
             !datasetPath && (
               <EmptyState onCreateDataset={() => setShowCreate(true)} />
             )}
-          {stageParam !== "tools" &&
-            stageParam !== "library" &&
+          {isDatasetStage(stageParam) &&
             datasetPath && (
-              <>
-                {stageParam === "intake" && (
-                  <IntakeStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "audit" && (
-                  <AuditStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "curate" && <DatasetDetail />}
-                {stageParam === "annotate" && (
-                  <AnnotateStage datasetPath={datasetPath} />
-                )}
-                {stageParam === "ship" && (
-                  <ShipStage datasetPath={datasetPath} />
-                )}
-              </>
+              <DatasetWorkspace stage={stageParam} datasetPath={datasetPath} />
             )}
         </div>
-      </main>
+      </WorkbenchSplitLayout>
 
       {showCreate && (
         <CreateDatasetDialog
@@ -110,28 +118,60 @@ function ImageStudioPage() {
           loading={createMutation.isPending}
         />
       )}
+    </>
+  )
+}
+
+function DatasetWorkspace({
+  stage,
+  datasetPath,
+}: {
+  stage: StageId
+  datasetPath: string
+}) {
+  if (stage === "curate") {
+    return <DatasetDetail />
+  }
+  const meta = STAGE_META[stage]
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_minmax(240px,38vh)] 2xl:grid-cols-[minmax(0,1fr)_minmax(560px,640px)] 2xl:grid-rows-[minmax(0,1fr)]">
+      <div className="min-h-0 min-w-0 overflow-hidden">
+        <DatasetDetail />
+      </div>
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-t border-border/60 bg-background 2xl:border-l 2xl:border-t-0">
+        <div className="shrink-0 border-b border-border/60 px-3 py-2">
+          <div className="text-sm font-medium">{meta.label}</div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            {meta.hint}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <StagePanel stage={stage} datasetPath={datasetPath} />
+        </div>
+      </aside>
     </div>
   )
+}
+
+function StagePanel({
+  stage,
+  datasetPath,
+}: {
+  stage: Exclude<StageId, "curate">
+  datasetPath: string
+}) {
+  if (stage === "intake") return <IntakeStage datasetPath={datasetPath} />
+  if (stage === "audit") return <AuditStage datasetPath={datasetPath} />
+  if (stage === "annotate") return <AnnotateStage datasetPath={datasetPath} />
+  return <ShipStage datasetPath={datasetPath} />
 }
 
 function EmptyState({ onCreateDataset }: { onCreateDataset: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
       <div className="flex flex-col items-center gap-4 text-center">
-        <div className="rounded-full bg-muted p-4">
-          <svg
-            className="size-8 text-muted-foreground/60"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z"
-            />
-          </svg>
+        <div className="grid size-16 place-items-center rounded-[6px] border border-border/60 bg-muted/35 shadow-[var(--panel-shadow)]">
+          <ImageIcon className="size-7 text-muted-foreground/70" />
         </div>
         <div>
           <p className="text-sm font-medium">图像工作台</p>
@@ -139,13 +179,14 @@ function EmptyState({ onCreateDataset }: { onCreateDataset: () => void }) {
             从侧边栏选择数据集，或创建新数据集开始工作
           </p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onCreateDataset}
-          className="rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          size="sm"
         >
+          <Plus className="size-3.5" />
           新建数据集
-        </button>
+        </Button>
       </div>
     </div>
   )

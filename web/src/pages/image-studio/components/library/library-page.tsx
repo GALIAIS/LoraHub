@@ -39,34 +39,28 @@ export function LibraryPage() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-base font-semibold">工具库</h1>
-        <p className="mt-1 text-xs text-muted-foreground">
-          跨数据集的标签词典、触发词索引和 Prompt 模板。新建后可在打标 / AI
-          工具里直接引用。
-        </p>
-      </header>
-
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as LibraryTab)}
         className="flex-1 min-h-0 flex flex-col"
       >
-        <div className="px-6 pt-3 pb-1 border-b border-border/60 bg-background/40">
-          <TabsList variant="line">
-            <TabsTrigger value="tags" className="gap-1.5">
-              <Tags className="size-3.5" />
-              标签词典
-            </TabsTrigger>
-            <TabsTrigger value="triggers" className="gap-1.5">
-              <Wand2 className="size-3.5" />
-              触发词索引
-            </TabsTrigger>
-            <TabsTrigger value="prompts" className="gap-1.5">
-              <BookText className="size-3.5" />
-              Prompt 模板
-            </TabsTrigger>
-          </TabsList>
+        <div className="border-b border-border/60 bg-background/40 px-4 py-2 md:px-6">
+          <div className="overflow-x-auto">
+            <TabsList variant="line" className="min-w-max">
+              <TabsTrigger value="tags" className="gap-1.5">
+                <Tags className="size-3.5" />
+                标签词典
+              </TabsTrigger>
+              <TabsTrigger value="triggers" className="gap-1.5">
+                <Wand2 className="size-3.5" />
+                触发词索引
+              </TabsTrigger>
+              <TabsTrigger value="prompts" className="gap-1.5">
+                <BookText className="size-3.5" />
+                Prompt 模板
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 overflow-hidden">

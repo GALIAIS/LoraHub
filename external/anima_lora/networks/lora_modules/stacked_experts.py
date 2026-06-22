@@ -204,15 +204,18 @@ class StackedExpertsLoRAModule(BaseLoRAModule):
             mid = torch.einsum("ejr,...er->...j", R_p, lx)
             adapter = torch.nn.functional.linear(mid, self.P_basis)
         else:
-            # bf16 storage, fp32 bottleneck — matches Hydra free-mode.
-            x_lora = self._rebalance(x)
+            # Compute in the model dtype, not x.dtype. AdaLN can emit fp32
+            # under autocast, and the old fp32 operands materialized full
+            # fp32 rank-path activations and weight copies.
+            compute_dtype = org_forwarded.dtype
+            x_lora = self._rebalance(x.to(compute_dtype))
 
             # Batched down: (..., in) @ (E, r, in)^T → (..., E, r). Saves ONE
             # (..., E, r) activation vs E × (..., out) from a per-expert loop.
             lx = torch.einsum(
                 "...i,eri->...er",
-                x_lora.float(),
-                self.lora_down_weight.float(),
+                x_lora,
+                self.lora_down_weight.to(compute_dtype),
             )
 
             lx = lx * self._timestep_mask
@@ -222,10 +225,14 @@ class StackedExpertsLoRAModule(BaseLoRAModule):
             B = w.shape[0]
             n_mid = lx.ndim - 3
             view_shape = (B,) + (1,) * n_mid + (self.num_experts, 1)
-            lx = lx * w.view(view_shape).float()
+            lx = lx * w.view(view_shape).to(compute_dtype)
 
             # Batched up: (..., E, r) @ (E, out, r)^T → (..., out).
-            adapter = torch.einsum("...er,eor->...o", lx, self.lora_up_weight.float())
+            adapter = torch.einsum(
+                "...er,eor->...o",
+                lx.to(compute_dtype),
+                self.lora_up_weight.to(compute_dtype),
+            )
 
         lora_out = adapter * self.multiplier * self.scale
         return org_forwarded + lora_out.to(org_forwarded.dtype)

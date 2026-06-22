@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +20,12 @@ from pydantic import BaseModel
 from lorahub.api import app as app_module
 from lorahub.api.backend_update import apply_update, check_update
 from lorahub.api.settings import probe_all_backends
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSession,
+    TaskSessionStore,
+    default_task_store_path,
+)
 from lorahub.core.backends.anima_lora.models import (
     DownloadEvent,
     download_models as _download_anima_models,
@@ -36,6 +41,23 @@ from lorahub.core.backends.kohya.bootstrap import (
 from lorahub.core.backends.registry import list_backends
 
 router = APIRouter(prefix="/api")
+_KIND_ANIMA_MODEL_DOWNLOAD = "anima_model_download"
+_KIND_MSVC_INSTALL = "msvc_install"
+_ToolTaskStatus = Literal[
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "interrupted",
+]
+
+
+def _task_store() -> TaskSessionStore:
+    store = app_module._task_session_store
+    if store is None:
+        store = TaskSessionStore(default_task_store_path())
+        app_module._task_session_store = store
+    return store
 
 
 class BackendEntry(BaseModel):
@@ -140,7 +162,8 @@ def update_backend(backend_id: str) -> dict[str, Any]:
 @dataclass(slots=True)
 class _AnimaModelSession:
     session_id: str
-    status: Literal["running", "succeeded", "failed"] = "running"
+    source: Literal["modelscope", "huggingface"] = "modelscope"
+    status: _ToolTaskStatus = "running"
     percent: float = 0
     files_done: int = 0
     files_total: int = 0
@@ -151,17 +174,33 @@ class _AnimaModelSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def add_event(self, event: DownloadEvent) -> None:
+        payload = asdict(event)
+        ts = time.time()
         with self.lock:
             self.percent = max(self.percent, min(100, float(event.percent)))
             self.files_done = event.files_done
             self.files_total = event.files_total
-            self.events.append(asdict(event) | {"ts": time.time()})
+            self.events.append(payload | {"ts": ts})
             self.events = self.events[-200:]
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(
+                    level="info",
+                    message=event.message,
+                    percent=event.percent,
+                    payload=payload,
+                    ts=ts,
+                ),
+            )
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             return {
                 "session_id": self.session_id,
+                "source": self.source,
                 "status": self.status,
                 "percent": self.percent,
                 "files_done": self.files_done,
@@ -176,6 +215,38 @@ class _AnimaModelSession:
 _anima_sessions: dict[str, _AnimaModelSession] = {}
 _anima_sessions_lock = threading.Lock()
 _anima_active_session: str | None = None
+
+
+def _anima_session_from_task(task: TaskSession) -> _AnimaModelSession:
+    status: _ToolTaskStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
+
+    files_done = 0
+    files_total = 0
+    if task.events:
+        last_payload = task.events[-1].payload
+        files_done = int(last_payload.get("files_done") or 0)
+        files_total = int(last_payload.get("files_total") or 0)
+
+    return _AnimaModelSession(
+        session_id=task.id,
+        source=task.metadata.get("source") or "modelscope",
+        status=status,
+        percent=task.percent,
+        files_done=files_done,
+        files_total=files_total,
+        events=[
+            (dict(event.payload) if event.payload else {})
+            | {"message": event.message, "percent": event.percent, "ts": event.ts}
+            for event in task.events
+        ],
+        error=task.error,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
 
 
 @router.post("/backends/anima_lora/download-models", status_code=202)
@@ -201,7 +272,15 @@ def start_anima_model_download() -> dict[str, Any]:
                 )
 
     settings = app_module._settings_store.load()
-    session = _AnimaModelSession(session_id=uuid.uuid4().hex)
+    task = _task_store().create(
+        kind=_KIND_ANIMA_MODEL_DOWNLOAD,
+        title="anima_lora models",
+        metadata={
+            "source": "modelscope",
+            "threads": 3,
+        },
+    )
+    session = _AnimaModelSession(session_id=task.id)
     session.add_event(DownloadEvent("queued", 0, 0, 0))
 
     with _anima_sessions_lock:
@@ -211,9 +290,16 @@ def start_anima_model_download() -> dict[str, Any]:
     def run() -> None:
         global _anima_active_session
         try:
+            _task_store().update(
+                session.session_id,
+                status="running",
+                percent=session.percent,
+            )
             _download_anima_models(
+                source=session.source,
                 huggingface_endpoint=settings.huggingface_endpoint,
                 huggingface_token=settings.huggingface_token,
+                modelscope_token=settings.modelscope_token,
                 proxy=settings.download_proxy,
                 threads=3,
                 progress=session.add_event,
@@ -222,11 +308,23 @@ def start_anima_model_download() -> dict[str, Any]:
                 session.status = "succeeded"
                 session.percent = 100
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="succeeded",
+                percent=100,
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                finished=True,
+            )
             session.add_event(DownloadEvent(f"failed: {exc}", session.percent, session.files_done, session.files_total))
         finally:
             with _anima_sessions_lock:
@@ -256,6 +354,11 @@ def anima_model_download_status() -> dict[str, Any]:
                 default=None,
             )
             if recent is None:
+                task = _task_store().latest(_KIND_ANIMA_MODEL_DOWNLOAD)
+                if task is not None:
+                    return _anima_session_from_task(task).snapshot() | {
+                        "missing_files": _anima_missing_models(),
+                    }
                 return {
                     "status": "idle",
                     "missing_files": _anima_missing_models(),
@@ -282,7 +385,7 @@ def anima_model_download_status() -> dict[str, Any]:
 @dataclass(slots=True)
 class _MsvcInstallSession:
     session_id: str
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: _ToolTaskStatus = "running"
     log: list[str] = field(default_factory=list)
     error: str | None = None
     started_at: float = field(default_factory=time.time)
@@ -290,6 +393,7 @@ class _MsvcInstallSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def append_log(self, line: str) -> None:
+        ts = time.time()
         with self.lock:
             self.log.append(line)
             # Cap the buffer — winget can emit hundreds of progress
@@ -297,6 +401,13 @@ class _MsvcInstallSession:
             # the snapshot small enough to JSON-encode cheaply.
             if len(self.log) > 200:
                 self.log = self.log[-200:]
+        try:
+            _task_store().append_event(
+                self.session_id,
+                TaskEvent(level="info", message=line, ts=ts),
+            )
+        except Exception:
+            pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -313,6 +424,23 @@ class _MsvcInstallSession:
 _msvc_sessions: dict[str, _MsvcInstallSession] = {}
 _msvc_sessions_lock = threading.Lock()
 _msvc_active_session: str | None = None
+
+
+def _msvc_session_from_task(task: TaskSession) -> _MsvcInstallSession:
+    status: _ToolTaskStatus = (
+        task.status
+        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        else "running"
+    )
+
+    return _MsvcInstallSession(
+        session_id=task.id,
+        status=status,
+        log=[event.message for event in task.events],
+        error=task.error,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
 
 
 @router.post("/backends/anima_lora/install-msvc", status_code=202)
@@ -362,7 +490,12 @@ def start_msvc_install() -> dict[str, Any]:
                     },
                 )
 
-    session = _MsvcInstallSession(session_id=uuid.uuid4().hex)
+    task = _task_store().create(
+        kind=_KIND_MSVC_INSTALL,
+        title="anima_lora MSVC Build Tools",
+        metadata={"cmd": list(cmd)},
+    )
+    session = _MsvcInstallSession(session_id=task.id)
     session.append_log("queued: " + " ".join(cmd))
     with _msvc_sessions_lock:
         _msvc_sessions[session.session_id] = session
@@ -372,6 +505,11 @@ def start_msvc_install() -> dict[str, Any]:
         global _msvc_active_session
         import subprocess as _sp  # noqa: PLC0415
         try:
+            _task_store().update(
+                session.session_id,
+                status="running",
+                percent=0,
+            )
             proc = _sp.Popen(
                 cmd,
                 stdout=_sp.PIPE,
@@ -395,11 +533,34 @@ def start_msvc_install() -> dict[str, Any]:
                     session.status = "failed"
                     session.error = f"winget exited with code {rc}"
                 session.finished_at = time.time()
+            if rc == 0:
+                _task_store().update(
+                    session.session_id,
+                    status="succeeded",
+                    percent=100,
+                    result={"returncode": rc},
+                    finished=True,
+                )
+            else:
+                _task_store().update(
+                    session.session_id,
+                    status="failed",
+                    percent=0,
+                    error=f"winget exited with code {rc}",
+                    result={"returncode": rc},
+                    finished=True,
+                )
         except Exception as exc:  # noqa: BLE001
             with session.lock:
                 session.status = "failed"
                 session.error = str(exc)
                 session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=str(exc),
+                finished=True,
+            )
             session.append_log(f"failed: {exc}")
         finally:
             with _msvc_sessions_lock:
@@ -439,6 +600,11 @@ def msvc_install_status() -> dict[str, Any]:
                 default=None,
             )
             if recent is None:
+                task = _task_store().latest(_KIND_MSVC_INSTALL)
+                if task is not None:
+                    return _msvc_session_from_task(task).snapshot() | {
+                        "msvc": detection,
+                    }
                 return {"status": "idle", "msvc": detection}
             return recent.snapshot() | {"msvc": detection}
         session = _msvc_sessions.get(sid)

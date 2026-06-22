@@ -4,7 +4,7 @@
  * 隔离区直接复用 QuarantinePanel；其他三个轻量自实现。所有写入操作都
  * 自动备份到 .workbench/backups/，UI 上只在按钮 hover / 描述里提一下。
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Calendar,
@@ -16,10 +16,15 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import {
-  imageStudioAutoRotate,
   imageStudioBackupsList,
-  imageStudioBatchResize,
+  getImageStudioAutoRotateSession,
+  getImageStudioBatchResizeSession,
+  getLatestTask,
   imageStudioRestoreBackup,
+  startImageStudioAutoRotate,
+  startImageStudioBatchResize,
+  stopImageStudioAutoRotateSession,
+  stopImageStudioBatchResizeSession,
   type BackupEntry,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -42,25 +47,65 @@ import { cn } from "@/lib/utils"
 export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const [recursive, setRecursive] = useState(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null)
+
+  const latestRotateTask = useQuery({
+    queryKey: ["tasks", "latest", "image_studio_auto_rotate"],
+    queryFn: () => getLatestTask("image_studio_auto_rotate"),
+    retry: false,
+    staleTime: 10_000,
+  })
+
+  useEffect(() => {
+    if (sessionId != null) return
+    const latest = latestRotateTask.data
+    if (
+      latest?.metadata?.dataset_path === datasetPath &&
+      latest.id !== dismissedSessionId
+    ) {
+      setSessionId(latest.id)
+    }
+  }, [datasetPath, dismissedSessionId, latestRotateTask.data, sessionId])
+
+  const sessionQuery = useQuery({
+    queryKey: ["image-studio", "auto-rotate-session", sessionId],
+    queryFn: () => getImageStudioAutoRotateSession(sessionId!),
+    enabled: sessionId != null,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1000 : false,
+  })
+
+  const session = sessionQuery.data
+  const running = session?.status === "running"
 
   const mutation = useMutation({
     mutationFn: () =>
-      imageStudioAutoRotate({
+      startImageStudioAutoRotate({
         dataset_path: datasetPath,
         recursive,
       }),
     onSuccess: (data) => {
+      setDismissedSessionId(null)
+      setSessionId(data.session_id)
       toast.success(
-        `自动旋转完成：${data.rotated_count} 张应用，${data.skipped_count} 张跳过`,
-        {
-          description:
-            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
-        },
+        `已启动自动旋转：${data.total} 张`,
+        { description: "后台进行，刷新后可恢复进度" },
       )
-      qc.invalidateQueries({ queryKey: ["image-studio"] })
     },
     onError: (err) =>
       toast.error("自动旋转失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopImageStudioAutoRotateSession(session!.session_id),
+    onSuccess: () => {
+      void sessionQuery.refetch()
+    },
+    onError: (err) =>
+      toast.error("停止失败", {
         description: err instanceof Error ? err.message : String(err),
       }),
   })
@@ -84,16 +129,79 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
           <Button
             size="sm"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || running}
             className="w-full gap-1"
           >
-            {mutation.isPending ? (
+            {mutation.isPending || running ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
               <RotateCw className="size-3" />
             )}
-            对整个数据集应用 EXIF 旋转
+            {running ? "自动旋转中…" : "对整个数据集应用 EXIF 旋转"}
           </Button>
+          {session && (
+            <div className="rounded-[4px] border border-border/60 bg-muted/25 p-2 text-[11px]">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-medium">
+                  {session.status === "succeeded"
+                    ? "自动旋转完成"
+                    : session.status === "failed"
+                      ? "自动旋转失败"
+                      : "自动旋转进行中"}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {session.processed} / {session.total}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    session.status === "failed"
+                      ? "bg-destructive"
+                      : "bg-primary",
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, session.percent))}%` }}
+                />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>已旋转 {session.rotated_count}</span>
+                <span>跳过 {session.skipped_count}</span>
+                <span>失败 {session.failed.length}</span>
+                {session.last_image && <span>最近 {session.last_image}</span>}
+              </div>
+              {session.error && (
+                <div className="mt-1 text-destructive">{session.error}</div>
+              )}
+              {session.status === "running" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px] text-destructive"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                >
+                  {stopMutation.isPending ? "停止中..." : "停止"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px]"
+                  onClick={() => {
+                    setDismissedSessionId(session.session_id)
+                    setSessionId(null)
+                    qc.invalidateQueries({ queryKey: ["image-studio"] })
+                    qc.invalidateQueries({
+                      queryKey: ["tasks", "latest", "image_studio_auto_rotate"],
+                    })
+                  }}
+                >
+                  关闭结果
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -110,10 +218,41 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
   const [filter, setFilter] = useState<"lanczos" | "bicubic" | "bilinear">("lanczos")
   const [upscale, setUpscale] = useState(false)
   const [recursive, setRecursive] = useState(true)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null)
+
+  const latestResizeTask = useQuery({
+    queryKey: ["tasks", "latest", "image_studio_batch_resize"],
+    queryFn: () => getLatestTask("image_studio_batch_resize"),
+    retry: false,
+    staleTime: 10_000,
+  })
+
+  useEffect(() => {
+    if (sessionId != null) return
+    const latest = latestResizeTask.data
+    if (
+      latest?.metadata?.dataset_path === datasetPath &&
+      latest.id !== dismissedSessionId
+    ) {
+      setSessionId(latest.id)
+    }
+  }, [datasetPath, dismissedSessionId, latestResizeTask.data, sessionId])
+
+  const sessionQuery = useQuery({
+    queryKey: ["image-studio", "batch-resize-session", sessionId],
+    queryFn: () => getImageStudioBatchResizeSession(sessionId!),
+    enabled: sessionId != null,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 1000 : false,
+  })
+
+  const session = sessionQuery.data
+  const running = session?.status === "running"
 
   const mutation = useMutation({
     mutationFn: () =>
-      imageStudioBatchResize({
+      startImageStudioBatchResize({
         dataset_path: datasetPath,
         target_short_edge: Number(shortEdge),
         filter,
@@ -121,14 +260,12 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
         recursive,
       }),
     onSuccess: (data) => {
+      setDismissedSessionId(null)
+      setSessionId(data.session_id)
       toast.success(
-        `重采样完成：${data.resampled_count} 张，跳过 ${data.skipped_count} 张`,
-        {
-          description:
-            data.failed.length > 0 ? `失败 ${data.failed.length} 张` : undefined,
-        },
+        `已启动批量缩放：${data.total} 张`,
+        { description: "后台进行，刷新后可恢复进度" },
       )
-      qc.invalidateQueries({ queryKey: ["image-studio"] })
     },
     onError: (err) =>
       toast.error("批量缩放失败", {
@@ -136,7 +273,18 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
       }),
   })
 
-  const targetOk = Number(shortEdge) >= 64 && Number(shortEdge) <= 4096
+  const targetOk = Number(shortEdge) >= 128 && Number(shortEdge) <= 4096
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopImageStudioBatchResizeSession(session!.session_id),
+    onSuccess: () => {
+      void sessionQuery.refetch()
+    },
+    onError: (err) =>
+      toast.error("停止失败", {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  })
 
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
@@ -158,13 +306,13 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
               value={shortEdge}
               onChange={(e) => setShortEdge(e.target.value)}
               className="h-8 w-28 text-xs font-mono"
-              min={64}
+              min={128}
               max={4096}
             />
             <span className="text-muted-foreground">px</span>
             {!targetOk && (
               <span className="text-red-600 text-[10px] ml-auto">
-                需在 64–4096 之间
+                需在 128–4096 之间
               </span>
             )}
           </div>
@@ -197,16 +345,79 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
           <Button
             size="sm"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !targetOk}
+            disabled={mutation.isPending || running || !targetOk}
             className="w-full gap-1"
           >
-            {mutation.isPending ? (
+            {mutation.isPending || running ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
               <Wrench className="size-3" />
             )}
-            应用批量缩放
+            {running ? "批量缩放中…" : "应用批量缩放"}
           </Button>
+          {session && (
+            <div className="rounded-[4px] border border-border/60 bg-muted/25 p-2 text-[11px]">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-medium">
+                  {session.status === "succeeded"
+                    ? "批量缩放完成"
+                    : session.status === "failed"
+                      ? "批量缩放失败"
+                      : "批量缩放进行中"}
+                </span>
+                <span className="font-mono text-muted-foreground">
+                  {session.processed} / {session.total}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    session.status === "failed"
+                      ? "bg-destructive"
+                      : "bg-primary",
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, session.percent))}%` }}
+                />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>已重采样 {session.resampled_count}</span>
+                <span>跳过 {session.skipped_count}</span>
+                <span>失败 {session.failed.length}</span>
+                {session.last_image && <span>最近 {session.last_image}</span>}
+              </div>
+              {session.error && (
+                <div className="mt-1 text-destructive">{session.error}</div>
+              )}
+              {session.status === "running" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px] text-destructive"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                >
+                  {stopMutation.isPending ? "停止中..." : "停止"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 text-[11px]"
+                  onClick={() => {
+                    setDismissedSessionId(session.session_id)
+                    setSessionId(null)
+                    qc.invalidateQueries({ queryKey: ["image-studio"] })
+                    qc.invalidateQueries({
+                      queryKey: ["tasks", "latest", "image_studio_batch_resize"],
+                    })
+                  }}
+                >
+                  关闭结果
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>

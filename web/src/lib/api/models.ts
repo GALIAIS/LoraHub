@@ -18,7 +18,8 @@ export interface ModelDownloadSession {
   revision: string
   target_dir: string | null
   threads: number
-  status: "running" | "succeeded" | "failed"
+  paths: string[]
+  status: "running" | "succeeded" | "failed" | "canceled" | "interrupted"
   percent: number
   events: ModelDownloadEvent[]
   result: {
@@ -32,6 +33,34 @@ export interface ModelDownloadSession {
   error: string | null
   started_at: number
   finished_at: number | null
+}
+
+export interface LatestModelDownloadSession
+  extends Partial<Omit<ModelDownloadSession, "session_id" | "status">> {
+  session_id: string | null
+  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+  events: ModelDownloadEvent[]
+  result: ModelDownloadSession["result"]
+  error: string | null
+  percent: number
+}
+
+export interface RemoteModelFile {
+  path: string
+  size: number
+  selected: boolean
+  reason: string
+}
+
+export interface RemoteModelFilesResponse {
+  source: "huggingface" | "modelscope"
+  repo_id: string
+  revision: string
+  files: RemoteModelFile[]
+  selected_count: number
+  selected_bytes: number
+  total_count: number
+  total_bytes: number
 }
 
 export interface ScannedModel {

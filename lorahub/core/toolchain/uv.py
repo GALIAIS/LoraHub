@@ -25,6 +25,7 @@ stream their step descriptions through the API event bus.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -178,10 +179,23 @@ def ensure_uv(progress: ProgressCallback | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _capture(cmd: list[str], step: str, progress: ProgressCallback | None) -> None:
+def _capture(
+    cmd: list[str],
+    step: str,
+    progress: ProgressCallback | None,
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
     if progress is not None:
         progress(step)
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
+    full_env = None if env is None else {**os.environ, **env}
+    result = subprocess.run(
+        cmd,
+        check=False,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=full_env,
+    )
     if result.returncode != 0:
         if progress is not None and result.stderr:
             tail = "\n".join(result.stderr.strip().splitlines()[-12:])
@@ -257,6 +271,7 @@ def run_uv(
     step: str,
     progress: ProgressCallback | None = None,
     pypi_index: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> None:
     """Run an arbitrary ``uv <args>`` invocation through the bootstrap binary.
 
@@ -283,7 +298,7 @@ def run_uv(
             final_args = [final_args[0], "--default-index", pypi_index, *final_args[1:]]
         else:
             final_args = [*final_args, "--default-index", pypi_index]
-    _capture([uv, *final_args], step, progress)
+    _capture([uv, *final_args], step, progress, env=env)
 
 
 __all__ = [

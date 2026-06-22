@@ -1,4 +1,5 @@
 import type { JobSummary } from "@/lib/api"
+import { PathDisplay } from "@/components/path-display"
 import { StateBadge } from "../../dashboard"
 import { cn } from "@/lib/utils"
 import { Circle, CircleCheck } from "lucide-react"
@@ -20,14 +21,15 @@ export function JobRow({
   onSelect: () => void
   onToggleCompare: () => void
 }) {
+  const shortId = formatJobId(job.id)
   return (
     <li
       onClick={onSelect}
       className={cn(
-        "px-5 py-3 cursor-pointer transition-colors flex items-start gap-2.5",
+        "mx-1.5 my-1 flex cursor-pointer items-start gap-2.5 rounded-[6px] border px-3 py-2.5 transition-colors",
         active
-          ? "bg-accent/70 border-l-2 border-l-primary"
-          : "border-l-2 border-l-transparent hover:bg-muted/40",
+          ? "border-primary/35 bg-accent text-accent-foreground"
+          : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-muted/45 hover:text-foreground",
       )}
     >
       {compareMode && (
@@ -55,15 +57,15 @@ export function JobRow({
         </button>
       )}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 mb-1">
+        <div className="mb-1 flex items-center gap-2">
           <StateBadge
             state={job.state}
             paused={
               Boolean(job.metadata && (job.metadata as Record<string, unknown>).paused === true)
             }
           />
-          <code className="text-[11px] font-mono text-muted-foreground">
-            {job.id.slice(-8)}
+          <code className="truncate text-[11px] font-mono text-muted-foreground">
+            {shortId}
           </code>
           {job.pid !== null && (
             <span className="text-[10px] text-muted-foreground/60">
@@ -71,13 +73,27 @@ export function JobRow({
             </span>
           )}
         </div>
-        <div className="text-xs text-muted-foreground truncate font-mono">
-          {job.workspace}
-        </div>
-        <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+        <PathDisplay
+          path={job.workspace}
+          tailSegments={3}
+          block
+          className="text-[11px]"
+        />
+        <div className="mt-1 text-[10px] text-muted-foreground/70">
           {new Date(job.created_at).toLocaleString()}
         </div>
       </div>
     </li>
   )
+}
+
+function formatJobId(id: string): string {
+  if (id.length <= 18) return id
+  const parts = id.split("-")
+  const maybeTimestamp = parts.find((part) => /^\d{8}$/.test(part))
+  if (maybeTimestamp) {
+    const prefix = id.slice(0, id.indexOf(maybeTimestamp)).replace(/-$/, "")
+    if (prefix.length > 0 && prefix.length <= 24) return prefix
+  }
+  return `${id.slice(0, 10)}…${id.slice(-6)}`
 }
