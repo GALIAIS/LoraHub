@@ -1,8 +1,6 @@
 import { useState } from "react"
-import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
-  ArrowRight,
   Copy,
   FolderInput,
   Loader2,
@@ -27,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { UploadDropZone } from "../upload-zone"
 
 interface Props {
   datasetPath: string
@@ -35,10 +34,12 @@ interface Props {
 export function IntakeStage({ datasetPath }: Props) {
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-4 grid gap-4 lg:grid-cols-2">
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-2">
         <BrowserUploadHint datasetPath={datasetPath} />
         <LocalPathPanel datasetPath={datasetPath} />
         <FromDatasetPanel datasetPath={datasetPath} />
+        </div>
       </div>
     </div>
   )
@@ -49,35 +50,19 @@ export function IntakeStage({ datasetPath }: Props) {
 // --------------------------------------------------------------------------- //
 
 function BrowserUploadHint({ datasetPath }: { datasetPath: string }) {
-  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const datasetName = datasetPath.split(/[\\/]/).filter(Boolean).pop() ?? datasetPath
   return (
-    <section className="rounded-md border border-border/60 bg-card flex flex-col">
+    <section className="rounded-md border border-border/60 bg-card flex flex-col lg:col-span-2">
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Upload className="size-3.5" />
-        <span className="text-xs font-medium">浏览器拖拽上传</span>
+        <span className="text-xs font-medium">上传图片或压缩包</span>
       </div>
-      <div className="p-3 space-y-2 text-xs text-muted-foreground flex-1 flex flex-col">
-        <p>
-          单文件 / zip / 文件夹的拖拽上传保留在 整理 阶段顶部 · 那里有原生的
-          <code className="text-[11px]"> &lt;DropZone /&gt; </code>。
-        </p>
-        <p className="opacity-80">
-          这里的两个面板针对的是另外两类场景：服务器上已有文件
-          （无法走浏览器），以及跨数据集复制。
-        </p>
-        <Button
-          size="sm"
-          variant="outline"
-          className="mt-auto gap-1 self-start"
-          onClick={() => {
-            const url = new URL(window.location.href)
-            url.searchParams.set("stage", "curate")
-            navigate(url.pathname + url.search)
-            void datasetPath
-          }}
-        >
-          去 整理 拖拽上传 <ArrowRight className="size-3" />
-        </Button>
+      <div className="pb-3">
+        <UploadDropZone
+          datasetName={datasetName}
+          onComplete={() => qc.invalidateQueries({ queryKey: ["image-studio"] })}
+        />
       </div>
     </section>
   )

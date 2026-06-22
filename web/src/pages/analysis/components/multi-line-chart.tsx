@@ -1,27 +1,18 @@
-/**
- * MultiLineChart — interactive multi-series SVG chart with optional dual
- * Y axis. Used by the analysis workbench's secondary panels.
- *
- * Features:
- *   - Per-series visibility chips (legend doubles as a control bar).
- *   - Wheel zoom + drag pan + double-click reset on the X axis. Zoom
- *     state survives live data appends (we don't rescale once the user
- *     has narrowed the view).
- *   - Multi-series crosshair tooltip — every visible series reports
- *     its value at the hovered X.
- *   - Floating toolbar (zoom in/out, reset, fullscreen, CSV download).
- *   - Optional sessionStorage persistence keyed by `persistKey`.
- *
- * Heavy lifting matches `<LossChart>` so users only have to learn one
- * gesture vocabulary across the workbench.
- */
-import { useCallback, useEffect, useMemo, useState } from "react"
-import type { CSSProperties } from "react"
+import { useEffect, useMemo, useState } from "react"
+import type { CSSProperties, WheelEvent } from "react"
 import { createPortal } from "react-dom"
-import { Eye, EyeOff, X } from "lucide-react"
+import { EyeOff, X } from "lucide-react"
+import { ChartTooltip } from "@/components/charts/tooltip"
+import { chartCssVars } from "@/components/charts/chart-context"
+import { Grid } from "@/components/charts/grid"
+import { Line } from "@/components/charts/line"
+import { LineChart as BklitLineChart } from "@/components/charts/line-chart"
+import {
+  ChartNumericXAxis,
+  ChartNumericYAxis,
+} from "@/components/charts/numeric-axis"
 import { cn } from "@/lib/utils"
 import { ChartToolbar } from "../../jobs/components/chart-toolbar"
-import { useMultiLineChartInteraction } from "./multi-line-chart-interaction"
 
 export interface MultiLinePoint {
   x: number
@@ -37,15 +28,11 @@ export interface MultiLineSeries {
   points: MultiLinePoint[]
 }
 
-const VIEW_W = 700
-const VIEW_H = 230
-const PAD_LEFT = 50
-const PAD_RIGHT = 50
-const PAD_TOP = 12
-const PAD_BOTTOM = 28
+const STEP_MS = 1000
+const ZOOM_STEP = 1.25
 
 function fmtNum(v: number): string {
-  if (!Number.isFinite(v)) return "—"
+  if (!Number.isFinite(v)) return "-"
   if (v === 0) return "0"
   const abs = Math.abs(v)
   if (abs >= 100) return v.toFixed(1)
@@ -59,9 +46,7 @@ interface Props {
   xLabel?: string
   emptyHint?: string
   className?: string
-  /** Stable id for sessionStorage persistence; null disables. */
   persistKey?: string | null
-  /** Optional title rendered inside the fullscreen modal. */
   title?: string
 }
 
@@ -89,182 +74,51 @@ function Core({
   xLabel,
   emptyHint = "暂无数据",
   className,
-  persistKey,
   fullscreen,
   onFullscreen,
 }: CoreProps) {
-  // ----- Per-series visibility -------------------------------------------
   const [hidden, setHidden] = useState<Record<string, boolean>>({})
+  const [viewDomain, setViewDomain] = useState<[number, number] | null>(null)
   useEffect(() => {
     setHidden((prev) => {
       const valid = new Set(series.map((s) => s.id))
       const next: Record<string, boolean> = {}
-      for (const k of Object.keys(prev)) if (valid.has(k)) next[k] = prev[k]
+      for (const key of Object.keys(prev)) {
+        if (valid.has(key)) next[key] = prev[key]
+      }
       return next
     })
   }, [series])
 
   const visible = useMemo(
     () => series.filter((s) => !hidden[s.id]),
-    [series, hidden],
+    [hidden, series],
   )
-
-  // ----- Extents ----------------------------------------------------------
+  const data = useMemo(() => mergeSeriesData(visible), [visible])
   const fullExtent = useMemo(() => {
-    let xMin = Infinity
-    let xMax = -Infinity
-    for (const s of visible) {
-      for (const p of s.points) {
-        if (p.y == null || !Number.isFinite(p.y)) continue
-        if (p.x < xMin) xMin = p.x
-        if (p.x > xMax) xMax = p.x
-      }
+    if (data.length === 0) return null
+    const xs = data
+      .map((row) => row.x)
+      .filter((x): x is number => typeof x === "number")
+    if (xs.length === 0) return null
+    const min = Math.min(...xs)
+    const max = Math.max(...xs)
+    return min === max ? { min, max: min + 1 } : { min, max }
+  }, [data])
+  useEffect(() => {
+    if (!fullExtent || !viewDomain) return
+    if (viewDomain[1] <= fullExtent.min || viewDomain[0] >= fullExtent.max) {
+      setViewDomain(null)
     }
-    if (!Number.isFinite(xMin) || !Number.isFinite(xMax)) return null
-    if (xMin === xMax) xMax = xMin + 1
-    return { xMin, xMax }
-  }, [visible])
-
-  const innerW = VIEW_W - PAD_LEFT - PAD_RIGHT
-  const innerH = VIEW_H - PAD_TOP - PAD_BOTTOM
-  const {
-    hoverX,
-    inverseX,
-    onDoubleClick,
-    onPointerDown,
-    onPointerLeave,
-    onPointerMove,
-    onPointerUp,
-    onWheel,
-    reset,
-    svgRef,
-    viewRange,
-    xMax,
-    xMin,
-    xSpan,
-    zoomBy,
-  } = useMultiLineChartInteraction({
-    persistKey,
-    fullExtent,
-    innerW,
-    padLeft: PAD_LEFT,
-    padRight: PAD_RIGHT,
-    viewW: VIEW_W,
-  })
-
-  const axisStats = useMemo(() => {
-    const left: number[] = []
-    const right: number[] = []
-    for (const s of visible) {
-      const axis = s.axis ?? "left"
-      const bucket = axis === "right" ? right : left
-      for (const p of s.points) {
-        if (p.x < xMin || p.x > xMax) continue
-        if (p.y == null || !Number.isFinite(p.y)) continue
-        bucket.push(p.y)
-      }
-    }
-    return { left, right }
-  }, [visible, xMin, xMax])
-
-  function axisRange(arr: number[]): { lo: number; hi: number } {
-    if (arr.length === 0) return { lo: 0, hi: 1 }
-    let lo = Math.min(...arr)
-    let hi = Math.max(...arr)
-    if (lo === hi) {
-      const pad = Math.max(Math.abs(lo) * 0.05, 0.001)
-      lo -= pad
-      hi += pad
-    } else {
-      const pad = (hi - lo) * 0.08
-      lo -= pad
-      hi += pad
-    }
-    return { lo, hi }
-  }
-  const leftR = axisRange(axisStats.left)
-  const rightR = axisRange(axisStats.right)
-  const hasLeft = axisStats.left.length > 0
-  const hasRight = axisStats.right.length > 0
-
-  // ----- Scales -----------------------------------------------------------
-  const xScale = useCallback(
-    (x: number) => PAD_LEFT + ((x - xMin) / xSpan) * innerW,
-    [xMin, xSpan, innerW],
-  )
-  const yScale = useCallback(
-    (y: number, axis: "left" | "right") => {
-      const r = axis === "right" ? rightR : leftR
-      const span = r.hi - r.lo || 1
-      return PAD_TOP + (1 - (y - r.lo) / span) * innerH
-    },
-    [leftR, rightR, innerH],
-  )
-
-  const yTicks = (axis: "left" | "right") => {
-    const r = axis === "right" ? rightR : leftR
-    const out: number[] = []
-    for (let i = 0; i <= 4; i += 1) out.push(r.hi - ((r.hi - r.lo) * i) / 4)
-    return out
-  }
-  const xTicks = useMemo(() => {
-    const out: number[] = []
-    for (let i = 0; i <= 4; i += 1) out.push(xMin + (xSpan * i) / 4)
-    return out
-  }, [xMin, xSpan])
-
-  const hasData = !!fullExtent
-
-  // ----- Tooltip / crosshair ---------------------------------------------
-  const tooltip = useMemo(() => {
-    if (hoverX == null || !hasData) return null
-    if (hoverX < PAD_LEFT || hoverX > VIEW_W - PAD_RIGHT) return null
-    const targetX = inverseX(hoverX)
-    const items: Array<{
-      seriesId: string
-      label: string
-      color: string
-      unit?: string
-      axis: "left" | "right"
-      x: number
-      y: number
-      cy: number
-    }> = []
-    for (const s of visible) {
-      let cand: { x: number; y: number } | null = null
-      let candDist = Infinity
-      for (const p of s.points) {
-        if (p.y == null || !Number.isFinite(p.y)) continue
-        const d = Math.abs(p.x - targetX)
-        if (d < candDist) {
-          candDist = d
-          cand = { x: p.x, y: p.y }
-        }
-      }
-      if (!cand) continue
-      const axis = s.axis ?? "left"
-      items.push({
-        seriesId: s.id,
-        label: s.label,
-        color: s.color,
-        unit: s.unit,
-        axis,
-        x: cand.x,
-        y: cand.y,
-        cy: yScale(cand.y, axis),
-      })
-    }
-    if (items.length === 0) return null
-    const anchorX = xScale(items[0].x)
-    return { anchorX, items, x: items[0].x }
-  }, [hoverX, visible, hasData, inverseX, xScale, yScale])
+  }, [fullExtent, viewDomain])
+  const hasData = data.length > 0
 
   function toggle(id: string) {
     setHidden((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
   function downloadCsv() {
-    const lines: string[] = ["series,x,y"]
+    const lines = ["series,x,y"]
     for (const s of series) {
       for (const p of s.points) {
         if (p.y == null || !Number.isFinite(p.y)) continue
@@ -282,240 +136,194 @@ function Core({
     URL.revokeObjectURL(url)
   }
 
-  const zoomedIn = viewRange !== null
-  const heightStyle = fullscreen ? "h-[60vh]" : "h-auto"
+  function zoomBy(factor: number, anchor?: number) {
+    if (!fullExtent) return
+    setViewDomain((current) => {
+      const min = fullExtent.min
+      const max = fullExtent.max
+      const span = max - min
+      const from = current ?? [min, max]
+      const fromSpan = from[1] - from[0]
+      const nextSpan = Math.max(1, Math.min(span, fromSpan / factor))
+      if (nextSpan >= span) return null
+      const pivot = anchor ?? (from[0] + from[1]) / 2
+      const ratio = (pivot - from[0]) / fromSpan
+      let nextMin = pivot - ratio * nextSpan
+      let nextMax = nextMin + nextSpan
+      if (nextMin < min) {
+        nextMin = min
+        nextMax = min + nextSpan
+      }
+      if (nextMax > max) {
+        nextMax = max
+        nextMin = max - nextSpan
+      }
+      return [nextMin, nextMax]
+    })
+  }
+
+  function handleWheel(event: WheelEvent<HTMLDivElement>) {
+    if (!fullExtent) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const current = viewDomain ?? [fullExtent.min, fullExtent.max]
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+    const anchor = current[0] + (current[1] - current[0]) * ratio
+    zoomBy(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, anchor)
+  }
+
+  const xDomain =
+    viewDomain != null
+      ? ([new Date(viewDomain[0] * STEP_MS), new Date(viewDomain[1] * STEP_MS)] as [
+          Date,
+          Date,
+        ])
+      : undefined
+  const zoomedIn = viewDomain != null
 
   return (
-    <div className={cn("relative flex flex-col gap-2", className)}>
+    <div
+      className={cn("relative flex flex-col gap-2", className)}
+      onDoubleClick={() => setViewDomain(null)}
+      onWheelCapture={handleWheel}
+    >
       <div className="absolute right-1 top-1 z-10 flex items-start gap-1.5">
         <ChartToolbar
           zoomedIn={zoomedIn}
           onZoomIn={() => zoomBy(1.5)}
           onZoomOut={() => zoomBy(1 / 1.5)}
-          onReset={reset}
+          onReset={() => setViewDomain(null)}
           onFullscreen={onFullscreen}
           onDownload={downloadCsv}
         />
       </div>
 
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-        className={cn("block w-full select-none", heightStyle)}
-        style={{ color: "var(--foreground)" } as CSSProperties}
-        onWheel={onWheel}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerLeave}
-        onDoubleClick={onDoubleClick}
-      >
-        <rect
-          x={PAD_LEFT}
-          y={PAD_TOP}
-          width={innerW}
-          height={innerH}
-          fill="transparent"
-          stroke="currentColor"
-          strokeOpacity={0.08}
-        />
-        {hasLeft &&
-          yTicks("left").map((v, i) => {
-            const y = yScale(v, "left")
-            return (
-              <g key={`yL${i}`}>
-                <line
-                  x1={PAD_LEFT}
-                  x2={VIEW_W - PAD_RIGHT}
-                  y1={y}
-                  y2={y}
-                  stroke="currentColor"
-                  strokeOpacity={0.06}
-                  strokeDasharray="3 4"
-                />
-                <text
-                  x={PAD_LEFT - 6}
-                  y={y}
-                  textAnchor="end"
-                  dominantBaseline="middle"
-                  fontSize={10}
-                  fill="currentColor"
-                  opacity={0.55}
-                >
-                  {fmtNum(v)}
-                </text>
-              </g>
-            )
-          })}
-        {hasRight &&
-          yTicks("right").map((v, i) => {
-            const y = yScale(v, "right")
-            return (
-              <text
-                key={`yR${i}`}
-                x={VIEW_W - PAD_RIGHT + 6}
-                y={y}
-                textAnchor="start"
-                dominantBaseline="middle"
-                fontSize={10}
-                fill="currentColor"
-                opacity={0.5}
-              >
-                {fmtNum(v)}
-              </text>
-            )
-          })}
-        {hasData &&
-          xTicks.map((v, i) => {
-            const x = xScale(v)
-            return (
-              <g key={`x${i}`}>
-                <line
-                  x1={x}
-                  x2={x}
-                  y1={VIEW_H - PAD_BOTTOM}
-                  y2={VIEW_H - PAD_BOTTOM + 4}
-                  stroke="currentColor"
-                  strokeOpacity={0.3}
-                />
-                <text
-                  x={x}
-                  y={VIEW_H - PAD_BOTTOM + 16}
-                  textAnchor="middle"
-                  fontSize={10}
-                  fill="currentColor"
-                  opacity={0.55}
-                >
-                  {Math.round(v)}
-                </text>
-              </g>
-            )
-          })}
-        {hasData ? (
-          visible.map((s) => {
-            const filtered = s.points.filter(
-              (p): p is { x: number; y: number } =>
-                typeof p.y === "number" && Number.isFinite(p.y),
-            )
-            if (filtered.length === 0) return null
-            const axis = s.axis ?? "left"
-            return (
-              <polyline
-                key={s.id}
-                fill="none"
-                stroke={s.color}
-                strokeWidth={1.5}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                points={filtered
-                  .filter((p) => p.x >= xMin && p.x <= xMax)
-                  .map((p) => `${xScale(p.x)},${yScale(p.y, axis)}`)
-                  .join(" ")}
-              />
-            )
-          })
-        ) : (
-          <text
-            x={VIEW_W / 2}
-            y={VIEW_H / 2}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize={12}
-            fill="currentColor"
-            opacity={0.55}
-          >
-            {emptyHint}
-          </text>
-        )}
-        {tooltip && (
-          <g pointerEvents="none">
-            <line
-              x1={tooltip.anchorX}
-              x2={tooltip.anchorX}
-              y1={PAD_TOP}
-              y2={VIEW_H - PAD_BOTTOM}
-              stroke="currentColor"
-              strokeOpacity={0.25}
-              strokeDasharray="2 4"
+      {hasData ? (
+        <BklitLineChart
+          data={data}
+          xDataKey="date"
+          animationDuration={850}
+          aspectRatio={fullscreen ? undefined : "16 / 6"}
+          className={fullscreen ? "h-[60vh]" : "min-h-[210px]"}
+          margin={{ top: 34, right: 18, bottom: 44, left: 52 }}
+          style={fullscreen ? ({ height: "60vh" } as CSSProperties) : undefined}
+          tweenYDomainOnXDomainChange
+          xDomain={xDomain}
+          xDomainSlotCount={data.length}
+        >
+          <Grid horizontal vertical={false} hideHorizontalEdgeLines />
+          {visible.map((s, index) => (
+            <Line
+              dataKey={s.id}
+              key={s.id}
+              showMarkers={s.points.length <= 40}
+              markers={{
+                inactiveBlur: 0,
+                radius: 2,
+                ringGap: 0,
+                showActiveHighlight: false,
+                strokeWidth: 1,
+              }}
+              stroke={s.color || `var(--chart-${(index % 5) + 1})`}
+              strokeWidth={1.8}
             />
-            {tooltip.items.map((it) => (
-              <circle
-                key={it.seriesId}
-                cx={tooltip.anchorX}
-                cy={it.cy}
-                r={3}
-                fill={it.color}
-              />
-            ))}
-          </g>
-        )}
-      </svg>
-
-      {tooltip && (
-        <div className="pointer-events-none absolute right-2 top-9 max-w-[240px] rounded-[5px] border border-border/60 bg-background/95 backdrop-blur-sm shadow-[var(--panel-shadow)] px-2 py-1 text-[11px] tabular-nums">
-          <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-            x = {Math.round(tooltip.x)}
-          </div>
-          <ul className="mt-0.5 space-y-0.5">
-            {tooltip.items.map((it) => (
-              <li
-                key={it.seriesId}
-                className="flex items-center gap-1.5 whitespace-nowrap"
-              >
-                <span
-                  className="inline-block size-2 rounded-full"
-                  style={{ background: it.color }}
-                />
-                <span className="text-foreground/85">{it.label}</span>
-                <span className="ml-auto text-foreground/95">
-                  {fmtNum(it.y)}
-                  {it.unit ?? ""}
-                </span>
-              </li>
-            ))}
-          </ul>
+          ))}
+          <ChartNumericYAxis format={fmtNum} />
+          <ChartNumericXAxis label={xLabel} />
+          <ChartTooltip
+            backgroundColor={chartCssVars.tooltipBackground}
+            showDatePill={false}
+            rows={(point) =>
+              visible
+                .map((s) => {
+                  const value = point[s.id]
+                  return typeof value === "number"
+                    ? {
+                        color: s.color,
+                        label: s.label,
+                        value: `${fmtNum(value)}${s.unit ?? ""}`,
+                      }
+                    : null
+                })
+                .filter((row): row is { color: string; label: string; value: string } =>
+                  row != null,
+                )
+            }
+            content={({ point }) => (
+              <div className="px-3 py-2 text-xs">
+                <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-chart-tooltip-muted">
+                  x = {fmtNum(typeof point.x === "number" ? point.x : Number.NaN)}
+                </div>
+                <div className="space-y-1.5">
+                  {visible.map((s) => {
+                    const value = point[s.id]
+                    if (typeof value !== "number") return null
+                    return (
+                      <div
+                        className="flex items-center justify-between gap-4"
+                        key={s.id}
+                      >
+                        <span className="flex min-w-0 items-center gap-2 text-chart-tooltip-muted">
+                          <span
+                            aria-hidden
+                            className="size-2.5 shrink-0 rounded-full"
+                            style={{ background: s.color }}
+                          />
+                          <span className="truncate">{s.label}</span>
+                        </span>
+                        <span className="font-medium tabular-nums text-chart-tooltip-foreground">
+                          {fmtNum(value)}
+                          {s.unit ?? ""}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          />
+        </BklitLineChart>
+      ) : (
+        <div className="grid min-h-[210px] place-items-center text-xs text-muted-foreground">
+          {emptyHint}
         </div>
       )}
 
-      <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px]">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
         {series.map((s) => {
           const off = !!hidden[s.id]
-          const axisHint = s.axis === "right" ? " (右)" : ""
-          const visiblePoints = s.points.filter(
-            (p) => typeof p.y === "number" && Number.isFinite(p.y),
-          ) as Array<{ x: number; y: number }>
-          const last =
-            visiblePoints.length > 0
-              ? visiblePoints[visiblePoints.length - 1]
-              : null
+          const last = [...s.points]
+            .reverse()
+            .find((p): p is { x: number; y: number } => typeof p.y === "number")
           return (
             <button
-              key={s.id}
-              type="button"
-              onClick={() => toggle(s.id)}
               className={cn(
-                "group inline-flex items-center gap-1.5 rounded-[3px] border px-1.5 py-0.5 transition-colors",
+                "group inline-flex max-w-full items-center gap-1.5 rounded-[3px] border px-1.5 py-0.5 transition-colors",
                 off
                   ? "border-border/40 text-muted-foreground/70"
                   : "border-border/60 bg-muted/40 text-foreground/85",
               )}
+              key={s.id}
+              onClick={() => toggle(s.id)}
               title={off ? "点击显示" : "点击隐藏"}
+              type="button"
             >
               {off ? (
-                <EyeOff className="size-3" />
+                <EyeOff className="size-3 shrink-0" />
               ) : (
                 <span
-                  className="inline-block h-[2px] w-3 align-middle"
-                  style={{ background: s.color }}
                   aria-hidden
+                  className="inline-block h-[2px] w-3 shrink-0 align-middle"
+                  style={{ background: s.color }}
                 />
               )}
-              <span className={cn(off && "line-through")}>
+              <span className={cn("truncate", off && "line-through")}>
                 {s.label}
-                {axisHint}
+                {s.axis === "right" ? " (右)" : ""}
               </span>
               {!off && last && (
-                <span className="text-muted-foreground/70 tabular-nums">
+                <span className="shrink-0 text-muted-foreground/70 tabular-nums">
                   {fmtNum(last.y)}
                   {s.unit ?? ""}
                 </span>
@@ -523,34 +331,37 @@ function Core({
             </button>
           )
         })}
-        <span className="ml-auto inline-flex items-center gap-2 text-[10px] text-muted-foreground/70">
-          {zoomedIn && (
-            <span className="inline-flex items-center gap-1">
-              <Eye className="size-3" />
-              {Math.round(xMin)} – {Math.round(xMax)}
-            </span>
-          )}
-          {zoomedIn && fullExtent && fullExtent.xMax > xMax && (
-            <button
-              type="button"
-              onClick={reset}
-              className="inline-flex items-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
-              title="新数据已超出视图,点击跟随到最新"
-            >
-              <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-              +{Math.round(fullExtent.xMax - xMax)} · 跟随
-            </button>
-          )}
-          {xLabel && <span>{xLabel}</span>}
-        </span>
+        {xLabel && (
+          <span className="ml-auto text-[10px] text-muted-foreground/70">
+            {zoomedIn && viewDomain
+              ? `${Math.round(viewDomain[0])}-${Math.round(viewDomain[1])} · `
+              : ""}
+            {xLabel}
+          </span>
+        )}
       </div>
     </div>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Fullscreen modal
-// ---------------------------------------------------------------------------
+function mergeSeriesData(series: MultiLineSeries[]) {
+  const byX = new Map<number, Record<string, unknown>>()
+  for (const s of series) {
+    for (const p of s.points) {
+      if (p.y == null || !Number.isFinite(p.y)) continue
+      const row =
+        byX.get(p.x) ??
+        ({
+          x: p.x,
+          step: p.x,
+          date: new Date(p.x * STEP_MS),
+        } satisfies Record<string, unknown>)
+      row[s.id] = p.y
+      byX.set(p.x, row)
+    }
+  }
+  return [...byX.values()].sort((a, b) => Number(a.x) - Number(b.x))
+}
 
 function FullscreenModal({
   children,
@@ -569,11 +380,6 @@ function FullscreenModal({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
 
-  // Portal to <body> so the modal isn't trapped in any ancestor's
-  // stacking context. Without this, a parent Card with transform /
-  // filter / isolate creates a new stacking context, and z-50 only
-  // applies *inside* that context — sibling cards rendered later
-  // would visually cover the "fullscreen" view.
   if (typeof document === "undefined") return null
   return createPortal(
     <div
@@ -584,15 +390,15 @@ function FullscreenModal({
         className="relative w-[90vw] max-w-[1280px] rounded-[6px] border border-border/60 bg-background p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-2">
+        <div className="mb-2 flex items-center justify-between">
           <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
             {title ?? "图表"}
           </span>
           <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex size-7 items-center justify-center rounded-[3px] text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label="关闭全屏"
+            className="inline-flex size-7 items-center justify-center rounded-[3px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={onClose}
+            type="button"
           >
             <X className="size-4" />
           </button>

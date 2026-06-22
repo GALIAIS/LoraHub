@@ -51,7 +51,7 @@ export function buildLossSeries({
       out.push({
         id: `${jobId}-train-raw`,
         label: "原始采样",
-        color: "var(--chart-1)",
+        color: "var(--chart-3)",
         dashed: true,
         points: trainPoints,
       })
@@ -72,7 +72,7 @@ export function buildLossSeries({
       out.push({
         id: `${jobId}-train-ema`,
         label: `EMA α=${EMA_ALPHA}`,
-        color: "var(--chart-1)",
+        color: "var(--chart-4)",
         dashed: true,
         points: ema,
       })
@@ -108,7 +108,7 @@ export function buildLossSeries({
     out.push({
       id: `${jobId}-val`,
       label: "验证 loss",
-      color: "var(--chart-2)",
+      color: "var(--chart-5)",
       points: mapped,
     })
   }
