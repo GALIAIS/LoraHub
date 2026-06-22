@@ -273,6 +273,11 @@ if exist "web\node_modules\.package-lock.json" (
   if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
 )
 if "%NEEDS_NPM_INSTALL%"=="0" (
+  pushd "web" >nul && npm.cmd ls --depth=0 >nul 2>nul
+  if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
+  popd >nul
+)
+if "%NEEDS_NPM_INSTALL%"=="0" (
   echo   OK web\node_modules already matches package lock
 ) else (
   pushd "web" || (

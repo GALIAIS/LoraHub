@@ -136,6 +136,8 @@ build_frontend() {
     needs_install=1
   elif [[ package.json -nt node_modules/.package-lock.json ]]; then
     needs_install=1
+  elif ! "${NODE_DIR}/bin/npm" ls --depth=0 >/dev/null 2>&1; then
+    needs_install=1
   fi
   if (( needs_install )); then
     log "npm ci (registry: ${NPM_REGISTRY}; log: /root/_npm_install.log)"

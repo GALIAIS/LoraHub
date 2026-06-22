@@ -263,6 +263,8 @@ elif [ "web/package-lock.json" -nt "web/node_modules/.package-lock.json" ]; then
     needs_npm_install=1
 elif [ "web/package.json" -nt "web/node_modules/.package-lock.json" ]; then
     needs_npm_install=1
+elif ! (cd web && npm ls --depth=0 >/dev/null 2>&1); then
+    needs_npm_install=1
 fi
 
 if [ "$needs_npm_install" = "0" ]; then
