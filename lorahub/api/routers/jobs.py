@@ -594,14 +594,130 @@ def get_job_analysis(job_id: str) -> dict[str, Any]:
     return {"analysis": cached}
 
 
+def _cfg_get(obj: Any, *keys: str) -> Any:
+    cur = obj
+    for key in keys:
+        if not isinstance(cur, dict):
+            return None
+        if key in cur:
+            cur = cur[key]
+        elif "_" in key:
+            cur = cur.get(_snake_to_camel(key))
+        else:
+            cur = cur.get(_camel_to_snake(key))
+    return cur
+
+
+def _snake_to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+
+def _camel_to_snake(value: str) -> str:
+    out = []
+    for ch in value:
+        if ch.isupper():
+            out.append("_")
+            out.append(ch.lower())
+        else:
+            out.append(ch)
+    return "".join(out).lstrip("_")
+
+
+def _first_not_none(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, Any]:
+    cfg = job.config_snapshot or {}
+    backend = _cfg_get(cfg, "backend") or {}
+    anima = _cfg_get(backend, "animaLora") or {}
+    network = _cfg_get(cfg, "network") or {}
+    optimizer = _cfg_get(cfg, "optimizer") or {}
+    schedule = _cfg_get(cfg, "schedule") or {}
+    dataset = _cfg_get(cfg, "dataset") or {}
+    caption = _cfg_get(dataset, "caption") or {}
+    sampling = _cfg_get(cfg, "sampling") or {}
+    output = _cfg_get(cfg, "output") or {}
+    loss = metrics.get("loss") or []
+    val_loss = metrics.get("val_loss") or []
+
+    def sample(seq: list[Any], n: int = 40) -> list[Any]:
+        if len(seq) <= n:
+            return seq
+        step = max(1, len(seq) // n)
+        return seq[::step][:n]
+
+    return {
+        "job": {
+            "id": job.id,
+            "state": job.state.value,
+            "returncode": job.returncode,
+            "duration_s": metrics.get("duration_s"),
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        },
+        "config": {
+            "backend": _cfg_get(backend, "type"),
+            "arch": _cfg_get(_cfg_get(cfg, "baseModel") or {}, "arch"),
+            "output_name": _first_not_none(
+                _cfg_get(output, "name"), _cfg_get(anima, "outputName")
+            ),
+            "rank": _first_not_none(
+                _cfg_get(anima, "networkDim"), _cfg_get(network, "rank")
+            ),
+            "alpha": _first_not_none(
+                _cfg_get(anima, "networkAlpha"), _cfg_get(network, "alpha")
+            ),
+            "algorithm": _cfg_get(_cfg_get(anima, "lora") or {}, "algorithm"),
+            "lr": _first_not_none(
+                _cfg_get(anima, "learningRate"), _cfg_get(optimizer, "lr")
+            ),
+            "lr_scheduler": _first_not_none(
+                _cfg_get(anima, "lrScheduler"), _cfg_get(optimizer, "schedule")
+            ),
+            "epochs": _first_not_none(
+                _cfg_get(anima, "maxTrainEpochs"), _cfg_get(schedule, "epochs")
+            ),
+            "batch_size": _cfg_get(schedule, "batchSize"),
+            "grad_accum": _cfg_get(schedule, "gradAccum"),
+            "num_repeats": _cfg_get(dataset, "numRepeats"),
+            "caption_dropout_rate": _first_not_none(
+                _cfg_get(anima, "captionDropoutRate"), _cfg_get(caption, "dropRate")
+            ),
+            "keep_tokens": _first_not_none(
+                _cfg_get(anima, "keepTokens"), _cfg_get(caption, "keepTokens")
+            ),
+            "validation_split_num": _cfg_get(anima, "validationSplitNum"),
+            "sampling_enabled": _cfg_get(sampling, "enabled"),
+        },
+        "metrics": {
+            "total_loss_points": len(loss),
+            "loss_samples": sample(loss, 30),
+            "val_loss_samples": sample(val_loss, 30),
+            "epochs": metrics.get("epochs") or [],
+            "checkpoints": metrics.get("checkpoints") or [],
+            "gpu_samples": sample(metrics.get("gpu_samples") or [], 20),
+            "lora_spectrum": sample(metrics.get("lora_spectrum") or [], 20),
+            "overfit_signal": metrics.get("overfit_signal"),
+            "total_steps": metrics.get("total_steps"),
+            "first_step_ts": metrics.get("first_step_ts"),
+            "last_step_ts": metrics.get("last_step_ts"),
+        },
+    }
+
+
 @router.post("/jobs/{job_id}/analyze")
 def analyze_job(job_id: str) -> dict[str, Any]:
     """Run a Claude-style diagnosis over this job's metrics + config.
 
     Reads the events.jsonl + config snapshot, builds a compact prompt,
-    sends it to the `global.default` AI route, and stamps the result on
-    `job.metadata['ai_analysis']` so reloads pick it up. Idempotent:
-    re-calling regenerates and overwrites.
+    sends it to the `training.diagnose` AI route (falling back to
+    `global.default`), and stamps the result on `job.metadata['ai_analysis']`
+    so reloads pick it up. Idempotent: re-calling regenerates and overwrites.
     """
     from lorahub.api import app as app_mod  # noqa: PLC0415
     from lorahub.core.ai import client as ai_client  # noqa: PLC0415
@@ -614,66 +730,14 @@ def analyze_job(job_id: str) -> dict[str, Any]:
     if ai_store is None:
         raise HTTPException(503, "AI store not initialised")
 
-    route = ai_store.get_route("training.analyze")
+    route = ai_store.get_route("training.diagnose")
     if route is None or not (route.provider_id and route.model_id):
         route = ai_store.get_route("global.default")
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, "no AI route configured")
 
     metrics = _read_metrics(job.workspace)
-    cfg = job.config_snapshot or {}
-
-    # Compact context for the LLM: trim huge arrays, only keep the bits
-    # that actually inform a training diagnosis.
-    loss = metrics.get("loss") or []
-    val_loss = metrics.get("val_loss") or []
-    epochs = metrics.get("epochs") or []
-    overfit = metrics.get("overfit_signal")
-
-    def _sample(seq: list[Any], n: int = 40) -> list[Any]:
-        if len(seq) <= n:
-            return seq
-        # First, last, plus evenly spaced middle picks.
-        step = max(1, len(seq) // n)
-        return seq[::step][:n]
-
-    summary_payload: dict[str, Any] = {
-        "job": {
-            "id": job.id,
-            "state": job.state.value,
-            "returncode": job.returncode,
-            "duration_s": metrics.get("duration_s"),
-            "started_at": job.started_at.isoformat() if job.started_at else None,
-            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
-        },
-        "config": {
-            "arch": ((cfg.get("baseModel") or cfg.get("base_model") or {}).get("arch")),
-            "rank": ((cfg.get("network") or {}).get("rank")),
-            "alpha": ((cfg.get("network") or {}).get("alpha")),
-            "lr": ((cfg.get("optimizer") or {}).get("lr")),
-            "schedule": ((cfg.get("optimizer") or {}).get("schedule")),
-            "epochs": ((cfg.get("schedule") or {}).get("epochs")),
-            "batch_size": (
-                (cfg.get("schedule") or {}).get("batchSize")
-                or (cfg.get("schedule") or {}).get("batch_size")
-            ),
-            "grad_accum": (
-                (cfg.get("schedule") or {}).get("gradAccum")
-                or (cfg.get("schedule") or {}).get("grad_accum")
-            ),
-            "num_repeats": (
-                (cfg.get("dataset") or {}).get("numRepeats")
-                or (cfg.get("dataset") or {}).get("num_repeats")
-            ),
-        },
-        "metrics": {
-            "total_loss_points": len(loss),
-            "loss_samples": _sample(loss, 30),
-            "val_loss": val_loss,
-            "epochs": epochs,
-            "overfit_signal": overfit,
-        },
-    }
+    summary_payload = _analysis_summary_payload(job, metrics)
 
     import json as _json  # noqa: PLC0415
     prompt = (
@@ -683,9 +747,10 @@ def analyze_job(job_id: str) -> dict[str, Any]:
         "  2. 收敛趋势：loss 形状（下降/震荡/平台/发散）。\n"
         "  3. 过拟合判断：train vs val 距离 + overfit_signal。\n"
         "  4. 学习率与 schedule 是否合适。\n"
-        "  5. 下一次实验建议（lr / rank / epochs / dropout 各 1-2 条具体动作）。\n\n"
+        "  5. 如果是 anima_lora,结合 algorithm / repeats / caption dropout / validation split 判断配置是否像默认弱配方。\n"
+        "  6. 下一次实验建议（lr / rank / epochs / repeats / dropout 各给可执行动作,只建议有数据支撑的项）。\n\n"
         "Use plain Markdown, short paragraphs, no fluff. If data is too sparse "
-        "to judge a section, say so.\n\n"
+        "to judge a section, say so. Do not invent metrics not present in JSON.\n\n"
         "JSON context:\n```json\n"
         + _json.dumps(summary_payload, ensure_ascii=False, indent=2)
         + "\n```"

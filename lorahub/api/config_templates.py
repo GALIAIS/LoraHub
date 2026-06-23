@@ -2,8 +2,8 @@
 
 The web UI lets the user spawn a new config from one of these starting points
 instead of having to fill the whole form from scratch. Templates live as
-plain YAML files under ``configs/builtin/`` (shipped with the repo) so they
-can be edited without touching Python; each one is parsed and validated with
+plain YAML files under ``configs/`` (shipped with the repo) so they can be
+edited without touching Python; each one is parsed and validated with
 :class:`TrainingConfig` before being added to the catalogue. A bad template is
 logged and skipped so a typo in one file can't take the whole endpoint down.
 
@@ -36,17 +36,26 @@ from lorahub.core.config.schema import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
-# Default location, relative to the repo root. The folder is shipped as part
-# of the source tree (configs/builtin/) and resolved relative to this file
+# Default location, relative to the repo root. Resolved relative to this file
 # rather than CWD so ``lorahub serve`` works from any directory.
 _DEFAULT_BUILTIN_DIR = Path(__file__).resolve().parents[2] / "configs" / "builtin"
+_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs"
 
 # Fallback metadata used when a YAML file omits the ``_template`` block.
 _FALLBACK_NAME_FROM_ID = {
+    "anima_lora_default": "Anima LoRA 默认基线",
+    "anima_lora_8gb": "Anima LoRA 8GB",
+    "anima_style_32gb_loha": "Anima 画风 LoHA 32GB",
     "sdxl_character": "SDXL Character",
     "sdxl_style": "SDXL Style",
     "sd15_character": "SD 1.5 Character",
     "blank": "Blank",
+}
+
+_FALLBACK_DESCRIPTION_FROM_ID = {
+    "anima_lora_default": "上游 anima_lora make lora default 的通用复刻基线；用于对照，不是画风强化配方。",
+    "anima_lora_8gb": "Anima 8GB 安全档：768 分辨率、低显存优化、关闭采样和验证。",
+    "anima_style_32gb_loha": "32GB 画风 LoRA 起步配方：LoHA、batchSize 2、gradAccum 4、10 epoch、CMMD 验证。",
 }
 
 
@@ -59,7 +68,9 @@ def _coerce_meta(stem: str, meta: Any, config: dict[str, Any]) -> dict[str, Any]
     """
     meta = meta if isinstance(meta, dict) else {}
     name = str(meta.get("name") or _FALLBACK_NAME_FROM_ID.get(stem, stem))
-    description = str(meta.get("description") or "")
+    description = str(
+        meta.get("description") or _FALLBACK_DESCRIPTION_FROM_ID.get(stem, "")
+    )
     arch = str(
         meta.get("arch")
         or config.get("base_model", {}).get("arch")
@@ -196,25 +207,32 @@ def _load_one(path: Path) -> dict[str, Any] | None:
 
 
 def load_templates(directory: Path | None = None) -> list[dict[str, Any]]:
-    """Discover, validate and return every YAML template under ``directory``.
+    """Discover, validate and return every YAML template.
 
-    Results are sorted by id for stable ordering in the UI. The directory is
-    re-scanned on every call so tests can swap it for a tmp_path without
-    needing to reload modules.
+    By default this scans the current top-level ``configs/*.yaml`` templates
+    plus the legacy ``configs/builtin/*.yaml`` templates. Results are sorted by
+    id for stable ordering in the UI. Passing ``directory`` keeps the old test
+    hook semantics and scans only that folder.
     """
-    base = directory if directory is not None else _DEFAULT_BUILTIN_DIR
-    if not base.is_dir():
-        logger.warning("config templates directory %s is missing", base)
-        return []
-
+    bases = [directory] if directory is not None else [_DEFAULT_CONFIG_DIR, _DEFAULT_BUILTIN_DIR]
     templates: list[dict[str, Any]] = []
-    for path in sorted(base.glob("*.y*ml")):
-        if path.suffix.lower() not in {".yaml", ".yml"}:
+    seen: set[str] = set()
+    for base in bases:
+        if base is None:
             continue
-        tpl = _load_one(path)
-        if tpl is not None:
-            templates.append(tpl)
-    return templates
+        if not base.is_dir():
+            logger.warning("config templates directory %s is missing", base)
+            continue
+        for path in sorted(base.glob("*.y*ml")):
+            if path.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            if path.stem in seen:
+                continue
+            tpl = _load_one(path)
+            if tpl is not None:
+                seen.add(path.stem)
+                templates.append(tpl)
+    return sorted(templates, key=lambda item: item["id"])
 
 
 # Eager-load once at import time so a cold start surfaces obviously-broken

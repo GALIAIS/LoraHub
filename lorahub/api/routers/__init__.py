@@ -20,6 +20,7 @@ from .error_reports import router as error_reports_router
 from .health import router as health_router
 from .image_studio import router as image_studio_router
 from .jobs import router as jobs_router
+from .lora_test import router as lora_test_router
 from .models import router as models_router
 from .network import router as network_router
 from .configs import router as configs_router
@@ -41,6 +42,7 @@ all_routers: list[APIRouter] = [
     datasets_router,
     image_studio_router,
     jobs_router,
+    lora_test_router,
     artifacts_router,
     backends_router,
     bootstrap_router,

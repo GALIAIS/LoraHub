@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from lorahub.api import app as app_mod
 from lorahub.api import state
+from lorahub.api.ai_store import AIRoute
 from lorahub.api.app import _resume_index_from_header, _sse_format
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
@@ -234,6 +235,165 @@ def test_jobs_sse_returns_404_for_unknown_job(client: TestClient) -> None:
 def test_jobs_analyze_returns_404_for_unknown_job(client: TestClient) -> None:
     r = client.post("/api/jobs/missing/analyze")
     assert r.status_code == 404
+
+
+def test_jobs_analyze_uses_training_diagnose_route_and_real_config_fields(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "events.jsonl").write_text(
+        "\n".join(
+            [
+                TrainingEvent(
+                    type=EventType.step,
+                    payload={"step": 1, "loss": 0.8, "lr": 7e-5, "total_steps": 20},
+                    timestamp=1.0,
+                ).to_json(),
+                TrainingEvent(
+                    type=EventType.step,
+                    payload={"step": 2, "loss": 0.6, "lr": 7e-5, "total_steps": 20},
+                    timestamp=2.0,
+                ).to_json(),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    job = state.registry.create(
+        workspace=workspace,
+        config_snapshot={
+            "baseModel": {"arch": "anima"},
+            "dataset": {
+                "numRepeats": 3,
+                "caption": {"dropRate": 0.18, "keepTokens": 1},
+            },
+            "schedule": {"batchSize": 2, "gradAccum": 4},
+            "optimizer": {"schedule": "cosine"},
+            "backend": {
+                "type": "anima_lora",
+                "animaLora": {
+                    "outputName": "style_anima_32gb",
+                    "networkDim": 16,
+                    "networkAlpha": 16,
+                    "learningRate": 7e-5,
+                    "lrScheduler": "cosine",
+                    "maxTrainEpochs": 10,
+                    "captionDropoutRate": 0,
+                    "keepTokens": 0,
+                    "validationSplitNum": 0,
+                    "lora": {"algorithm": "loha"},
+                },
+            },
+        },
+    )
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    seen_routes: list[str] = []
+
+    class FakeStore:
+        def get_route(self, task_id: str):  # type: ignore[no-untyped-def]
+            seen_routes.append(task_id)
+            if task_id == "training.diagnose":
+                return AIRoute(task_id=task_id, provider_id="p", model_id="m")
+            return None
+
+    class Result:
+        content = "结论：训练正常。"
+        provider_name = "Provider"
+        model_id = "model"
+
+    captured: dict[str, object] = {}
+
+    def fake_invoke(store, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(app_mod, "_ai_store", FakeStore())
+    monkeypatch.setattr("lorahub.core.ai.client.invoke", fake_invoke)
+
+    r = client.post(f"/api/jobs/{job.id}/analyze")
+    assert r.status_code == 200, r.text
+    assert seen_routes == ["training.diagnose"]
+    analysis = r.json()["analysis"]
+    cfg = analysis["summary_payload"]["config"]
+    assert cfg["backend"] == "anima_lora"
+    assert cfg["rank"] == 16
+    assert cfg["alpha"] == 16
+    assert cfg["algorithm"] == "loha"
+    assert cfg["lr"] == 7e-5
+    assert cfg["lr_scheduler"] == "cosine"
+    assert cfg["epochs"] == 10
+    assert cfg["num_repeats"] == 3
+    assert cfg["caption_dropout_rate"] == 0
+    assert cfg["keep_tokens"] == 0
+    assert cfg["validation_split_num"] == 0
+    assert captured["provider_id"] == "p"
+    assert captured["model_id"] == "m"
+
+
+def test_jobs_analyze_falls_back_to_global_default_route(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "events.jsonl").write_text(
+        TrainingEvent(
+            type=EventType.step,
+            payload={"step": 1, "loss": 0.8, "total_steps": 1},
+            timestamp=1.0,
+        ).to_json()
+        + "\n",
+        encoding="utf-8",
+    )
+    job = state.registry.create(
+        workspace=workspace,
+        config_snapshot={
+            "base_model": {"arch": "sdxl"},
+            "network": {"rank": 8, "alpha": 4},
+            "optimizer": {"lr": 1e-4, "schedule": "constant"},
+            "schedule": {"epochs": 1},
+        },
+    )
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    seen_routes: list[str] = []
+
+    class FakeStore:
+        def get_route(self, task_id: str):  # type: ignore[no-untyped-def]
+            seen_routes.append(task_id)
+            if task_id == "global.default":
+                return AIRoute(task_id=task_id, provider_id="fallback", model_id="m")
+            return None
+
+    class Result:
+        content = "结论：数据不足。"
+        provider_name = "Provider"
+        model_id = "model"
+
+    captured: dict[str, object] = {}
+
+    def fake_invoke(store, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(app_mod, "_ai_store", FakeStore())
+    monkeypatch.setattr("lorahub.core.ai.client.invoke", fake_invoke)
+
+    r = client.post(f"/api/jobs/{job.id}/analyze")
+    assert r.status_code == 200, r.text
+    assert seen_routes == ["training.diagnose", "global.default"]
+    assert captured["provider_id"] == "fallback"
+    cfg = r.json()["analysis"]["summary_payload"]["config"]
+    assert cfg["arch"] == "sdxl"
+    assert cfg["rank"] == 8
+    assert cfg["lr"] == 1e-4
 
 
 # --------------------------------------------------------------------------- #

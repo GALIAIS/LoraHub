@@ -188,6 +188,31 @@ def test_use_cmmd_true_is_emitted(tmp_path: Path) -> None:
     assert emitted["use_cmmd"] is True
 
 
+def test_style_32gb_loha_template_compiles_to_style_recipe(tmp_path: Path) -> None:
+    """Guard the user-facing 32GB style template against drifting to default."""
+    from lorahub.core.config.loader import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root / "configs" / "anima_style_32gb_loha.yaml")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["output_name"] == "style_anima_32gb"
+    assert emitted["network_dim"] == 16
+    assert emitted["network_alpha"] == 16.0
+    assert emitted["learning_rate"] == 7e-05
+    assert emitted["max_train_epochs"] == 10
+    assert emitted["caption_dropout_rate"] == 0.18
+    assert emitted["use_cmmd"] is True
+    assert emitted["general"]["keep_tokens"] == 1
+    assert emitted["datasets"][0]["batch_size"] == 2
+    assert emitted["datasets"][0]["validation_split_num"] == 16
+    assert emitted["datasets"][0]["subsets"][0]["num_repeats"] == 3
+    network_args = emitted["network_args"]
+    assert "use_loha=true" in network_args
+    assert "use_timestep_mask=false" in network_args
+
+
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
 

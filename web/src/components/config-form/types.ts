@@ -339,6 +339,7 @@ export interface ConfigFormValue {
       networkDim?: number
       networkAlpha?: number
       networkTrainUnetOnly?: boolean
+      channelScalingAlpha?: number
       optimizerType?: "AdamW" | "AdamW8bit" | "Lion" | "Prodigy"
       lrScheduler?:
         | "constant"
@@ -469,7 +470,6 @@ export interface ConfigFormValue {
         useTimestepMask?: boolean
         minRank?: number
         alphaRankScale?: number
-        channelScalingAlpha?: number
       }
       postfix?: {
         mode?: "postfix" | "cond"

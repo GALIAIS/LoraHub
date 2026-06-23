@@ -13,7 +13,6 @@ LoraHub 自带几份 YAML 模板，放在 [`configs/`](https://github.com/GALIAI
 | ---- | ---- | ------- | ---- |
 | `anima_lora_default`        | Anima | LoRA + OrthoLoRA + T-LoRA, rank 16 / alpha 16 | 上游 anima_lora `make lora default` 的 100% 复刻基线;新手对照参考。 |
 | `anima_lora_8gb`            | Anima | LoRA + OrthoLoRA + T-LoRA, rank 8 / alpha 8   | 8GB 显存档:768²、AdamW8bit、blocks_to_swap=24、grad-ckpt 开;关 sampling/validation/torch.compile。 |
-| `anima_character_32gb_dora` | Anima | DoRA + T-LoRA, rank 32 / alpha 32             | 32GB 卡上的角色 LoRA:1024²、batchSize 2 + gradAccum 4、torch.compile cudagraph_trees、CMMD validation。 |
 | `anima_style_32gb_loha`     | Anima | LoHa + T-LoRA, rank 4 / alpha 4               | 32GB 卡上的画风 LoRA;LoHa 比同等表达的 LoRA 参数量减半,收敛更快。 |
 
 Anima 配置走 LoraHub 的 anima_lora 后端 — 把 DiT + Qwen-Image VAE + Qwen3-0.6B 文本编码器接好,并自动调用上游 preprocess (resize_images / cache_latents / cache_text_embeddings)。
@@ -63,9 +62,8 @@ _placeholders:
 ```powershell
 lorahub init my_character                            # 默认:anima_lora_default
 lorahub init my_8gb --template anima_lora_8gb        # 8GB 卡起步
-lorahub init my_char --template anima_character_32gb_dora  # 32GB 角色 DoRA
+lorahub init my_style --template anima_style_32gb_loha      # 32GB 画风 LoHA
 lorahub init my_character --auto `
     --checkpoint .\models\circlestone-labs__Anima\split_files\diffusion_models\anima-base-v1.0.safetensors `
     --dataset    .\datasets\my_character             # 按检测到的显存调参
 ```
-

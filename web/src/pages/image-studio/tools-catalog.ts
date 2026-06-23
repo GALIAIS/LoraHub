@@ -26,6 +26,7 @@ import {
   Library,
   PackageCheck,
   RefreshCw,
+  Rocket,
   Replace,
   RotateCcw,
   Save,
@@ -254,6 +255,17 @@ export const TOOLS: readonly ToolInfo[] = [
   },
 
   // ===== AI =====
+  {
+    id: "lora-testbench",
+    category: "ai",
+    stage: "library",
+    label: "LoRA 生图测试",
+    description: "选择训练出的 LoRA checkpoint，调 prompt / seed / CFG 直接验收效果",
+    icon: Rocket,
+    requiresDataset: false,
+    async: true,
+    writes: true,
+  },
   {
     id: "ai-caption",
     category: "ai",

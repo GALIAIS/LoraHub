@@ -13,11 +13,13 @@
  */
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate } from "react-router-dom"
 import {
   Download,
   FileArchive,
   FolderOpen,
   Loader2,
+  Play,
   RefreshCw,
   Trash2,
 } from "lucide-react"
@@ -91,6 +93,7 @@ function formatTime(iso: string | null | undefined): string {
 
 export function ArtifactsPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const list = useQuery({
     queryKey: ["artifacts"],
     queryFn: api.listArtifacts,
@@ -215,6 +218,11 @@ export function ArtifactsPage() {
               onFileDelete={(path) =>
                 deleteFile.mutate({ jobId: row.job_id, path })
               }
+              onFileTest={(path) => {
+                navigate(
+                  `/image-studio?stage=lora-test&job=${encodeURIComponent(row.job_id)}&checkpoint=${encodeURIComponent(path)}`,
+                )
+              }}
               onWorkspaceDelete={() => setConfirmDelete(row)}
               fileBusy={deleteFile.isPending}
             />
@@ -268,6 +276,7 @@ interface ArtifactCardProps {
   row: ArtifactRow
   onZipDownload: (include: string[], format: ArchiveFormat) => void
   onFileDownload: (path: string) => void
+  onFileTest: (path: string) => void
   onFileDelete: (path: string) => void
   onWorkspaceDelete: () => void
   fileBusy: boolean
@@ -277,6 +286,7 @@ function ArtifactCard({
   row,
   onZipDownload,
   onFileDownload,
+  onFileTest,
   onFileDelete,
   onWorkspaceDelete,
   fileBusy,
@@ -402,6 +412,15 @@ function ArtifactCard({
                   </span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onFileTest(ckpt.path)}
+                    className="h-7 px-2 gap-1"
+                  >
+                    <Play className="size-3" />
+                    测试
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"

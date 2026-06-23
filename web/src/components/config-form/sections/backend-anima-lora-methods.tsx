@@ -223,13 +223,13 @@ function LoraMethodConfig({
       <Row
         label="channel scaling α"
         description="OrthoLoRA / LoRA 输出 channel-wise 缩放系数，上游默认 0.5。降低可缓解梯度震荡。"
-        errors={errorMap.get("backend.animaLora.lora.channelScalingAlpha")}
+        errors={errorMap.get("backend.animaLora.channelScalingAlpha")}
       >
         <FloatInput
-          value={value.lora?.channelScalingAlpha}
+          value={value.channelScalingAlpha}
           onChange={(n) =>
             set(
-              ["backend", "animaLora", "lora", "channelScalingAlpha"],
+              ["backend", "animaLora", "channelScalingAlpha"],
               n ?? 0.5,
             )
           }

@@ -52,6 +52,11 @@ import type {
 } from "./ai"
 import type { SystemSnapshot, UpdateInfo, UpdateEvent } from "./system"
 import type { TaskSessionRecord } from "./tasks"
+import type {
+  LoraTestGenerateInput,
+  LoraTestGenerateResponse,
+  LoraTestModelsResponse,
+} from "./lora-test"
 import type { MirrorPreset, ProbeResult } from "./network"
 import type {
   SweepSummary,
@@ -557,6 +562,22 @@ export const api = {
     http<{ analysis: JobAnalysis | null }>(`/jobs/${id}/analysis`),
   analyzeJob: (id: string) =>
     http<{ analysis: JobAnalysis }>(`/jobs/${id}/analyze`, { method: "POST" }),
+  listLoraTestModels: () =>
+    http<LoraTestModelsResponse>("/lora-test/models"),
+  startLoraTestGeneration: (input: LoraTestGenerateInput) =>
+    http<LoraTestGenerateResponse>("/lora-test/generate", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  getLoraTestSession: (id: string) =>
+    http<TaskSessionRecord>(`/lora-test/sessions/${encodeURIComponent(id)}`),
+  cancelLoraTestSession: (id: string) =>
+    http<{ canceled: boolean }>(
+      `/lora-test/sessions/${encodeURIComponent(id)}/cancel`,
+      { method: "POST" },
+    ),
+  loraTestResultFileUrl: (id: string, path: string) =>
+    `/api/lora-test/results/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
   /**
    * Heuristic failure-mode diagnosis. Reads the job's events.jsonl +
    * trailing log lines on the server, runs a small regex panel, and

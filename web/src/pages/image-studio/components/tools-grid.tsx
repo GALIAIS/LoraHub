@@ -64,9 +64,12 @@ function ToolCard({
   disabled: boolean
 }) {
   const Icon = tool.icon
-  const to = datasetPath
-    ? `/image-studio/tools/${tool.id}?path=${encodeURIComponent(datasetPath)}`
-    : `/image-studio/tools/${tool.id}`
+  const to =
+    tool.id === "lora-testbench"
+      ? "/image-studio?stage=lora-test"
+      : datasetPath
+        ? `/image-studio/tools/${tool.id}?path=${encodeURIComponent(datasetPath)}`
+        : `/image-studio/tools/${tool.id}`
 
   const inner = (
     <>

@@ -12,12 +12,19 @@ export interface TaskSessionRecord {
   id: string
   kind: string
   title: string
-  status: "pending" | "running" | "succeeded" | "failed" | "canceled" | string
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "interrupted"
+    | string
   percent: number
   metadata: Record<string, unknown>
   result: Record<string, unknown> | null
   error: string | null
-  created_at: number
+  started_at: number
   updated_at: number
   finished_at: number | null
   events: TaskSessionEvent[]

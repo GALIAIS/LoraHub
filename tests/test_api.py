@@ -2068,18 +2068,21 @@ def test_list_templates_returns_validated_configs(client: TestClient) -> None:
     body = r.json()
 
     ids = {t["id"] for t in body["templates"]}
-    assert ids == {
+    assert {
         "sdxl_character",
         "sdxl_style",
         "sd15_character",
         "blank",
         "low_vram",
-    }
+        "anima_lora_default",
+        "anima_lora_8gb",
+        "anima_style_32gb_loha",
+    }.issubset(ids)
 
     # Each template config must round-trip through the schema.
     for tpl in body["templates"]:
         cfg = TrainingConfig.model_validate(tpl["config"])
-        assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3"}
+        assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3", "anima"}
 
 
 def test_list_templates_skips_invalid_yaml_files(

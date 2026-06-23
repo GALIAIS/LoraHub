@@ -15,6 +15,7 @@ import { ShipStage } from "./components/stages/ship-stage"
 import { CreateDatasetDialog } from "./components/create-dataset-dialog"
 import { ToolsGrid } from "./components/tools-grid"
 import { LibraryPage } from "./components/library/library-page"
+import { LoraTestPage } from "./lora-test"
 import type { StageId } from "./components/stage-stepper"
 
 export { ImageStudioPage }
@@ -23,15 +24,17 @@ export { ImageStudioPage }
 //  - "tools"   — 全部工具广场
 //  - "library" — 跨数据集的工具库（标签词典 / 触发词 / Prompt 模板）
 type StageOrTools = StageId | "tools" | "library"
+type StageRoute = StageOrTools | "lora-test"
 
-function isDatasetStage(stage: StageOrTools): stage is StageId {
+function isDatasetStage(stage: StageRoute): stage is StageId {
   return stage !== "tools" && stage !== "library"
+    && stage !== "lora-test"
 }
 
 function ImageStudioPage() {
   const [params, setParams] = useSearchParams()
   const datasetPath = params.get("path") || ""
-  const stageParam = (params.get("stage") || (datasetPath ? "curate" : "tools")) as StageOrTools
+  const stageParam = (params.get("stage") || (datasetPath ? "curate" : "tools")) as StageRoute
   const [showCreate, setShowCreate] = useState(false)
   const queryClient = useQueryClient()
 
@@ -80,7 +83,7 @@ function ImageStudioPage() {
         sidebar={
           <StudioSidebar
             datasetPath={datasetPath}
-            stage={stageParam}
+            stage={stageParam === "lora-test" ? "tools" : stageParam}
             onSelectDataset={selectDataset}
             onSelectStage={selectStage}
             onCreateDataset={() => setShowCreate(true)}
@@ -92,6 +95,7 @@ function ImageStudioPage() {
             <ToolsGrid datasetPath={datasetPath} />
           )}
           {stageParam === "library" && <LibraryPage />}
+          {stageParam === "lora-test" && <LoraTestPage />}
           {isDatasetStage(stageParam) &&
             !datasetPath && (
               <EmptyState onCreateDataset={() => setShowCreate(true)} />
