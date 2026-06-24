@@ -449,7 +449,7 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
         "lorahub.core.backends._common.runner.SubprocessRunner.wait", fake_wait
     ):
         handle = AnimaLoraBackend().launch(
-            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=2
         )
 
     assert handle.pid == 4242
@@ -463,6 +463,8 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
     assert argv[3] == "launch"
     assert "--num_cpu_threads_per_process" in argv
     assert "--mixed_precision" in argv
+    assert "--multi_gpu" in argv
+    assert argv[argv.index("--num_processes") + 1] == "2"
     # train.py path must end the launcher prefix.
     train_py_idx = next(
         i for i, x in enumerate(argv) if x.endswith("train.py")

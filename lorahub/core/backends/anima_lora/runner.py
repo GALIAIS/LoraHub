@@ -72,7 +72,7 @@ class AnimaLoraRunner(SubprocessRunner):
             _LAUNCH_MIXED_PRECISION,
         ]
         if num_processes > 1:
-            full_argv += ["--num_processes", str(num_processes)]
+            full_argv += ["--multi_gpu", "--num_processes", str(num_processes)]
         full_argv += [
             str(train_py),
             *argv,

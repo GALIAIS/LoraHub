@@ -277,10 +277,12 @@ def _read_changelog_version() -> str | None:
 
 
 def _normalize_version(raw: str) -> str:
-    """Drop a leading 'v' and any pre-release/local suffix junk we don't compare on."""
+    """Drop a leading 'v' plus git-describe dirtiness markers."""
     s = raw.strip()
     if s.lower().startswith("v"):
         s = s[1:]
+    if s.endswith("-dirty"):
+        s = s[:-6]
     return s
 
 
@@ -292,6 +294,24 @@ def _compare_versions(left: str, right: str) -> int:
         )
     except InvalidVersion:
         return (left > right) - (left < right)
+
+
+def _tag_update_available(
+    *,
+    latest: str | None,
+    current: str,
+    latest_commit: str | None,
+    current_commit: str | None,
+) -> bool:
+    if not latest:
+        return False
+    version_cmp = _compare_versions(latest, current)
+    return version_cmp > 0 or (
+        version_cmp == 0
+        and bool(latest_commit)
+        and bool(current_commit)
+        and latest_commit != current_commit
+    )
 
 
 def _read_cache() -> _CacheBlob:
@@ -636,6 +656,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         fresh_enough = False
 
     if fresh_enough:
+        cached_latest = cached.get("latest")
+        cached_latest_commit = cached.get("latest_commit")
         info = UpdateInfo(
             **{
                 **cached,
@@ -644,6 +666,16 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                 "version_source": version_source,
                 "git_checkout": is_git_checkout,
                 "current_commit": current_commit,
+                "update_available": (
+                    _tag_update_available(
+                        latest=cached_latest,
+                        current=current,
+                        latest_commit=cached_latest_commit,
+                        current_commit=current_commit,
+                    )
+                    if channel == "tag"
+                    else cached.get("update_available", False)
+                ),
             }
         )
         return info
@@ -690,14 +722,12 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     )
     if latest_commit is None:
         latest_commit = remote.get("commit")
-    update_available = False
     if channel == "tag" and latest:
-        version_cmp = _compare_versions(latest, current)
-        update_available = version_cmp > 0 or (
-            version_cmp == 0
-            and bool(latest_commit)
-            and bool(current_commit)
-            and latest_commit != current_commit
+        update_available = _tag_update_available(
+            latest=latest,
+            current=current,
+            latest_commit=latest_commit,
+            current_commit=current_commit,
         )
     elif channel == "dev" and latest and cwd:
         # For dev, "update available" means HEAD is not on the
@@ -705,6 +735,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         # rev-parse so a forced reset still counts as up-to-date.
         head = current_commit or ""
         update_available = bool(head) and not head.startswith(latest)
+    else:
+        update_available = False
 
     info = UpdateInfo(
         channel=channel,

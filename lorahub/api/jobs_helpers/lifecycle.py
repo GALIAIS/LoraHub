@@ -419,7 +419,11 @@ def _gpu_dispatch_mode(cfg: TrainingConfig) -> str:
 
 
 def _apply_settings_gpu_dispatch_default(cfg: TrainingConfig) -> None:
-    if "gpu_dispatch" in cfg.backend.model_fields_set:
+    dispatch = cfg.backend.gpu_dispatch
+    explicit = "gpu_dispatch" in cfg.backend.model_fields_set
+    if explicit and (
+        dispatch.mode != "one-job-per-gpu" or dispatch.num_gpus is not None
+    ):
         return
     try:
         from lorahub.api import app as _app  # noqa: PLC0415
@@ -427,8 +431,8 @@ def _apply_settings_gpu_dispatch_default(cfg: TrainingConfig) -> None:
         settings = _app._settings_store.load()
     except Exception:  # noqa: BLE001
         return
-    cfg.backend.gpu_dispatch.mode = settings.gpu_dispatch_mode
-    cfg.backend.gpu_dispatch.num_gpus = settings.gpu_dispatch_num_gpus
+    dispatch.mode = settings.gpu_dispatch_mode
+    dispatch.num_gpus = settings.gpu_dispatch_num_gpus
 
 
 def _slots_required(cfg: TrainingConfig) -> int:
