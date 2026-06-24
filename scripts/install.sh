@@ -304,6 +304,17 @@ echo ""
 # weird HOME / permission setup doesn't sink the whole installer.
 echo "[extra] Registering lorahub CLI ..."
 "$VENV_PY" -m lorahub manage install 2>&1 || true
+LOCAL_BIN="$HOME/.local/bin"
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+if [ -d "$LOCAL_BIN" ]; then
+    export PATH="$LOCAL_BIN:$PATH"
+    shell_rc="$HOME/.profile"
+    [ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
+    if [ -w "$(dirname "$shell_rc")" ] && ! grep -Fqs "$PATH_LINE" "$shell_rc" 2>/dev/null; then
+        printf '\n# LoRaHub CLI\n%s\n' "$PATH_LINE" >> "$shell_rc"
+        echo "已添加 $LOCAL_BIN 到 $shell_rc"
+    fi
+fi
 echo ""
 
 echo "============================================================"
@@ -321,6 +332,6 @@ echo "    scripts/run.sh              (default prod: API serves built SPA)"
 echo "    scripts/run.sh dev          (dev mode: API + Vite HMR)"
 echo "    lorahub service start       (background daemon — random port)"
 echo ""
-echo "  If 'lorahub' isn't found, ensure ~/.local/bin is on PATH:"
+echo "  CLI PATH is configured for new shells when possible:"
 echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo ""
