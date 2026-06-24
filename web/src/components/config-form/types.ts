@@ -269,6 +269,10 @@ export interface ConfigFormValue {
     repoPath?: string | null
     pythonExecutable?: string | null
     extraArgs?: Record<string, unknown>
+    gpuDispatch?: {
+      mode?: "one-job-per-gpu" | "distributed"
+      numGpus?: number | null
+    }
     diffusionPipe?: {
       pipelineStages?: number
       gradientClipping?: number

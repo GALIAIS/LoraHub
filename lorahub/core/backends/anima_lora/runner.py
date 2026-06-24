@@ -58,6 +58,7 @@ class AnimaLoraRunner(SubprocessRunner):
         *,
         job_id: str | None = None,
         env: dict[str, str] | None = None,
+        num_processes: int = 1,
     ) -> None:
         train_py = repo / "train.py"
         full_argv = [
@@ -69,6 +70,10 @@ class AnimaLoraRunner(SubprocessRunner):
             _LAUNCH_THREADS,
             "--mixed_precision",
             _LAUNCH_MIXED_PRECISION,
+        ]
+        if num_processes > 1:
+            full_argv += ["--num_processes", str(num_processes)]
+        full_argv += [
             str(train_py),
             *argv,
         ]

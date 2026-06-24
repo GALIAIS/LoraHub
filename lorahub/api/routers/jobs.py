@@ -16,6 +16,7 @@ from lorahub.api import state
 from lorahub.api.jobs_helpers import (
     _TERMINAL_STATES,
     _apply_cfg_overrides,
+    _apply_settings_gpu_dispatch_default,
     _archive_workspace,
     _dispatch_resume_spec,
     _job_events,
@@ -56,6 +57,7 @@ def _raise_if_preflight_blocks(
     decision to bail is purely on severity == "error" — warnings are
     surfaced through the response on a successful create as well.
     """
+    _apply_settings_gpu_dispatch_default(cfg)
     findings = run_preflight(cfg, workspace, skip=skip)
     blockers = [f for f in findings if f.severity == "error"]
     if blockers:

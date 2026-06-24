@@ -15,9 +15,18 @@ interface UploadDropZoneProps {
   onComplete: () => void
 }
 
+interface UploadSummary {
+  doneTasks: number
+  importedFiles: number
+}
+
 export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps) {
   const [dragging, setDragging] = useState(false)
   const [queue, setQueue] = useState<UploadTask[]>([])
+  const [summary, setSummary] = useState<UploadSummary>({
+    doneTasks: 0,
+    importedFiles: 0,
+  })
   const processingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -109,8 +118,11 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
                 }
               }
             }
-            if (!isArchive(task.file.name)) extracted = 1
             updateTask(task.id, { status: "done", percent: 100, extracted })
+            setSummary((prev) => ({
+              doneTasks: prev.doneTasks + 1,
+              importedFiles: prev.importedFiles + extracted,
+            }))
           } else {
             updateTask(task.id, { status: "error", error: `HTTP ${xhr.status}` })
           }
@@ -137,11 +149,16 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
   }
 
   const clearDone = () =>
-    setQueue((prev) => prev.filter((t) => t.status !== "done" && t.status !== "error"))
+    setQueue((prev) => {
+      const active = prev.filter((t) => t.status !== "done" && t.status !== "error")
+      if (active.length === 0) {
+        setSummary({ doneTasks: 0, importedFiles: 0 })
+      }
+      return active
+    })
 
   const activeTasks = queue.filter((t) => t.status !== "done" && t.status !== "error")
   const doneTasks = queue.filter((t) => t.status === "done")
-  const totalDoneFiles = doneTasks.reduce((sum, t) => sum + (t.extracted ?? 0), 0)
   const hasActive = activeTasks.length > 0
 
   return (
@@ -163,9 +180,9 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
               拖入图片或压缩包 (.zip/.tar.gz/.7z) 上传
             </span>
           )}
-          {!hasActive && doneTasks.length > 0 && (
+          {!hasActive && summary.doneTasks > 0 && (
             <span className="text-xs text-muted-foreground flex-1">
-              已完成 {doneTasks.length} 个任务，共导入 {totalDoneFiles} 个文件
+              已完成 {summary.doneTasks} 个任务，共导入 {summary.importedFiles} 个文件
             </span>
           )}
           {hasActive && (

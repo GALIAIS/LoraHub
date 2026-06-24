@@ -109,6 +109,8 @@ def run_preflight(
         findings.extend(_check_path_encoding(cfg, workspace))
     if "disk_low" not in skip_set:
         findings.extend(_check_disk_space(workspace))
+    if "gpu_dispatch" not in skip_set:
+        findings.extend(_check_gpu_dispatch(cfg))
 
     return findings
 
@@ -567,6 +569,94 @@ def _check_disk_space(workspace: Path) -> list[PreflightFinding]:
             )
         )
     return out
+
+
+def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
+    dispatch = cfg.backend.gpu_dispatch
+    if dispatch.mode != "distributed":
+        return []
+
+    out: list[PreflightFinding] = []
+    if cfg.backend.type not in {"anima_lora", "diffusion-pipe"}:
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.gpuDispatch.mode",
+                message="当前后端不支持单任务多 GPU 分布式训练。",
+                remediation=(
+                    "改回 one-job-per-gpu，或切换到 anima_lora / diffusion-pipe。"
+                ),
+            )
+        )
+    if (
+        cfg.backend.type == "anima_lora"
+        and cfg.backend.anima_lora is not None
+        and cfg.backend.anima_lora.turbo is not None
+    ):
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.gpuDispatch.mode",
+                message="anima_lora turbo 蒸馏当前不支持单任务多 GPU。",
+                remediation="关闭 turbo，或把 GPU 调度改回 one-job-per-gpu。",
+            )
+        )
+
+    try:
+        from lorahub.api import scheduler as sched  # noqa: PLC0415
+
+        available = sched.scheduler.concurrency
+    except Exception:  # noqa: BLE001
+        available = 1
+    requested = dispatch.num_gpus or available
+    if requested > available:
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.gpuDispatch.numGpus",
+                message=(
+                    f"分布式训练请求 {requested} 张 GPU，但当前调度器只有 "
+                    f"{available} 个 GPU slot。"
+                ),
+                remediation=(
+                    "降低 backend.gpuDispatch.numGpus，或在设置里提高 "
+                    "max_concurrent_jobs 后重启服务。"
+                ),
+            )
+        )
+    groups = _homogeneous_gpu_groups()
+    if groups:
+        largest = max(len(g) for g in groups)
+        if requested > largest:
+            out.append(
+                PreflightFinding(
+                    category="gpu_dispatch",
+                    severity="error",
+                    field="backend.gpuDispatch.numGpus",
+                    message=(
+                        f"请求 {requested} 张 GPU 做单任务分布式，但当前最大同构 GPU 组 "
+                        f"只有 {largest} 张。异构 GPU 不会默认混跑。"
+                    ),
+                    remediation=(
+                        "4080 + V100 这类异构机器请使用 one-job-per-gpu 并发；"
+                        "单任务多 GPU 需要型号、显存、compute capability 一致的卡。"
+                    ),
+                    extra={"homogeneous_groups": groups},
+                )
+            )
+    return out
+
+
+def _homogeneous_gpu_groups() -> list[list[int]]:
+    try:
+        from lorahub.api.gpu_topology import homogeneous_slot_groups  # noqa: PLC0415
+
+        return homogeneous_slot_groups()
+    except Exception:  # noqa: BLE001
+        return []
 
 
 # --------------------------------------------------------------------- #

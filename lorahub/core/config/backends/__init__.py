@@ -27,6 +27,18 @@ from .anima_lora import (
 from .diffusion_pipe import DiffusionPipeOptions
 
 
+class GpuDispatchConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    # one-job-per-gpu: scheduler assigns one GPU per training job.
+    # distributed: one training job owns multiple GPUs and launches
+    # backend-native multi-process training where supported.
+    mode: Literal["one-job-per-gpu", "distributed"] = "one-job-per-gpu"
+    # None means "all scheduler slots" in distributed mode; ignored by
+    # one-job-per-gpu mode.
+    num_gpus: int | None = Field(default=None, ge=1)
+
+
 class BackendConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
@@ -48,6 +60,7 @@ class BackendConfig(BaseModel):
     )
     python_executable: Path | None = None
     extra_args: dict[str, Any] = Field(default_factory=dict)
+    gpu_dispatch: GpuDispatchConfig = Field(default_factory=GpuDispatchConfig)
     # Optional, dp-specific knobs. None means "use library defaults" so kohya
     # users never need to touch this field.
     diffusion_pipe: DiffusionPipeOptions | None = None
@@ -65,5 +78,6 @@ __all__ = [
     "AnimaLoraOptions",
     "AnimaLoraTurboConfig",
     "BackendConfig",
+    "GpuDispatchConfig",
     "DiffusionPipeOptions",
 ]

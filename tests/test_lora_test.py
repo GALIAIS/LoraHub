@@ -110,7 +110,7 @@ def test_lora_test_generate_session_completes_with_fake_inference(
     job.state = state.JobState.succeeded
     state.registry.update(job)
 
-    def fake_inference(resolved, req, out_path, seed, cancel_evt):  # type: ignore[no-untyped-def]
+    def fake_inference(resolved, req, case, out_path, cancel_evt):  # type: ignore[no-untyped-def]
         out_path.write_bytes(b"png")
 
     monkeypatch.setattr(lora_test, "_run_anima_inference", fake_inference)
@@ -137,3 +137,184 @@ def test_lora_test_generate_session_completes_with_fake_inference(
     assert len(status["result"]["images"]) == 2
     assert status["result"]["images"][0]["seed"] == 42
     assert status["result"]["images"][1]["seed"] == 43
+
+
+def test_lora_test_xy_grid_with_fake_inference(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+    from lorahub.api.routers import lora_test
+
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(workspace=workspace, config_snapshot=_anima_snapshot(tmp_path))
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    seen: list[tuple[float, int]] = []
+
+    def fake_inference(resolved, req, case, out_path, cancel_evt):  # type: ignore[no-untyped-def]
+        seen.append((case.cfg, case.steps))
+        Image.new("RGB", (8, 8), "white").save(out_path)
+
+    monkeypatch.setattr(lora_test, "_run_anima_inference", fake_inference)
+    r = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "1girl",
+            "seed": 7,
+            "x_axis": {"field": "cfg", "values": ["3", "5"]},
+            "y_axis": {"field": "steps", "values": ["10", "20"]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+
+    for _ in range(20):
+        status = client.get(f"/api/lora-test/sessions/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("session did not complete")
+
+    assert len(status["result"]["images"]) == 4
+    assert status["result"]["grid"] == "xy_grid.png"
+    assert seen == [(3.0, 10), (5.0, 10), (3.0, 20), (5.0, 20)]
+
+
+def test_lora_test_base_prompt_seed_axes(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+    from lorahub.api.routers import lora_test
+
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(workspace=workspace, config_snapshot=_anima_snapshot(tmp_path))
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    seen: list[tuple[int, str, int]] = []
+
+    def fake_inference(resolved, req, case, out_path, cancel_evt):  # type: ignore[no-untyped-def]
+        seen.append((len(case.loras), case.prompt, case.seed))
+        Image.new("RGB", (8, 8), "white").save(out_path)
+
+    monkeypatch.setattr(lora_test, "_run_anima_inference", fake_inference)
+    r = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "p0",
+            "x_axis": {"field": "variant", "values": ["base", "lora"]},
+            "y_axis": {"field": "prompt", "values": ["p1", "p2"]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+
+    for _ in range(20):
+        status = client.get(f"/api/lora-test/sessions/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("session did not complete")
+
+    assert [item[:2] for item in seen] == [(0, "p1"), (1, "p1"), (0, "p2"), (1, "p2")]
+
+
+def test_lora_test_size_negative_and_base_weight_axes(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+    from lorahub.api.routers import lora_test
+
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(workspace=workspace, config_snapshot=_anima_snapshot(tmp_path))
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+
+    seen: list[tuple[int, int, str, float, int]] = []
+
+    def fake_inference(resolved, req, case, out_path, cancel_evt):  # type: ignore[no-untyped-def]
+        seen.append(
+            (
+                case.width,
+                case.height,
+                case.negative_prompt,
+                case.multipliers[0] if case.multipliers else 0.0,
+                len(case.loras),
+            )
+        )
+        Image.new("RGB", (8, 8), "white").save(out_path)
+
+    monkeypatch.setattr(lora_test, "_run_anima_inference", fake_inference)
+    r = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "p0",
+            "x_axis": {"field": "variant", "values": ["base", "lora"]},
+            "y_axis": {"field": "lora_weight", "values": ["0.6", "1.0"]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+
+    for _ in range(20):
+        status = client.get(f"/api/lora-test/sessions/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("session did not complete")
+
+    assert [(item[3], item[4]) for item in seen] == [
+        (0.0, 0),
+        (0.6, 1),
+        (0.0, 0),
+        (1.0, 1),
+    ]
+
+    seen.clear()
+    r = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "p0",
+            "x_axis": {"field": "size", "values": ["768x1344"]},
+            "y_axis": {"field": "negative_prompt", "values": ["empty"]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+
+    for _ in range(20):
+        status = client.get(f"/api/lora-test/sessions/{session_id}").json()
+        if status["status"] == "succeeded":
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("session did not complete")
+
+    assert seen[0][:3] == (768, 1344, "")

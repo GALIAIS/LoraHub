@@ -21,6 +21,13 @@ export interface LoraTestModelsResponse {
 export interface LoraTestGenerateInput {
   job_id: string
   checkpoint_path: string
+  loras?: Array<{
+    job_id?: string | null
+    checkpoint_path: string
+    weight: number
+  }>
+  x_axis?: LoraTestAxisInput | null
+  y_axis?: LoraTestAxisInput | null
   prompt: string
   negative_prompt?: string
   width?: number
@@ -32,6 +39,21 @@ export interface LoraTestGenerateInput {
   sampler?: string
   lora_weight?: number
   output_format?: "png"
+}
+
+export interface LoraTestAxisInput {
+  field:
+    | "variant"
+    | "prompt"
+    | "negative_prompt"
+    | "seed"
+    | "lora_weight"
+    | "cfg"
+    | "steps"
+    | "sampler"
+    | "size"
+    | "checkpoint"
+  values: string[]
 }
 
 export interface LoraTestGenerateResponse {

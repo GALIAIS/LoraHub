@@ -44,6 +44,9 @@ class GenerateRequest(BaseModel):
     cfg: float = Field(default=4.5, ge=0.0, le=30.0)
     sampler: str = Field(default="euler", max_length=32)
     lora_weight: float = Field(default=1.0, ge=-2.0, le=2.0)
+    loras: list["LoraInput"] = Field(default_factory=list, max_length=8)
+    x_axis: "AxisInput | None" = None
+    y_axis: "AxisInput | None" = None
     output_format: Literal["png"] = "png"
 
     @property
@@ -53,12 +56,54 @@ class GenerateRequest(BaseModel):
         return self.sampler
 
 
+class LoraInput(BaseModel):
+    job_id: str | None = None
+    checkpoint_path: str
+    weight: float = Field(default=1.0, ge=-2.0, le=2.0)
+
+
+class AxisInput(BaseModel):
+    field: Literal[
+        "variant",
+        "prompt",
+        "negative_prompt",
+        "seed",
+        "lora_weight",
+        "cfg",
+        "steps",
+        "sampler",
+        "size",
+        "checkpoint",
+    ]
+    values: list[str] = Field(min_length=1, max_length=16)
+
+
 @dataclass(frozen=True, slots=True)
 class _ResolvedModel:
     job: state.JobRecord
     cfg: TrainingConfig
     checkpoint: Path
     checkpoint_rel: str
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerationCase:
+    index: int
+    prompt: str
+    negative_prompt: str
+    width: int
+    height: int
+    seed: int
+    steps: int
+    cfg: float
+    sampler: str
+    loras: list[_ResolvedModel]
+    multipliers: list[float]
+    x_label: str | None = None
+    y_label: str | None = None
+
+
+GenerateRequest.model_rebuild()
 
 
 def _store() -> TaskSessionStore:
@@ -240,11 +285,13 @@ def _run_generation_session(
     results: list[dict[str, Any]] = []
     try:
         resolved = _resolve_model(req.job_id, req.checkpoint_path)
+        loras = _resolve_loras(req, resolved)
+        cases = _build_cases(req, resolved, loras)
         out_dir = _session_output_dir(session_id)
         out_dir.mkdir(parents=True, exist_ok=True)
         store.update(session_id, status="running", percent=1)
         store.append_event(session_id, TaskEvent(level="info", message="loading model", percent=1))
-        for index in range(req.batch_count):
+        for case in cases:
             if cancel_evt.is_set():
                 store.update(
                     session_id,
@@ -255,41 +302,56 @@ def _run_generation_session(
                     finished=True,
                 )
                 return
-            seed = random.randrange(0, 2**31 - 1) if req.seed < 0 else req.seed + index
-            image_path = out_dir / f"{index + 1:03d}_{seed}.{req.output_format}"
-            percent = 5 + (index / max(req.batch_count, 1)) * 90
+            image_path = out_dir / f"{case.index + 1:03d}_{case.seed}.{req.output_format}"
+            percent = 5 + (case.index / max(len(cases), 1)) * 90
             store.append_event(
                 session_id,
                 TaskEvent(
                     level="info",
-                    message=f"generating {index + 1}/{req.batch_count}",
+                    message=f"generating {case.index + 1}/{len(cases)}",
                     percent=percent,
-                    payload={"seed": seed},
+                    payload={"seed": case.seed, "x": case.x_label, "y": case.y_label},
                 ),
             )
-            _run_anima_inference(resolved, req, image_path, seed, cancel_evt)
+            _run_anima_inference(resolved, req, case, image_path, cancel_evt)
             sidecar = image_path.with_suffix(".json")
             meta = {
                 "path": image_path.name,
-                "seed": seed,
-                "prompt": req.prompt,
-                "negative_prompt": req.negative_prompt,
-                "width": req.width,
-                "height": req.height,
-                "steps": req.steps,
-                "cfg": req.cfg,
-                "sampler": req.sampler,
-                "lora_weight": req.lora_weight,
-                "checkpoint_path": resolved.checkpoint_rel,
+                "seed": case.seed,
+                "prompt": case.prompt,
+                "negative_prompt": case.negative_prompt,
+                "width": case.width,
+                "height": case.height,
+                "steps": case.steps,
+                "cfg": case.cfg,
+                "sampler": case.sampler,
+                "lora_weight": case.multipliers[0] if case.multipliers else 0.0,
+                "loras": [
+                    {
+                        "job_id": lora.job.id,
+                        "checkpoint_path": lora.checkpoint_rel,
+                        "checkpoint_name": lora.checkpoint.name,
+                        "weight": case.multipliers[i],
+                    }
+                    for i, lora in enumerate(case.loras)
+                ],
+                "checkpoint_path": case.loras[0].checkpoint_rel if case.loras else "",
                 "job_id": resolved.job.id,
+                "x_label": case.x_label,
+                "y_label": case.y_label,
             }
             sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             results.append(meta)
+        grid_path = _maybe_write_xy_grid(out_dir, results, req)
         store.update(
             session_id,
             status="succeeded",
             percent=100,
-            result={"images": results, "output_dir": str(out_dir)},
+            result={
+                "images": results,
+                "grid": grid_path.name if grid_path is not None else None,
+                "output_dir": str(out_dir),
+            },
             finished=True,
         )
         store.append_event(session_id, TaskEvent(level="info", message="generation complete", percent=100))
@@ -316,11 +378,167 @@ def _run_generation_session(
             _cancel_events.pop(session_id, None)
 
 
+def _resolve_loras(req: GenerateRequest, primary: _ResolvedModel) -> list[_ResolvedModel]:
+    if not req.loras:
+        return [primary]
+    return [_resolve_model(item.job_id or req.job_id, item.checkpoint_path) for item in req.loras]
+
+
+def _build_cases(
+    req: GenerateRequest,
+    primary: _ResolvedModel,
+    loras: list[_ResolvedModel],
+) -> list[_GenerationCase]:
+    base_weights = [item.weight for item in req.loras] if req.loras else [req.lora_weight]
+    x_values = _axis_values(req.x_axis) if req.x_axis else [(None, None)]
+    y_values = _axis_values(req.y_axis) if req.y_axis else [(None, None)]
+    cases: list[_GenerationCase] = []
+    grid_mode = req.x_axis is not None or req.y_axis is not None
+    total = len(x_values) * len(y_values) if grid_mode else req.batch_count
+    for i in range(total):
+        x_label, x_override = x_values[i % len(x_values)] if grid_mode else (None, {})
+        y_label, y_override = y_values[i // len(x_values)] if grid_mode else (None, {})
+        override = {**(x_override or {}), **(y_override or {})}
+        case_loras = loras
+        weights = list(base_weights)
+        prompt = req.prompt
+        negative_prompt = req.negative_prompt
+        seed_override: int | None = None
+        width = req.width
+        height = req.height
+        variant = override.get("variant")
+        if variant not in (None, "base", "lora"):
+            raise ValueError("variant axis values must be base or lora")
+        if "checkpoint" in override and variant != "base":
+            case_loras = [_resolve_model(req.job_id, str(override["checkpoint"]))]
+            weights = [req.lora_weight]
+        if "lora_weight" in override and weights:
+            weights[0] = float(override["lora_weight"])
+        if "size" in override:
+            width, height = override["size"]
+        if "prompt" in override:
+            prompt = str(override["prompt"])
+        if "negative_prompt" in override:
+            negative_prompt = str(override["negative_prompt"])
+        if "seed" in override:
+            seed_override = int(override["seed"])
+        if variant == "base":
+            case_loras = []
+            weights = []
+        seed = (
+            seed_override
+            if seed_override is not None
+            else random.randrange(0, 2**31 - 1) if req.seed < 0 else req.seed + i
+        )
+        cases.append(
+            _GenerationCase(
+                index=i,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                seed=seed,
+                steps=int(override.get("steps", req.steps)),
+                cfg=float(override.get("cfg", req.cfg)),
+                sampler=str(override.get("sampler", req.sampler)),
+                loras=case_loras,
+                multipliers=weights,
+                x_label=x_label,
+                y_label=y_label,
+            )
+        )
+    return cases
+
+
+def _axis_values(axis: AxisInput) -> list[tuple[str, dict[str, Any]]]:
+    out: list[tuple[str, dict[str, Any]]] = []
+    for raw in axis.values:
+        value = raw.strip()
+        if not value:
+            continue
+        if axis.field in {"lora_weight", "cfg"}:
+            parsed: Any = float(value)
+        elif axis.field in {"steps", "seed"}:
+            parsed = int(value)
+        elif axis.field == "sampler":
+            if value not in {"euler", "er_sde", "lcm"}:
+                raise ValueError("sampler axis values must be euler, er_sde or lcm")
+            parsed = value
+        elif axis.field == "size":
+            parsed = _parse_size_axis_value(value)
+        elif axis.field == "variant":
+            parsed = value.lower()
+        elif axis.field == "negative_prompt" and value.lower() in {
+            "empty",
+            "none",
+            "__empty__",
+            "空",
+            "无",
+        }:
+            parsed = ""
+            value = "empty"
+        else:
+            parsed = value
+        out.append((f"{axis.field}={value}", {axis.field: parsed}))
+    if not out:
+        raise ValueError("axis values cannot be empty")
+    return out
+
+
+def _parse_size_axis_value(value: str) -> tuple[int, int]:
+    raw = value.lower().replace(" ", "")
+    for sep in ("x", "*", "×"):
+        if sep in raw:
+            left, right = raw.split(sep, 1)
+            break
+    else:
+        raise ValueError("size axis values must look like 912x1632")
+    width = int(left)
+    height = int(right)
+    if width < 256 or width > 2048 or height < 256 or height > 2048:
+        raise ValueError("size axis width and height must be between 256 and 2048")
+    return width, height
+
+
+def _maybe_write_xy_grid(
+    out_dir: Path,
+    results: list[dict[str, Any]],
+    req: GenerateRequest,
+) -> Path | None:
+    if req.x_axis is None and req.y_axis is None:
+        return None
+    from PIL import Image, ImageDraw
+
+    paths = [out_dir / str(item["path"]) for item in results]
+    images = [Image.open(path).convert("RGB") for path in paths]
+    if not images:
+        return None
+    cols = len([v for v in req.x_axis.values if v.strip()]) if req.x_axis else 1
+    rows = len([v for v in req.y_axis.values if v.strip()]) if req.y_axis else 1
+    thumb_w, thumb_h = images[0].size
+    label_h = 28
+    canvas = Image.new("RGB", (cols * thumb_w, rows * (thumb_h + label_h)), "white")
+    draw = ImageDraw.Draw(canvas)
+    for idx, image in enumerate(images):
+        x = idx % cols
+        y = idx // cols
+        left = x * thumb_w
+        top = y * (thumb_h + label_h)
+        canvas.paste(image, (left, top + label_h))
+        label = " / ".join(
+            part for part in (results[idx].get("x_label"), results[idx].get("y_label")) if part
+        )
+        draw.text((left + 8, top + 7), label or str(idx + 1), fill=(20, 20, 20))
+    target = out_dir / "xy_grid.png"
+    canvas.save(target)
+    return target
+
+
 def _run_anima_inference(
     resolved: _ResolvedModel,
     req: GenerateRequest,
+    case: _GenerationCase,
     out_path: Path,
-    seed: int,
     cancel_evt: threading.Event,
 ) -> None:
     cfg = resolved.cfg
@@ -343,28 +561,31 @@ def _run_anima_inference(
         str(paths.ae),
         "--text_encoder",
         str(paths.qwen3),
-        "--lora_weight",
-        str(resolved.checkpoint),
-        "--lora_multiplier",
-        repr(float(req.lora_weight)),
         "--prompt",
-        req.prompt,
+        case.prompt,
         "--image_size",
-        str(req.height),
-        str(req.width),
+        str(case.height),
+        str(case.width),
         "--infer_steps",
-        str(req.steps),
+        str(case.steps),
         "--guidance_scale",
-        repr(float(req.cfg)),
+        repr(float(case.cfg)),
         "--sampler",
-        req.validated_sampler,
+        case.sampler,
         "--save_path",
         str(out_path),
         "--seed",
-        str(seed),
+        str(case.seed),
     ]
-    if req.negative_prompt.strip():
-        argv += ["--negative_prompt", req.negative_prompt.strip()]
+    if case.loras:
+        argv += [
+            "--lora_weight",
+            *[str(lora.checkpoint) for lora in case.loras],
+            "--lora_multiplier",
+            *[repr(float(weight)) for weight in case.multipliers],
+        ]
+    if case.negative_prompt.strip():
+        argv += ["--negative_prompt", case.negative_prompt.strip()]
     proc = subprocess.Popen(
         argv,
         cwd=env.repo_path,

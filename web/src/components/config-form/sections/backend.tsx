@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input"
 import { BACKEND_BADGE } from "../backend-meta"
 import { BACKEND_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { EnumSelect, KeyValueTextArea, PathInput, Row } from "../widgets"
+import { EnumSelect, IntInput, KeyValueTextArea, PathInput, Row } from "../widgets"
 
 const BACKEND_DESCRIPTIONS: Record<string, string> = {
   kohya:
@@ -26,6 +26,12 @@ const REPO_PLACEHOLDER: Record<string, string> = {
   "diffusion-pipe": "（使用设置中的默认值)",
   anima_lora: "（默认 ./external/anima_lora,通常无需填写)",
 }
+
+const GPU_DISPATCH_OPTIONS = [
+  { value: "settings", label: "跟随设置" },
+  { value: "one-job-per-gpu", label: "一任务一 GPU" },
+  { value: "distributed", label: "单任务多 GPU" },
+]
 
 export const BackendFields = memo(function BackendFields({
   value = {},
@@ -89,6 +95,38 @@ export const BackendFields = memo(function BackendFields({
               : "（使用设置中的默认值)"
           }
         />
+      </Row>
+      <Row
+        label="GPU 调度"
+        description={
+          type === "kohya"
+            ? "kohya 当前仅支持一任务一 GPU。多卡机器可并行跑多个训练任务。"
+            : "默认跟随「设置 → 概览」。单任务多 GPU 只会使用同型号/同显存 GPU 组，4080 + V100 这类异构卡默认不混跑。"
+        }
+        errors={errorMap.get("backend.gpuDispatch.mode")}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <EnumSelect
+            value={v.gpuDispatch?.mode ?? "settings"}
+            onChange={(mode) => {
+              if (mode === "settings") {
+                set(["backend", "gpuDispatch"], undefined)
+              } else {
+                set(["backend", "gpuDispatch", "mode"], mode)
+              }
+            }}
+            options={GPU_DISPATCH_OPTIONS}
+          />
+          {v.gpuDispatch?.mode === "distributed" && (
+            <IntInput
+              value={v.gpuDispatch?.numGpus ?? null}
+              min={1}
+              onChange={(n) => set(["backend", "gpuDispatch", "numGpus"], n)}
+              placeholder="全部"
+              className="w-24"
+            />
+          )}
+        </div>
       </Row>
       <Row
         label="锁定版本"

@@ -30,10 +30,9 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
-# A submitted task is a callable that receives the assigned slot id.
-# The slot id is opaque metadata for now; multi-GPU patches will use it
-# to set CUDA_VISIBLE_DEVICES, etc.
-TaskFn = Callable[[int], None]
+# A submitted task receives either one assigned slot id or, for
+# distributed single-job launches, the full slot group it owns.
+TaskFn = Callable[[int | list[int]], None]
 # Fired when the head of the queue exceeds every declared slot capacity
 # and gets evicted. Args: (job_id, required_gb, max_available_gb).
 RejectCallback = Callable[[str, float, float], None]
@@ -44,6 +43,7 @@ class _PendingTask:
     job_id: str
     fn: TaskFn
     vram_required: float | None = None
+    slots_required: int = 1
 
 
 class JobScheduler:
@@ -64,6 +64,7 @@ class JobScheduler:
         concurrency: int = 1,
         available_slots: list[int] | None = None,
         slot_capacities: dict[int, float] | None = None,
+        slot_groups: list[list[int]] | None = None,
         capacity_reject_callback: RejectCallback | None = None,
     ) -> None:
         if concurrency < 1:
@@ -89,11 +90,17 @@ class JobScheduler:
         if slot_capacities:
             for slot, cap in slot_capacities.items():
                 self._slot_capacities[slot] = float(cap)
+        self._slot_groups = [
+            [slot for slot in group if slot in self._available_slots]
+            for group in (slot_groups or [self._available_slots])
+        ]
+        self._slot_groups = [group for group in self._slot_groups if group]
         self._reject_cb = capacity_reject_callback
 
         self._queue: deque[_PendingTask] = deque()
         self._cv = threading.Condition()
         self._workers: list[threading.Thread] = []
+        self._busy_slots: set[int] = set()
         self._stopping = False
         self._started = False
 
@@ -154,15 +161,33 @@ class JobScheduler:
         fn: TaskFn,
         *,
         vram_required: float | None = None,
+        slots_required: int = 1,
     ) -> None:
         """Enqueue a launch closure. Lazily starts workers on first submit.
 
         `vram_required` is in GB. `None` means "unknown / accept anywhere"
         and matches every slot regardless of declared capacity.
         """
+        if slots_required < 1 or slots_required > self._concurrency:
+            msg = (
+                f"slots_required must be between 1 and {self._concurrency}, "
+                f"got {slots_required}"
+            )
+            raise ValueError(msg)
+        if not any(len(group) >= slots_required for group in self._slot_groups):
+            msg = (
+                f"slots_required={slots_required} cannot be satisfied by slot_groups="
+                f"{self._slot_groups}"
+            )
+            raise ValueError(msg)
         with self._cv:
             self._queue.append(
-                _PendingTask(job_id=job_id, fn=fn, vram_required=vram_required)
+                _PendingTask(
+                    job_id=job_id,
+                    fn=fn,
+                    vram_required=vram_required,
+                    slots_required=slots_required,
+                )
             )
             # notify_all so any slot that could fit this task wakes up,
             # not just one (which might be too small and go right back to
@@ -185,15 +210,35 @@ class JobScheduler:
         # from `available_slots` in `__init__`).
         return max(self._slot_capacities.values())
 
-    def _fits(self, slot: int, task: _PendingTask) -> bool:
+    def _fits_capacity(self, slot: int, task: _PendingTask) -> bool:
         if task.vram_required is None:
             return True
         cap = self._slot_capacities.get(slot, math.inf)
         return task.vram_required <= cap
 
+    def _free_slots(self) -> list[int]:
+        return [s for s in self._available_slots if s not in self._busy_slots]
+
+    def _fits(self, slot: int, task: _PendingTask) -> list[int] | None:
+        free = self._free_slots()
+        if slot not in free:
+            return None
+        if task.slots_required == 1:
+            return [slot] if self._fits_capacity(slot, task) else None
+        candidates = [s for s in free if self._fits_capacity(s, task)]
+        if len(candidates) < task.slots_required:
+            return None
+        for group in self._slot_groups:
+            if slot not in group:
+                continue
+            group_candidates = [s for s in group if s in candidates]
+            if len(group_candidates) >= task.slots_required:
+                return group_candidates[: task.slots_required]
+        return None
+
     def _pick_next(
         self, slot: int
-    ) -> tuple[_PendingTask | None, list[tuple[str, float, float]]]:
+    ) -> tuple[tuple[_PendingTask, list[int]] | None, list[tuple[str, float, float]]]:
         """Caller must hold `self._cv`.
 
         Walks the deque looking for the first task this slot can run.
@@ -223,25 +268,35 @@ class JobScheduler:
 
             # Head is feasible somewhere. If *we* can run it, take it —
             # never let a smaller item further back jump the line.
-            if self._fits(slot, head):
-                return self._queue.popleft(), rejects
+            head_slots = self._fits(slot, head)
+            if head_slots is not None:
+                return (self._queue.popleft(), head_slots), rejects
+
+            # A distributed head task may be feasible but currently
+            # waiting for busy slots to free up. Do not let smaller
+            # tasks behind it keep grabbing the remaining free slot and
+            # starve it forever.
+            if head.slots_required > 1:
+                return None, rejects
 
             # We can't run head, but someone else can. Look further only
             # for a task we can run; do *not* pop anything ahead of head.
             picked: _PendingTask | None = None
             for i in range(1, len(self._queue)):
                 cand = self._queue[i]
-                if self._fits(slot, cand):
+                cand_slots = self._fits(slot, cand)
+                if cand_slots is not None:
                     picked = cand
                     del self._queue[i]
-                    break
-            return picked, rejects
+                    return (picked, cand_slots), rejects
+            return None, rejects
 
         return None, rejects
 
     def _loop(self, slot: int) -> None:
         while True:
             task: _PendingTask | None = None
+            assigned_slots: list[int] = []
             rejects: list[tuple[str, float, float]] = []
             with self._cv:
                 while True:
@@ -249,12 +304,14 @@ class JobScheduler:
                         # Final drain: nothing to do, exit after firing
                         # any rejects we already collected.
                         break
-                    task, new_rejects = self._pick_next(slot)
+                    picked, new_rejects = self._pick_next(slot)
                     if new_rejects:
                         rejects.extend(new_rejects)
                         # Head changed; wake peers so they re-check.
                         self._cv.notify_all()
-                    if task is not None:
+                    if picked is not None:
+                        task, assigned_slots = picked
+                        self._busy_slots.update(assigned_slots)
                         break
                     if rejects:
                         # Release the lock to fire callbacks, then loop.
@@ -282,13 +339,14 @@ class JobScheduler:
                 continue
 
             try:
-                task.fn(slot)
+                task.fn(assigned_slots[0] if len(assigned_slots) == 1 else assigned_slots)
             except Exception:  # noqa: BLE001
                 log.exception("scheduler task for job %s raised", task.job_id)
             # Task done: wake every worker so any blocked-on-capacity
             # peer can re-check. notify_all (not notify) avoids waking
             # the wrong slot for a long-tailed task.
             with self._cv:
+                self._busy_slots.difference_update(assigned_slots)
                 self._cv.notify_all()
 
 

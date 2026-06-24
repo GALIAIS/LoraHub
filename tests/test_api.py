@@ -542,6 +542,7 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
     """Worker slot -> `CUDA_VISIBLE_DEVICES` env var on backend.launch()."""
     from lorahub.api import jobs_helpers
     from lorahub.api import scheduler as sched_module
+    from lorahub.api.routers import jobs as jobs_router
     from lorahub.core.backends.base import TrainingHandle
 
     captured: dict[str, Any] = {}
@@ -567,6 +568,7 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
             )
 
     monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+    monkeypatch.setattr(jobs_router, "run_preflight", lambda *_a, **_k: [])
 
     # Use a 2-slot scheduler so we exercise a non-zero slot id (slot=7).
     fresh_sched = sched_module.JobScheduler(concurrency=1, available_slots=[7])
@@ -588,6 +590,137 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
 
     assert "env" in captured, "FakeBackend.launch was never invoked"
     assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "7"}
+
+
+def test_distributed_gpu_dispatch_assigns_multiple_visible_devices(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+    from lorahub.api import preflight
+    from lorahub.api import scheduler as sched_module
+    from lorahub.core.backends.base import TrainingHandle, VRAMEstimate
+
+    captured: dict[str, Any] = {}
+
+    class FakeBackend:
+        def estimate_vram(self, _cfg: Any) -> VRAMEstimate:
+            return VRAMEstimate(1, 1, 1)
+
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+            gpu_count: int = 1,
+        ) -> TrainingHandle:
+            captured["env"] = env
+            captured["gpu_count"] = gpu_count
+            return TrainingHandle(
+                job_id="fake",
+                pid=0,
+                _stop_fn=lambda _g: None,
+                _wait_fn=lambda _t: 0,
+            )
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+    monkeypatch.setattr(preflight, "_homogeneous_gpu_groups", lambda: [[0, 1]])
+    fresh_sched = sched_module.JobScheduler(concurrency=2, available_slots=[0, 1])
+    monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
+    fresh_sched.start()
+    try:
+        cfg = _config_payload(tmp_path)
+        cfg["base_model"]["arch"] = "anima"
+        cfg["backend"]["type"] = "anima_lora"
+        cfg["backend"]["gpu_dispatch"] = {
+            "mode": "distributed",
+            "num_gpus": 2,
+        }
+        r = client.post("/api/jobs", json={"config": cfg, "workspace": str(tmp_path / "ws")})
+        assert r.status_code == 202, r.text
+
+        import time as _time
+
+        deadline = _time.time() + 5.0
+        while _time.time() < deadline and "env" not in captured:
+            _time.sleep(0.02)
+    finally:
+        fresh_sched.stop(timeout=2.0)
+
+    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    assert captured["gpu_count"] == 2
+
+
+def test_create_job_inherits_settings_gpu_dispatch_default(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+    from lorahub.api import preflight
+    from lorahub.api import scheduler as sched_module
+    from lorahub.core.backends.base import TrainingHandle, VRAMEstimate
+
+    client.put(
+        "/api/settings",
+        json={"gpu_dispatch_mode": "distributed", "gpu_dispatch_num_gpus": 2},
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeBackend:
+        def estimate_vram(self, _cfg: Any) -> VRAMEstimate:
+            return VRAMEstimate(1, 1, 1)
+
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+            gpu_count: int = 1,
+        ) -> TrainingHandle:
+            captured["mode"] = cfg.backend.gpu_dispatch.mode
+            captured["env"] = env
+            captured["gpu_count"] = gpu_count
+            return TrainingHandle(
+                job_id="fake",
+                pid=0,
+                _stop_fn=lambda _g: None,
+                _wait_fn=lambda _t: 0,
+            )
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+    monkeypatch.setattr(preflight, "_homogeneous_gpu_groups", lambda: [[0, 1]])
+    fresh_sched = sched_module.JobScheduler(concurrency=2, available_slots=[0, 1])
+    monkeypatch.setattr(sched_module, "scheduler", fresh_sched)
+    fresh_sched.start()
+    try:
+        cfg = _config_payload(tmp_path)
+        cfg["base_model"]["arch"] = "anima"
+        cfg["backend"]["type"] = "anima_lora"
+        r = client.post(
+            "/api/jobs",
+            json={"config": cfg, "workspace": str(tmp_path / "ws")},
+        )
+        assert r.status_code == 202, r.text
+
+        import time as _time
+
+        deadline = _time.time() + 5.0
+        while _time.time() < deadline and "env" not in captured:
+            _time.sleep(0.02)
+    finally:
+        fresh_sched.stop(timeout=2.0)
+
+    assert captured["mode"] == "distributed"
+    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    assert captured["gpu_count"] == 2
 
 
 def test_failed_job_reports_once_for_noisy_error_logs(
@@ -937,6 +1070,25 @@ def test_put_settings_rejects_invalid_auto_resume_max_attempts(
     assert r.status_code == 422
     r = client.put("/api/settings", json={"auto_resume_max_attempts": -1})
     assert r.status_code == 422
+
+
+def test_settings_persists_gpu_dispatch_defaults(client: TestClient) -> None:
+    r = client.put(
+        "/api/settings",
+        json={
+            "max_concurrent_jobs": 2,
+            "gpu_dispatch_mode": "distributed",
+            "gpu_dispatch_num_gpus": 2,
+        },
+    )
+    assert r.status_code == 200, r.text
+    settings = r.json()["settings"]
+    assert settings["max_concurrent_jobs"] == 2
+    assert settings["gpu_dispatch_mode"] == "distributed"
+    assert settings["gpu_dispatch_num_gpus"] == 2
+
+    r_bad = client.put("/api/settings", json={"gpu_dispatch_mode": "mixed"})
+    assert r_bad.status_code == 422
 
 
 # --------------------------------------------------------------------------- #

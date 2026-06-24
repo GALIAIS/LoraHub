@@ -11,6 +11,9 @@ export interface SettingsState {
   anima_lora_python: string | null
   default_backend: BackendId
   tagger_device: "auto" | "cpu" | "cuda"
+  max_concurrent_jobs: number
+  gpu_dispatch_mode: "one-job-per-gpu" | "distributed"
+  gpu_dispatch_num_gpus: number | null
   github_proxy: string | null
   huggingface_endpoint: string | null
   modelscope_enabled: boolean

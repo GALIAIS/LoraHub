@@ -123,6 +123,7 @@ class TrainingBackend(Protocol):
         *,
         extra_argv: list[str] | None = None,
         env: dict[str, str] | None = None,
+        gpu_count: int = 1,
     ) -> TrainingHandle:
         """Start training. Returns immediately with a handle.
 
@@ -134,5 +135,6 @@ class TrainingBackend(Protocol):
         `/jobs/{id}/resume`). `env` is merged into the subprocess env on top
         of the parent process environment so the scheduler can pin a worker
         to a specific GPU via `CUDA_VISIBLE_DEVICES`.
+        `gpu_count` is the number of visible GPUs assigned to this job.
         """
         ...

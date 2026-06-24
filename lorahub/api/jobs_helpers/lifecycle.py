@@ -15,6 +15,7 @@ shares state with the next); see the audit report for the long-term
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import re
 import secrets
@@ -82,6 +83,7 @@ def _launch_job(
     """
     workspace.mkdir(parents=True, exist_ok=True)
 
+    _apply_settings_gpu_dispatch_default(cfg)
     _normalize_config_paths(cfg)
     _resolve_runtime_seeds(cfg)
     _resolve_trigger_word(cfg)
@@ -130,6 +132,7 @@ def _relaunch_job_in_place(
     workspace = job.workspace
     workspace.mkdir(parents=True, exist_ok=True)
 
+    _apply_settings_gpu_dispatch_default(cfg)
     _normalize_config_paths(cfg)
     _resolve_runtime_seeds(cfg)
     _resolve_trigger_word(cfg)
@@ -284,14 +287,14 @@ def _enqueue_launch(
             _sink_closed = True
             sink.__exit__(None, None, None)
 
-    def task(slot: int) -> None:
+    def task(slot: int | list[int]) -> None:
         current = state.registry.get(job.id)
         if current is None or current.state is not JobState.queued:
             return
-        # Pin the worker subprocess to the assigned GPU. With concurrency=1
-        # the slot is always 0; with N>1 each worker gets a distinct GPU id
-        # so kohya / diffusion-pipe see exactly one device.
-        slot_env = {"CUDA_VISIBLE_DEVICES": str(slot)}
+        # Pin the subprocess to its assigned GPU set. Default mode gets
+        # one id; distributed mode gets a comma-separated group.
+        assigned_slots = [slot] if isinstance(slot, int) else list(slot)
+        slot_env = {"CUDA_VISIBLE_DEVICES": ",".join(str(s) for s in assigned_slots)}
         from lorahub.api.settings import env_overrides  # noqa: PLC0415
         from lorahub.api import app as _app  # noqa: PLC0415
 
@@ -305,15 +308,24 @@ def _enqueue_launch(
         # subprocess is spawned. Without this the UI keeps reporting
         # "排队中" even though the worker is already busy.
         current.state = JobState.preparing
+        meta = dict(current.metadata or {})
+        meta["gpu_slots"] = assigned_slots
+        meta["gpu_dispatch_mode"] = _gpu_dispatch_mode(cfg)
+        current.metadata = meta
         state.registry.update(current)
         sink.__enter__()
         try:
+            kwargs = {
+                "extra_argv": extra_argv,
+                "env": slot_env,
+            }
+            if _backend_accepts_gpu_count(backend):
+                kwargs["gpu_count"] = len(assigned_slots)
             handle = backend.launch(
                 cfg,
                 workspace=workspace,
                 on_event=on_event,
-                extra_argv=extra_argv,
-                env=slot_env,
+                **kwargs,
             )
         except Exception as exc:  # noqa: BLE001
             j = state.registry.get(job.id)
@@ -364,7 +376,7 @@ def _enqueue_launch(
         sampler_stop = threading.Event()
         sampler = threading.Thread(
             target=_gpu_sampler_loop,
-            args=(job.id, slot, on_event, sampler_stop),
+            args=(job.id, assigned_slots[0], on_event, sampler_stop),
             daemon=True,
             name=f"gpu-sampler-{job.id[-6:]}",
         )
@@ -394,7 +406,53 @@ def _enqueue_launch(
             if preview_thread is not None:
                 preview_thread.join(timeout=5.0)
 
-    sched.scheduler.submit(job.id, task)
+    sched.scheduler.submit(
+        job.id,
+        task,
+        vram_required=_vram_required(backend, cfg),
+        slots_required=_slots_required(cfg),
+    )
+
+
+def _gpu_dispatch_mode(cfg: TrainingConfig) -> str:
+    return cfg.backend.gpu_dispatch.mode
+
+
+def _apply_settings_gpu_dispatch_default(cfg: TrainingConfig) -> None:
+    if "gpu_dispatch" in cfg.backend.model_fields_set:
+        return
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        settings = _app._settings_store.load()
+    except Exception:  # noqa: BLE001
+        return
+    cfg.backend.gpu_dispatch.mode = settings.gpu_dispatch_mode
+    cfg.backend.gpu_dispatch.num_gpus = settings.gpu_dispatch_num_gpus
+
+
+def _slots_required(cfg: TrainingConfig) -> int:
+    dispatch = cfg.backend.gpu_dispatch
+    if dispatch.mode != "distributed":
+        return 1
+    return dispatch.num_gpus or sched.scheduler.concurrency
+
+
+def _backend_accepts_gpu_count(backend: Any) -> bool:
+    try:
+        return "gpu_count" in inspect.signature(backend.launch).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _vram_required(backend: Any, cfg: TrainingConfig) -> float | None:
+    estimate = getattr(backend, "estimate_vram", None)
+    if not callable(estimate):
+        return None
+    try:
+        return float(estimate(cfg).total_gib)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _extract_ckpt_name(ev: TrainingEvent) -> str | None:

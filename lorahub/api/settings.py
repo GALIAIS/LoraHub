@@ -51,6 +51,8 @@ class Settings:
     # is read once at server startup. Restart `lorahub serve` for the new
     # value to take effect.
     max_concurrent_jobs: int = 1
+    gpu_dispatch_mode: str = "one-job-per-gpu"
+    gpu_dispatch_num_gpus: int | None = None
 
     # --- Network acceleration ---
     # Optional GitHub mirror prefix (e.g. "https://gh-proxy.org") rewriting

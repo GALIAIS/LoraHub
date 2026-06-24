@@ -13,14 +13,14 @@ import {
   ArrowDown,
   ArrowUp,
   Cpu,
+  Gauge,
   MemoryStick,
   Sparkles,
-  Wifi,
-  WifiOff,
   Zap,
 } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
 import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
+import type { JobSummary, SystemGpu } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { useSystemVersion } from "@/hooks/use-system-version"
 import { useStudioTasks } from "@/hooks/use-studio-tasks"
@@ -43,17 +43,18 @@ export function GlobalStatusBar() {
 
   const snapshot: SystemSnapshot | null =
     stream.snapshot ?? polled.data ?? null
-  const running = (jobsQuery.data?.jobs ?? []).filter(
+  const runningJobs = (jobsQuery.data?.jobs ?? []).filter(
     (j) => j.state === "running",
-  ).length
+  )
+  const gpuSummary = snapshot ? summarizeGpus(snapshot.gpus) : null
 
   return (
-    <div className="shrink-0 border-b border-border/60 bg-background/80 backdrop-blur px-3 py-1.5 text-[11px] md:px-4">
-      <div className="no-scrollbar flex items-center gap-x-4 gap-y-1 overflow-x-auto md:flex-wrap md:overflow-visible">
+    <div className="shrink-0 border-b border-border/60 bg-background/92 px-3 py-1.5 text-[11px] backdrop-blur-xl md:px-4">
+      <div className="no-scrollbar flex min-h-8 items-center gap-2 overflow-x-auto md:overflow-visible">
       <ConnectionDot live={stream.status === "open"} />
       {snapshot ? (
         <>
-          <Chip
+          <MetricChip
             className="hidden md:inline-flex"
             icon={<Cpu className="size-3" />}
             label="CPU"
@@ -63,55 +64,56 @@ export function GlobalStatusBar() {
                 : "—"
             }
             tone={toneForPercent(snapshot.cpu.usage_percent)}
+            percent={snapshot.cpu.usage_percent}
           />
-          <Chip
+          <MetricChip
             className="hidden sm:inline-flex"
             icon={<MemoryStick className="size-3" />}
             label="内存"
             value={`${snapshot.memory.percent.toFixed(0)}%`}
             tone={toneForPercent(snapshot.memory.percent)}
             sub={`${fmtBytes(snapshot.memory.used_bytes)} / ${fmtBytes(snapshot.memory.total_bytes)}`}
+            percent={snapshot.memory.percent}
           />
-          {snapshot.gpus[0] && (
-            <Chip
-              icon={<Zap className="size-3" />}
-              label={`GPU0`}
-              value={
-                typeof snapshot.gpus[0].utilization_percent === "number"
-                  ? `${snapshot.gpus[0].utilization_percent.toFixed(0)}%`
-                  : "—"
-              }
-              tone={toneForPercent(snapshot.gpus[0].utilization_percent)}
-              sub={
-                snapshot.gpus[0].memory_total_bytes &&
-                typeof snapshot.gpus[0].memory_used_bytes === "number"
-                  ? `${fmtBytes(snapshot.gpus[0].memory_used_bytes)} / ${fmtBytes(snapshot.gpus[0].memory_total_bytes)}`
-                  : undefined
-              }
+          {snapshot.gpus.length > 0 && (
+            <GpuStatusPanel snapshot={snapshot} runningJobs={runningJobs} />
+          )}
+          {gpuSummary && (
+            <MetricChip
+              className="hidden lg:inline-flex"
+              icon={<Gauge className="size-3" />}
+              label="显存"
+              value={`${gpuSummary.memoryPercent.toFixed(0)}%`}
+              tone={toneForPercent(gpuSummary.memoryPercent)}
+              sub={`${fmtBytes(gpuSummary.memoryUsed)} / ${fmtBytes(gpuSummary.memoryTotal)}`}
+              percent={gpuSummary.memoryPercent}
             />
           )}
           {snapshot.network && (
             <>
-              <Chip
+              <MetricChip
                 icon={<ArrowDown className="size-3 text-emerald-600 dark:text-emerald-400" />}
                 label="下载"
                 value={fmtRate(snapshot.network.bytes_recv_per_sec)}
                 tone="text-emerald-700 dark:text-emerald-400"
+                valueWidth="min-w-[7ch]"
               />
-              <Chip
+              <MetricChip
                 className="hidden md:inline-flex"
                 icon={<ArrowUp className="size-3 text-primary" />}
                 label="上传"
                 value={fmtRate(snapshot.network.bytes_sent_per_sec)}
                 tone="text-primary"
+                valueWidth="min-w-[7ch]"
               />
             </>
           )}
-          <Chip
+          <MetricChip
             icon={<Activity className="size-3" />}
             label="训练"
-            value={running > 0 ? `${running} 个` : "空闲"}
-            tone={running > 0 ? "text-primary" : "text-muted-foreground"}
+            value={runningJobs.length > 0 ? `${runningJobs.length} 个` : "空闲"}
+            tone={runningJobs.length > 0 ? "text-primary" : "text-muted-foreground"}
+            sub={assignedGpuSlots(runningJobs) ?? undefined}
           />
           {studioRunning.length > 0 && (
             <StudioTaskChip tasks={studioRunning} />
@@ -130,23 +132,33 @@ function ConnectionDot({ live }: { live: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-[0.15em]",
-        live ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
+        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[7px] border px-2",
+        "font-mono text-[10px] font-medium tabular-nums tracking-[0.08em]",
+        live
+          ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-700 dark:text-emerald-400"
+          : "border-border/70 bg-muted/35 text-muted-foreground",
       )}
       title={live ? "实时事件流连接中" : "实时通道未连接，回退为 10 秒轮询"}
     >
-      {live ? <Wifi className="size-3" /> : <WifiOff className="size-3" />}
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          live ? "bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]" : "bg-muted-foreground/45",
+        )}
+      />
       <span>{live ? "实时" : "轮询"}</span>
     </span>
   )
 }
 
-function Chip({
+function MetricChip({
   icon,
   label,
   value,
   sub,
   tone,
+  percent,
+  valueWidth = "min-w-[5ch]",
   className,
 }: {
   icon: React.ReactNode
@@ -154,25 +166,186 @@ function Chip({
   value: string
   sub?: string
   tone: string
+  percent?: number | null
+  valueWidth?: string
   className?: string
 }) {
+  const boundedPercent =
+    typeof percent === "number" && Number.isFinite(percent)
+      ? Math.max(0, Math.min(100, percent))
+      : null
+
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 min-w-0 shrink-0", className)}
+      className={cn(
+        "inline-flex h-7 min-w-0 shrink-0 items-center gap-2 rounded-[7px]",
+        "border border-border/55 bg-muted/24 px-2 text-foreground/90",
+        className,
+      )}
       title={sub ?? undefined}
     >
-      <span className="text-muted-foreground/70 shrink-0">{icon}</span>
-      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
+      <span className="shrink-0 text-muted-foreground/65">{icon}</span>
+      <span className="text-[10px] font-medium text-muted-foreground/75">
         {label}
       </span>
-      <span
+      <span className="grid min-w-0 gap-0.5">
+        <span
+          className={cn(
+            "font-mono text-[11px] font-semibold leading-none tabular-nums text-right",
+            valueWidth,
+            tone,
+          )}
+        >
+          {value}
+        </span>
+        {boundedPercent !== null && (
+          <span className="h-0.5 overflow-hidden rounded-full bg-border/70">
+            <span
+              className={cn("block h-full rounded-full", barToneForPercent(boundedPercent))}
+              style={{ width: `${boundedPercent}%` }}
+            />
+          </span>
+        )}
+      </span>
+    </span>
+  )
+}
+
+function GpuStatusPanel({
+  snapshot,
+  runningJobs,
+}: {
+  snapshot: SystemSnapshot
+  runningJobs: JobSummary[]
+}) {
+  const gpus = snapshot.gpus
+  const active = gpus.filter((g) => (g.utilization_percent ?? 0) >= 5).length
+  const avgUtil =
+    gpus.reduce((sum, g) => sum + (g.utilization_percent ?? 0), 0) / gpus.length
+  const slots = assignedGpuSlots(runningJobs)
+
+  return (
+    <details className="group relative shrink-0">
+      <summary
         className={cn(
-          "font-mono tabular-nums font-semibold text-right min-w-[5ch]",
-          tone,
+          "inline-flex h-7 cursor-pointer list-none items-center gap-2 rounded-[7px]",
+          "border border-border/60 bg-muted/24 px-2 text-foreground/90",
+          "hover:border-primary/35 hover:bg-muted/40",
+        )}
+        title="点击查看多卡状态"
+      >
+        <Zap className="size-3 text-muted-foreground/70" />
+        <span className="text-[10px] font-medium text-muted-foreground/75">
+          GPU
+        </span>
+        <span className={cn("font-mono text-[11px] font-semibold tabular-nums", toneForPercent(avgUtil))}>
+          {active}/{gpus.length}
+        </span>
+        <span className="flex max-w-24 items-center gap-1">
+          {gpus.slice(0, 8).map((gpu) => (
+            <span
+              key={gpu.index}
+              className="h-3 w-1.5 overflow-hidden rounded-full bg-border/70"
+              title={`GPU${gpu.index} ${gpu.name}`}
+            >
+              <span
+                className={cn("block w-full rounded-full", barToneForPercent(gpu.utilization_percent ?? 0))}
+                style={{ height: `${Math.max(3, gpu.utilization_percent ?? 0)}%` }}
+              />
+            </span>
+          ))}
+        </span>
+        {slots && (
+          <span className="hidden font-mono text-[10px] text-muted-foreground sm:inline">
+            {slots}
+          </span>
+        )}
+      </summary>
+      <div
+        className={cn(
+          "absolute left-0 top-8 z-50 w-[min(92vw,34rem)] rounded-[8px]",
+          "border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl",
         )}
       >
-        {value}
-      </span>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="text-xs font-semibold">多卡状态</div>
+          <div className="font-mono text-[10px] text-muted-foreground">
+            {active}/{gpus.length} active
+          </div>
+        </div>
+        <div className="grid gap-2">
+          {gpus.map((gpu) => (
+            <GpuRow
+              key={gpu.index}
+              gpu={gpu}
+              processCount={
+                snapshot.gpu_processes?.filter((p) => p.gpu_index === gpu.index).length ?? 0
+              }
+              assigned={runningJobs.filter((job) =>
+                jobGpuSlots(job).includes(gpu.index),
+              ).length}
+            />
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
+function GpuRow({
+  gpu,
+  processCount,
+  assigned,
+}: {
+  gpu: SystemGpu
+  processCount: number
+  assigned: number
+}) {
+  const util = gpu.utilization_percent ?? 0
+  const memPercent =
+    gpu.memory_total_bytes && typeof gpu.memory_used_bytes === "number"
+      ? (gpu.memory_used_bytes / gpu.memory_total_bytes) * 100
+      : null
+  return (
+    <div className="rounded-[6px] border border-border/55 bg-muted/20 p-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-semibold">GPU{gpu.index}</span>
+            <span className="truncate text-xs text-muted-foreground">{gpu.name}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
+            <span>util {fmtPercent(gpu.utilization_percent)}</span>
+            <span>vram {memPercent === null ? "—" : fmtPercent(memPercent)}</span>
+            {gpu.temperature_c !== null && <span>{gpu.temperature_c.toFixed(0)}°C</span>}
+            {gpu.power_w !== null && <span>{gpu.power_w.toFixed(0)}W</span>}
+            {assigned > 0 && <span>{assigned} job</span>}
+            {processCount > 0 && <span>{processCount} proc</span>}
+          </div>
+        </div>
+        <span className={cn("font-mono text-xs font-semibold tabular-nums", toneForPercent(util))}>
+          {fmtPercent(util)}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <TinyBar value={util} />
+        <TinyBar value={memPercent} />
+      </div>
+    </div>
+  )
+}
+
+function TinyBar({ value }: { value: number | null }) {
+  const bounded =
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, Math.min(100, value))
+      : 0
+  return (
+    <span className="h-1 overflow-hidden rounded-full bg-border/65">
+      <span
+        className={cn("block h-full rounded-full", barToneForPercent(bounded))}
+        style={{ width: `${bounded}%` }}
+      />
     </span>
   )
 }
@@ -183,6 +356,45 @@ function toneForPercent(p: number | null | undefined): string {
   if (p >= 70) return "text-amber-700 dark:text-amber-400"
   if (p >= 40) return "text-primary"
   return "text-emerald-700 dark:text-emerald-400"
+}
+
+function barToneForPercent(p: number): string {
+  if (p >= 90) return "bg-destructive"
+  if (p >= 70) return "bg-amber-500"
+  if (p >= 40) return "bg-primary"
+  return "bg-emerald-500"
+}
+
+function summarizeGpus(gpus: SystemGpu[]) {
+  const withMem = gpus.filter(
+    (g) => g.memory_total_bytes && typeof g.memory_used_bytes === "number",
+  )
+  if (withMem.length === 0) return null
+  const memoryUsed = withMem.reduce((sum, g) => sum + (g.memory_used_bytes ?? 0), 0)
+  const memoryTotal = withMem.reduce((sum, g) => sum + (g.memory_total_bytes ?? 0), 0)
+  if (memoryTotal <= 0) return null
+  return {
+    memoryUsed,
+    memoryTotal,
+    memoryPercent: (memoryUsed / memoryTotal) * 100,
+  }
+}
+
+function jobGpuSlots(job: JobSummary): number[] {
+  const raw = job.metadata?.gpu_slots
+  if (!Array.isArray(raw)) return []
+  return raw.filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+}
+
+function assignedGpuSlots(jobs: JobSummary[]): string | null {
+  const slots = Array.from(new Set(jobs.flatMap(jobGpuSlots))).sort((a, b) => a - b)
+  return slots.length > 0 ? `GPU ${slots.join(",")}` : null
+}
+
+function fmtPercent(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(0)}%`
+    : "—"
 }
 
 function fmtBytes(n: number): string {
@@ -234,7 +446,7 @@ function StudioTaskChip({ tasks }: { tasks: StudioTaskRecord[] }) {
       className="inline-flex items-center gap-1.5 min-w-0 shrink-0 hover:text-primary transition-colors cursor-pointer"
     >
       <Sparkles className="size-3 text-primary animate-pulse" />
-      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
+      <span className="text-[10px] font-medium text-muted-foreground/75">
         AI 任务
       </span>
       <span className="font-mono tabular-nums font-semibold text-primary">

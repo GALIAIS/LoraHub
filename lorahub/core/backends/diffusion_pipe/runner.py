@@ -39,6 +39,7 @@ class DiffusionPipeRunner(SubprocessRunner):
         job_id: str | None = None,
         env: dict[str, str] | None = None,
         launcher_args: list[str] | None = None,
+        num_gpus: int = 1,
     ) -> None:
         train_py = repo / "train.py"
         # Use the venv's `deepspeed` launcher rather than plain `python`.
@@ -56,6 +57,8 @@ class DiffusionPipeRunner(SubprocessRunner):
         # itself for compat with both launch styles, so we keep the recipe
         # argv as-is.
         launcher_prefix = list(launcher_args or [])
+        if num_gpus > 1:
+            launcher_prefix += ["--num_gpus", str(num_gpus)]
         super().__init__(
             argv=[str(deepspeed_bin), *launcher_prefix, str(train_py), *argv],
             workspace=workspace,

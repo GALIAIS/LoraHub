@@ -156,6 +156,7 @@ class AnimaLoraBackend:
         *,
         extra_argv: list[str] | None = None,
         env: dict[str, str] | None = None,
+        gpu_count: int = 1,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
             config_path=cfg.backend.repo_path,
@@ -244,6 +245,7 @@ class AnimaLoraBackend:
                 on_event=on_event,
                 job_id=job_id,
                 env=env,
+                num_processes=max(1, gpu_count),
             )
         runner.start()
 

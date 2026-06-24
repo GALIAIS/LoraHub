@@ -105,6 +105,8 @@ class UpdateSettingsRequest(BaseModel):
     tagger_device: str | None = None
     default_tagger: str | None = None
     max_concurrent_jobs: int | None = None
+    gpu_dispatch_mode: str | None = None
+    gpu_dispatch_num_gpus: int | None = None
     github_proxy: str | None = None
     huggingface_endpoint: str | None = None
     modelscope_enabled: bool | None = None
@@ -283,6 +285,28 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
                     ),
                 )
             updates[key] = value
+            continue
+        if key == "gpu_dispatch_mode":
+            updates[key] = _validate_choice(
+                "gpu_dispatch_mode",
+                (raw or current.gpu_dispatch_mode or "one-job-per-gpu").strip()
+                or "one-job-per-gpu",
+                {"one-job-per-gpu", "distributed"},
+            )
+            continue
+        if key == "gpu_dispatch_num_gpus":
+            if raw is None:
+                updates[key] = None
+                continue
+            if not isinstance(raw, int) or raw < 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "gpu_dispatch_num_gpus must be null or a positive integer; "
+                        f"got {raw!r}"
+                    ),
+                )
+            updates[key] = raw
             continue
         if key == "auto_resume_max_attempts":
             value = raw if raw is not None else current.auto_resume_max_attempts

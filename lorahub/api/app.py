@@ -331,6 +331,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         desired = max(1, int(_settings_store.load().max_concurrent_jobs))
     except Exception:  # noqa: BLE001
         desired = 1
+    desired = _clamp_scheduler_concurrency_to_gpus(desired)
     if desired != sched.scheduler.concurrency:
         log.info(
             "scheduler concurrency: %d -> %d (from settings.max_concurrent_jobs)",
@@ -343,6 +344,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         sched.scheduler = sched.JobScheduler(
             concurrency=desired,
             available_slots=list(range(desired)),
+            slot_groups=_scheduler_slot_groups(desired),
         )
     sched.scheduler.start()
 
@@ -404,6 +406,32 @@ def _sink_config_from_settings(settings: Any) -> SinkConfig:
             settings, "error_upstream_auto_severity", "error",
         ) or "error",
     )
+
+
+def _clamp_scheduler_concurrency_to_gpus(desired: int) -> int:
+    try:
+        from lorahub.api.gpu_topology import nvidia_slots  # noqa: PLC0415
+
+        gpu_count = len(nvidia_slots())
+    except Exception:  # noqa: BLE001
+        gpu_count = 0
+    if gpu_count <= 0:
+        return desired
+    return max(1, min(desired, gpu_count))
+
+
+def _scheduler_slot_groups(desired: int) -> list[list[int]] | None:
+    try:
+        from lorahub.api.gpu_topology import homogeneous_slot_groups  # noqa: PLC0415
+
+        groups = [
+            [slot for slot in group if slot < desired]
+            for group in homogeneous_slot_groups()
+        ]
+        groups = [group for group in groups if group]
+    except Exception:  # noqa: BLE001
+        groups = []
+    return groups or None
 
 
 async def _update_check_loop() -> None:

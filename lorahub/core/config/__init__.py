@@ -58,6 +58,7 @@ from .backends import (
     AnimaLoraTurboConfig,
     BackendConfig,
     DiffusionPipeOptions,
+    GpuDispatchConfig,
 )
 from .base import ArchPathsConfig, BaseModelConfig
 from .dataset import BucketConfig, CaptionConfig, DatasetConfig, DatasetSubsetConfig
@@ -136,6 +137,7 @@ __all__ = [
     "AttentionConfig",
     "AugmentationConfig",
     "BackendConfig",
+    "GpuDispatchConfig",
     "BaseModelConfig",
     "BucketConfig",
     "CaptionConfig",
@@ -161,4 +163,3 @@ __all__ = [
     "TrainingConfig",
     "ValidationConfig",
 ]
-

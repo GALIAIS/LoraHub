@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { useSearchParams } from "react-router-dom"
-import { api, type LoraTestJob } from "@/lib/api"
+import { api, type LoraTestAxisInput, type LoraTestJob } from "@/lib/api"
 import type { TaskSessionRecord } from "@/lib/api/tasks"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -60,9 +60,46 @@ interface ResultImage {
   cfg: number
   sampler: string
   lora_weight: number
+  loras?: Array<{
+    job_id: string
+    checkpoint_path: string
+    checkpoint_name: string
+    weight: number
+  }>
   checkpoint_path: string
   job_id: string
+  x_label?: string | null
+  y_label?: string | null
 }
+
+interface LoraRow {
+  id: string
+  jobId: string
+  checkpointPath: string
+  weight: number
+}
+
+const AXIS_FIELDS = [
+  { value: "variant", label: "Base/LoRA" },
+  { value: "prompt", label: "Prompt" },
+  { value: "negative_prompt", label: "Negative" },
+  { value: "seed", label: "Seed" },
+  { value: "lora_weight", label: "LoRA 权重" },
+  { value: "cfg", label: "CFG" },
+  { value: "steps", label: "Steps" },
+  { value: "sampler", label: "Sampler" },
+  { value: "size", label: "尺寸" },
+  { value: "checkpoint", label: "Checkpoint" },
+] as const
+
+const NEGATIVE_STRESS_VALUES = [
+  "empty",
+  "low quality, worst quality, blurry, bad anatomy",
+  "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, watermark, text",
+]
+
+const QUALITY_NEGATIVE =
+  "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, watermark, text"
 
 export function LoraTestPage() {
   const [params, setParams] = useSearchParams()
@@ -88,6 +125,11 @@ export function LoraTestPage() {
   const [cfg, setCfg] = useState(4.5)
   const [sampler, setSampler] = useState("euler")
   const [loraWeight, setLoraWeight] = useState(1)
+  const [loraRows, setLoraRows] = useState<LoraRow[]>([])
+  const [xField, setXField] = useState<LoraTestAxisInput["field"]>("lora_weight")
+  const [xValues, setXValues] = useState("")
+  const [yField, setYField] = useState<LoraTestAxisInput["field"]>("cfg")
+  const [yValues, setYValues] = useState("")
   const [sessionId, setSessionId] = useState(urlSession)
   const [detail, setDetail] = useState<ResultImage | null>(null)
 
@@ -137,6 +179,9 @@ export function LoraTestPage() {
         cfg,
         sampler,
         lora_weight: loraWeight,
+        loras: buildLoras(loraRows, jobId, checkpointPath, loraWeight),
+        x_axis: buildAxis(xField, xValues),
+        y_axis: buildAxis(yField, yValues),
         output_format: "png",
       }),
     onSuccess: (data) => {
@@ -300,9 +345,228 @@ export function LoraTestPage() {
               </CardContent>
             </Card>
 
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>效果矩阵</CardTitle>
+                <CardDescription>
+                  多 LoRA 叠加与 XY 轴扫描，用同一 seed 对比权重、CFG、steps、sampler 或 checkpoint。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">叠加 LoRA</div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setLoraRows((rows) => [
+                          ...rows,
+                          {
+                            id: crypto.randomUUID(),
+                            jobId,
+                            checkpointPath,
+                            weight: 1,
+                          },
+                        ])
+                      }
+                      disabled={!jobId || !checkpointPath}
+                    >
+                      添加
+                    </Button>
+                  </div>
+                  {loraRows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      默认只用上方选择的主 LoRA。添加后会按顺序叠加多个 LoRA。
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {loraRows.map((row, index) => {
+                        const rowJob = jobs.find((item) => item.job_id === row.jobId)
+                        return (
+                          <div
+                            key={row.id}
+                            className="grid gap-2 rounded-[6px] border border-border/60 bg-muted/20 p-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_6rem_auto]"
+                          >
+                            <Select
+                              value={row.jobId}
+                              onValueChange={(value) => {
+                                if (!value) return
+                                const nextJob = jobs.find((item) => item.job_id === value)
+                                updateLoraRow(setLoraRows, row.id, {
+                                  jobId: value,
+                                  checkpointPath: nextJob?.checkpoints[0]?.path ?? "",
+                                })
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={`LoRA ${index + 1}`} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {jobs.map((item) => (
+                                  <SelectItem key={item.job_id} value={item.job_id}>
+                                    {item.output_name ?? item.job_id.slice(-8)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={row.checkpointPath}
+                              onValueChange={(value) =>
+                                value && updateLoraRow(setLoraRows, row.id, { checkpointPath: value })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="checkpoint" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(rowJob?.checkpoints ?? []).map((ckpt) => (
+                                  <SelectItem key={ckpt.path} value={ckpt.path}>
+                                    {ckpt.path}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="number"
+                              step={0.05}
+                              min={-2}
+                              max={2}
+                              value={row.weight}
+                              onChange={(e) =>
+                                updateLoraRow(setLoraRows, row.id, {
+                                  weight: Number(e.target.value),
+                                })
+                              }
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                setLoraRows((rows) => rows.filter((item) => item.id !== row.id))
+                              }
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <AxisEditor
+                    title="X 轴"
+                    field={xField}
+                    values={xValues}
+                    onFieldChange={setXField}
+                    onValuesChange={setXValues}
+                  />
+                  <AxisEditor
+                    title="Y 轴"
+                    field={yField}
+                    values={yValues}
+                    onFieldChange={setYField}
+                    onValuesChange={setYValues}
+                  />
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  <PresetButton
+                    label="Base 对照"
+                    onClick={() => {
+                      setXField("variant")
+                      setXValues("base, lora")
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="权重扫描"
+                    onClick={() => {
+                      setXField("lora_weight")
+                      setXValues("0.4, 0.6, 0.8, 1.0, 1.2")
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="Prompt 泛化"
+                    onClick={() => {
+                      setXField("prompt")
+                      setXValues(buildPromptGeneralizationValues(prompt))
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="Seed 稳定性"
+                    onClick={() => {
+                      const base = seed >= 0 ? seed : 1001
+                      setXField("seed")
+                      setXValues(`${base}, ${base + 1}, ${base + 2}, ${base + 3}`)
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="CFG x 权重"
+                    onClick={() => {
+                      setXField("lora_weight")
+                      setXValues("0.6, 0.8, 1.0, 1.2")
+                      setYField("cfg")
+                      setYValues("3.5, 4.5, 5.5")
+                    }}
+                  />
+                  <PresetButton
+                    label="Steps x Sampler"
+                    onClick={() => {
+                      setXField("steps")
+                      setXValues("16, 24, 32, 40")
+                      setYField("sampler")
+                      setYValues("euler, er_sde")
+                    }}
+                  />
+                  <PresetButton
+                    label="负面词压力"
+                    onClick={() => {
+                      setXField("negative_prompt")
+                      setXValues(NEGATIVE_STRESS_VALUES.join("\n"))
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="尺寸鲁棒性"
+                    onClick={() => {
+                      setXField("size")
+                      setXValues("768x1344, 912x1632, 1024x1024")
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="Checkpoint 回放"
+                    onClick={() => {
+                      setXField("checkpoint")
+                      setXValues(buildCheckpointAxisValues(selectedJob, checkpointPath))
+                      setYValues("")
+                    }}
+                  />
+                  <PresetButton
+                    label="质量诊断矩阵"
+                    onClick={() => {
+                      setNegative((current) => current || QUALITY_NEGATIVE)
+                      setXField("lora_weight")
+                      setXValues("0.6, 0.8, 1.0, 1.2")
+                      setYField("steps")
+                      setYValues("20, 28, 36")
+                    }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
             <ResultGrid
               sessionId={sessionId}
               images={resultImages}
+              gridPath={getResultGridPath(session.data)}
               loading={session.isFetching && !session.data}
               onOpen={setDetail}
             />
@@ -476,11 +740,13 @@ function QueuePanel({
 function ResultGrid({
   sessionId,
   images,
+  gridPath,
   loading,
   onOpen,
 }: {
   sessionId: string
   images: ResultImage[]
+  gridPath: string | null
   loading: boolean
   onOpen: (image: ResultImage) => void
 }) {
@@ -503,6 +769,25 @@ function ResultGrid({
             </div>
           </div>
         )}
+        {gridPath && (
+          <button
+            type="button"
+            className="mb-3 block w-full overflow-hidden rounded-[6px] border border-border/60 bg-background text-left"
+            onClick={() =>
+              window.open(
+                api.loraTestResultFileUrl(sessionId, gridPath),
+                "_blank",
+                "noopener,noreferrer",
+              )
+            }
+          >
+            <img
+              src={api.loraTestResultFileUrl(sessionId, gridPath)}
+              alt="XY grid"
+              className="max-h-[70vh] w-full object-contain"
+            />
+          </button>
+        )}
         {images.length > 0 && (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {images.map((image) => (
@@ -522,7 +807,7 @@ function ResultGrid({
                 <div className="flex items-center justify-between gap-2 px-2 py-2 text-[11px]">
                   <span className="font-mono">seed {image.seed}</span>
                   <span className="text-muted-foreground">
-                    {image.steps} / cfg {image.cfg}
+                    {formatAxisLabel(image) ?? `${image.steps} / cfg ${image.cfg}`}
                   </span>
                 </div>
               </button>
@@ -591,7 +876,17 @@ function ResultSheet({
                 <Param label="尺寸" value={`${image.width} x ${image.height}`} />
                 <Param label="steps / cfg" value={`${image.steps} / ${image.cfg}`} />
                 <Param label="sampler" value={image.sampler} />
-                <Param label="LoRA 权重" value={String(image.lora_weight)} />
+                <Param
+                  label="LoRA"
+                  value={
+                    image.loras?.length
+                      ? image.loras
+                          .map((item) => `${item.checkpoint_name} x ${item.weight}`)
+                          .join("\n")
+                      : String(image.lora_weight)
+                  }
+                  block
+                />
                 <Param label="checkpoint" value={image.checkpoint_path} />
                 <Param label="prompt" value={image.prompt} block />
                 <Param label="negative" value={image.negative_prompt || "-"} block />
@@ -675,4 +970,152 @@ function Param({
 function getResultImages(session: TaskSessionRecord | undefined): ResultImage[] {
   const raw = session?.result?.images
   return Array.isArray(raw) ? (raw as ResultImage[]) : []
+}
+
+function getResultGridPath(session: TaskSessionRecord | undefined): string | null {
+  const raw = session?.result?.grid
+  return typeof raw === "string" && raw ? raw : null
+}
+
+function buildLoras(
+  rows: LoraRow[],
+  jobId: string,
+  checkpointPath: string,
+  weight: number,
+) {
+  if (rows.length === 0) return undefined
+  return [
+    { job_id: jobId, checkpoint_path: checkpointPath, weight },
+    ...rows
+      .filter((row) => row.jobId && row.checkpointPath && Number.isFinite(row.weight))
+      .map((row) => ({
+        job_id: row.jobId,
+        checkpoint_path: row.checkpointPath,
+        weight: row.weight,
+      })),
+  ]
+}
+
+function buildAxis(
+  field: LoraTestAxisInput["field"],
+  raw: string,
+): LoraTestAxisInput | null {
+  const separator =
+    field === "prompt" || field === "negative_prompt" || field === "checkpoint"
+      ? /\n/
+      : /[\n,]/
+  const values = raw
+    .split(separator)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return values.length > 0 ? { field, values } : null
+}
+
+function updateLoraRow(
+  setRows: React.Dispatch<React.SetStateAction<LoraRow[]>>,
+  id: string,
+  patch: Partial<LoraRow>,
+) {
+  setRows((rows) =>
+    rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+  )
+}
+
+function AxisEditor({
+  title,
+  field,
+  values,
+  onFieldChange,
+  onValuesChange,
+}: {
+  title: string
+  field: LoraTestAxisInput["field"]
+  values: string
+  onFieldChange: (field: LoraTestAxisInput["field"]) => void
+  onValuesChange: (values: string) => void
+}) {
+  return (
+    <div className="rounded-[6px] border border-border/60 bg-muted/20 p-3">
+      <div className="mb-2 text-xs font-medium">{title}</div>
+      <div className="grid gap-2">
+        <Select
+          value={field}
+          onValueChange={(value) => onFieldChange(value as LoraTestAxisInput["field"])}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AXIS_FIELDS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {field === "prompt" || field === "negative_prompt" || field === "checkpoint" ? (
+          <Textarea
+            value={values}
+            onChange={(e) => onValuesChange(e.target.value)}
+            placeholder={axisPlaceholder(field)}
+            className="min-h-24 font-mono text-xs"
+          />
+        ) : (
+          <Input
+            value={values}
+            onChange={(e) => onValuesChange(e.target.value)}
+            placeholder={axisPlaceholder(field)}
+            className="font-mono"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PresetButton({
+  label,
+  onClick,
+}: {
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Button type="button" variant="outline" size="sm" onClick={onClick}>
+      {label}
+    </Button>
+  )
+}
+
+function buildPromptGeneralizationValues(prompt: string): string {
+  const base = prompt.trim()
+  if (!base) return ""
+  return [
+    base,
+    `${base}, different outfit`,
+    `${base}, outdoor scene`,
+    `${base}, close-up portrait`,
+  ].join("\n")
+}
+
+function buildCheckpointAxisValues(
+  selectedJob: LoraTestJob | null,
+  current: string,
+): string {
+  const checkpoints = selectedJob?.checkpoints.map((item) => item.path) ?? []
+  const unique = Array.from(new Set([current, ...checkpoints].filter(Boolean)))
+  return unique.slice(0, 6).join("\n")
+}
+
+function axisPlaceholder(field: LoraTestAxisInput["field"]): string {
+  if (field === "checkpoint") return "每行一个 checkpoint 相对路径"
+  if (field === "variant") return "base, lora"
+  if (field === "prompt") return "每行一个 prompt"
+  if (field === "negative_prompt") return "每行一个 negative；empty 表示空负面词"
+  if (field === "size") return "768x1344, 912x1632, 1024x1024"
+  return "0.6, 0.8, 1.0, 1.2"
+}
+
+function formatAxisLabel(image: ResultImage): string | null {
+  return [image.x_label, image.y_label].filter(Boolean).join(" / ") || null
 }

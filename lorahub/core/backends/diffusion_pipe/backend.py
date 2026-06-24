@@ -138,6 +138,7 @@ class DiffusionPipeBackend:
         *,
         extra_argv: list[str] | None = None,
         env: dict[str, str] | None = None,
+        gpu_count: int = 1,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
             config_path=cfg.backend.repo_path,
@@ -185,6 +186,7 @@ class DiffusionPipeBackend:
             job_id=job_id,
             env=env,
             launcher_args=launcher_args,
+            num_gpus=max(1, gpu_count),
         )
         runner.start()
 

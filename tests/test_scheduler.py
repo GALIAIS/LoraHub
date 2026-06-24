@@ -163,6 +163,52 @@ def test_scheduler_runs_two_tasks_in_parallel_with_concurrency_2() -> None:
     sched.stop(timeout=2.0)
 
 
+def test_distributed_head_waits_for_all_slots_without_starvation() -> None:
+    sched = JobScheduler(concurrency=2, available_slots=[0, 1])
+    seen: list[str] = []
+    lock = threading.Lock()
+    hold_done = threading.Event()
+    release_hold = threading.Event()
+    dist_done = threading.Event()
+
+    def hold(_slot: int | list[int]) -> None:
+        with lock:
+            seen.append("hold")
+        hold_done.set()
+        release_hold.wait(timeout=2.0)
+
+    def distributed(slots: int | list[int]) -> None:
+        with lock:
+            seen.append(f"dist:{slots}")
+        dist_done.set()
+
+    def small(_slot: int | list[int]) -> None:
+        with lock:
+            seen.append("small")
+
+    sched.submit("hold", hold)
+    assert hold_done.wait(timeout=2.0)
+    sched.submit("dist", distributed, slots_required=2)
+    sched.submit("small", small)
+    time.sleep(0.05)
+    release_hold.set()
+
+    assert dist_done.wait(timeout=3.0)
+    sched.stop(timeout=2.0)
+    assert seen[:2] == ["hold", "dist:[0, 1]"], seen
+
+
+def test_distributed_task_requires_same_slot_group() -> None:
+    sched = JobScheduler(
+        concurrency=2,
+        available_slots=[0, 1],
+        slot_groups=[[0], [1]],
+    )
+    with pytest.raises(ValueError, match="slot_groups"):
+        sched.submit("dist", lambda _slots: None, slots_required=2)
+    sched.stop(timeout=2.0)
+
+
 def test_scheduler_rejects_invalid_concurrency() -> None:
     with pytest.raises(ValueError, match="concurrency"):
         JobScheduler(concurrency=0)

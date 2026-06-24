@@ -104,6 +104,18 @@ class KohyaBackend:
 
         issues.extend(check_cross_field_conflicts(cfg))
 
+        if cfg.backend.gpu_dispatch.mode == "distributed":
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "backend.gpuDispatch.mode",
+                    (
+                        "kohya backend is launched as a single Python process by "
+                        "LoraHub; distributed single-job GPU dispatch is not supported."
+                    ),
+                )
+            )
+
         if not cfg.base_model.checkpoint.exists():
             issues.append(
                 ValidationIssue(
@@ -146,7 +158,11 @@ class KohyaBackend:
         *,
         extra_argv: list[str] | None = None,
         env: dict[str, str] | None = None,
+        gpu_count: int = 1,
     ) -> TrainingHandle:
+        if gpu_count > 1:
+            msg = "kohya backend does not support LoraHub distributed GPU dispatch"
+            raise CompilationError(msg)
         bootstrap_env = _bootstrap.resolve(
             config_path=cfg.backend.repo_path,
             config_python=cfg.backend.python_executable,
