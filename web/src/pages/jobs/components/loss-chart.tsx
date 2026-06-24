@@ -82,10 +82,18 @@ function LossChartCore({
       })),
     [series],
   )
+  const preparedBands = useMemo(
+    () =>
+      bands.map((band) => ({
+        ...band,
+        points: downsamplePoints(band.points, MAX_POINTS),
+      })),
+    [bands],
+  )
   const visibleSeries = prepared.filter((s) => !hidden[s.id])
   const data = useMemo(
-    () => mergeLossData(visibleSeries, bands),
-    [bands, visibleSeries],
+    () => mergeLossData(visibleSeries, preparedBands),
+    [preparedBands, visibleSeries],
   )
   const fullExtent = useMemo(() => {
     if (data.length === 0) return null
@@ -109,6 +117,9 @@ function LossChartCore({
     () => markers.filter((marker) => dataSteps.has(marker.step)),
     [dataSteps, markers],
   )
+  const heavyChart =
+    data.length > 500 ||
+    prepared.reduce((sum, item) => sum + item.points.length, 0) > 1_000
 
   function toggleSeries(id: string) {
     setHidden((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -202,7 +213,7 @@ function LossChartCore({
         <BklitLineChart
           data={data}
           xDataKey="date"
-          animationDuration={900}
+          animationDuration={heavyChart ? 0 : 900}
           aspectRatio={fullscreen ? undefined : "16 / 6"}
           className={fullscreen ? "h-[70vh]" : "min-h-[260px]"}
           margin={{ top: 46, right: 28, bottom: 42, left: 56 }}
@@ -210,9 +221,10 @@ function LossChartCore({
           tweenYDomainOnXDomainChange
           xDomain={xDomain}
           xDomainSlotCount={data.length}
+          yDomainTween={!heavyChart}
         >
           <Grid horizontal vertical={false} hideHorizontalEdgeLines />
-          <LossBandLayer bands={bands} />
+          <LossBandLayer bands={preparedBands} />
           <MarkerLayer markers={visibleMarkers} />
           {visibleSeries.map((s, index) => (
             <Line
@@ -221,6 +233,9 @@ function LossChartCore({
               stroke={s.color || `var(--chart-${(index % 5) + 1})`}
               strokeWidth={s.dashed ? 1.8 : 2.4}
               dashArray={s.dashed ? "5,4" : undefined}
+              animate={!heavyChart}
+              fadeEdges={!heavyChart}
+              showHighlight={!heavyChart}
               showMarkers={s.points.length <= 80}
               markers={{
                 inactiveBlur: 0,

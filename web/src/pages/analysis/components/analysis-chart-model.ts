@@ -3,7 +3,7 @@ import type {
   ChartBand,
   ChartMarker,
   LossSeries,
-} from "../../jobs/components/loss-chart"
+} from "../../jobs/components/loss-chart-model"
 import { rollingQuartiles, type BandPoint } from "./loss-stats"
 import { analyseChangepoints } from "./pelt"
 import type { ReferenceRun } from "./reference-run"

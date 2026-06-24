@@ -187,9 +187,10 @@ def save_and_remove_state_on_epoch_end(args: argparse.Namespace, accelerator, ep
             model_name,
             EPOCH_STATE_NAME.format(model_name, remove_epoch_no),
         )
-        if os.path.exists(state_dir_old):
+        if accelerator.is_main_process and os.path.exists(state_dir_old):
             logger.info(f"removing old state: {state_dir_old}")
             shutil.rmtree(state_dir_old)
+        accelerator.wait_for_everyone()
 
 
 def save_and_remove_state_stepwise(args: argparse.Namespace, accelerator, step_no):
@@ -219,9 +220,10 @@ def save_and_remove_state_stepwise(args: argparse.Namespace, accelerator, step_n
                 model_name,
                 STEP_STATE_NAME.format(model_name, remove_step_no),
             )
-            if os.path.exists(state_dir_old):
+            if accelerator.is_main_process and os.path.exists(state_dir_old):
                 logger.info(f"removing old state: {state_dir_old}")
                 shutil.rmtree(state_dir_old)
+            accelerator.wait_for_everyone()
 
 
 def get_checkpoint_state_dir(args: argparse.Namespace):
@@ -241,9 +243,10 @@ def save_checkpoint_state(args: argparse.Namespace, accelerator):
     logger.info(f"saving checkpoint state to {state_dir} (overwriting)")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    if os.path.exists(state_dir):
+    if accelerator.is_main_process and os.path.exists(state_dir):
         shutil.rmtree(state_dir)
 
+    accelerator.wait_for_everyone()
     accelerator.save_state(state_dir)
 
 

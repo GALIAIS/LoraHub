@@ -494,6 +494,16 @@ def run_training_loop(trainer, state: LoopState) -> None:
         # ``args._lorahub_paused`` is set) doesn't get a chance to
         # write the final checkpoint either.
         if getattr(state, "_lorahub_pause", False):
+            if pending_prefetch is not None:
+                pending_prefetch.cancel()
+                pending_prefetch = None
+            break
+
+        if state.global_step >= args.max_train_steps:
+            if pending_prefetch is not None:
+                pending_prefetch.cancel()
+                pending_prefetch = None
+            accelerator.wait_for_everyone()
             break
 
         _run_epoch_validation(trainer, state, epoch)
@@ -526,6 +536,14 @@ def run_training_loop(trainer, state: LoopState) -> None:
     state.metadata["ss_training_finished_at"] = str(time.time())
 
 
+def _distributed_any(accelerator: Accelerator, value: bool) -> bool:
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return value
+    flag = torch.tensor(int(value), device=accelerator.device)
+    torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
+    return bool(flag.item())
+
+
 def _run_epoch_steps(
     trainer,
     state: LoopState,
@@ -556,31 +574,21 @@ def _run_epoch_steps(
         # the existing checkpoint to the current step. The matching
         # weights are read out of the state dir's ``model.safetensors``
         # at resume time, so we skip writing a separate step ckpt.
-        # Only the main process touches the file system; other ranks
-        # block in ``wait_for_everyone()``.
-        if accelerator.sync_gradients and accelerator.is_main_process:
+        # Only the main process probes/removes the flag. Once detected,
+        # every rank must call accelerator.save_state(); Accelerate state
+        # saves are collective under distributed training.
+        pause_detected = False
+        if accelerator.sync_gradients:
             try:
                 ws_root = os.path.dirname(os.path.abspath(args.output_dir))
                 pause_flag = os.path.join(ws_root, "_lorahub_pause")
-                if os.path.exists(pause_flag):
+                local_pause_detected = os.path.exists(pause_flag)
+                pause_detected = _distributed_any(accelerator, local_pause_detected)
+                if pause_detected and accelerator.is_main_process:
                     logger.info(
                         "[lorahub] pause flag detected — saving checkpoint state at step %d and exiting",
                         state.global_step,
                     )
-                    try:
-                        from library.training.checkpoints import (
-                            save_checkpoint_state,
-                        )
-                        # Mark the run as paused before writing state
-                        # so train_state.json (written via accelerate
-                        # save-hooks registered by CheckpointSaver)
-                        # carries the right step. Then overwrite the
-                        # in-place checkpoint-state dir.
-                        save_checkpoint_state(args, accelerator)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception(
-                            "[lorahub] forced save failed: %s", exc
-                        )
                     # Best-effort flag cleanup so a later /resume
                     # doesn't immediately re-pause. The LoRaHub side
                     # also clears this on its end.
@@ -588,6 +596,7 @@ def _run_epoch_steps(
                         os.remove(pause_flag)
                     except OSError:
                         pass
+                if pause_detected:
                     # Tell train.py's epilogue not to write the
                     # final ``<output_name>-state`` and
                     # ``<output_name>.safetensors`` — they would
@@ -602,7 +611,16 @@ def _run_epoch_steps(
                 logger.warning("[lorahub] pause-flag check failed: %s", exc)
 
         if getattr(state, "_lorahub_pause", False):
-            accelerator.wait_for_everyone()
+            try:
+                from library.training.checkpoints import (
+                    save_checkpoint_state,
+                )
+                # Mark the run as paused before writing state so
+                # train_state.json (written via accelerate save-hooks
+                # registered by CheckpointSaver) carries the right step.
+                save_checkpoint_state(args, accelerator)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("[lorahub] forced save failed: %s", exc)
             return True
         return False
 
@@ -629,6 +647,9 @@ def _run_epoch_steps(
         step = 0
         batch = first_batch
         while True:
+            if state.global_step >= args.max_train_steps:
+                break
+
             state.current_step.value = state.global_step
             _profiler_step_begin(state)
             loss = _run_step(trainer, state, batch)
@@ -679,6 +700,9 @@ def _run_epoch_steps(
             if state.initial_step > 0:
                 state.initial_step -= 1
                 continue
+
+            if state.global_step >= args.max_train_steps:
+                break
 
             _profiler_step_begin(state)
 
