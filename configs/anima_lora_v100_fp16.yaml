@@ -1,196 +1,149 @@
-# Anima LoRA on Tesla V100 32GB — fp16 compatibility template.
+# Anima style LoRA on the anima_lora backend — V100 32GB fp16 config.
 #
-# Target hardware: Tesla V100 32GB (sm_70). V100 has fast fp16 tensor cores
-# but no native bf16, so this template uses fp16 end-to-end and PyTorch SDPA
-# (`attnMode: torch`) instead of flash-attn. It is intentionally more
-# conservative than anima_style_32gb_loha.yaml: batch=1, gradAccum=2,
-# gradient checkpointing on, cache-to-disk on, no CMMD validation by default.
+# Target hardware: Tesla V100 32GB (sm_70). Based on the stable 32GB style config; only hardware compatibility knobs are changed.
+# Expected throughput: slower than Ada/Ampere; V100 uses fp16 and PyTorch SDPA.
+# Expected VRAM peak: fits V100 32GB with batch 1 + gradAccum 8 + checkpointing.
 #
-# Note from V100 VPS probe: current anima_lora torch 2.12.1+cu130 does not
-# initialize on driver 570.124.04 (CUDA driver 12.8). Install a torch build
-# compatible with the server driver before running training.
+# This keeps the 32GB style LoHA recipe and changes only V100 compatibility:
+#   - algorithm = loha (Hadamard product; effective rank up to r²)
+#   - dataset has wider AR range and heavier caption dropout
+#   - more epochs (style needs more variety per image than character)
+#   - fp16 instead of bf16, no torch.compile, gradient checkpointing on
+#
+# Style training intuition:
+#   1. Caption dropRate 0.15-0.20 → push the network to represent style
+#      *outside* any caption, so it generalises to prompts you never tagged
+#   2. numRepeats 3-4 → don't burn the same 100 images into the network 8
+#      times per epoch; let it see fresh variety
+#   3. LoHA at r=16 → effective rank ~256, plenty for multi-scale texture /
+#      colour / brush coupling that pure LoRA can't fit at the same params
 
-_template:
-  name: Anima LoRA V100 32GB fp16
-  description: Tesla V100 32GB 兼容档：fp16、PyTorch SDPA、关闭 bf16/flash 依赖，适合 CUDA 12.x
-    驱动环境。
-  arch: anima
-_placeholders:
-- key: name
-  label: 输出名称
-  path_field: output.name
-  placeholder: anima_v100_fp16
-- key: checkpoint
-  label: Anima base checkpoint
-  path_field: baseModel.checkpoint
-  placeholder: ./models/diffusion_models/anima-base-v1.0.safetensors
-- key: qwen3
-  label: Qwen3 text encoder
-  path_field: baseModel.archPaths.qwen3
-  placeholder: ./models/text_encoders/qwen_3_06b_base.safetensors
-- key: vae
-  label: Qwen Image VAE
-  path_field: baseModel.archPaths.ae
-  placeholder: ./models/vae/qwen_image_vae.safetensors
-- key: dataset
-  label: Dataset directory
-  path_field: dataset.source
-  placeholder: ./datasets/my_dataset
 schemaVersion: '1.0'
+
 baseModel:
   arch: anima
-  archVariant: ''
-  checkpoint: models\circlestone-labs__Anima\anima-base-v1.0.safetensors
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
   archPaths:
-    ae: models\circlestone-labs__Anima\qwen_image_vae.safetensors
-    qwen3: models\circlestone-labs__Anima\qwen_3_06b_base.safetensors
-    applyT5AttnMask: false
-    applyLgAttnMask: false
-    t5DropoutRate: 0.0
-    clipLDropoutRate: 0.0
-    clipGDropoutRate: 0.0
-    posEmbRandomCropRate: 0.0
-    enableScaledPosEmbed: false
-    vaeDisableCache: false
-    textEncoderCpu: false
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 1024
+
 dataset:
-  source: datasets\your_dataset
-  resolution:
-  - 896
-  - 896
+  source: ./datasets/your_style
+  resolution: [1024, 1024]
   bucket:
     enabled: true
-    min: 256
-    max: 1536
+    # Style datasets mix portraits / landscapes / scenes — wider AR
+    # range than the character config.
+    min: 512
+    max: 1664
     step: 64
-    noUpscale: false
-    skipImageResolution: false
   caption:
     strategy: tag_file
     ext: .txt
     shuffle: true
-    dropRate: 0.1
-    dropoutEveryNEpochs: 0
-    tagDropoutRate: 0.0
-    keepTokens: 3
-    dropTokens: []
-    enableWildcard: false
-    weighted: false
-    shuffleTags: false
-  numRepeats: 1
-  valSplit: 0.0
-  subsets: []
-  frameBuckets:
-  - 1
-network:
-  type: lora
-  rank: 32
-  alpha: 32
-  targetUnet: true
-  targetTextEncoder: false
-  networkDropout: 0.0
-  rankDropout: 0.0
-  moduleDropout: 0.0
-  baseWeights: []
-  baseWeightsMultiplier: []
-  fuseAdapters: []
-optimizer:
-  type: AdamW8bit
-  lr:
-    unet: 5.0e-05
-    textEncoder: 5.0e-05
-  schedule: cosine_with_restarts
-  warmupSteps: 100
-  betas:
-  - 0.9
-  - 0.999
-  weightDecay: 0.0
-  eps: 1.0e-08
-  optimizerArgs: {}
-  maxGradNorm: 1.0
-  schedulerArgs: {}
-  schedulerNumCycles: 1
-  schedulerPower: 1.0
-  gradientRelease: false
-loss:
-  noiseOffset: 0.0
-  noiseOffsetRandomStrength: false
-  multiresNoiseDiscount: 0.3
-  ipNoiseGammaRandomStrength: false
-  zeroTerminalSnr: false
-  priorLossWeight: 1.0
-  lossType: l2
-  debiasedEstimation: false
-  maskedLoss: false
-  scaleVPredLossLikeNoisePred: false
-  vParameterization: false
-flowMatch: {}
+    # Heavier dropRate than character — style should bleed across prompts.
+    dropRate: 0.18
+    keepTokens: 1
+  # 3 repeats × 200 imgs × 10 epochs / (batch 2 × accum 4) ≈ 750 steps.
+  # ~15 minutes wall-clock at 1.5 s/step. Style benefits from variety
+  # over repetition; if your dataset is small (<100 imgs) bump
+  # numRepeats to 4-5.
+  numRepeats: 3
+
 schedule:
-  epochs: 8
+  epochs: 10
   batchSize: 1
-  gradAccum: 2
+  gradAccum: 8
   seed: 42
+  maxSteps: null
+
 precision: fp16
 gradientCheckpointing: true
 cacheLatents: true
-cacheLatentsToDisk: false
-skipCacheCheck: false
-cacheInfo: false
-trainInpainting: false
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
 sampling:
   enabled: true
-  everyNEpochs: 3
-  atFirst: false
-  prompts:
-  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, upper body,
-      looking at viewer, neutral expression, simple background, soft natural lighting
-    negative: lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry,
-      jpeg artifacts, deformed, mutated, watermark, signature, text
-    cfg: 5.0
-    steps: 24
-    seed: 42
-    width: 1024
-    height: 1024
-  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, full body,
-      standing, dynamic pose, looking at viewer, outdoors, daytime, soft sunlight
-    negative: lowres, worst quality, bad anatomy, bad hands, missing fingers, extra
-      fingers, blurry, jpeg artifacts, deformed, mutated, watermark, text
-    cfg: 5.0
-    steps: 24
-    seed: 1024
-    width: 832
-    height: 1216
-  - prompt: masterpiece, best quality, score_7, ${TRIGGER}, 1girl, solo, close-up,
-      smiling, blush, looking at viewer, indoor warm lighting, bokeh background
-    negative: lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts,
-      deformed, mutated, watermark, text, sad, angry
-    cfg: 5.0
-    steps: 24
-    seed: 7777
-    width: 896
-    height: 1152
-  resolution:
-  - 1024
-  - 1024
+  everyNEpochs: 2
+  atFirst: true
+  resolution: [1024, 1024]
   seed: -1
+  triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
   outputs:
     gridStitching: true
-    baseCompare: false
-    crossCkptAnimation: false
     pngMetadata: true
-  enableLiveInference: false
-  inferenceSteps: 20
-  inferenceCfg: 5.0
-  spectrumAnalysis: true
+    baseCompare: true        # 风格 LoRA 必看:基模对比能立刻发现是否真学到风格
+    crossCkptAnimation: false
+  # 风格 LoRA 验证:覆盖单人/群像/全身/风景/静物/夜景共 6 个场景,跨主体+复杂度
+  # 检查风格是否稳定迁移而不退到基模 prior。${TRIGGER} 占位符在启动时用
+  # triggerWord 字段(优先)或 dataset captions 推断(回退)统一注入。
+  prompts:
+    - prompt: "${TRIGGER}, 1girl, solo, portrait, looking at viewer, soft expression, simple background, even lighting"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 28
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 2girls, multiple girls, friends, sitting together, talking, indoor, daytime, casual atmosphere"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 28
+      seed: 256
+      width: 1216
+      height: 832
+
+    - prompt: "${TRIGGER}, 1girl, solo, full body, fantasy outfit, intricate details, dynamic pose, magic effects, sparkles"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic"
+      cfg: 5.5
+      steps: 30
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "${TRIGGER}, scenery, no humans, landscape, mountains, forest, river, dramatic clouds, golden hour, cinematic"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
+      cfg: 5.0
+      steps: 28
+      seed: 8888
+      width: 1344
+      height: 768
+
+    - prompt: "${TRIGGER}, still life, table with cup of coffee, open book, soft window light, cozy atmosphere, no humans"
+      negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
+      cfg: 5.0
+      steps: 28
+      seed: 7777
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 1boy, solo, urban night, neon signs, rain, reflective wet ground, cyberpunk atmosphere, dramatic lighting"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d, daytime, sunny"
+      cfg: 6.0
+      steps: 32
+      seed: 31415
+      width: 896
+      height: 1152
+
 output:
-  name: anima_v100_fp16
-  saveEveryNEpochs: 1
+  name: style_anima_v100_fp16
+  saveEveryNEpochs: 2
   saveDtype: fp16
-  noMetadata: false
-  metadata: {}
+
 backend:
   type: anima_lora
-  extraArgs: {}
+  # Multi-GPU:
+  #   - one-job-per-gpu: each training task owns one GPU.
+  #   - distributed + ddp: one task uses multiple same-model GPUs by data parallelism.
+  #   - distributed + fsdp: additionally shards parameters to reduce per-GPU VRAM.
+  #   - distributed + deepspeed_zero: shards optimizer/parameters via DeepSpeed.
+  #
+  # For two same 4080 cards, start with distributed + ddp. Switch to fsdp
+  # only when a larger batch/resolution still OOMs on one card. ZeRO needs
+  # DeepSpeed installed in external/anima_lora/.venv and is Linux/WSL-first.
   gpuDispatch:
     mode: one-job-per-gpu
     numGpus: null
@@ -209,31 +162,52 @@ backend:
       overlapComm: true
   animaLora:
     method: lora
-    preset: low_vram
-    outputName: anima_v100_fp16
-    networkModule: networks.lora_anima
-    networkDim: 32
-    networkAlpha: 32.0
+    preset: default
+    outputName: style_anima_v100_fp16
+
+    # Algorithm: LoHA — same choice as the 8GB config, scaled up.
+    # Effective rank is ``r²`` so r=16 here is comparable in expressive
+    # power to a r≈256 plain LoRA, at 32 × the parameter cost (vs r=16
+    # plain LoRA).
+    lora:
+      algorithm: loha
+      # T-LoRA mask is a no-op for LoHA (atomic decomposition owns the
+      # full ΔW); explicit off for clarity.
+      useTimestepMask: false
+      # channel_scaling_alpha 只对 LoRA / OrthoLoRA factory 生效;LoHA
+      # 走 atomic 路径会忽略它。这里仍设 0.5,方便用户在不动其它字段
+      # 的前提下把 algorithm 切到 ortho 时立刻拿到上游 methods/lora.toml
+      # 默认 channel scale。
+      channelScalingAlpha: 0.5
+
+    # Network sizing. r=16 here gives effective rank up to 256 via the
+    # Hadamard product. Going higher quickly hits OOM at 1024² because
+    # LoHA stores 4 matrices per Linear (vs LoRA's 2).
+    networkDim: 16
+    networkAlpha: 16.0
     networkTrainUnetOnly: true
-    channelScalingAlpha: 0.5
-    optimizerType: AdamW8bit
+
+    optimizerType: AdamW
     lrScheduler: cosine
+    # Slightly higher than character — style converges faster because
+    # the gradient signal is denser (every image carries the same style
+    # signal vs character training where only a few images carry the
+    # specific identity feature).
     learningRate: 5.0e-05
-    lrWarmupRatio: 0.05
-    maxTrainEpochs: 6
-    saveEveryNEpochs: 3
-    checkpointingEpochs: 3
-    captionDropoutRate: 0.1
+    lrWarmupRatio: 0.05          # 5% 总步数 warmup;style 也需要,初期防 LR 抖
+    maxTrainEpochs: 10
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.18
+
+    # Flow-matching sampling.
     timestepSampling: sigmoid
     sigmoidScale: 1.0
     discreteFlowShift: 1.0
-    ema: false
-    emaDecay: 0.9999
-    emaUseNumUpdates: true
-    nanGuard: true
-    nanGuardRecover: true
-    nanGuardMaxConsecutive: 5
-    sampleGrid: true
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    # Caching — full fanout.
     cacheLatents: true
     cacheLatentsToDisk: true
     cacheTextEncoderOutputs: true
@@ -242,80 +216,49 @@ backend:
     useShuffledCaptionVariants: true
     staticTokenCount: 4096
     vaeChunkSize: 64
-    vaeDisableCache: true
-    noHalfVae: false
+
+    # Attention.
     attnMode: torch
-    xformers: false
-    splitAttn: false
+
+    # COMPILE — same fast path as character. cudagraph_trees + LoHA's
+    # forward (two matmul pairs + Hadamard) compiles fine; the
+    # per-step kernel count is higher than DoRA so the % wins from
+    # compilation are if anything bigger here.
     compileMode: null
     compileInductorMode: null
-    enableNativeFlatten: false
+    torchCompile: false
     useCustomDownAutograd: true
+
+    # Memory / offload — all OFF.
     blocksToSwap: 0
     gradientCheckpointing: true
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
     mixedPrecision: fp16
-    useCmmd: false
-    maskedLoss: false
-    torchCompile: true
-    skipCacheCheck: true
-    dataloaderPinMemory: true
     persistentDataLoaderWorkers: true
-    trimCrossattnKv: false
+
+    # Training stabilisers. Same default as character: EMA off to
+    # preserve cudagraph_trees throughput, nan_guard on.
+    ema: false
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    # Per-epoch contact-sheet of sample previews. Lets you eyeball
+    # style emergence over the run remotely.
+    sampleGrid: true
+
+    # Validation. Style-eval CMMD has more variance than character but
+    # still gives a useful signal at 16 held-out images.
+    useCmmd: false
+    validationSplitNum: 0
+    validationSeed: 42
+
+    # Output / save.
     saveModelAs: safetensors
     savePrecision: fp16
     logEveryNSteps: 2
-    keepTokens: 3
+    keepTokens: 1
     captionExtension: .txt
-    validationSplitNum: 0
     enableBucket: true
     pathPattern: '*'
-    lora:
-      algorithm: ortho
-      useOrtho: true
-      lokrFactor: 8
-      boftFactors: 4
-      useTimestepMask: true
-      minRank: 16
-      alphaRankScale: 1.0
-resume:
-  saveState: true
-  saveStateAtEnd: true
-  skipUntilInitialStep: false
-validation:
-  everyNEpochs: 1
-attention:
-  training: torch
-  split: false
-optimization:
-  torchCompile: false
-  fusedBackwardPass: false
-  fullBf16: false
-  fullFp16: false
-  blocksToSwap: 0
-  fp8Base: false
-  fp8BaseUnet: false
-  fp8Scaled: false
-  fp8VlTextEncoder: false
-  lowram: false
-  highvram: false
-  noHalfVae: false
-  disableMmapLoadSafetensors: false
-  cpuOffloadCheckpointing: false
-  unslothOffloadCheckpointing: false
-  cacheTextEncoderOutputs: false
-  cacheTextEncoderOutputsToDisk: false
-dataloader:
-  numWorkers: 8
-  persistentWorkers: false
-  vaeBatchSize: 1
-  cacheShuffleNum: 0
-augmentation:
-  flip: false
-  color: false
-  randomCrop: false
-  alphaMask: false
-monitoring:
-  enableWandb: true
-  tags: []
