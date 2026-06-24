@@ -19,11 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 GH_PROXIES=(
   ""
-  "https://gh-proxy.org/"
-  "https://hk.gh-proxy.org/"
-  "https://cdn.gh-proxy.org/"
-  "https://v6.gh-proxy.org/"
+  "https://gh-proxy.com/"
+  "https://gh.ddlc.top/"
+  "https://gh.jasonzeng.dev/"
+  "https://gh.zwy.one/"
   "https://ghfast.top/"
+  "https://gh-proxy.org/"
 )
 
 PYTHON_BUILD_MIRRORS=(
