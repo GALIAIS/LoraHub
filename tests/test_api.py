@@ -123,6 +123,24 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "sd_scripts_path" in body["backend"]
 
 
+def test_health_does_not_run_full_backend_probe(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Service startup waits on /api/health; it must stay lightweight."""
+    from lorahub.api import settings as settings_mod
+
+    def fail_probe(_settings: object) -> dict[str, dict[str, object]]:
+        raise AssertionError("full backend probe must not run in health")
+
+    monkeypatch.setattr(settings_mod, "probe_all_backends", fail_probe)
+
+    r = client.get("/api/health")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
 def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
     from lorahub.api.routers import system as system_router
 
