@@ -886,10 +886,6 @@ def apply(
 
         _fetch(cwd, emit)
         _apply_ref(cwd, channel=channel, force=force, emit=emit)
-        _restore_configs(cwd, ctx.snapshot_path, emit)
-        # The snapshot has been re-laid into the working tree; the
-        # context's __exit__ no longer needs to restore it on success.
-        ctx.snapshot_consumed = True
 
         _install_deps(cwd, build=build, emit=emit)
 
@@ -905,6 +901,11 @@ def apply(
                     "in `git stash list`; resolve manually after this update.",
                 )
             ctx.stash_active = False
+
+        _restore_configs(cwd, ctx.snapshot_path, emit)
+        # The snapshot has been re-laid into the working tree; the
+        # context's __exit__ no longer needs to restore it on success.
+        ctx.snapshot_consumed = True
 
     emit("done", "info", "update applied")
 
@@ -945,13 +946,6 @@ class _UpdateContext:
         if exc_type is not None:
             # Best-effort rollback. We don't re-raise from here; the
             # original exception propagates out of the ``with`` block.
-            if self.snapshot_path is not None and not self.snapshot_consumed:
-                with contextlib.suppress(Exception):
-                    self.emit(
-                        "git", "warn",
-                        "upgrade failed; restoring configs/ from pre-flight snapshot",
-                    )
-                    _restore_configs(self.cwd, self.snapshot_path, self.emit)
             if self.stash_active:
                 with contextlib.suppress(Exception):
                     self.emit(
@@ -961,6 +955,13 @@ class _UpdateContext:
                     _stream_subprocess(
                         ["git", "stash", "pop"], cwd=self.cwd, phase="git", emit=self.emit,
                     )
+            if self.snapshot_path is not None and not self.snapshot_consumed:
+                with contextlib.suppress(Exception):
+                    self.emit(
+                        "git", "warn",
+                        "upgrade failed; restoring configs/ from pre-flight snapshot",
+                    )
+                    _restore_configs(self.cwd, self.snapshot_path, self.emit)
         # Always remove the temp archive — it's only useful as a
         # rollback bridge and would otherwise accumulate in TMPDIR.
         if self.snapshot_path is not None:

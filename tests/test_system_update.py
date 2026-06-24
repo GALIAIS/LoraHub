@@ -496,6 +496,23 @@ def test_apply_force_clean_excludes_user_owned_paths(
     assert not missing, f"clean -fd missing user-owned excludes: {missing}"
 
 
+def test_apply_failure_pops_stash_before_restoring_config_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "configs" / "anima.yaml").write_text("name: local\n")
+    calls = _stub_apply(monkeypatch, repo, fetch_rc=128)
+    events, emit = _capturing_emit()
+
+    with pytest.raises(RuntimeError, match="git fetch failed"):
+        su.apply(channel="main", build=False, progress=emit)
+
+    assert any(c == ["git", "stash", "pop"] for c in calls)
+    restore = next(i for i, event in enumerate(events) if "restoring configs/" in event[2])
+    stash_event = next(i for i, event in enumerate(events) if "popping stash" in event[2])
+    assert stash_event < restore
+
+
 def test_apply_restores_configs_when_pip_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
