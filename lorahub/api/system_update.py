@@ -837,12 +837,9 @@ def apply(
 
     with _UpdateContext(cwd, emit) as ctx:
         ctx.snapshot_path = _snapshot_configs(cwd, emit)
-        # `_snapshot_configs` only captures git-untracked entries — repo-
-        # shipped presets (tracked) are owned by `git checkout` and ride
-        # along with the upgrade. Local edits to tracked presets fall
-        # through to the stash/pop dance below so users see the standard
-        # git conflict workflow instead of having their edit silently
-        # replayed over the upstream fix.
+        # `_snapshot_configs` captures user-created configs and locally edited
+        # tracked configs. Untouched repo presets still ride along with the
+        # checkout so upstream default fixes can land.
 
         if force:
             emit(
@@ -1018,9 +1015,14 @@ def _pre_check(
     # synced. The duplicate fetch is cheap (a few hundred KB of refs)
     # and idempotent.
     target_branch = "main" if channel == "tag" else channel
-    target_remote = f"origin/{target_branch}"
+    target_remote = f"refs/remotes/origin/{target_branch}"
     fetch = _git(
-        ["fetch", "--quiet", "origin", target_branch],
+        [
+            "fetch",
+            "--quiet",
+            "origin",
+            f"{target_branch}:refs/remotes/origin/{target_branch}",
+        ],
         cwd=cwd,
     )
     if fetch.returncode != 0:
@@ -1028,7 +1030,8 @@ def _pre_check(
         # rather than silently mis-classifying the detached state.
         msg = (
             f"HEAD is detached at {head_sha} and `git fetch origin "
-            f"{target_branch}` failed ({fetch.stderr.strip() or 'unknown'}). "
+            f"{target_branch}:refs/remotes/origin/{target_branch}` failed "
+            f"({fetch.stderr.strip() or 'unknown'}). "
             f"Run `git checkout {target_branch}` first, or pass --force to "
             "discard the detached commits."
         )
@@ -1079,23 +1082,13 @@ def _pre_check(
 
 
 def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
-    """Capture user-authored (git-untracked) files under ``configs/``.
+    """Capture user-authored and locally edited files under ``configs/``.
 
-    Restricted to entries ``git ls-files --others --exclude-standard``
-    reports — i.e. yamls the user dropped in by hand that the repo can
-    never know about. Tracked preset files (``configs/anima_lora_*.yaml``
-    etc.) are intentionally *not* captured: they're owned by ``git
-    checkout`` so upstream fixes (default-value tweaks, new fields)
-    actually reach the working tree after an upgrade. Local edits to
-    tracked presets travel through the stash/pop flow in ``apply()`` so
-    users get the standard git conflict UX rather than a silent override.
-
-    Prior behaviour captured every file under ``configs/`` and restored
-    them whole at the end, which had the surprising effect that a user
-    who never touched the dir would still get *no* preset updates ever —
-    ``_restore_configs`` would copy the pre-upgrade tree back over the
-    just-checked-out version, making ``apply()`` look like it ignored
-    ``configs/``. Narrowing the snapshot scope closes that gap.
+    The snapshot includes untracked config files plus tracked config files
+    with staged or unstaged local edits. Untouched tracked presets are not
+    captured, so upstream default fixes still reach users who did not edit
+    those files. In force mode this snapshot is the only protection tracked
+    config edits have before ``git reset --hard``.
 
     The archive lives in ``tempfile.gettempdir()`` so a multi-megabyte
     yaml collection doesn't have to be held in memory while the upgrade
@@ -1103,23 +1096,29 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
     file rather than aborting the upgrade — partial coverage beats
     refusing to update.
 
-    Returns ``None`` when ``configs/`` is missing, empty, or contains
-    only tracked files (nothing untracked to protect).
+    Returns ``None`` when ``configs/`` is missing, empty, or contains no
+    user-created or locally edited files to protect.
     """
     root = cwd / "configs"
     if not root.is_dir():
         return None
 
-    # Authoritative list: only git-untracked files. ``--exclude-standard``
-    # honours .gitignore / .git/info/exclude so cache spillovers a user
-    # never meant to keep aren't sucked in either.
-    listing = _git(
+    rels: set[str] = set()
+    git_failed: list[str] = []
+    commands = (
         ["ls-files", "--others", "--exclude-standard", "--", "configs"],
-        cwd=cwd,
+        ["diff", "--name-only", "--", "configs"],
+        ["diff", "--name-only", "--cached", "--", "configs"],
     )
-    if listing.returncode == 0:
-        rels = [line.strip() for line in listing.stdout.splitlines() if line.strip()]
-        files = [cwd / rel for rel in rels if (cwd / rel).is_file()]
+    for command in commands:
+        result = _git(command, cwd=cwd)
+        if result.returncode == 0:
+            rels.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        else:
+            git_failed.append(result.stderr.strip() or "unknown")
+
+    if not git_failed:
+        files = [cwd / rel for rel in sorted(rels) if (cwd / rel).is_file()]
     else:
         # Defensive fallback: corrupted index or non-git layout. Warn so
         # the "save everything" behaviour is observable and preserve the
@@ -1127,7 +1126,7 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
         # silently lose user data on a degraded git state.
         emit(
             "git", "warn",
-            f"git ls-files failed ({listing.stderr.strip() or 'unknown'}); "
+            f"git config snapshot scan failed ({'; '.join(git_failed)}); "
             "falling back to full configs/ snapshot — tracked-preset edits "
             "will override upstream changes this run.",
         )

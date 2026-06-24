@@ -193,6 +193,34 @@ def test_pre_check_auto_attaches_when_detached_sha_in_remote(tmp_path: Path) -> 
     ), events
 
 
+def test_pre_check_refreshes_remote_ref_before_detached_reachability(tmp_path: Path) -> None:
+    """A detached release checkout should not fail because origin/main is stale."""
+    upstream_root = tmp_path / "upstream"
+    upstream_root.mkdir()
+    upstream = _make_repo(upstream_root)
+    clone_root = tmp_path / "clone"
+    clone_root.mkdir()
+    repo = clone_root / "repo"
+    _run_git(["clone", "-q", str(upstream), str(repo)], cwd=clone_root)
+
+    _run_git(["checkout", "-q", "--detach", "HEAD"], cwd=repo)
+    _run_git(["update-ref", "-d", "refs/remotes/origin/main"], cwd=repo)
+
+    events, emit = _capturing_emit()
+    su._pre_check(repo, channel="tag", force=False, emit=emit)
+
+    branch = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    assert branch == "main"
+    assert any(
+        "auto-attaching" in m
+        for _phase, level, m in events
+        if level == "info"
+    ), events
+
+
 # --------------------------------------------------------------------- #
 # _snapshot_configs / _restore_configs
 # --------------------------------------------------------------------- #
@@ -215,25 +243,24 @@ def test_snapshot_returns_none_when_configs_empty(tmp_path: Path) -> None:
 
 
 def test_snapshot_returns_none_when_only_tracked_present(tmp_path: Path) -> None:
-    """Tracked presets are git-owned and ride along ``git checkout``.
+    """Untouched tracked presets are git-owned and ride along checkout.
 
-    With nothing untracked under configs/, snapshot has nothing to do
-    and returns None — restore is a no-op and the upgrade lets upstream
-    preset fixes propagate.
+    With no user-created or locally edited config files, snapshot has
+    nothing to do and the upgrade lets upstream preset fixes propagate.
     """
     repo = _make_repo(tmp_path)
     events, emit = _capturing_emit()
     assert su._snapshot_configs(repo, emit) is None
 
 
-def test_snapshot_round_trip_preserves_untracked_only(tmp_path: Path) -> None:
+def test_snapshot_round_trip_preserves_user_configs_and_local_edits(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    # Author-side yamls — never seen by git.
+    # User-side yamls — never seen by git.
     (repo / "configs" / "user.yaml").write_text("name: user_edit\n")
     (repo / "configs" / "nested").mkdir()
     (repo / "configs" / "nested" / "deep.yaml").write_text("deep: yes\n")
-    # Modification on a tracked preset — must NOT be snapshotted (git
-    # owns it; stash flow handles the user's edit downstream).
+    # Modification on a tracked preset — must be snapshotted so force
+    # upgrades do not reset the user's config edits.
     (repo / "configs" / "anima.yaml").write_text("name: locally_edited\n")
 
     events, emit = _capturing_emit()
@@ -242,10 +269,14 @@ def test_snapshot_round_trip_preserves_untracked_only(tmp_path: Path) -> None:
     assert snap.is_file()
     assert tarfile.is_tarfile(snap)
 
-    # Tar must contain only the two untracked entries.
+    # Tar must contain untracked entries and locally edited tracked configs.
     with tarfile.open(snap, "r") as tar:
         names = sorted(m.name for m in tar.getmembers() if m.isfile())
-    assert names == ["configs/nested/deep.yaml", "configs/user.yaml"], names
+    assert names == [
+        "configs/anima.yaml",
+        "configs/nested/deep.yaml",
+        "configs/user.yaml",
+    ], names
 
     # Wipe configs/ then restore from the archive.
     for p in sorted(
@@ -258,10 +289,7 @@ def test_snapshot_round_trip_preserves_untracked_only(tmp_path: Path) -> None:
     (repo / "configs").rmdir()
 
     su._restore_configs(repo, snap, emit)
-    # Tracked file is NOT in the snapshot — it stays gone post-wipe
-    # (in the real upgrade flow `git checkout` would already have put
-    # the upstream version back; here we only assert snapshot scope).
-    assert not (repo / "configs" / "anima.yaml").exists()
+    assert (repo / "configs" / "anima.yaml").read_text() == "name: locally_edited\n"
     assert (repo / "configs" / "user.yaml").read_text() == "name: user_edit\n"
     assert (repo / "configs" / "nested" / "deep.yaml").read_text() == "deep: yes\n"
 
