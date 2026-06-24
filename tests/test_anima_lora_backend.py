@@ -181,6 +181,45 @@ def test_installer_deepspeed_runs_on_linux(
     assert calls == [(plan.venv_python, ["deepspeed"], "install anima_lora deepspeed")]
 
 
+def test_installer_bitsandbytes_runs_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, list[str], str]] = []
+    monkeypatch.setattr(al_installer.sys, "platform", "linux")
+
+    def fake_pip_install(
+        venv_py: Path,
+        args: list[str],
+        *,
+        step: str,
+        progress=None,
+        pypi_index=None,
+    ) -> None:
+        calls.append((venv_py, args, step))
+
+    monkeypatch.setattr(al_installer._uv, "pip_install", fake_pip_install)
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+
+    al_installer.install_bitsandbytes(plan)
+
+    assert calls == [
+        (plan.venv_python, ["bitsandbytes"], "install anima_lora bitsandbytes")
+    ]
+
+
+def test_installer_bitsandbytes_skips_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[Any] = []
+    monkeypatch.setattr(al_installer.sys, "platform", "win32")
+    monkeypatch.setattr(al_installer._uv, "pip_install", lambda *a, **k: calls.append(a))
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+
+    al_installer.install_bitsandbytes(plan)
+
+    assert calls == []
+
+
 def test_anima_model_download_uses_env_hf_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

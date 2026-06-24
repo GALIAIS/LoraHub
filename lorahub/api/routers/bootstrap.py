@@ -273,6 +273,7 @@ def _build_deps_runner(
         def runner(progress: Callable[[str], None]) -> None:
             al_installer.sync(plan, progress=progress)
             al_installer.install_torch_override(plan, progress=progress)
+            al_installer.install_bitsandbytes(plan, progress=progress)
             al_installer.install_deepspeed(plan, progress=progress)
 
     else:

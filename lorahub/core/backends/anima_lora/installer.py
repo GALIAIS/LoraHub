@@ -179,6 +179,23 @@ def install_deepspeed(
         raise BootstrapError("install anima_lora deepspeed", 1) from exc
 
 
+def install_bitsandbytes(
+    plan: BootstrapPlan, *, progress: ProgressCallback | None = None
+) -> None:
+    if sys.platform == "win32":
+        return
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["bitsandbytes"],
+            step="install anima_lora bitsandbytes",
+            progress=progress,
+            pypi_index=plan.pypi_index,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError("install anima_lora bitsandbytes", 1) from exc
+
+
 def install_torch_override(
     plan: BootstrapPlan, *, progress: ProgressCallback | None = None
 ) -> None:
@@ -243,6 +260,7 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
     """
     sync(plan, progress=progress)
     install_torch_override(plan, progress=progress)
+    install_bitsandbytes(plan, progress=progress)
     install_deepspeed(plan, progress=progress)
 
 
@@ -299,6 +317,7 @@ __all__ = [
     "ProgressCallback",
     "bootstrap",
     "cleanup_partial",
+    "install_bitsandbytes",
     "install_deepspeed",
     "install_torch_override",
     "sync",
