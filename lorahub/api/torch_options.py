@@ -17,6 +17,7 @@ class TorchWheelOption:
     torchvision_version: str
     label: str
     min_driver: str
+    min_compute_capability: str
     notes: str
 
 
@@ -29,6 +30,7 @@ TORCH_WHEEL_OPTIONS: tuple[TorchWheelOption, ...] = (
         torchvision_version="0.22.1",
         label="PyTorch 2.7.1 / CUDA 12.8",
         min_driver="570.00",
+        min_compute_capability="7.5",
         notes="需要 570+ NVIDIA 驱动。",
     ),
     TorchWheelOption(
@@ -37,6 +39,7 @@ TORCH_WHEEL_OPTIONS: tuple[TorchWheelOption, ...] = (
         torchvision_version="0.21.0",
         label="PyTorch 2.6.0 / CUDA 12.6",
         min_driver="560.00",
+        min_compute_capability="7.0",
         notes="需要 560+ NVIDIA 驱动。",
     ),
     TorchWheelOption(
@@ -45,6 +48,7 @@ TORCH_WHEEL_OPTIONS: tuple[TorchWheelOption, ...] = (
         torchvision_version="0.21.0",
         label="PyTorch 2.6.0 / CUDA 12.4",
         min_driver="550.54",
+        min_compute_capability="7.0",
         notes="需要 550.54+ NVIDIA 驱动。",
     ),
     TorchWheelOption(
@@ -53,6 +57,7 @@ TORCH_WHEEL_OPTIONS: tuple[TorchWheelOption, ...] = (
         torchvision_version="0.20.1",
         label="PyTorch 2.5.1 / CUDA 12.1",
         min_driver="530.30",
+        min_compute_capability="7.0",
         notes="需要 530.30+ NVIDIA 驱动。",
     ),
     TorchWheelOption(
@@ -61,6 +66,7 @@ TORCH_WHEEL_OPTIONS: tuple[TorchWheelOption, ...] = (
         torchvision_version="0.20.1",
         label="PyTorch 2.5.1 / CUDA 11.8",
         min_driver="520.61",
+        min_compute_capability="7.0",
         notes="需要 520.61+ NVIDIA 驱动。",
     ),
 )
@@ -122,6 +128,34 @@ def detect_nvidia_driver() -> str | None:
     return None
 
 
+def detect_compute_capability() -> str | None:
+    """Return the lowest NVIDIA compute capability on this host."""
+
+    smi = _find_nvidia_smi()
+    if not smi:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                smi,
+                "--query-gpu=compute_cap",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not values:
+        return None
+    return min(values, key=lambda v: _version_tuple(v) or (999,))
+
+
 def supports_cuda(driver_version: str | None, cuda: str) -> bool | None:
     """Return whether *driver_version* can load the requested CUDA wheel.
 
@@ -135,7 +169,19 @@ def supports_cuda(driver_version: str | None, cuda: str) -> bool | None:
     return _version_gte(driver_version, minimum)
 
 
-def get_torch_options(driver_version: str | None | object = _DETECT_DRIVER) -> dict[str, Any]:
+def supports_compute_capability(
+    compute_capability: str | None,
+    option: TorchWheelOption,
+) -> bool | None:
+    if not compute_capability:
+        return None
+    return _version_gte(compute_capability, option.min_compute_capability)
+
+
+def get_torch_options(
+    driver_version: str | None | object = _DETECT_DRIVER,
+    compute_capability: str | None | object = _DETECT_DRIVER,
+) -> dict[str, Any]:
     driver = (
         detect_nvidia_driver()
         if driver_version is _DETECT_DRIVER
@@ -143,22 +189,35 @@ def get_torch_options(driver_version: str | None | object = _DETECT_DRIVER) -> d
     )
     if not isinstance(driver, str):
         driver = None
+    cap = (
+        detect_compute_capability()
+        if compute_capability is _DETECT_DRIVER
+        else compute_capability
+    )
+    if not isinstance(cap, str):
+        cap = None
     rows: list[dict[str, Any]] = []
     recommended_index: int | None = None
     max_cuda: str | None = None
 
     for idx, option in enumerate(TORCH_WHEEL_OPTIONS):
-        supported = supports_cuda(driver, option.cuda)
-        compatible = True if supported is None else supported
+        driver_supported = supports_cuda(driver, option.cuda)
+        cap_supported = supports_compute_capability(cap, option)
+        compatible = all(v is not False for v in (driver_supported, cap_supported))
         if recommended_index is None and compatible:
             recommended_index = idx
             max_cuda = option.cuda
         if driver is None:
-            reason = "未检测到 NVIDIA 驱动，按默认兼容项展示；安装前请确认 nvidia-smi 可用。"
-        elif compatible:
-            reason = f"当前驱动 {driver} 满足最低要求 {option.min_driver}。"
-        else:
+            reason = "未检测到 NVIDIA 驱动。"
+        elif driver_supported is False:
             reason = f"当前驱动 {driver} 低于最低要求 {option.min_driver}。"
+        elif cap_supported is False:
+            reason = (
+                f"当前 GPU compute capability {cap} 低于最低要求 "
+                f"{option.min_compute_capability}。"
+            )
+        else:
+            reason = f"当前驱动 {driver} 与 GPU 架构满足要求。"
         rows.append(
             {
                 "cuda": option.cuda,
@@ -166,6 +225,7 @@ def get_torch_options(driver_version: str | None | object = _DETECT_DRIVER) -> d
                 "torchvision_version": option.torchvision_version,
                 "label": option.label,
                 "min_driver": option.min_driver,
+                "min_compute_capability": option.min_compute_capability,
                 "compatible": compatible,
                 "recommended": False,
                 "reason": reason,
@@ -178,9 +238,18 @@ def get_torch_options(driver_version: str | None | object = _DETECT_DRIVER) -> d
 
     return {
         "driver_version": driver,
+        "compute_capability": cap,
         "max_cuda": max_cuda,
         "options": rows,
     }
+
+
+def recommended_torch_option() -> TorchWheelOption:
+    payload = get_torch_options()
+    for row in payload["options"]:
+        if row["recommended"]:
+            return next(o for o in TORCH_WHEEL_OPTIONS if o.cuda == row["cuda"])
+    return TORCH_WHEEL_OPTIONS[0]
 
 
 def validate_torch_selection(cuda: str) -> str | None:
@@ -194,4 +263,12 @@ def validate_torch_selection(cuda: str) -> str | None:
             f"当前 NVIDIA 驱动 {driver} 低于 {cuda} wheel 的最低要求 {minimum}，"
             "请选择更低 CUDA 版本的 PyTorch 或升级驱动。"
         )
+    option = next((o for o in TORCH_WHEEL_OPTIONS if o.cuda == cuda), None)
+    if option is not None:
+        cap = detect_compute_capability()
+        if supports_compute_capability(cap, option) is False:
+            return (
+                f"当前 GPU compute capability {cap} 低于 {cuda} wheel 的最低要求 "
+                f"{option.min_compute_capability}，请选择更低版本的 PyTorch。"
+            )
     return None

@@ -385,13 +385,22 @@ def _build_anima_lora_runner(
     CUDA pin without editing ``pyproject.toml`` by hand.
     """
     from lorahub.api import app as app_module  # noqa: PLC0415
-    from lorahub.api.torch_options import validate_torch_selection  # noqa: PLC0415
+    from lorahub.api.torch_options import (  # noqa: PLC0415
+        recommended_torch_option,
+        validate_torch_selection,
+    )
     from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap  # noqa: PLC0415
     from lorahub.core.backends.anima_lora import installer  # noqa: PLC0415
 
-    if req.torch_override:
-        if error := validate_torch_selection(req.cuda):
-            raise HTTPException(status_code=400, detail=error)
+    torch_override = req.torch_override
+    cuda = req.cuda
+    torch_version = req.torch_version
+    torchvision_version = req.torchvision_version
+    if torch_override and validate_torch_selection(cuda):
+        option = recommended_torch_option()
+        cuda = option.cuda
+        torch_version = option.torch_version
+        torchvision_version = option.torchvision_version
 
     target_path = (
         Path(req.target).expanduser().resolve()
@@ -411,10 +420,10 @@ def _build_anima_lora_runner(
         base_python=_resolve_base_python("3.13"),
         pypi_index=settings.pypi_index_url,
         install_deepspeed=req.install_deepspeed,
-        torch_override=req.torch_override,
-        cuda_version=req.cuda,
-        torch_version=req.torch_version,
-        torchvision_version=req.torchvision_version,
+        torch_override=torch_override,
+        cuda_version=cuda,
+        torch_version=torch_version,
+        torchvision_version=torchvision_version,
         torch_index_base=_torch_index_url(settings),
     )
     if not (plan.target / "pyproject.toml").is_file():

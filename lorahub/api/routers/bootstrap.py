@@ -246,6 +246,7 @@ def _build_deps_runner(
             bootstrap as al_bootstrap,
             installer as al_installer,
         )
+        from lorahub.api.torch_options import recommended_torch_option  # noqa: PLC0415
 
         target_path = al_bootstrap.default_repo_path()
         if not (target_path / "pyproject.toml").is_file():
@@ -256,16 +257,22 @@ def _build_deps_runner(
                     "the repo source tree may be corrupted."
                 ),
             )
+        torch_option = recommended_torch_option()
         plan = al_installer.BootstrapPlan(
             target=target_path,
             base_python=None,
             pypi_index=settings.pypi_index_url,
             install_deepspeed=req.install_deepspeed,
+            torch_override=True,
+            cuda_version=torch_option.cuda,
+            torch_version=torch_option.torch_version,
+            torchvision_version=torch_option.torchvision_version,
             torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
             al_installer.sync(plan, progress=progress)
+            al_installer.install_torch_override(plan, progress=progress)
             al_installer.install_deepspeed(plan, progress=progress)
 
     else:
