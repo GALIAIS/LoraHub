@@ -4,12 +4,30 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from lorahub.core.toolchain import uv as _uv
+
+
+class _FakePopen:
+    def __init__(
+        self,
+        cmd: list[str],
+        *args: object,
+        returncode: int = 0,
+        output: list[str] | None = None,
+        **kwargs: object,
+    ) -> None:
+        self.cmd = cmd
+        self.args = args
+        self.kwargs = kwargs
+        self.returncode = returncode
+        self.stdout = iter(output or [])
+
+    def wait(self) -> int:
+        return self.returncode
 
 
 @pytest.fixture(autouse=True)
@@ -61,11 +79,11 @@ def test_pip_install_invokes_uv_with_python(
     monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
     captured: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **_kw: object) -> MagicMock:
+    def fake_popen(cmd: list[str], **_kw: object) -> _FakePopen:
         captured.append(cmd)
-        return MagicMock(returncode=0, stderr="")
+        return _FakePopen(cmd)
 
-    monkeypatch.setattr(_uv.subprocess, "run", fake_run)
+    monkeypatch.setattr(_uv.subprocess, "Popen", fake_popen)
     venv_py = tmp_path / "venv" / "bin" / "python"
     _uv.pip_install(venv_py, ["torch", "--index-url", "https://x"], step="install torch")
     assert captured, "uv pip install was not called"
@@ -82,7 +100,7 @@ def test_create_venv_returns_python_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
-    monkeypatch.setattr(_uv.subprocess, "run", MagicMock(return_value=MagicMock(returncode=0, stderr="")))
+    monkeypatch.setattr(_uv.subprocess, "Popen", lambda cmd, **kw: _FakePopen(cmd, **kw))
     target = tmp_path / "proj"
     py = _uv.create_venv(target)
     expected_dir = target / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
@@ -94,11 +112,11 @@ def test_run_uv_merges_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
     captured: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+    def fake_popen(cmd: list[str], **kwargs: object) -> _FakePopen:
         captured.append((cmd, kwargs))
-        return SimpleNamespace(returncode=0, stderr="")
+        return _FakePopen(cmd, **kwargs)
 
-    monkeypatch.setattr(_uv.subprocess, "run", fake_run)
+    monkeypatch.setattr(_uv.subprocess, "Popen", fake_popen)
 
     _uv.run_uv(["sync"], step="sync", env={"UV_CACHE_DIR": "/work/.cache/uv"})
 

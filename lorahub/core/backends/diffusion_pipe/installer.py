@@ -23,6 +23,7 @@ from lorahub.core.backends._common.installer import (
     DEFAULT_CUDA,
     DEFAULT_DEPTH,
     DEFAULT_TORCH,
+    DEFAULT_TORCH_INDEX_BASE,
     DEFAULT_TORCHVISION,
     ProgressCallback,
 )
@@ -58,8 +59,7 @@ class BootstrapPlan:
 
     @property
     def torch_index(self) -> str:
-        base = (self.torch_index_base or "").rstrip("/") or "https://download.pytorch.org/whl"
-        return f"{base}/{self.cuda_version}"
+        return _common.torch_index_from_base(self.torch_index_base, self.cuda_version)
 
 
 def clone(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -167,6 +167,7 @@ __all__ = [
     "DEFAULT_CUDA",
     "DEFAULT_DEPTH",
     "DEFAULT_TORCH",
+    "DEFAULT_TORCH_INDEX_BASE",
     "DEFAULT_TORCHVISION",
     "DIFFUSION_PIPE_REPO_URL",
     "BootstrapError",

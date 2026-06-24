@@ -187,6 +187,24 @@ export interface AttentionBackendsResponse {
   all: string[]
 }
 
+export interface TorchWheelOption {
+  cuda: string
+  torch_version: string
+  torchvision_version: string
+  label: string
+  min_driver: string
+  compatible: boolean
+  recommended: boolean
+  reason: string
+  notes: string
+}
+
+export interface TorchOptionsResponse {
+  driver_version: string | null
+  max_cuda: string | null
+  options: TorchWheelOption[]
+}
+
 export interface BootstrapRequestBody {
   backend?: BackendId
   target?: string | null
@@ -195,6 +213,7 @@ export interface BootstrapRequestBody {
   torchvision_version?: string
   install_xformers?: boolean
   install_deepspeed?: boolean
+  torch_override?: boolean
   force?: boolean
 }
 

@@ -33,9 +33,13 @@ PYTHON_BUILD_MIRRORS=(
 )
 
 PYPI_INDEXES=(
-  "https://pypi.tuna.tsinghua.edu.cn/simple"
   "https://mirrors.aliyun.com/pypi/simple"
+  "https://mirror.nju.edu.cn/pypi/web/simple"
+  "https://mirrors.bfsu.edu.cn/pypi/web/simple"
+  "https://pypi.mirrors.ustc.edu.cn/simple"
+  "https://pypi.tuna.tsinghua.edu.cn/simple"
   "https://mirrors.cloud.tencent.com/pypi/simple"
+  "https://mirrors.huaweicloud.com/repository/pypi/simple"
   "https://pypi.org/simple"
 )
 
@@ -49,6 +53,13 @@ NODE_MIRRORS=(
 NPM_REGISTRIES=(
   "https://registry.npmmirror.com"
   "https://registry.npmjs.org"
+)
+
+PYTORCH_WHEEL_MIRRORS=(
+  "https://mirrors.aliyun.com/pytorch-wheels"
+  "https://mirrors.nju.edu.cn/pytorch/whl"
+  "https://download.pytorch.org/whl"
+  "https://mirror.sjtu.edu.cn/pytorch-wheels"
 )
 
 # Probe URLs — small payloads (HEAD on a tiny known file) so the test
@@ -122,7 +133,7 @@ pick_fastest() {
         best_url="${candidates[0]}"
         local fallback
         if [ -z "$best_url" ]; then fallback="(direct)"; else fallback="$best_url"; fi
-        printf '  [!] all probes failed, falling back to %s\n' "$fallback" >&2
+        printf '  [!] all probes failed; using %s\n' "$fallback" >&2
     fi
     echo "$best_url"
 }
@@ -167,6 +178,10 @@ probe_npm() {
     echo "$1/lodash"
 }
 
+probe_pytorch() {
+    echo "$1/cu128/torch/"
+}
+
 echo "[install-cn] selecting fastest mirrors ..."
 echo ""
 
@@ -175,8 +190,10 @@ UV_PYTHON_INSTALL_MIRROR=$(pick_fastest "python-build-standalone" probe_python_b
 UV_INDEX_URL=$(pick_fastest "PyPI" probe_pypi "${PYPI_INDEXES[@]}")
 LORAHUB_NODE_MIRROR=$(pick_fastest "Node binary" probe_node "${NODE_MIRRORS[@]}")
 NPM_CONFIG_REGISTRY=$(pick_fastest "npm registry" probe_npm "${NPM_REGISTRIES[@]}")
+LORAHUB_TORCH_INDEX_URL=$(pick_fastest "PyTorch wheel" probe_pytorch "${PYTORCH_WHEEL_MIRRORS[@]}")
 
-export LORAHUB_GH_PROXY UV_PYTHON_INSTALL_MIRROR UV_INDEX_URL LORAHUB_NODE_MIRROR NPM_CONFIG_REGISTRY
+export LORAHUB_GH_PROXY UV_PYTHON_INSTALL_MIRROR UV_INDEX_URL LORAHUB_NODE_MIRROR NPM_CONFIG_REGISTRY LORAHUB_TORCH_INDEX_URL
+export UV_DEFAULT_INDEX="$UV_INDEX_URL"
 
 echo ""
 echo "[install-cn] selected mirrors:"
@@ -185,6 +202,7 @@ echo "  Python:  $UV_PYTHON_INSTALL_MIRROR"
 echo "  PyPI:    $UV_INDEX_URL"
 echo "  Node:    $LORAHUB_NODE_MIRROR"
 echo "  npm:     $NPM_CONFIG_REGISTRY"
+echo "  PyTorch: $LORAHUB_TORCH_INDEX_URL"
 echo ""
 
 exec bash "$SCRIPT_DIR/install.sh" "$@"

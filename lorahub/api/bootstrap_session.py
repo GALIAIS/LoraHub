@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -22,6 +23,10 @@ from pydantic import BaseModel
 from lorahub.api.task_sessions import TaskEvent
 
 
+def _torch_index_url(settings: Any) -> str | None:
+    return settings.torch_index_url or os.environ.get("LORAHUB_TORCH_INDEX_URL")
+
+
 class BootstrapRequest(BaseModel):
     backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
     target: str | None = None
@@ -30,6 +35,7 @@ class BootstrapRequest(BaseModel):
     torchvision_version: str = "0.21.0"
     install_xformers: bool = True
     install_deepspeed: bool = True
+    torch_override: bool = False
     force: bool = False
 
 
@@ -258,7 +264,11 @@ def _build_kohya_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
     from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.torch_options import validate_torch_selection  # noqa: PLC0415
     from lorahub.core.backends.kohya import installer  # noqa: PLC0415
+
+    if error := validate_torch_selection(req.cuda):
+        raise HTTPException(status_code=400, detail=error)
 
     target_path = (
         Path(req.target).expanduser().resolve()
@@ -275,7 +285,7 @@ def _build_kohya_runner(
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
         pypi_index=settings.pypi_index_url,
-        torch_index_base=settings.torch_index_url,
+        torch_index_base=_torch_index_url(settings),
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -310,7 +320,11 @@ def _build_diffusion_pipe_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
     from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.torch_options import validate_torch_selection  # noqa: PLC0415
     from lorahub.core.backends.diffusion_pipe import installer  # noqa: PLC0415
+
+    if error := validate_torch_selection(req.cuda):
+        raise HTTPException(status_code=400, detail=error)
 
     target_path = (
         Path(req.target).expanduser().resolve()
@@ -327,7 +341,7 @@ def _build_diffusion_pipe_runner(
         github_proxy=settings.github_proxy,
         base_python=_resolve_base_python(),
         pypi_index=settings.pypi_index_url,
-        torch_index_base=settings.torch_index_url,
+        torch_index_base=_torch_index_url(settings),
     )
     if plan.target.exists() and any(plan.target.iterdir()):
         if not req.force:
@@ -365,13 +379,19 @@ def _build_anima_lora_runner(
 
     The target directory is **always** ``external/anima_lora`` (vendored).
     ``req.target`` is honoured only as a dev override — pointing at an
-    alternate checkout for upstream development. ``req.cuda`` /
-    ``req.torch_version`` are ignored because anima_lora's torch pin
-    lives in its own ``pyproject.toml`` + ``uv.lock``.
+    alternate checkout for upstream development. When ``req.torch_override``
+    is true, the installer applies a post-sync torch / torchvision wheel
+    override so old-driver hosts can downgrade from anima_lora's upstream
+    CUDA pin without editing ``pyproject.toml`` by hand.
     """
     from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.torch_options import validate_torch_selection  # noqa: PLC0415
     from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap  # noqa: PLC0415
     from lorahub.core.backends.anima_lora import installer  # noqa: PLC0415
+
+    if req.torch_override:
+        if error := validate_torch_selection(req.cuda):
+            raise HTTPException(status_code=400, detail=error)
 
     target_path = (
         Path(req.target).expanduser().resolve()
@@ -391,6 +411,11 @@ def _build_anima_lora_runner(
         base_python=_resolve_base_python("3.13"),
         pypi_index=settings.pypi_index_url,
         install_deepspeed=req.install_deepspeed,
+        torch_override=req.torch_override,
+        cuda_version=req.cuda,
+        torch_version=req.torch_version,
+        torchvision_version=req.torchvision_version,
+        torch_index_base=_torch_index_url(settings),
     )
     if not (plan.target / "pyproject.toml").is_file():
         raise HTTPException(

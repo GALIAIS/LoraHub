@@ -210,3 +210,64 @@ def test_clone_repo_raises_when_non_empty_not_git(
     with pytest.raises(BootstrapError):
         common.clone_repo(plan, repo_url="https://example.invalid/r.git", label="r")
     called.assert_not_called()
+
+
+def test_torch_index_candidates_put_user_source_first() -> None:
+    indexes = common.torch_index_candidates(
+        "https://example.invalid/pytorch/whl",
+        "cu121",
+    )
+
+    assert indexes[0] == "https://example.invalid/pytorch/whl/cu121"
+    assert "https://download.pytorch.org/whl/cu121" in indexes
+
+
+def test_torch_index_from_base_replaces_existing_cuda_suffix() -> None:
+    assert (
+        common.torch_index_from_base(
+            "https://example.invalid/pytorch/whl/cu128",
+            "cu124",
+        )
+        == "https://example.invalid/pytorch/whl/cu124"
+    )
+
+
+def test_pip_install_with_torch_index_fallback_tries_next_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_pip_install(
+        _venv_py: Path,
+        args: list[str],
+        *,
+        step: str,
+        progress=None,
+    ) -> None:
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("missing wheel")
+
+    monkeypatch.setattr(common._uv, "pip_install", fake_pip_install)
+
+    plan = MagicMock()
+    plan.venv_python = tmp_path / "venv" / "bin" / "python"
+    plan.cuda_version = "cu124"
+    plan.torch_index_base = "https://bad.invalid/pytorch/whl"
+
+    seen: list[str] = []
+    common.pip_install_with_torch_index_fallback(
+        plan,
+        ["torch==2.6.0", "--index-url", "https://bad.invalid/pytorch/whl/cu124"],
+        step="install torch",
+        progress=seen.append,
+    )
+
+    assert len(calls) == 2
+    first_index = calls[0][calls[0].index("--index-url") + 1]
+    second_index = calls[1][calls[1].index("--index-url") + 1]
+    assert first_index == "https://bad.invalid/pytorch/whl/cu124"
+    assert second_index != first_index
+    assert second_index.endswith("/cu124")
+    assert any("trying" in item for item in seen)

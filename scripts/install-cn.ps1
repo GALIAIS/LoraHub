@@ -37,6 +37,7 @@ if (-not $env:UV_INDEX_URL) {
     Write-Host "[install-cn] probe failed; aborting." -ForegroundColor Red
     exit 1
 }
+$env:UV_DEFAULT_INDEX = $env:UV_INDEX_URL
 
 Write-Host ""
 Write-Host "[install-cn] selected mirrors:"
@@ -49,6 +50,7 @@ Write-Host "  Python:  $env:UV_PYTHON_INSTALL_MIRROR"
 Write-Host "  PyPI:    $env:UV_INDEX_URL"
 Write-Host "  Node:    $env:LORAHUB_NODE_MIRROR"
 Write-Host "  npm:     $env:NPM_CONFIG_REGISTRY"
+Write-Host "  PyTorch: $env:LORAHUB_TORCH_INDEX_URL"
 Write-Host ""
 
 # Forward any extra args the user passed verbatim to install.bat.

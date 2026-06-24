@@ -28,6 +28,13 @@ DEFAULT_TORCH = "2.6.0"
 DEFAULT_TORCHVISION = "0.21.0"
 DEFAULT_CUDA = "cu124"
 DEFAULT_DEPTH = 1
+DEFAULT_TORCH_INDEX_BASE = "https://download.pytorch.org/whl"
+FALLBACK_TORCH_INDEX_BASES: tuple[str, ...] = (
+    "https://mirrors.aliyun.com/pytorch-wheels",
+    "https://mirrors.nju.edu.cn/pytorch/whl",
+    DEFAULT_TORCH_INDEX_BASE,
+    "https://mirror.sjtu.edu.cn/pytorch-wheels",
+)
 
 
 class BootstrapPlanLike(Protocol):
@@ -212,14 +219,85 @@ def install_torch(
         plan.torch_index,
     ]
     try:
-        _uv.pip_install(
-            plan.venv_python,
+        pip_install_with_torch_index_fallback(
+            plan,
             args,
             step=f"install torch=={plan.torch_version} ({plan.cuda_version})",
             progress=progress,
         )
     except RuntimeError as exc:
         raise BootstrapError(f"install torch=={plan.torch_version}", 1) from exc
+
+
+def torch_index_from_base(base: str | None, cuda: str) -> str:
+    """Return a concrete PyTorch wheel index for *cuda*.
+
+    User settings store a base URL such as ``https://.../pytorch/whl``.
+    If someone has already entered a concrete ``.../cu124`` URL, normalize it
+    by replacing that suffix with the requested CUDA suffix.
+    """
+    clean = (base or "").strip().rstrip("/") or DEFAULT_TORCH_INDEX_BASE
+    parts = clean.rsplit("/", 1)
+    if len(parts) == 2 and parts[1].startswith("cu") and parts[1][2:].isdigit():
+        clean = parts[0]
+    return f"{clean}/{cuda}"
+
+
+def torch_index_candidates(
+    base: str | None,
+    cuda: str,
+) -> list[str]:
+    """Concrete torch indexes, user-configured source first, then built-ins."""
+    indexes: list[str] = []
+    bases = []
+    if base and base.strip():
+        bases.append(base.strip())
+    bases.extend(FALLBACK_TORCH_INDEX_BASES)
+    for candidate_base in bases:
+        index = torch_index_from_base(candidate_base, cuda)
+        if index not in indexes:
+            indexes.append(index)
+    return indexes
+
+
+def _with_index_url(args: list[str], index_url: str) -> list[str]:
+    out = list(args)
+    for i, arg in enumerate(out):
+        if arg == "--index-url" and i + 1 < len(out):
+            out[i + 1] = index_url
+            return out
+        if arg.startswith("--index-url="):
+            out[i] = f"--index-url={index_url}"
+            return out
+    return [*out, "--index-url", index_url]
+
+
+def pip_install_with_torch_index_fallback(
+    plan: BootstrapPlanLike,
+    args: list[str],
+    *,
+    step: str,
+    progress: ProgressCallback | None = None,
+) -> None:
+    """Install from PyTorch wheel indexes, trying the next source on failure."""
+    indexes = torch_index_candidates(plan.torch_index_base, plan.cuda_version)
+    errors: list[str] = []
+    for idx, index_url in enumerate(indexes):
+        current_step = step if idx == 0 else f"{step} (source {idx + 1}/{len(indexes)})"
+        try:
+            _uv.pip_install(
+                plan.venv_python,
+                _with_index_url(args, index_url),
+                step=current_step,
+                progress=progress,
+            )
+            return
+        except RuntimeError as exc:
+            errors.append(f"{index_url}: {exc}")
+            if idx + 1 < len(indexes) and progress is not None:
+                progress(f"{current_step} failed; trying {indexes[idx + 1]}")
+    detail = "\n".join(errors[-4:])
+    raise RuntimeError(f"{step} failed on all PyTorch indexes:\n{detail}")
 
 
 def cleanup_partial(target: Path) -> None:
@@ -252,14 +330,19 @@ def cleanup_partial(target: Path) -> None:
 __all__ = [
     "DEFAULT_CUDA",
     "DEFAULT_DEPTH",
+    "DEFAULT_TORCH_INDEX_BASE",
     "DEFAULT_TORCH",
     "DEFAULT_TORCHVISION",
+    "FALLBACK_TORCH_INDEX_BASES",
     "BootstrapPlanLike",
     "ProgressCallback",
     "cleanup_partial",
     "clone_repo",
     "create_venv",
     "install_torch",
+    "pip_install_with_torch_index_fallback",
     "run_step",
+    "torch_index_candidates",
+    "torch_index_from_base",
     "upgrade_pip",
 ]

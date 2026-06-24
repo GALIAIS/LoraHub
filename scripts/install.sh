@@ -67,6 +67,10 @@ if [ "$NODE_MIRROR" != "https://nodejs.org/dist" ]; then echo "  Node:      $NOD
 if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then echo "  npm:       $NPM_CONFIG_REGISTRY";    fi
 echo ""
 
+if [ -n "${UV_INDEX_URL:-}" ] && [ -z "${UV_DEFAULT_INDEX:-}" ]; then
+    export UV_DEFAULT_INDEX="$UV_INDEX_URL"
+fi
+
 version_ge() {
     # Return true when $1 >= $2 for dotted numeric versions.
     local a b IFS=.
@@ -196,10 +200,14 @@ echo ""
 
 # ---- [4/6] Install Python dependencies ------------------------------
 echo "[4/6] Installing Python dependencies ..."
-# uv pip install reads UV_INDEX_URL natively when set; explicit
-# --index-url here would override that, so leave the env var to do
-# its job.
-"$UV" pip install -e ".[api,dev]" --python "$VENV_PY"
+PY_DEPS_LOG="$ROOT/_uv_python_deps.log"
+PY_DEPS_ARGS=(pip install -v -e ".[api,dev]" --python "$VENV_PY" --link-mode=copy)
+if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
+    PY_DEPS_ARGS+=(--index-url "$UV_DEFAULT_INDEX")
+fi
+echo "  uv default index: ${UV_DEFAULT_INDEX:-default}"
+echo "  running uv ${PY_DEPS_ARGS[*]} (log: _uv_python_deps.log) ..."
+"$UV" "${PY_DEPS_ARGS[@]}" 2>&1 | tee "$PY_DEPS_LOG"
 echo "  OK Python dependencies installed"
 echo ""
 

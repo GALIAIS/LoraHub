@@ -17,10 +17,12 @@ session in the API can drive any backend uniformly.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from lorahub.core.backends._common import installer as _common
 from lorahub.core.backends._common.installer import ProgressCallback
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.paths import project_root
@@ -61,6 +63,13 @@ class BootstrapPlan:
     # because there is no reliable wheel and source builds require a
     # CUDA toolkit + MSVC setup outside LoraHub's control.
     install_deepspeed: bool = True
+    # Optional post-sync torch wheel override. Used for hosts whose driver
+    # cannot load anima_lora's upstream CUDA pin.
+    torch_override: bool = False
+    cuda_version: str = "cu128"
+    torch_version: str = "2.7.1"
+    torchvision_version: str = "0.22.1"
+    torch_index_base: str | None = None
 
     @property
     def venv_dir(self) -> Path:
@@ -79,6 +88,10 @@ class BootstrapPlan:
     @property
     def temp_dir(self) -> Path:
         return project_root() / ".cache" / "tmp"
+
+    @property
+    def torch_index(self) -> str:
+        return _common.torch_index_from_base(self.torch_index_base, self.cuda_version)
 
 
 def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
@@ -166,6 +179,61 @@ def install_deepspeed(
         raise BootstrapError("install anima_lora deepspeed", 1) from exc
 
 
+def install_torch_override(
+    plan: BootstrapPlan, *, progress: ProgressCallback | None = None
+) -> None:
+    if not plan.torch_override:
+        return
+    _ensure_no_torch_override_running(plan)
+    args = [
+        f"torch=={plan.torch_version}",
+        f"torchvision=={plan.torchvision_version}",
+        "--index-url",
+        plan.torch_index,
+    ]
+    try:
+        _common.pip_install_with_torch_index_fallback(
+            plan,
+            args,
+            step=(
+                "override anima_lora torch=="
+                f"{plan.torch_version} ({plan.cuda_version})"
+            ),
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError(
+            f"override anima_lora torch=={plan.torch_version}",
+            1,
+        ) from exc
+
+
+def _ensure_no_torch_override_running(plan: BootstrapPlan) -> None:
+    if sys.platform == "win32":
+        return
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", "uv.*pip install.*torch=="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return
+    if result.returncode not in (0, 1):
+        return
+    needle = str(plan.venv_python)
+    current_pid = str(__import__("os").getpid())
+    lines = [
+        line
+        for line in result.stdout.splitlines()
+        if needle in line and not line.startswith(current_pid + " ")
+    ]
+    if lines:
+        msg = "another anima_lora torch install is still running:\n" + "\n".join(lines[:3])
+        raise BootstrapError("override anima_lora torch", 1) from RuntimeError(msg)
+
+
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     """Execute every install step in order.
 
@@ -174,6 +242,7 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
     only needed for ZeRO and is not part of upstream anima_lora's lock.
     """
     sync(plan, progress=progress)
+    install_torch_override(plan, progress=progress)
     install_deepspeed(plan, progress=progress)
 
 
@@ -231,5 +300,6 @@ __all__ = [
     "bootstrap",
     "cleanup_partial",
     "install_deepspeed",
+    "install_torch_override",
     "sync",
 ]

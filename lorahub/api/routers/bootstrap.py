@@ -21,6 +21,7 @@ from lorahub.api.bootstrap_session import (
     _BootstrapSession,
 )
 from lorahub.api.task_sessions import TaskSessionStore, default_task_store_path
+from lorahub.api.torch_options import get_torch_options
 
 router = APIRouter(prefix="/api")
 _KIND_BACKEND_BOOTSTRAP = "backend_bootstrap"
@@ -52,6 +53,13 @@ def list_bootstrap_sessions(limit: int = 20) -> dict[str, Any]:
         return {"sessions": []}
     sessions = [r["snapshot"] for r in rows if isinstance(r.get("snapshot"), dict)]
     return {"sessions": sessions}
+
+
+@router.get("/backend/torch-options")
+def torch_options() -> dict[str, Any]:
+    """Selectable PyTorch/CUDA wheel combinations for this host."""
+
+    return get_torch_options()
 
 
 def _latest_persisted_bootstrap() -> dict[str, Any] | None:
@@ -137,6 +145,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
                 "torchvision_version": req.torchvision_version,
                 "install_xformers": req.install_xformers,
                 "install_deepspeed": req.install_deepspeed,
+                "torch_override": req.torch_override,
                 "force": req.force,
             },
         )
@@ -222,6 +231,7 @@ def _build_deps_runner(
             github_proxy=settings.github_proxy,
             base_python=venv_py,
             pypi_index=settings.pypi_index_url,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
@@ -251,6 +261,7 @@ def _build_deps_runner(
             base_python=None,
             pypi_index=settings.pypi_index_url,
             install_deepspeed=req.install_deepspeed,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
@@ -286,6 +297,7 @@ def _build_deps_runner(
             github_proxy=settings.github_proxy,
             base_python=venv_py,
             pypi_index=settings.pypi_index_url,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
