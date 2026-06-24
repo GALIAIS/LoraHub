@@ -314,6 +314,27 @@ def _tag_update_available(
     )
 
 
+def _release_notes_from_git(
+    cwd: Path | None,
+    tag_name: str | None,
+    current_commit: str | None,
+) -> str:
+    if cwd is None or not tag_name or not cwd.is_dir():
+        return ""
+    start = current_commit or "HEAD"
+    try:
+        out = _git(
+            ["log", "--no-merges", "--pretty=format:%h %s", f"{start}..{tag_name}", "--"],
+            cwd=cwd,
+        )
+    except OSError:
+        return ""
+    if out.returncode != 0 or not out.stdout.strip():
+        return f"{tag_name} 正式版"
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    return "\n".join(lines[:80])[:8000]
+
+
 def _read_cache() -> _CacheBlob:
     f = _cache_file()
     if not f.is_file():
@@ -722,6 +743,13 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     )
     if latest_commit is None:
         latest_commit = remote.get("commit")
+    release_notes = remote["release_notes"]
+    if channel == "tag" and not release_notes:
+        release_notes = _release_notes_from_git(
+            cwd,
+            remote.get("tag_name"),
+            current_commit,
+        )
     if channel == "tag" and latest:
         update_available = _tag_update_available(
             latest=latest,
@@ -744,7 +772,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         latest=latest,
         update_available=update_available,
         release_url=WEB_RELEASES_URL if channel == "tag" else WEB_COMMITS_URL,
-        release_notes=remote["release_notes"],
+        release_notes=release_notes,
         checked_at=_now_iso(),
         is_dirty=is_dirty,
         tag_name=remote["tag_name"],

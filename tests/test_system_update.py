@@ -663,6 +663,38 @@ def test_check_tag_detects_retagged_same_version(
     assert info.latest_commit == "newsha"
 
 
+def test_check_tag_adds_git_notes_when_release_body_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.6", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.0.7",
+            "version_str": "1.0.7",
+            "commit": "newsha",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        su,
+        "_release_notes_from_git",
+        lambda cwd, tag, current: "abc123 fix(update): show release notes",
+    )
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda blob: None)
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.release_notes == "abc123 fix(update): show release notes"
+
+
 def test_check_tag_refreshes_cached_payload_without_sha(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

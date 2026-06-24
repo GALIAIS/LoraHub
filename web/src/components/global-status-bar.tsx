@@ -18,6 +18,7 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
 import type { JobSummary, SystemGpu } from "@/lib/api"
@@ -218,14 +219,37 @@ function GpuStatusPanel({
   snapshot: SystemSnapshot
   runningJobs: JobSummary[]
 }) {
+  const [open, setOpen] = useState(false)
+  const panelRef = useRef<HTMLDetailsElement | null>(null)
   const gpus = snapshot.gpus
   const active = gpus.filter((g) => (g.utilization_percent ?? 0) >= 5).length
   const avgUtil =
     gpus.reduce((sum, g) => sum + (g.utilization_percent ?? 0), 0) / gpus.length
   const slots = assignedGpuSlots(runningJobs)
 
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!panelRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [open])
+
   return (
-    <details className="group relative shrink-0">
+    <details
+      ref={panelRef}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      className="group relative shrink-0"
+    >
       <summary
         className={cn(
           "inline-flex h-7 cursor-pointer list-none items-center gap-2 rounded-[7px]",
