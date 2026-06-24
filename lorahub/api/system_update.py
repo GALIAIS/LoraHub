@@ -337,6 +337,19 @@ def _release_notes_from_git(
     return "\n".join(lines[:80])[:8000]
 
 
+def _release_notes_from_commit(commit_sha: str | None) -> str:
+    if not commit_sha:
+        return ""
+    try:
+        info = _fetch_json(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{commit_sha}"
+        )
+    except (OSError, ValueError):
+        return ""
+    msg = (info.get("commit") or {}).get("message") or ""
+    return msg.split("\n", 1)[0][:300]
+
+
 def _read_cache() -> _CacheBlob:
     f = _cache_file()
     if not f.is_file():
@@ -746,11 +759,15 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     if latest_commit is None:
         latest_commit = remote.get("commit")
     release_notes = remote["release_notes"]
-    if channel == "tag" and not release_notes:
-        release_notes = _release_notes_from_git(
+    if channel == "tag":
+        release_notes = (
+            _release_notes_from_commit(latest_commit)
+            or release_notes
+            or _release_notes_from_git(
             cwd,
             remote.get("tag_name"),
             current_commit,
+            )
         )
     if channel == "tag" and latest:
         update_available = _tag_update_available(
