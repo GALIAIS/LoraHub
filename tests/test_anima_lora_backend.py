@@ -19,6 +19,7 @@ test_anima_lora_schema.py (cut0 file).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,46 @@ def test_installer_uv_sync_env_preserves_user_overrides(
         assert "TMP" not in env
     else:
         assert "TMPDIR" not in env
+
+
+def test_installer_deepspeed_skips_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(al_installer.sys, "platform", "win32")
+    plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
+
+    al_installer.install_deepspeed(plan, progress=seen.append)
+
+    assert seen
+    assert "skip deepspeed" in seen[0]
+
+
+def test_installer_deepspeed_runs_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, list[str], str]] = []
+    monkeypatch.setattr(al_installer.sys, "platform", "linux")
+
+    def fake_pip_install(
+        venv_py: Path,
+        args: list[str],
+        *,
+        step: str,
+        progress=None,
+        pypi_index=None,
+    ) -> None:
+        calls.append((venv_py, args, step))
+
+    monkeypatch.setattr(al_installer._uv, "pip_install", fake_pip_install)
+    plan = al_installer.BootstrapPlan(
+        target=tmp_path / "external" / "anima_lora",
+        pypi_index="https://pypi.tuna.tsinghua.edu.cn/simple",
+    )
+
+    al_installer.install_deepspeed(plan)
+
+    assert calls == [(plan.venv_python, ["deepspeed"], "install anima_lora deepspeed")]
 
 
 def test_anima_model_download_uses_env_hf_endpoint(
@@ -474,3 +515,98 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
     # (LoraHub now drives every training knob through the generated
     # _lorahub_anima_config.toml; --method/--preset are gone).
     assert "--config_file" in argv[train_py_idx + 1 :]
+
+
+def test_launch_fsdp_writes_accelerate_config(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    cfg = _config(
+        tmp_path,
+        gpuDispatch={"mode": "distributed", "numGpus": 2},
+        distributed={
+            "strategy": "fsdp",
+            "fsdp": {
+                "autoWrapPolicy": "size_based",
+                "minNumParams": 123456,
+                "shardingStrategy": "full_shard",
+            },
+        },
+    )
+    captured_argv: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured_argv.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        AnimaLoraBackend().launch(
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=2
+        )
+
+    argv = captured_argv[0]
+    assert "--multi_gpu" not in argv
+    config_path = Path(argv[argv.index("--config_file") + 1])
+    assert config_path.name == "_lorahub_accelerate.yaml"
+    body = config_path.read_text(encoding="utf-8")
+    assert "distributed_type: FSDP" in body
+    assert "num_processes: 2" in body
+    assert "fsdp_auto_wrap_policy: SIZE_BASED_WRAP" in body
+    assert "fsdp_sharding_strategy: FULL_SHARD" in body
+    assert "fsdp_backward_prefetch_policy: NO_PREFETCH" in body
+    assert "fsdp_min_num_params: 123456" in body
+
+
+def test_launch_deepspeed_zero_writes_accelerate_and_zero_config(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    cfg = _config(
+        tmp_path,
+        gpuDispatch={"mode": "distributed", "numGpus": 2},
+        animaLora={"mixedPrecision": "fp16"},
+        distributed={
+            "strategy": "deepspeed_zero",
+            "zero": {
+                "stage": 3,
+                "offloadOptimizer": "cpu",
+                "offloadParam": "none",
+                "overlapComm": False,
+            },
+        },
+    )
+    captured_argv: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured_argv.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ), patch(
+        "lorahub.core.backends.anima_lora.backend._ensure_deepspeed_available",
+        lambda _python: None,
+    ):
+        AnimaLoraBackend().launch(
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=2
+        )
+
+    argv = captured_argv[0]
+    assert "--multi_gpu" not in argv
+    accelerate_path = Path(argv[argv.index("--config_file") + 1])
+    accelerate_body = accelerate_path.read_text(encoding="utf-8")
+    assert "distributed_type: DEEPSPEED" in accelerate_body
+    assert "num_processes: 2" in accelerate_body
+    assert "_lorahub_deepspeed_zero.json" in accelerate_body
+
+    zero_path = tmp_path / "ws" / "_lorahub_deepspeed_zero.json"
+    zero_body = json.loads(zero_path.read_text(encoding="utf-8"))
+    assert zero_body["bf16"]["enabled"] is False
+    assert zero_body["fp16"]["enabled"] is True
+    assert zero_body["train_batch_size"] == "auto"
+    assert zero_body["zero_optimization"]["stage"] == 3
+    assert zero_body["zero_optimization"]["offload_optimizer"]["device"] == "cpu"
+    assert zero_body["zero_optimization"]["offload_param"]["device"] == "none"
+    assert zero_body["zero_optimization"]["overlap_comm"] is False

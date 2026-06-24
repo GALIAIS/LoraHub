@@ -390,6 +390,7 @@ def _build_anima_lora_runner(
         # before, just opportunistically faster.
         base_python=_resolve_base_python("3.13"),
         pypi_index=settings.pypi_index_url,
+        install_deepspeed=req.install_deepspeed,
     )
     if not (plan.target / "pyproject.toml").is_file():
         raise HTTPException(

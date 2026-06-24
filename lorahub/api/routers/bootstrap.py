@@ -153,6 +153,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
 
 class InstallDepsRequest(BaseModel):
     backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
+    install_deepspeed: bool = True
 
 
 @router.post("/backend/install-deps", status_code=202)
@@ -249,10 +250,12 @@ def _build_deps_runner(
             target=target_path,
             base_python=None,
             pypi_index=settings.pypi_index_url,
+            install_deepspeed=req.install_deepspeed,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
             al_installer.sync(plan, progress=progress)
+            al_installer.install_deepspeed(plan, progress=progress)
 
     else:
         from lorahub.core.backends.kohya import installer  # noqa: PLC0415

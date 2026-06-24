@@ -57,6 +57,15 @@ def _valid_payload(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def _stub_anima_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "train.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    (root / "inference.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    (root / "library").mkdir()
+    (root / "library" / "anima").mkdir()
+    return root
+
+
 @pytest.fixture(autouse=True)
 def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistry]:
     from lorahub.api import scheduler as sched_module
@@ -168,6 +177,31 @@ def test_preflight_collects_all_blockers_in_one_pass(tmp_path: Path) -> None:
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
     cats = {f.category for f in findings if f.severity == "error"}
     assert {"model_missing", "dataset_missing"} <= cats, findings
+
+
+def test_preflight_fsdp_requires_distributed_gpu_dispatch(
+    tmp_path: Path,
+) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {},
+            "backend.distributed": {"strategy": "fsdp"},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "gpu_dispatch"
+        and f.field == "backend.distributed.strategy"
+        and f.severity == "error"
+        for f in findings
+    ), findings
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="mbcs probe is Windows-specific")

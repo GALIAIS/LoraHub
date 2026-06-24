@@ -356,7 +356,7 @@ def _check_backend_repo(cfg: TrainingConfig) -> list[PreflightFinding]:
     canonical: dict[str, list[str]] = {
         "kohya": ["train_network.py", "sdxl_train_network.py", "flux_train_network.py"],
         "diffusion-pipe": ["train.py"],
-        "anima_lora": ["train_network.py"],
+        "anima_lora": ["train.py"],
     }
     expected = canonical.get(cfg.backend.type, [])
     if expected and not any((p / s).is_file() for s in expected):
@@ -573,10 +573,25 @@ def _check_disk_space(workspace: Path) -> list[PreflightFinding]:
 
 def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
     dispatch = cfg.backend.gpu_dispatch
-    if dispatch.mode != "distributed":
+    strategy = cfg.backend.distributed.strategy
+    if dispatch.mode != "distributed" and strategy == "ddp":
         return []
 
     out: list[PreflightFinding] = []
+    if dispatch.mode != "distributed":
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.gpuDispatch.mode",
+                message="FSDP / DeepSpeed ZeRO 必须启用单任务多 GPU 调度。",
+                remediation=(
+                    "把 backend.gpuDispatch.mode 设为 distributed，"
+                    "并设置 backend.gpuDispatch.numGpus>=2；"
+                    "或把 backend.distributed.strategy 改回 ddp。"
+                ),
+            )
+        )
     if cfg.backend.type not in {"anima_lora", "diffusion-pipe"}:
         out.append(
             PreflightFinding(
@@ -586,6 +601,19 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
                 message="当前后端不支持单任务多 GPU 分布式训练。",
                 remediation=(
                     "改回 one-job-per-gpu，或切换到 anima_lora / diffusion-pipe。"
+                ),
+            )
+        )
+    if strategy != "ddp" and cfg.backend.type != "anima_lora":
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.distributed.strategy",
+                message="FSDP / DeepSpeed ZeRO 当前只接入 anima_lora 后端。",
+                remediation=(
+                    "切换 backend.type=anima_lora，或把 "
+                    "backend.distributed.strategy 改回 ddp。"
                 ),
             )
         )
@@ -601,6 +629,20 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
                 field="backend.gpuDispatch.mode",
                 message="anima_lora turbo 蒸馏当前不支持单任务多 GPU。",
                 remediation="关闭 turbo，或把 GPU 调度改回 one-job-per-gpu。",
+            )
+        )
+    if strategy != "ddp" and (
+        cfg.backend.type == "anima_lora"
+        and cfg.backend.anima_lora is not None
+        and cfg.backend.anima_lora.turbo is not None
+    ):
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.distributed.strategy",
+                message="anima_lora turbo 蒸馏当前不支持 FSDP / DeepSpeed ZeRO。",
+                remediation="关闭 turbo，或把 backend.distributed.strategy 改回 ddp。",
             )
         )
 
@@ -623,6 +665,20 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
                 remediation=(
                     "把设置里的“并行训练槽位”设为 2 或更高并重启服务；"
                     "也可以在训练配置里明确设置 backend.gpuDispatch.numGpus=2。"
+                ),
+                extra={"available_slots": available, "requested_slots": requested},
+            )
+        )
+    if strategy != "ddp" and requested < 2:
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.distributed.strategy",
+                message="FSDP / DeepSpeed ZeRO 至少需要 2 张 GPU。",
+                remediation=(
+                    "把 backend.gpuDispatch.numGpus 设为 2 或更高，"
+                    "或把 backend.distributed.strategy 改回 ddp。"
                 ),
                 extra={"available_slots": available, "requested_slots": requested},
             )

@@ -227,6 +227,12 @@ def _venv_site_packages(python: Path) -> Path | None:
     return None
 
 
+def _site_package_exists(site_pkgs: Path, package: str) -> bool:
+    return (site_pkgs / package).exists() or any(
+        site_pkgs.glob(f"{package}-*.dist-info")
+    )
+
+
 def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the configured kohya checkout looks usable."""
     from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
@@ -434,12 +440,14 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     _anima_required_pkgs = ("torch", "accelerate", "diffusers", "safetensors")
     requirements_ok = True
     missing_pkgs: list[str] = []
+    deepspeed_ok = False
     if py_ok and py_path is not None:
         site_pkgs = _venv_site_packages(py_path)
         if site_pkgs is not None:
             for pkg in _anima_required_pkgs:
-                if not (site_pkgs / pkg).exists():
+                if not _site_package_exists(site_pkgs, pkg):
                     missing_pkgs.append(pkg)
+            deepspeed_ok = _site_package_exists(site_pkgs, "deepspeed")
             requirements_ok = not missing_pkgs
 
     # MSVC Build Tools detection — only meaningful on Windows. anima's
@@ -474,6 +482,10 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         # misleading green tick.
         "requirements_ok": requirements_ok,
         "missing_requirements": missing_pkgs,
+        # Optional add-on used by backend.distributed.strategy=deepspeed_zero.
+        # Not part of requirements_ok because DDP/FSDP do not need it.
+        "deepspeed_ok": deepspeed_ok,
+        "deepspeed_missing": py_ok and not deepspeed_ok,
         # Anima base / TE / VAE checkpoints are downloaded separately
         # (multi-GB) — we surface presence here so the install panel
         # can show a "Download models" CTA after `uv sync` finishes.

@@ -136,6 +136,31 @@ output:
 
 backend:
   type: anima_lora
+  # Multi-GPU:
+  #   - one-job-per-gpu: each training task owns one GPU.
+  #   - distributed + ddp: one task uses multiple same-model GPUs by data parallelism.
+  #   - distributed + fsdp: additionally shards parameters to reduce per-GPU VRAM.
+  #   - distributed + deepspeed_zero: shards optimizer/parameters via DeepSpeed.
+  #
+  # For two same 4080 cards, start with distributed + ddp. Switch to fsdp
+  # only when a larger batch/resolution still OOMs on one card. ZeRO needs
+  # DeepSpeed installed in external/anima_lora/.venv and is Linux/WSL-first.
+  gpuDispatch:
+    mode: one-job-per-gpu
+    numGpus: null
+  distributed:
+    strategy: ddp
+    fsdp:
+      shardingStrategy: full_shard
+      autoWrapPolicy: size_based
+      minNumParams: 100000000
+      stateDictType: full_state_dict
+      cpuOffload: false
+    zero:
+      stage: 2
+      offloadOptimizer: none
+      offloadParam: none
+      overlapComm: true
   animaLora:
     method: lora
     preset: default

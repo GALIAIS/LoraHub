@@ -4,7 +4,14 @@ import { Input } from "@/components/ui/input"
 import { BACKEND_BADGE } from "../backend-meta"
 import { BACKEND_OPTIONS } from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
-import { EnumSelect, IntInput, KeyValueTextArea, PathInput, Row } from "../widgets"
+import {
+  EnumSelect,
+  IntInput,
+  KeyValueTextArea,
+  PathInput,
+  Row,
+  ToggleSwitch,
+} from "../widgets"
 
 const BACKEND_DESCRIPTIONS: Record<string, string> = {
   kohya:
@@ -33,6 +40,40 @@ const GPU_DISPATCH_OPTIONS = [
   { value: "distributed", label: "单任务多 GPU" },
 ]
 
+const DISTRIBUTED_STRATEGY_OPTIONS = [
+  { value: "ddp", label: "DDP 数据并行" },
+  { value: "fsdp", label: "FSDP 参数分片" },
+  { value: "deepspeed_zero", label: "DeepSpeed ZeRO" },
+]
+
+const FSDP_SHARDING_OPTIONS = [
+  { value: "full_shard", label: "Full shard" },
+  { value: "shard_grad_op", label: "Shard grad op" },
+  { value: "no_reshard", label: "No shard" },
+]
+
+const FSDP_WRAP_OPTIONS = [
+  { value: "size_based", label: "按参数量自动包裹" },
+  { value: "transformer", label: "Transformer 层包裹" },
+  { value: "none", label: "不自动包裹" },
+]
+
+const FSDP_STATE_DICT_OPTIONS = [
+  { value: "full_state_dict", label: "Full state dict" },
+  { value: "sharded_state_dict", label: "Sharded state dict" },
+  { value: "local_state_dict", label: "Local state dict" },
+]
+
+const ZERO_STAGE_OPTIONS = [
+  { value: "2", label: "ZeRO-2" },
+  { value: "3", label: "ZeRO-3" },
+]
+
+const ZERO_OFFLOAD_OPTIONS = [
+  { value: "none", label: "不 offload" },
+  { value: "cpu", label: "CPU offload" },
+]
+
 export const BackendFields = memo(function BackendFields({
   value = {},
   set,
@@ -49,6 +90,8 @@ export const BackendFields = memo(function BackendFields({
     BACKEND_DESCRIPTIONS[type] ?? BACKEND_DESCRIPTIONS.kohya
   const repoLabel = REPO_LABEL[type] ?? "仓库路径"
   const repoPlaceholder = REPO_PLACEHOLDER[type] ?? "（使用设置中的默认值)"
+  const isDistributed = v.gpuDispatch?.mode === "distributed"
+  const distributedStrategy = v.distributed?.strategy ?? "ddp"
 
   return (
     <>
@@ -111,8 +154,12 @@ export const BackendFields = memo(function BackendFields({
             onChange={(mode) => {
               if (mode === "settings") {
                 set(["backend", "gpuDispatch"], undefined)
+                set(["backend", "distributed", "strategy"], "ddp")
               } else {
                 set(["backend", "gpuDispatch", "mode"], mode)
+                if (mode !== "distributed") {
+                  set(["backend", "distributed", "strategy"], "ddp")
+                }
               }
             }}
             options={GPU_DISPATCH_OPTIONS}
@@ -128,6 +175,142 @@ export const BackendFields = memo(function BackendFields({
           )}
         </div>
       </Row>
+      {isDistributed && (
+        <>
+          <Row
+            label="分布式策略"
+            description={
+              type === "anima_lora"
+                ? "DDP 复制模型到每张卡；FSDP/ZeRO 会分片参数或优化器状态，能降低单卡显存峰值但通信开销更高。"
+                : "当前只有 anima_lora 接入 FSDP / DeepSpeed ZeRO；其他后端请保持 DDP。"
+            }
+            errors={errorMap.get("backend.distributed.strategy")}
+          >
+            <EnumSelect
+              value={distributedStrategy}
+              onChange={(s) => set(["backend", "distributed", "strategy"], s)}
+              options={DISTRIBUTED_STRATEGY_OPTIONS}
+            />
+          </Row>
+          {distributedStrategy === "fsdp" && (
+            <>
+              <Row
+                label="FSDP 分片"
+                errors={errorMap.get("backend.distributed.fsdp.shardingStrategy")}
+              >
+                <EnumSelect
+                  value={v.distributed?.fsdp?.shardingStrategy ?? "full_shard"}
+                  onChange={(s) =>
+                    set(["backend", "distributed", "fsdp", "shardingStrategy"], s)
+                  }
+                  options={FSDP_SHARDING_OPTIONS}
+                />
+              </Row>
+              <Row
+                label="FSDP 包裹"
+                description="默认按大模块参数量自动包裹，更适合 anima_lora 这种非标准 Transformers DiT。"
+                errors={errorMap.get("backend.distributed.fsdp.autoWrapPolicy")}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <EnumSelect
+                    value={v.distributed?.fsdp?.autoWrapPolicy ?? "size_based"}
+                    onChange={(s) =>
+                      set(["backend", "distributed", "fsdp", "autoWrapPolicy"], s)
+                    }
+                    options={FSDP_WRAP_OPTIONS}
+                  />
+                  {(v.distributed?.fsdp?.autoWrapPolicy ?? "size_based") ===
+                    "size_based" && (
+                    <IntInput
+                      value={v.distributed?.fsdp?.minNumParams ?? 100_000_000}
+                      min={0}
+                      onChange={(n) =>
+                        set(
+                          ["backend", "distributed", "fsdp", "minNumParams"],
+                          n ?? 100_000_000,
+                        )
+                      }
+                      className="w-36"
+                    />
+                  )}
+                </div>
+              </Row>
+              <Row
+                label="FSDP 保存"
+                errors={errorMap.get("backend.distributed.fsdp.stateDictType")}
+              >
+                <EnumSelect
+                  value={v.distributed?.fsdp?.stateDictType ?? "full_state_dict"}
+                  onChange={(s) =>
+                    set(["backend", "distributed", "fsdp", "stateDictType"], s)
+                  }
+                  options={FSDP_STATE_DICT_OPTIONS}
+                />
+              </Row>
+              <Row
+                label="FSDP CPU offload"
+                description="只有显存仍不够时再开；会明显增加 CPU/PCIe 压力。"
+                errors={errorMap.get("backend.distributed.fsdp.cpuOffload")}
+              >
+                <ToggleSwitch
+                  checked={!!v.distributed?.fsdp?.cpuOffload}
+                  onCheckedChange={(c) =>
+                    set(["backend", "distributed", "fsdp", "cpuOffload"], c)
+                  }
+                />
+              </Row>
+            </>
+          )}
+          {distributedStrategy === "deepspeed_zero" && (
+            <>
+              <Row
+                label="ZeRO stage"
+                errors={errorMap.get("backend.distributed.zero.stage")}
+              >
+                <EnumSelect
+                  value={String(v.distributed?.zero?.stage ?? 2)}
+                  onChange={(s) =>
+                    set(["backend", "distributed", "zero", "stage"], parseInt(s, 10))
+                  }
+                  options={ZERO_STAGE_OPTIONS}
+                />
+              </Row>
+              <Row
+                label="ZeRO offload"
+                description="ZeRO-3 + 参数 offload 能继续降显存，但速度通常明显下降。"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <EnumSelect
+                    value={v.distributed?.zero?.offloadOptimizer ?? "none"}
+                    onChange={(s) =>
+                      set(["backend", "distributed", "zero", "offloadOptimizer"], s)
+                    }
+                    options={ZERO_OFFLOAD_OPTIONS}
+                  />
+                  <EnumSelect
+                    value={v.distributed?.zero?.offloadParam ?? "none"}
+                    onChange={(s) =>
+                      set(["backend", "distributed", "zero", "offloadParam"], s)
+                    }
+                    options={ZERO_OFFLOAD_OPTIONS}
+                  />
+                </div>
+              </Row>
+              <Row
+                label="ZeRO overlap comm"
+                errors={errorMap.get("backend.distributed.zero.overlapComm")}
+              >
+                <ToggleSwitch
+                  checked={v.distributed?.zero?.overlapComm ?? true}
+                  onCheckedChange={(c) =>
+                    set(["backend", "distributed", "zero", "overlapComm"], c)
+                  }
+                />
+              </Row>
+            </>
+          )}
+        </>
+      )}
       <Row
         label="锁定版本"
         description="schema-only 字段：保留以兼容旧 YAML,但当前 installer 不会读取。如需锁定到特定 git ref,手动 cd 到后端仓库后 git checkout。"

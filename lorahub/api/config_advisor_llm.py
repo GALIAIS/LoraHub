@@ -133,6 +133,14 @@ _BACKEND_GUIDES: dict[str, str] = {
 * `keepTokens > 0` 但 `useShuffledCaptionVariants = false` 是死字段
 * `networkAlpha / networkDim` 的比值偏离 [0.25, 4.0] 会数值不稳
 * `lora.minRank > networkDim` 会让 T-LoRA route layer 构造失败
+* 多 GPU:
+  - `backend.gpuDispatch.mode="one-job-per-gpu"` 表示多个任务并发,单任务仍单卡
+  - `backend.gpuDispatch.mode="distributed"` + `backend.distributed.strategy="ddp"`
+    表示单任务多卡数据并行,要求同型号/同显存 GPU
+  - `strategy="fsdp"` 才会做参数分片,适合单卡显存不够但多卡同构的场景
+  - `strategy="deepspeed_zero"` 需要 external/anima_lora/.venv 安装 deepspeed,
+    优先用于 Linux/WSL,Windows 不要默认建议
+  - 不要建议 `model_parallel` / 张量并行 / 手工 device_map 字段,当前 schema 未实现
 
 ## anima_lora 后端 — Locked fields(用户改了也不会生效)
 

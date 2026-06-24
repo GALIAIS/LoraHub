@@ -56,6 +56,11 @@ class BootstrapPlan:
     # Optional PyPI index URL forwarded to `uv sync` via ``--default-index``.
     # Useful in regions where the default PyPI is slow.
     pypi_index: str | None = None
+    # Optional DeepSpeed add-on. Needed only for
+    # backend.distributed.strategy=deepspeed_zero; skipped on Windows
+    # because there is no reliable wheel and source builds require a
+    # CUDA toolkit + MSVC setup outside LoraHub's control.
+    install_deepspeed: bool = True
 
     @property
     def venv_dir(self) -> Path:
@@ -137,15 +142,39 @@ def _uv_sync_env(plan: BootstrapPlan) -> dict[str, str]:
     return env
 
 
+def install_deepspeed(
+    plan: BootstrapPlan, *, progress: ProgressCallback | None = None
+) -> None:
+    if not plan.install_deepspeed:
+        return
+    if sys.platform == "win32":
+        if progress is not None:
+            progress(
+                "skip deepspeed: no Windows wheel available. "
+                "DeepSpeed ZeRO requires WSL2/Linux or a manual CUDA/MSVC build."
+            )
+        return
+    try:
+        _uv.pip_install(
+            plan.venv_python,
+            ["deepspeed"],
+            step="install anima_lora deepspeed",
+            progress=progress,
+            pypi_index=plan.pypi_index,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError("install anima_lora deepspeed", 1) from exc
+
+
 def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     """Execute every install step in order.
 
-    Single step today — ``uv sync`` reads the vendored uv.lock and
-    materialises the venv. Kept as a wrapping function so the install
-    session can swap to a multi-step pipeline if anima_lora ever grows
-    out-of-band setup (e.g. ``make download-models``).
+    ``uv sync`` reads the vendored uv.lock and materialises the venv.
+    DeepSpeed is installed as an optional post-sync add-on because it is
+    only needed for ZeRO and is not part of upstream anima_lora's lock.
     """
     sync(plan, progress=progress)
+    install_deepspeed(plan, progress=progress)
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
@@ -201,5 +230,6 @@ __all__ = [
     "ProgressCallback",
     "bootstrap",
     "cleanup_partial",
+    "install_deepspeed",
     "sync",
 ]

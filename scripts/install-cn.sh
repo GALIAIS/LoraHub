@@ -63,6 +63,24 @@ probe_one() {
     echo $((t2 - t1))
 }
 
+probe_one_download() {
+    # $1 = url. HEAD is not enough for gh-proxy release binaries: some
+    # proxies answer fast, then EOF on the real tarball stream.
+    local url="$1"
+    local tmp t1 t2 bytes
+    tmp="$(mktemp)"
+    t1=$(date +%s%3N)
+    if ! curl -fsL --range 0-262143 -o "$tmp" --max-time 10 --connect-timeout 3 "$url" 2>/dev/null; then
+        rm -f "$tmp"
+        return 1
+    fi
+    t2=$(date +%s%3N)
+    bytes=$(wc -c < "$tmp" 2>/dev/null || echo 0)
+    rm -f "$tmp"
+    [ "${bytes:-0}" -ge 65536 ] || return 1
+    echo $((t2 - t1))
+}
+
 # Pick the fastest URL from a candidate list, given a probe-URL builder.
 # Args:  pool_name builder_function
 # Output: chosen base URL (echoed)
@@ -78,7 +96,11 @@ pick_fastest() {
         local probe_url
         probe_url=$("$builder" "$cand")
         local ms
-        ms=$(probe_one "$probe_url" || echo "")
+        if [ "$label" = "GitHub proxy" ]; then
+            ms=$(probe_one_download "$probe_url" || echo "")
+        else
+            ms=$(probe_one "$probe_url" || echo "")
+        fi
         local display
         if [ -z "$cand" ]; then display="(direct)"; else display="$cand"; fi
         if [ -n "$ms" ]; then

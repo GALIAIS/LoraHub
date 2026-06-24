@@ -59,6 +59,7 @@ class AnimaLoraRunner(SubprocessRunner):
         job_id: str | None = None,
         env: dict[str, str] | None = None,
         num_processes: int = 1,
+        accelerate_config: Path | None = None,
     ) -> None:
         train_py = repo / "train.py"
         full_argv = [
@@ -66,12 +67,16 @@ class AnimaLoraRunner(SubprocessRunner):
             "-m",
             "accelerate.commands.accelerate_cli",
             "launch",
+        ]
+        if accelerate_config is not None:
+            full_argv += ["--config_file", str(accelerate_config)]
+        full_argv += [
             "--num_cpu_threads_per_process",
             _LAUNCH_THREADS,
             "--mixed_precision",
             _LAUNCH_MIXED_PRECISION,
         ]
-        if num_processes > 1:
+        if num_processes > 1 and accelerate_config is None:
             full_argv += ["--multi_gpu", "--num_processes", str(num_processes)]
         full_argv += [
             str(train_py),

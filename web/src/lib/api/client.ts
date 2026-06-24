@@ -237,10 +237,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  installDeps: (backend: BackendId = "diffusion-pipe") =>
+  installDeps: (
+    backend: BackendId = "diffusion-pipe",
+    options: Pick<BootstrapRequestBody, "install_deepspeed"> = {},
+  ) =>
     http<BootstrapStartResponse>("/backend/install-deps", {
       method: "POST",
-      body: JSON.stringify({ backend }),
+      body: JSON.stringify({ backend, ...options }),
     }),
   getAttentionBackends: () =>
     http<AttentionBackendsResponse>("/system/attention-backends"),

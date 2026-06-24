@@ -177,9 +177,34 @@ def test_backend_config_accepts_anima_lora_type() -> None:
     bc = BackendConfig(type="anima_lora", anima_lora=AnimaLoraOptions())
     assert bc.type == "anima_lora"
     assert bc.anima_lora is not None
+    assert bc.distributed.strategy == "ddp"
     # Other two backends keep working unchanged.
     assert BackendConfig(type="kohya").anima_lora is None
     assert BackendConfig(type="diffusion-pipe").anima_lora is None
+
+
+def test_backend_distributed_strategy_accepts_camel_case() -> None:
+    bc = BackendConfig.model_validate(
+        {
+            "type": "anima_lora",
+            "distributed": {
+                "strategy": "fsdp",
+                "fsdp": {
+                    "autoWrapPolicy": "size_based",
+                    "minNumParams": 123456,
+                    "cpuOffload": True,
+                },
+            },
+        }
+    )
+
+    assert bc.distributed.strategy == "fsdp"
+    assert bc.distributed.fsdp.auto_wrap_policy == "size_based"
+    assert bc.distributed.fsdp.min_num_params == 123456
+    dumped = bc.model_dump(by_alias=True)
+    assert dumped["distributed"]["fsdp"]["autoWrapPolicy"] == "size_based"
+    assert dumped["distributed"]["fsdp"]["minNumParams"] == 123456
+    assert dumped["distributed"]["fsdp"]["cpuOffload"] is True
 
 
 def test_backend_config_anima_lora_is_optional() -> None:

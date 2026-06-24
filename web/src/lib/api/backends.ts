@@ -48,6 +48,9 @@ export interface AnimaLoraBackendStatus {
   // the type for shape parity with the other two probes.
   requirements_ok: boolean
   missing_requirements: string[]
+  /** Optional add-on needed only for backend.distributed.strategy=deepspeed_zero. */
+  deepspeed_ok: boolean
+  deepspeed_missing: boolean
   // Anima base / TE / VAE checkpoints. ``ready`` only covers the venv;
   // models are tracked separately so the install panel can offer a
   // dedicated "Download models" CTA.
@@ -191,6 +194,7 @@ export interface BootstrapRequestBody {
   torch_version?: string
   torchvision_version?: string
   install_xformers?: boolean
+  install_deepspeed?: boolean
   force?: boolean
 }
 

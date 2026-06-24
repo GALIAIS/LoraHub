@@ -181,6 +181,22 @@ output:
 backend:
   type: anima_lora
   extraArgs: {}
+  gpuDispatch:
+    mode: one-job-per-gpu
+    numGpus: null
+  distributed:
+    strategy: ddp
+    fsdp:
+      shardingStrategy: full_shard
+      autoWrapPolicy: size_based
+      minNumParams: 100000000
+      stateDictType: full_state_dict
+      cpuOffload: false
+    zero:
+      stage: 2
+      offloadOptimizer: none
+      offloadParam: none
+      overlapComm: true
   animaLora:
     method: lora
     preset: default
