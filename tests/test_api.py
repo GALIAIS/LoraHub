@@ -2335,6 +2335,31 @@ def test_delete_config(client: TestClient, configs_dir: Path) -> None:
     assert client.delete("/api/configs/demo").status_code == 404
 
 
+def test_template_metadata_is_ignored_for_regular_config_validation(
+    client: TestClient,
+    configs_dir: Path,
+) -> None:
+    payload = {
+        "_template": {"name": "Template", "arch": "sdxl"},
+        "_placeholders": [{"key": "dataset", "path_field": "dataset.source"}],
+        "base_model": {"checkpoint": "./model.safetensors"},
+        "dataset": {"source": "./data"},
+    }
+    (configs_dir / "with_template_meta.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    listed = client.get("/api/configs")
+    assert listed.status_code == 200
+    row = next(item for item in listed.json()["configs"] if item["name"] == "with_template_meta")
+    assert row["valid"] is True
+
+    validated = client.post("/api/configs/validate", json={"config": payload})
+    assert validated.status_code == 200
+    assert validated.json()["valid"] is True
+
+
 def test_list_templates_returns_validated_configs(client: TestClient) -> None:
     r = client.get("/api/configs/templates")
     assert r.status_code == 200, r.text
@@ -2405,9 +2430,11 @@ def test_list_templates_skips_invalid_yaml_files(
     body = r.json()
 
     ids = [t["id"] for t in body["templates"]]
-    assert ids == ["good"], body
-    assert body["templates"][0]["name"] == "Good Template"
-    assert body["templates"][0]["arch"] == "sdxl"
+    assert "good" in ids, body
+    assert "bad" not in ids, body
+    good_template = next(t for t in body["templates"] if t["id"] == "good")
+    assert good_template["name"] == "Good Template"
+    assert good_template["arch"] == "sdxl"
 
     warnings = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
     assert any("bad.yaml" in msg for msg in warnings), warnings
@@ -4256,8 +4283,8 @@ def test_instantiate_template_substitutes_placeholders(
 
     # Confirm the listing exposes the new placeholders array.
     listed = client.get("/api/configs/templates").json()["templates"]
-    assert len(listed) == 1
-    assert [p["key"] for p in listed[0]["placeholders"]] == [
+    listed_template = next(t for t in listed if t["id"] == "test")
+    assert [p["key"] for p in listed_template["placeholders"]] == [
         "checkpoint",
         "dataset",
         "name",

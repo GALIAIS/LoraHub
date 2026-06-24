@@ -18,7 +18,7 @@ from lorahub.api.helpers import (
     _configs_dir,
 )
 from lorahub.api import config_templates as config_templates_module
-from lorahub.core.config.loader import dump_config, load_config
+from lorahub.core.config.loader import dump_config, load_config, strip_template_metadata
 from lorahub.core.config.schema import TrainingConfig
 
 router = APIRouter(prefix="/api")
@@ -180,7 +180,7 @@ def validate_config(req: ValidateConfigRequest) -> dict[str, Any]:
     from pydantic import ValidationError as _PydanticValidationError  # noqa: PLC0415
 
     try:
-        cfg = TrainingConfig.model_validate(req.config)
+        cfg = TrainingConfig.model_validate(strip_template_metadata(req.config))
     except _PydanticValidationError as exc:
         return {
             "valid": False,
@@ -318,7 +318,7 @@ def save_config(req: SaveConfigRequest) -> dict[str, Any]:
     name = _validate_config_name(req.name)
 
     try:
-        cfg = TrainingConfig.model_validate(req.config)
+        cfg = TrainingConfig.model_validate(strip_template_metadata(req.config))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -474,7 +474,7 @@ async def import_config(
         )
 
     try:
-        cfg = TrainingConfig.model_validate(data)
+        cfg = TrainingConfig.model_validate(strip_template_metadata(data))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

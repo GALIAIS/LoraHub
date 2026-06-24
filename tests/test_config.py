@@ -35,6 +35,27 @@ def test_load_config_from_yaml(tmp_path: Path) -> None:
     assert cfg.dataset.source == Path("./data")
 
 
+def test_load_config_strips_template_metadata(tmp_path: Path) -> None:
+    config_file = tmp_path / "template.yaml"
+    config_file.write_text(
+        yaml.safe_dump(
+            {
+                "_template": {"name": "Template", "arch": "sdxl"},
+                "_placeholders": [
+                    {"key": "dataset", "path_field": "dataset.source"},
+                ],
+                **MINIMAL_RECIPE,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_file)
+
+    assert cfg.base_model.checkpoint == Path("./model.safetensors")
+
+
 def test_dump_and_reload_round_trips(tmp_path: Path) -> None:
     cfg = TrainingConfig.model_validate(MINIMAL_RECIPE)
     out = tmp_path / "out.yaml"
@@ -123,4 +144,3 @@ def test_optimization_kitchen_sink_round_trip() -> None:
     assert cfg.optimization.fused_backward_pass is True
     assert cfg.optimization.full_bf16 is True
     assert cfg.optimization.blocks_to_swap == 8
-
