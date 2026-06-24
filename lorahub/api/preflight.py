@@ -611,6 +611,22 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
     except Exception:  # noqa: BLE001
         available = 1
     requested = dispatch.num_gpus or available
+    if requested < 2:
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="error",
+                field="backend.gpuDispatch.mode",
+                message=(
+                    "单任务多 GPU 当前只会申请 1 个 GPU slot，训练会退化成单卡。"
+                ),
+                remediation=(
+                    "把设置里的“并行训练槽位”设为 2 或更高并重启服务；"
+                    "也可以在训练配置里明确设置 backend.gpuDispatch.numGpus=2。"
+                ),
+                extra={"available_slots": available, "requested_slots": requested},
+            )
+        )
     if requested > available:
         out.append(
             PreflightFinding(

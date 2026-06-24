@@ -42,4 +42,9 @@ export interface SettingsResponse {
   backend: AnyBackendStatus
   backends: Record<BackendId, AnyBackendStatus>
   path: string
+  runtime?: {
+    scheduler_concurrency?: number
+    scheduler_slots?: number[]
+    settings_restart_required?: boolean
+  }
 }

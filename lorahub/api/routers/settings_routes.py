@@ -82,6 +82,7 @@ class SettingsResponse(BaseModel):
     backend: dict[str, Any]
     backends: dict[str, dict[str, Any]]
     path: str
+    runtime: dict[str, Any] = {}
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -152,11 +153,24 @@ def _to_response(s: Settings, path: str) -> SettingsResponse:
         raw = payload.get(name)
         payload[name] = _mask_secret(raw) if raw else None
         payload[f"has_{name}"] = bool(raw)
+    try:
+        from lorahub.api import scheduler as sched  # noqa: PLC0415
+
+        runtime = {
+            "scheduler_concurrency": sched.scheduler.concurrency,
+            "scheduler_slots": sched.scheduler.available_slots,
+            "settings_restart_required": (
+                int(s.max_concurrent_jobs) != int(sched.scheduler.concurrency)
+            ),
+        }
+    except Exception:  # noqa: BLE001
+        runtime = {}
     return SettingsResponse(
         settings=payload,
         backend=probe_kohya_backend(s),
         backends=probe_all_backends(s),
         path=path,
+        runtime=runtime,
     )
 
 

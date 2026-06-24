@@ -776,6 +776,8 @@ def _collect_linux_drm_gpus(start_index: int = 0) -> list[GpuStats]:
         if vendor_key == "0x10de" and _find_nvidia_smi() is not None:
             continue
         vendor_label, default_name = _DRM_VENDORS.get(vendor_key, ("unknown", "GPU"))
+        if vendor_label in {"unknown", "qemu"}:
+            continue
 
         name = _gpu_name_from_uevent(device_dir) or default_name
 

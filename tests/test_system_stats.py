@@ -887,3 +887,28 @@ def test_gpu_processes_maps_uuid_to_index(monkeypatch: pytest.MonkeyPatch) -> No
 def test_gpu_processes_empty_when_smi_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
     assert system_stats._collect_gpu_processes() == []
+
+
+def test_linux_drm_skips_bmc_display_adapters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cloud hosts expose ASPEED BMC display cards; they are not training GPUs."""
+    drm = tmp_path / "sys" / "class" / "drm"
+    card = drm / "card0"
+    device = card / "device"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text("0x1a03", encoding="utf-8")
+    (device / "uevent").write_text("DRIVER=ast\nPCI_ID=1A03:2000\n", encoding="utf-8")
+
+    real_path = system_stats.Path
+
+    def path_factory(value: str) -> Path:
+        if value == "/sys/class/drm":
+            return drm
+        return real_path(value)
+
+    monkeypatch.setattr(system_stats, "Path", path_factory)
+    monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
+
+    assert system_stats._collect_linux_drm_gpus() == []

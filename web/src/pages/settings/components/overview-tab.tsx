@@ -65,6 +65,12 @@ export function OverviewTab() {
   const dispatchMode = settings?.gpu_dispatch_mode ?? "one-job-per-gpu"
   const slots = settings?.max_concurrent_jobs ?? 1
   const numGpus = settings?.gpu_dispatch_num_gpus ?? ""
+  const runtimeSlots = settingsQuery.data?.runtime?.scheduler_concurrency ?? slots
+  const runtimeSlotIds = settingsQuery.data?.runtime?.scheduler_slots ?? []
+  const restartRequired = Boolean(settingsQuery.data?.runtime?.settings_restart_required)
+  const effectiveDistributedSlots =
+    dispatchMode === "distributed" ? (settings?.gpu_dispatch_num_gpus ?? runtimeSlots) : 1
+  const distributedWouldBeSingle = dispatchMode === "distributed" && effectiveDistributedSlots < 2
 
   return (
     <div className="space-y-5">
@@ -112,16 +118,40 @@ export function OverviewTab() {
               保存后重启服务生效；启动时会按实际 NVIDIA GPU 数自动夹紧。
             </span>
           </div>
+          <div />
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-[3px] border border-border/70 bg-muted/25 px-2 py-1">
+              运行中 slot:{" "}
+              <code className="font-mono text-foreground">{runtimeSlots}</code>
+            </span>
+            {runtimeSlotIds.length > 0 && (
+              <span className="rounded-[3px] border border-border/70 bg-muted/25 px-2 py-1">
+                GPU:{" "}
+                <code className="font-mono text-foreground">
+                  {runtimeSlotIds.join(",")}
+                </code>
+              </span>
+            )}
+            {restartRequired && (
+              <span className="rounded-[3px] border border-amber-500/35 bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-300">
+                已保存 {slots}，当前服务仍按 {runtimeSlots} 个 slot 运行，需重启后生效。
+              </span>
+            )}
+          </div>
 
           <Label className="text-xs">默认调度模式</Label>
           <div className="flex flex-wrap items-center gap-2">
             <Select
               value={dispatchMode}
-              onValueChange={(mode) =>
+              onValueChange={(mode) => {
+                const nextMode = mode as "one-job-per-gpu" | "distributed"
                 updateSettings.mutate({
-                  gpu_dispatch_mode: mode as "one-job-per-gpu" | "distributed",
+                  gpu_dispatch_mode: nextMode,
+                  ...(nextMode === "distributed" && slots < 2
+                    ? { max_concurrent_jobs: 2, gpu_dispatch_num_gpus: 2 }
+                    : {}),
                 })
-              }
+              }}
               disabled={updateSettings.isPending || settingsQuery.isLoading}
             >
               <SelectTrigger className="h-8 w-48">
@@ -136,16 +166,18 @@ export function OverviewTab() {
               <Input
                 type="number"
                 min={1}
-                max={slots}
+                max={16}
                 value={numGpus}
                 placeholder="全部槽位"
                 onChange={(e) => {
                   const raw = e.target.value
+                  const parsed = Math.max(1, Number.parseInt(raw, 10) || 1)
                   updateSettings.mutate({
                     gpu_dispatch_num_gpus:
                       raw === ""
                         ? null
-                        : Math.max(1, Number.parseInt(raw, 10) || 1),
+                        : parsed,
+                    ...(parsed > slots ? { max_concurrent_jobs: parsed } : {}),
                   })
                 }}
                 className="h-8 w-28 font-mono text-xs"
@@ -165,6 +197,15 @@ export function OverviewTab() {
               重置
             </Button>
           </div>
+          {distributedWouldBeSingle && (
+            <>
+              <div />
+              <div className="rounded-[3px] border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                当前“单任务多 GPU”只会拿到 1 个 slot。请把并行训练槽位和 GPU
+                数量设为 2，并重启服务后再新建训练任务。
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

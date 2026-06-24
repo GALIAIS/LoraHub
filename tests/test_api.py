@@ -1086,9 +1086,43 @@ def test_settings_persists_gpu_dispatch_defaults(client: TestClient) -> None:
     assert settings["max_concurrent_jobs"] == 2
     assert settings["gpu_dispatch_mode"] == "distributed"
     assert settings["gpu_dispatch_num_gpus"] == 2
+    assert r.json()["runtime"]["scheduler_concurrency"] == 1
+    assert r.json()["runtime"]["settings_restart_required"] is True
 
     r_bad = client.put("/api/settings", json={"gpu_dispatch_mode": "mixed"})
     assert r_bad.status_code == 422
+
+
+def test_distributed_gpu_dispatch_rejects_single_runtime_slot(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+
+    client.put(
+        "/api/settings",
+        json={"gpu_dispatch_mode": "distributed", "gpu_dispatch_num_gpus": None},
+    )
+    monkeypatch.setattr(
+        jobs_helpers,
+        "_select_backend",
+        lambda _cfg: pytest.fail("backend should not launch"),
+    )
+
+    cfg = _config_payload(tmp_path)
+    cfg["base_model"]["arch"] = "anima"
+    cfg["backend"]["type"] = "anima_lora"
+
+    r = client.post("/api/jobs", json={"config": cfg, "workspace": str(tmp_path / "ws")})
+
+    assert r.status_code == 422, r.text
+    findings = r.json()["detail"]["findings"]
+    assert any(
+        f["category"] == "gpu_dispatch"
+        and "只会申请 1 个 GPU slot" in f["message"]
+        for f in findings
+    )
 
 
 # --------------------------------------------------------------------------- #
