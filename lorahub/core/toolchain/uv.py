@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
@@ -189,18 +190,28 @@ def _capture(
     if progress is not None:
         progress(step)
     full_env = None if env is None else {**os.environ, **env}
-    result = subprocess.run(
+    proc = subprocess.Popen(  # noqa: S603
         cmd,
-        check=False,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
         env=full_env,
     )
-    if result.returncode != 0:
-        if progress is not None and result.stderr:
-            tail = "\n".join(result.stderr.strip().splitlines()[-12:])
-            progress(f"{step} failed (exit {result.returncode}):\n{tail}")
-        msg = f"{step} failed (exit {result.returncode})"
+    tail: deque[str] = deque(maxlen=12)
+    assert proc.stdout is not None  # noqa: S101
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if not line:
+            continue
+        tail.append(line)
+        if progress is not None:
+            progress(line)
+    rc = proc.wait()
+    if rc != 0:
+        if progress is not None and tail:
+            progress(f"{step} failed (exit {rc}):\n" + "\n".join(tail))
+        msg = f"{step} failed (exit {rc})"
         raise RuntimeError(msg)
 
 

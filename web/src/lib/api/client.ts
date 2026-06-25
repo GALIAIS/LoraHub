@@ -28,6 +28,7 @@ import type {
   BootstrapStatus,
   BootstrapRequestBody,
   AttentionBackendsResponse,
+  TorchOptionsResponse,
 } from "./backends"
 import type { SettingsState, SettingsResponse } from "./settings"
 import type { DatasetScanResponse, DatasetCaptionResponse } from "./datasets"
@@ -237,13 +238,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  installDeps: (backend: BackendId = "diffusion-pipe") =>
+  installDeps: (
+    backend: BackendId = "diffusion-pipe",
+    options: Pick<BootstrapRequestBody, "install_deepspeed"> = {},
+  ) =>
     http<BootstrapStartResponse>("/backend/install-deps", {
       method: "POST",
-      body: JSON.stringify({ backend }),
+      body: JSON.stringify({ backend, ...options }),
     }),
   getAttentionBackends: () =>
     http<AttentionBackendsResponse>("/system/attention-backends"),
+  getTorchOptions: () =>
+    http<TorchOptionsResponse>("/backend/torch-options"),
   installFlashAttn: (backend: BackendId, version: "2" | "3" | "4") =>
     http<{
       session_id: string

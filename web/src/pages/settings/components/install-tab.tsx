@@ -15,6 +15,7 @@ import {
   type BackendId,
   type BackendUpdateCheck,
   type BootstrapEvent,
+  type TorchWheelOption,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -69,6 +70,12 @@ export function InstallTab() {
 
   const noProxy = !settingsQuery.data?.settings.github_proxy
 
+  const torchOptionsQuery = useQuery({
+    queryKey: ["backend-torch-options"],
+    queryFn: api.getTorchOptions,
+    staleTime: 60_000,
+  })
+
   // Poll status as a fallback so the panel survives a page reload while an
   // install is mid-flight, and so we never miss a terminal frame the WS may
   // have sent before we attached.
@@ -88,10 +95,25 @@ export function InstallTab() {
   // default once both queries land. Use empty string until ready so the
   // base-ui Select stays controlled across the entire mount lifecycle.
   const [selected, setSelected] = useState<BackendId | "">("")
+  const [selectedTorch, setSelectedTorch] = useState("")
   useEffect(() => {
     if (selected || !backendsQuery.data) return
     setSelected(backendsQuery.data.default)
   }, [backendsQuery.data, selected])
+
+  const torchOptions = torchOptionsQuery.data?.options ?? []
+  const recommendedTorch = useMemo(
+    () => torchOptions.find((o) => o.recommended) ?? torchOptions.find((o) => o.compatible),
+    [torchOptions],
+  )
+  useEffect(() => {
+    if (selectedTorch || !recommendedTorch) return
+    setSelectedTorch(torchOptionValue(recommendedTorch))
+  }, [recommendedTorch, selectedTorch])
+  const selectedTorchOption = useMemo(
+    () => torchOptions.find((o) => torchOptionValue(o) === selectedTorch) ?? recommendedTorch,
+    [recommendedTorch, selectedTorch, torchOptions],
+  )
 
   // While a session is running we always show the running backend, no matter
   // what the user previously picked — that's also what the action button
@@ -136,7 +158,14 @@ export function InstallTab() {
       // Always force-overwrite. Users have repeatedly tripped on the
       // "target not empty" 409 because the install panel's whole point is
       // to wipe and re-install — there's no other meaningful intent.
-      return api.startBootstrap({ backend, force: true })
+      return api.startBootstrap({
+        backend,
+        force: true,
+        cuda: selectedTorchOption?.cuda,
+        torch_version: selectedTorchOption?.torch_version,
+        torchvision_version: selectedTorchOption?.torchvision_version,
+        torch_override: backend === "anima_lora",
+      })
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["backend-bootstrap-status"] })
@@ -269,9 +298,9 @@ export function InstallTab() {
               <div>
                 <div className="font-semibold">GitHub 代理未配置</div>
                 <div className="mt-0.5">
-                  国内直连 GitHub 克隆仓库可能极慢或超时。建议先到
+                  国内直连 GitHub 克隆仓库可能极慢或超时。可先到
                   <strong className="text-foreground"> 网络加速 </strong>
-                  标签页配置 GitHub 代理（推荐
+                  标签页配置 GitHub 代理（例如
                   <code className="text-foreground"> https://gh-proxy.org </code>
                   ），再执行安装。
                 </div>
@@ -293,6 +322,35 @@ export function InstallTab() {
                 {(backendsQuery.data?.backends ?? []).map((b) => (
                   <SelectItem key={b.id} value={b.id}>
                     {b.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">PyTorch</span>
+            <Select
+              value={selectedTorchOption ? torchOptionValue(selectedTorchOption) : ""}
+              onValueChange={(value) => setSelectedTorch(value ?? "")}
+              disabled={isRunning || torchOptions.length === 0}
+            >
+              <SelectTrigger className="w-72 text-xs font-mono h-8">
+                <SelectValue placeholder="按驱动选择 PyTorch" />
+              </SelectTrigger>
+              <SelectContent align="start" alignItemWithTrigger={false} className="w-[360px]">
+                {torchOptions.map((option) => (
+                  <SelectItem
+                    key={torchOptionValue(option)}
+                    value={torchOptionValue(option)}
+                    disabled={!option.compatible}
+                  >
+                    <span className="flex min-w-0 flex-col items-start gap-0.5">
+                      <span className="truncate text-xs font-medium">
+                        {option.label}
+                        {option.recommended ? " · 默认" : ""}
+                      </span>
+                      <span className="truncate text-[10px] text-muted-foreground">
+                        驱动最低 {option.min_driver} · {option.cuda}
+                      </span>
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -329,6 +387,28 @@ export function InstallTab() {
               </span>
             )}
           </div>
+
+          {selectedTorchOption && (
+            <div
+              className={cn(
+                "rounded-[4px] border px-3 py-2 text-xs leading-relaxed",
+                selectedTorchOption.compatible
+                  ? "border-border/60 bg-muted/20 text-muted-foreground"
+                  : "border-destructive/40 bg-destructive/5 text-destructive",
+              )}
+            >
+              <span className="text-foreground">
+                驱动 {torchOptionsQuery.data?.driver_version ?? "未检测到"} ·
+                选择 {selectedTorchOption.torch_version} / {selectedTorchOption.cuda}
+              </span>
+              <span className="ml-2">{selectedTorchOption.reason}</span>
+              {effective === "anima_lora" && (
+                <span className="ml-2">
+                  anima_lora 会在 <code>uv sync</code> 后覆盖 torch wheel。
+                </span>
+              )}
+            </div>
+          )}
 
           {updateCheckEnabled && descriptor?.ready && !isRunning && (
             <BackendUpdateCard
@@ -562,4 +642,8 @@ function BackendUpdateCard({
       )}
     </div>
   )
+}
+
+function torchOptionValue(option: TorchWheelOption): string {
+  return `${option.cuda}:${option.torch_version}:${option.torchvision_version}`
 }

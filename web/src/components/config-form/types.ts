@@ -273,6 +273,22 @@ export interface ConfigFormValue {
       mode?: "one-job-per-gpu" | "distributed"
       numGpus?: number | null
     }
+    distributed?: {
+      strategy?: "ddp" | "fsdp" | "deepspeed_zero"
+      fsdp?: {
+        shardingStrategy?: "full_shard" | "shard_grad_op" | "no_reshard"
+        autoWrapPolicy?: "size_based" | "transformer" | "none"
+        minNumParams?: number
+        stateDictType?: "full_state_dict" | "sharded_state_dict" | "local_state_dict"
+        cpuOffload?: boolean
+      }
+      zero?: {
+        stage?: 2 | 3
+        offloadOptimizer?: "none" | "cpu"
+        offloadParam?: "none" | "cpu"
+        overlapComm?: boolean
+      }
+    }
     diffusionPipe?: {
       pipelineStages?: number
       gradientClipping?: number

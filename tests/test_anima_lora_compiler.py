@@ -213,6 +213,19 @@ def test_style_32gb_loha_template_compiles_to_style_recipe(tmp_path: Path) -> No
     assert "use_timestep_mask=false" in network_args
 
 
+def test_v100_template_emits_fp32_compute(tmp_path: Path) -> None:
+    from lorahub.core.config.loader import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root / "configs" / "anima_lora_v100_fp16.yaml")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["mixed_precision"] == "fp32"
+    assert emitted["save_precision"] == "fp16"
+    assert emitted["output_name"] == "style_anima_v100"
+
+
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     """method='lora' default stacks OrthoLoRA + T-LoRA per upstream lora.toml.
 
@@ -543,6 +556,57 @@ def test_workspace_drives_output_dir(tmp_path: Path) -> None:
     expected = (ws / "ckpt").resolve()
     assert Path(pairs["--output_dir"][0]) == expected
     assert pairs["--output_name"] == ["my_run"]
+
+
+def test_model_paths_are_absolute_in_generated_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Training runs from anima_lora's context, so relative model paths break."""
+    project = tmp_path / "project"
+    project.mkdir()
+    for rel in (
+        "models/diffusion_models/anima.safetensors",
+        "models/text_encoders/qwen.safetensors",
+        "models/vae/ae.safetensors",
+    ):
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    data = project / "data"
+    data.mkdir()
+    monkeypatch.chdir(project)
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {
+                "arch": "anima",
+                "checkpoint": "models/diffusion_models/anima.safetensors",
+                "arch_paths": {
+                    "qwen3": "models/text_encoders/qwen.safetensors",
+                    "ae": "models/vae/ae.safetensors",
+                },
+            },
+            "dataset": {"source": "data"},
+            "schedule": {"epochs": 1, "batch_size": 1},
+            "sampling": {"enabled": False},
+            "optimizer": {"lr": {"unet": 1e-4, "text_encoder": 5e-5}},
+            "network": {"rank": 16, "alpha": 8},
+            "output": {"name": "x"},
+            "backend": {
+                "type": "anima_lora",
+                "animaLora": AnimaLoraOptions().model_dump(by_alias=True),
+            },
+        }
+    )
+    argv, files = compile_config(cfg, project / "runs" / "x")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["pretrained_model_name_or_path"] == str(
+        (project / "models/diffusion_models/anima.safetensors").resolve()
+    )
+    assert emitted["qwen3"] == str((project / "models/text_encoders/qwen.safetensors").resolve())
+    assert emitted["vae"] == str((project / "models/vae/ae.safetensors").resolve())
 
 
 # --------------------------------------------------------------------------- #

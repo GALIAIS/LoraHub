@@ -111,6 +111,7 @@ _CANCEL_HINTS = (
 
 # Substrings that contain "error" but are benign informational output.
 _ERROR_FALSE_POSITIVES = (
+    "brokenpipeerror: [errno 32] broken pipe",
     "mean ar error",
     "forrtl: error (200): program aborting due to control-break event",
 )

@@ -87,6 +87,18 @@ const RAW_PATH_LABELS: Record<string, string> = {
   "backend.pythonExecutable": "后端 / Python 解释器",
   "backend.extra_args": "后端 / 额外参数",
   "backend.extraArgs": "后端 / 额外参数",
+  "backend.gpuDispatch.mode": "后端 / GPU 调度",
+  "backend.gpuDispatch.numGpus": "后端 / GPU 数量",
+  "backend.distributed.strategy": "后端 / 分布式策略",
+  "backend.distributed.fsdp.shardingStrategy": "后端 / FSDP 分片",
+  "backend.distributed.fsdp.autoWrapPolicy": "后端 / FSDP 包裹",
+  "backend.distributed.fsdp.minNumParams": "后端 / FSDP 包裹阈值",
+  "backend.distributed.fsdp.stateDictType": "后端 / FSDP 保存方式",
+  "backend.distributed.fsdp.cpuOffload": "后端 / FSDP CPU offload",
+  "backend.distributed.zero.stage": "后端 / ZeRO stage",
+  "backend.distributed.zero.offloadOptimizer": "后端 / ZeRO 优化器 offload",
+  "backend.distributed.zero.offloadParam": "后端 / ZeRO 参数 offload",
+  "backend.distributed.zero.overlapComm": "后端 / ZeRO 通信重叠",
 
   // backend.animaLora.*
   "backend.animaLora.networkDim": "anima_lora / 网络 dim",

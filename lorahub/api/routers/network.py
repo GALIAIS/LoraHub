@@ -38,19 +38,26 @@ PRESETS: dict[str, list[dict[str, str]]] = {
         {"label": "kkgithub.com", "value": "https://kkgithub.com", "probe": "https://kkgithub.com/"},
     ],
     "huggingface": [
-        {"label": "huggingface.co (官方)", "value": "", "probe": "https://huggingface.co/"},
+        {"label": "huggingface.co", "value": "", "probe": "https://huggingface.co/"},
         {"label": "hf-mirror.com", "value": "https://hf-mirror.com", "probe": "https://hf-mirror.com/"},
-        {"label": "modelscope.cn (备选)", "value": "https://modelscope.cn", "probe": "https://modelscope.cn/"},
+        {"label": "modelscope.cn", "value": "https://modelscope.cn", "probe": "https://modelscope.cn/"},
     ],
     "pypi": [
-        {"label": "pypi.org (官方)", "value": "https://pypi.org/simple/", "probe": "https://pypi.org/simple/"},
-        {"label": "TUNA 清华", "value": "https://pypi.tuna.tsinghua.edu.cn/simple", "probe": "https://pypi.tuna.tsinghua.edu.cn/simple/"},
-        {"label": "中科大 USTC", "value": "https://pypi.mirrors.ustc.edu.cn/simple", "probe": "https://pypi.mirrors.ustc.edu.cn/simple/"},
         {"label": "阿里云", "value": "https://mirrors.aliyun.com/pypi/simple", "probe": "https://mirrors.aliyun.com/pypi/simple/"},
+        {"label": "南京大学", "value": "https://mirror.nju.edu.cn/pypi/web/simple", "probe": "https://mirror.nju.edu.cn/pypi/web/simple/"},
+        {"label": "北京外国语大学", "value": "https://mirrors.bfsu.edu.cn/pypi/web/simple", "probe": "https://mirrors.bfsu.edu.cn/pypi/web/simple/"},
+        {"label": "中国科学技术大学", "value": "https://pypi.mirrors.ustc.edu.cn/simple", "probe": "https://pypi.mirrors.ustc.edu.cn/simple/"},
+        {"label": "清华大学", "value": "https://pypi.tuna.tsinghua.edu.cn/simple", "probe": "https://pypi.tuna.tsinghua.edu.cn/simple/"},
         {"label": "腾讯云", "value": "https://mirrors.cloud.tencent.com/pypi/simple", "probe": "https://mirrors.cloud.tencent.com/pypi/simple/"},
         {"label": "华为云", "value": "https://mirrors.huaweicloud.com/repository/pypi/simple", "probe": "https://mirrors.huaweicloud.com/repository/pypi/simple/"},
-        {"label": "豆瓣", "value": "https://pypi.douban.com/simple", "probe": "https://pypi.douban.com/simple/"},
         {"label": "网易", "value": "https://mirrors.163.com/pypi/simple", "probe": "https://mirrors.163.com/pypi/simple/"},
+        {"label": "pypi.org", "value": "https://pypi.org/simple/", "probe": "https://pypi.org/simple/"},
+    ],
+    "pytorch": [
+        {"label": "PyTorch", "value": "", "probe": "https://download.pytorch.org/whl/cu128/torch/"},
+        {"label": "阿里云", "value": "https://mirrors.aliyun.com/pytorch-wheels", "probe": "https://mirrors.aliyun.com/pytorch-wheels/cu128/torch/"},
+        {"label": "南京大学", "value": "https://mirrors.nju.edu.cn/pytorch/whl", "probe": "https://mirrors.nju.edu.cn/pytorch/whl/cu128/torch/"},
+        {"label": "上海交通大学", "value": "https://mirror.sjtu.edu.cn/pytorch-wheels", "probe": "https://mirror.sjtu.edu.cn/pytorch-wheels/cu128/torch/"},
     ],
 }
 

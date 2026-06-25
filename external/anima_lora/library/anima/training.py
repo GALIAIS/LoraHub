@@ -1297,6 +1297,9 @@ def _sample_image_inference(
 
     # Convert to image
     image = decoded.float()
+    if not torch.isfinite(image).all():
+        logger.warning("sample image contains NaN/Inf, skipping save")
+        return
     image = torch.clamp((image + 1.0) / 2.0, min=0.0, max=1.0)[0]
     # Remove temporal dim if present
     if image.ndim == 4:

@@ -101,26 +101,32 @@ def _missing_caches(
     images: list[Path],
     cache_dir: Path,
 ) -> list[Path]:
-    """Return the subset of images that don't have a TE-cache sidecar yet.
+    """Return images with missing/stale latent or TE cache sidecars.
 
-    We use ``{stem}_anima_te.safetensors`` as the gate because it's the
-    last file written in upstream's preprocess chain (resize → VAE
-    latent → TE embedding). If TE is present, the latent has to be
-    too — and any preprocess re-run is idempotent, so it's safe to
-    declare "everything is cached" once TE exists.
-
-    The latent cache filename includes resolution (``{WxH}_anima.npz``)
-    which we'd have to predict from the bucket manager to match exactly;
-    keying off TE keeps the check simple and correct.
+    The latent cache filename includes resolution, so we accept any
+    ``{stem}_*_anima.npz``. Captions newer than TE cache force a rebuild;
+    otherwise edits to ``.txt`` sidecars silently train on stale text.
     """
     if not cache_dir.is_dir():
         return list(images)
     out: list[Path] = []
     for img in images:
         te = cache_dir / f"{img.stem}_anima_te.safetensors"
-        if not te.is_file():
+        latent = next(cache_dir.glob(f"{img.stem}_*_anima.npz"), None)
+        if not te.is_file() or latent is None or not latent.is_file():
+            out.append(img)
+            continue
+        caption = img.with_suffix(".txt")
+        if caption.is_file() and _mtime(caption) > _mtime(te):
             out.append(img)
     return out
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 # Type alias for the SubprocessRunner factory that ``ensure_cache`` uses.

@@ -793,7 +793,10 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
         # per accumulation slice) so always-on when the user opts in.
         nan_guard_on = bool(getattr(args, "nan_guard", False))
         skipped_for_nan = False
-        if nan_guard_on and not torch.isfinite(loss).all():
+        non_finite_loss = bool(nan_guard_on and not torch.isfinite(loss).all())
+        if nan_guard_on:
+            non_finite_loss = _distributed_any(accelerator, non_finite_loss)
+        if non_finite_loss:
             state.nan_skips += 1
             state.nan_consecutive += 1
             state.optimizer.zero_grad(set_to_none=True)
@@ -853,6 +856,7 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
                     if p.grad is not None and not torch.isfinite(p.grad).all():
                         bad = True
                         break
+                bad = _distributed_any(accelerator, bad)
                 if bad:
                     state.nan_skips += 1
                     state.nan_consecutive += 1
@@ -912,15 +916,14 @@ def _maybe_recover_from_nan(state: LoopState) -> None:
     threshold = max(1, int(getattr(args, "nan_guard_max_consecutive", 5) or 5))
     if state.nan_consecutive < threshold:
         return
-    if not state.accelerator.is_main_process:
-        return
     if not bool(getattr(args, "nan_guard_recover", False)):
-        logger.error(
-            "NaN/spike threshold reached (%d consecutive). "
-            "Pass --nan_guard_recover to auto-halve LR + restore EMA, "
-            "or stop training and inspect the data pipeline.",
-            state.nan_consecutive,
-        )
+        if state.accelerator.is_main_process:
+            logger.error(
+                "NaN/spike threshold reached (%d consecutive). "
+                "Pass --nan_guard_recover to auto-halve LR + restore EMA, "
+                "or stop training and inspect the data pipeline.",
+                state.nan_consecutive,
+            )
         # Reset so we don't log this every step until end of run.
         state.nan_consecutive = 0
         return
@@ -940,10 +943,11 @@ def _maybe_recover_from_nan(state: LoopState) -> None:
             ]
         except Exception:  # noqa: BLE001
             pass
-    logger.warning(
-        "nan_guard recovery: halved LR (now %s)",
-        [g.get("lr") for g in state.optimizer.param_groups],
-    )
+    if state.accelerator.is_main_process:
+        logger.warning(
+            "nan_guard recovery: halved LR (now %s)",
+            [g.get("lr") for g in state.optimizer.param_groups],
+        )
 
     if state.ema is not None:
         # Swap the EMA shadow into the live network so we restart
@@ -958,9 +962,10 @@ def _maybe_recover_from_nan(state: LoopState) -> None:
             with torch.no_grad():
                 for shadow, (_, live) in zip(state.ema.shadow_params, named):
                     live.data.copy_(shadow.to(live.device, dtype=live.dtype))
-            logger.warning(
-                "nan_guard recovery: restored network params from EMA shadow",
-            )
+            if state.accelerator.is_main_process:
+                logger.warning(
+                    "nan_guard recovery: restored network params from EMA shadow",
+                )
 
     state.nan_consecutive = 0
 

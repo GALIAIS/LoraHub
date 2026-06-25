@@ -62,6 +62,8 @@ if not "%LORAHUB_NODE_MIRROR%"=="https://nodejs.org/dist" echo   Node:      %LOR
 if defined NPM_CONFIG_REGISTRY      echo   npm:       %NPM_CONFIG_REGISTRY%
 echo.
 
+if defined UV_INDEX_URL if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%UV_INDEX_URL%"
+
 rem ---- [1/6] Install uv locally -------------------------------------
 echo [1/6] Installing uv ...
 if exist "%UV_DIR%\uv.exe" (
@@ -195,9 +197,12 @@ echo.
 
 rem ---- [4/6] Install Python dependencies ----------------------------
 echo [4/6] Installing Python dependencies ...
-rem uv pip install reads UV_INDEX_URL natively when set; we don't
-rem pass --index-url here so the env-driven override stays in effect.
-"%UV%" pip install -e ".[api,dev]" --python "%VENV_PY%"
+set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
+set "PY_DEPS_INDEX_ARGS="
+if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url ""%UV_DEFAULT_INDEX%"""
+echo   uv default index: %UV_DEFAULT_INDEX%
+echo   running uv pip install -v -e .[api,dev] --python "%VENV_PY%" --link-mode=copy %PY_DEPS_INDEX_ARGS% ^(log: _uv_python_deps.log^)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%UV%' pip install -v -e '.[api,dev]' --python '%VENV_PY%' --link-mode=copy %PY_DEPS_INDEX_ARGS% 2>&1 | Tee-Object -FilePath '%PY_DEPS_LOG%'; exit $LASTEXITCODE"
 if errorlevel 1 (
   echo   [ERROR] pip install failed.
   echo   If your network blocks pypi.org, retry with the China-mirror

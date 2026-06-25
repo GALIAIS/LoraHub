@@ -96,7 +96,14 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
               )}
             </>
           ) : (
-            <Missing reason="尚未收到任何 loss 采样" label="—" />
+            <Missing
+              reason={
+                summary.nonfiniteLoss
+                  ? "后端上报 loss=NaN/Inf, 曲线会跳过该点"
+                  : "尚未收到任何 loss 采样"
+              }
+              label={summary.nonfiniteLoss ? "NaN" : "—"}
+            />
           )}
         </Stat>
         <Stat icon={<ArrowDownRight className="size-3" />} label="验证">
@@ -121,8 +128,12 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
             </>
           ) : (
             <Missing
-              reason="未配置验证集 (在 schedule 中开启 validate_every_n_epochs)"
-              label="未启用"
+              reason={
+                summary.nonfiniteValLoss
+                  ? "后端上报 val_loss=NaN/Inf, 曲线会跳过该点"
+                  : "未配置验证集 (在 schedule 中开启 validate_every_n_epochs)"
+              }
+              label={summary.nonfiniteValLoss ? "NaN" : "未启用"}
             />
           )}
         </Stat>
@@ -213,6 +224,8 @@ interface Kpis {
   samples: number
   wallSec: number | null
   etaSec: number | null
+  nonfiniteLoss: boolean
+  nonfiniteValLoss: boolean
 }
 
 function deriveKpis(
@@ -230,6 +243,10 @@ function deriveKpis(
       ? ((lossStart - lossLatest) / lossStart) * 100
       : null
   const step = points.length > 0 ? points[points.length - 1].step : null
+  const lastStep =
+    typeof m?.last_step === "number" && Number.isFinite(m.last_step)
+      ? m.last_step
+      : step
   // Trainer-reported total_steps wins (kohya / anima emit it on every
   // step event); fall back to the parent-supplied config-derived
   // estimate when dp doesn't emit one. Same priority as the overview
@@ -239,16 +256,16 @@ function deriveKpis(
       ? m.total_steps
       : (fallbackTotalSteps ?? null)
   const percent =
-    step != null && totalSteps != null && totalSteps > 0
-      ? (step / totalSteps) * 100
+    lastStep != null && totalSteps != null && totalSteps > 0
+      ? (lastStep / totalSteps) * 100
       : null
   const wallSec =
     m?.first_step_ts != null && m?.last_step_ts != null
       ? m.last_step_ts - m.first_step_ts
       : null
   const etaSec =
-    wallSec != null && step != null && totalSteps != null && step > 0
-      ? (wallSec / step) * Math.max(0, totalSteps - step)
+    wallSec != null && lastStep != null && totalSteps != null && lastStep > 0
+      ? (wallSec / lastStep) * Math.max(0, totalSteps - lastStep)
       : null
   const vals = m?.val_loss ?? []
   const valLatest =
@@ -260,7 +277,7 @@ function deriveKpis(
   const valGap =
     valLatest != null && lossLatest != null ? valLatest - lossLatest : null
   return {
-    step,
+    step: lastStep,
     totalSteps,
     percent,
     lossLatest,
@@ -271,5 +288,7 @@ function deriveKpis(
     samples: m?.samples?.length ?? 0,
     wallSec,
     etaSec,
+    nonfiniteLoss: !!m?.last_nonfinite_loss,
+    nonfiniteValLoss: !!m?.last_nonfinite_val_loss,
   }
 }

@@ -40,10 +40,12 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import queue
 import re
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -333,6 +335,19 @@ def _release_notes_from_git(
         return f"{tag_name} 正式版"
     lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
     return "\n".join(lines[:80])[:8000]
+
+
+def _release_notes_from_commit(commit_sha: str | None) -> str:
+    if not commit_sha:
+        return ""
+    try:
+        info = _fetch_json(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{commit_sha}"
+        )
+    except (OSError, ValueError):
+        return ""
+    msg = (info.get("commit") or {}).get("message") or ""
+    return msg.split("\n", 1)[0][:300]
 
 
 def _read_cache() -> _CacheBlob:
@@ -744,11 +759,15 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     if latest_commit is None:
         latest_commit = remote.get("commit")
     release_notes = remote["release_notes"]
-    if channel == "tag" and not release_notes:
-        release_notes = _release_notes_from_git(
+    if channel == "tag":
+        release_notes = (
+            _release_notes_from_commit(latest_commit)
+            or release_notes
+            or _release_notes_from_git(
             cwd,
             remote.get("tag_name"),
             current_commit,
+            )
         )
     if channel == "tag" and latest:
         update_available = _tag_update_available(
@@ -1293,6 +1312,7 @@ def _apply_ref(
 def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     emit("deps", "info", "reinstalling Python dependencies")
     py_cmd = _build_pip_command(cwd)
+    emit("deps", "info", "running " + _format_cmd(py_cmd))
     rc = _stream_subprocess(py_cmd, cwd=cwd, phase="deps", emit=emit)
     if rc != 0:
         msg = f"pip install failed (exit {rc})"
@@ -1381,10 +1401,16 @@ def _build_pip_command(cwd: Path) -> list[str]:
 
         uv = find_uv()
         if uv:
-            return [uv, "pip", "install", "-e", ".[api,dev]", "--python", py]
+            return [uv, "-v", "pip", "install", "-e", ".[api,dev]", "--python", py]
     except Exception:  # noqa: BLE001
         pass
     return [py, "-m", "pip", "install", "-e", ".[api,dev]"]
+
+
+def _format_cmd(cmd: list[str]) -> str:
+    import shlex  # noqa: PLC0415
+
+    return " ".join(shlex.quote(part) for part in cmd)
 
 
 def _find_npm(repo: Path) -> str | None:
@@ -1449,8 +1475,26 @@ def _stream_subprocess(
         env=env,
     )
     assert proc.stdout is not None  # noqa: S101
-    for raw in proc.stdout:
-        line = raw.rstrip()
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def _reader() -> None:
+        try:
+            for raw in proc.stdout:
+                lines.put(raw.rstrip())
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=_reader, name="lorahub-update-stream", daemon=True).start()
+    while True:
+        try:
+            line = lines.get(timeout=30)
+        except queue.Empty:
+            if proc.poll() is None:
+                emit(phase, "info", "still running ...")
+                continue
+            break
+        if line is None:
+            break
         if line:
             emit(phase, "info", line)
     return proc.wait()

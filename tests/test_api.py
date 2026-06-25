@@ -113,6 +113,15 @@ def _config_payload(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def _use_stub_anima_backend(cfg: dict[str, Any], tmp_path: Path) -> None:
+    repo = tmp_path / "anima_lora"
+    repo.mkdir()
+    (repo / "train.py").write_text("", encoding="utf-8")
+    cfg["base_model"]["arch"] = "anima"
+    cfg["backend"]["type"] = "anima_lora"
+    cfg["backend"]["repo_path"] = str(repo)
+
+
 def test_health_returns_version(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -121,6 +130,24 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "version" in body
     assert "backend" in body
     assert "sd_scripts_path" in body["backend"]
+
+
+def test_health_does_not_run_full_backend_probe(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Service startup waits on /api/health; it must stay lightweight."""
+    from lorahub.api import settings as settings_mod
+
+    def fail_probe(_settings: object) -> dict[str, dict[str, object]]:
+        raise AssertionError("full backend probe must not run in health")
+
+    monkeypatch.setattr(settings_mod, "probe_all_backends", fail_probe)
+
+    r = client.get("/api/health")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
 
 
 def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
@@ -634,8 +661,7 @@ def test_distributed_gpu_dispatch_assigns_multiple_visible_devices(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         cfg["backend"]["gpu_dispatch"] = {
             "mode": "distributed",
             "num_gpus": 2,
@@ -702,8 +728,7 @@ def test_create_job_inherits_settings_gpu_dispatch_default(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         r = client.post(
             "/api/jobs",
             json={"config": cfg, "workspace": str(tmp_path / "ws")},
@@ -770,8 +795,7 @@ def test_empty_gpu_dispatch_payload_still_follows_settings(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         cfg["backend"]["gpu_dispatch"] = {}
         r = client.post(
             "/api/jobs",
@@ -835,6 +859,51 @@ def test_failed_job_reports_once_for_noisy_error_logs(
     assert len(reports) == 1
     assert reports[0].job_id == job_id
     assert reports[0].context["returncode"] == 1
+
+
+def test_job_event_stream_normalizes_payloads(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+    from lorahub.core.backends.base import TrainingHandle
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+        ) -> TrainingHandle:
+            def wait(_timeout: float | None) -> int:
+                on_event(
+                    TrainingEvent(
+                        type=EventType.step,
+                        payload={"loss": float("nan"), "message": "x" * 20_000},
+                    )
+                )
+                on_event(TrainingEvent(type=EventType.done, payload={"returncode": 0}))
+                return 0
+
+            return TrainingHandle(job_id="fake", pid=0, _stop_fn=lambda _g: None, _wait_fn=wait)
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    ws = tmp_path / "ws"
+    payload = {"config": _config_payload(tmp_path), "workspace": str(ws)}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+    final = _wait_terminal(client, job_id, timeout=5.0)
+
+    assert final["state"] == "succeeded", final
+    events = list(JsonlEventSink.replay(ws / "events.jsonl"))
+    step = next(ev for ev in events if ev.type is EventType.step)
+    assert step.job_id == job_id
+    assert step.payload["loss"] is None
+    assert step.payload["message"].endswith("...[truncated]")
 
 
 # --------------------------------------------------------------------------- #
@@ -2317,6 +2386,31 @@ def test_delete_config(client: TestClient, configs_dir: Path) -> None:
     assert client.delete("/api/configs/demo").status_code == 404
 
 
+def test_template_metadata_is_ignored_for_regular_config_validation(
+    client: TestClient,
+    configs_dir: Path,
+) -> None:
+    payload = {
+        "_template": {"name": "Template", "arch": "sdxl"},
+        "_placeholders": [{"key": "dataset", "path_field": "dataset.source"}],
+        "base_model": {"checkpoint": "./model.safetensors"},
+        "dataset": {"source": "./data"},
+    }
+    (configs_dir / "with_template_meta.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    listed = client.get("/api/configs")
+    assert listed.status_code == 200
+    row = next(item for item in listed.json()["configs"] if item["name"] == "with_template_meta")
+    assert row["valid"] is True
+
+    validated = client.post("/api/configs/validate", json={"config": payload})
+    assert validated.status_code == 200
+    assert validated.json()["valid"] is True
+
+
 def test_list_templates_returns_validated_configs(client: TestClient) -> None:
     r = client.get("/api/configs/templates")
     assert r.status_code == 200, r.text
@@ -2387,9 +2481,11 @@ def test_list_templates_skips_invalid_yaml_files(
     body = r.json()
 
     ids = [t["id"] for t in body["templates"]]
-    assert ids == ["good"], body
-    assert body["templates"][0]["name"] == "Good Template"
-    assert body["templates"][0]["arch"] == "sdxl"
+    assert "good" in ids, body
+    assert "bad" not in ids, body
+    good_template = next(t for t in body["templates"] if t["id"] == "good")
+    assert good_template["name"] == "Good Template"
+    assert good_template["arch"] == "sdxl"
 
     warnings = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
     assert any("bad.yaml" in msg for msg in warnings), warnings
@@ -4176,6 +4272,40 @@ def test_metrics_exclude_grid_sample_events(client: TestClient, tmp_path: Path) 
     assert [item["path"] for item in samples] == ["sample-1.png"]
 
 
+def test_metrics_keep_progress_when_loss_is_nan(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "nan-progress"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    (ws / "events.jsonl").write_text(
+        "\n".join(
+            [
+                (
+                    '{"type":"step","payload":{"step":55,"total_steps":2000,'
+                    '"loss":NaN},"timestamp":1.0,"job_id":"%s"}'
+                )
+                % job.id,
+                (
+                    '{"type":"validation","payload":{"step":55,'
+                    '"val_loss":NaN},"timestamp":2.0,"job_id":"%s"}'
+                )
+                % job.id,
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    r = client.get(f"/api/jobs/{job.id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["loss"] == []
+    assert body["last_step"] == 55
+    assert body["total_steps"] == 2000
+    assert body["last_nonfinite_loss"]["step"] == 55
+    assert body["val_loss"] == []
+    assert body["last_nonfinite_val_loss"]["step"] == 55
+
+
 # --------------------------------------------------------------------------- #
 # Config template instantiate (POST /api/configs/templates/{id}/instantiate)
 # --------------------------------------------------------------------------- #
@@ -4238,8 +4368,8 @@ def test_instantiate_template_substitutes_placeholders(
 
     # Confirm the listing exposes the new placeholders array.
     listed = client.get("/api/configs/templates").json()["templates"]
-    assert len(listed) == 1
-    assert [p["key"] for p in listed[0]["placeholders"]] == [
+    listed_template = next(t for t in listed if t["id"] == "test")
+    assert [p["key"] for p in listed_template["placeholders"]] == [
         "checkpoint",
         "dataset",
         "name",

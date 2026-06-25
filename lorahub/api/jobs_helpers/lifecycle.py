@@ -33,7 +33,7 @@ from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
 from lorahub.core.config.loader import dump_config
 from lorahub.core.config.schema import TrainingConfig
-from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
+from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent, normalize_event
 
 from .paths_norm import _normalize_config_paths
 from .preview import _gpu_sampler_loop, _maybe_start_preview_worker
@@ -203,7 +203,19 @@ def _enqueue_launch(
         nonlocal _sink_closed
         if _sink_closed and ev.type is not EventType.done:
             return
-        sink(ev)
+        ev = normalize_event(ev, job_id=job.id)
+        try:
+            sink(ev)
+        except ValueError as exc:
+            ev = TrainingEvent(
+                type=EventType.error,
+                payload={
+                    "source": "event_sink",
+                    "error": f"event payload is not JSON-compliant: {exc}",
+                },
+                job_id=job.id,
+            )
+            sink(ev)
         state.registry.record_event(job.id, ev)
         if ev.type is EventType.log:
             _capture_wandb_run_url(job.id, ev)
@@ -376,7 +388,7 @@ def _enqueue_launch(
         sampler_stop = threading.Event()
         sampler = threading.Thread(
             target=_gpu_sampler_loop,
-            args=(job.id, assigned_slots[0], on_event, sampler_stop),
+            args=(job.id, assigned_slots, on_event, sampler_stop),
             daemon=True,
             name=f"gpu-sampler-{job.id[-6:]}",
         )

@@ -11,9 +11,12 @@ from __future__ import annotations
 import argparse
 from types import SimpleNamespace
 
+import torch
+
 from library.training import (
     LOSS_REGISTRY,
     LossComposer,
+    apply_masked_loss,
     build_loss_composer,
 )
 
@@ -71,3 +74,9 @@ def test_postfix_activates_multiscale_when_weight_set():
     args = _make_args(method="postfix", multiscale_loss_weight=0.5)
     composer = build_loss_composer(args, _net())
     assert "multiscale" in composer.active_losses
+
+
+def test_masked_loss_ignores_none_conditioning_images():
+    loss = torch.ones(1, 1, 2, 2)
+    out = apply_masked_loss(loss, {"conditioning_images": None})
+    assert torch.equal(out, loss)

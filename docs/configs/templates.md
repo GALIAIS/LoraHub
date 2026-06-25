@@ -13,6 +13,7 @@ LoraHub 自带几份 YAML 模板，放在 [`configs/`](https://github.com/GALIAI
 | ---- | ---- | ------- | ---- |
 | `anima_lora_default`        | Anima | LoRA + OrthoLoRA + T-LoRA, rank 16 / alpha 16 | 上游 anima_lora `make lora default` 的 100% 复刻基线;新手对照参考。 |
 | `anima_lora_8gb`            | Anima | LoRA + OrthoLoRA + T-LoRA, rank 8 / alpha 8   | 8GB 显存档:768²、AdamW8bit、blocks_to_swap=24、grad-ckpt 开;关 sampling/validation/torch.compile。 |
+| `anima_lora_v100_fp16`      | Anima | LoRA + OrthoLoRA + T-LoRA, rank 32 / alpha 32 | Tesla V100 32GB 兼容档:fp16、PyTorch SDPA、batch=1/accum=2,避开 bf16/flash 路径。 |
 | `anima_style_32gb_loha`     | Anima | LoHa + T-LoRA, rank 4 / alpha 4               | 32GB 卡上的画风 LoRA;LoHa 比同等表达的 LoRA 参数量减半,收敛更快。 |
 
 Anima 配置走 LoraHub 的 anima_lora 后端 — 把 DiT + Qwen-Image VAE + Qwen3-0.6B 文本编码器接好,并自动调用上游 preprocess (resize_images / cache_latents / cache_text_embeddings)。
@@ -62,6 +63,7 @@ _placeholders:
 ```powershell
 lorahub init my_character                            # 默认:anima_lora_default
 lorahub init my_8gb --template anima_lora_8gb        # 8GB 卡起步
+lorahub init my_v100 --template anima_lora_v100_fp16 # V100 32GB fp16 起步
 lorahub init my_style --template anima_style_32gb_loha      # 32GB 画风 LoHA
 lorahub init my_character --auto `
     --checkpoint .\models\circlestone-labs__Anima\split_files\diffusion_models\anima-base-v1.0.safetensors `

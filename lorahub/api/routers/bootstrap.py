@@ -21,6 +21,7 @@ from lorahub.api.bootstrap_session import (
     _BootstrapSession,
 )
 from lorahub.api.task_sessions import TaskSessionStore, default_task_store_path
+from lorahub.api.torch_options import get_torch_options
 
 router = APIRouter(prefix="/api")
 _KIND_BACKEND_BOOTSTRAP = "backend_bootstrap"
@@ -52,6 +53,13 @@ def list_bootstrap_sessions(limit: int = 20) -> dict[str, Any]:
         return {"sessions": []}
     sessions = [r["snapshot"] for r in rows if isinstance(r.get("snapshot"), dict)]
     return {"sessions": sessions}
+
+
+@router.get("/backend/torch-options")
+def torch_options() -> dict[str, Any]:
+    """Selectable PyTorch/CUDA wheel combinations for this host."""
+
+    return get_torch_options()
 
 
 def _latest_persisted_bootstrap() -> dict[str, Any] | None:
@@ -137,6 +145,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
                 "torchvision_version": req.torchvision_version,
                 "install_xformers": req.install_xformers,
                 "install_deepspeed": req.install_deepspeed,
+                "torch_override": req.torch_override,
                 "force": req.force,
             },
         )
@@ -153,6 +162,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
 
 class InstallDepsRequest(BaseModel):
     backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
+    install_deepspeed: bool = True
 
 
 @router.post("/backend/install-deps", status_code=202)
@@ -221,6 +231,7 @@ def _build_deps_runner(
             github_proxy=settings.github_proxy,
             base_python=venv_py,
             pypi_index=settings.pypi_index_url,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
@@ -235,6 +246,7 @@ def _build_deps_runner(
             bootstrap as al_bootstrap,
             installer as al_installer,
         )
+        from lorahub.api.torch_options import recommended_torch_option  # noqa: PLC0415
 
         target_path = al_bootstrap.default_repo_path()
         if not (target_path / "pyproject.toml").is_file():
@@ -245,14 +257,24 @@ def _build_deps_runner(
                     "the repo source tree may be corrupted."
                 ),
             )
+        torch_option = recommended_torch_option()
         plan = al_installer.BootstrapPlan(
             target=target_path,
             base_python=None,
             pypi_index=settings.pypi_index_url,
+            install_deepspeed=req.install_deepspeed,
+            torch_override=True,
+            cuda_version=torch_option.cuda,
+            torch_version=torch_option.torch_version,
+            torchvision_version=torch_option.torchvision_version,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:
             al_installer.sync(plan, progress=progress)
+            al_installer.install_torch_override(plan, progress=progress)
+            al_installer.install_bitsandbytes(plan, progress=progress)
+            al_installer.install_deepspeed(plan, progress=progress)
 
     else:
         from lorahub.core.backends.kohya import installer  # noqa: PLC0415
@@ -283,6 +305,7 @@ def _build_deps_runner(
             github_proxy=settings.github_proxy,
             base_python=venv_py,
             pypi_index=settings.pypi_index_url,
+            torch_index_base=settings.torch_index_url,
         )
 
         def runner(progress: Callable[[str], None]) -> None:

@@ -1229,6 +1229,19 @@ class BaseDataset(torch.utils.data.Dataset):
         img = img[:, :, :3]
         return self.image_transforms(img)
 
+    @staticmethod
+    def _guard_item_load(image_info, what: str, thunk):
+        try:
+            return thunk()
+        except Exception as e:
+            raise RuntimeError(
+                f"DataLoader failed to load {what} for image "
+                f"{image_info.absolute_path!r} "
+                f"(latents={image_info.latents_npz!r}, "
+                f"TE={image_info.text_encoder_outputs_npz!r}): "
+                f"{type(e).__name__}: {e}"
+            ) from e
+
     def __getitem__(self, index):
         bucket = self.bucket_manager.buckets[self.buckets_indices[index].bucket_index]
         bucket_batch_size = self.buckets_indices[index].bucket_batch_size
@@ -1290,8 +1303,12 @@ class BaseDataset(torch.utils.data.Dataset):
                     image = None
             elif image_info.latents_npz is not None:
                 latents, original_size, crop_ltrb, flipped_latents, alpha_mask = (
-                    self.latents_caching_strategy.load_latents_from_disk(
-                        image_info.latents_npz, image_info.bucket_reso
+                    self._guard_item_load(
+                        image_info,
+                        "latents",
+                        lambda: self.latents_caching_strategy.load_latents_from_disk(
+                            image_info.latents_npz, image_info.bucket_reso
+                        ),
                     )
                 )
                 if flipped:
@@ -1460,10 +1477,12 @@ class BaseDataset(torch.utils.data.Dataset):
             if image_info.text_encoder_outputs is not None:
                 text_encoder_outputs = image_info.text_encoder_outputs
             elif image_info.text_encoder_outputs_npz is not None:
-                text_encoder_outputs = (
-                    self.text_encoder_output_caching_strategy.load_outputs_npz(
+                text_encoder_outputs = self._guard_item_load(
+                    image_info,
+                    "text-encoder cache",
+                    lambda: self.text_encoder_output_caching_strategy.load_outputs_npz(
                         image_info.text_encoder_outputs_npz
-                    )
+                    ),
                 )
             else:
                 tokenization_required = True

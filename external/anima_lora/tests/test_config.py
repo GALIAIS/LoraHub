@@ -60,6 +60,7 @@ def test_choices_preserved(populated_parser):
     mp = config_schema.get_schema()["mixed_precision"]
     assert "bf16" in mp.choices
     assert "no" in mp.choices
+    assert "fp32" in mp.choices
 
 
 # ---------------------------------------------------------------------------

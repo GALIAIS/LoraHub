@@ -67,6 +67,10 @@ if [ "$NODE_MIRROR" != "https://nodejs.org/dist" ]; then echo "  Node:      $NOD
 if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then echo "  npm:       $NPM_CONFIG_REGISTRY";    fi
 echo ""
 
+if [ -n "${UV_INDEX_URL:-}" ] && [ -z "${UV_DEFAULT_INDEX:-}" ]; then
+    export UV_DEFAULT_INDEX="$UV_INDEX_URL"
+fi
+
 version_ge() {
     # Return true when $1 >= $2 for dotted numeric versions.
     local a b IFS=.
@@ -196,10 +200,14 @@ echo ""
 
 # ---- [4/6] Install Python dependencies ------------------------------
 echo "[4/6] Installing Python dependencies ..."
-# uv pip install reads UV_INDEX_URL natively when set; explicit
-# --index-url here would override that, so leave the env var to do
-# its job.
-"$UV" pip install -e ".[api,dev]" --python "$VENV_PY"
+PY_DEPS_LOG="$ROOT/_uv_python_deps.log"
+PY_DEPS_ARGS=(pip install -v -e ".[api,dev]" --python "$VENV_PY" --link-mode=copy)
+if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
+    PY_DEPS_ARGS+=(--index-url "$UV_DEFAULT_INDEX")
+fi
+echo "  uv default index: ${UV_DEFAULT_INDEX:-default}"
+echo "  running uv ${PY_DEPS_ARGS[*]} (log: _uv_python_deps.log) ..."
+"$UV" "${PY_DEPS_ARGS[@]}" 2>&1 | tee "$PY_DEPS_LOG"
 echo "  OK Python dependencies installed"
 echo ""
 
@@ -304,6 +312,17 @@ echo ""
 # weird HOME / permission setup doesn't sink the whole installer.
 echo "[extra] Registering lorahub CLI ..."
 "$VENV_PY" -m lorahub manage install 2>&1 || true
+LOCAL_BIN="$HOME/.local/bin"
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+if [ -d "$LOCAL_BIN" ]; then
+    export PATH="$LOCAL_BIN:$PATH"
+    shell_rc="$HOME/.profile"
+    [ -n "${BASH_VERSION:-}" ] && shell_rc="$HOME/.bashrc"
+    if [ -w "$(dirname "$shell_rc")" ] && ! grep -Fqs "$PATH_LINE" "$shell_rc" 2>/dev/null; then
+        printf '\n# LoRaHub CLI\n%s\n' "$PATH_LINE" >> "$shell_rc"
+        echo "已添加 $LOCAL_BIN 到 $shell_rc"
+    fi
+fi
 echo ""
 
 echo "============================================================"
@@ -321,6 +340,6 @@ echo "    scripts/run.sh              (default prod: API serves built SPA)"
 echo "    scripts/run.sh dev          (dev mode: API + Vite HMR)"
 echo "    lorahub service start       (background daemon — random port)"
 echo ""
-echo "  If 'lorahub' isn't found, ensure ~/.local/bin is on PATH:"
+echo "  CLI PATH is configured for new shells when possible:"
 echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo ""

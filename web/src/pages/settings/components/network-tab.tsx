@@ -13,7 +13,6 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card"
-import { cn } from "@/lib/utils"
 import { MirrorSelector } from "./network-mirror-selector"
 
 type Draft = {
@@ -102,6 +101,7 @@ export function NetworkTab() {
   const githubPresets = presetsQuery.data?.github_proxy ?? []
   const hfPresets = presetsQuery.data?.huggingface ?? []
   const pypiPresets = presetsQuery.data?.pypi ?? []
+  const pytorchPresets = presetsQuery.data?.pytorch ?? []
 
   return (
     <div className="space-y-5">
@@ -158,7 +158,7 @@ export function NetworkTab() {
             <Label className="text-xs">自定义</Label>
             <Input
               value={draft.huggingface_endpoint}
-              placeholder="https://hf-mirror.com(留空表示官方站)"
+              placeholder="https://hf-mirror.com（留空使用 huggingface.co）"
               onChange={(e) =>
                 setDraft({ ...draft, huggingface_endpoint: e.target.value })
               }
@@ -171,15 +171,15 @@ export function NetworkTab() {
               <Input
                 type="password"
                 value={draft.huggingface_token}
-                placeholder="hf_xxx (受限仓库需要,如 black-forest-labs/FLUX)"
+                placeholder="hf_xxx（私有或受限仓库需要）"
                 onChange={(e) =>
                   setDraft({ ...draft, huggingface_token: e.target.value })
                 }
                 className="font-mono"
               />
               <p className="text-[11px] text-muted-foreground/85 leading-relaxed">
-                作为 <code className="text-foreground">HF_TOKEN</code> 注入下载与训练子进程,
-                同时用于 hub API 鉴权。可在 huggingface.co/settings/tokens 创建。
+                作为 <code className="text-foreground">HF_TOKEN</code> 注入下载与训练子进程，
+                同时用于 hub API 鉴权。
               </p>
             </div>
           </div>
@@ -236,9 +236,7 @@ export function NetworkTab() {
             PyPI 镜像（pip 依赖源）
           </CardTitle>
           <CardDescription>
-            后端 venv 安装 Python 依赖（kohya / diffusion-pipe requirements、xformers
-            等普通包）时使用的 PyPI 索引。已显式指定的 wheel 源
-            （如 <code>download.pytorch.org</code>）不会被改写。
+            安装 Python 依赖时使用。已指定独立 wheel 源的包不会被改写。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -269,58 +267,18 @@ export function NetworkTab() {
             PyTorch 镜像（torch / torchvision / xformers）
           </CardTitle>
           <CardDescription>
-            kohya 与 diffusion-pipe 安装时直接拉 PyTorch 官方 wheel 索引
-            <code className="text-foreground"> download.pytorch.org/whl/{"{cuda}"} </code>
-            ；境内访问不畅时可在此填写镜像 base URL，会自动追加
-            <code className="text-foreground"> /{"{cuda}"} </code> 后缀。留空使用官方源。
+            安装 torch、torchvision、xformers 时使用。填写 base URL，系统会追加
+            <code className="text-foreground"> /{"{cuda}"} </code>
+            。安装失败时会按内置源顺序继续尝试。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="rounded-[4px] border border-border/60 divide-y divide-border/40 overflow-hidden">
-            {[
-              {
-                label: "官方（默认）",
-                value: "",
-              },
-              {
-                label: "清华 TUNA",
-                value: "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/whl",
-              },
-              {
-                label: "阿里云",
-                value: "https://mirrors.aliyun.com/pytorch-wheels",
-              },
-            ].map((p) => {
-              const isCurrent = draft.torch_index_url === p.value
-              return (
-                <button
-                  key={p.label}
-                  type="button"
-                  onClick={() => setDraft({ ...draft, torch_index_url: p.value })}
-                  className={cn(
-                    "w-full flex items-center gap-3 px-3 py-2 text-xs text-left transition-colors",
-                    isCurrent
-                      ? "bg-primary/10 text-foreground"
-                      : "hover:bg-muted/50 text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <span className="flex-1 min-w-0">
-                    <span className="block font-medium truncate">{p.label}</span>
-                    {p.value && (
-                      <span className="block text-[10px] font-mono text-muted-foreground/70 truncate">
-                        {p.value}
-                      </span>
-                    )}
-                  </span>
-                  {isCurrent && (
-                    <span className="rounded-[2px] bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] shrink-0">
-                      已选
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
+          <MirrorSelector
+            category="pytorch"
+            presets={pytorchPresets}
+            current={draft.torch_index_url}
+            onChoose={(v) => setDraft({ ...draft, torch_index_url: v })}
+          />
           <div className="grid grid-cols-[8rem_1fr] gap-x-4 items-center">
             <Label className="text-xs">自定义</Label>
             <Input
@@ -342,7 +300,7 @@ export function NetworkTab() {
             下载代理（模型下载与子进程）
           </CardTitle>
           <CardDescription>
-            模型下载（HuggingFace / ModelScope）和训练 / 标注子进程使用的网络代理。支持
+            模型下载（HuggingFace / ModelScope）和训练 / 标注子进程使用的网络代理。格式：
             <code className="text-foreground"> socks5h://user:pass@host:port </code>
             或
             <code className="text-foreground"> http://user:pass@host:port </code>
@@ -363,7 +321,7 @@ export function NetworkTab() {
                 className="font-mono"
               />
               <p className="text-[11px] text-muted-foreground/80">
-                SOCKS5 代理推荐使用 <code>socks5h://</code> 协议前缀（由代理端解析 DNS）。
+                SOCKS5 代理可使用 <code>socks5h://</code> 协议前缀（由代理端解析 DNS）。
                 需要安装 <code>PySocks</code> 依赖才能使用 SOCKS 代理。
               </p>
             </div>

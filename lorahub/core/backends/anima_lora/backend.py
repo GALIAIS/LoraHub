@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import math
 import re
+import subprocess
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 import ulid
+import yaml
 
 from lorahub.core.backends._common.vram import estimate_vram as _shared_estimate_vram
 from lorahub.core.backends.anima_lora import bootstrap as _bootstrap
@@ -111,6 +113,7 @@ class AnimaLoraBackend:
         )
 
         issues.extend(check_cross_field_conflicts(cfg))
+        issues.extend(_check_distributed_strategy(cfg))
 
         if not cfg.base_model.checkpoint.exists():
             issues.append(
@@ -237,6 +240,13 @@ class AnimaLoraBackend:
                 env=env,
             )
         else:
+            effective_gpu_count = _effective_launch_gpu_count(cfg, gpu_count)
+            accelerate_config = _write_accelerate_config(
+                cfg=cfg,
+                workspace=workspace,
+                python=bootstrap_env.python_executable,
+                gpu_count=effective_gpu_count,
+            )
             runner = AnimaLoraRunner(
                 python=bootstrap_env.python_executable,
                 repo=bootstrap_env.repo_path,
@@ -245,7 +255,9 @@ class AnimaLoraBackend:
                 on_event=on_event,
                 job_id=job_id,
                 env=env,
-                num_processes=max(1, gpu_count),
+                num_processes=effective_gpu_count,
+                accelerate_config=accelerate_config,
+                mixed_precision=_distributed_mixed_precision(cfg),
             )
         runner.start()
 
@@ -274,6 +286,216 @@ class AnimaLoraBackend:
 
 
 __all__ = ["AnimaLoraBackend"]
+
+
+# --- Distributed strategy launcher config ---------------------------------
+_ACCELERATE_CONFIG_NAME = "_lorahub_accelerate.yaml"
+_DEEPSPEED_CONFIG_NAME = "_lorahub_deepspeed_zero.json"
+_STRATEGY_DDP = "ddp"
+_STRATEGY_FSDP = "fsdp"
+_STRATEGY_ZERO = "deepspeed_zero"
+
+
+def _effective_launch_gpu_count(cfg: TrainingConfig, gpu_count: int) -> int:
+    if cfg.backend.gpu_dispatch.mode != "distributed":
+        return 1
+    configured = cfg.backend.gpu_dispatch.num_gpus
+    if configured is not None and configured > 0:
+        return max(1, min(int(configured), max(1, gpu_count)))
+    return max(1, gpu_count)
+
+
+def _check_distributed_strategy(cfg: TrainingConfig) -> list[ValidationIssue]:
+    strategy = cfg.backend.distributed.strategy
+    if strategy == _STRATEGY_DDP:
+        return []
+
+    issues: list[ValidationIssue] = []
+    if cfg.backend.gpu_dispatch.mode != "distributed":
+        issues.append(
+            ValidationIssue(
+                Severity.error,
+                "backend.distributed.strategy",
+                (
+                    "FSDP / DeepSpeed ZeRO only work when "
+                    "backend.gpuDispatch.mode is 'distributed'."
+                ),
+            )
+        )
+    if (
+        cfg.backend.anima_lora is not None
+        and cfg.backend.anima_lora.turbo is not None
+    ):
+        issues.append(
+            ValidationIssue(
+                Severity.error,
+                "backend.distributed.strategy",
+                "anima_lora turbo distillation does not support FSDP / ZeRO.",
+            )
+        )
+    return issues
+
+
+def _write_accelerate_config(
+    *,
+    cfg: TrainingConfig,
+    workspace: Path,
+    python: Path,
+    gpu_count: int,
+) -> Path | None:
+    strategy = cfg.backend.distributed.strategy
+    if strategy == _STRATEGY_DDP:
+        return None
+    if gpu_count < 2:
+        msg = (
+            f"backend.distributed.strategy={strategy} requires at least 2 GPUs; "
+            f"launcher received {gpu_count}."
+        )
+        raise CompilationError(msg)
+    if strategy == _STRATEGY_ZERO:
+        _ensure_deepspeed_available(python)
+
+    payload = _accelerate_config_payload(cfg=cfg, workspace=workspace, gpu_count=gpu_count)
+    target = workspace / _ACCELERATE_CONFIG_NAME
+    target.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return target
+
+
+def _accelerate_config_payload(
+    *,
+    cfg: TrainingConfig,
+    workspace: Path,
+    gpu_count: int,
+) -> dict[str, object]:
+    mixed_precision = _accelerate_mixed_precision(_distributed_mixed_precision(cfg))
+    common: dict[str, object] = {
+        "compute_environment": "LOCAL_MACHINE",
+        "debug": False,
+        "num_processes": gpu_count,
+        "num_machines": 1,
+        "machine_rank": 0,
+        "main_training_function": "main",
+        "rdzv_backend": "static",
+        "same_network": True,
+        "use_cpu": False,
+    }
+    strategy = cfg.backend.distributed.strategy
+    if strategy == _STRATEGY_FSDP:
+        return {
+            **common,
+            "mixed_precision": mixed_precision,
+            "distributed_type": "FSDP",
+            "deepspeed_config": {},
+            "fsdp_config": _fsdp_payload(cfg),
+        }
+    if strategy == _STRATEGY_ZERO:
+        return {
+            **common,
+            "distributed_type": "DEEPSPEED",
+            "deepspeed_config": _deepspeed_payload(cfg, workspace),
+            "fsdp_config": {},
+        }
+    raise CompilationError(f"unsupported distributed strategy: {strategy}")
+
+
+def _fsdp_payload(cfg: TrainingConfig) -> dict[str, object]:
+    opts = cfg.backend.distributed.fsdp
+    sharding_strategy = {
+        "full_shard": "FULL_SHARD",
+        "shard_grad_op": "SHARD_GRAD_OP",
+        "no_reshard": "NO_SHARD",
+    }[opts.sharding_strategy]
+    policy = {
+        "size_based": "SIZE_BASED_WRAP",
+        "transformer": "TRANSFORMER_BASED_WRAP",
+        "none": "NO_WRAP",
+    }[opts.auto_wrap_policy]
+    payload: dict[str, object] = {
+        "fsdp_version": 1,
+        "fsdp_sharding_strategy": sharding_strategy,
+        "fsdp_offload_params": bool(opts.cpu_offload),
+        "fsdp_auto_wrap_policy": policy,
+        "fsdp_state_dict_type": opts.state_dict_type.upper(),
+        "fsdp_backward_prefetch_policy": "NO_PREFETCH",
+        "fsdp_forward_prefetch": False,
+        "fsdp_use_orig_params": True,
+        "fsdp_cpu_ram_efficient_loading": False,
+        "fsdp_sync_module_states": False,
+    }
+    if opts.auto_wrap_policy == "size_based":
+        payload["fsdp_min_num_params"] = int(opts.min_num_params)
+    return payload
+
+
+def _deepspeed_payload(cfg: TrainingConfig, workspace: Path) -> dict[str, object]:
+    opts = cfg.backend.distributed.zero
+    mixed_precision = _distributed_mixed_precision(cfg)
+    ds_config = {
+        "bf16": {"enabled": mixed_precision == "bf16"},
+        "fp16": {"enabled": mixed_precision == "fp16"},
+        "zero_optimization": {
+            "stage": int(opts.stage),
+            "overlap_comm": bool(opts.overlap_comm),
+            "offload_optimizer": {"device": opts.offload_optimizer},
+            "offload_param": {"device": opts.offload_param},
+        },
+        "train_batch_size": "auto",
+        "train_micro_batch_size_per_gpu": "auto",
+        "gradient_accumulation_steps": "auto",
+        "gradient_clipping": "auto",
+        "steps_per_print": 1000000000,
+    }
+    if opts.stage == 3:
+        ds_config["zero_optimization"][
+            "stage3_gather_16bit_weights_on_model_save"
+        ] = True
+
+    target = workspace / _DEEPSPEED_CONFIG_NAME
+    import json  # noqa: PLC0415
+
+    target.write_text(
+        json.dumps(ds_config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "deepspeed_config_file": str(target),
+        "zero3_init_flag": opts.stage == 3,
+    }
+
+
+def _distributed_mixed_precision(cfg: TrainingConfig) -> str:
+    opts = cfg.backend.anima_lora
+    return opts.mixed_precision if opts is not None else cfg.precision
+
+
+def _accelerate_mixed_precision(value: str) -> str:
+    return "no" if value == "fp32" else value
+
+
+def _ensure_deepspeed_available(python: Path) -> None:
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [str(python), "-c", "import deepspeed"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        msg = f"DeepSpeed availability probe failed: {exc}"
+        raise CompilationError(msg) from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        msg = (
+            "backend.distributed.strategy=deepspeed_zero requires DeepSpeed in "
+            f"the anima_lora venv ({python}). Install it first, then relaunch."
+        )
+        if detail:
+            msg += f"\nProbe output: {detail[-500:]}"
+        raise CompilationError(msg)
 
 
 # --- Sample directory watcher ---------------------------------------------

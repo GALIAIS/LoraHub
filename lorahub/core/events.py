@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
@@ -105,7 +106,12 @@ class TrainingEvent:
         return d
 
     def to_json(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            self.to_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -118,6 +124,38 @@ class TrainingEvent:
 
 
 EventListener = Callable[[TrainingEvent], None]
+
+_MAX_EVENT_STRING = 16_000
+
+
+def normalize_event(event: TrainingEvent, *, job_id: str | None = None) -> TrainingEvent:
+    """Return a JSON-safe event with bounded payload strings."""
+    payload = _normalize_payload(event.payload)
+    normalized_job_id = event.job_id or job_id
+    if payload is event.payload and normalized_job_id == event.job_id:
+        return event
+    return TrainingEvent(
+        type=event.type,
+        payload=payload,
+        timestamp=event.timestamp,
+        job_id=normalized_job_id,
+    )
+
+
+def _normalize_payload(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        if len(value) <= _MAX_EVENT_STRING:
+            return value
+        return value[:_MAX_EVENT_STRING] + "\n...[truncated]"
+    if isinstance(value, dict):
+        return {str(k): _normalize_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_payload(v) for v in value]
+    if isinstance(value, tuple):
+        return [_normalize_payload(v) for v in value]
+    return value
 
 
 class EventBus:

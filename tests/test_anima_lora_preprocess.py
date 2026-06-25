@@ -84,11 +84,12 @@ def test_ensure_cache_skips_when_complete(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     cache_dir = workspace / "post_image_dataset" / "lora"
     cache_dir.mkdir(parents=True)
-    # Two images, both already cached (TE sidecar present).
+    # Two images, both already cached (TE + latent sidecars present).
     for stem in ("a", "b"):
         (image_dir / f"{stem}.jpg").write_bytes(b"")
         (image_dir / f"{stem}.txt").write_text("tag", encoding="utf-8")
         (cache_dir / f"{stem}_anima_te.safetensors").write_bytes(b"")
+        (cache_dir / f"{stem}_1024x1024_anima.npz").write_bytes(b"")
 
     spawned: list[list[str]] = []
     factory = _stub_runner_factory(spawned)
@@ -100,6 +101,68 @@ def test_ensure_cache_skips_when_complete(tmp_path: Path) -> None:
         runner_factory=factory,
     )
     assert spawned == []
+
+
+def test_ensure_cache_rebuilds_when_latent_missing(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    bm = _base_model(tmp_path)
+    image_dir = tmp_path / "raw"
+    image_dir.mkdir()
+    workspace = tmp_path / "ws"
+    cache_dir = workspace / "post_image_dataset" / "lora"
+    cache_dir.mkdir(parents=True)
+    (image_dir / "a.jpg").write_bytes(b"")
+    (image_dir / "a.txt").write_text("tag", encoding="utf-8")
+    (cache_dir / "a_anima_te.safetensors").write_bytes(b"")
+
+    spawned: list[list[str]] = []
+    ensure_cache(
+        image_dir=image_dir,
+        workspace=workspace,
+        base_model=bm,
+        env=env,
+        runner_factory=_stub_runner_factory(spawned),
+    )
+
+    assert len(spawned) == 3
+
+
+def test_ensure_cache_rebuilds_when_caption_newer_than_te_cache(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    bm = _base_model(tmp_path)
+    image_dir = tmp_path / "raw"
+    image_dir.mkdir()
+    workspace = tmp_path / "ws"
+    cache_dir = workspace / "post_image_dataset" / "lora"
+    cache_dir.mkdir(parents=True)
+    img = image_dir / "a.jpg"
+    caption = image_dir / "a.txt"
+    te = cache_dir / "a_anima_te.safetensors"
+    latent = cache_dir / "a_1024x1024_anima.npz"
+    img.write_bytes(b"")
+    caption.write_text("new tag", encoding="utf-8")
+    te.write_bytes(b"")
+    latent.write_bytes(b"")
+    old = 1_700_000_000
+    new = old + 10
+    import os
+
+    os.utime(te, (old, old))
+    os.utime(latent, (old, old))
+    os.utime(caption, (new, new))
+
+    spawned: list[list[str]] = []
+    ensure_cache(
+        image_dir=image_dir,
+        workspace=workspace,
+        base_model=bm,
+        env=env,
+        runner_factory=_stub_runner_factory(spawned),
+    )
+
+    assert len(spawned) == 3
 
 
 def test_ensure_cache_spawns_when_missing(tmp_path: Path) -> None:

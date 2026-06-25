@@ -39,6 +39,37 @@ class GpuDispatchConfig(BaseModel):
     num_gpus: int | None = Field(default=None, ge=1)
 
 
+class FsdpConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    sharding_strategy: Literal["full_shard", "shard_grad_op", "no_reshard"] = (
+        "full_shard"
+    )
+    auto_wrap_policy: Literal["size_based", "transformer", "none"] = "size_based"
+    min_num_params: int = Field(default=100_000_000, ge=0)
+    state_dict_type: Literal[
+        "full_state_dict", "sharded_state_dict", "local_state_dict"
+    ] = "full_state_dict"
+    cpu_offload: bool = False
+
+
+class DeepSpeedZeroConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    stage: Literal[2, 3] = 2
+    offload_optimizer: Literal["none", "cpu"] = "none"
+    offload_param: Literal["none", "cpu"] = "none"
+    overlap_comm: bool = True
+
+
+class DistributedTrainingConfig(BaseModel):
+    model_config = _CAMEL_CONFIG
+
+    strategy: Literal["ddp", "fsdp", "deepspeed_zero"] = "ddp"
+    fsdp: FsdpConfig = Field(default_factory=FsdpConfig)
+    zero: DeepSpeedZeroConfig = Field(default_factory=DeepSpeedZeroConfig)
+
+
 class BackendConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
@@ -61,6 +92,9 @@ class BackendConfig(BaseModel):
     python_executable: Path | None = None
     extra_args: dict[str, Any] = Field(default_factory=dict)
     gpu_dispatch: GpuDispatchConfig = Field(default_factory=GpuDispatchConfig)
+    distributed: DistributedTrainingConfig = Field(
+        default_factory=DistributedTrainingConfig
+    )
     # Optional, dp-specific knobs. None means "use library defaults" so kohya
     # users never need to touch this field.
     diffusion_pipe: DiffusionPipeOptions | None = None
@@ -78,6 +112,9 @@ __all__ = [
     "AnimaLoraOptions",
     "AnimaLoraTurboConfig",
     "BackendConfig",
+    "DeepSpeedZeroConfig",
+    "DistributedTrainingConfig",
+    "FsdpConfig",
     "GpuDispatchConfig",
     "DiffusionPipeOptions",
 ]

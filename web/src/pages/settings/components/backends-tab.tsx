@@ -332,6 +332,23 @@ export function BackendsTab() {
             }
             detected={detectedAnimaLoraPython}
           />
+          {animaLoraStatus?.python_ok && (
+            <div className="grid grid-cols-[10rem_1fr] gap-x-4 items-start">
+              <Label className="text-xs pt-1.5">ZeRO 依赖</Label>
+              <div className="text-xs">
+                {animaLoraStatus.deepspeed_ok ? (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    DeepSpeed 已安装，可使用 DeepSpeed ZeRO。
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    DeepSpeed 未安装；DDP/FSDP 可用，选择 DeepSpeed ZeRO 前请在
+                    后端安装中启用 DeepSpeed 或手动安装。
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

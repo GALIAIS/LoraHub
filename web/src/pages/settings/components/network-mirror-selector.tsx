@@ -21,7 +21,7 @@ function latencyTone(ms: number | null | undefined, ok: boolean): string {
 }
 
 interface MirrorSelectorProps {
-  category: "github_proxy" | "huggingface" | "pypi"
+  category: "github_proxy" | "huggingface" | "pypi" | "pytorch"
   presets: MirrorPreset[]
   current: string
   onChoose: (value: string) => void

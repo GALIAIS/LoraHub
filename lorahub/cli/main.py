@@ -31,6 +31,7 @@ from lorahub import __version__
 from lorahub.cli._i18n import set_lang, t
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.backends.kohya.backend import KohyaBackend
+from lorahub.core.backends.registry import get_backend
 from lorahub.core.backends.kohya.compiler import compile_config
 from lorahub.core.config.loader import load_config
 from lorahub.core.config.schema import TrainingConfig
@@ -311,7 +312,7 @@ def validate(
 ) -> None:
     """Validate a config without running training."""
     cfg = load_config(config)
-    backend = KohyaBackend()
+    backend = _backend_for(cfg)
     issues = backend.validate(cfg)
     _render_issues(issues)
     if any(i.severity is Severity.error for i in issues):
@@ -325,9 +326,16 @@ def info(
 ) -> None:
     """Show what a config would compile to, plus VRAM estimate (no training)."""
     cfg = load_config(config)
-    backend = KohyaBackend()
+    backend = _backend_for(cfg)
 
-    script, argv, _files, _env = compile_config(cfg, workspace=Path.cwd() / "_dryrun")
+    if cfg.backend.type == "anima_lora":
+        from lorahub.core.backends.anima_lora.compiler import compile_config as _compile
+    elif cfg.backend.type == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe.compiler import compile_config as _compile
+    else:
+        _compile = compile_config
+
+    script, argv, _files, _env = _compile(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
     table = Table(title=t("info.title"), show_header=False, expand=False)
@@ -355,7 +363,7 @@ def train(
 ) -> None:
     """Run training to completion. Press Ctrl+C to stop gracefully."""
     cfg = load_config(config)
-    backend = KohyaBackend()
+    backend = _backend_for(cfg)
 
     issues = backend.validate(cfg)
     _render_issues(issues)
@@ -386,6 +394,10 @@ def train(
         err_console.print(t("train.failed", rc=rc))
         raise typer.Exit(code=rc)
     console.print(t("train.ok"))
+
+
+def _backend_for(cfg):
+    return get_backend(cfg.backend.type or "kohya").backend_class()
 
 
 @app.command(help=t("sweep.help"))

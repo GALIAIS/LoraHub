@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from lorahub.api import state
 from lorahub.api.preflight import PreflightFinding, run_preflight
+from lorahub.api.scheduler import JobScheduler
 from lorahub.core.config.schema import TrainingConfig
 
 
@@ -55,6 +56,15 @@ def _valid_payload(tmp_path: Path) -> dict[str, Any]:
             "python_executable": sys.executable,
         },
     }
+
+
+def _stub_anima_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "train.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    (root / "inference.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    (root / "library").mkdir()
+    (root / "library" / "anima").mkdir()
+    return root
 
 
 @pytest.fixture(autouse=True)
@@ -168,6 +178,384 @@ def test_preflight_collects_all_blockers_in_one_pass(tmp_path: Path) -> None:
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
     cats = {f.category for f in findings if f.severity == "error"}
     assert {"model_missing", "dataset_missing"} <= cats, findings
+
+
+def test_preflight_fsdp_requires_distributed_gpu_dispatch(
+    tmp_path: Path,
+) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {},
+            "backend.distributed": {"strategy": "fsdp"},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "gpu_dispatch"
+        and f.field == "backend.distributed.strategy"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_fsdp_warns_experimental_for_anima(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import scheduler as sched_module
+
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    scheduler = JobScheduler(concurrency=2)
+    monkeypatch.setattr(sched_module, "scheduler", scheduler)
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {},
+            "backend.gpuDispatch": {"mode": "distributed", "numGpus": 2},
+            "backend.distributed": {"strategy": "fsdp"},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "gpu_dispatch"
+        and f.field == "backend.distributed.strategy"
+        and f.severity == "warn"
+        and "实验性" in f.message
+        for f in findings
+    ), findings
+
+
+def test_preflight_fsdp_blocks_anima_compile_and_offload_mix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import scheduler as sched_module
+
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    scheduler = JobScheduler(concurrency=2)
+    monkeypatch.setattr(sched_module, "scheduler", scheduler)
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {
+                "compileMode": "blocks",
+                "blocksToSwap": 2,
+            },
+            "backend.gpuDispatch": {"mode": "distributed", "numGpus": 2},
+            "backend.distributed": {"strategy": "fsdp"},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "gpu_dispatch"
+        and f.field == "backend.distributed.strategy"
+        and f.severity == "error"
+        and "torch.compile" in f.message
+        for f in findings
+    ), findings
+
+
+def test_preflight_ip_adapter_blocks_until_pe_cache_pipeline_exists(
+    tmp_path: Path,
+) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {
+                "method": "ip_adapter",
+                "ipAdapter": {},
+            },
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "anima_method"
+        and f.field == "backend.animaLora.method"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_easycontrol_requires_conditioning_dir(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {
+                "method": "easycontrol",
+                "easycontrol": {},
+            },
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "anima_method"
+        and f.field == "dataset.subsets.conditioningDataDir"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_conditioning_requires_conditioning_dir(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"conditioning": True},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "anima_method"
+        and f.field == "dataset.subsets.conditioningDataDir"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_masked_loss_requires_conditioning_dir(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"maskedLoss": True},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "anima_method"
+        and f.field == "backend.animaLora.maskedLoss"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_conditioning_requires_same_stem_pairs(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    data = tmp_path / "paired-data"
+    cond = tmp_path / "paired-cond"
+    data.mkdir()
+    cond.mkdir()
+    (data / "train.png").write_bytes(b"")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "dataset.source": str(data),
+            "dataset.subsets": [
+                {
+                    "path": str(data),
+                    "conditioningDataDir": str(cond),
+                }
+            ],
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"conditioning": True},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "anima_method"
+        and f.field == "dataset.subsets.conditioningDataDir"
+        and f.severity == "error"
+        for f in findings
+    ), findings
+
+
+def test_preflight_warns_v100_fp16_for_anima(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import gpu_topology
+
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    monkeypatch.setattr(
+        gpu_topology,
+        "nvidia_slots",
+        lambda: [
+            gpu_topology.GpuSlotInfo(
+                index=0,
+                name="Tesla V100-SXM2-32GB",
+                memory_total_bytes=32 * 1024**3,
+                compute_capability="7.0",
+            )
+        ],
+    )
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"mixedPrecision": "fp16"},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "precision"
+        and f.field == "backend.animaLora.mixedPrecision"
+        and f.severity == "warn"
+        and "V100" in f.message
+        for f in findings
+    ), findings
+
+
+def test_preflight_warns_expensive_anima_sampling(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"maxTrainEpochs": 20},
+            "schedule.epochs": 20,
+            "sampling": {
+                "enabled": True,
+                "everyNEpochs": 1,
+                "prompts": [
+                    {"prompt": f"prompt {idx}", "steps": 35}
+                    for idx in range(8)
+                ],
+            },
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "sampling_cost"
+        and f.field == "sampling.prompts"
+        and f.severity == "warn"
+        for f in findings
+    ), findings
+
+
+def test_preflight_warns_small_dataset_validation_split(tmp_path: Path) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {
+                "useCmmd": True,
+                "validationSplitNum": 16,
+            },
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "validation_split"
+        and f.field == "backend.animaLora.validationSplitNum"
+        and f.severity == "warn"
+        for f in findings
+    ), findings
+
+
+def test_preflight_warns_anima_extra_args_overrides_critical_fields(
+    tmp_path: Path,
+) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {},
+            "backend.extraArgs": {
+                "mixed_precision": "fp16",
+                "sample_every_n_epochs": 1,
+            },
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "extra_args"
+        and f.field == "backend.extraArgs.mixed_precision"
+        and f.severity == "warn"
+        for f in findings
+    ), findings
+
+
+def test_preflight_warns_wandb_missing_for_anima(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import lorahub.api.preflight as preflight
+
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    fake_python = tmp_path / "anima-python.exe"
+    fake_python.write_bytes(b"")
+    monkeypatch.setattr(preflight, "_resolve_anima_python", lambda _cfg: fake_python)
+    monkeypatch.setattr(preflight, "_probe_python_import", lambda _py, _mod: False)
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {},
+            "monitoring": {"enableWandb": True},
+        },
+    )
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert any(
+        f.category == "optional_dependencies"
+        and f.field == "monitoring.enableWandb"
+        and f.severity == "warn"
+        for f in findings
+    ), findings
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="mbcs probe is Windows-specific")
