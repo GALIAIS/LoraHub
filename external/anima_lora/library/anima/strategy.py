@@ -275,6 +275,32 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
         with _safe_open(cache_path, framework="pt") as f:
             keys = set(f.keys())
             has_variants = "num_variants" in keys
+
+            def read_variant(sfx: str):
+                crossattn_key = f"crossattn_emb{sfx}"
+                if crossattn_key in keys:
+                    return (
+                        None,
+                        None,
+                        None,
+                        f.get_tensor(f"t5_attn_mask{sfx}"),
+                        f.get_tensor(crossattn_key),
+                    )
+                prompt_key = f"prompt_embeds{sfx}"
+                if prompt_key in keys:
+                    return (
+                        f.get_tensor(prompt_key),
+                        f.get_tensor(f"attn_mask{sfx}"),
+                        f.get_tensor(f"t5_input_ids{sfx}"),
+                        f.get_tensor(f"t5_attn_mask{sfx}"),
+                        None,
+                    )
+                raise RuntimeError(
+                    f"TE cache {cache_path!r} has neither {crossattn_key!r} "
+                    f"nor {prompt_key!r}; re-run preprocess-te "
+                    f"(keys: {sorted(keys)})"
+                )
+
             if has_variants and self.use_shuffled_caption_variants:
                 num_variants = int(f.get_tensor("num_variants"))
                 v0_intact = "v0_intact" in keys
@@ -304,40 +330,15 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
                         if random.random() < 0.2
                         else random.randint(1, num_variants - 1)
                     )
-                prompt_embeds = f.get_tensor(f"prompt_embeds_v{vi}")
-                attn_mask = f.get_tensor(f"attn_mask_v{vi}")
-                t5_input_ids = f.get_tensor(f"t5_input_ids_v{vi}")
-                t5_attn_mask = f.get_tensor(f"t5_attn_mask_v{vi}")
-                crossattn_key = f"crossattn_emb_v{vi}"
-                crossattn_emb = (
-                    f.get_tensor(crossattn_key)
-                    if self.cache_llm_adapter_outputs and crossattn_key in keys
-                    else None
-                )
+                prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask, crossattn_emb = read_variant(f"_v{vi}")
             elif has_variants:
                 # Variants on disk but the user opted out — pin to v0 deterministically.
-                prompt_embeds = f.get_tensor("prompt_embeds_v0")
-                attn_mask = f.get_tensor("attn_mask_v0")
-                t5_input_ids = f.get_tensor("t5_input_ids_v0")
-                t5_attn_mask = f.get_tensor("t5_attn_mask_v0")
-                crossattn_emb = (
-                    f.get_tensor("crossattn_emb_v0")
-                    if self.cache_llm_adapter_outputs and "crossattn_emb_v0" in keys
-                    else None
-                )
+                prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask, crossattn_emb = read_variant("_v0")
             else:
                 # Single-variant cache. Loaded as-is whether or not the user
                 # asked for shuffles — silent fallback so a bool flip doesn't
                 # require re-preprocessing.
-                prompt_embeds = f.get_tensor("prompt_embeds")
-                attn_mask = f.get_tensor("attn_mask")
-                t5_input_ids = f.get_tensor("t5_input_ids")
-                t5_attn_mask = f.get_tensor("t5_attn_mask")
-                crossattn_emb = (
-                    f.get_tensor("crossattn_emb")
-                    if self.cache_llm_adapter_outputs and "crossattn_emb" in keys
-                    else None
-                )
+                prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask, crossattn_emb = read_variant("")
 
             caption_dropout_rate = f.get_tensor("caption_dropout_rate")
         if crossattn_emb is None:

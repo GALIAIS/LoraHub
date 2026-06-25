@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +44,25 @@ from typing import Any, Iterable, Literal
 from lorahub.core.config.schema import TrainingConfig
 
 Severity = Literal["info", "warn", "error"]
+
+_ANIMA_EXTRA_ARGS_CRITICAL: frozenset[str] = frozenset(
+    {
+        "mixed_precision",
+        "max_train_epochs",
+        "max_train_steps",
+        "sample_every_n_epochs",
+        "sample_every_n_steps",
+        "validation_split_num",
+        "learning_rate",
+        "network_dim",
+        "network_alpha",
+        "static_token_count",
+        "enable_native_flatten",
+        "bucket_table",
+    }
+)
+_SAMPLE_COST_WARN_THRESHOLD = 3000
+_SMALL_DATASET_WARN_THRESHOLD = 100
 
 # Image extensions we consider "trainable" when probing dataset
 # directories. Mirrors what kohya/dp expect — anything outside this
@@ -111,6 +131,18 @@ def run_preflight(
         findings.extend(_check_disk_space(workspace))
     if "gpu_dispatch" not in skip_set:
         findings.extend(_check_gpu_dispatch(cfg))
+    if "anima_method" not in skip_set:
+        findings.extend(_check_anima_method(cfg))
+    if "anima_precision" not in skip_set:
+        findings.extend(_check_anima_precision(cfg))
+    if "sampling_cost" not in skip_set:
+        findings.extend(_check_sampling_cost(cfg))
+    if "validation_split" not in skip_set:
+        findings.extend(_check_validation_split(cfg))
+    if "extra_args" not in skip_set:
+        findings.extend(_check_extra_args(cfg))
+    if "optional_dependencies" not in skip_set:
+        findings.extend(_check_optional_dependencies(cfg))
 
     return findings
 
@@ -645,6 +677,44 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
                 remediation="关闭 turbo，或把 backend.distributed.strategy 改回 ddp。",
             )
         )
+    if strategy != "ddp" and cfg.backend.type == "anima_lora":
+        out.append(
+            PreflightFinding(
+                category="gpu_dispatch",
+                severity="warn",
+                field="backend.distributed.strategy",
+                message="anima_lora 的 FSDP / DeepSpeed ZeRO 当前仍是实验性路径。",
+                remediation=(
+                    "优先使用 DDP。只有在 DDP 单卡显存不够时再测试 FSDP/ZeRO，"
+                    "并先用小步数 smoke run 验证保存、恢复和采样。"
+                ),
+            )
+        )
+        opts = cfg.backend.anima_lora
+        if opts is not None and (
+            opts.compile_mode is not None
+            or opts.blocks_to_swap > 0
+            or opts.gradient_checkpointing
+            or opts.unsloth_offload_checkpointing
+            or opts.cpu_offload_checkpointing
+            or opts.ema
+        ):
+            out.append(
+                PreflightFinding(
+                    category="gpu_dispatch",
+                    severity="error",
+                    field="backend.distributed.strategy",
+                    message=(
+                        "FSDP / ZeRO 暂不支持 anima_lora 的 torch.compile、"
+                        "block swap、gradient checkpoint/offload 或 EMA 组合。"
+                    ),
+                    remediation=(
+                        "把 distributed.strategy 改回 ddp；或关闭 compileMode、"
+                        "blocksToSwap、gradientCheckpointing、offload 和 EMA 后，"
+                        "再用短任务验证 FSDP/ZeRO。"
+                    ),
+                )
+            )
 
     try:
         from lorahub.api import scheduler as sched  # noqa: PLC0415
@@ -722,6 +792,250 @@ def _check_gpu_dispatch(cfg: TrainingConfig) -> list[PreflightFinding]:
     return out
 
 
+def _check_anima_method(cfg: TrainingConfig) -> list[PreflightFinding]:
+    opts = cfg.backend.anima_lora
+    if cfg.backend.type != "anima_lora" or opts is None:
+        return []
+    out: list[PreflightFinding] = []
+    if opts.method == "ip_adapter":
+        out.append(
+            PreflightFinding(
+                category="anima_method",
+                severity="error",
+                field="backend.animaLora.method",
+                message="IP-Adapter 的 PE feature cache 尚未接入 LoraHub 自动预处理。",
+                remediation=(
+                    "暂时改用 method=lora / easycontrol；等 cache_pe_encoder.py "
+                    "纳入自动预处理后再启用 IP-Adapter。"
+                ),
+            )
+        )
+    if opts.method == "easycontrol":
+        has_cond_dir = _first_conditioning_dir(cfg) is not None
+        if not has_cond_dir:
+            out.append(
+                PreflightFinding(
+                    category="anima_method",
+                    severity="error",
+                    field="dataset.subsets.conditioningDataDir",
+                    message="EasyControl 需要同名参考图目录。",
+                    remediation=(
+                        "在数据集子集里设置 conditioningDataDir，或把 "
+                        "backend.animaLora.method 改回 lora。"
+                    ),
+                )
+            )
+    if opts.conditioning and _first_conditioning_dir(cfg) is None:
+        out.append(
+            PreflightFinding(
+                category="anima_method",
+                severity="error",
+                field="dataset.subsets.conditioningDataDir",
+                message="conditioning=true 需要同名参考图目录。",
+                remediation=(
+                    "在数据集子集里设置 conditioningDataDir，或关闭 "
+                    "backend.animaLora.conditioning。"
+                ),
+            )
+        )
+    if opts.masked_loss and _first_conditioning_dir(cfg) is None:
+        out.append(
+            PreflightFinding(
+                category="anima_method",
+                severity="error",
+                field="backend.animaLora.maskedLoss",
+                message="maskedLoss=true 需要 conditioningDataDir 或 alpha mask。",
+                remediation=(
+                    "当前 LoraHub 没有为 anima_lora 接入 alpha mask 目录。"
+                    "请设置 conditioningDataDir，或关闭 maskedLoss。"
+                ),
+            )
+        )
+
+    if opts.method == "easycontrol" or opts.conditioning or opts.masked_loss:
+        cond_dir = _first_conditioning_dir(cfg)
+        if cond_dir is not None:
+            out.extend(_check_conditioning_pairs(cfg, cond_dir))
+    return out
+
+
+def _check_anima_precision(cfg: TrainingConfig) -> list[PreflightFinding]:
+    opts = cfg.backend.anima_lora
+    if cfg.backend.type != "anima_lora" or opts is None:
+        return []
+    precision = (opts.mixed_precision or cfg.precision).lower()
+    if precision != "fp16":
+        return []
+
+    slots = _nvidia_slots()
+    risky = [
+        slot
+        for slot in slots
+        if _is_pre_ampere(slot.compute_capability) or "v100" in slot.name.lower()
+    ]
+    if not risky:
+        return []
+
+    names = ", ".join(f"{slot.index}:{slot.name}" for slot in risky)
+    return [
+        PreflightFinding(
+            category="precision",
+            severity="warn",
+            field="backend.animaLora.mixedPrecision",
+            message=f"检测到 V100/Volta 级 GPU 使用 anima_lora fp16：{names}。",
+            remediation=(
+                "Anima DiT 的 fp16 路径在 V100 上更容易出现 NaN 或黑图。"
+                "优先改为 backend.animaLora.mixedPrecision=fp32；"
+                "如必须 fp16，请降低 learningRate / networkDim 并先短步数验证。"
+            ),
+            extra={
+                "gpus": [
+                    {
+                        "index": slot.index,
+                        "name": slot.name,
+                        "compute_capability": slot.compute_capability,
+                    }
+                    for slot in risky
+                ]
+            },
+        )
+    ]
+
+
+def _check_sampling_cost(cfg: TrainingConfig) -> list[PreflightFinding]:
+    opts = cfg.backend.anima_lora
+    sampling = cfg.sampling
+    if cfg.backend.type != "anima_lora" or opts is None or not sampling.enabled:
+        return []
+
+    prompt_steps = [
+        int(prompt.steps or opts.validation_sample_steps or sampling.inference_steps)
+        for prompt in sampling.prompts
+    ]
+    if not prompt_steps and sampling.prompts_file is None:
+        # LoraHub materialises one safe default prompt for anima_lora.
+        prompt_steps = [int(opts.validation_sample_steps or sampling.inference_steps)]
+    prompt_count = len(prompt_steps) if prompt_steps else 1
+    steps_per_round = sum(prompt_steps) if prompt_steps else int(
+        opts.validation_sample_steps or sampling.inference_steps
+    )
+
+    rounds = 1 if sampling.at_first else 0
+    epochs = int(opts.max_train_epochs or cfg.schedule.epochs)
+    if sampling.every_n_epochs:
+        rounds += max(1, epochs // int(sampling.every_n_epochs))
+    if cfg.schedule.max_steps and sampling.every_n_steps:
+        rounds += max(1, int(cfg.schedule.max_steps) // int(sampling.every_n_steps))
+
+    total_sample_steps = rounds * steps_per_round
+    if total_sample_steps < _SAMPLE_COST_WARN_THRESHOLD:
+        return []
+    return [
+        PreflightFinding(
+            category="sampling_cost",
+            severity="warn",
+            field="sampling.prompts",
+            message=(
+                f"采样配置偏重：约 {rounds} 轮 × {prompt_count} 个提示词，"
+                f"合计 {total_sample_steps} 个采样 step。"
+            ),
+            remediation=(
+                "减少提示词数量，或提高 sampling.everyNEpochs / "
+                "sampling.everyNSteps。训练稳定前建议只保留 1-3 个固定提示词。"
+            ),
+            extra={
+                "rounds": rounds,
+                "prompt_count": prompt_count,
+                "total_sample_steps": total_sample_steps,
+            },
+        )
+    ]
+
+
+def _check_validation_split(cfg: TrainingConfig) -> list[PreflightFinding]:
+    opts = cfg.backend.anima_lora
+    if (
+        cfg.backend.type != "anima_lora"
+        or opts is None
+        or opts.validation_split_num <= 0
+    ):
+        return []
+
+    total = _dataset_image_count(cfg, limit=_SMALL_DATASET_WARN_THRESHOLD + 1)
+    if total is None or total >= _SMALL_DATASET_WARN_THRESHOLD:
+        return []
+    if opts.validation_split_num <= max(4, total // 10):
+        return []
+    return [
+        PreflightFinding(
+            category="validation_split",
+            severity="warn",
+            field="backend.animaLora.validationSplitNum",
+            message=(
+                f"数据集约 {total} 张图，但 validationSplitNum="
+                f"{opts.validation_split_num}，验证集占比偏高。"
+            ),
+            remediation=(
+                "小数据集建议 validationSplitNum=0 或 4。"
+                "验证集过大时训练集变少，风格 LoRA 更容易学不实。"
+            ),
+            extra={"image_count": total, "validation_split_num": opts.validation_split_num},
+        )
+    ]
+
+
+def _check_extra_args(cfg: TrainingConfig) -> list[PreflightFinding]:
+    if cfg.backend.type != "anima_lora" or not cfg.backend.extra_args:
+        return []
+
+    out: list[PreflightFinding] = []
+    for key in sorted(cfg.backend.extra_args):
+        if key not in _ANIMA_EXTRA_ARGS_CRITICAL:
+            continue
+        out.append(
+            PreflightFinding(
+                category="extra_args",
+                severity="warn",
+                field=f"backend.extraArgs.{key}",
+                message=f"extraArgs.{key} 会覆盖表单中对应的 anima_lora 编译结果。",
+                remediation=(
+                    "优先使用表单字段。只有调试上游新参数时才保留 extraArgs，"
+                    "并在任务备注中记录覆盖原因。"
+                ),
+                extra={"key": key},
+            )
+        )
+    return out
+
+
+def _check_optional_dependencies(cfg: TrainingConfig) -> list[PreflightFinding]:
+    if cfg.backend.type != "anima_lora" or not cfg.monitoring.enable_wandb:
+        return []
+
+    python = _resolve_anima_python(cfg)
+    if python is None:
+        return []
+    probe = _probe_python_import(python, "wandb")
+    if probe is True:
+        return []
+
+    detail = "未安装" if probe is False else "无法确认"
+    return [
+        PreflightFinding(
+            category="optional_dependencies",
+            severity="warn",
+            field="monitoring.enableWandb",
+            message=f"已启用 W&B，但 anima_lora 运行环境中 wandb {detail}。",
+            remediation=(
+                f"建议先执行 `{python} -m pip install wandb`，"
+                "或关闭 monitoring.enableWandb。否则启动训练时会临时安装，"
+                "网络慢时会卡在任务启动阶段。"
+            ),
+            extra={"python": str(python), "package": "wandb", "probe": probe},
+        )
+    ]
+
+
 def _homogeneous_gpu_groups() -> list[list[int]]:
     try:
         from lorahub.api.gpu_topology import homogeneous_slot_groups  # noqa: PLC0415
@@ -729,6 +1043,35 @@ def _homogeneous_gpu_groups() -> list[list[int]]:
         return homogeneous_slot_groups()
     except Exception:  # noqa: BLE001
         return []
+
+
+def _nvidia_slots() -> list[Any]:
+    try:
+        from lorahub.api.gpu_topology import nvidia_slots  # noqa: PLC0415
+
+        return nvidia_slots()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _first_conditioning_dir(cfg: TrainingConfig) -> Path | None:
+    for subset in cfg.dataset.subsets:
+        if subset.conditioning_data_dir is not None:
+            return Path(str(subset.conditioning_data_dir))
+    return None
+
+
+def _resolve_anima_python(cfg: TrainingConfig) -> Path | None:
+    try:
+        from lorahub.core.backends.anima_lora import bootstrap  # noqa: PLC0415
+
+        env = bootstrap.resolve(
+            config_path=cfg.backend.repo_path,
+            config_python=cfg.backend.python_executable,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return env.python_executable
 
 
 # --------------------------------------------------------------------- #
@@ -763,6 +1106,137 @@ def _count_with_extensions(
     except OSError:
         return found
     return found
+
+
+def _dataset_image_count(cfg: TrainingConfig, *, limit: int) -> int | None:
+    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    total = 0
+    for raw in roots:
+        if raw is None:
+            continue
+        root = Path(str(raw))
+        if not root.is_dir():
+            continue
+        total += _count_with_extensions(root, _IMAGE_EXTS, limit=max(1, limit - total))
+        if total >= limit:
+            return total
+    return total if total > 0 else None
+
+
+def _dataset_image_paths(cfg: TrainingConfig, *, limit: int) -> list[Path]:
+    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    out: list[Path] = []
+    for raw in roots:
+        if raw is None:
+            continue
+        root = Path(str(raw))
+        if not root.is_dir():
+            continue
+        try:
+            for sub_root, _dirs, files in os.walk(root):
+                for name in files:
+                    path = Path(sub_root) / name
+                    if path.suffix.lower() in _IMAGE_EXTS:
+                        out.append(path)
+                        if len(out) >= limit:
+                            return out
+                if sub_root != str(root):
+                    continue
+        except OSError:
+            continue
+    return out
+
+
+def _check_conditioning_pairs(
+    cfg: TrainingConfig,
+    cond_dir: Path,
+) -> list[PreflightFinding]:
+    if not cond_dir.is_dir():
+        return [
+            PreflightFinding(
+                category="anima_method",
+                severity="error",
+                field="dataset.subsets.conditioningDataDir",
+                message=f"conditioningDataDir 不存在：{cond_dir!s}",
+                remediation="选择一个存在的参考图目录，或关闭 conditioning / maskedLoss。",
+            )
+        ]
+
+    images = _dataset_image_paths(cfg, limit=20)
+    if not images:
+        return []
+    missing = [
+        path.name
+        for path in images
+        if not _has_conditioning_pair(path, cfg, cond_dir)
+    ]
+    if not missing:
+        return []
+    severity: Severity = "error" if len(missing) == len(images) else "warn"
+    return [
+        PreflightFinding(
+            category="anima_method",
+            severity=severity,
+            field="dataset.subsets.conditioningDataDir",
+            message=(
+                f"conditioningDataDir 中有 {len(missing)}/{len(images)} 个样本"
+                "未找到同名参考图。"
+            ),
+            remediation=(
+                "参考图需要与训练图同 stem，可使用相同子目录结构；"
+                "支持 png/jpg/jpeg/webp/bmp。"
+            ),
+            extra={"missing_sample_names": missing[:10]},
+        )
+    ]
+
+
+def _has_conditioning_pair(image_path: Path, cfg: TrainingConfig, cond_dir: Path) -> bool:
+    rel_dir = Path()
+    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    for raw in roots:
+        if raw is None:
+            continue
+        root = Path(str(raw))
+        try:
+            rel = image_path.parent.relative_to(root)
+        except ValueError:
+            continue
+        rel_dir = rel
+        break
+
+    suffixes = [image_path.suffix.lower()] if image_path.suffix else []
+    for ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        if ext not in suffixes:
+            suffixes.append(ext)
+    for ext in suffixes:
+        if (cond_dir / rel_dir / f"{image_path.stem}{ext}").is_file():
+            return True
+    return False
+
+
+def _is_pre_ampere(compute_capability: str | None) -> bool:
+    if not compute_capability:
+        return False
+    try:
+        major = int(str(compute_capability).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return False
+    return major < 8
+
+
+def _probe_python_import(python: Path, module: str) -> bool | None:
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [str(python), "-c", f"import {module}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.returncode == 0
 
 
 def _to_camel(snake: str) -> str:

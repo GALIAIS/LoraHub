@@ -37,7 +37,7 @@ def _config(tmp_path: Path, *, with_turbo: bool) -> TrainingConfig:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
-    # Drop a dummy image + matching TE cache so the auto-preprocess
+    # Drop a dummy image + matching TE/latent cache so the auto-preprocess
     # short-circuits ("everything cached"); these turbo tests only care
     # about runner / argv selection, not the preprocess wiring.
     (data / "img1.jpg").write_bytes(b"")
@@ -45,6 +45,7 @@ def _config(tmp_path: Path, *, with_turbo: bool) -> TrainingConfig:
     cache = tmp_path / "ws" / "post_image_dataset" / "lora"
     cache.mkdir(parents=True)
     (cache / "img1_anima_te.safetensors").write_bytes(b"")
+    (cache / "img1_1024x1024_anima.npz").write_bytes(b"")
     anima_lora_payload: dict = {}
     if with_turbo:
         anima_lora_payload["turbo"] = {}

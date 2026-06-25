@@ -319,7 +319,7 @@ def test_parser_tqdm_nan_loss_keeps_step_progress() -> None:
     assert ev.type == EventType.step
     assert ev.payload["step"] == 55
     assert ev.payload["total_steps"] == 2000
-    assert ev.payload["loss"] != ev.payload["loss"]
+    assert "loss" not in ev.payload
     assert ev.payload["lr"] == pytest.approx(2e-5)
 
 
@@ -370,7 +370,7 @@ def test_parser_nan_validation_loss_emits_validation_event() -> None:
     ev = parse_line(line)
     assert ev is not None
     assert ev.type == EventType.validation
-    assert ev.payload["val_loss"] != ev.payload["val_loss"]
+    assert "val_loss" not in ev.payload
     assert ev.payload["epoch"] == 1
     assert ev.payload["step"] == 113
 
@@ -409,6 +409,13 @@ def test_parser_keyboard_interrupt_not_an_error() -> None:
     assert ev.payload["level"] == "info"
 
 
+def test_parser_broken_pipe_not_an_error() -> None:
+    ev = parse_line("BrokenPipeError: [Errno 32] Broken pipe")
+    assert ev is not None
+    assert ev.type == EventType.log
+    assert ev.payload["level"] == "info"
+
+
 def test_parser_empty_line_returns_none() -> None:
     """Whitespace-only input is dropped to save downstream allocations."""
     assert parse_line("") is None
@@ -426,7 +433,7 @@ def _config(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
     data.mkdir()
-    # Drop a dummy image + matching TE cache so the auto-preprocess
+    # Drop a dummy image + matching TE/latent cache so the auto-preprocess
     # short-circuits ("everything cached") and tests can focus on
     # validate / launch shape without spawning preprocess subprocesses.
     (data / "img1.jpg").write_bytes(b"")
@@ -434,6 +441,7 @@ def _config(tmp_path: Path, **backend_extras: Any) -> TrainingConfig:
     cache = tmp_path / "ws" / "post_image_dataset" / "lora"
     cache.mkdir(parents=True)
     (cache / "img1_anima_te.safetensors").write_bytes(b"")
+    (cache / "img1_1024x1024_anima.npz").write_bytes(b"")
     backend = {"type": "anima_lora", "animaLora": {}}
     backend.update(backend_extras)
     return TrainingConfig.model_validate(

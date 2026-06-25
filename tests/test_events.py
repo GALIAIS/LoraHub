@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
 
-from lorahub.core.events import EventBus, EventType, JsonlEventSink, TrainingEvent
+from lorahub.core.events import (
+    EventBus,
+    EventType,
+    JsonlEventSink,
+    TrainingEvent,
+    normalize_event,
+)
 
 
 def test_event_round_trips_through_dict_and_json() -> None:
@@ -19,6 +26,28 @@ def test_event_round_trips_through_dict_and_json() -> None:
     )
     restored = TrainingEvent.from_dict(json.loads(ev.to_json()))
     assert restored == ev
+
+
+def test_event_json_rejects_non_finite_numbers() -> None:
+    ev = TrainingEvent(type=EventType.step, payload={"loss": math.nan})
+    with pytest.raises(ValueError):
+        ev.to_json()
+
+
+def test_normalize_event_makes_payload_json_safe_and_bounded() -> None:
+    ev = normalize_event(
+        TrainingEvent(
+            type=EventType.log,
+            payload={"loss": math.nan, "message": "x" * 20_000},
+        ),
+        job_id="job-1",
+    )
+
+    assert ev.job_id == "job-1"
+    assert ev.payload["loss"] is None
+    assert len(ev.payload["message"]) < 17_000
+    assert ev.payload["message"].endswith("...[truncated]")
+    json.loads(ev.to_json())
 
 
 def test_bus_delivers_to_all_listeners_in_order() -> None:

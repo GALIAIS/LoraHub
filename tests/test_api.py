@@ -113,6 +113,15 @@ def _config_payload(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def _use_stub_anima_backend(cfg: dict[str, Any], tmp_path: Path) -> None:
+    repo = tmp_path / "anima_lora"
+    repo.mkdir()
+    (repo / "train.py").write_text("", encoding="utf-8")
+    cfg["base_model"]["arch"] = "anima"
+    cfg["backend"]["type"] = "anima_lora"
+    cfg["backend"]["repo_path"] = str(repo)
+
+
 def test_health_returns_version(client: TestClient) -> None:
     r = client.get("/api/health")
     assert r.status_code == 200
@@ -652,8 +661,7 @@ def test_distributed_gpu_dispatch_assigns_multiple_visible_devices(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         cfg["backend"]["gpu_dispatch"] = {
             "mode": "distributed",
             "num_gpus": 2,
@@ -720,8 +728,7 @@ def test_create_job_inherits_settings_gpu_dispatch_default(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         r = client.post(
             "/api/jobs",
             json={"config": cfg, "workspace": str(tmp_path / "ws")},
@@ -788,8 +795,7 @@ def test_empty_gpu_dispatch_payload_still_follows_settings(
     fresh_sched.start()
     try:
         cfg = _config_payload(tmp_path)
-        cfg["base_model"]["arch"] = "anima"
-        cfg["backend"]["type"] = "anima_lora"
+        _use_stub_anima_backend(cfg, tmp_path)
         cfg["backend"]["gpu_dispatch"] = {}
         r = client.post(
             "/api/jobs",
@@ -853,6 +859,51 @@ def test_failed_job_reports_once_for_noisy_error_logs(
     assert len(reports) == 1
     assert reports[0].job_id == job_id
     assert reports[0].context["returncode"] == 1
+
+
+def test_job_event_stream_normalizes_payloads(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+    from lorahub.core.backends.base import TrainingHandle
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+        ) -> TrainingHandle:
+            def wait(_timeout: float | None) -> int:
+                on_event(
+                    TrainingEvent(
+                        type=EventType.step,
+                        payload={"loss": float("nan"), "message": "x" * 20_000},
+                    )
+                )
+                on_event(TrainingEvent(type=EventType.done, payload={"returncode": 0}))
+                return 0
+
+            return TrainingHandle(job_id="fake", pid=0, _stop_fn=lambda _g: None, _wait_fn=wait)
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    ws = tmp_path / "ws"
+    payload = {"config": _config_payload(tmp_path), "workspace": str(ws)}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+    final = _wait_terminal(client, job_id, timeout=5.0)
+
+    assert final["state"] == "succeeded", final
+    events = list(JsonlEventSink.replay(ws / "events.jsonl"))
+    step = next(ev for ev in events if ev.type is EventType.step)
+    assert step.job_id == job_id
+    assert step.payload["loss"] is None
+    assert step.payload["message"].endswith("...[truncated]")
 
 
 # --------------------------------------------------------------------------- #
@@ -4225,21 +4276,24 @@ def test_metrics_keep_progress_when_loss_is_nan(client: TestClient, tmp_path: Pa
     ws = tmp_path / "nan-progress"
     ws.mkdir()
     job = state.registry.create(workspace=ws, config_snapshot={})
-    with JsonlEventSink(ws / "events.jsonl") as sink:
-        sink(
-            TrainingEvent(
-                type=EventType.step,
-                payload={"step": 55, "total_steps": 2000, "loss": float("nan")},
-                job_id=job.id,
-            )
+    (ws / "events.jsonl").write_text(
+        "\n".join(
+            [
+                (
+                    '{"type":"step","payload":{"step":55,"total_steps":2000,'
+                    '"loss":NaN},"timestamp":1.0,"job_id":"%s"}'
+                )
+                % job.id,
+                (
+                    '{"type":"validation","payload":{"step":55,'
+                    '"val_loss":NaN},"timestamp":2.0,"job_id":"%s"}'
+                )
+                % job.id,
+            ]
         )
-        sink(
-            TrainingEvent(
-                type=EventType.validation,
-                payload={"step": 55, "val_loss": float("nan")},
-                job_id=job.id,
-            )
-        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     r = client.get(f"/api/jobs/{job.id}/metrics")
     assert r.status_code == 200

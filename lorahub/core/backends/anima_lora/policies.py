@@ -144,16 +144,15 @@ def _compile_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
             "(显存占用接近翻倍,不建议)。",
         )
 
-    # native_flatten 与 static_token_count 互斥
-    # vendored 的 compile_blocks 在两者都设置时会 raise,这里前置校验。
+    # native_flatten 与 static_token_count 在上游互斥,但 LoraHub compiler
+    # 会在 native-flatten 时主动不发 static_token_count。这里不能报 error,
+    # 否则 schema 默认 4096 会误拦合法配置。
     if opts.enable_native_flatten and (opts.static_token_count or 0) > 0:
         yield ValidationIssue(
-            Severity.error,
+            Severity.info,
             "backend.animaLora.enableNativeFlatten",
-            "enableNativeFlatten=true 与 staticTokenCount 互斥。"
-            "native-flatten 走 4032+4200 双家族 bucket 表(每个 bucket 精确"
-            "填满 token count、零 padding),staticTokenCount 走 4096 padding "
-            "路径。请把 staticTokenCount 删掉(或设为 0),或关掉 native-flatten。",
+            "enableNativeFlatten=true 时 LoraHub 会忽略 staticTokenCount,"
+            "避免触发上游 compile_blocks 互斥断言。切换该项后会重建缓存。",
         )
 
     # native_flatten + reduce-overhead + 显存 swap/grad-ckpt 不兼容

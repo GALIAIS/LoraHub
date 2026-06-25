@@ -66,7 +66,7 @@ def add_custom_train_arguments(
 
 
 def apply_masked_loss(loss, batch) -> torch.FloatTensor:
-    if "conditioning_images" in batch:
+    if batch.get("conditioning_images") is not None:
         mask_image = (
             batch["conditioning_images"].to(dtype=loss.dtype)[:, 0].unsqueeze(1)
         )  # use R channel

@@ -162,7 +162,7 @@ def _maybe_start_preview_worker(
 
 def _gpu_sampler_loop(
     job_id: str,
-    slot: int,
+    slot: int | list[int],
     on_event: Any,
     stop_evt: threading.Event,
 ) -> None:
@@ -175,38 +175,42 @@ def _gpu_sampler_loop(
     from lorahub.api.system_stats import _collect_nvidia_gpus  # noqa: PLC0415
 
     interval = 5.0
+    slots = [slot] if isinstance(slot, int) else list(slot)
     while not stop_evt.wait(interval):
         try:
             gpus = _collect_nvidia_gpus()
         except Exception:  # noqa: BLE001
             continue
-        if not gpus or slot >= len(gpus):
+        if not gpus:
             continue
-        g = gpus[slot]
-        try:
-            on_event(
-                TrainingEvent(
-                    type=EventType.gpu_sample,
-                    job_id=job_id,
-                    payload={
-                        "gpu_index": slot,
-                        "util_percent": g.utilization_percent,
-                        "vram_used_mib": (
-                            int(g.memory_used_bytes // (1024 * 1024))
-                            if getattr(g, "memory_used_bytes", None) is not None
-                            else None
-                        ),
-                        "vram_total_mib": (
-                            int(g.memory_total_bytes // (1024 * 1024))
-                            if getattr(g, "memory_total_bytes", None) is not None
-                            else None
-                        ),
-                        "temperature_c": g.temperature_c,
-                    },
+        for gpu_slot in slots:
+            if gpu_slot < 0 or gpu_slot >= len(gpus):
+                continue
+            g = gpus[gpu_slot]
+            try:
+                on_event(
+                    TrainingEvent(
+                        type=EventType.gpu_sample,
+                        job_id=job_id,
+                        payload={
+                            "gpu_index": gpu_slot,
+                            "util_percent": g.utilization_percent,
+                            "vram_used_mib": (
+                                int(g.memory_used_bytes // (1024 * 1024))
+                                if getattr(g, "memory_used_bytes", None) is not None
+                                else None
+                            ),
+                            "vram_total_mib": (
+                                int(g.memory_total_bytes // (1024 * 1024))
+                                if getattr(g, "memory_total_bytes", None) is not None
+                                else None
+                            ),
+                            "temperature_c": g.temperature_c,
+                        },
+                    )
                 )
-            )
-        except Exception:  # noqa: BLE001
-            continue
+            except Exception:  # noqa: BLE001
+                continue
 
 
 __all__ = ["_gpu_sampler_loop", "_maybe_start_preview_worker"]
