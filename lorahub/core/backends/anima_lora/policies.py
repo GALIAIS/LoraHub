@@ -49,6 +49,7 @@ def check_cross_field_conflicts(cfg: TrainingConfig) -> list[ValidationIssue]:
     issues.extend(_optimizer_conflicts(cfg, opts))
     issues.extend(_network_conflicts(cfg, opts))
     issues.extend(_schedule_conflicts(cfg, opts))
+    issues.extend(_fp16_conflicts(cfg, opts))
     issues.extend(_validation_conflicts(opts))
     issues.extend(_caption_conflicts(cfg, opts))
     return issues
@@ -368,6 +369,36 @@ def _schedule_conflicts(
             f"effective batch (batchSize × gradAccum = {bs}×{accum} = "
             f"{effective_batch}) 偏大。LoRA 微调常见的 effective batch 在 4~16,"
             "过大会让梯度信号过度平均、收敛变慢。",
+        )
+
+
+def _fp16_conflicts(
+    cfg: TrainingConfig, opts: AnimaLoraOptions,
+) -> Iterable[ValidationIssue]:
+    if (opts.mixed_precision or cfg.precision).lower() != "fp16":
+        return
+
+    sub = opts.lora
+    if sub is not None and sub.algorithm == "loha" and opts.network_dim > 16:
+        yield ValidationIssue(
+            Severity.warning,
+            "backend.animaLora.networkDim",
+            "fp16 + LoHA rank > 16 在 V100 上容易 NaN。V100 模板使用 rank=16；"
+            "需要更大容量请优先用 bf16/Ampere 以上 GPU。",
+        )
+
+    if opts.use_custom_down_autograd:
+        yield ValidationIssue(
+            Severity.warning,
+            "backend.animaLora.useCustomDownAutograd",
+            "fp16 下自定义 down autograd 更容易触发非有限梯度。V100 建议关闭。",
+        )
+
+    if cfg.sampling.enabled and cfg.sampling.at_first:
+        yield ValidationIssue(
+            Severity.warning,
+            "sampling.atFirst",
+            "fp16 下训练前采样容易先生成黑图，且无法反映 LoRA 训练效果。V100 建议关闭。",
         )
 
 

@@ -116,6 +116,9 @@ export interface JobMetricsResponse {
     image_path: string | null
     ts: number
   }>
+  last_step: number | null
+  last_nonfinite_loss: { step: number | null; loss: number | null; ts: number | null } | null
+  last_nonfinite_val_loss: { step: number | null; loss: number | null; ts: number | null } | null
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null

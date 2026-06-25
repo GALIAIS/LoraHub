@@ -235,7 +235,9 @@ export function AnalysisWorkbench({
     const lossArr = metrics.data?.loss ?? []
     const lastStep = lossArr.length
       ? lossArr[lossArr.length - 1].step
-      : null
+      : typeof metrics.data?.last_step === "number"
+        ? metrics.data.last_step
+        : null
     const totalSteps =
       typeof metrics.data?.total_steps === "number" &&
       metrics.data.total_steps > 0

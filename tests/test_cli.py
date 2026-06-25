@@ -94,6 +94,33 @@ def test_validate_fails_for_missing_sd_scripts(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_validate_uses_configured_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ckpt = tmp_path / "model.safetensors"
+    ckpt.write_bytes(b"")
+    data = tmp_path / "data"
+    data.mkdir()
+    config = tmp_path / "anima.yaml"
+    config.write_text(
+        yaml.dump(
+            {
+                "base_model": {"checkpoint": str(ckpt), "arch": "anima"},
+                "dataset": {"source": str(data)},
+                "schedule": {"epochs": 1, "batch_size": 1},
+                "sampling": {"enabled": False},
+                "backend": {"type": "anima_lora", "animaLora": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from lorahub.core.backends.anima_lora import backend as anima_backend
+
+    monkeypatch.setattr(anima_backend.AnimaLoraBackend, "validate", lambda *_: [])
+    result = runner.invoke(app, ["validate", str(config)])
+    assert result.exit_code == 0, result.stdout
+    assert "sd-scripts" not in result.stdout
+
+
 def test_info_renders_summary(tmp_path: Path) -> None:
     sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
     config = _make_config_yaml(tmp_path, sd)

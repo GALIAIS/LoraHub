@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +198,9 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "gpu_samples": [],
         "lora_spectrum": [],
         "forgetting_probe": [],
+        "last_step": None,
+        "last_nonfinite_loss": None,
+        "last_nonfinite_val_loss": None,
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
@@ -214,6 +218,10 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     gpu_samples: list[dict[str, Any]] = []
     lora_spectrum: list[dict[str, Any]] = []
     forgetting_probe: list[dict[str, Any]] = []
+    last_step: int | None = None
+    last_step_ts: float | None = None
+    last_nonfinite_loss: dict[str, Any] | None = None
+    last_nonfinite_val_loss: dict[str, Any] | None = None
     epoch_counter = 0
     # Trainer-reported total step count. We track the latest non-zero
     # value seen on a `step` event so the front-end has a single
@@ -237,7 +245,21 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                 continue
 
             if etype == EventType.step.value:
+                raw_step = payload.get("step")
+                if isinstance(raw_step, (int, float)):
+                    last_step = int(raw_step)
+                    last_step_ts = ts if isinstance(ts, (int, float)) else last_step_ts
+                raw_total = payload.get("total_steps")
+                if isinstance(raw_total, (int, float)) and raw_total > 0:
+                    total_steps = int(raw_total)
                 if "loss" in payload:
+                    if not _finite_number(payload.get("loss")):
+                        last_nonfinite_loss = {
+                            "step": last_step,
+                            "loss": None,
+                            "ts": ts,
+                        }
+                        continue
                     raw_epoch = payload.get("epoch")
                     epoch_value = (
                         int(raw_epoch)
@@ -263,14 +285,18 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                         ):
                             point[k_out] = payload[k_src]
                     loss.append(point)
-                    raw_total = payload.get("total_steps")
-                    if isinstance(raw_total, (int, float)) and raw_total > 0:
-                        total_steps = int(raw_total)
             elif etype == EventType.epoch_end.value:
                 epoch_counter += 1
                 epochs.append({"epoch": payload.get("epoch"), "ts": ts})
             elif etype == EventType.validation.value:
                 if "val_loss" in payload:
+                    if not _finite_number(payload.get("val_loss")):
+                        last_nonfinite_val_loss = {
+                            "step": payload.get("step"),
+                            "loss": None,
+                            "ts": ts,
+                        }
+                        continue
                     entry: dict[str, Any] = {
                         "epoch": payload.get("epoch", epoch_counter),
                         "val_loss": payload.get("val_loss"),
@@ -327,7 +353,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                 )
 
     first_ts = loss[0]["ts"] if loss else None
-    last_ts = loss[-1]["ts"] if loss else None
+    last_ts = last_step_ts if last_step_ts is not None else (loss[-1]["ts"] if loss else None)
     duration = (
         last_ts - first_ts
         if first_ts is not None and last_ts is not None
@@ -350,6 +376,9 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "gpu_samples": gpu_samples,
         "lora_spectrum": lora_spectrum,
         "forgetting_probe": forgetting_probe,
+        "last_step": last_step,
+        "last_nonfinite_loss": last_nonfinite_loss,
+        "last_nonfinite_val_loss": last_nonfinite_val_loss,
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,
@@ -365,6 +394,10 @@ def _empty_overfit_signal() -> dict[str, Any]:
         "gap": None,
         "trend": None,
     }
+
+
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(value)
 
 
 def _compute_overfit_signal(

@@ -309,6 +309,27 @@ def test_parser_tqdm_steps_emits_step_event() -> None:
     assert ev.job_id == "job-1"
 
 
+def test_parser_tqdm_nan_loss_keeps_step_progress() -> None:
+    line = (
+        "steps:   3%|3         | 55/2000 [00:28<16:48,  1.93it/s, "
+        "avr_loss=nan, lr=2e-05]"
+    )
+    ev = parse_line(line, job_id="job-1")
+    assert ev is not None
+    assert ev.type == EventType.step
+    assert ev.payload["step"] == 55
+    assert ev.payload["total_steps"] == 2000
+    assert ev.payload["loss"] != ev.payload["loss"]
+    assert ev.payload["lr"] == pytest.approx(2e-5)
+
+
+def test_parser_nan_guard_emits_diagnostic_warning() -> None:
+    ev = parse_line("WARNING nan_guard recovery: halved LR (now 1e-05)")
+    assert ev is not None
+    assert ev.type == EventType.diagnostic_warning
+    assert ev.payload["category"] == "nan_loss"
+
+
 def test_parser_epoch_increment_emits_epoch_end() -> None:
     line = "epoch is incremented. current_epoch: 1, epoch: 2"
     ev = parse_line(line)
@@ -342,6 +363,16 @@ def test_parser_validation_loss_emits_validation_event() -> None:
     assert ev.payload["val_loss"] == pytest.approx(0.187)
     assert ev.payload["epoch"] == 3
     assert ev.payload["step"] == 512
+
+
+def test_parser_nan_validation_loss_emits_validation_event() -> None:
+    line = "validation loss=nan epoch=1 step=113"
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.type == EventType.validation
+    assert ev.payload["val_loss"] != ev.payload["val_loss"]
+    assert ev.payload["epoch"] == 1
+    assert ev.payload["step"] == 113
 
 
 def test_parser_eval_loss_emits_validation_event() -> None:
@@ -477,6 +508,28 @@ def test_validate_anima_arch_clean(tmp_path: Path) -> None:
     assert errors == [], f"unexpected errors: {errors}"
 
 
+def test_validate_warns_on_v100_risky_fp16_combo(tmp_path: Path) -> None:
+    cfg = _config(
+        tmp_path,
+        animaLora={
+            "mixedPrecision": "fp16",
+            "networkDim": 32,
+            "networkAlpha": 32,
+            "lora": {"algorithm": "loha"},
+            "useCustomDownAutograd": True,
+        },
+    )
+    cfg.precision = "fp16"
+    cfg.sampling.enabled = True
+    cfg.sampling.at_first = True
+
+    issues = AnimaLoraBackend().validate(cfg)
+    fields = {i.field for i in issues if i.severity.value == "warning"}
+    assert "backend.animaLora.networkDim" in fields
+    assert "backend.animaLora.useCustomDownAutograd" in fields
+    assert "sampling.atFirst" in fields
+
+
 def test_validate_wrong_arch_errors(tmp_path: Path) -> None:
     """Config targets sdxl but type=anima_lora — clear error pointing back to kohya."""
     cfg = _config(tmp_path)
@@ -536,15 +589,16 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
     assert len(captured_argv) == 1
     argv = captured_argv[0]
     # Frame: <python> -m accelerate.commands.accelerate_cli launch
-    #         --num_cpu_threads_per_process 3 --mixed_precision bf16
+    #         --num_cpu_threads_per_process 3 --mixed_precision <config precision>
     #         <repo>/train.py ...
     assert argv[1] == "-m"
     assert argv[2] == "accelerate.commands.accelerate_cli"
     assert argv[3] == "launch"
     assert "--num_cpu_threads_per_process" in argv
     assert "--mixed_precision" in argv
-    assert "--multi_gpu" in argv
-    assert argv[argv.index("--num_processes") + 1] == "2"
+    assert argv[argv.index("--mixed_precision") + 1] == "bf16"
+    assert "--multi_gpu" not in argv
+    assert argv[argv.index("--num_processes") + 1] == "1"
     # train.py path must end the launcher prefix.
     train_py_idx = next(
         i for i, x in enumerate(argv) if x.endswith("train.py")
@@ -554,6 +608,76 @@ def test_launch_builds_accelerate_argv_without_running(tmp_path: Path) -> None:
     # (LoraHub now drives every training knob through the generated
     # _lorahub_anima_config.toml; --method/--preset are gone).
     assert "--config_file" in argv[train_py_idx + 1 :]
+
+
+def test_launch_distributed_ddp_uses_multi_gpu(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    cfg = _config(
+        tmp_path,
+        gpuDispatch={"mode": "distributed", "numGpus": 2},
+        distributed={"strategy": "ddp"},
+        animaLora={"mixedPrecision": "fp16"},
+    )
+    captured_argv: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured_argv.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        AnimaLoraBackend().launch(
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=4
+        )
+
+    argv = captured_argv[0]
+    assert argv[argv.index("--mixed_precision") + 1] == "fp16"
+    assert "--multi_gpu" in argv
+    assert argv[argv.index("--num_processes") + 1] == "2"
+
+
+def test_launch_uses_anima_mixed_precision_for_accelerate(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    cfg = _config(tmp_path, animaLora={"mixedPrecision": "fp16"})
+    captured_argv: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured_argv.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        AnimaLoraBackend().launch(
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=1
+        )
+
+    argv = captured_argv[0]
+    assert argv[argv.index("--mixed_precision") + 1] == "fp16"
+
+
+def test_launch_maps_fp32_to_accelerate_no_precision(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    cfg = _config(tmp_path, animaLora={"mixedPrecision": "fp32"})
+    captured_argv: list[list[str]] = []
+
+    def fake_start(self):  # type: ignore[no-untyped-def]
+        captured_argv.append(list(self._argv))
+        self._proc = SimpleNamespace(pid=4242, returncode=0)
+
+    with patch(
+        "lorahub.core.backends._common.runner.SubprocessRunner.start", fake_start
+    ):
+        AnimaLoraBackend().launch(
+            cfg, workspace=tmp_path / "ws", on_event=lambda _e: None, gpu_count=1
+        )
+
+    argv = captured_argv[0]
+    assert argv[argv.index("--mixed_precision") + 1] == "no"
 
 
 def test_launch_fsdp_writes_accelerate_config(tmp_path: Path) -> None:

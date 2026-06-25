@@ -455,7 +455,7 @@ def add_training_arguments(parser: argparse.ArgumentParser, support_dreambooth: 
         "--mixed_precision",
         type=str,
         default="no",
-        choices=["no", "fp16", "bf16"],
+        choices=["no", "fp16", "bf16", "fp32"],
         help="use mixed precision",
     )
     parser.add_argument(

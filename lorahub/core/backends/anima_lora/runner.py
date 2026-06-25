@@ -6,15 +6,15 @@ anima_lora drives training through HuggingFace Accelerate, not DeepSpeed
 
     <python> -m accelerate.commands.accelerate_cli launch \
         --num_cpu_threads_per_process 3 \
-        --mixed_precision bf16 \
+        --mixed_precision <cfg precision> \
         train.py <args>
 
-We mirror that invocation to keep behaviour identical to ``make lora``
-upstream. The mixed_precision flag here is the **launcher's** mixed
+We keep the same launcher shape, but the mixed_precision flag is
+configuration-driven. The flag here is the **launcher's** mixed
 precision (Accelerate's HF-side AMP routing); ``train.py`` itself takes
-its own ``--mixed_precision`` from the compiler-emitted argv, which is
-fine — Accelerate's launcher and the trainer agree on the same value
-for a default config.
+its own ``mixed_precision`` from the compiler-emitted config file. They
+must agree: V100-class GPUs need fp16, while the upstream default is
+bf16 for newer hardware.
 
 We deliberately DON'T use the ``accelerate`` console-script entry point
 (``<venv>/bin/accelerate``). Going through ``python -m`` keeps
@@ -37,10 +37,9 @@ from lorahub.core.backends.anima_lora.parser import parse_line
 __all__ = ["AnimaLoraRunner", "RunResult"]
 
 
-# Mirror upstream's accelerate launch defaults. Both flags are the same
-# values shipped in ``external/anima_lora/scripts/tasks/_common.py``;
-# centralising them here means a future upstream bump can change them
-# in one spot.
+# Mirror upstream's CPU-thread launch default. Mixed precision has a
+# bf16 default for compatibility with upstream templates but is normally
+# overridden from the LoraHub recipe before launch.
 _LAUNCH_THREADS = "3"
 _LAUNCH_MIXED_PRECISION = "bf16"
 
@@ -60,6 +59,7 @@ class AnimaLoraRunner(SubprocessRunner):
         env: dict[str, str] | None = None,
         num_processes: int = 1,
         accelerate_config: Path | None = None,
+        mixed_precision: str = _LAUNCH_MIXED_PRECISION,
     ) -> None:
         train_py = repo / "train.py"
         full_argv = [
@@ -74,10 +74,12 @@ class AnimaLoraRunner(SubprocessRunner):
             "--num_cpu_threads_per_process",
             _LAUNCH_THREADS,
             "--mixed_precision",
-            _LAUNCH_MIXED_PRECISION,
+            _accelerate_mixed_precision(mixed_precision),
+            "--num_processes",
+            str(max(1, num_processes)),
         ]
         if num_processes > 1 and accelerate_config is None:
-            full_argv += ["--multi_gpu", "--num_processes", str(num_processes)]
+            full_argv += ["--multi_gpu"]
         full_argv += [
             str(train_py),
             *argv,
@@ -129,3 +131,7 @@ class AnimaLoraRunner(SubprocessRunner):
             env=merged_env,
             thread_label="anima_lora",
         )
+
+
+def _accelerate_mixed_precision(value: str) -> str:
+    return "no" if value == "fp32" else value

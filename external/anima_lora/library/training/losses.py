@@ -528,7 +528,9 @@ class LossComposer:
     active_losses: list[str]
 
     def compose(self, ctx: LossContext) -> torch.Tensor:
-        per_sample = ctx.model_pred.new_zeros(ctx.model_pred.shape[0])
+        per_sample = ctx.model_pred.new_zeros(
+            ctx.model_pred.shape[0], dtype=torch.float32
+        )
 
         # Stage 1: per-sample losses.
         first = True

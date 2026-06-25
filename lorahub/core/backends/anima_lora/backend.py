@@ -240,11 +240,12 @@ class AnimaLoraBackend:
                 env=env,
             )
         else:
+            effective_gpu_count = _effective_launch_gpu_count(cfg, gpu_count)
             accelerate_config = _write_accelerate_config(
                 cfg=cfg,
                 workspace=workspace,
                 python=bootstrap_env.python_executable,
-                gpu_count=max(1, gpu_count),
+                gpu_count=effective_gpu_count,
             )
             runner = AnimaLoraRunner(
                 python=bootstrap_env.python_executable,
@@ -254,8 +255,9 @@ class AnimaLoraBackend:
                 on_event=on_event,
                 job_id=job_id,
                 env=env,
-                num_processes=max(1, gpu_count),
+                num_processes=effective_gpu_count,
                 accelerate_config=accelerate_config,
+                mixed_precision=_distributed_mixed_precision(cfg),
             )
         runner.start()
 
@@ -292,6 +294,15 @@ _DEEPSPEED_CONFIG_NAME = "_lorahub_deepspeed_zero.json"
 _STRATEGY_DDP = "ddp"
 _STRATEGY_FSDP = "fsdp"
 _STRATEGY_ZERO = "deepspeed_zero"
+
+
+def _effective_launch_gpu_count(cfg: TrainingConfig, gpu_count: int) -> int:
+    if cfg.backend.gpu_dispatch.mode != "distributed":
+        return 1
+    configured = cfg.backend.gpu_dispatch.num_gpus
+    if configured is not None and configured > 0:
+        return max(1, min(int(configured), max(1, gpu_count)))
+    return max(1, gpu_count)
 
 
 def _check_distributed_strategy(cfg: TrainingConfig) -> list[ValidationIssue]:
@@ -359,7 +370,7 @@ def _accelerate_config_payload(
     workspace: Path,
     gpu_count: int,
 ) -> dict[str, object]:
-    mixed_precision = _distributed_mixed_precision(cfg)
+    mixed_precision = _accelerate_mixed_precision(_distributed_mixed_precision(cfg))
     common: dict[str, object] = {
         "compute_environment": "LOCAL_MACHINE",
         "debug": False,
@@ -457,7 +468,10 @@ def _deepspeed_payload(cfg: TrainingConfig, workspace: Path) -> dict[str, object
 
 def _distributed_mixed_precision(cfg: TrainingConfig) -> str:
     opts = cfg.backend.anima_lora
-    value = opts.mixed_precision if opts is not None else cfg.precision
+    return opts.mixed_precision if opts is not None else cfg.precision
+
+
+def _accelerate_mixed_precision(value: str) -> str:
     return "no" if value == "fp32" else value
 
 

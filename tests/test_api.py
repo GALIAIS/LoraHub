@@ -4221,6 +4221,37 @@ def test_metrics_exclude_grid_sample_events(client: TestClient, tmp_path: Path) 
     assert [item["path"] for item in samples] == ["sample-1.png"]
 
 
+def test_metrics_keep_progress_when_loss_is_nan(client: TestClient, tmp_path: Path) -> None:
+    ws = tmp_path / "nan-progress"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    with JsonlEventSink(ws / "events.jsonl") as sink:
+        sink(
+            TrainingEvent(
+                type=EventType.step,
+                payload={"step": 55, "total_steps": 2000, "loss": float("nan")},
+                job_id=job.id,
+            )
+        )
+        sink(
+            TrainingEvent(
+                type=EventType.validation,
+                payload={"step": 55, "val_loss": float("nan")},
+                job_id=job.id,
+            )
+        )
+
+    r = client.get(f"/api/jobs/{job.id}/metrics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["loss"] == []
+    assert body["last_step"] == 55
+    assert body["total_steps"] == 2000
+    assert body["last_nonfinite_loss"]["step"] == 55
+    assert body["val_loss"] == []
+    assert body["last_nonfinite_val_loss"]["step"] == 55
+
+
 # --------------------------------------------------------------------------- #
 # Config template instantiate (POST /api/configs/templates/{id}/instantiate)
 # --------------------------------------------------------------------------- #

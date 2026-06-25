@@ -35,11 +35,14 @@ from lorahub.core.events import EventType, TrainingEvent
 _TQDM_STEPS_RE = re.compile(
     r"steps:\s*\d+%\|[^|]*\|\s*(?P<step>\d+)/(?P<total>\d+)",
 )
-_TQDM_LOSS_RE = re.compile(
-    r"avr_loss=(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
-)
+_FLOAT_RE = r"[-+]?(?:\d*\.?\d+(?:[eE][-+]?\d+)?|nan|inf(?:inity)?)"
+_TQDM_LOSS_RE = re.compile(rf"avr_loss=(?P<loss>{_FLOAT_RE})", re.IGNORECASE)
 _TQDM_LR_RE = re.compile(
     r"\blr=(?P<lr>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+)
+_NAN_LOSS_RE = re.compile(
+    r"\b(?:non-finite\s+loss|loss\s+became\s+nan|nan_guard\s+recovery)\b",
+    re.IGNORECASE,
 )
 
 # Epoch transition: ``library/datasets/base.py:212`` logger.info.
@@ -65,7 +68,7 @@ _SAVE_RE = re.compile(
 # ``eval_loss`` instead. We support all phrasings because upstream's
 # exact wording drifted across releases.
 _VAL_LOSS_RE = re.compile(
-    r"\b(?:val(?:idation)?|eval)[\s_/]?loss\s*[=:]\s*(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+    rf"\b(?:val(?:idation)?|eval)[\s_/]?loss\s*[=:]\s*(?P<loss>{_FLOAT_RE})"
     r"(?:.*?\bepoch\s*[=:]\s*(?P<epoch>\d+))?"
     r"(?:.*?\bstep\s*[=:]\s*(?P<step>\d+))?",
     re.IGNORECASE,
@@ -120,6 +123,19 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
         if (rm := _TQDM_LR_RE.search(stripped)) is not None:
             payload["lr"] = float(rm.group("lr"))
         return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+
+    if _NAN_LOSS_RE.search(stripped):
+        return TrainingEvent(
+            type=EventType.diagnostic_warning,
+            payload={
+                "category": "nan_loss",
+                "severity": "error",
+                "message": "Loss became NaN — training is numerically unstable.",
+                "remediation": "Lower learning rate or disable fp16-risky options, then restart from a clean checkpoint.",
+                "evidence": stripped,
+            },
+            job_id=job_id,
+        )
 
     level = "error" if _looks_like_error(stripped) else "info"
     return TrainingEvent(

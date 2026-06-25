@@ -263,12 +263,12 @@ def _render_full_config(
     # ---- Model paths ----
     bm = cfg.base_model
     if bm.checkpoint:
-        cfg_dict["pretrained_model_name_or_path"] = str(bm.checkpoint)
+        cfg_dict["pretrained_model_name_or_path"] = _local_path_string(bm.checkpoint)
     if bm.arch_paths.qwen3 is not None:
-        cfg_dict["qwen3"] = str(bm.arch_paths.qwen3)
+        cfg_dict["qwen3"] = _local_path_string(bm.arch_paths.qwen3)
     if bm.arch_paths.ae is not None:
         # anima_lora calls the VAE flag --vae upstream
-        cfg_dict["vae"] = str(bm.arch_paths.ae)
+        cfg_dict["vae"] = _local_path_string(bm.arch_paths.ae)
 
     # ---- Network ----
     cfg_dict["network_module"] = opts.network_module
@@ -493,6 +493,11 @@ def _render_full_config(
     _render_dataset(cfg, opts, workspace, cfg_dict)
 
     return cfg_dict
+
+
+def _local_path_string(path: Path) -> str:
+    """Resolve local model paths before writing the upstream TOML."""
+    return str(path.expanduser().resolve())
 
 
 def _render_sampling(

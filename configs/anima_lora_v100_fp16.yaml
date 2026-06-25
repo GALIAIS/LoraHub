@@ -1,14 +1,14 @@
-# Anima style LoRA on the anima_lora backend — V100 32GB fp16 config.
+# Anima style LoRA on the anima_lora backend — V100 32GB stable config.
 #
 # Target hardware: Tesla V100 32GB (sm_70). Based on the stable 32GB style config; only hardware compatibility knobs are changed.
-# Expected throughput: slower than Ada/Ampere; V100 uses fp16 and PyTorch SDPA.
-# Expected VRAM peak: fits V100 32GB with batch 1 + gradAccum 8 + checkpointing.
+# Expected throughput: slower than Ada/Ampere; V100 uses fp32 compute and PyTorch SDPA.
+# Expected VRAM peak: fits V100 32GB with batch 1 + gradAccum 16 + checkpointing.
 #
 # This keeps the 32GB style LoHA recipe and changes only V100 compatibility:
 #   - algorithm = loha (Hadamard product; effective rank up to r²)
 #   - dataset has wider AR range and heavier caption dropout
 #   - more epochs (style needs more variety per image than character)
-#   - fp16 instead of bf16, no torch.compile, gradient checkpointing on
+#   - fp32 instead of bf16, no torch.compile, gradient checkpointing on
 #
 # Style training intuition:
 #   1. Caption dropRate 0.15-0.20 → push the network to represent style
@@ -45,7 +45,7 @@ dataset:
     # Heavier dropRate than character — style should bleed across prompts.
     dropRate: 0.18
     keepTokens: 1
-  # 3 repeats × 200 imgs × 10 epochs / (batch 2 × accum 4) ≈ 750 steps.
+  # 3 repeats × 200 imgs × 10 epochs / (batch 1 × accum 16) ≈ 375 steps.
   # ~15 minutes wall-clock at 1.5 s/step. Style benefits from variety
   # over repetition; if your dataset is small (<100 imgs) bump
   # numRepeats to 4-5.
@@ -54,11 +54,11 @@ dataset:
 schedule:
   epochs: 10
   batchSize: 1
-  gradAccum: 8
+  gradAccum: 16
   seed: 42
   maxSteps: null
 
-precision: fp16
+precision: fp32
 gradientCheckpointing: true
 cacheLatents: true
 cacheLatentsToDisk: true
@@ -67,8 +67,8 @@ skipCacheCheck: true
 sampling:
   enabled: true
   everyNEpochs: 2
-  atFirst: true
-  resolution: [1024, 1024]
+  atFirst: false
+  resolution: [768, 768]
   seed: -1
   triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
   outputs:
@@ -82,54 +82,54 @@ sampling:
   prompts:
     - prompt: "${TRIGGER}, 1girl, solo, portrait, looking at viewer, soft expression, simple background, even lighting"
       negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
-      cfg: 5.0
-      steps: 28
+      cfg: 4.0
+      steps: 20
       seed: 42
-      width: 1024
-      height: 1024
+      width: 768
+      height: 768
 
     - prompt: "${TRIGGER}, 2girls, multiple girls, friends, sitting together, talking, indoor, daytime, casual atmosphere"
       negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
-      cfg: 5.0
-      steps: 28
+      cfg: 4.0
+      steps: 20
       seed: 256
-      width: 1216
-      height: 832
+      width: 896
+      height: 640
 
     - prompt: "${TRIGGER}, 1girl, solo, full body, fantasy outfit, intricate details, dynamic pose, magic effects, sparkles"
       negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic"
-      cfg: 5.5
-      steps: 30
+      cfg: 4.5
+      steps: 22
       seed: 1024
-      width: 832
-      height: 1216
+      width: 640
+      height: 896
 
     - prompt: "${TRIGGER}, scenery, no humans, landscape, mountains, forest, river, dramatic clouds, golden hour, cinematic"
       negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
-      cfg: 5.0
-      steps: 28
+      cfg: 4.0
+      steps: 20
       seed: 8888
-      width: 1344
-      height: 768
+      width: 960
+      height: 576
 
     - prompt: "${TRIGGER}, still life, table with cup of coffee, open book, soft window light, cozy atmosphere, no humans"
       negative: "lowres, worst quality, blurry, jpeg artifacts, photo, realistic, 3d, watermark, text, person, character, human"
-      cfg: 5.0
-      steps: 28
+      cfg: 4.0
+      steps: 20
       seed: 7777
-      width: 1024
-      height: 1024
+      width: 768
+      height: 768
 
     - prompt: "${TRIGGER}, 1boy, solo, urban night, neon signs, rain, reflective wet ground, cyberpunk atmosphere, dramatic lighting"
       negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d, daytime, sunny"
-      cfg: 6.0
-      steps: 32
+      cfg: 4.5
+      steps: 22
       seed: 31415
-      width: 896
-      height: 1152
+      width: 640
+      height: 896
 
 output:
-  name: style_anima_v100_fp16
+  name: style_anima_v100
   saveEveryNEpochs: 2
   saveDtype: fp16
 
@@ -163,7 +163,7 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: style_anima_v100_fp16
+    outputName: style_anima_v100
 
     # Algorithm: LoHA — same choice as the 8GB config, scaled up.
     # Effective rank is ``r²`` so r=16 here is comparable in expressive
@@ -193,8 +193,8 @@ backend:
     # the gradient signal is denser (every image carries the same style
     # signal vs character training where only a few images carry the
     # specific identity feature).
-    learningRate: 5.0e-05
-    lrWarmupRatio: 0.05          # 5% 总步数 warmup;style 也需要,初期防 LR 抖
+    learningRate: 1.0e-05
+    lrWarmupRatio: 0.1           # V100 fp32 更保守;前 10% warmup 防初期抖动
     maxTrainEpochs: 10
     saveEveryNEpochs: 2
     checkpointingEpochs: 2
@@ -227,14 +227,14 @@ backend:
     compileMode: null
     compileInductorMode: null
     torchCompile: false
-    useCustomDownAutograd: true
+    useCustomDownAutograd: false
 
     # Memory / offload — all OFF.
     blocksToSwap: 0
     gradientCheckpointing: true
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
-    mixedPrecision: fp16
+    mixedPrecision: fp32
     persistentDataLoaderWorkers: true
 
     # Training stabilisers. Same default as character: EMA off to
@@ -242,11 +242,11 @@ backend:
     ema: false
     nanGuard: true
     nanGuardRecover: true
-    nanGuardMaxConsecutive: 5
+    nanGuardMaxConsecutive: 2
 
     # Per-epoch contact-sheet of sample previews. Lets you eyeball
     # style emergence over the run remotely.
-    sampleGrid: true
+    sampleGrid: false
 
     # Validation. Style-eval CMMD has more variance than character but
     # still gives a useful signal at 16 held-out images.
