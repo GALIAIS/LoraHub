@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
