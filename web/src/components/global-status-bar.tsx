@@ -200,9 +200,9 @@ function MetricChip({
           {value}
         </span>
         {boundedPercent !== null && (
-          <span className="h-0.5 overflow-hidden rounded-full bg-border/70">
+          <span className="shiro-progress-track h-0.5 overflow-hidden rounded-full border-0 bg-border/70">
             <span
-              className={cn("block h-full rounded-full", barToneForPercent(boundedPercent))}
+              className={cn("shiro-progress-fill", barToneForPercent(boundedPercent))}
               style={{ width: `${boundedPercent}%` }}
             />
           </span>
@@ -365,9 +365,9 @@ function TinyBar({ value }: { value: number | null }) {
       ? Math.max(0, Math.min(100, value))
       : 0
   return (
-    <span className="h-1 overflow-hidden rounded-full bg-border/65">
+    <span className="shiro-progress-track h-1 overflow-hidden rounded-full border-0 bg-border/65">
       <span
-        className={cn("block h-full rounded-full", barToneForPercent(bounded))}
+        className={cn("shiro-progress-fill", barToneForPercent(bounded))}
         style={{ width: `${bounded}%` }}
       />
     </span>

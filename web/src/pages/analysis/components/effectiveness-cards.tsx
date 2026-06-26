@@ -102,10 +102,10 @@ export function InsightCard({
         >
           {renderHeadline}
         </div>
-        <div className="h-1.5 rounded-full bg-muted/60 overflow-hidden">
+        <div className="shiro-progress-track h-1.5 border-0 bg-muted/60">
           <div
             className={cn(
-              "analysis-bar-fill h-full rounded-full transition-[background-color] duration-300",
+              "analysis-bar-fill h-full rounded-full",
               TONE_FILL[tone],
             )}
             style={{ width: `${(animatedFill * 100).toFixed(1)}%` }}

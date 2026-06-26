@@ -70,9 +70,9 @@ function Bar({
 }) {
   const v = Math.max(0, Math.min(100, percent))
   return (
-    <div className="h-1.5 w-full bg-muted/50 rounded-full overflow-hidden">
+    <div className="shiro-progress-track h-1.5 w-full border-0 bg-muted/50">
       <div
-        className={cn("h-full rounded-full transition-[width]", toneClass)}
+        className={cn("shiro-progress-fill", toneClass)}
         style={{ width: `${v.toFixed(1)}%` }}
       />
     </div>

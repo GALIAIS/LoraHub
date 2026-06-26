@@ -64,7 +64,7 @@ export function StageTimeline({
             <div
               key={i}
               className={cn(
-                "relative h-full transition-[transform] duration-300 hover:scale-y-[1.03]",
+                "analysis-bar-fill relative h-full hover:scale-y-[1.03]",
                 STAGE_COLOR[seg.stage],
                 i > 0 && "border-l border-background/70",
               )}

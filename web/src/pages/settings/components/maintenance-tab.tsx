@@ -95,9 +95,9 @@ export function MaintenanceTab() {
                   <span className="font-mono">{fmtBytes(fs.total_bytes)}</span>
                 </div>
               </div>
-              <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div className="shiro-progress-track mt-2 h-1.5 border-0 bg-muted">
                 <div
-                  className="h-full bg-primary transition-all"
+                  className="shiro-progress-fill bg-primary"
                   style={{
                     width: `${Math.min(
                       100,

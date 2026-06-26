@@ -79,7 +79,11 @@
 
 @utility analysis-bar-fill {
   transform-origin: left center;
-  will-change: transform;
+  will-change: width, transform;
+  transition:
+    width 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 180ms ease;
 }
 
 @utility analysis-shimmer {
@@ -104,6 +108,10 @@
   .analysis-bar-fill,
   .analysis-shimmer {
     animation: none !important;
+  }
+
+  .analysis-bar-fill {
+    transition: none !important;
   }
 }
 
@@ -912,11 +920,24 @@ code {
     display: none !important;
   }
 
-  .shiro-progress-fill {
+  .shiro-progress-fill,
+  [data-slot="progress-indicator"] {
     display: block;
     height: 100%;
     border-radius: inherit;
-    transition: width 300ms ease;
+    transform: translateZ(0);
+    will-change: width, transform;
+    transition:
+      width 520ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 180ms ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shiro-progress-fill,
+    [data-slot="progress-indicator"] {
+      transition: none !important;
+    }
   }
 
   .shiro-code-shell {

@@ -244,9 +244,9 @@ function ProgressBlock({ summary }: { summary: Summary }) {
         </span>
       </div>
       {percent != null && (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div className="shiro-progress-track h-1 w-full border-0 bg-muted">
           <div
-            className="h-full bg-primary transition-[width] duration-500"
+            className="shiro-progress-fill bg-primary"
             style={{ width: `${Math.min(percent, 100)}%` }}
           />
         </div>

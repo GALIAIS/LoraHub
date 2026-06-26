@@ -245,9 +245,9 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
                   {task.status === "error" && (task.error || "失败")}
                 </span>
                 {(task.status === "uploading" || task.status === "extracting") && (
-                  <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div className="shiro-progress-track h-1.5 w-20 border-0 bg-muted">
                     <div
-                      className={`h-full rounded-full transition-all duration-300 ${
+                      className={`shiro-progress-fill ${
                         task.status === "extracting" ? "bg-amber-500 animate-pulse" : "bg-primary"
                       }`}
                       style={{ width: `${task.percent}%` }}

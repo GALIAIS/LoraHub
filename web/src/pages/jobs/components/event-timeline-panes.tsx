@@ -270,9 +270,9 @@ function DetailBody({
               {done} / {total || "?"} ({pct.toFixed(0)}%)
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="shiro-progress-track h-1.5 w-full border-0 bg-muted">
             <div
-              className="h-full bg-amber-500 transition-[width] duration-300"
+              className="shiro-progress-fill bg-amber-500"
               style={{ width: `${pct}%` }}
             />
           </div>

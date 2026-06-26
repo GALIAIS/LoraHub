@@ -527,10 +527,10 @@ function TaskCard({
             <span className="font-medium">{task.label}</span>
             <span className="text-muted-foreground">{task.status}</span>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div className="shiro-progress-track h-1.5 border-0 bg-muted">
             <div
               className={cn(
-                "h-full rounded-full",
+                "shiro-progress-fill",
                 task.status === "failed" ? "bg-destructive" : "bg-primary",
               )}
               style={{ width: `${percent}%` }}

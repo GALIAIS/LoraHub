@@ -153,10 +153,10 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
                   {session.processed} / {session.total}
                 </span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="shiro-progress-track h-1.5 border-0 bg-muted">
                 <div
                   className={cn(
-                    "h-full rounded-full transition-all",
+                    "shiro-progress-fill",
                     session.status === "failed"
                       ? "bg-destructive"
                       : "bg-primary",
@@ -369,10 +369,10 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
                   {session.processed} / {session.total}
                 </span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="shiro-progress-track h-1.5 border-0 bg-muted">
                 <div
                   className={cn(
-                    "h-full rounded-full transition-all",
+                    "shiro-progress-fill",
                     session.status === "failed"
                       ? "bg-destructive"
                       : "bg-primary",

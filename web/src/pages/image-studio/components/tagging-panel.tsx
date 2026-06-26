@@ -203,9 +203,9 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
             </span>
             <span className="text-muted-foreground">{session.percent}%</span>
           </div>
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+          <div className="shiro-progress-track h-1.5 border-0 bg-muted">
             <div
-              className={`h-full rounded-full transition-all ${
+              className={`shiro-progress-fill ${
                 session.status === "failed" ? "bg-destructive" : "bg-primary"
               }`}
               style={{ width: `${session.percent}%` }}
