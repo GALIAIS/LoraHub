@@ -702,7 +702,13 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
 
     if fresh_enough:
         cached_latest = cached.get("latest")
-        cached_latest_commit = cached.get("latest_commit")
+        cached_latest_commit = (
+            _remote_tag_commit(cwd, cached.get("tag_name"))
+            if channel == "tag"
+            else cached.get("latest_commit")
+        )
+        if cached_latest_commit is None:
+            cached_latest_commit = cached.get("latest_commit")
         info = UpdateInfo(
             **{
                 **cached,
@@ -711,6 +717,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                 "version_source": version_source,
                 "git_checkout": is_git_checkout,
                 "current_commit": current_commit,
+                "latest_commit": cached_latest_commit,
                 "update_available": (
                     _tag_update_available(
                         latest=cached_latest,

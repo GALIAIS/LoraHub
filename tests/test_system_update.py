@@ -816,6 +816,7 @@ def test_check_tag_cached_payload_recomputes_dirty_same_version(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: True)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.7-dirty", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
     cached = UpdateInfo(
         channel="tag",
         current="1.0.7",
@@ -835,6 +836,38 @@ def test_check_tag_cached_payload_recomputes_dirty_same_version(
     info = su.check(channel="tag")
 
     assert info.update_available is True
+
+
+def test_check_tag_cached_payload_refreshes_existing_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.system_update_types import CacheBlob, UpdateInfo
+
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.8", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "49633851")
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "49633851")
+    cached = UpdateInfo(
+        channel="tag",
+        current="1.0.8",
+        latest="1.0.8",
+        update_available=False,
+        release_url=su.WEB_RELEASES_URL,
+        tag_name="v1.0.8",
+        current_commit="49633851",
+        latest_commit="97682880",
+    ).to_dict()
+    monkeypatch.setattr(
+        su,
+        "_read_cache",
+        lambda: CacheBlob(data={"tag": cached}, updated_at=time.time()),
+    )
+
+    info = su.check(channel="tag")
+
+    assert info.latest_commit == "49633851"
+    assert info.update_available is False
 
 
 # --------------------------------------------------------------------- #
@@ -977,3 +1010,33 @@ def test_update_restart_args_leave_non_uvicorn_commands_untouched(
         ["-m", "lorahub", "serve", "--port", "8123"],
     )
     assert args == ["/opt/venv/bin/python", "-m", "lorahub", "serve", "--port", "8123"]
+
+
+def test_system_update_restart_rewrites_bind_before_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    from lorahub.api.runtime_bind import RuntimeBind
+
+    module_path = Path("lorahub/api/routers/system.py").resolve()
+    spec = importlib.util.spec_from_file_location("_system_router_for_test", module_path)
+    assert spec is not None and spec.loader is not None
+    system_router = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(system_router)
+
+    writes: list[tuple[str, int, int | None]] = []
+
+    monkeypatch.setattr(
+        system_router,
+        "read_runtime_bind",
+        lambda: RuntimeBind(host="0.0.0.0", port=18765, pid=123),
+    )
+    monkeypatch.setattr(
+        system_router,
+        "write_runtime_bind",
+        lambda host, port, *, pid=None: writes.append((host, port, pid)),
+    )
+    system_router._preserve_restart_bind()
+
+    assert writes == [("0.0.0.0", 18765, None)]

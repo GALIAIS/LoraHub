@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from lorahub.api.runtime_bind import read_runtime_bind, restart_args
+from lorahub.api.runtime_bind import read_runtime_bind, restart_args, write_runtime_bind
 from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
@@ -323,6 +323,8 @@ def _trigger_restart() -> None:
     import os
     import sys
 
+    _preserve_restart_bind()
+
     args = restart_args(sys.executable, sys.argv)
     if sys.platform == "win32":
         # Spawn detached child running same argv, then bail.
@@ -336,3 +338,9 @@ def _trigger_restart() -> None:
         os._exit(0)  # noqa: SLF001 — needed: skip atexit / running tasks
         return
     os.execv(sys.executable, args)
+
+
+def _preserve_restart_bind() -> None:
+    bind = read_runtime_bind()
+    if bind is not None:
+        write_runtime_bind(bind.host, bind.port, pid=None)
