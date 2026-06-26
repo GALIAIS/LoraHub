@@ -36,6 +36,7 @@ from library.training.checkpoints import CheckpointSaver
 from library.training.contexts import TrainCtx, ValCtx
 from library.training.method_adapter import StepCtx
 from library.training.metrics import MetricContext, collect_metrics
+from library.training.ema import _named_trainables
 
 logger = logging.getLogger(__name__)
 
@@ -751,6 +752,14 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
     accelerator = state.accelerator
     network = state.network
 
+    def _reset_amp_after_skipped_backward() -> None:
+        scaler = getattr(accelerator, "scaler", None)
+        if scaler is not None:
+            try:
+                scaler.update()
+            except (AssertionError, RuntimeError):
+                pass
+
     with accelerator.accumulate(state.training_model):
         state.on_step_start_for_network(state.text_encoder, state.unet)
 
@@ -838,11 +847,9 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
             )
             if _will_log_after and hasattr(net_unwrapped, "capture_up_grad_stats"):
                 net_unwrapped.capture_up_grad_stats()
-            if args.max_grad_norm != 0.0:
-                params_to_clip = accelerator.unwrap_model(
-                    network
-                ).get_trainable_params()
-                accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+            params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+            if getattr(accelerator, "scaler", None) is not None:
+                accelerator.unscale_gradients()
 
             # NaN/spike guard — post-backward, post-clip. Catches the
             # case where the loss was finite but per-param grads
@@ -850,11 +857,30 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
             # poison-pill module). Bail out before optimizer.step()
             # so the parameters stay clean.
             if nan_guard_on:
-                params_to_check = accelerator.unwrap_model(network).get_trainable_params()
                 bad = False
-                for p in params_to_check:
+                bad_names: list[str] = []
+                trainable_names = None
+                for p in params_to_clip:
                     if p.grad is not None and not torch.isfinite(p.grad).all():
                         bad = True
+                        if accelerator.is_main_process and len(bad_names) < 5:
+                            if trainable_names is None:
+                                trainable_names = {
+                                    id(param): name
+                                    for name, param in _named_trainables(
+                                        accelerator.unwrap_model(network)
+                                    )
+                                }
+                            finite = torch.isfinite(p.grad)
+                            finite_count = int(finite.sum().item())
+                            if finite_count:
+                                absmax = float(p.grad[finite].float().abs().max().item())
+                            else:
+                                absmax = float("nan")
+                            bad_names.append(
+                                f"{trainable_names.get(id(p), '<unnamed>')} "
+                                f"finite={finite_count}/{p.grad.numel()} absmax={absmax}"
+                            )
                         break
                 bad = _distributed_any(accelerator, bad)
                 if bad:
@@ -868,8 +894,14 @@ def _run_step(trainer, state: LoopState, batch) -> torch.Tensor:
                             state.global_step, state.nan_skips,
                             state.nan_consecutive,
                         )
+                        if bad_names:
+                            logger.warning("non-finite gradient params: %s", bad_names)
                     _maybe_recover_from_nan(state)
+                    _reset_amp_after_skipped_backward()
                     skipped_for_nan = True
+
+            if not skipped_for_nan and args.max_grad_norm != 0.0:
+                torch.nn.utils.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
         if skipped_for_nan:
             return loss.detach()

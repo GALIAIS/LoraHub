@@ -316,17 +316,41 @@ def dispatch_attention(
     scale = attn_params.softmax_scale  # None = default 1/sqrt(head_dim)
 
     if attn_params.attn_mode == "torch":
+        stable_fp32 = (not attn_params.split_attn) and q.is_cuda and q.dtype == torch.float16
         if attn_params.split_attn:
             x = []
             for i in range(len(q)):
-                x_i = torch.nn.functional.scaled_dot_product_attention(
-                    q[i], k[i], v[i], dropout_p=drop_rate, scale=scale
-                )
+                if q[i].is_cuda and q[i].dtype == torch.float16:
+                    with torch.amp.autocast(device_type="cuda", enabled=False):
+                        x_i = torch.nn.functional.scaled_dot_product_attention(
+                            q[i].float(),
+                            k[i].float(),
+                            v[i].float(),
+                            dropout_p=drop_rate,
+                            scale=scale,
+                        ).to(q[i].dtype)
+                else:
+                    x_i = torch.nn.functional.scaled_dot_product_attention(
+                        q[i], k[i], v[i], dropout_p=drop_rate, scale=scale
+                    )
                 q[i] = None
                 k[i] = None
                 v[i] = None
                 x.append(pad_fn(x_i, attn_params.max_seqlen))  # B, H, L, D
             x = torch.cat(x, dim=0)
+            del q, k, v
+
+        elif stable_fp32:
+            out_dtype = q.dtype
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                x = torch.nn.functional.scaled_dot_product_attention(
+                    q.float(),
+                    k.float(),
+                    v.float(),
+                    attn_mask=attn_params.attention_mask,
+                    dropout_p=drop_rate,
+                    scale=scale,
+                ).to(out_dtype)
             del q, k, v
 
         else:

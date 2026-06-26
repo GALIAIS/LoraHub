@@ -57,15 +57,18 @@ function lockBadgeFor(field: string) {
 
 export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
   value = {},
+  optimizer,
   set,
   errorMap,
 }: {
   value: NonNullable<ConfigFormValue["backend"]>["animaLora"]
+  optimizer: ConfigFormValue["optimizer"]
   set: Setter
   errorMap: ErrorMap
 }) {
   const v = value ?? {}
   const method = v.method ?? "lora"
+  const isFullFinetune = method === "full_finetune"
 
   // Switching method clears the previously-active sub-config so the
   // model_validator on the Python side doesn't reject "method=postfix
@@ -85,7 +88,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       <Row
         label="训练方法"
         required
-        description="LoRA 为默认堆叠（LoRA + OrthoLoRA + T-LoRA）；其余四种为上游论文级算法。选定后下方将展开其子配置。"
+        description="LoRA 为默认堆叠；全量微调会直接训练完整 Anima DiT 并保存完整模型，其余方法会展开对应子配置。"
         errors={errorMap.get("backend.animaLora.method")}
       >
         <EnumSelect value={method} onChange={onMethodChange} options={METHOD_OPTIONS} />
@@ -125,28 +128,36 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === 通用网络参数 === */}
       <Section
         icon={<Sparkles className="size-3.5" />}
-        title="网络容量"
-        subtitle="LoRA rank / alpha"
+        title={isFullFinetune ? "训练范围" : "网络容量"}
+        subtitle={isFullFinetune ? "Full model finetune" : "LoRA rank / alpha"}
       >
-        <Row label="网络维度 (rank)" errors={errorMap.get("backend.animaLora.networkDim")}>
-          <FloatInput
-            value={v.networkDim}
-            onChange={(n) => set(["backend", "animaLora", "networkDim"], n)}
-            placeholder="16"
-            min={1}
-          />
-        </Row>
-        <Row label="网络 alpha" errors={errorMap.get("backend.animaLora.networkAlpha")}>
-          <FloatInput
-            value={v.networkAlpha}
-            onChange={(n) => set(["backend", "animaLora", "networkAlpha"], n)}
-            placeholder="16"
-            min={1}
-          />
-        </Row>
+        {!isFullFinetune && (
+          <>
+            <Row label="网络维度 (rank)" errors={errorMap.get("backend.animaLora.networkDim")}>
+              <FloatInput
+                value={v.networkDim}
+                onChange={(n) => set(["backend", "animaLora", "networkDim"], n)}
+                placeholder="16"
+                min={1}
+              />
+            </Row>
+            <Row label="网络 alpha" errors={errorMap.get("backend.animaLora.networkAlpha")}>
+              <FloatInput
+                value={v.networkAlpha}
+                onChange={(n) => set(["backend", "animaLora", "networkAlpha"], n)}
+                placeholder="16"
+                min={1}
+              />
+            </Row>
+          </>
+        )}
         <Row
-          label="只训练 UNet"
-          description="anima_lora 默认开启 — text encoder 不训练。"
+          label={isFullFinetune ? "只训练 DiT" : "只训练 UNet"}
+          description={
+            isFullFinetune
+              ? "默认只训练 Anima DiT；关闭后会同时训练 text encoder，需要关闭 TE 缓存并显著增加显存占用。"
+              : "anima_lora 默认开启 — text encoder 不训练。"
+          }
         >
           <ToggleSwitch
             checked={v.networkTrainUnetOnly ?? true}
@@ -177,6 +188,19 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             onChange={(n) => set(["backend", "animaLora", "learningRate"], n)}
             placeholder="5e-5"
             step={1e-6}
+          />
+        </Row>
+        <Row
+          label="梯度裁剪"
+          description="max_grad_norm；0 = 关闭。V100 出现 NaN 时建议 0.5。"
+          errors={errorMap.get("optimizer.maxGradNorm")}
+        >
+          <FloatInput
+            value={optimizer?.maxGradNorm ?? 1.0}
+            onChange={(n) => set(["optimizer", "maxGradNorm"], n ?? 1.0)}
+            placeholder="1.0"
+            step={0.1}
+            min={0}
           />
         </Row>
         <Row

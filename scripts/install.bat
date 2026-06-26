@@ -70,9 +70,8 @@ if exist "%UV_DIR%\uv.exe" (
   echo   OK uv already installed
 ) else (
   if not exist "%UV_DIR%" mkdir "%UV_DIR%"
-  set "UV_URL=https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-  if defined LORAHUB_GH_PROXY set "UV_URL=%LORAHUB_GH_PROXY%!UV_URL!"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '!UV_URL!' -OutFile '%UV_DIR%\uv.zip'"
+  set "UV_UPSTREAM=https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $up='!UV_UPSTREAM!'; $out='%UV_DIR%\uv.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($p -eq 'https://cdn.gh-proxy.org') { continue }; if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 90 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
   if errorlevel 1 (
     echo   [ERROR] Failed to download uv.
     goto :fail
@@ -199,7 +198,7 @@ rem ---- [4/6] Install Python dependencies ----------------------------
 echo [4/6] Installing Python dependencies ...
 set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
 set "PY_DEPS_INDEX_ARGS="
-if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url ""%UV_DEFAULT_INDEX%"""
+if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url '%UV_DEFAULT_INDEX%'"
 echo   uv default index: %UV_DEFAULT_INDEX%
 echo   running uv pip install -v -e .[api,dev] --python "%VENV_PY%" --link-mode=copy %PY_DEPS_INDEX_ARGS% ^(log: _uv_python_deps.log^)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%UV%' pip install -v -e '.[api,dev]' --python '%VENV_PY%' --link-mode=copy %PY_DEPS_INDEX_ARGS% 2>&1 | Tee-Object -FilePath '%PY_DEPS_LOG%'; exit $LASTEXITCODE"

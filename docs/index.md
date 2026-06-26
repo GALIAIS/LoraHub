@@ -41,6 +41,7 @@ LoraHub 是一个自托管的 LoRA 训练工作台。它把三套训练栈
 - [快速开始](getting-started/quickstart.md) — 四条命令把第一份配置跑成第一次训练。
 - [端到端教程](getting-started/smoke-test.md) — 从图片到 LoRA 文件的全流程示例。
 - [配置概览](configs/index.md) — `TrainingConfig` 结构与字段索引。
+- [Anima Base v1.0 模型架构](research/anima-base-v1.md) — 本地权重检查、DiT/LLM Adapter/Qwen-Image VAE 架构与训练影响。
 - [CLI 参考](cli/index.md) — 每条 `lorahub` 命令的用法。
 - [API 参考](api/index.md) — REST + SSE + WebSocket 端点。
 

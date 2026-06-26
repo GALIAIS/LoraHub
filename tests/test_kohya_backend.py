@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -197,3 +198,42 @@ def test_launch_runs_to_completion(tmp_path: Path, backend: KohyaBackend) -> Non
     assert EventType.epoch_end in types
     assert EventType.checkpoint_saved in types
     assert types[-1] is EventType.done
+
+
+def test_requirement_probe_hides_windows_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.core.backends._common import bootstrap
+
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(bootstrap.sys, "platform", "win32")
+    monkeypatch.setattr(bootstrap.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    def fake_run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="torch==2.0.0\n", stderr="")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+
+    assert bootstrap._get_installed_packages(Path("python.exe")) == {"torch"}
+    assert calls[0]["creationflags"] == 0x08000000
+
+
+def test_msvc_probe_hides_windows_console(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from lorahub.core.backends.anima_lora import msvc
+
+    calls: list[dict[str, object]] = []
+    vswhere = tmp_path / "vswhere.exe"
+    vswhere.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(msvc.sys, "platform", "win32")
+    monkeypatch.setattr(msvc.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(msvc, "_find_vswhere", lambda: vswhere)
+
+    def fake_check_output(*_args: object, **kwargs: object) -> str:
+        calls.append(kwargs)
+        return ""
+
+    monkeypatch.setattr(msvc.subprocess, "check_output", fake_check_output)
+
+    assert msvc._msvc_root_via_vswhere() is None
+    assert calls[0]["creationflags"] == 0x08000000

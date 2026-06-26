@@ -1053,10 +1053,12 @@ class AnimaTrainer:
             text_encoder_conds = (
                 text_encoder_outputs_list  # List of text encoder outputs
             )
+        has_cached_text_conds = bool(text_encoder_conds) and any(
+            cond is not None for cond in text_encoder_conds
+        )
 
         if (
-            len(text_encoder_conds) == 0
-            or text_encoder_conds[0] is None
+            not has_cached_text_conds
             or train_text_encoder
         ):
             with (
@@ -1457,12 +1459,17 @@ class AnimaTrainer:
         """Build train/val dataset groups and the collator shared by both loaders."""
         use_dreambooth_method = args.in_json is None
         use_user_config = args.dataset_config is not None
+        inline_dataset_config = getattr(args, "inline_dataset_config", None)
 
         if args.dataset_class is None:
             blueprint_generator = BlueprintGenerator(
                 ConfigSanitizer(support_dropout=True)
             )
-            if use_user_config:
+            if inline_dataset_config:
+                logger.info("Loading dataset config from --config_file inline sections")
+                user_config = inline_dataset_config
+                use_user_config = True
+            elif use_user_config:
                 logger.info(f"Loading dataset config from {args.dataset_config}")
                 user_config = config_util.load_user_config(args.dataset_config)
                 ignored = ["train_data_dir", "reg_data_dir", "in_json"]
@@ -1854,7 +1861,10 @@ class AnimaTrainer:
             accelerator.print("enable full bf16 training.")
             network.to(weight_dtype)
 
-        unet_weight_dtype = te_weight_dtype = weight_dtype
+        model_weight_dtype = (
+            weight_dtype if (args.full_fp16 or args.full_bf16) else torch.float32
+        )
+        unet_weight_dtype = te_weight_dtype = model_weight_dtype
 
         unet.requires_grad_(False)
         if self.cast_unet(args):
@@ -1888,11 +1898,22 @@ class AnimaTrainer:
                 text_encoder = text_encoders[0]
         # else: text_encoder is unchanged; device and dtype are already set above
 
-        network, optimizer, train_dataloader, val_dataloader, lr_scheduler = (
-            accelerator.prepare(
-                network, optimizer, train_dataloader, val_dataloader, lr_scheduler
+        if getattr(network, "is_full_finetune", False):
+            # Full-finetune trains the already-prepared DiT directly. The
+            # network object is only a lifecycle/save shim and intentionally
+            # has no registered trainable parameters, so DDP-wrapping it would
+            # fail on multi-GPU runs.
+            optimizer, train_dataloader, val_dataloader, lr_scheduler = (
+                accelerator.prepare(
+                    optimizer, train_dataloader, val_dataloader, lr_scheduler
+                )
             )
-        )
+        else:
+            network, optimizer, train_dataloader, val_dataloader, lr_scheduler = (
+                accelerator.prepare(
+                    network, optimizer, train_dataloader, val_dataloader, lr_scheduler
+                )
+            )
         training_model = network
 
         if args.gradient_checkpointing:
@@ -1910,6 +1931,13 @@ class AnimaTrainer:
                 if frag:
                     self.prepare_text_encoder_grad_ckpt_workaround(i, t_enc)
 
+        elif getattr(network, "is_full_finetune", False):
+            unet.train()
+            for t_enc, flag in zip(
+                text_encoders,
+                self.get_text_encoders_train_flags(args, text_encoders),
+            ):
+                t_enc.train(flag)
         else:
             unet.eval()
             for t_enc in text_encoders:
@@ -1950,7 +1978,14 @@ class AnimaTrainer:
                     backend=args.dynamo_backend, mode=inductor_mode
                 )
 
-        accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
+        network_unwrapped = (
+            network
+            if getattr(network, "is_full_finetune", False)
+            else accelerator.unwrap_model(network)
+        )
+        network_unwrapped.prepare_grad_etc(text_encoder, unet)
+        if getattr(network_unwrapped, "is_full_finetune", False):
+            training_model = unet
 
         if not cache_latents:
             vae.requires_grad_(False)
@@ -2003,7 +2038,11 @@ class AnimaTrainer:
         accelerator = ctx.accelerator
 
         ctx.optimizer_eval_fn()
-        accelerator.unwrap_model(ctx.network).eval()
+        full_finetune = bool(getattr(ctx.network, "is_full_finetune", False))
+        if full_finetune:
+            accelerator.unwrap_model(ctx.unet).eval()
+        else:
+            accelerator.unwrap_model(ctx.network).eval()
         unwrapped_unet = accelerator.unwrap_model(ctx.unet)
         if hasattr(unwrapped_unet, "switch_block_swap_for_inference"):
             unwrapped_unet.switch_block_swap_for_inference()
@@ -2044,7 +2083,10 @@ class AnimaTrainer:
             args.t_min = val.original_t_min
             args.t_max = val.original_t_max
             ctx.optimizer_train_fn()
-            accelerator.unwrap_model(ctx.network).train()
+            if full_finetune:
+                accelerator.unwrap_model(ctx.unet).train()
+            else:
+                accelerator.unwrap_model(ctx.network).train()
             if hasattr(unwrapped_unet, "switch_block_swap_for_training"):
                 unwrapped_unet.switch_block_swap_for_training()
             clean_memory_on_device(accelerator.device)

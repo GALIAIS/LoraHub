@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -392,11 +393,14 @@ def _build_anima_lora_runner(
     from lorahub.core.backends.anima_lora import bootstrap as al_bootstrap  # noqa: PLC0415
     from lorahub.core.backends.anima_lora import installer  # noqa: PLC0415
 
-    torch_override = req.torch_override
+    torch_override = req.torch_override or sys.platform == "win32"
     cuda = req.cuda
     torch_version = req.torch_version
     torchvision_version = req.torchvision_version
-    if torch_override and validate_torch_selection(cuda):
+    if sys.platform == "win32":
+        torch_version = "2.11.0"
+        torchvision_version = "0.26.0"
+    if torch_override and validate_torch_selection(cuda) and sys.platform != "win32":
         option = recommended_torch_option()
         cuda = option.cuda
         torch_version = option.torch_version

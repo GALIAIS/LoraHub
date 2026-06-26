@@ -290,6 +290,32 @@ def _load_toml_with_base(path: str, *, strict: bool = False) -> dict:
     return merged
 
 
+def _load_inline_dataset_config(path: str) -> dict:
+    """Load dataset blueprint sections from a full config file.
+
+    ``read_config_from_file`` flattens argparse-shaped keys, but
+    ``[general]`` / ``[[datasets]]`` must remain nested for the
+    BlueprintGenerator. Preserve those sections separately so callers
+    using one self-contained config_file do not fall back to the
+    legacy DreamBooth path with an empty resolution.
+    """
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        raw = toml.load(f)
+    sections = {k: v for k, v in raw.items() if k in _DATASET_CONFIG_SECTIONS}
+    base_ref = raw.get("base_config")
+    if base_ref is not None:
+        if not os.path.isabs(base_ref):
+            base_ref = os.path.join(os.path.dirname(path), base_ref)
+        base_sections = _load_inline_dataset_config(base_ref)
+        if base_sections:
+            merged = dict(base_sections)
+            _apply_dataset_overrides(merged, sections)
+            return merged
+    return sections
+
+
 def _resolve_preset(
     preset: str, configs_dir: str = "configs"
 ) -> tuple[dict, str, str]:
@@ -641,6 +667,9 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
     config_args = argparse.Namespace(**merged)
     args = parser.parse_args(namespace=config_args)
     args.config_file = os.path.splitext(args.config_file)[0]
+    inline_dataset_config = _load_inline_dataset_config(config_path)
+    if inline_dataset_config.get("datasets"):
+        args.inline_dataset_config = inline_dataset_config
 
     if print_config:
         import sys as _sys

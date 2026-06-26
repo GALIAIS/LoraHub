@@ -1507,22 +1507,20 @@ class BaseDataset(torch.utils.data.Dataset):
             )
 
         def none_or_stack_elements(tensors_list, converter):
-            if (
-                len(tensors_list) == 0
-                or tensors_list[0] is None
-                or len(tensors_list[0]) == 0
-                or tensors_list[0][0] is None
-            ):
+            first = next((x for x in tensors_list if x is not None and len(x) > 0), None)
+            if first is None:
                 return None
 
             result = []
-            for i in range(len(tensors_list[0])):
-                tensors = [x[i] for x in tensors_list]
-                if tensors[0] is None:
+            for i in range(len(first)):
+                tensors = [x[i] for x in tensors_list if x is not None]
+                if all(x is None for x in tensors):
                     result.append(None)
                     continue
+                if any(x is None for x in tensors):
+                    return None
                 if tensors[0].ndim == 0:
-                    result.append(torch.stack([converter(x[i]) for x in tensors_list]))
+                    result.append(torch.stack([converter(x) for x in tensors]))
                     continue
 
                 min_len = min([len(x) for x in tensors])

@@ -60,6 +60,12 @@ def _find_vswhere() -> Path | None:
     return Path(on_path) if on_path else None
 
 
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    return 0
+
+
 def _msvc_root_via_vswhere() -> Path | None:
     """Ask vswhere for the latest VS install with C++ build tools."""
     vswhere = _find_vswhere()
@@ -80,6 +86,7 @@ def _msvc_root_via_vswhere() -> Path | None:
             ],
             text=True,
             timeout=15,
+            creationflags=_subprocess_no_window(),
         ).strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return None

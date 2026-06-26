@@ -147,7 +147,7 @@ class OrthoLoRAModule(BaseLoRAModule):
             lx = torch.nn.functional.linear(x_lora, Q_eff)
         # λ stays a fp32 Parameter (Adam state precision); cast at multiply
         # so the chain remains bf16. Same for the timestep mask buffer.
-        lx = lx * self.lambda_layer.to(work) * self._timestep_mask.to(work)
+        lx = lx * self.lambda_layer.to(work) * self._rank_mask_for(lx)
 
         if self.dropout is not None and self.training:
             lx = torch.nn.functional.dropout(lx, p=self.dropout)

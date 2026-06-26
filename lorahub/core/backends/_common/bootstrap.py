@@ -22,6 +22,12 @@ from lorahub.core.backends.errors import BootstrapError
 _log = logging.getLogger(__name__)
 
 
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    return 0
+
+
 def path_from_env(name: str) -> Path | None:
     """Read ``$name`` from the environment and return it as a Path, or None."""
     raw = os.environ.get(name)
@@ -183,6 +189,7 @@ def _get_installed_packages(python: Path) -> set[str] | None:
             capture_output=True,
             text=True,
             timeout=30,
+            creationflags=_subprocess_no_window(),
         )
         if result.returncode == 0 and result.stdout.strip():
             packages: set[str] = set()
@@ -207,6 +214,7 @@ def _get_installed_packages(python: Path) -> set[str] | None:
             capture_output=True,
             text=True,
             timeout=30,
+            creationflags=_subprocess_no_window(),
         )
         if result.returncode == 0:
             packages = set()

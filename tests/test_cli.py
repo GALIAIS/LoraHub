@@ -258,6 +258,66 @@ def test_service_restart_reuses_previous_port(monkeypatch: pytest.MonkeyPatch) -
     assert calls == [("0.0.0.0", 19090)]
 
 
+def test_service_daemon_uses_pythonw_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.cli import service as service_mod
+
+    python = tmp_path / "python.exe"
+    pythonw = tmp_path / "pythonw.exe"
+    python.write_text("", encoding="utf-8")
+    pythonw.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(service_mod.sys, "platform", "win32")
+    monkeypatch.setattr(service_mod, "_venv_python", lambda: python)
+
+    assert service_mod._daemon_python() == pythonw
+
+
+def test_service_resolves_windows_listener_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from lorahub.cli import service as service_mod
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def cmdline(self) -> list[str]:
+            return ["pythonw.exe", "-m", "uvicorn", "lorahub.api.app:app"]
+
+    fake_psutil = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(laddr=SimpleNamespace(port=18765), pid=456)
+        ],
+        Process=FakeProcess,
+    )
+
+    monkeypatch.setattr(service_mod.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    assert service_mod._resolve_daemon_pid(123, 18765) == 456
+
+
+def test_service_stop_terminates_windows_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.cli import service as service_mod
+
+    calls: list[tuple[int, float]] = []
+
+    monkeypatch.setattr(service_mod.sys, "platform", "win32")
+    monkeypatch.setattr(service_mod, "_read_pid", lambda: 123)
+    monkeypatch.setattr(
+        service_mod,
+        "_terminate_windows_process_tree",
+        lambda pid, timeout: calls.append((pid, timeout)),
+    )
+    monkeypatch.setattr(service_mod, "clear_runtime_bind", lambda *, keep_bind: None)
+
+    service_mod.stop(timeout=1.5)
+
+    assert calls == [(123, 1.5)]
+
+
 # --------------------------------------------------------------------------- #
 # Localisation — verify zh mode actually swaps the strings.
 # --------------------------------------------------------------------------- #

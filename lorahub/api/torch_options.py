@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
-from lorahub.api.system_stats import _find_nvidia_smi
+from lorahub.api.system_stats import _find_nvidia_smi, _run_hidden
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +106,7 @@ def detect_nvidia_driver() -> str | None:
     if not smi:
         return None
     try:
-        result = subprocess.run(
+        result = _run_hidden(
             [
                 smi,
                 "--query-gpu=driver_version",
@@ -135,7 +135,7 @@ def detect_compute_capability() -> str | None:
     if not smi:
         return None
     try:
-        result = subprocess.run(
+        result = _run_hidden(
             [
                 smi,
                 "--query-gpu=compute_cap",

@@ -51,7 +51,7 @@ def _named_trainables(network: Any) -> list[tuple[str, torch.nn.Parameter]]:
     """
     by_id = {id(p): name for name, p in network.named_parameters()}
     result: list[tuple[str, torch.nn.Parameter]] = []
-    for p in network.get_trainable_params():
+    for i, p in enumerate(network.get_trainable_params()):
         if not isinstance(p, torch.nn.Parameter):
             # Some adapters return raw tensors. Skip — EMA only tracks
             # registered Parameters so the shadow dict stays restorable
@@ -61,9 +61,16 @@ def _named_trainables(network: Any) -> list[tuple[str, torch.nn.Parameter]]:
             continue
         name = by_id.get(id(p))
         if name is None:
-            # Anonymous tensor (typically a fused view). EMA over views
-            # would double-count the underlying storage, so skip.
-            continue
+            if not getattr(network, "is_full_finetune", False):
+                # Anonymous tensor (typically a fused view). EMA over views
+                # would double-count the underlying storage, so skip.
+                continue
+            # Full-model finetune shims keep the DiT as an external
+            # reference to avoid accelerator double-wrapping. Those
+            # Parameters are not registered on the shim, but they are
+            # still the optimizer's canonical trainables, so track them
+            # by stable optimizer order.
+            name = f"trainable_{i}"
         result.append((name, p))
     return result
 

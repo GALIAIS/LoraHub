@@ -3,6 +3,7 @@ export const METHOD_OPTIONS = [
   { value: "postfix", label: "Postfix · 自由参数 / 条件正交后缀" },
   { value: "chimera", label: "ChimeraHydra · 双池路由 MoE" },
   { value: "easycontrol", label: "EasyControl · 自注意力图像条件" },
+  { value: "full_finetune", label: "全量微调 · 训练完整 Anima DiT" },
   {
     value: "ip_adapter",
     label: "IP-Adapter · 图像交叉注意力 (PE-Core encoder)",

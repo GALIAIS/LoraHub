@@ -9,11 +9,16 @@ function Probe-Url {
     try {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $req = [System.Net.HttpWebRequest]::Create($Url)
-        $req.Method = 'HEAD'
+        $req.Method = 'GET'
+        $req.AddRange(0, 262143)
         $req.Timeout = 5000
         $req.ReadWriteTimeout = 5000
         $req.AllowAutoRedirect = $true
         $resp = $req.GetResponse()
+        $stream = $resp.GetResponseStream()
+        $buf = New-Object byte[] 8192
+        while ($stream.Read($buf, 0, $buf.Length) -gt 0) {}
+        $stream.Close()
         $resp.Close()
         $sw.Stop()
         return $sw.ElapsedMilliseconds
@@ -59,9 +64,13 @@ function Pick-Fastest {
 
 $ghProxies = @(
   ''  # empty = direct GitHub, in case network is unrestricted
+  'https://v4.gh-proxy.org/'
+  'https://gh-proxy.com/'
+  'https://gh.ddlc.top/'
+  'https://gh.jasonzeng.dev/'
+  'https://gh.zwy.one/'
   'https://gh-proxy.org/'
   'https://hk.gh-proxy.org/'
-  'https://cdn.gh-proxy.org/'
   'https://v6.gh-proxy.org/'
   'https://ghfast.top/'
 )

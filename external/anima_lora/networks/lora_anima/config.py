@@ -199,6 +199,7 @@ class LoRANetworkCfg:
 
     # T-LoRA
     use_timestep_mask: bool = False
+    per_sample_timestep_mask: bool = False
     min_rank: int = 1
     alpha_rank_scale: float = 1.0
 
@@ -380,6 +381,7 @@ class LoRANetworkCfg:
         module_dropout = float(module_dropout) if module_dropout is not None else None
 
         use_timestep_mask = _as_bool(kwargs.get("use_timestep_mask"))
+        per_sample_timestep_mask = _as_bool(kwargs.get("per_sample_timestep_mask"))
         min_rank = kwargs.get("min_rank")
         min_rank = int(min_rank) if min_rank is not None else 1
         alpha_rank_scale = kwargs.get("alpha_rank_scale")
@@ -621,6 +623,7 @@ class LoRANetworkCfg:
             reg_dims=reg_dims,
             reg_lrs=reg_lrs,
             use_timestep_mask=use_timestep_mask,
+            per_sample_timestep_mask=per_sample_timestep_mask,
             min_rank=min_rank,
             alpha_rank_scale=alpha_rank_scale,
             add_reft=add_reft,

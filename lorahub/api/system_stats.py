@@ -64,6 +64,12 @@ _SYSTEM_PROFILER: str | None = None
 _SYSTEM_PROFILER_PROBED = False
 
 
+def _run_hidden(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    if platform.system() == "Windows":
+        kwargs.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)  # type: ignore[attr-defined]
+    return subprocess.run(cmd, **kwargs)
+
+
 def _find_nvidia_smi() -> str | None:
     global _NVIDIA_SMI, _NVIDIA_SMI_PROBED
     if _NVIDIA_SMI_PROBED:
@@ -179,7 +185,7 @@ def _collect_cpu_model() -> str:
                 return m.group(1).strip()
     if system == "Darwin":
         try:
-            proc = subprocess.run(  # noqa: S603, S607
+            proc = _run_hidden(  # noqa: S603, S607
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
                 check=False,
                 capture_output=True,
@@ -437,7 +443,7 @@ def _collect_nvidia_gpus(start_index: int = 0) -> list[GpuStats]:
     if smi is None:
         return []
     try:
-        proc = subprocess.run(  # noqa: S603
+        proc = _run_hidden(  # noqa: S603
             [smi, f"--query-gpu={_GPU_QUERY}", "--format=csv,noheader,nounits"],
             check=False,
             capture_output=True,
@@ -516,7 +522,7 @@ def _collect_gpu_processes() -> list[GpuProcessInfo]:
     if smi is None:
         return []
     try:
-        idx_proc = subprocess.run(  # noqa: S603
+        idx_proc = _run_hidden(  # noqa: S603
             [smi, "--query-gpu=index,uuid", "--format=csv,noheader"],
             check=False,
             capture_output=True,
@@ -540,7 +546,7 @@ def _collect_gpu_processes() -> list[GpuProcessInfo]:
         return []
 
     try:
-        apps_proc = subprocess.run(  # noqa: S603
+        apps_proc = _run_hidden(  # noqa: S603
             [
                 smi,
                 "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
@@ -595,7 +601,7 @@ def _collect_macos_gpus(start_index: int = 0) -> list[GpuStats]:
     if profiler is None:
         return []
     try:
-        proc = subprocess.run(  # noqa: S603
+        proc = _run_hidden(  # noqa: S603
             [profiler, "-json", "SPDisplaysDataType"],
             check=False,
             capture_output=True,

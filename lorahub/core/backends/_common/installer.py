@@ -30,10 +30,10 @@ DEFAULT_CUDA = "cu124"
 DEFAULT_DEPTH = 1
 DEFAULT_TORCH_INDEX_BASE = "https://download.pytorch.org/whl"
 FALLBACK_TORCH_INDEX_BASES: tuple[str, ...] = (
-    "https://mirrors.aliyun.com/pytorch-wheels",
     "https://mirrors.nju.edu.cn/pytorch/whl",
-    DEFAULT_TORCH_INDEX_BASE,
     "https://mirror.sjtu.edu.cn/pytorch-wheels",
+    DEFAULT_TORCH_INDEX_BASE,
+    "https://mirrors.aliyun.com/pytorch-wheels",
 )
 
 

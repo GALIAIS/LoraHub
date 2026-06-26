@@ -108,6 +108,9 @@ export function AnimaLoraMethodConfig({
   if (method === "easycontrol") {
     return <EasyControlMethodConfig value={value} set={set} />
   }
+  if (method === "full_finetune") {
+    return null
+  }
   return <IpAdapterMethodConfig value={value} set={set} />
 }
 

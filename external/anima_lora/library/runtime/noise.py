@@ -98,23 +98,25 @@ def get_noisy_model_input_and_timesteps(
     bsz, h, w = latents.shape[0], latents.shape[-2], latents.shape[-1]
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
+    stable_math = dtype == torch.float16
+    math_dtype = torch.float32 if stable_math else dtype
     if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         if args.timestep_sampling == "sigmoid":
             sigmas = torch.sigmoid(
-                args.sigmoid_scale * torch.randn((bsz,), device=device)
+                args.sigmoid_scale * torch.randn((bsz,), device=device, dtype=math_dtype)
             )
         else:
-            sigmas = torch.rand((bsz,), device=device)
+            sigmas = torch.rand((bsz,), device=device, dtype=math_dtype)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "shift":
-        shift = args.discrete_flow_shift
-        sigmas = torch.randn(bsz, device=device)
+        shift = float(args.discrete_flow_shift)
+        sigmas = torch.randn(bsz, device=device, dtype=math_dtype)
         sigmas = sigmas * args.sigmoid_scale
         sigmas = sigmas.sigmoid()
         sigmas = (sigmas * shift) / (1 + (shift - 1) * sigmas)
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "flux_shift":
-        sigmas = torch.randn(bsz, device=device)
+        sigmas = torch.randn(bsz, device=device, dtype=math_dtype)
         sigmas = sigmas * args.sigmoid_scale
         sigmas = sigmas.sigmoid()
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
@@ -131,7 +133,7 @@ def get_noisy_model_input_and_timesteps(
         indices = (u * num_timesteps).long()
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(
-            noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype
+            noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=math_dtype
         )
 
     # Restrict sigma range (P-GRAFT-inspired timestep restriction)
@@ -149,21 +151,23 @@ def get_noisy_model_input_and_timesteps(
     )
 
     # Add noise to the latents according to the noise magnitude at each timestep
+    latents_f = latents.to(math_dtype)
+    noise_f = noise.to(math_dtype)
     if args.ip_noise_gamma:
-        xi = torch.randn_like(latents, device=latents.device, dtype=dtype)
+        xi = torch.randn_like(latents_f, device=latents.device, dtype=math_dtype)
         if args.ip_noise_gamma_random_strength:
             ip_noise_gamma = (
-                torch.rand(1, device=latents.device, dtype=dtype) * args.ip_noise_gamma
+                torch.rand(1, device=latents.device, dtype=math_dtype) * args.ip_noise_gamma
             )
         else:
             ip_noise_gamma = args.ip_noise_gamma
-        noisy_model_input = (1.0 - sigmas) * latents + sigmas * (
-            noise + ip_noise_gamma * xi
+        noisy_model_input = (1.0 - sigmas) * latents_f + sigmas * (
+            noise_f + ip_noise_gamma * xi
         )
     else:
-        noisy_model_input = (1.0 - sigmas) * latents + sigmas * noise
+        noisy_model_input = (1.0 - sigmas) * latents_f + sigmas * noise_f
 
-    return noisy_model_input.to(dtype), timesteps.to(dtype), sigmas
+    return noisy_model_input.to(dtype), timesteps.to(math_dtype), sigmas
 
 
 def apply_model_prediction_type(args, model_pred, noisy_model_input, sigmas):
