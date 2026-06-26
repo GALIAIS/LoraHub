@@ -3,7 +3,7 @@
  *
  * 后端 13 个 image-studio 子路由对应的工具被分到 5 个类别下，每条工具能直接
  * 跳到对应的 stage 子页（带 ?tool=<id> URL 标识，stage 子页可选地用此参数
- * 高亮 / 滚动到对应面板）。stepper 不再是必经之路 — 用户既可走推荐路径，也
+ * 高亮 / 滚动到对应面板）。stepper 不再是必经之路 — 用户既可走阶段路径，也
  * 能从工具广场点任意工具直达。
  *
  * 没有为每个工具单独渲染对话框，因为同 stage 子页内已有该工具的现成面板。
@@ -73,7 +73,7 @@ export interface ToolInfo {
   id: string
   category: ToolCategory
   /** 工具进入哪个 stage 子页 — 即点击卡片后路由的 ?stage 参数。
-   *  "library" 是工具库虚拟 stage，不参与 stepper 推荐路径。 */
+   *  "library" 是工具库虚拟 stage，不参与 stepper 阶段路径。 */
   stage: StageId | "library"
   label: string
   /** 一句话描述 — 1-2 句，控制在 60 中文字符内便于卡片排版。 */
@@ -322,7 +322,7 @@ export const TOOLS: readonly ToolInfo[] = [
     category: "ai",
     stage: "annotate",
     label: "AI 触发词抽取",
-    description: "让 VLM 从图片 / caption 里推荐触发词候选",
+    description: "让 VLM 从图片 / caption 里生成触发词候选",
     icon: TriangleAlert,
     requiresDataset: true,
     async: true,

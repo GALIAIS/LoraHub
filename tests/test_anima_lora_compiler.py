@@ -228,9 +228,13 @@ def test_32gb_lokr_template_compiles_to_lokr_recipe(tmp_path: Path) -> None:
     assert emitted.get("compile_mode") is None
     assert emitted["datasets"][0]["batch_size"] == 1
     network_args = emitted["network_args"]
-    assert "use_lokr=true" in network_args
+    assert "use_lokr_factorized=true" in network_args
+    assert "use_lokr=false" in network_args
     assert "use_loha=false" in network_args
     assert "min_rank=4" in network_args
+    assert "layer_start=12" in network_args
+    assert "layer_end=28" in network_args
+    assert "exclude_patterns=['blocks\\\\.\\\\d+\\\\.mlp\\\\..*']" in network_args
 
 
 def test_v100_template_emits_fp16_amp_with_stability_clip(tmp_path: Path) -> None:
@@ -276,6 +280,25 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     assert len(files) == 1
     [only_path] = list(files.keys())
     assert only_path.name == "_lorahub_anima_config.toml"
+
+
+def test_lora_layer_range_emits_network_args(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(layer_start=12, layer_end=28)
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    network_args = _argv_pairs(argv, files)["--network_args"]
+
+    assert "layer_start=12" in network_args
+    assert "layer_end=28" in network_args
+
+
+def test_lora_target_preset_emits_exclude_patterns(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(target_preset="attention")
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    network_args = _argv_pairs(argv, files)["--network_args"]
+
+    assert "exclude_patterns=['blocks\\\\.\\\\d+\\\\.mlp\\\\..*']" in network_args
 
 
 def test_full_finetune_method_uses_full_model_network(tmp_path: Path) -> None:
@@ -1256,6 +1279,7 @@ def test_algorithm_enum_drives_compiler_selection(tmp_path: Path) -> None:
         ("dora", "use_dora=true"),
         ("ia3", "use_ia3=true"),
         ("lokr", "use_lokr=true"),
+        ("lokr_factorized", "use_lokr_factorized=true"),
         ("loha", "use_loha=true"),
         ("dylora", "use_dylora=true"),
         ("full", "use_full=true"),

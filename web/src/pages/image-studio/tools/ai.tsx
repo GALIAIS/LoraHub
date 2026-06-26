@@ -4,7 +4,7 @@
  *   - ai-smart-caption     : 复用现成的 batch + 全局任务条 (smart-caption 走 sessioned poll)
  *   - ai-caption           : 直接 VLM 写 caption（sessioned poll）
  *   - ai-quality           : 给图打质量分（sessioned poll）
- *   - ai-trigger-words     : 让 VLM 推荐触发词候选（sessioned poll）
+ *   - ai-trigger-words     : 让 VLM 生成触发词候选（sessioned poll）
  *   - ai-wd14-prefilter    : 单图测试 - 拿到 WD14 标签 + 拼装好的 prompt
  *   - ai-vlm-anima-rewrite : 单图测试 - 把上一个的产出喂给 VLM 写 caption
  *
@@ -123,7 +123,7 @@ export function AiSmartCaptionTool({ datasetPath }: { datasetPath: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="vlm">视觉模型（看图） · 质量最高</SelectItem>
+                <SelectItem value="vlm">视觉模型（看图）</SelectItem>
                 <SelectItem value="tags">仅 WD14 标签 · 不上传图片</SelectItem>
               </SelectContent>
             </Select>
@@ -182,7 +182,7 @@ export function AiSmartCaptionTool({ datasetPath }: { datasetPath: string }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="replace">替换（推荐）</SelectItem>
+                <SelectItem value="replace">替换</SelectItem>
                 <SelectItem value="append">追加</SelectItem>
                 <SelectItem value="prepend">前置</SelectItem>
               </SelectContent>
@@ -474,7 +474,7 @@ export function AiTriggerWordsTool({ datasetPath }: { datasetPath: string }) {
         </div>
         <div className="p-3 space-y-3 text-xs">
           <p className="text-muted-foreground">
-            逐图让 VLM 推荐 1-3 个适合作触发词的短语。完成后会汇总数据集层面的
+            逐图让 VLM 生成 1-3 个触发词候选短语。完成后会汇总数据集层面的
             top-N 候选 — 点击复制。
           </p>
           <Row label="任务模板">

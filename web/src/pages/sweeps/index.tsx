@@ -52,7 +52,7 @@ export function SweepsPage() {
       sidebarOpen={sidebarOpen}
       sidebarWidth="minmax(240px,300px)"
       mobileSidebarTitle="参数搜索列表"
-      mobileSidebarDescription="选择 sweep，查看变体、最佳 trial 和任务状态。"
+      mobileSidebarDescription="选择 sweep，查看变体、最优 trial 和任务状态。"
       sidebar={
         <SweepSidebar
           list={list}

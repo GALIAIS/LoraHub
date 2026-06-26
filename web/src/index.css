@@ -70,19 +70,15 @@
 }
 
 @utility analysis-fade-in {
-  animation: analysis-fade-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
   will-change: opacity, transform;
 }
 
 @utility analysis-fade-in-stagger {
-  animation: analysis-fade-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  animation-delay: var(--stagger-delay, 0ms);
   will-change: opacity, transform;
 }
 
 @utility analysis-bar-fill {
   transform-origin: left center;
-  animation: analysis-bar-fill 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
   will-change: transform;
 }
 
@@ -95,22 +91,6 @@
   );
   background-size: 200% 100%;
   animation: analysis-shimmer 2.4s linear infinite;
-}
-
-@keyframes analysis-fade-in {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 4px, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes analysis-bar-fill {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
 }
 
 @keyframes analysis-shimmer {
@@ -226,37 +206,19 @@ body {
   overflow: hidden;
 }
 
-/* ---------- Theme switch transition ----------
-   When the user toggles light/dark/accent, only color-related
-   properties cross-fade. We deliberately exclude `transform`,
-   `opacity`, and layout properties so the transition is purely
-   cosmetic — interactions, animations, and scrolling stay snappy.
-   The class is added to <html> for the duration of one frame
-   pair (≈260ms) by App.tsx and removed afterwards, so day-to-day
-   hover / click handlers don't pay this transition cost.
-   View Transitions API users get the radial reveal instead and
-   skip the fallback class. */
-html.theme-transition,
-html.theme-transition *,
-html.theme-transition *::before,
-html.theme-transition *::after {
-  transition:
-    background-color 200ms ease,
-    background-image 200ms ease,
-    border-color 200ms ease,
-    color 200ms ease,
-    fill 200ms ease,
-    stroke 200ms ease,
-    box-shadow 200ms ease,
-    text-decoration-color 200ms ease;
+html::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  background: var(--background);
+  opacity: var(--theme-transition-opacity, 0);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html.theme-transition,
-  html.theme-transition *,
-  html.theme-transition *::before,
-  html.theme-transition *::after {
-    transition: none !important;
+  html::after {
+    opacity: 0;
   }
   ::view-transition-old(root),
   ::view-transition-new(root) {
@@ -266,7 +228,7 @@ html.theme-transition *::after {
 
 /* View Transitions API — circular reveal from the toggle button.
    Browsers without `document.startViewTransition` (Firefox, older
-   Safari) fall back to the .theme-transition class above. */
+   Safari) use the Anime.js opacity overlay fallback. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -1003,21 +965,6 @@ code {
     margin-bottom: 0;
   }
 
-  .shiro-page-enter {
-    animation: shiro-fade-in 0.18s ease-out;
-  }
-
-  @keyframes shiro-fade-in {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
   .shiro-loading-pulse {
     position: relative;
     overflow: hidden;
@@ -1105,4 +1052,40 @@ code {
       color-mix(in oklab, var(--foreground) 24%, transparent)
       padding-box;
   }
+}
+
+/* Flat industrial mode: hard edges, no raised controls. */
+:root {
+  --radius: 0rem;
+  --shell-shadow: none;
+  --panel-shadow: none;
+  --panel-shadow-strong: none;
+  --surface-shadow-hover: none;
+}
+
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+}
+
+[data-slot="button"],
+[data-slot="input"],
+[data-slot="card"],
+[data-slot="select-trigger"],
+[data-slot="sidebar-menu-button"],
+.shiro-surface,
+.shiro-hero-panel,
+.shiro-modal-surface,
+.shiro-stat-block,
+.shiro-data-cell,
+.shiro-table-shell,
+.shiro-scroll-shell,
+.shiro-code-shell,
+.shiro-progress-track {
+  box-shadow: none !important;
+}
+
+[data-slot="button"]:active {
+  transform: none !important;
 }

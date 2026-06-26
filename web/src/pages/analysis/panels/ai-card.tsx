@@ -127,7 +127,7 @@ export function AICard({
         )}
         {!loading && !cached && !run.isPending && (
           <div className="text-xs text-muted-foreground leading-relaxed">
-            点击「生成分析」让 AI 阅读 events.jsonl + 配置摘要后给出诊断（收敛趋势、过拟合判断、LR 建议、下一次实验调整）。
+            点击「生成分析」读取 events.jsonl 与配置摘要，生成收敛、过拟合、LR 与后续实验分析。
             {!canRun && (
               <span className="block mt-1 text-amber-600">
                 训练尚未产出指标点，先等一会再分析。
@@ -138,7 +138,7 @@ export function AICard({
         {run.isPending && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="size-3 animate-spin" />
-            正在调用模型，通常 5-15 秒…
+            正在调用模型…
           </div>
         )}
         {error && (

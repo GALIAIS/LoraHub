@@ -24,7 +24,7 @@ export const OptimizationFields = memo(function OptimizationFields({
     <>
       <Row
         label="torchCompile"
-        description="kohya 训练加速；dp 已默认启用，保留此开关只为配置互通。"
+        description="kohya torch.compile 开关；dp 配置保留该字段用于兼容。"
       >
         <ToggleSwitch
           checked={v.torchCompile ?? false}
@@ -44,7 +44,7 @@ export const OptimizationFields = memo(function OptimizationFields({
       </Row>
       <Row
         label="fullBf16"
-        description="双后端通用，把模型 / 梯度 / 优化器状态全部放到 bf16，优化器内存约减半。"
+        description="模型、梯度与优化器状态使用 bf16。"
       >
         <ToggleSwitch
           checked={v.fullBf16 ?? false}
@@ -77,7 +77,7 @@ export const OptimizationFields = memo(function OptimizationFields({
           FP8 / 内存策略 / 缓存
         </summary>
         <div className="mt-3 space-y-3.5">
-          <Row label="fp8Base" description="FLUX/SD3/HunyuanImage 把 base 模型权重以 fp8 加载，显存约 -40%。">
+          <Row label="fp8Base" description="FLUX/SD3/HunyuanImage base 模型权重以 fp8 加载。">
             <ToggleSwitch
               checked={v.fp8Base ?? false}
               onCheckedChange={(b) => set(["optimization", "fp8Base"], b)}
@@ -126,7 +126,7 @@ export const OptimizationFields = memo(function OptimizationFields({
           </Row>
           <Row
             label="disableMmapLoadSafetensors"
-            description="禁用 safetensors mmap 加载（NFS / 网络盘必需）。"
+            description="禁用 safetensors mmap 加载。"
           >
             <ToggleSwitch
               checked={v.disableMmapLoadSafetensors ?? false}

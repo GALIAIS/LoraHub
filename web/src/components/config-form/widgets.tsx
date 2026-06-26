@@ -4,8 +4,8 @@
  * Each widget is memoized so identity is stable across parent rerenders when
  * its props don't change.
  */
-import { createContext, memo, useContext, useEffect, useRef, useState } from "react"
-import { ChevronDown, Dices } from "lucide-react"
+import { createContext, memo, useContext, useEffect, useId, useRef, useState } from "react"
+import { ChevronDown, CircleHelp, Dices } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -96,18 +96,18 @@ export const Row = memo(function Row({
 }: RowProps) {
   return (
     <div className="grid gap-1.5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-x-4 sm:items-start">
-      <Label htmlFor={htmlFor} className="text-xs leading-tight sm:pt-2">
-        <span className="inline-flex items-center gap-1.5 flex-wrap">
-          <span>{label}</span>
-          {labelBadge}
-          {required && <span className="ml-1 text-destructive/80">*</span>}
-        </span>
-      </Label>
+      <div className="flex min-w-0 items-start gap-1.5 sm:pt-2">
+        <Label htmlFor={htmlFor} className="min-w-0 text-xs leading-tight">
+          <span className="inline-flex min-w-0 items-center gap-1.5 flex-wrap">
+            <span>{label}</span>
+            {labelBadge}
+            {required && <span className="ml-1 text-destructive/80">*</span>}
+          </span>
+        </Label>
+        {description && <FieldHelp label={label}>{description}</FieldHelp>}
+      </div>
       <div className="min-w-0">
         {children}
-        {description && (
-          <p className="text-[11px] text-muted-foreground mt-1">{description}</p>
-        )}
         {errors && errors.length > 0 && (
           <ul className="mt-1 text-[11px] text-destructive">
             {errors.map((e, i) => (
@@ -116,6 +116,89 @@ export const Row = memo(function Row({
           </ul>
         )}
       </div>
+    </div>
+  )
+})
+
+interface FieldHelpProps {
+  label: string
+  children: React.ReactNode
+}
+
+const FieldHelp = memo(function FieldHelp({ label, children }: FieldHelpProps) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const pointerFocusRef = useRef(false)
+  const contentId = useId()
+
+  useEffect(() => {
+    if (!open) return
+
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div ref={rootRef} className="relative inline-flex shrink-0">
+      <button
+        type="button"
+        aria-label={`${label} 字段说明`}
+        aria-controls={open ? contentId : undefined}
+        aria-expanded={open}
+        onPointerDown={() => {
+          pointerFocusRef.current = true
+          window.setTimeout(() => {
+            pointerFocusRef.current = false
+          }, 0)
+        }}
+        onClick={() => setOpen((next) => !next)}
+        onFocus={() => {
+          if (!pointerFocusRef.current) {
+            setOpen(true)
+          }
+        }}
+        onBlur={(event) => {
+          if (!rootRef.current?.contains(event.relatedTarget as Node | null)) {
+            setOpen(false)
+          }
+        }}
+        className={cn(
+          "inline-flex size-4 items-center justify-center rounded-[4px] text-muted-foreground outline-none transition-colors",
+          "hover:bg-[var(--state-hover)] hover:text-foreground",
+          "focus-visible:ring-2 focus-visible:ring-ring/35",
+          open && "bg-[var(--state-hover)] text-foreground"
+        )}
+      >
+        <CircleHelp className="size-3.5" aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          id={contentId}
+          role="note"
+          className={cn(
+            "absolute left-0 top-full z-40 mt-2 block w-72 max-w-[calc(100vw-2rem)] rounded-[6px] border border-border bg-popover p-3 text-left",
+            "text-xs leading-relaxed text-popover-foreground shadow-[var(--panel-shadow)]"
+          )}
+        >
+          <span className="mb-1 block text-[11px] font-medium text-foreground">字段说明</span>
+          <div className="text-muted-foreground">{children}</div>
+        </div>
+      )}
     </div>
   )
 })

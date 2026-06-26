@@ -10,16 +10,17 @@ import {
   KeyValueTextArea,
   PathInput,
   Row,
+  Section,
   ToggleSwitch,
 } from "../widgets"
 
 const BACKEND_DESCRIPTIONS: Record<string, string> = {
   kohya:
-    "kohya-ss/sd-scripts。SD1.5 / SD2 / SDXL / SD3 / FLUX / Lumina / HunyuanImage / Anima 通用 LoRA / DreamBooth 训练。",
+    "kohya-ss/sd-scripts。LoRA / DreamBooth 训练后端。",
   "diffusion-pipe":
-    "tdrussell/diffusion-pipe。DeepSpeed 流水并行,涵盖图像与视频(Wan / HunyuanVideo / LTX / Cosmos 等)。",
+    "tdrussell/diffusion-pipe。图像与视频训练后端。",
   anima_lora:
-    "sorryhyun/anima_lora(随 LoraHub vendored)。仅训练 Anima DiT,带 OrthoLoRA / T-LoRA / Hydra / postfix / EasyControl / IP-Adapter / DMD turbo 蒸馏。",
+    "sorryhyun/anima_lora。Anima DiT 训练后端。",
 }
 
 const REPO_LABEL: Record<string, string> = {
@@ -29,9 +30,9 @@ const REPO_LABEL: Record<string, string> = {
 }
 
 const REPO_PLACEHOLDER: Record<string, string> = {
-  kohya: "（使用设置中的默认值)",
-  "diffusion-pipe": "（使用设置中的默认值)",
-  anima_lora: "（默认 ./external/anima_lora,通常无需填写)",
+  kohya: "设置默认值",
+  "diffusion-pipe": "设置默认值",
+  anima_lora: "./external/anima_lora",
 }
 
 const GPU_DISPATCH_OPTIONS = [
@@ -114,37 +115,19 @@ export const BackendFields = memo(function BackendFields({
             <Badge
               variant="outline"
               className="rounded-[2px] uppercase text-[10px] border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              title="anima_lora 源码随 LoraHub 一起分发,不需要单独 clone"
+              title="随 LoraHub 分发"
             >
               vendored
             </Badge>
           )}
         </div>
       </Row>
-      <Row label={repoLabel} errors={errorMap.get("backend.repoPath")}>
-        <PathInput
-          value={v.repoPath ?? v.sdScriptsPath ?? ""}
-          onChange={(s) => set(["backend", "repoPath"], s || null)}
-          placeholder={repoPlaceholder}
-        />
-      </Row>
-      <Row label="Python 解释器" errors={errorMap.get("backend.pythonExecutable")}>
-        <PathInput
-          value={v.pythonExecutable ?? ""}
-          onChange={(s) => set(["backend", "pythonExecutable"], s || null)}
-          placeholder={
-            type === "anima_lora"
-              ? "（默认 .venv/bin/python — 用 uv sync 后自动指向)"
-              : "（使用设置中的默认值)"
-          }
-        />
-      </Row>
       <Row
         label="GPU 调度"
         description={
           type === "kohya"
-            ? "kohya 当前仅支持一任务一 GPU。多卡机器可并行跑多个训练任务。"
-            : "默认跟随「设置 → 概览」。单任务多 GPU 只会使用同型号/同显存 GPU 组，4080 + V100 这类异构卡默认不混跑。"
+            ? "kohya 使用一任务一 GPU。"
+            : "选择任务到 GPU 的分配方式。"
         }
         errors={errorMap.get("backend.gpuDispatch.mode")}
       >
@@ -181,8 +164,8 @@ export const BackendFields = memo(function BackendFields({
             label="分布式策略"
             description={
               type === "anima_lora"
-                ? "DDP 复制模型到每张卡；FSDP/ZeRO 会分片参数或优化器状态，能降低单卡显存峰值但通信开销更高。"
-                : "当前只有 anima_lora 接入 FSDP / DeepSpeed ZeRO；其他后端请保持 DDP。"
+                ? "DDP 复制模型；FSDP/ZeRO 分片参数或优化器状态。"
+                : "当前后端使用 DDP。"
             }
             errors={errorMap.get("backend.distributed.strategy")}
           >
@@ -208,7 +191,7 @@ export const BackendFields = memo(function BackendFields({
               </Row>
               <Row
                 label="FSDP 包裹"
-                description="默认按大模块参数量自动包裹，更适合 anima_lora 这种非标准 Transformers DiT。"
+                description="FSDP 自动包裹策略。"
                 errors={errorMap.get("backend.distributed.fsdp.autoWrapPolicy")}
               >
                 <div className="flex flex-wrap items-center gap-2">
@@ -249,7 +232,7 @@ export const BackendFields = memo(function BackendFields({
               </Row>
               <Row
                 label="FSDP CPU offload"
-                description="只有显存仍不够时再开；会明显增加 CPU/PCIe 压力。"
+                description="将 FSDP 参数 offload 到 CPU。"
                 errors={errorMap.get("backend.distributed.fsdp.cpuOffload")}
               >
                 <ToggleSwitch
@@ -277,7 +260,7 @@ export const BackendFields = memo(function BackendFields({
               </Row>
               <Row
                 label="ZeRO offload"
-                description="ZeRO-3 + 参数 offload 能继续降显存，但速度通常明显下降。"
+                description="ZeRO 优化器 / 参数 offload。"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <EnumSelect
@@ -311,69 +294,89 @@ export const BackendFields = memo(function BackendFields({
           )}
         </>
       )}
-      <Row
-        label="锁定版本"
-        description="schema-only 字段：保留以兼容旧 YAML,但当前 installer 不会读取。如需锁定到特定 git ref,手动 cd 到后端仓库后 git checkout。"
-      >
-        <Input
-          value={v.pinVersion ?? ""}
-          className="font-mono w-64"
-          onChange={(e) => set(["backend", "pinVersion"], e.target.value || null)}
-          placeholder="(未实装,仅 YAML 占位)"
-          disabled
-        />
-      </Row>
-      <Row
-        label="额外参数"
-        description={
-          type === "kohya"
-            ? "透传给 sd-scripts 的额外 CLI flag。每行一条,key=value。bool flag 写 key=true 即可,store_true 由 compiler 兼容。"
-            : type === "anima_lora"
-              ? "写入 _lorahub_anima_config.toml 顶层的额外字段。每行一条,key=value。"
-              : "追加到 diffusion-pipe TOML 顶层的额外字段。每行一条,key=value。"
-        }
-      >
-        <KeyValueTextArea
-          value={
-            v.extraArgs
-              ? Object.fromEntries(
-                  Object.entries(v.extraArgs).map(([k, val]) => [
-                    k,
-                    val === true
-                      ? "true"
-                      : val === false
-                        ? "false"
-                        : val == null
-                          ? ""
-                          : String(val),
-                  ]),
-                )
-              : {}
-          }
-          onChange={(next) => {
-            const out: Record<string, unknown> = {}
-            for (const [k, val] of Object.entries(next)) {
-              const trimmed = val.trim()
-              if (trimmed === "") {
-                out[k] = true
-              } else if (trimmed === "true") {
-                out[k] = true
-              } else if (trimmed === "false") {
-                out[k] = false
-              } else {
-                out[k] = trimmed
-              }
+      <Section title="后端高级" subtitle="仓库路径 / Python / 额外参数">
+        <Row label={repoLabel} errors={errorMap.get("backend.repoPath")}>
+          <PathInput
+            value={v.repoPath ?? v.sdScriptsPath ?? ""}
+            onChange={(s) => set(["backend", "repoPath"], s || null)}
+            placeholder={repoPlaceholder}
+          />
+        </Row>
+        <Row label="Python 解释器" errors={errorMap.get("backend.pythonExecutable")}>
+          <PathInput
+            value={v.pythonExecutable ?? ""}
+            onChange={(s) => set(["backend", "pythonExecutable"], s || null)}
+            placeholder={
+              type === "anima_lora"
+                ? ".venv/bin/python"
+                : "设置默认值"
             }
-            set(["backend", "extraArgs"], out)
-          }}
-          placeholder={
+          />
+        </Row>
+        <Row
+          label="锁定版本"
+          description="兼容旧配置。当前安装器不读取该字段。"
+        >
+          <Input
+            value={v.pinVersion ?? ""}
+            className="font-mono w-64"
+            onChange={(e) => set(["backend", "pinVersion"], e.target.value || null)}
+            placeholder="未启用"
+            disabled
+          />
+        </Row>
+        <Row
+          label="额外参数"
+          description={
             type === "kohya"
-              ? "network_train_unet_only=true\ngradient_accumulation_steps=4"
-              : "key=value"
+              ? "透传给 sd-scripts 的额外 CLI flag。每行一条,key=value。bool flag 写 key=true 即可,store_true 由 compiler 兼容。"
+              : type === "anima_lora"
+                ? "写入 Anima TOML 顶层。每行 key=value。"
+                : "追加到 diffusion-pipe TOML 顶层。每行 key=value。"
           }
-          rows={4}
-        />
-      </Row>
+        >
+          <KeyValueTextArea
+            value={
+              v.extraArgs
+                ? Object.fromEntries(
+                    Object.entries(v.extraArgs).map(([k, val]) => [
+                      k,
+                      val === true
+                        ? "true"
+                        : val === false
+                          ? "false"
+                          : val == null
+                            ? ""
+                            : String(val),
+                    ]),
+                  )
+                : {}
+            }
+            onChange={(next) => {
+              const out: Record<string, unknown> = {}
+              for (const [k, val] of Object.entries(next)) {
+                const trimmed = val.trim()
+                if (trimmed === "") {
+                  out[k] = true
+                } else if (trimmed === "true") {
+                  out[k] = true
+                } else if (trimmed === "false") {
+                  out[k] = false
+                } else {
+                  out[k] = trimmed
+                }
+              }
+              set(["backend", "extraArgs"], out)
+            }}
+            placeholder={
+              type === "kohya"
+                ? "network_train_unet_only=true\ngradient_accumulation_steps=4"
+                : "key=value"
+            }
+            rows={4}
+          />
+        </Row>
+      </Section>
     </>
   )
 })

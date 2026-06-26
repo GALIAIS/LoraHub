@@ -32,6 +32,17 @@ style_data_regime = _STYLE_FIDELITY.style_data_regime
 style_rank_budget = _STYLE_FIDELITY.style_rank_budget
 style_recipe = _STYLE_FIDELITY.style_recipe
 
+_EXPERIMENT_PLANS_PATH = ANIMA_ROOT / "networks" / "lora_research" / "experiment_plans.py"
+_EXPERIMENT_PLANS_SPEC = importlib.util.spec_from_file_location(
+    "lora_research_experiment_plans", _EXPERIMENT_PLANS_PATH
+)
+assert _EXPERIMENT_PLANS_SPEC and _EXPERIMENT_PLANS_SPEC.loader
+_EXPERIMENT_PLANS = importlib.util.module_from_spec(_EXPERIMENT_PLANS_SPEC)
+_EXPERIMENT_PLANS_SPEC.loader.exec_module(_EXPERIMENT_PLANS)
+build_all_experiment_configs = _EXPERIMENT_PLANS.build_all_experiment_configs
+build_experiment_config = _EXPERIMENT_PLANS.build_experiment_config
+passes_promotion_gate = _EXPERIMENT_PLANS.passes_promotion_gate
+
 
 def test_per_sample_rank_mask_preserves_sample_timestep():
     torch = pytest.importorskip("torch")
@@ -129,3 +140,74 @@ def test_style_fidelity_recipe_scales_capacity_by_dataset_size():
     assert style_rank_budget(16, "net.blocks.0.self_attn.q_proj", rank=16, image_count=4) == 10
     assert style_rank_budget(16, "net.blocks.0.mlp.layer1", rank=16, image_count=4) == 6
     assert style_rank_budget(16, "net.blocks.0.mlp.layer1", rank=16, image_count=200) == 10
+
+
+def test_research_experiment_plans_build_configs_without_registry():
+    base = {
+        "dataset": {"caption": {"dropRate": 0.18}},
+        "output": {"name": "style_anima_32gb"},
+        "backend": {
+            "animaLora": {
+                "outputName": "style_anima_32gb",
+                "networkDim": 16,
+                "captionDropoutRate": 0.18,
+                "lora": {"algorithm": "loha", "useTimestepMask": False},
+            }
+        },
+    }
+
+    fast = build_experiment_config(base, plan="fast")
+    quality = build_experiment_config(
+        base,
+        plan="quality",
+        max_steps=8,
+        dataset_source="./datasets/betanonbeet",
+        smoke=True,
+    )
+    style = build_experiment_config(base, plan="balanced_style")
+    all_configs = build_all_experiment_configs(base, max_steps=4)
+
+    assert base["backend"]["animaLora"]["lora"]["algorithm"] == "loha"
+    assert fast["backend"]["animaLora"]["lora"]["algorithm"] == "asr_tlora"
+    assert fast["backend"]["animaLora"]["networkDim"] == 12
+    assert quality["backend"]["animaLora"]["networkDim"] == 24
+    assert quality["schedule"]["maxSteps"] == 8
+    assert quality["dataset"]["source"] == "./datasets/betanonbeet"
+    assert quality["sampling"]["enabled"] is False
+    assert quality["backend"]["animaLora"]["maxTrainSteps"] == 8
+    assert quality["backend"]["animaLora"]["useCmmd"] is False
+    assert quality["backend"]["animaLora"]["validationSplitNum"] == 0
+    assert quality["backend"]["animaLora"]["compileMode"] is None
+    assert quality["backend"]["animaLora"]["gradientCheckpointing"] is True
+    assert style["backend"]["animaLora"]["lora"]["algorithm"] == "loha"
+    assert style["backend"]["animaLora"]["lora"]["useTimestepMask"] is False
+    assert set(all_configs) == {"fast", "balanced_character", "balanced_style", "quality"}
+    assert all_configs["fast"]["schedule"]["maxSteps"] == 4
+
+
+def test_research_promotion_gate_depends_on_plan_goal():
+    baseline = {
+        "quality_score": 0.70,
+        "seconds_per_step": 1.00,
+    }
+    assert not passes_promotion_gate(
+        baseline,
+        {"plan": "quality", "quality_score": 0.80, "seconds_per_step": 1.00},
+    )
+    assert not passes_promotion_gate(
+        baseline,
+        {
+            "plan": "balanced_style",
+            "quality_score": 0.90,
+            "seconds_per_step": 1.00,
+            "black_preview_count": 1,
+        },
+    )
+    assert passes_promotion_gate(
+        baseline,
+        {"plan": "fast", "quality_score": 0.70, "seconds_per_step": 0.85},
+    )
+    assert passes_promotion_gate(
+        baseline,
+        {"plan": "quality", "quality_score": 0.90, "seconds_per_step": 1.30},
+    )

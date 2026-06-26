@@ -17,7 +17,7 @@ const tabs: { id: AiBulkTab; label: string }[] = [
   { id: "smart-caption", label: "智能标注" },
   { id: "quality-score", label: "质量评分" },
   { id: "wd14", label: "WD14 标注" },
-  { id: "trigger-words", label: "触发词建议" },
+  { id: "trigger-words", label: "触发词候选" },
 ]
 
 // Server-side fallback when ``/api/tagging/wd14/models`` hasn't
@@ -77,7 +77,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   }, [wd14Models.data?.default, taggerModel])
 
   const wd14Options = wd14Models.data?.models ?? [
-    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
+    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large" },
   ]
 
   const handleStart = () => {
@@ -195,7 +195,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
               <span className="text-muted-foreground/70">
                 ({
                   activeTab === "quality-score" ? "已有 AI 质量评分" :
-                  activeTab === "trigger-words" ? "已生成触发词建议" :
+                  activeTab === "trigger-words" ? "已生成触发词候选" :
                   "已有非空 .txt"
                 })
               </span>
@@ -227,8 +227,8 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                   disabled={!useWd14 && captionMode === "style"}
                 >
-                  <option value="vlm">视觉模型（看图）· 质量最高</option>
-                  <option value="tags">仅 WD14 标签 · 不上传图片，省额度/兼容文本模型</option>
+                  <option value="vlm">视觉模型（看图）</option>
+                  <option value="tags">仅 WD14 标签 · 不上传图片</option>
                 </select>
               </label>
               <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
@@ -242,7 +242,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                         ? "角色模式：LLM 输出『描述 + 修正后的标签』，过滤掉外貌身份词（hair / eyes / skin / body）与矛盾标签。"
                         : captionSource === "tags"
                           ? "LLM 不会看到图片，仅根据 WD14 标签列表撰写。提示词已针对此场景优化，避免凭空虚构。"
-                          : "多模态模型直接看图，质量最佳。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
+                          : "多模态模型直接读取图片。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>
@@ -290,7 +290,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setMergeStrategy(e.target.value)}
                   className="rounded border bg-background px-2 py-1 text-xs flex-1"
                 >
-                  <option value="replace">替换（推荐）</option>
+                  <option value="replace">替换</option>
                   <option value="append">追加</option>
                   <option value="prepend">前置</option>
                 </select>
@@ -373,11 +373,11 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           {activeTab === "trigger-words" && (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-muted-foreground">
-                逐图分析视觉内容，给出 1-3 个适合作为 LoRA 触发词的短语。
+                逐图分析视觉内容，生成 1-3 个触发词候选短语。
                 批次完成后会在工具栏下方汇总数据集层面的高频候选词，可点击复制。
               </p>
               <p className="text-xs text-muted-foreground/70">
-                只写入 store（不修改 .txt），可在右侧检查器看到每张图的建议触发词。
+                只写入 store（不修改 .txt），可在右侧检查器查看每张图的触发词候选。
               </p>
             </div>
           )}

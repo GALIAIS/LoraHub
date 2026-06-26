@@ -19,7 +19,7 @@
 # layers are Linear. LyCORIS-style locon support can land later.
 
 import math
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 
@@ -142,6 +142,7 @@ class LoKrModule(BaseLoRAModule):
 
     def merge_to(self, sd, dtype, device):
         """Bake ΔW into ``org_module.weight``."""
+        self.normalize_state_dict_for_runtime(sd)
         with torch.no_grad():
             weight = self.org_module.weight
             org_dtype = weight.dtype
@@ -159,6 +160,19 @@ class LoKrModule(BaseLoRAModule):
 
             weight.data.copy_((weight.data.float() + delta).to(dtype))
 
+    def normalize_state_dict_for_runtime(self, sd: Dict[str, torch.Tensor]) -> None:
+        """Accept both internal legacy and LyCORIS/Comfy LoKr tensor order."""
+        a = sd.get("lokr_w2_a")
+        b = sd.get("lokr_w2_b")
+        if a is None or b is None:
+            return
+        expected_a = tuple(self.lokr_w2_a.shape)
+        expected_b = tuple(self.lokr_w2_b.shape)
+        if tuple(a.shape) == expected_a and tuple(b.shape) == expected_b:
+            return
+        if tuple(a.shape) == expected_b and tuple(b.shape) == expected_a:
+            sd["lokr_w2_a"], sd["lokr_w2_b"] = b, a
+
     def fuse_weight(self):
         if self._fused:
             return
@@ -175,3 +189,48 @@ class LoKrModule(BaseLoRAModule):
         org_module.weight.data.copy_(self._w0_backup)
         del self._w0_backup
         self._fused = False
+
+
+class FactorizedLoKrModule(LoKrModule):
+    """LoKr with an equivalent factorized adapter forward.
+
+    The checkpoint layout is identical to :class:`LoKrModule`; only training
+    forward avoids materialising ``torch.kron(w1, w2)`` and ``weight + delta``.
+    """
+
+    def forward(self, x):
+        if not self.enabled or self._fused:
+            return self.org_forward(x)
+        if self.training and self._skip_module():
+            return self.org_forward(x)
+
+        org_forwarded = self.org_forward(x)
+        a, b, c, d = self._shape
+        orig_shape = x.shape[:-1]
+        x2 = x.reshape(-1, b, d).float()
+        w1 = self.lokr_w1.float()
+        w2_a = self.lokr_w2_a.float()
+        w2_b = self.lokr_w2_b.float()
+
+        # Two contractions are cheaper than a four-input einsum planner here:
+        # first project the d-axis into rank, then mix b/r into a/c.
+        y_rank = torch.einsum("nbd,rd->nbr", x2, w2_a)
+        y = torch.einsum("nbr,ab,cr->nac", y_rank, w1, w2_b)
+        y = y.reshape(*orig_shape, a * c)
+        y = y * (self.multiplier * self.scale)
+        return org_forwarded + y.to(org_forwarded.dtype)
+
+
+def lokr_state_dict_to_lycoris(state_dict: Dict[str, torch.Tensor]) -> None:
+    """Write LoKr tensors in the common LyCORIS/Comfy ``w2_a @ w2_b`` order."""
+    for key in list(state_dict.keys()):
+        if not key.endswith(".lokr_w2_a"):
+            continue
+        prefix = key[: -len(".lokr_w2_a")]
+        a_key = f"{prefix}.lokr_w2_a"
+        b_key = f"{prefix}.lokr_w2_b"
+        a = state_dict.get(a_key)
+        b = state_dict.get(b_key)
+        if a is None or b is None or a.ndim != 2 or b.ndim != 2:
+            continue
+        state_dict[a_key], state_dict[b_key] = b, a

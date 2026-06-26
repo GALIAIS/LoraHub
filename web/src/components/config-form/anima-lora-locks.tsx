@@ -38,91 +38,87 @@ export interface LockMeta {
 export const ANIMA_LORA_LOCKS: Record<string, LockMeta> = {
   maskedLoss: {
     kind: "locked_true",
-    reason: "Anima 训练管线硬依赖 masked loss;关掉是无效操作。",
+    reason: "Anima 训练流程要求 masked loss。",
   },
   torchCompile: {
     kind: "locked_true",
-    reason:
-      "torch.compile 是 static_token_count 性能收益的前提;upstream 训练循环假定开启。",
+    reason: "Anima static-shape 训练路径要求 torch.compile。",
   },
   skipCacheCheck: {
     kind: "locked_true",
-    reason: "缓存校验跳过对训练正确性无影响,只影响启动速度;关掉无意义。",
+    reason: "缓存校验保持跳过。",
   },
   dataloaderPinMemory: {
     kind: "locked_true",
-    reason: "DataLoader pin_memory 一直开;upstream 没提供反向 flag。",
+    reason: "DataLoader pin_memory 固定开启。",
   },
   enableBucket: {
     kind: "locked_true",
-    reason: "constant-token bucketing 是 Anima static-shape compile 的硬约束。",
+    reason: "Anima static-shape compile 要求 bucketing。",
   },
   cacheLatents: {
     kind: "locked_true",
-    reason: "anima_lora 训练流程依赖预计算 latent 缓存,关掉训练会失败。",
+    reason: "训练流程要求 latent 缓存。",
   },
   cacheLatentsToDisk: {
     kind: "locked_true",
-    reason: "缓存必须落盘以避免每次 epoch 重算。",
+    reason: "latent 缓存写入磁盘。",
   },
   cacheTextEncoderOutputs: {
     kind: "locked_true",
-    reason: "TE 输出必缓存,否则训练时拖累 Qwen3 的 forward。",
+    reason: "训练流程要求 text encoder 缓存。",
   },
   cacheTextEncoderOutputsToDisk: {
     kind: "locked_true",
-    reason: "TE 缓存必须落盘。",
+    reason: "text encoder 缓存写入磁盘。",
   },
   cacheLlmAdapterOutputs: {
     kind: "locked_true",
-    reason: "LLM adapter 输出必缓存。",
+    reason: "训练流程要求 LLM adapter 缓存。",
   },
   staticTokenCount: {
     kind: "risky",
-    reason:
-      "默认 4096 适配 1024² 训练。1536² 训练改成 9240 + Bucket 表选 1536,或开启 native-flatten 让上游自动接管(此时本字段被忽略)。三者协同;改完需要重做 dataset 缓存。",
+    reason: "修改 static_token_count 后需要重建 dataset 缓存。",
   },
   vaeChunkSize: {
     kind: "locked_value",
-    reason: "QwenImage VAE memory layout 锁死 64;改了多半 OOM 或无收益。",
+    reason: "VAE chunk size 固定为 64。",
   },
   captionExtension: {
     kind: "locked_value",
-    reason: "数据 pipeline 写死 .txt 后缀;改了所有图片会被跳过且无警告。",
+    reason: "caption 后缀固定为 .txt。",
   },
   saveModelAs: {
     kind: "locked_value",
-    reason: "Anima 只能加载 safetensors;其它格式无法 round-trip。",
+    reason: "保存格式固定为 safetensors。",
   },
   vaeDisableCache: {
     kind: "risky",
-    reason: "改成 false 会拖慢 VAE encode ~30%,但与官方 VAE 行为一致。",
+    reason: "影响 VAE encode 路径。",
   },
   noHalfVae: {
     kind: "risky",
-    reason: "true 半精度 VAE 省显存,但偶尔在边缘数据集上产生 NaN。",
+    reason: "影响 VAE 精度与显存。",
   },
   trimCrossattnKv: {
     kind: "risky",
-    reason: "true 启用 KV trimming(短 caption 加速 ~10-15%),但需匹配 caption 长度分布。",
+    reason: "影响 cross-attention KV 长度。",
   },
   savePrecision: {
     kind: "risky",
-    reason:
-      "fp32 是双倍体积无质量收益;fp16 略小但偶有量化损失;bf16 是 upstream 默认。",
+    reason: "影响 checkpoint 体积与 dtype。",
   },
   persistentDataLoaderWorkers: {
     kind: "risky",
-    reason: "true 减少 epoch 边界 stall,但长跑可能泄漏 file handle。",
+    reason: "影响 DataLoader worker 生命周期。",
   },
   keepTokens: {
     kind: "risky",
-    reason:
-      "anima 训练模板把 trigger / character / character-feature 三件放前 3 位;改了 trigger word 不再可靠。",
+    reason: "影响 caption shuffle 保留 token。",
   },
   validationSplitNum: {
     kind: "risky",
-    reason: "0 = 关 CMMD 验证(val_loss 不再更新)。",
+    reason: "影响 CMMD / val_loss 验证。",
   },
 }
 

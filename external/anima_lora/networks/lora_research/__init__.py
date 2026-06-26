@@ -12,6 +12,12 @@ from networks.lora_research.style_fidelity import (
     style_rank_budget,
     style_recipe,
 )
+from networks.lora_research.experiment_plans import (
+    PLAN_PRESETS,
+    build_all_experiment_configs,
+    build_experiment_config,
+    passes_promotion_gate,
+)
 
 __all__ = [
     "layer_rank_budget",
@@ -22,4 +28,8 @@ __all__ = [
     "style_layer_multiplier",
     "style_rank_budget",
     "style_recipe",
+    "PLAN_PRESETS",
+    "build_all_experiment_configs",
+    "build_experiment_config",
+    "passes_promotion_gate",
 ]

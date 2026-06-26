@@ -15,7 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 
 /**
- * 「智能推荐」按钮 + dialog。
+ * 参数方案按钮 + dialog。
  *
  * 把当前 form 草稿 + 用户填的意图 + 自动探到的硬件信息 POST 到
  * `/api/configs/llm-advise`,LLM 返回 patches + fullConfig + rationale。
@@ -72,7 +72,7 @@ export function LlmAdvisorButton({
       })
       setResult(out)
     } catch (e) {
-      toast.error("智能推荐失败", {
+      toast.error("参数生成失败", {
         description: e instanceof Error ? e.message : String(e),
         duration: 12_000,
       })
@@ -89,7 +89,7 @@ export function LlmAdvisorButton({
   const acceptAll = () => {
     if (!result) return
     onApply(result.fullConfig)
-    toast.success("已应用 LLM 推荐", {
+    toast.success("已应用 LLM 参数方案", {
       description: `${result.patches.length} 项更新已应用到表单。`,
     })
     setOpen(false)
@@ -105,18 +105,18 @@ export function LlmAdvisorButton({
         className={`gap-1.5 ${className ?? ""}`}
       >
         <Sparkles className="size-3.5" />
-        智能推荐
+        参数方案
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-[1100px] w-[95vw] max-h-[88vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="size-4" />
-              智能推荐配置
+              生成配置参数
             </DialogTitle>
             <DialogDescription>
               告诉 LLM 你想训练什么 / 硬件预算是多少;LLM 会根据 schema、显存、
-              数据集统计给出一份建议。建议会先经过 schema 校验和字段冲突检测后才返回。
+              数据集统计生成参数变更。结果会经过 schema 校验和字段冲突检测。
             </DialogDescription>
           </DialogHeader>
 
@@ -160,7 +160,7 @@ export function LlmAdvisorButton({
                 ) : (
                   <>
                     <Sparkles className="size-3.5" />
-                    {result ? "重新生成" : "开始推荐"}
+                    {result ? "重新生成" : "生成方案"}
                   </>
                 )}
               </Button>
@@ -226,7 +226,7 @@ function AdvisorResultPane({
         <div className="rounded-[4px] border border-amber-700/40 bg-amber-700/5 px-3 py-2 space-y-1">
           <div className="flex items-center gap-2 text-[11px] text-amber-700 dark:text-amber-400 font-medium">
             <AlertTriangle className="size-3.5" />
-            LLM 建议触发了以下校验提示
+            LLM 参数方案触发了以下校验提示
           </div>
           <ul className="space-y-0.5">
             {result.validationIssues.map((iss, i) => {

@@ -44,6 +44,7 @@ from networks.lora_modules import (
     GLoRAModule,
     HydraLoRAModule,
     IA3Module,
+    FactorizedLoKrModule,
     LoHAModule,
     LoKrModule,
     LoRAModule,
@@ -128,6 +129,7 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "use_dora",
     "use_ia3",
     "use_lokr",
+    "use_lokr_factorized",
     "use_loha",
     "use_dylora",
     "use_full",
@@ -187,6 +189,7 @@ _LYCORIS_ALGO_TO_FLAG: Dict[str, Optional[str]] = {
     "asr_tlora": "use_timestep_mask",
     "loha": "use_loha",
     "lokr": "use_lokr",
+    "lokr_factorized": "use_lokr_factorized",
     "ia3": "use_ia3",
     "dylora": "use_dylora",
     "full": "use_full",
@@ -314,6 +317,11 @@ NETWORK_REGISTRY: Dict[str, NetworkSpec] = {
     "lokr": NetworkSpec(
         name="lokr",
         module_class=LoKrModule,
+        save_variant="lokr",
+    ),
+    "lokr_factorized": NetworkSpec(
+        name="lokr_factorized",
+        module_class=FactorizedLoKrModule,
         save_variant="lokr",
     ),
     # LoHA (FedPara, arXiv:2108.06098) — Hadamard product of two LoRA
@@ -497,6 +505,7 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     use_dora = _parse_bool_flag(kwargs, "use_dora")
     use_ia3 = _parse_bool_flag(kwargs, "use_ia3")
     use_lokr = _parse_bool_flag(kwargs, "use_lokr")
+    use_lokr_factorized = _parse_bool_flag(kwargs, "use_lokr_factorized")
     use_loha = _parse_bool_flag(kwargs, "use_loha")
     use_dylora = _parse_bool_flag(kwargs, "use_dylora")
     use_full = _parse_bool_flag(kwargs, "use_full")
@@ -513,6 +522,7 @@ def resolve_network_spec(kwargs: Mapping[str, Any]) -> NetworkSpec:
     _atomic = {
         "use_ia3": use_ia3,
         "use_lokr": use_lokr,
+        "use_lokr_factorized": use_lokr_factorized,
         "use_loha": use_loha,
         "use_full": use_full,
         "use_diag_oft": use_diag_oft,

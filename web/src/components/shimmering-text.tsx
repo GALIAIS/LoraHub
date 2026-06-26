@@ -1,26 +1,12 @@
-"use client";
+import { animate, type JSAnimation } from "animejs/animation"
+import { type ComponentProps, useEffect, useRef } from "react"
+import { cn } from "@/lib/utils"
 
-import { motion, useReducedMotion, type Variants } from "motion/react";
-import { type ComponentProps, useCallback } from "react";
-import { cn } from "@/lib/utils";
-
-export type ShimmeringTextProps = Omit<
-  ComponentProps<typeof motion.span>,
-  "children"
-> & {
-  /** The text to render with the shimmering effect. */
-  text: string;
-  /**
-   * Duration in seconds for one shimmer cycle.
-   * @defaultValue 1
-   */
-  duration?: number;
-  /**
-   * Whether the shimmer animation is paused.
-   * @defaultValue false
-   */
-  isStopped?: boolean;
-};
+export type ShimmeringTextProps = Omit<ComponentProps<"span">, "children"> & {
+  text: string
+  duration?: number
+  isStopped?: boolean
+}
 
 export function ShimmeringText({
   text,
@@ -29,56 +15,61 @@ export function ShimmeringText({
   className,
   ...props
 }: ShimmeringTextProps) {
-  const reducedMotion = useReducedMotion();
-  const stopped = isStopped || reducedMotion === true;
+  const rootRef = useRef<HTMLSpanElement | null>(null)
 
-  const createCharVariants = useCallback(
-    (charIndex: number): Variants => ({
-      running: {
-        color: ["var(--color)", "var(--shimmering-color)", "var(--color)"],
-        transition: {
-          duration,
-          repeat: Number.POSITIVE_INFINITY,
-          repeatType: "loop",
-          repeatDelay: text.length * 0.05,
-          delay: (charIndex * duration) / text.length,
-          ease: "easeInOut",
-        },
-      },
-      stopped: {
-        color: "var(--color)",
-        transition: {
-          duration: duration * 0.5,
-          ease: "easeOut",
-        },
-      },
-    }),
-    [duration, text.length]
-  );
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const chars = root.querySelectorAll("[data-shimmer-char]")
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+    let animation: JSAnimation | null = null
+    if (!isStopped && !reduce && chars.length > 0) {
+      animation = animate(chars, {
+        color: [
+          "var(--color)",
+          "var(--shimmering-color)",
+          "var(--color)",
+        ],
+        delay: (_target: unknown, index = 0) =>
+          (index * duration * 1000) / Math.max(1, chars.length),
+        duration: duration * 1000,
+        loop: true,
+        loopDelay: chars.length * 50,
+        ease: "inOutSine",
+      })
+    } else {
+      chars.forEach((char) => {
+        ;(char as HTMLElement).style.color = "var(--color)"
+      })
+    }
+    return () => {
+      animation?.revert()
+    }
+  }, [duration, isStopped, text])
 
   return (
-    <motion.span
+    <span
+      ref={rootRef}
       className={cn(
         "inline-flex select-none items-center leading-none",
         "[--color:var(--muted-foreground)] [--shimmering-color:var(--foreground)]",
-        className
+        className,
       )}
       {...props}
     >
       {text.split("").map((char, index) => (
-        <motion.span
-          animate={stopped ? "stopped" : "running"}
+        <span
           aria-hidden
-          className="inline-block whitespace-pre leading-none"
-          initial="stopped"
+          className="inline-block whitespace-pre leading-none text-[var(--color)]"
+          data-shimmer-char
           // biome-ignore lint/suspicious/noArrayIndexKey: static label text, order never changes
           key={index}
-          variants={createCharVariants(index)}
         >
           {char}
-        </motion.span>
+        </span>
       ))}
       <span className="sr-only">{text}</span>
-    </motion.span>
-  );
+    </span>
+  )
 }

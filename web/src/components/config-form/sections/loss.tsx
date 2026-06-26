@@ -28,7 +28,7 @@ export const LossFields = memo(function LossFields({
     <>
       <Row
         label="Min-SNR Gamma"
-        description="启用 Min-SNR 加权（推荐 5.0）。仅在勾选时写入；否则走 sd-scripts 默认。"
+        description="启用 Min-SNR 加权。仅在勾选时写入。"
         errors={errorMap.get("loss.minSnrGamma")}
       >
         <div className="flex items-center gap-3">
@@ -49,7 +49,7 @@ export const LossFields = memo(function LossFields({
       </Row>
       <Row
         label="Noise Offset"
-        description="给输入噪声加常数偏移以增强对比度（kohya 推荐 0.05~0.1）。"
+        description="给输入噪声加常数偏移。"
         errors={errorMap.get("loss.noiseOffset")}
       >
         <FloatInput

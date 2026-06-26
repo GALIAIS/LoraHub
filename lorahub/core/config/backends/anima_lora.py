@@ -46,6 +46,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         "dora",
         "ia3",
         "lokr",
+        "lokr_factorized",
         "loha",
         "dylora",
         "full",
@@ -58,6 +59,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         "lycoris_tlora",
         "lycoris_ia3",
         "lycoris_lokr",
+        "lycoris_lokr_factorized",
         "lycoris_loha",
         "lycoris_dylora",
         "lycoris_full",
@@ -78,6 +80,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     use_dora: bool | None = None
     use_ia3: bool | None = None
     use_lokr: bool | None = None
+    use_lokr_factorized: bool | None = None
     use_loha: bool | None = None
     use_dylora: bool | None = None
     use_full: bool | None = None
@@ -108,6 +111,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         ("use_dora", "dora"),
         ("use_ia3", "ia3"),
         ("use_lokr", "lokr"),
+        ("use_lokr_factorized", "lokr_factorized"),
         ("use_loha", "loha"),
         ("use_dylora", "dylora"),
         ("use_full", "full"),
@@ -128,6 +132,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         "lycoris_tlora": "tlora",
         "lycoris_ia3": "ia3",
         "lycoris_lokr": "lokr",
+        "lycoris_lokr_factorized": "lokr_factorized",
         "lycoris_loha": "loha",
         "lycoris_dylora": "dylora",
         "lycoris_full": "full",
@@ -402,6 +407,21 @@ class AnimaLoraOptions(BaseModel):
     network_dim: int = Field(32, ge=1)
     network_alpha: float = Field(32, gt=0)
     network_train_unet_only: bool = True
+    # Optional DiT block range for adapter training. Forwarded through
+    # network_args as layer_start/layer_end and consumed by
+    # networks.lora_anima.LoRANetwork when it builds per-block modules.
+    layer_start: int | None = Field(default=None, ge=0)
+    layer_end: int | None = Field(default=None, ge=0)
+    # Adapter target subset inside each selected DiT block. This compiles
+    # to exclude_patterns in network_args and lets users trade capacity for
+    # throughput without hand-writing regexes.
+    target_preset: Literal[
+        "all",
+        "attention",
+        "cross_attention",
+        "self_attention",
+        "mlp",
+    ] = "all"
     # OrthoLoRA / LoRA channel-wise gain scaling (network kwarg, not a CLI
     # flag). Controls the magnitude of the per-channel scale applied on
     # the output of the LoRA branch — Backend's ``methods/lora.toml``
@@ -674,5 +694,12 @@ class AnimaLoraOptions(BaseModel):
             raise ValueError(msg)
         if self.method == "ip_adapter" and self.ip_adapter is None:
             msg = "method='ip_adapter' requires the `ipAdapter` sub-config to be set"
+            raise ValueError(msg)
+        if (
+            self.layer_start is not None
+            and self.layer_end is not None
+            and self.layer_end <= self.layer_start
+        ):
+            msg = "layerEnd must be greater than layerStart when both are set"
             raise ValueError(msg)
         return self

@@ -38,9 +38,9 @@ export function AnimaModelDownloadCard({
           </div>
           <div className="mt-0.5 leading-relaxed">
             训练 / 推理需要 3 个 safetensors 检查点（DiT 基模型、Qwen3 文本编码器、
-            Qwen Image VAE），默认从 ModelScope
+            Qwen Image VAE）。从 ModelScope
             <code className="mx-1 text-foreground">circlestone-labs/Anima</code>
-            下载约 <strong className="text-foreground">14 GB</strong>，存放到项目根
+            下载到项目根
             <code className="mx-1 text-foreground">models/</code>
             目录。
           </div>
@@ -138,11 +138,11 @@ export function MsvcInstallCard({
             缺少 Visual Studio Build Tools
           </div>
           <div className="mt-0.5 leading-relaxed">
-            anima_lora 训练默认开启
+            anima_lora 使用
             <code className="mx-1 text-foreground">torch.compile</code>
             ，PyTorch Inductor 需要通过 triton-windows 调用
             <code className="mx-1 text-foreground">cl.exe</code>
-            。否则首次编译就会崩溃，无法继续训练。
+            。未检测到 cl.exe 时无法完成编译。
           </div>
           <div className="mt-1 leading-relaxed">
             点击下方按钮调用
@@ -151,7 +151,7 @@ export function MsvcInstallCard({
             <strong className="mx-0.5 text-foreground">
               Build Tools for Visual Studio 2022
             </strong>
-            （含 C++ 工作负载与 Windows 11 SDK，约 1.5–2 GB）。不会安装完整的 Visual Studio IDE。
+            （含 C++ 工作负载与 Windows 11 SDK）。不会安装完整的 Visual Studio IDE。
           </div>
           {detection.reason && (
             <div className="mt-1 font-mono text-[10px] text-muted-foreground/80 break-all">

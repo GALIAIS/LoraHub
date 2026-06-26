@@ -140,6 +140,27 @@ def test_train_runs_end_to_end(tmp_path: Path) -> None:
     assert (ws / "events.jsonl").exists()
 
 
+def test_train_keeps_events_when_console_render_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sd = _make_stub_sd_scripts(tmp_path / "sd-scripts")
+    config = _make_config_yaml(tmp_path, sd)
+    ws = tmp_path / "ws"
+
+    import lorahub.cli.main as cli_main  # noqa: PLC0415
+
+    def broken_render(_ev):  # type: ignore[no-untyped-def]
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(cli_main, "_render_event", broken_render)
+    result = runner.invoke(app, ["train", str(config), "--workspace", str(ws)])
+
+    assert result.exit_code == 0, result.stdout
+    body = (ws / "events.jsonl").read_text(encoding="utf-8")
+    assert "console render failed: OSError(22, 'Invalid argument')" in body
+    assert '"type":"done"' in body
+
+
 def test_init_scaffolds_config(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init", "my_lora"])

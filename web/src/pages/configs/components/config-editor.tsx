@@ -217,7 +217,7 @@ export function ConfigEditor({
           <CheckCheck className="size-3" /> 校验
         </Button>
         {/*
-          LLM-driven 智能推荐 entry — temporarily disabled for stability.
+          LLM-driven parameter-plan entry — temporarily disabled for stability.
           The upstream proxy fronting the configured AI provider was
           dropping multi-thousand-token prompts at the 60s mark with
           ``Server disconnected``, which surfaced as a 422 in the form

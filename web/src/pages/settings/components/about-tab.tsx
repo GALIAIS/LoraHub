@@ -101,10 +101,8 @@ export function AboutTab() {
                 </div>
                 <div className="text-amber-900/80 dark:text-amber-200/85">
                   前端 bundle 内嵌的 git sha 与后端运行时的 sha 不同。
-                  通常是因为 <code className="font-mono">git pull</code> 后
-                  Python 依赖被自动重装，但 <code className="font-mono">web/dist/</code>{" "}
-                  没有重建，前端仍是旧 bundle。新的 API 形状可能让旧前端
-                  渲染失败，建议尽快重建前端。
+                  后端代码更新后，需要重建 <code className="font-mono">web/dist/</code>{" "}
+                  以匹配当前 API。
                 </div>
                 <div className="text-amber-900/80 dark:text-amber-200/85 pt-1">
                   重建命令：
@@ -129,7 +127,7 @@ export function AboutTab() {
           <p>
             LoraHub 把 kohya-ss/sd-scripts 与 tdrussell/diffusion-pipe
             两套训练后端、配置编辑器、数据集预处理、自动标注与作业调度统一在
-            单进程 FastAPI 服务后，前端通过纯本地 HTTP 调用，无需登录、无云端依赖。
+            单进程 FastAPI 服务后，前端通过本地 HTTP 调用，运行数据保存在本机。
           </p>
           <p className="text-muted-foreground">
             开源 AGPL-3.0 协议; 训练数据、配置、运行结果全部存放在用户的本地工作目录,

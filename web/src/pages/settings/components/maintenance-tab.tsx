@@ -465,7 +465,7 @@ function TerminalSettingsCard() {
               保存
             </Button>
             <span className="text-[11px] text-muted-foreground">
-              超时后会强制结束子进程。pip install 大轮子建议 ≥ 600。
+              超时后会强制结束子进程。大体积 wheel 安装需要更长超时。
             </span>
           </div>
         </div>

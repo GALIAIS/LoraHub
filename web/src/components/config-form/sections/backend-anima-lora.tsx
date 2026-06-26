@@ -42,6 +42,7 @@ import {
   METHOD_OPTIONS,
   OPTIMIZER_OPTIONS,
   PRESET_OPTIONS,
+  TARGET_PRESET_OPTIONS,
   TIMESTEP_OPTIONS,
   WEIGHTING_SCHEME_OPTIONS,
 } from "./backend-anima-lora-options"
@@ -88,14 +89,14 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       <Row
         label="训练方法"
         required
-        description="LoRA 为默认堆叠；全量微调会直接训练完整 Anima DiT 并保存完整模型，其余方法会展开对应子配置。"
+        description="选择 Anima 训练方法。"
         errors={errorMap.get("backend.animaLora.method")}
       >
         <EnumSelect value={method} onChange={onMethodChange} options={METHOD_OPTIONS} />
       </Row>
       <Row
         label="硬件预设"
-        description="对应 anima_lora/configs/presets.toml 中的 section。debug 预设仅取 0.1 % 数据，用于打通管线。"
+        description="读取 anima_lora/configs/presets.toml。"
         errors={errorMap.get("backend.animaLora.preset")}
       >
         <EnumSelect
@@ -115,7 +116,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
 
       <Row
         label="差异训练"
-        description="启用 conditioning training: 每张目标图与同名参考图配对(参考图目录在 数据集 → 子集 → 参考图目录 设置),train.py 把参考图加载到 batch['conditioning_images'] 供下游 loss 使用。适合图像编辑 / ControlNet 风格的成对训练。"
+        description="启用 conditioning training。参考图目录在数据集子集内设置。"
       >
         <ToggleSwitch
           checked={v.conditioning ?? false}
@@ -155,8 +156,8 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           label={isFullFinetune ? "只训练 DiT" : "只训练 UNet"}
           description={
             isFullFinetune
-              ? "默认只训练 Anima DiT；关闭后会同时训练 text encoder，需要关闭 TE 缓存并显著增加显存占用。"
-              : "anima_lora 默认开启 — text encoder 不训练。"
+              ? "开启时仅训练 Anima DiT。"
+              : "开启时不训练 text encoder。"
           }
         >
           <ToggleSwitch
@@ -164,6 +165,47 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             onCheckedChange={(c) => set(["backend", "animaLora", "networkTrainUnetOnly"], c)}
           />
         </Row>
+        {!isFullFinetune && (
+          <Row
+            label="训练 block 范围"
+            description="限制 Anima DiT block 范围。结束值不包含自身。"
+            errors={[
+              ...(errorMap.get("backend.animaLora.layerStart") ?? []),
+              ...(errorMap.get("backend.animaLora.layerEnd") ?? []),
+            ]}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <IntInput
+                value={v.layerStart ?? null}
+                onChange={(n) => set(["backend", "animaLora", "layerStart"], n)}
+                placeholder="起始"
+                min={0}
+              />
+              <span className="text-xs text-muted-foreground">到</span>
+              <IntInput
+                value={v.layerEnd ?? null}
+                onChange={(n) => set(["backend", "animaLora", "layerEnd"], n)}
+                placeholder="结束"
+                min={0}
+              />
+            </div>
+          </Row>
+        )}
+        {!isFullFinetune && (
+          <Row
+            label="目标模块"
+            description="限制 adapter 注入模块。"
+            errors={errorMap.get("backend.animaLora.targetPreset")}
+          >
+            <EnumSelect
+              value={v.targetPreset ?? "all"}
+              onChange={(next) =>
+                set(["backend", "animaLora", "targetPreset"], next)
+              }
+              options={TARGET_PRESET_OPTIONS}
+            />
+          </Row>
+        )}
       </Section>
 
       {/* === 优化器 + 调度 === */}
@@ -192,7 +234,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="梯度裁剪"
-          description="max_grad_norm；0 = 关闭。V100 出现 NaN 时建议 0.5。"
+          description="max_grad_norm。0 表示关闭。"
           errors={errorMap.get("optimizer.maxGradNorm")}
         >
           <FloatInput
@@ -205,7 +247,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="LR Warmup 比例"
-          description="占总训练步数的比例（0.05 = 5%）。比绝对步数更稳健，跨数据集大小同样表现。"
+          description="占总训练步数的比例。0.05 表示 5%。"
           errors={errorMap.get("backend.animaLora.lrWarmupRatio")}
         >
           <FloatInput
@@ -233,7 +275,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="检查点保存频率" description="保存 optimizer state 的频率，用于断点续训。">
+        <Row label="检查点保存频率" description="optimizer state 保存频率。">
           <FloatInput
             value={v.checkpointingEpochs}
             onChange={(n) => set(["backend", "animaLora", "checkpointingEpochs"], n)}
@@ -241,7 +283,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
-        <Row label="caption 丢弃率" description="训练时随机丢弃 caption 的概率，用于增强泛化。">
+        <Row label="caption 丢弃率" description="训练时随机丢弃 caption 的概率。">
           <FloatInput
             value={v.captionDropoutRate}
             onChange={(n) => set(["backend", "animaLora", "captionDropoutRate"], n)}
@@ -254,7 +296,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       </Section>
 
       {/* === 流匹配采样 === */}
-      <Section title="流匹配采样" subtitle="Anima DiT 的 timestep + 损失权重">
+      <Section title="流匹配采样" subtitle="timestep 与损失权重">
         <Row label="时间步采样方式">
           <EnumSelect
             value={v.timestepSampling ?? "sigmoid"}
@@ -262,7 +304,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={TIMESTEP_OPTIONS}
           />
         </Row>
-        <Row label="sigmoid 缩放" description="控制 sigmoid 采样的集中程度。">
+        <Row label="sigmoid 缩放" description="sigmoid timestep 采样缩放。">
           <FloatInput
             value={v.sigmoidScale}
             onChange={(n) => set(["backend", "animaLora", "sigmoidScale"], n)}
@@ -270,7 +312,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             step={0.1}
           />
         </Row>
-        <Row label="离散流偏移" description="Flow matching 的 shift 参数。">
+        <Row label="离散流偏移" description="flow matching shift。">
           <FloatInput
             value={v.discreteFlowShift}
             onChange={(n) => set(["backend", "animaLora", "discreteFlowShift"], n)}
@@ -280,7 +322,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="加权方案"
-          description="rectified-flow 损失加权;min_snr_rf 是 Min-SNR-γ 整流流变体,需要配合下方 min_snr_gamma 使用。"
+          description="rectified-flow 损失加权。"
         >
           <EnumSelect
             value={v.weightingScheme ?? ""}
@@ -292,7 +334,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="min_snr_gamma"
-          description="Min-SNR-γ 整流流加权的 γ 阈值，推荐 5.0；仅当加权方案 = min_snr_rf 时生效。留空则该方案退化为等权。"
+          description="min_snr_rf 的 γ 阈值。留空不写入。"
         >
           <FloatInput
             value={v.minSnrGamma ?? undefined}
@@ -306,7 +348,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row
           label="方差减少损失权重"
-          description="可选 AsymFlow §5.2 方差减少损失。+40% step 计算成本,留空关闭。"
+          description="AsymFlow 方差减少损失权重。留空关闭。"
         >
           <FloatInput
             value={v.vrLossWeight ?? undefined}
@@ -323,11 +365,11 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
       {/* === 训练增强（EMA / NaN guard / sample grid） === */}
       <Section
         title="训练增强"
-        subtitle="EMA 影子权重 / NaN guard 自愈 / 采样网格 — 全部可选"
+        subtitle="EMA / NaN guard / 采样网格"
       >
         <Row
           label="启用 EMA"
-          description="对 LoRA 可训练参数维护一份指数移动平均影子；每个 ckpt 旁会同步写出 {name}_ema.safetensors，推理质量通常优于在线权重。约 2× LoRA 显存占用。"
+          description="维护可训练参数的指数移动平均权重。"
         >
           <ToggleSwitch
             checked={!!v.ema}
@@ -338,7 +380,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           <>
             <Row
               label="EMA decay"
-              description="衰减系数。0.9999 适合常规 LoRA · 半衰期约 1 万步；短训（< 2k step）建议降至 0.999 / 0.99。"
+              description="EMA 衰减系数。"
             >
               <FloatInput
                 value={v.emaDecay ?? 0.9999}
@@ -353,7 +395,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="warmup decay"
-              description="开启后前几百步用 min(decay, (1+t)/(10+t)) 缩放衰减，避免影子吸入早期噪声。"
+              description="按训练步数缩放 EMA decay。"
             >
               <ToggleSwitch
                 checked={v.emaUseNumUpdates ?? true}
@@ -364,7 +406,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="自动护栏"
-              description="开启 EMA 时，LoraHub 强制 compile_inductor_mode = default，以避开 cudagraph_trees 与 EMA 的不兼容（否则会在 step 2 抛 RuntimeError）。无需手动设置。"
+              description="启用 EMA 时固定 compile_inductor_mode = default。"
             >
               <span className="text-xs text-muted-foreground">已启用</span>
             </Row>
@@ -372,7 +414,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         )}
         <Row
           label="启用 NaN guard"
-          description="在反向传播前与梯度裁剪后检查 loss / 梯度的 NaN / Inf。当连续超过阈值时按下方策略恢复或中止训练。"
+          description="检查 loss / 梯度中的 NaN 与 Inf。"
         >
           <ToggleSwitch
             checked={!!v.nanGuard}
@@ -383,7 +425,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           <>
             <Row
               label="自动恢复"
-              description="超阈值时：将每个参数组的 LR 减半，并（若 EMA 已启用）用影子权重还原在线参数；关闭则直接中止训练。"
+              description="超阈值时降低 LR；可配合 EMA 还原权重。"
             >
               <ToggleSwitch
                 checked={!!v.nanGuardRecover}
@@ -394,7 +436,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             </Row>
             <Row
               label="连续异常上限"
-              description="连续多少步出现 NaN / Inf 后才触发恢复或中止；偶发尖峰将被吸收。默认 5。"
+              description="连续异常步数阈值。"
             >
               <IntInput
                 value={v.nanGuardMaxConsecutive ?? 5}
@@ -409,7 +451,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         )}
         <Row
           label="采样网格图"
-          description="每轮采样后额外合成一张 contact-sheet PNG（单图仍各自落盘），便于一眼看进度。"
+          description="采样后生成 contact-sheet PNG。"
         >
           <ToggleSwitch
             checked={!!v.sampleGrid}

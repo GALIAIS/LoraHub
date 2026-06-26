@@ -28,13 +28,13 @@ export function AnimaLoraLockedDefaultsSection({
   return (
     <Section
       icon={<Lock className="size-3.5" />}
-      title="上游默认 / 锁定字段"
-      subtitle="anima_lora base.toml 写死的字段。带 🔒 是 upstream 无法 override 的;带 ⚠️ 可改但有副作用。"
+      title="固定字段"
+      subtitle="base.toml 字段与风险项"
     >
       <Row
         label="Masked Loss"
         labelBadge={lockBadgeFor("maskedLoss")}
-        description="Anima 训练管线硬依赖,关掉是无效操作。"
+        description="Anima masked loss。"
       >
         <ToggleSwitch
           checked={value.maskedLoss ?? true}
@@ -44,7 +44,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="torch.compile"
         labelBadge={lockBadgeFor("torchCompile")}
-        description="static_token_count 性能收益的前提,upstream 训练循环假定开启。"
+        description="启用 torch.compile。"
       >
         <ToggleSwitch
           checked={value.torchCompile ?? true}
@@ -66,7 +66,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="DataLoader pin_memory"
         labelBadge={lockBadgeFor("dataloaderPinMemory")}
-        description="DataLoader pin_memory 一直开;upstream 没提供反向 flag。"
+        description="DataLoader pin_memory。"
       >
         <ToggleSwitch
           checked={value.dataloaderPinMemory ?? true}
@@ -78,7 +78,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="持久化 DataLoader workers"
         labelBadge={lockBadgeFor("persistentDataLoaderWorkers")}
-        description="减少 epoch 边界 stall,但长跑可能泄漏 file handle。"
+        description="persistent_workers。"
       >
         <ToggleSwitch
           checked={value.persistentDataLoaderWorkers ?? false}
@@ -90,7 +90,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="裁剪交叉注意力 KV"
         labelBadge={lockBadgeFor("trimCrossattnKv")}
-        description="启用 KV trimming · 短 caption 加速约 10–15 %。"
+        description="启用 cross-attention KV trimming。"
       >
         <ToggleSwitch
           checked={value.trimCrossattnKv ?? false}
@@ -102,7 +102,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="半精度 VAE"
         labelBadge={lockBadgeFor("noHalfVae")}
-        description="true 半精度 VAE 省显存,但偶尔在边缘数据集产生 NaN。"
+        description="启用 half VAE。"
       >
         <ToggleSwitch
           checked={value.noHalfVae ?? false}
@@ -112,7 +112,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="保存精度"
         labelBadge={lockBadgeFor("savePrecision")}
-        description="bf16 是 upstream 默认且匹配训练 dtype。"
+        description="checkpoint 保存精度。"
       >
         <EnumSelect
           value={value.savePrecision ?? "bf16"}
@@ -120,19 +120,19 @@ export function AnimaLoraLockedDefaultsSection({
           options={[
             { value: "bf16", label: "bf16 · 默认" },
             { value: "fp16", label: "fp16" },
-            { value: "fp32", label: "fp32 · 2× 体积，无质量收益" },
+            { value: "fp32", label: "fp32" },
           ]}
         />
       </Row>
       <Row
         label="保存格式"
         labelBadge={lockBadgeFor("saveModelAs")}
-        description="Anima 只能加载 safetensors。"
+        description="checkpoint 保存格式。"
       >
         <EnumSelect
           value={value.saveModelAs ?? "safetensors"}
           onChange={(s) => set(["backend", "animaLora", "saveModelAs"], s)}
-          options={[{ value: "safetensors", label: "safetensors · 锁定" }]}
+          options={[{ value: "safetensors", label: "safetensors" }]}
         />
       </Row>
       <Row label="日志记录步数" description="每 N 步记录一次训练日志。">
@@ -147,7 +147,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="保留 token 数"
         labelBadge={lockBadgeFor("keepTokens")}
-        description="caption shuffle 保前 N 个 tag。改 < 3 trigger word 不再可靠。"
+        description="caption shuffle 时保留前 N 个 token。"
       >
         <FloatInput
           value={value.keepTokens}
@@ -159,7 +159,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="caption 文件后缀"
         labelBadge={lockBadgeFor("captionExtension")}
-        description="caption 文件后缀。改了所有图片会被跳过。"
+        description="caption 文件后缀。"
       >
         <PathInput
           value={value.captionExtension ?? ""}
@@ -172,7 +172,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="验证集大小"
         labelBadge={lockBadgeFor("validationSplitNum")}
-        description="留出验证集大小；0 是 LoraHub 默认，关闭验证。大于 0 时需要开启 CMMD 验证。"
+        description="验证集样本数。0 表示关闭。"
       >
         <FloatInput
           value={value.validationSplitNum}
@@ -183,7 +183,7 @@ export function AnimaLoraLockedDefaultsSection({
       </Row>
       <Row
         label="CMMD 验证"
-        description="开启后按验证集计算 val_loss/CMMD；关闭时 validationSplitNum 应为 0。"
+        description="按验证集计算 val_loss / CMMD。"
         errors={errorMap.get("backend.animaLora.useCmmd")}
       >
         <ToggleSwitch
@@ -194,7 +194,7 @@ export function AnimaLoraLockedDefaultsSection({
       <Row
         label="多分辨率分桶"
         labelBadge={lockBadgeFor("enableBucket")}
-        description="多分辨率 bucketing,Anima static-shape compile 硬约束。"
+        description="启用多分辨率 bucketing。"
       >
         <ToggleSwitch
           checked={value.enableBucket ?? true}
@@ -203,7 +203,7 @@ export function AnimaLoraLockedDefaultsSection({
       </Row>
       <Row
         label="路径匹配模式"
-        description="fnmatch 模式;* 全部图,char_a/*|char_b/* OR-合并子文件夹。"
+        description="fnmatch pattern。"
       >
         <PathInput
           value={value.pathPattern ?? ""}
@@ -225,11 +225,11 @@ export function AnimaLoraTurboSection({
   return (
     <Section
       title="Turbo / DMD 蒸馏"
-      subtitle="开启后会切换到 distill_turbo.py 路径(忽略 method/preset),输出 4-step LoRA"
+      subtitle="distill_turbo.py"
     >
       <Row
         label="启用 turbo 蒸馏"
-        description="勾选后下方字段才会写入 turbo 子配置;否则该字段为 null,保持普通训练。"
+        description="启用 turbo 子配置。"
       >
         <ToggleSwitch
           checked={!!value.turbo}
@@ -282,7 +282,7 @@ export function AnimaLoraTurboSection({
               />
             </div>
           </Row>
-          <Row label="学生推理步数" description="蒸馏后用 --infer_steps N。">
+          <Row label="学生推理步数" description="infer_steps。">
             <FloatInput
               value={value.turbo.studentSteps}
               onChange={(n) =>
@@ -292,7 +292,7 @@ export function AnimaLoraTurboSection({
               min={1}
             />
           </Row>
-          <Row label="教师 CFG" description="教师 CFG,会被烤进学生（推理时 --cfg 1.0）。">
+          <Row label="教师 CFG" description="teacher cfg。">
             <FloatInput
               value={value.turbo.teacherCfg}
               onChange={(n) =>

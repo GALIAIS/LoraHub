@@ -22,7 +22,7 @@ export const PrecisionFields = memo(function PrecisionFields({
       </Row>
       <Row
         label="梯度检查点"
-        description="以约 20% 吞吐为代价节省显存。8GB 显卡几乎必开。"
+        description="用重算换取更低显存占用。"
       >
         <ToggleSwitch
           checked={value.gradientCheckpointing ?? true}
@@ -31,7 +31,7 @@ export const PrecisionFields = memo(function PrecisionFields({
       </Row>
       <Row
         label="缓存潜变量"
-        description="提前用 VAE 编码图片并存盘，大幅提速但占额外硬盘。"
+        description="提前用 VAE 编码图片并缓存。"
       >
         <ToggleSwitch
           checked={value.cacheLatents ?? true}

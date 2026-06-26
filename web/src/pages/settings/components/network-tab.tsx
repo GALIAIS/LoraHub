@@ -193,7 +193,7 @@ export function NetworkTab() {
             ModelScope（魔搭）
           </CardTitle>
           <CardDescription>
-            国内更稳的模型源。可在「模型下载」标签直接拉取。私有模型需填写访问令牌。
+            ModelScope 模型源。可在「模型下载」标签直接拉取。私有模型需填写访问令牌。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -338,7 +338,7 @@ export function NetworkTab() {
           <CardDescription>
             训练任务可上报指标到 wandb。在此填写 API Key,系统会注入
             <code className="text-foreground"> WANDB_API_KEY </code>
-            环境变量,无需在 shell 里 export。
+            环境变量。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

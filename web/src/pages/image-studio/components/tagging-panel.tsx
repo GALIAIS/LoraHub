@@ -36,7 +36,7 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
     }
   }, [wd14Models.data?.default, model])
   const modelOptions = wd14Models.data?.models ?? [
-    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
+    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large" },
   ]
 
   const latestTaggingTask = useQuery({

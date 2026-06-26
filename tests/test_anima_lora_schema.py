@@ -69,6 +69,15 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.ip_adapter is None
 
 
+def test_layer_range_requires_end_after_start() -> None:
+    opts = AnimaLoraOptions(layerStart=8, layerEnd=16)
+    assert opts.layer_start == 8
+    assert opts.layer_end == 16
+
+    with pytest.raises(pydantic.ValidationError, match="layerEnd"):
+        AnimaLoraOptions(layerStart=16, layerEnd=8)
+
+
 def test_tlora_algorithm_requires_timestep_mask() -> None:
     """T-LoRA is the public name for plain LoRA + timestep rank masking."""
     cfg = AnimaLoraMethodLoraConfig(algorithm="tlora")
@@ -114,6 +123,7 @@ def test_lycoris_algorithm_aliases_normalize_to_anima_registry_keys() -> None:
         "lycoris_tlora": "tlora",
         "lycoris_loha": "loha",
         "lycoris_lokr": "lokr",
+        "lycoris_lokr_factorized": "lokr_factorized",
         "lycoris_ia3": "ia3",
         "lycoris_dylora": "dylora",
         "lycoris_full": "full",

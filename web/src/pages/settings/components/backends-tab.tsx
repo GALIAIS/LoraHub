@@ -304,17 +304,17 @@ export function BackendsTab() {
           <CardTitle className="text-base">Anima_lora 后端 (vendored)</CardTitle>
           <CardDescription>
             sorryhyun/anima_lora 已随 LoraHub 一起分发(<code>external/anima_lora/</code>),
-            无需克隆。点击下方
+            点击下方
             <strong className="text-foreground"> 后端安装 </strong>
             标签页里的「安装」会用 <code>uv sync</code> 创建独立的 CPython 3.13 +
             torch 2.11/2.12 nightly venv,与 LoraHub 主 venv 完全隔离。
-            下方两个字段一般留空，只在你想覆盖默认路径时才填入。
+            下方字段用于覆盖默认路径。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Field
             label="repo 路径"
-            description="一般留空，自动定位到 external/anima_lora/。仅在做 anima_lora 上游开发（切到外挂检出）时才需要覆盖。"
+            description="覆盖 anima_lora 源码目录。留空时使用 external/anima_lora/。"
             value={draft.anima_lora_repo_path ?? ""}
             placeholder={detectedAnimaLoraPath ?? "<lorahub>/external/anima_lora"}
             onChange={(v) =>
@@ -324,7 +324,7 @@ export function BackendsTab() {
           />
           <Field
             label="Python 解释器"
-            description="一般留空，自动指向 external/anima_lora/.venv 里 uv sync 创建的 python。仅在你手动维护另一个 venv 时才需要覆盖。"
+            description="覆盖 anima_lora Python 解释器。留空时使用 external/anima_lora/.venv。"
             value={draft.anima_lora_python ?? ""}
             placeholder={detectedAnimaLoraPython ?? "<anima_lora>/.venv/Scripts/python.exe"}
             onChange={(v) =>

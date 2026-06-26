@@ -1,12 +1,14 @@
-# Anima LoKr on the anima_lora backend — 32GB config.
+# Anima factorized LoKr on the anima_lora backend — 32GB config.
 #
 # Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
-# Conservative LoKr profile. Do not copy the LoHA 32GB runtime knobs directly:
-# LoKr has a different decomposition path and can peak much higher at 1024+.
+# Conservative factorized LoKr profile. Do not copy the LoHA 32GB runtime
+# knobs directly: materialized LoKr can peak much higher at 1024+.
 #
 # What separates this from the LoHA 32GB config:
-#   - algorithm = lokr (Kronecker decomposition)
+#   - algorithm = lokr_factorized (Kronecker decomposition without
+#     materializing full delta weight in forward)
 #   - lower rank and batch
+#   - train only late attention blocks by default
 #   - lower bucket ceiling
 #   - checkpointing on, compile off
 #   - dataset has wider AR range and heavier caption dropout
@@ -168,11 +170,10 @@ backend:
     preset: default
     outputName: anima_lokr_32gb
 
-    # algorithm: lokr — Kronecker decomposition. This uses lower rank
-    # than the LoHA 32GB config because LoKr can peak higher during the
-    # DiT block stack.
+    # algorithm: lokr_factorized — same checkpoint layout as LoKr, but
+    # the adapter forward avoids materializing full ΔW.
     lora:
-      algorithm: lokr
+      algorithm: lokr_factorized
       minRank: 4
       # T-LoRA mask is a no-op for LoKr (atomic decomposition owns the
       # full ΔW); explicit off for clarity.
@@ -187,6 +188,12 @@ backend:
     networkDim: 8
     networkAlpha: 8.0
     networkTrainUnetOnly: true
+    # Throughput profile: Anima has 28 DiT blocks. Late attention blocks
+    # carry most style / prompt binding signal while avoiding full-block
+    # LoKr overhead. Clear these three fields to train every Linear.
+    layerStart: 12
+    layerEnd: 28
+    targetPreset: attention
 
     optimizerType: AdamW
     lrScheduler: cosine

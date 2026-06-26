@@ -397,7 +397,7 @@ function ParetoCard({
       <section className="space-y-2">
         <h2 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/80 inline-flex items-center gap-1">
           <Trophy className="size-3" />
-          Pareto / 最佳 trial
+          Pareto / 最优 trial
         </h2>
         <div className="rounded-[6px] border border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">
           加载中…
@@ -418,7 +418,7 @@ function ParetoCard({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/80 inline-flex items-center gap-1">
           <Trophy className="size-3" />
-          Pareto / 最佳 trial
+          Pareto / 最优 trial
         </h2>
         <span className="text-[11px] text-muted-foreground">
           {completed_trials.length} 个 trial 已完成
@@ -430,7 +430,7 @@ function ParetoCard({
         <div className="rounded-[6px] border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400 font-semibold">
-              最佳
+              最优
             </span>
             <span className="text-sm font-mono">
               loss = <span className="text-foreground">{best.score.toFixed(6)}</span>
@@ -497,7 +497,7 @@ function ParetoCard({
       )}
       {mode === "grid" && completed_trials.length === 0 && pending === 0 && (
         <div className="text-[11px] text-muted-foreground">
-          网格 sweep 通常不上报 per-trial loss;若有需要可在配置里开 validation。
+          当前网格 sweep 未上报 per-trial loss；如需比较指标，请在配置中开启 validation。
         </div>
       )}
     </section>

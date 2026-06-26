@@ -383,6 +383,9 @@ export interface ConfigFormValue {
       networkDim?: number
       networkAlpha?: number
       networkTrainUnetOnly?: boolean
+      layerStart?: number | null
+      layerEnd?: number | null
+      targetPreset?: "all" | "attention" | "cross_attention" | "self_attention" | "mlp"
       channelScalingAlpha?: number
       optimizerType?: "AdamW" | "AdamW8bit" | "Lion" | "Prodigy" | "CAME"
       lrScheduler?:
@@ -474,10 +477,12 @@ export interface ConfigFormValue {
           | "lora"
           | "locon"
           | "tlora"
+          | "asr_tlora"
           | "ortho"
           | "dora"
           | "ia3"
           | "lokr"
+          | "lokr_factorized"
           | "loha"
           | "dylora"
           | "full"
@@ -490,6 +495,7 @@ export interface ConfigFormValue {
           | "lycoris_tlora"
           | "lycoris_ia3"
           | "lycoris_lokr"
+          | "lycoris_lokr_factorized"
           | "lycoris_loha"
           | "lycoris_dylora"
           | "lycoris_full"
@@ -502,6 +508,7 @@ export interface ConfigFormValue {
         useDora?: boolean | null
         useIa3?: boolean | null
         useLokr?: boolean | null
+        useLokrFactorized?: boolean | null
         useLoha?: boolean | null
         useDylora?: boolean | null
         useFull?: boolean | null
@@ -511,7 +518,9 @@ export interface ConfigFormValue {
         useVera?: boolean | null
         lokrFactor?: number
         boftFactors?: number
+        downInit?: "kaiming" | "weight_svd"
         useTimestepMask?: boolean
+        perSampleTimestepMask?: boolean
         minRank?: number
         alphaRankScale?: number
       }

@@ -266,13 +266,23 @@ class SubprocessRunner:
         try:
             self._on_event(event)
         except Exception as exc:  # noqa: BLE001
-            self._on_event(
-                TrainingEvent(
-                    type=EventType.error,
-                    payload={"source": "listener", "error": repr(exc)},
-                    job_id=self._job_id,
-                )
+            # Listener failures are outside the training subprocess.
+            # On Windows, SSH/console handles can transiently raise
+            # OSError(22) while the trainer is still healthy. Surface
+            # the first failure if the listener can still accept events,
+            # but never let a broken UI/terminal sink kill the pipe pump.
+            self._write_training_log(
+                f"lorahub listener error: {exc!r}",
+                source="runner",
             )
+            with contextlib.suppress(Exception):
+                self._on_event(
+                    TrainingEvent(
+                        type=EventType.error,
+                        payload={"source": "listener", "error": repr(exc)},
+                        job_id=self._job_id,
+                    )
+                )
 
     # --------------------------------------------------------------- #
     # training.log mirror

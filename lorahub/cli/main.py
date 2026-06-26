@@ -379,7 +379,24 @@ def train(
 
         def on_event(ev: TrainingEvent) -> None:
             sink(ev)
-            _render_event(ev)
+            # Event persistence is the source of truth. Console
+            # rendering is best-effort because Windows SSH/PTY handles
+            # can raise OSError(22) while the training subprocess is
+            # still running.
+            try:
+                _render_event(ev)
+            except OSError as exc:
+                sink(
+                    TrainingEvent(
+                        type=EventType.log,
+                        payload={
+                            "level": "warning",
+                            "source": "cli",
+                            "message": f"console render failed: {exc!r}",
+                        },
+                        job_id=ev.job_id,
+                    )
+                )
 
         handle = backend.launch(cfg, workspace=ws, on_event=on_event)
         console.print(t("train.process_label", pid=handle.pid, job=handle.job_id))

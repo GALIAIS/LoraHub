@@ -1,5 +1,5 @@
 /**
- * Tween a number over a short duration via requestAnimationFrame.
+ * Tween a number over a short duration via Anime.js.
  *
  * Designed for analysis KPIs: when a verdict's headline value
  * changes (e.g. SNR moved from -1.2 to -1.8 after a fresh metric
@@ -18,13 +18,8 @@
  * the page-level fade-ins so number motion reads as part of the
  * same family.
  */
+import { animate, type JSAnimation } from "animejs/animation"
 import { useEffect, useRef, useState } from "react"
-
-const EASE = (t: number): number => {
-  // cubic-bezier(0.22, 1, 0.36, 1) — out-quint feel.
-  const x = 1 - t
-  return 1 - x * x * x * x * x
-}
 
 export function useAnimatedNumber(
   target: number,
@@ -33,7 +28,7 @@ export function useAnimatedNumber(
   const [value, setValue] = useState(target)
   const fromRef = useRef(target)
   const isFirstRef = useRef(true)
-  const rafRef = useRef<number | null>(null)
+  const animationRef = useRef<JSAnimation | null>(null)
 
   useEffect(() => {
     if (isFirstRef.current) {
@@ -59,25 +54,21 @@ export function useAnimatedNumber(
     }
     const from = fromRef.current
     const to = target
-    const start = performance.now()
-    if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
-    const tick = (now: number): void => {
-      const t = Math.min(1, (now - start) / durationMs)
-      const v = from + (to - from) * EASE(t)
-      setValue(v)
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(tick)
-      } else {
+    const state = { value: from }
+    animationRef.current?.cancel()
+    animationRef.current = animate(state, {
+      value: to,
+      duration: durationMs,
+      ease: "outCubic",
+      onRender: () => setValue(state.value),
+      onComplete: () => {
         fromRef.current = to
-        rafRef.current = null
-      }
-    }
-    rafRef.current = requestAnimationFrame(tick)
+        animationRef.current = null
+      },
+    })
     return () => {
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
+      animationRef.current?.cancel()
+      animationRef.current = null
     }
   }, [target, durationMs])
 

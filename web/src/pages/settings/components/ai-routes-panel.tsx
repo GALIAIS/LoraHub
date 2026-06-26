@@ -36,7 +36,7 @@ const TASK_LABELS: Record<AITaskId, string> = {
   "training.diagnose": "训练诊断",
   "error.diagnose": "错误自助",
   "quality.score": "图片质量评分",
-  "trigger.suggest": "Trigger 建议",
+  "trigger.suggest": "Trigger 生成",
 }
 
 const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
@@ -44,10 +44,10 @@ const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
   "tagging.assist": "用 VLM 给图补充 wd14 不擅长的描述 (光照、角度、自然语言)",
   "caption.rewrite": "把 wd14 标签改写为自然语言或统一格式",
   "dataset.analyze": "对扫描结果做诊断 — caption 长度、tag 分布等",
-  "training.diagnose": "解读 loss/grad_norm 曲线给优化建议",
-  "error.diagnose": "训练 / 安装失败时给出修复建议",
+  "training.diagnose": "解读 loss/grad_norm 曲线并输出调整方案",
+  "error.diagnose": "分析训练 / 安装失败并输出处理方案",
   "quality.score": "VLM 评估图片质量 (0-100 + 优/中/差)",
-  "trigger.suggest": "根据数据集特征建议 trigger word 和模板",
+  "trigger.suggest": "根据数据集特征生成 trigger word 和模板",
 }
 
 const REASONING_EFFORTS = ["low", "medium", "high"] as const
@@ -243,9 +243,9 @@ function RouteRow({
               type="button"
               onClick={() => setSystemPrompt(recommendedPrompt)}
               className="text-[11px] text-primary hover:underline mt-1"
-              title="将 Anima 推荐 caption 模板填入此字段（点保存才会持久化）"
+              title="将 Anima caption 模板填入此字段（点保存才会持久化）"
             >
-              使用 Anima 推荐 prompt
+              使用 Anima prompt
             </button>
           )}
         </Field>

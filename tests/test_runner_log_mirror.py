@@ -153,3 +153,35 @@ def test_training_log_captures_stderr_traceback(tmp_path: Path) -> None:
     assert "RuntimeError: simulated failure for traceback capture" in body
     assert "Traceback (most recent call last)" in body
     assert "returncode=1" in body
+
+
+def test_listener_failure_does_not_kill_pipe_pump(tmp_path: Path) -> None:
+    """A broken terminal/UI listener must not strand the trainer process."""
+    calls = 0
+
+    def broken_listener(_ev: TrainingEvent) -> None:
+        nonlocal calls
+        calls += 1
+        raise OSError(22, "Invalid argument")
+
+    runner = SubprocessRunner(
+        argv=_stub_argv(
+            """
+            import sys
+            print("line-before-listener-error", flush=True)
+            sys.exit(0)
+            """
+        ),
+        workspace=tmp_path,
+        on_event=broken_listener,
+        parse_line=_identity_parser,
+    )
+    runner.start()
+    rc = runner.wait().returncode
+
+    assert rc == 0
+    assert calls >= 1
+    body = (tmp_path / _TRAINING_LOG_FILENAME).read_text(encoding="utf-8")
+    assert "line-before-listener-error" in body
+    assert "lorahub listener error: OSError(22, 'Invalid argument')" in body
+    assert "returncode=0" in body

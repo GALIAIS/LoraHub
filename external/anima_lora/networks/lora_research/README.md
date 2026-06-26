@@ -286,15 +286,51 @@ Do not implement in production until a real style dataset confirms it beats
 current `anima_style_32gb_loha` and `tlora` on prompt adherence and style
 consistency.
 
+## Experiment Plans
+
+`experiment_plans.py` is the current research entry point. It creates configs
+from an existing template; it does not add a new production algorithm.
+
+Initial candidate families:
+
+| Plan | Goal | Candidate path | Promotion bar |
+| --- | --- | --- | --- |
+| `fast` | Higher training speed without quality drop | lower-rank ASR-T-LoRA | >=12% faster, no quality loss |
+| `balanced_character` | Better identity/character consistency | DoRA baseline recipe | clear quality win, <=5% slower |
+| `balanced_style` | Better style transfer | LoHA baseline recipe | clear quality win, <=8% slower |
+| `quality` | Slower but visibly higher quality | larger ASR-T-LoRA | large quality win, <=35% slower |
+
+Generate one candidate config:
+
+```bash
+python external/anima_lora/networks/lora_research/experiment_plans.py \
+  --base configs/anima_style_32gb_loha.yaml \
+  --plan quality \
+  --out runs/research/quality.yaml
+```
+
+Record every run as JSONL with `append_result(...)`. Required fields for a
+useful comparison:
+
+- `plan`
+- `quality_score`
+- `seconds_per_step`
+- `nan`
+- `black_preview_count`
+- dataset name, seed, base config, checkpoint path
+
+Do not promote a plan unless `passes_promotion_gate(...)` returns true and the
+result is confirmed by preview images, not just loss.
+
 ## Evaluation
 
-Each candidate must be compared against current `algorithm=tlora` with the same
-dataset and seed:
+Each candidate must be compared against the current best matching production
+baseline with the same dataset and seed:
 
 - 60-image V100 smoke: confirm no NaN/black preview.
-- 32G style config: compare loss curve, validation curve, and preview stability.
+- 32G style/character configs: compare loss curve, validation curve, previews.
 - Same checkpoint format load test in LoRA test page.
-- Wall-clock overhead must stay under 3 percent for ASR-LoRA.
+- Wall-clock speed/overhead must match the plan's promotion bar.
 
 Promotion rule:
 
@@ -303,12 +339,6 @@ passes one real training run and one save/load inference check.
 
 ## Next Concrete Patch
 
-Implement `per_sample_timestep_mask=false` behind a hidden network arg:
-
-```text
---network_args use_timestep_mask=true per_sample_timestep_mask=true
-```
-
-Default stays false. The patch is acceptable only if old T-LoRA checkpoints
-load unchanged and standard LoRA behavior is byte-for-byte unaffected when the
-flag is false.
+Run real A/B jobs for `fast`, `balanced_character`, `balanced_style`, and
+`quality` using the same seed and dataset. Do not add a public algorithm enum
+until a plan beats its promotion bar.

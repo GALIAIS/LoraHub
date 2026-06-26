@@ -129,14 +129,14 @@ export function SuggestDialog({ set, backend = "anima_lora" }: Props) {
         onClick={() => setOpen(true)}
       >
         <Sparkles className="size-3" />
-        智能推荐参数
+        生成参数方案
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
-            <DialogTitle>智能超参推荐</DialogTitle>
+            <DialogTitle>生成超参方案</DialogTitle>
             <DialogDescription>
-              根据数据集大小、目标类型和当前 GPU 显存,推荐一个稳健的训练起点。
+              根据数据集大小、目标类型和当前 GPU 显存生成一组初始参数。
               会覆盖已配置的 batch / 学习率 / rank / epochs / 优化器。
             </DialogDescription>
           </DialogHeader>
@@ -190,7 +190,7 @@ export function SuggestDialog({ set, backend = "anima_lora" }: Props) {
             {latestSuggestion && (
               <div className="rounded-[4px] border border-border/60 bg-muted/30 p-3 space-y-2">
                 <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                  建议
+                  参数方案
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                   <KV k="batch_size" v={latestSuggestion.batch_size} />
@@ -225,7 +225,7 @@ export function SuggestDialog({ set, backend = "anima_lora" }: Props) {
                 disabled={recommend.isPending}
               >
                 {recommend.isPending && <Loader2 className="size-3 animate-spin" />}
-                生成建议
+                生成方案
               </Button>
             ) : (
               <>

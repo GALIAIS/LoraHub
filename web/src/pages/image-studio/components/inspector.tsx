@@ -251,7 +251,7 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
 
           {detail.annotation?.aiTriggerWords && detail.annotation.aiTriggerWords.length > 0 && (
             <div className="flex flex-col gap-1">
-              <span className="text-xs font-medium">触发词建议</span>
+              <span className="text-xs font-medium">触发词候选</span>
               <div className="flex flex-wrap gap-1">
                 {detail.annotation.aiTriggerWords.map((w) => (
                   <Badge key={w} variant="secondary" className="rounded-[2px] text-[10px]">

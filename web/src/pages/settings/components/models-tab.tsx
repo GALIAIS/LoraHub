@@ -283,11 +283,11 @@ export function ModelsTab() {
                 )
               }
             >
-              恢复推荐
+              恢复默认选择
             </Button>
             {fileList.data && (
               <div className="ml-auto text-xs text-muted-foreground">
-                推荐 {fileList.data.selected_count}/{fileList.data.total_count} ·{" "}
+                默认选择 {fileList.data.selected_count}/{fileList.data.total_count} ·{" "}
                 {formatBytes(fileList.data.selected_bytes)} /{" "}
                 {formatBytes(fileList.data.total_bytes)}
               </div>

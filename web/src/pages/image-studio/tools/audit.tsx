@@ -189,7 +189,7 @@ function ClusterView({
               onClick={selectAllSuggested}
               className="h-7 text-[11px]"
             >
-              全选建议删除 ({totalDupes})
+              全选重复项 ({totalDupes})
             </Button>
             <span className="text-xs text-muted-foreground">
               {clusters.length} 个聚类 · {totalDupes} 张可去重 · 已选{" "}
@@ -359,7 +359,7 @@ function DupeMemberTile({
           onChange={onToggle}
           className="size-3 shrink-0"
           disabled={isKeep}
-          title={isKeep ? "建议保留这一张" : "勾选后会一并删除"}
+          title={isKeep ? "保留项" : "勾选后会一并删除"}
         />
         <span className="min-w-0 flex-1 truncate text-[10px]" title={path}>
           {path.split(/[/\\]/).pop()}

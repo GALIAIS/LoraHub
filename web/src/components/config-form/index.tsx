@@ -143,14 +143,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
     | "anima_lora"
     | undefined
   const arch = value.baseModel?.arch ?? ""
-  // ArchPaths section is collapsed by default but auto-expands for arches
-  // that almost always need a per-component path filled in.
-  const archPathsAutoOpen =
-    arch === "flux" ||
-    arch === "flux2" ||
-    arch === "sd3" ||
-    arch === "anima" ||
-    arch === "hunyuan_image"
   const flowMatchVisible = FLOW_MATCH_ARCHES.has(arch)
 
   const body = (
@@ -158,8 +150,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       <Section
         icon={<Wand2 className="size-3.5" />}
         title="后端选择"
-        subtitle="先决定训练后端 — kohya / diffusion-pipe / anima_lora。下方表单按所选后端动态显示。"
-        defaultOpen
+        subtitle="选择训练后端。表单按后端显示对应字段。"
       >
         <BackendFields value={value.backend} set={set} errorMap={errorMap} />
       </Section>
@@ -182,8 +173,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <Section
           icon={<Sparkles className="size-3.5" />}
           title="anima_lora 选项"
-          subtitle="method / preset 与上游 lora.toml 对齐;turbo 字段切到 distill 路径"
-          defaultOpen
+          subtitle="method / preset / turbo。"
         >
           <BackendAnimaLoraFields
             value={value.backend?.animaLora}
@@ -198,7 +188,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         icon={<Cpu className="size-3.5" />}
         title="基础模型"
         subtitle="选择架构与待微调的 .safetensors 检查点"
-        defaultOpen
       >
         <BaseModelFields
           value={value.baseModel}
@@ -211,14 +200,14 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       <Section
         icon={<Sparkles className="size-3.5" />}
         title="架构组件路径"
-        subtitle="FLUX / SD3 / Anima 等多文件 bundle 的逐组件路径"
-        defaultOpen={archPathsAutoOpen}
+        subtitle="多文件模型组件路径。"
       >
         <ArchPathsFields
           value={value.baseModel?.archPaths}
           set={set}
           errorMap={errorMap}
           arch={arch}
+          backendType={backendType}
         />
       </Section>
 
@@ -226,7 +215,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         icon={<FileImage className="size-3.5" />}
         title="数据集"
         subtitle="训练图片的位置与加载方式"
-        defaultOpen
       >
         <DatasetFields value={value.dataset} set={set} errorMap={errorMap} />
       </Section>
@@ -236,7 +224,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
           icon={<Layers className="size-3.5" />}
           title="网络"
           subtitle="LoRA 结构：rank、alpha、目标模块"
-          defaultOpen
         >
           <NetworkFields value={value.network} set={set} errorMap={errorMap} />
         </Section>
@@ -276,7 +263,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <Section
           icon={<Shuffle className="size-3.5" />}
           title="Flow Matching"
-          subtitle="FLUX / SD3 / Lumina / Anima / HunyuanImage / chroma 专用"
+          subtitle="flow-matching 参数。"
         >
           <FlowMatchFields
             value={value.flowMatch}
@@ -291,7 +278,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         icon={<Settings2 className="size-3.5" />}
         title="训练计划"
         subtitle="回合数、批大小、梯度累积"
-        defaultOpen
       >
         <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} />
       </Section>
@@ -300,7 +286,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <Section
           icon={<Zap className="size-3.5" />}
           title="注意力内核"
-          subtitle="Flash / xformers / sdpa；按 GPU 计算能力自动门控"
+          subtitle="Flash / xformers / sdpa。"
         >
           <AttentionFields value={value.attention} set={set} errorMap={errorMap} />
         </Section>
@@ -380,7 +366,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         <Section
           icon={<LineChart className="size-3.5" />}
           title="实验跟踪"
-          subtitle="把训练指标推到 wandb.ai 或自托管 W&amp;B Server"
+          subtitle="Weights & Biases 配置。"
         >
           <MonitoringFields
             value={value.monitoring}
@@ -394,7 +380,6 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         icon={<Folder className="size-3.5" />}
         title="输出"
         subtitle="文件名、保存频率、保存精度"
-        defaultOpen
       >
         <OutputFields value={value.output} set={set} errorMap={errorMap} />
       </Section>

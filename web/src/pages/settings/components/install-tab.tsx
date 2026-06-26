@@ -298,11 +298,9 @@ export function InstallTab() {
               <div>
                 <div className="font-semibold">GitHub 代理未配置</div>
                 <div className="mt-0.5">
-                  国内直连 GitHub 克隆仓库可能极慢或超时。可先到
+                  当前未配置 GitHub 代理。可到
                   <strong className="text-foreground"> 网络加速 </strong>
-                  标签页配置 GitHub 代理（例如
-                  <code className="text-foreground"> https://gh-proxy.org </code>
-                  ），再执行安装。
+                  标签页配置代理后再执行安装。
                 </div>
               </div>
             </div>
@@ -404,7 +402,7 @@ export function InstallTab() {
               <span className="ml-2">{selectedTorchOption.reason}</span>
               {effective === "anima_lora" && (
                 <span className="ml-2">
-                  anima_lora 会在 <code>uv sync</code> 后覆盖 torch wheel。
+                  anima_lora 安装会在 <code>uv sync</code> 后设置 torch wheel。
                 </span>
               )}
             </div>
@@ -425,12 +423,11 @@ export function InstallTab() {
             <div className="rounded-[4px] border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300 leading-relaxed">
               <strong className="text-foreground">anima_lora 已随 LoraHub 一起分发</strong>
               （<code className="text-foreground">external/anima_lora/</code>），
-              无需克隆。点击「安装」会用
+              点击「安装」会用
               <code className="text-foreground"> uv sync </code>
               在 <code className="text-foreground">external/anima_lora/.venv</code> 内
               创建一个<strong className="text-foreground">独立的</strong> CPython 3.13 venv,装好 torch 2.11/2.12 nightly +
               accelerate + diffusers 等依赖,与 LoraHub 主 venv 完全隔离。
-              首次安装大约下载 6-8 GB（torch + CUDA wheels）。
             </div>
           )}
 

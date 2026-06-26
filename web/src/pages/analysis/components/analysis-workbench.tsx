@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type JobDetail, type JobSummary } from "@/lib/api"
+import { useAnimeAnalysisMotion } from "@/hooks/use-anime-analysis-motion"
 import { LossChart } from "../../jobs/components/loss-chart"
 import { TERMINAL_STATES } from "../../jobs/utils"
 import {
@@ -301,6 +302,15 @@ export function AnalysisWorkbench({
     const raw = sampling?.["triggerWord"] ?? sampling?.["trigger_word"]
     return typeof raw === "string" && raw.trim() ? raw.trim() : null
   }, [jobDetail])
+  const analysisMotionRef = useAnimeAnalysisMotion<HTMLDivElement>([
+    job.id,
+    viewKind,
+    viewMode,
+    xMode,
+    panels.showStageTimeline,
+    panels.showMetricGrid,
+    panels.showCheckpointPlayback,
+  ])
 
   return (
     <div className="flex flex-col min-h-0">
@@ -332,7 +342,7 @@ export function AnalysisWorkbench({
         <>
           <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
 
-      <div className="space-y-4 px-4 py-4 md:px-7">
+      <div ref={analysisMotionRef} className="space-y-4 px-4 py-4 md:px-7">
         {/* View-mode switcher: live / postmortem / custom. Mode picks
             sensible defaults for which heavy panels are open by
             default; manual toggles flip into custom and persist. */}

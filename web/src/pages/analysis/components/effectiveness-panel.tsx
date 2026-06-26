@@ -270,7 +270,7 @@ export function EffectivenessPanel({ metrics, progress }: Props) {
           formatHeadline={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`}
           caption={
             lrResponse.events.length === 0
-              ? "学习率尚未发生显著下降, 或后端未上报 lr"
+              ? "未识别到学习率下降事件，或后端未上报 lr"
               : `${lrResponse.responsiveEvents}/${lrResponse.events.length} 次下降产生改善 · ${lrResponseLabel(lrResponse.state)}`
           }
           fill={lrFill}
@@ -390,7 +390,7 @@ function fmtFloat(v: number): string {
 }
 
 function stabilityLabel(s: StabilityVerdict["state"]): string {
-  return s === "progressing" ? "仍在显著下降" : s === "diverging" ? "近窗回升" : "近窗停滞"
+  return s === "progressing" ? "近窗下降" : s === "diverging" ? "近窗回升" : "近窗停滞"
 }
 
 function lrResponseLabel(s: LrResponseVerdict["state"]): string {

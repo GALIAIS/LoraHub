@@ -14,17 +14,19 @@ type AnimaLoraValue = NonNullable<
   NonNullable<ConfigFormValue["backend"]>["animaLora"]
 >
 type AnimaLoraMethod = NonNullable<AnimaLoraValue["method"]>
-type LoraAlgorithm = NonNullable<AnimaLoraValue["lora"]>["algorithm"]
+type LoraAlgorithm = NonNullable<NonNullable<AnimaLoraValue["lora"]>["algorithm"]>
 
 const LORA_ALGORITHM_OPTIONS = [
   { value: "ortho", label: "OrthoLoRA · 默认" },
   { value: "lora", label: "LoRA · 经典低秩 ΔW = BA" },
   { value: "tlora", label: "T-LoRA · 时间步动态 rank" },
+  { value: "asr_tlora", label: "ASR T-LoRA · 逐样本时间步 rank" },
   { value: "dora", label: "DoRA · 方向 / 幅度分离" },
   { value: "dylora", label: "DyLoRA · 训练随机 rank 截断" },
   { value: "glora", label: "GLoRA · LoRA + 每秩对角 gate" },
   { value: "ia3", label: "IA³ · 每输出通道缩放" },
   { value: "lokr", label: "LoKr · Kronecker 积分解" },
+  { value: "lokr_factorized", label: "LoKr factorized · 不 materialize ΔW" },
   { value: "loha", label: "LoHA · Hadamard 积, r² 表达力" },
   { value: "diag_oft", label: "Diag-OFT · 块对角正交 (保 hyperspherical)" },
   { value: "boft", label: "BOFT · 蝴蝶级联正交" },
@@ -34,6 +36,7 @@ const LORA_ALGORITHM_OPTIONS = [
   { value: "lycoris_tlora", label: "LyCORIS T-LoRA · 时间步感知 LoRA" },
   { value: "lycoris_loha", label: "LyCORIS LoHa · Hadamard 分解" },
   { value: "lycoris_lokr", label: "LyCORIS LoKr · Kronecker 分解" },
+  { value: "lycoris_lokr_factorized", label: "LyCORIS LoKr factorized" },
   { value: "lycoris_ia3", label: "LyCORIS IA³ · 通道缩放" },
   { value: "lycoris_dylora", label: "LyCORIS DyLoRA · 动态 rank" },
   { value: "lycoris_diag_oft", label: "LyCORIS Diag-OFT · 块正交" },
@@ -54,6 +57,8 @@ function canonicalAlgorithm(algorithm: LoraAlgorithm) {
       return "ia3"
     case "lycoris_lokr":
       return "lokr"
+    case "lycoris_lokr_factorized":
+      return "lokr_factorized"
     case "lycoris_loha":
       return "loha"
     case "lycoris_dylora":
@@ -78,6 +83,7 @@ function usesTimestepMaskControls(algorithm: LoraAlgorithm) {
   return (
     canonical === "lora" ||
     canonical === "tlora" ||
+    canonical === "asr_tlora" ||
     canonical === "ortho" ||
     canonical === "dora" ||
     canonical === "dylora" ||
@@ -126,10 +132,12 @@ function LoraMethodConfig({
   const algorithm = value.lora?.algorithm ?? "ortho"
   const canonical = canonicalAlgorithm(algorithm)
   const showTimestepMaskControls = usesTimestepMaskControls(algorithm)
-  const isTlora = canonical === "tlora"
+  const isTlora = canonical === "tlora" || canonical === "asr_tlora"
+  const timestepMaskEnabled =
+    isTlora || (showTimestepMaskControls && (value.lora?.useTimestepMask ?? true))
   const setAlgorithm = (next: string) => {
     set(["backend", "animaLora", "lora", "algorithm"], next)
-    if (canonicalAlgorithm(next as LoraAlgorithm) === "tlora") {
+    if (["tlora", "asr_tlora"].includes(canonicalAlgorithm(next as LoraAlgorithm))) {
       set(["backend", "animaLora", "lora", "useTimestepMask"], true)
     }
   }
@@ -138,12 +146,11 @@ function LoraMethodConfig({
     <Section
       icon={<Sparkles className="size-3.5" />}
       title="method=lora 子配置"
-      subtitle="选择 LoRA 家族的算法变体 + T-LoRA 时间步 mask"
-      defaultOpen
+      subtitle="LoRA 算法与时间步 mask"
     >
       <Row
         label="算法"
-        description="决定如何参数化 ΔW。LoRA 为经典低秩；OrthoLoRA 在 LoRA 上叠加 SVD + Cayley 正交；DoRA 引入方向 / 幅度分离；其余原子分解类（IA³ / LoKr / LoHA / Full / OFT / BOFT / GLoRA / VeRA）各自采用独立的 ΔW 参数化。"
+        description="选择 adapter 参数化方式。"
       >
         <EnumSelect
           value={algorithm}
@@ -151,10 +158,10 @@ function LoraMethodConfig({
           options={LORA_ALGORITHM_OPTIONS}
         />
       </Row>
-      {canonical === "lokr" && (
+      {(canonical === "lokr" || canonical === "lokr_factorized") && (
         <Row
           label="LoKr factor"
-          description="将 (out, in) 拆为 (a×c, b×d) 的最大块大小。8 是 LyCORIS 默认；越大 W₁ 表达力越强，LoRA 边项越小。"
+          description="LoKr Kronecker 分解因子。"
         >
           <IntInput
             value={value.lora?.lokrFactor ?? 8}
@@ -169,7 +176,7 @@ function LoraMethodConfig({
       {canonical === "boft" && (
         <Row
           label="BOFT 蝴蝶层数"
-          description="蝴蝶旋转的级联深度；m ≥ log₂(out_dim) 即可张满 SO(out_dim)。默认 4 已足够。"
+          description="BOFT butterfly factor 数量。"
         >
           <IntInput
             value={value.lora?.boftFactors ?? 4}
@@ -186,8 +193,8 @@ function LoraMethodConfig({
           label="启用时间步 mask"
           description={
             isTlora
-              ? "T-LoRA 固定启用时间步相关 rank mask；如需关闭，请选择 LoRA。"
-              : "T-LoRA 时间步相关 rank mask，可叠在带 LoRA legs 的算法上。"
+              ? "T-LoRA 强制启用。"
+              : "启用 timestep rank mask。"
           }
         >
           <ToggleSwitch
@@ -199,7 +206,7 @@ function LoraMethodConfig({
           />
         </Row>
       )}
-      {showTimestepMaskControls && (
+      {timestepMaskEnabled && (
         <Row label="T-mask 最小 rank">
           <IntInput
             value={value.lora?.minRank}
@@ -211,7 +218,7 @@ function LoraMethodConfig({
           />
         </Row>
       )}
-      {showTimestepMaskControls && (
+      {timestepMaskEnabled && (
         <Row label="alpha/rank 缩放">
           <FloatInput
             value={value.lora?.alphaRankScale}
@@ -223,25 +230,29 @@ function LoraMethodConfig({
           />
         </Row>
       )}
-      <Row
-        label="channel scaling α"
-        description="OrthoLoRA / LoRA 输出 channel-wise 缩放系数，上游默认 0.5。降低可缓解梯度震荡。"
-        errors={errorMap.get("backend.animaLora.channelScalingAlpha")}
-      >
-        <FloatInput
-          value={value.channelScalingAlpha}
-          onChange={(n) =>
-            set(
-              ["backend", "animaLora", "channelScalingAlpha"],
-              n ?? 0.5,
-            )
-          }
-          placeholder="0.5"
-          step={0.05}
-          min={0}
-          max={1}
-        />
-      </Row>
+      {["lora", "tlora", "asr_tlora", "ortho", "dora", "dylora", "glora"].includes(
+        canonical,
+      ) && (
+        <Row
+          label="channel scaling α"
+          description="LoRA 输出 channel-wise 缩放系数。"
+          errors={errorMap.get("backend.animaLora.channelScalingAlpha")}
+        >
+          <FloatInput
+            value={value.channelScalingAlpha}
+            onChange={(n) =>
+              set(
+                ["backend", "animaLora", "channelScalingAlpha"],
+                n ?? 0.5,
+              )
+            }
+            placeholder="0.5"
+            step={0.05}
+            min={0}
+            max={1}
+          />
+        </Row>
+      )}
     </Section>
   )
 }
@@ -254,7 +265,7 @@ function PostfixMethodConfig({
   set: Setter
 }) {
   return (
-    <Section title="method=postfix 子配置" defaultOpen>
+    <Section title="postfix 配置">
       <Row label="模式">
         <EnumSelect
           value={value.postfix?.mode ?? "cond"}
@@ -306,7 +317,7 @@ function ChimeraMethodConfig({
   set: Setter
 }) {
   return (
-    <Section title="method=chimera 子配置" defaultOpen>
+    <Section title="chimera 配置">
       <Row label="内容平衡权重">
         <FloatInput
           value={value.chimera?.balanceWContent}
@@ -354,10 +365,10 @@ function EasyControlMethodConfig({
   set: Setter
 }) {
   return (
-    <Section title="method=easycontrol 子配置" defaultOpen>
+    <Section title="easycontrol 配置">
       <Row
         label="条件门初始值"
-        description="softmax gate 初始值 · -10 让 step 0 等同 baseline DiT。"
+        description="softmax gate 初始值。"
       >
         <FloatInput
           value={value.easycontrol?.bCondInit}
@@ -386,7 +397,7 @@ function EasyControlMethodConfig({
           }
         />
       </Row>
-      <Row label="图像丢弃率" description="image-CFG dropout。">
+      <Row label="图像丢弃率" description="image-CFG dropout 概率。">
         <FloatInput
           value={value.easycontrol?.dropP}
           onChange={(n) =>
@@ -410,7 +421,7 @@ function IpAdapterMethodConfig({
   set: Setter
 }) {
   return (
-    <Section title="method=ip_adapter 子配置" defaultOpen>
+    <Section title="ip_adapter 配置">
       <Row label="编码器">
         <EnumSelect
           value={value.ipAdapter?.encoder ?? "PE-Core-L14-336"}
@@ -433,7 +444,7 @@ function IpAdapterMethodConfig({
           step={0.1}
         />
       </Row>
-      <Row label="门学习率" description="门 LR,通常 10× 全局 LR。">
+      <Row label="门学习率" description="gate learning rate。">
         <FloatInput
           value={value.ipAdapter?.gateLr}
           onChange={(n) =>

@@ -352,7 +352,7 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
           </div>
           {finding.remediation && (
             <div className="text-[11px] text-muted-foreground/85 mt-1 leading-relaxed">
-              <span className="font-medium text-foreground/75">建议: </span>
+              <span className="font-medium text-foreground/75">处理: </span>
               {finding.remediation}
             </div>
           )}

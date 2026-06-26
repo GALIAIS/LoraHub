@@ -1,5 +1,5 @@
 export const METHOD_OPTIONS = [
-  { value: "lora", label: "LoRA · 默认堆叠 (LoRA + OrthoLoRA + T-LoRA)" },
+  { value: "lora", label: "LoRA" },
   { value: "postfix", label: "Postfix · 自由参数 / 条件正交后缀" },
   { value: "chimera", label: "ChimeraHydra · 双池路由 MoE" },
   { value: "easycontrol", label: "EasyControl · 自注意力图像条件" },
@@ -11,13 +11,13 @@ export const METHOD_OPTIONS = [
 ] as const
 
 export const PRESET_OPTIONS = [
-  { value: "default", label: "default · 标准 24 GB" },
+  { value: "default", label: "default" },
   { value: "low_vram", label: "low_vram · 8 GB (grad ckpt + unsloth offload)" },
   { value: "graft", label: "graft · blocks_to_swap = 20" },
   { value: "half", label: "half · 50 % 数据 (实验)" },
   { value: "quarter", label: "quarter · 25 % 数据" },
   { value: "tenth", label: "tenth · 10 % 数据" },
-  { value: "debug", label: "debug · 0.1 % 数据 (管线打通)" },
+  { value: "debug", label: "debug · 0.1 % 数据" },
 ] as const
 
 export const TIMESTEP_OPTIONS = [
@@ -58,7 +58,7 @@ export const COMPILE_MODE_OPTIONS = [
 export const COMPILE_INDUCTOR_OPTIONS = [
   { value: "", label: "默认" },
   { value: "default", label: "default" },
-  { value: "reduce-overhead", label: "reduce-overhead · 推荐" },
+  { value: "reduce-overhead", label: "reduce-overhead" },
   { value: "max-autotune", label: "max-autotune" },
 ] as const
 
@@ -73,7 +73,7 @@ export const OPTIMIZER_OPTIONS = [
   { value: "AdamW8bit", label: "AdamW8bit" },
   { value: "Lion", label: "Lion" },
   { value: "Prodigy", label: "Prodigy" },
-  { value: "CAME", label: "CAME · 显存友好二阶矩 (LyCORIS / 风格 LoRA 推荐)" },
+  { value: "CAME", label: "CAME" },
 ] as const
 
 export const LR_SCHEDULER_OPTIONS = [
@@ -82,6 +82,14 @@ export const LR_SCHEDULER_OPTIONS = [
   { value: "cosine_with_restarts", label: "cosine_with_restarts" },
   { value: "linear", label: "linear" },
   { value: "polynomial", label: "polynomial" },
+] as const
+
+export const TARGET_PRESET_OPTIONS = [
+  { value: "all", label: "全部 Linear" },
+  { value: "attention", label: "Attention" },
+  { value: "cross_attention", label: "Cross-attention" },
+  { value: "self_attention", label: "Self-attention" },
+  { value: "mlp", label: "MLP" },
 ] as const
 
 export const BUCKET_TABLE_OPTIONS = [

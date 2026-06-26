@@ -50,7 +50,7 @@ export function AiWd14PrefilterTool({ datasetPath }: { datasetPath: string }) {
     }
   }, [wd14Models.data?.default, taggerModel])
   const modelOptions = wd14Models.data?.models ?? [
-    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large(推荐)" },
+    { id: FALLBACK_DEFAULT_MODEL, label: "v3 · EvaCLIP-Large" },
   ]
 
   const mutation = useMutation({

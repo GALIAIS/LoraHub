@@ -83,9 +83,9 @@ export function DependenciesTab() {
   // default base for kohya / diffusion-pipe. Keeping this map small means
   // we don't fork the recommended_versions data on the API side.
   const versionHint: Record<string, string> = {
-    "3.11": "推荐 · kohya / diffusion-pipe",
-    "3.12": "推荐 · kohya / diffusion-pipe",
-    "3.13": "anima_lora 必需",
+    "3.11": "kohya / diffusion-pipe",
+    "3.12": "kohya / diffusion-pipe",
+    "3.13": "anima_lora",
   }
   const versionOptions = useMemo(
     () => versions.map((v) => ({ value: v, label: `Python ${v}` })),
@@ -171,7 +171,7 @@ export function DependenciesTab() {
                   </code>
                 </div>
 
-                <span className="text-xs text-muted-foreground">推荐版本</span>
+                <span className="text-xs text-muted-foreground">Python 版本</span>
                 <div className="flex items-center gap-2">
                   <Select items={versionOptions} value={effectiveVersion} onValueChange={(v) => setVersion(v ?? "")}>
                     <SelectTrigger className="w-32 text-xs font-mono h-8">
@@ -298,7 +298,7 @@ export function DependenciesTab() {
       </Card>
 
       <div className="text-[11px] text-muted-foreground/80 px-1 leading-relaxed">
-        · 便携 Python 不会修改系统环境变量；卸载只需删除安装目录即可。
+        · 便携 Python 不修改系统环境变量；删除安装目录即可移除。
         <br />· 后端版本对应：<span className="font-mono">3.11 / 3.12</span> 给
         kohya 与 diffusion-pipe；<span className="font-mono">3.13</span> 给
         anima_lora。两者都装上后，安装后端时会自动复用对应版本，避免 uv 重复下载。

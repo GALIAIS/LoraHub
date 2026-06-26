@@ -44,6 +44,7 @@ from networks.lora_modules import (
     OrthoLoRAModule,
     StackedExpertsLoRAModule,
 )
+from networks.lora_modules.lokr import lokr_state_dict_to_lycoris
 from networks.lora_modules.lora import rename_dora_and_defuse_standard
 
 setup_logging()
@@ -237,6 +238,8 @@ def save_network_weights(
     # need the dtype cast + safetensors hashing tail.
     if not is_atomic_variant:
         rename_dora_and_defuse_standard(state_dict)
+    elif save_variant == "lokr":
+        lokr_state_dict_to_lycoris(state_dict)
 
     if dtype is not None:
         for key in list(state_dict.keys()):

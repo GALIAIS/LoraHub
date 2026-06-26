@@ -2,10 +2,9 @@
  * ArchPathsConfig editor — per-component checkpoint paths and arch-specific
  * memory / dropout / token-length knobs.
  *
- * Most arches don't use every field; the form intentionally exposes the full
- * union so any user can fill in the bits their arch needs. The wrapping
- * <Section> in `index.tsx` decides default-open semantics (collapsed by
- * default, but auto-expanded when the chosen arch typically wants these).
+ * Most arches don't use every field. The form renders only the subset the
+ * selected backend + architecture can consume; hidden values stay in state so
+ * switching architectures does not discard existing YAML.
  */
 import { memo } from "react"
 import { T5_DTYPE_OPTIONS } from "../options"
@@ -25,70 +24,126 @@ export const ArchPathsFields = memo(function ArchPathsFields({
   set,
   errorMap,
   arch,
+  backendType,
 }: {
   value: ArchPathsValue | undefined
   set: Setter
   errorMap: ErrorMap
   arch: string
+  backendType?: string
 }) {
   const v = value ?? {}
   const p = (k: keyof ArchPathsValue) => `baseModel.archPaths.${k}` as const
-  // Per-arch hint — purely informational; the schema doesn't actually
-  // enforce a subset, so we just nudge users towards the relevant inputs.
-  const hint = (() => {
-    switch (arch) {
-      case "flux":
-      case "flux2":
-        return "FLUX 通常需要 clip_l / t5xxl / ae 三个组件路径。"
-      case "sd3":
-        return "SD3 通常需要 clip_l / clip_g / t5xxl 三个组件路径。"
-      case "anima":
-        return "Anima 通常需要 transformer / qwen3 / t5_tokenizer / llm_adapter。"
-      case "hunyuan_image":
-        return "HunyuanImage 通常需要 byt5 / text_encoder / transformer。"
-      default:
-        return "仅在使用多文件 bundle 的 arch 上需要填写；其它 arch 留空即可。"
-    }
-  })()
+  const isFlux = arch === "flux" || arch === "flux2"
+  const isSd3 = arch === "sd3"
+  const isAnima = arch === "anima"
+  const isHunyuanImage = arch === "hunyuan_image"
+  const isVideoBundle =
+    arch === "wan" ||
+    arch === "hunyuan_video" ||
+    arch === "hunyuan_video_15" ||
+    arch === "ltx_video" ||
+    arch === "ltx2" ||
+    arch === "cosmos" ||
+    arch === "cosmos_predict2"
+  const isDp = backendType === "diffusion-pipe"
+  const isAnimaBackend = backendType === "anima_lora"
+  const showFlux = isFlux || (isDp && !arch)
+  const showSd3 = isSd3 || (isDp && !arch)
+  const showAnima = isAnima
+  const showHunyuan = isHunyuanImage
+  const showGenericDp = isDp && (isVideoBundle || arch === "chroma" || arch === "omnigen2")
+  const showNothing =
+    !showFlux && !showSd3 && !showAnima && !showHunyuan && !showGenericDp
 
   return (
     <>
       <div className="-mt-1 mb-1 text-[11px] text-muted-foreground/80">
-        {hint}
+        {hintFor(arch, backendType)}
       </div>
 
-      <SubGroup label="FLUX / SD3 组件">
-        <Row label="clipL" errors={errorMap.get(p("clipL"))}>
-          <ModelPathPicker
-            value={v.clipL ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "clipL"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-        <Row label="clipG" errors={errorMap.get(p("clipG"))}>
-          <ModelPathPicker
-            value={v.clipG ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "clipG"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-        <Row label="t5xxl" errors={errorMap.get(p("t5xxl"))}>
-          <ModelPathPicker
-            value={v.t5xxl ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "t5xxl"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-        <Row label="ae" description="FLUX autoencoder。" errors={errorMap.get(p("ae"))}>
-          <ModelPathPicker
-            value={v.ae ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "ae"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-      </SubGroup>
+      {showNothing && (
+        <div className="rounded-[4px] border border-dashed border-border/50 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+          当前架构不读取组件路径。
+        </div>
+      )}
 
-      <SubGroup label="Anima 组件">
+      {showFlux && (
+        <SubGroup label="FLUX 组件">
+          <Row label="clipL" errors={errorMap.get(p("clipL"))}>
+            <ModelPathPicker
+              value={v.clipL ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "clipL"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row label="t5xxl" errors={errorMap.get(p("t5xxl"))}>
+            <ModelPathPicker
+              value={v.t5xxl ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "t5xxl"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row label="ae" description="FLUX VAE。" errors={errorMap.get(p("ae"))}>
+            <ModelPathPicker
+              value={v.ae ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "ae"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+        </SubGroup>
+      )}
+
+      {showSd3 && (
+        <SubGroup label="SD3 组件">
+          <Row label="clipL" errors={errorMap.get(p("clipL"))}>
+            <ModelPathPicker
+              value={v.clipL ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "clipL"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row label="clipG" errors={errorMap.get(p("clipG"))}>
+            <ModelPathPicker
+              value={v.clipG ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "clipG"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row label="t5xxl" errors={errorMap.get(p("t5xxl"))}>
+            <ModelPathPicker
+              value={v.t5xxl ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "t5xxl"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+        </SubGroup>
+      )}
+
+      {showAnima && (
+        <SubGroup label="Anima 组件">
+          {!isAnimaBackend && (
+            <>
+              <Row label="llmAdapter" errors={errorMap.get(p("llmAdapter"))}>
+                <ModelPathPicker
+                  value={v.llmAdapter ?? ""}
+                  onChange={(s) =>
+                    set(["baseModel", "archPaths", "llmAdapter"], s || null)
+                  }
+                  placeholder="（可选）"
+                />
+              </Row>
+              <Row label="t5Tokenizer" errors={errorMap.get(p("t5Tokenizer"))}>
+                <ModelPathPicker
+                  value={v.t5Tokenizer ?? ""}
+                  onChange={(s) =>
+                    set(["baseModel", "archPaths", "t5Tokenizer"], s || null)
+                  }
+                  placeholder="（可选）"
+                />
+              </Row>
+            </>
+          )}
         <Row label="qwen3" errors={errorMap.get(p("qwen3"))}>
           <ModelPathPicker
             value={v.qwen3 ?? ""}
@@ -96,36 +151,31 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（可选）"
           />
         </Row>
-        <Row label="llmAdapter" errors={errorMap.get(p("llmAdapter"))}>
-          <ModelPathPicker
-            value={v.llmAdapter ?? ""}
-            onChange={(s) =>
-              set(["baseModel", "archPaths", "llmAdapter"], s || null)
-            }
-            placeholder="（可选）"
-          />
-        </Row>
-        <Row label="t5Tokenizer" errors={errorMap.get(p("t5Tokenizer"))}>
-          <ModelPathPicker
-            value={v.t5Tokenizer ?? ""}
-            onChange={(s) =>
-              set(["baseModel", "archPaths", "t5Tokenizer"], s || null)
-            }
-            placeholder="（可选）"
-          />
-        </Row>
-      </SubGroup>
+          <Row
+            label="ae"
+            description="Anima VAE。"
+            errors={errorMap.get(p("ae"))}
+          >
+            <ModelPathPicker
+              value={v.ae ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "ae"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+        </SubGroup>
+      )}
 
-      <SubGroup label="通用组件（Anima / Wan / HunyuanImage / chroma）">
-        <Row label="transformer" errors={errorMap.get(p("transformer"))}>
-          <ModelPathPicker
-            value={v.transformer ?? ""}
-            onChange={(s) =>
-              set(["baseModel", "archPaths", "transformer"], s || null)
-            }
-            placeholder="（可选）"
-          />
-        </Row>
+      {(showHunyuan || showGenericDp) && (
+        <SubGroup label={showHunyuan ? "HunyuanImage 组件" : "diffusion-pipe 组件"}>
+          <Row label="transformer" errors={errorMap.get(p("transformer"))}>
+            <ModelPathPicker
+              value={v.transformer ?? ""}
+              onChange={(s) =>
+                set(["baseModel", "archPaths", "transformer"], s || null)
+              }
+              placeholder="（可选）"
+            />
+          </Row>
         <Row label="textEncoder" errors={errorMap.get(p("textEncoder"))}>
           <ModelPathPicker
             value={v.textEncoder ?? ""}
@@ -135,24 +185,29 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（可选）"
           />
         </Row>
-        <Row label="llm" description="Anima Qwen3 / HunyuanVideo LLM。" errors={errorMap.get(p("llm"))}>
-          <ModelPathPicker
-            value={v.llm ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "llm"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-        <Row label="byt5" description="HunyuanImage byT5。" errors={errorMap.get(p("byt5"))}>
-          <ModelPathPicker
-            value={v.byt5 ?? ""}
-            onChange={(s) => set(["baseModel", "archPaths", "byt5"], s || null)}
-            placeholder="（可选）"
-          />
-        </Row>
-      </SubGroup>
+          <Row label="llm" description="LLM 权重路径。" errors={errorMap.get(p("llm"))}>
+            <ModelPathPicker
+              value={v.llm ?? ""}
+              onChange={(s) => set(["baseModel", "archPaths", "llm"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          {(showHunyuan || isDp) && (
+            <Row label="byt5" description="byT5 权重路径。" errors={errorMap.get(p("byt5"))}>
+              <ModelPathPicker
+                value={v.byt5 ?? ""}
+                onChange={(s) => set(["baseModel", "archPaths", "byt5"], s || null)}
+                placeholder="（可选）"
+              />
+            </Row>
+          )}
+        </SubGroup>
+      )}
 
-      <SubGroup label="Token 长度上限">
-        <Row label="t5xxlMaxTokenLength" errors={errorMap.get(p("t5xxlMaxTokenLength"))}>
+      {(showFlux || showSd3 || showAnima) && (
+        <SubGroup label="Token 长度上限">
+          {(showFlux || showSd3) && (
+            <Row label="t5xxlMaxTokenLength" errors={errorMap.get(p("t5xxlMaxTokenLength"))}>
           <IntInput
             min={1}
             value={v.t5xxlMaxTokenLength ?? null}
@@ -162,7 +217,9 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（默认）"
           />
         </Row>
-        <Row label="qwen3MaxTokenLength" errors={errorMap.get(p("qwen3MaxTokenLength"))}>
+          )}
+          {showAnima && (
+            <Row label="qwen3MaxTokenLength" errors={errorMap.get(p("qwen3MaxTokenLength"))}>
           <IntInput
             min={1}
             value={v.qwen3MaxTokenLength ?? null}
@@ -172,7 +229,9 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（默认）"
           />
         </Row>
-        <Row label="t5MaxTokenLength" errors={errorMap.get(p("t5MaxTokenLength"))}>
+          )}
+          {showAnima && !isAnimaBackend && (
+            <Row label="t5MaxTokenLength" errors={errorMap.get(p("t5MaxTokenLength"))}>
           <IntInput
             min={1}
             value={v.t5MaxTokenLength ?? null}
@@ -182,10 +241,13 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（默认）"
           />
         </Row>
-      </SubGroup>
+          )}
+        </SubGroup>
+      )}
 
-      <SubGroup label="Attention 掩码与 dropout（FLUX / SD3）">
-        <Row label="applyT5AttnMask" description="对 T5 输出施加 attention mask。">
+      {(showFlux || showSd3) && (
+        <SubGroup label="Attention 掩码与 dropout">
+        <Row label="applyT5AttnMask" description="启用 T5 attention mask。">
           <ToggleSwitch
             checked={v.applyT5AttnMask ?? false}
             onCheckedChange={(b) =>
@@ -193,7 +255,8 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
-        <Row label="applyLgAttnMask" description="对 CLIP-L/G 输出施加 attention mask。">
+          {showSd3 && (
+            <Row label="applyLgAttnMask" description="启用 CLIP-L/G attention mask。">
           <ToggleSwitch
             checked={v.applyLgAttnMask ?? false}
             onCheckedChange={(b) =>
@@ -201,6 +264,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
+          )}
         <Row label="t5DropoutRate" errors={errorMap.get(p("t5DropoutRate"))}>
           <FloatInput
             step={0.05}
@@ -210,7 +274,7 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
-        <Row label="clipLDropoutRate" errors={errorMap.get(p("clipLDropoutRate"))}>
+          <Row label="clipLDropoutRate" errors={errorMap.get(p("clipLDropoutRate"))}>
           <FloatInput
             step={0.05}
             value={v.clipLDropoutRate ?? 0}
@@ -219,7 +283,8 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
-        <Row label="clipGDropoutRate" errors={errorMap.get(p("clipGDropoutRate"))}>
+          {showSd3 && (
+            <Row label="clipGDropoutRate" errors={errorMap.get(p("clipGDropoutRate"))}>
           <FloatInput
             step={0.05}
             value={v.clipGDropoutRate ?? 0}
@@ -228,6 +293,9 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
+          )}
+          {showSd3 && (
+            <>
         <Row
           label="posEmbRandomCropRate"
           description="SD3 位置编码随机 crop 概率。"
@@ -249,12 +317,17 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
+            </>
+          )}
       </SubGroup>
+      )}
 
-      <SubGroup label="FLUX guidance / TE 设备 / VAE 内存">
+      {(showFlux || showSd3 || showAnima || showHunyuan) && (
+        <SubGroup label="附加参数">
+          {showFlux && (
         <Row
           label="guidanceScale"
-          description="FLUX dev 蒸馏版需要烘焙到 LoRA 的 guidance。留空跳过。"
+          description="FLUX guidance scale。留空不写入。"
           errors={errorMap.get(p("guidanceScale"))}
         >
           <FloatInput
@@ -264,7 +337,10 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（默认）"
           />
         </Row>
-        <Row label="t5xxlDevice" description="例如 cuda / cuda:1 / cpu。">
+          )}
+          {showSd3 && (
+            <>
+        <Row label="t5xxlDevice" description="T5XXL 设备，例如 cuda / cuda:1 / cpu。">
           <TextInput
             className="w-48"
             value={v.t5xxlDevice ?? ""}
@@ -283,9 +359,13 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             options={T5_DTYPE_OPTIONS}
           />
         </Row>
+            </>
+          )}
+          {(showAnima || showHunyuan) && (
+            <>
         <Row
           label="vaeChunkSize"
-          description="Anima / HunyuanImage / Wan VAE 分块大小，调小可节省显存。"
+          description="VAE 分块大小。"
           errors={errorMap.get(p("vaeChunkSize"))}
         >
           <IntInput
@@ -297,7 +377,8 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             placeholder="（默认）"
           />
         </Row>
-        <Row label="vaeDisableCache" description="禁用 VAE 输出缓存。">
+              {showAnima && (
+        <Row label="vaeDisableCache" description="关闭 VAE 输出缓存。">
           <ToggleSwitch
             checked={v.vaeDisableCache ?? false}
             onCheckedChange={(b) =>
@@ -305,7 +386,11 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
-        <Row label="textEncoderCpu" description="把文本编码器固定在 CPU。">
+              )}
+            </>
+          )}
+          {showHunyuan && (
+        <Row label="textEncoderCpu" description="文本编码器使用 CPU。">
           <ToggleSwitch
             checked={v.textEncoderCpu ?? false}
             onCheckedChange={(b) =>
@@ -313,10 +398,31 @@ export const ArchPathsFields = memo(function ArchPathsFields({
             }
           />
         </Row>
+          )}
       </SubGroup>
+      )}
     </>
   )
 })
+
+function hintFor(arch: string, backendType?: string) {
+  if (backendType === "anima_lora" && arch === "anima") {
+    return "当前仅显示 qwen3 与 ae 字段。"
+  }
+  switch (arch) {
+    case "flux":
+    case "flux2":
+      return "FLUX 读取 clip_l / t5xxl / ae。"
+    case "sd3":
+      return "SD3 读取 clip_l / clip_g / t5xxl。"
+    case "anima":
+      return "Anima 读取 qwen3 / ae；kohya 可读取 llm_adapter / t5_tokenizer。"
+    case "hunyuan_image":
+      return "HunyuanImage 读取 transformer / text_encoder / byt5。"
+    default:
+      return "仅显示当前架构会读取的字段。"
+  }
+}
 
 const SubGroup = memo(function SubGroup({
   label,

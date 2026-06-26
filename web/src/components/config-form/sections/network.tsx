@@ -30,7 +30,7 @@ export const NetworkFields = memo(function NetworkFields({
       </Row>
       <Row
         label="Rank（秩）"
-        description="越高容量越大，显存占用也越大。SDXL 角色推荐 32。"
+        description="控制 LoRA 容量；数值越高显存占用越大。"
         errors={errorMap.get("network.rank")}
       >
         <IntInput
@@ -51,7 +51,7 @@ export const NetworkFields = memo(function NetworkFields({
           onChange={(n) => set(["network", "alpha"], n ?? 16)}
         />
       </Row>
-      <Row label="训练 U-Net" description="训练 U-Net（视觉变化所必需）。">
+      <Row label="训练 U-Net" description="训练视觉网络。">
         <ToggleSwitch
           checked={v.targetUnet ?? true}
           onCheckedChange={(b) => set(["network", "targetUnet"], b)}
@@ -59,7 +59,7 @@ export const NetworkFields = memo(function NetworkFields({
       </Row>
       <Row
         label="训练文本编码器"
-        description="一并训练文本编码器，速度更慢；有助于风格 / 概念的泛化。"
+        description="同时训练文本编码器。"
       >
         <ToggleSwitch
           checked={v.targetTextEncoder ?? false}
@@ -136,7 +136,7 @@ export const NetworkFields = memo(function NetworkFields({
           </Row>
           <Row
             label="Scale Weight Norms"
-            description="`--scale_weight_norms` 最大范数；可选启用以约束权重大小。"
+            description="`--scale_weight_norms` 最大范数。"
             errors={errorMap.get("network.scaleWeightNorms")}
           >
             <div className="flex items-center gap-3">

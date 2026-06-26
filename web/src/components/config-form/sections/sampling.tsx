@@ -96,7 +96,7 @@ export const SamplingFields = memo(function SamplingFields({
           </Row>
           <Row
             label="预览采样器"
-            description="传给 anima_lora 的 --sample_sampler；留空使用上游默认 DDIM。"
+            description="传给 anima_lora 的 --sample_sampler；留空使用 DDIM。"
             errors={errorMap.get("sampling.sampleSampler")}
           >
             <EnumSelect
@@ -155,7 +155,7 @@ export const SamplingFields = memo(function SamplingFields({
 
           <Row
             label="触发词"
-            description="提示词中的 ${TRIGGER} 占位符将在训练启动时替换为此值。留空时，自动从数据集 .txt 描述文件推断（取第一个 token 的众数，过滤 1girl / masterpiece 等通用标签）；推断失败则连同相邻逗号一并删除占位符。"
+            description="训练启动时用此值替换 ${TRIGGER}。留空时从数据集 .txt 描述推断。"
           >
             <TextInput
               value={v.triggerWord ?? ""}
@@ -180,7 +180,7 @@ export const SamplingFields = memo(function SamplingFields({
               />
               <OutputToggle
                 label="基模对比"
-                description="同一提示词额外渲染一份不挂 LoRA 的基模产出，便于直观对比 LoRA 学习效果。GPU 耗时翻倍。"
+                description="同一提示词额外渲染一份不挂 LoRA 的基模产出，用于对比。"
                 checked={outputs.baseCompare ?? false}
                 onCheckedChange={(b) =>
                   set(["sampling", "outputs", "baseCompare"], b)

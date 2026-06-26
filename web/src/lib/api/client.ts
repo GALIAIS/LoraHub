@@ -188,7 +188,7 @@ export const api = {
     datasetImageCount?: number | null
   }): never => {
     throw new Error(
-      "智能推荐已暂时停用 (上游 LLM 流量层超时问题)。后续会切换到 streaming 路径再恢复。",
+      "参数方案生成功能已暂时停用（LLM 流量层超时）。后续切换到 streaming 路径后恢复。",
     )
   },
   saveConfig: (

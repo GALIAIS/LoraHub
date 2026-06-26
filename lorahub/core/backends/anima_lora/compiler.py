@@ -163,6 +163,23 @@ _log = logging.getLogger(__name__)
 DEFAULT_SAMPLE_PROMPTS_FILENAME = "_lorahub_sample_prompts.txt"
 
 
+_TARGET_PRESET_EXCLUDE_PATTERNS: dict[str, list[str]] = {
+    "attention": [r"blocks\.\d+\.mlp\..*"],
+    "cross_attention": [
+        r"blocks\.\d+\.self_attn\..*",
+        r"blocks\.\d+\.mlp\..*",
+    ],
+    "self_attention": [
+        r"blocks\.\d+\.cross_attn\..*",
+        r"blocks\.\d+\.mlp\..*",
+    ],
+    "mlp": [
+        r"blocks\.\d+\.self_attn\..*",
+        r"blocks\.\d+\.cross_attn\..*",
+    ],
+}
+
+
 class CompilationError(ValueError):
     """Raised when an AnimaLoraOptions config can't be compiled."""
 
@@ -626,6 +643,15 @@ def _render_method(opts: AnimaLoraOptions, cfg_dict: dict[str, Any]) -> None:
         msg = f"unhandled method {opts.method!r} (schema enum drift?)"
         raise CompilationError(msg)
 
+    if method != "full_finetune":
+        if opts.layer_start is not None:
+            pieces.append(f"layer_start={int(opts.layer_start)}")
+        if opts.layer_end is not None:
+            pieces.append(f"layer_end={int(opts.layer_end)}")
+        patterns = _TARGET_PRESET_EXCLUDE_PATTERNS.get(opts.target_preset)
+        if patterns:
+            pieces.append(f"exclude_patterns={patterns!r}")
+
     # Universal — the LoRA factory reads this kwarg regardless of method.
     if method == "lora" and opts.use_custom_down_autograd:
         pieces.append("use_custom_down_autograd=true")
@@ -797,6 +823,7 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
         "dora": "use_dora",
         "ia3": "use_ia3",
         "lokr": "use_lokr",
+        "lokr_factorized": "use_lokr_factorized",
         "loha": "use_loha",
         "dylora": "use_dylora",
         "full": "use_full",

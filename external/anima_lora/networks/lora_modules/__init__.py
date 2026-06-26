@@ -15,7 +15,7 @@ from networks.lora_modules.glora import GLoRAModule
 from networks.lora_modules.hydra import HydraLoRAModule, _sigma_sinusoidal_features
 from networks.lora_modules.ia3 import IA3Module
 from networks.lora_modules.loha import LoHAModule
-from networks.lora_modules.lokr import LoKrModule
+from networks.lora_modules.lokr import FactorizedLoKrModule, LoKrModule
 from networks.lora_modules.lora import LoRAModule
 from networks.lora_modules.ortho import (
     OrthoHydraLoRAModule,
@@ -37,6 +37,7 @@ __all__ = [
     "GLoRAModule",
     "HydraLoRAModule",
     "IA3Module",
+    "FactorizedLoKrModule",
     "LoHAModule",
     "LoKrModule",
     "LoRAModule",

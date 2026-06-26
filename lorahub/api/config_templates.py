@@ -57,7 +57,7 @@ _FALLBACK_DESCRIPTION_FROM_ID = {
     "anima_lora_default": "上游 anima_lora make lora default 的通用复刻基线；用于对照，不是画风强化配方。",
     "anima_lora_8gb": "Anima 8GB 安全档：768 分辨率、低显存优化、关闭采样和验证。",
     "anima_loha_32gb": "32GB LoHA 配方：batchSize 2、gradAccum 4、10 epoch、CMMD 验证。",
-    "anima_lokr_32gb": "32GB LoKr 保守配方：rank 8、batchSize 1、gradAccum 8、checkpointing on、compile off。",
+    "anima_lokr_32gb": "32GB factorized LoKr 配方：rank 8、batchSize 1、gradAccum 8、checkpointing on、compile off。",
 }
 
 

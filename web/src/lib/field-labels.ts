@@ -178,7 +178,7 @@ const RAW_PATH_LABELS: Record<string, string> = {
   // Synthetic / generic placeholders the backend uses for non-field
   // issues. Keep these short — they're surfaced in the same list.
   "@summary.vram": "汇总 / 显存预估",
-  "@advisor": "智能推荐",
+  "@advisor": "参数方案",
   "@backend": "后端校验",
   "recipe": "整体配置",
 }

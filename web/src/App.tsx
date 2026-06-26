@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from "react"
+import { Suspense, useCallback, useEffect, useState } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
 import { useQueryClient } from "@tanstack/react-query"
 import { Toaster } from "sonner"
@@ -24,6 +24,8 @@ import { api } from "@/lib/api"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalStatusBar } from "@/components/global-status-bar"
 import { useVersionInfo } from "@/hooks/use-version-info"
+import { useAnimeEnter } from "@/hooks/use-anime-enter"
+import { useAnimeThemeTransition } from "@/hooks/use-anime-theme-transition"
 import {
   Sidebar,
   SidebarContent,
@@ -108,29 +110,7 @@ export default function App() {
     return () => media.removeEventListener("change", apply)
   }, [mode])
 
-  // Run a quick cross-fade transition class for one frame pair after
-  // mode changes so the swap from one palette to the other
-  // doesn't feel like a hard cut. View-Transitions-capable browsers
-  // get a radial reveal instead (driven by handleThemeChange below).
-  const isFirstThemeRun = useRef(true)
-  useEffect(() => {
-    if (isFirstThemeRun.current) {
-      isFirstThemeRun.current = false
-      return
-    }
-    const root = document.documentElement
-    if (root.dataset.viewTransitionInProgress === "true") {
-      return
-    }
-    root.classList.add("theme-transition")
-    const id = window.setTimeout(() => {
-      root.classList.remove("theme-transition")
-    }, 260)
-    return () => {
-      window.clearTimeout(id)
-      root.classList.remove("theme-transition")
-    }
-  }, [mode])
+  useAnimeThemeTransition([mode])
 
   // Eagerly warm every route chunk during browser idle time so the
   // first click on a nav item never pays a network round-trip. We
@@ -218,6 +198,7 @@ export default function App() {
 
   const resolvedTitle =
     NAV.find((n) => isRouteActive(n.to))?.label ?? "LoraHub"
+  const pageEnterRef = useAnimeEnter<HTMLDivElement>([location.pathname])
 
   return (
     <SidebarProvider className="shiro-shell-grid">
@@ -338,7 +319,7 @@ export default function App() {
               }
             >
               <ErrorBoundary resetKey={location.pathname}>
-                <div className="shiro-page-enter flex-1 min-h-0 flex flex-col">
+                <div ref={pageEnterRef} className="flex-1 min-h-0 flex flex-col">
                   <Outlet />
                 </div>
               </ErrorBoundary>
@@ -428,7 +409,7 @@ function SidebarVersionStack() {
     ? "text-amber-700 dark:text-amber-400"
     : "text-sidebar-foreground/80"
   const title = mismatch
-    ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit,多半是后端拉了新代码但 web/dist 没重建。运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
+    ? `前端 ${frontendDisplay} 与后端 ${backendDisplay} 来自不同 commit。请运行 \`scripts/run.bat dev\` 或 \`lorahub manage build\` 重建前端。点击查看详情。`
     : loading
       ? "正在读取后端版本…"
       : `前端 ${frontendDisplay} · 后端 ${backendDisplay} (同一 commit)`

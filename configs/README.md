@@ -10,7 +10,7 @@ LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 sc
 | `anima_lora_8gb.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 8GB | 在 default 基础上压低显存预算:768²、AdamW8bit、blocks_to_swap=24、gradient_checkpointing on、关 sampling/validation/torch.compile。RTX 3060/4060 等 8GB 卡的安全档。 |
 | `anima_lora_v100_fp16.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | V100 32GB | Tesla V100 兼容档:fp16、PyTorch SDPA、batch=1/accum=2、缓存落盘,避开 bf16/flash 路径。 |
 | `anima_loha_32gb.yaml` | anima_lora | LoHA | 32GB | LoHA 高吞吐档,batchSize 2、rank 16、compile on。 |
-| `anima_lokr_32gb.yaml` | anima_lora | LoKr | 32GB | LoKr 保守档,batchSize 1、rank 8、checkpointing on、compile off,避免直接套 LoHA 配置顶满显存。 |
+| `anima_lokr_32gb.yaml` | anima_lora | factorized LoKr | 32GB | LoKr 省显存档,batchSize 1、rank 8、checkpointing on、compile off,forward 不 materialize 完整 ΔW。 |
 
 ## 命名约定
 

@@ -105,7 +105,7 @@ export function StageTimeline({
       </div>
 
       <div className="text-[10.5px] text-muted-foreground/70 leading-relaxed">
-        变点用 PELT 算法 (BIC 惩罚)，识别"动态显著改变"的步数点。在损失图上以青色虚线标出。
+        变点用 PELT 算法 (BIC 惩罚)，识别动态明显变化的步数点。在损失图上以青色虚线标出。
       </div>
     </div>
   )

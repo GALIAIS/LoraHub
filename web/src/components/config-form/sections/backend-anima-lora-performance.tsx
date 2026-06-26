@@ -23,11 +23,11 @@ export function AnimaLoraCacheSection({
   lockBadgeFor: (field: string) => ReactNode
 }) {
   return (
-    <Section title="缓存" subtitle="latent / TE / LLM adapter 输出落盘">
+    <Section title="缓存" subtitle="latent / TE / LLM adapter">
       <Row
         label="缓存潜变量"
         labelBadge={lockBadgeFor("cacheLatents")}
-        description="提前用 VAE 编码图片并存盘，大幅提速但占用额外硬盘空间。"
+        description="预计算 VAE latent。"
       >
         <ToggleSwitch
           checked={value.cacheLatents ?? true}
@@ -39,7 +39,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="潜变量缓存写盘"
         labelBadge={lockBadgeFor("cacheLatentsToDisk")}
-        description="将潜变量缓存写到磁盘，释放内存。"
+        description="将 latent 缓存写入磁盘。"
       >
         <ToggleSwitch
           checked={value.cacheLatentsToDisk ?? true}
@@ -51,7 +51,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="缓存文本编码器输出"
         labelBadge={lockBadgeFor("cacheTextEncoderOutputs")}
-        description="预计算 TE 输出并缓存,避免训练时重复 forward。"
+        description="预计算 text encoder 输出。"
       >
         <ToggleSwitch
           checked={value.cacheTextEncoderOutputs ?? true}
@@ -63,7 +63,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="TE 缓存写盘"
         labelBadge={lockBadgeFor("cacheTextEncoderOutputsToDisk")}
-        description="将文本编码器缓存写到磁盘，释放内存。"
+        description="将 text encoder 缓存写入磁盘。"
       >
         <ToggleSwitch
           checked={value.cacheTextEncoderOutputsToDisk ?? true}
@@ -89,7 +89,7 @@ export function AnimaLoraCacheSection({
       </Row>
       <Row
         label="打乱 caption 变体"
-        description="每 epoch 使用不同的 caption shuffle 变体,增加数据多样性。"
+        description="训练时使用 caption shuffle 变体。"
       >
         <ToggleSwitch
           checked={value.useShuffledCaptionVariants ?? true}
@@ -101,7 +101,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="静态 token 数"
         labelBadge={lockBadgeFor("staticTokenCount")}
-        description="默认 4096 适配 1024² 训练。1536² 训练设 9240 + Bucket 表选 1536。开启 native-flatten 时本字段会被忽略（两条 bucket 路径互斥）。"
+        description="static_token_count。native-flatten 开启时不读取。"
       >
         <FloatInput
           value={value.staticTokenCount}
@@ -115,7 +115,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="VAE 分块大小"
         labelBadge={lockBadgeFor("vaeChunkSize")}
-        description="QwenImage VAE memory layout 锁死 64。"
+        description="VAE chunk size。"
       >
         <FloatInput
           value={value.vaeChunkSize}
@@ -129,7 +129,7 @@ export function AnimaLoraCacheSection({
       <Row
         label="禁用 VAE 缓存"
         labelBadge={lockBadgeFor("vaeDisableCache")}
-        description="关闭 VAE 内部 KV 缓存,拖慢 ~30% 但与官方行为一致。"
+        description="关闭 VAE 内部缓存。"
       >
         <ToggleSwitch
           checked={value.vaeDisableCache ?? false}
@@ -150,8 +150,8 @@ export function AnimaLoraCompileSection({
   set: Setter
 }) {
   return (
-    <Section title="注意力 / torch.compile" subtitle="性能权衡旋钮">
-      <Row label="注意力模式" description="不装 flash-attn 时选 torch。">
+    <Section title="注意力 / torch.compile" subtitle="attention backend 与编译模式">
+      <Row label="注意力模式" description="attention backend。">
         <EnumSelect
           value={value.attnMode ?? "flash"}
           onChange={(next) => set(["backend", "animaLora", "attnMode"], next)}
@@ -160,7 +160,7 @@ export function AnimaLoraCompileSection({
       </Row>
       <Row
         label="编译模式"
-        description="full 与 gradient_checkpointing / blocks_to_swap 互斥，LoraHub 在编译期会校验。"
+        description="torch.compile 模式。"
       >
         <EnumSelect
           value={value.compileMode ?? ""}
@@ -184,7 +184,7 @@ export function AnimaLoraCompileSection({
       </Row>
       <Row
         label="启用 native-flatten"
-        description="走 4032+4200 双家族 bucket 表 + 不 padding 的 fake-5D 展平，block 栈编译为 2 张图（vs 现状 ~24 张）。在 RTX Pro 6000 / 4090 类卡上提速约 2×。与 staticTokenCount 互斥；切换后需要重做 dataset 缓存。"
+        description="启用 native-flatten bucket 路径。与 staticTokenCount 互斥。"
       >
         <ToggleSwitch
           checked={value.enableNativeFlatten ?? false}
@@ -195,7 +195,7 @@ export function AnimaLoraCompileSection({
       </Row>
       <Row
         label="Bucket 表"
-        description="默认 · 按 native-flatten / staticTokenCount 自动选择（4032+4200 或 4096）。1536 · 9216+9240 双家族，用于 Anima v1.0 native 1536² 训练，12 个 entry 覆盖 ar 0.44–2.25。选 1536 时必须同时启用 native-flatten，或将 staticTokenCount 提至 9240 及以上。"
+        description="native-flatten / staticTokenCount 使用的 bucket 表。"
       >
         <EnumSelect
           value={value.bucketTable ?? ""}
@@ -205,7 +205,7 @@ export function AnimaLoraCompileSection({
           options={BUCKET_TABLE_OPTIONS}
         />
       </Row>
-      <Row label="自定义 autograd" description="anima_lora 自定义内存优化 autograd · 默认开。">
+      <Row label="自定义 autograd" description="启用自定义 autograd 路径。">
         <ToggleSwitch
           checked={value.useCustomDownAutograd ?? true}
           onCheckedChange={(checked) =>
@@ -225,8 +225,8 @@ export function AnimaLoraMemorySection({
   set: Setter
 }) {
   return (
-    <Section title="显存 / offload" subtitle="低显存训练相关">
-      <Row label="块交换数" description="0=关。graft preset 默认 20。">
+    <Section title="显存 / offload" subtitle="block swap 与 checkpointing">
+      <Row label="块交换数" description="blocks_to_swap。0 表示关闭。">
         <FloatInput
           value={value.blocksToSwap}
           onChange={(next) =>
@@ -244,7 +244,7 @@ export function AnimaLoraMemorySection({
           }
         />
       </Row>
-      <Row label="Unsloth offload 检查点" description="低显存预设的杀手锏。">
+      <Row label="Unsloth offload 检查点" description="启用 Unsloth offload checkpointing。">
         <ToggleSwitch
           checked={value.unslothOffloadCheckpointing ?? false}
           onCheckedChange={(checked) =>

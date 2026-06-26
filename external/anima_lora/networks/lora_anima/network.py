@@ -2375,6 +2375,18 @@ class LoRANetwork(torch.nn.Module):
 
     def load_state_dict(self, state_dict, strict=True, **kwargs):
         state_dict = self._strip_orig_mod_keys(state_dict)
+        grouped_sd: dict[str, dict[str, torch.Tensor]] = {}
+        for key, value in state_dict.items():
+            prefix, dot, suffix = key.partition(".")
+            if dot:
+                grouped_sd.setdefault(prefix, {})[suffix] = value
+        for lora in self.text_encoder_loras + self.unet_loras:
+            normalizer = getattr(lora, "normalize_state_dict_for_runtime", None)
+            sd_for_lora = grouped_sd.get(lora.lora_name)
+            if normalizer is not None and sd_for_lora:
+                normalizer(sd_for_lora)
+                for suffix, value in sd_for_lora.items():
+                    state_dict[f"{lora.lora_name}.{suffix}"] = value
         return super().load_state_dict(state_dict, strict=strict, **kwargs)
 
     def load_weights(self, file):

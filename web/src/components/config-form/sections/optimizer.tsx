@@ -33,7 +33,7 @@ export const OptimizerFields = memo(function OptimizerFields({
           options={OPTIMIZER_OPTIONS}
         />
       </Row>
-      <Row label="U-Net 学习率" description="SDXL 角色 LoRA 推荐 1e-4。" errors={errorMap.get("optimizer.lr.unet")}>
+      <Row label="U-Net 学习率" description="U-Net 参数学习率。" errors={errorMap.get("optimizer.lr.unet")}>
         <FloatInput
           step={0.00001}
           value={lr.unet ?? 1e-4}
