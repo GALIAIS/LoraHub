@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from lorahub.api.runtime_bind import read_runtime_bind, restart_args, write_runtime_bind
+from lorahub.api.runtime_bind import clear_runtime_bind, read_runtime_bind, restart_args
 from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
@@ -341,6 +341,4 @@ def _trigger_restart() -> None:
 
 
 def _preserve_restart_bind() -> None:
-    bind = read_runtime_bind()
-    if bind is not None:
-        write_runtime_bind(bind.host, bind.port, pid=None)
+    clear_runtime_bind(keep_bind=True)

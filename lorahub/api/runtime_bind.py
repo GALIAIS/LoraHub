@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -113,6 +114,27 @@ def restart_args(executable: str, argv: list[str]) -> list[str]:
     return ensure_uvicorn_bind_args(args, host=bind.host, port=bind.port)
 
 
+def refresh_current_uvicorn_bind(argv: list[str] | None = None, *, pid: int | None = None) -> RuntimeBind | None:
+    """Refresh pid for the current uvicorn process when it matches the saved bind."""
+    bind = read_runtime_bind()
+    if bind is None:
+        return None
+    args = list(sys.argv if argv is None else argv)
+    if not _looks_like_uvicorn_args(args):
+        return None
+    arg_port = _get_option(args, "--port")
+    if arg_port is not None:
+        try:
+            if int(arg_port) != bind.port:
+                return None
+        except ValueError:
+            return None
+    host = _get_option(args, "--host") or bind.host
+    actual_pid = os.getpid() if pid is None else pid
+    write_runtime_bind(host, bind.port, pid=actual_pid)
+    return RuntimeBind(host=host, port=bind.port, pid=actual_pid)
+
+
 def ensure_uvicorn_bind_args(args: list[str], *, host: str, port: int) -> list[str]:
     """Patch argv so uvicorn restarts on the known host/port.
 
@@ -152,6 +174,16 @@ def _set_option(args: list[str], option: str, value: str) -> None:
     args.extend([option, value])
 
 
+def _get_option(args: list[str], option: str) -> str | None:
+    prefix = f"{option}="
+    for i, tok in enumerate(args):
+        if tok == option and i + 1 < len(args):
+            return args[i + 1]
+        if tok.startswith(prefix):
+            return tok[len(prefix):]
+    return None
+
+
 __all__ = [
     "RuntimeBind",
     "bind_file",
@@ -162,6 +194,7 @@ __all__ = [
     "port_file",
     "read_runtime_bind",
     "record_current_process_bind",
+    "refresh_current_uvicorn_bind",
     "restart_args",
     "state_dir",
     "write_runtime_bind",

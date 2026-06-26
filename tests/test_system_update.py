@@ -1012,31 +1012,52 @@ def test_update_restart_args_leave_non_uvicorn_commands_untouched(
     assert args == ["/opt/venv/bin/python", "-m", "lorahub", "serve", "--port", "8123"]
 
 
-def test_system_update_restart_rewrites_bind_before_exit(
+def test_refresh_current_uvicorn_bind_records_exec_pid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import importlib.util
+    from lorahub.api import runtime_bind
 
-    from lorahub.api.runtime_bind import RuntimeBind
-
-    module_path = Path("lorahub/api/routers/system.py").resolve()
-    spec = importlib.util.spec_from_file_location("_system_router_for_test", module_path)
-    assert spec is not None and spec.loader is not None
-    system_router = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(system_router)
-
+    monkeypatch.setattr(runtime_bind, "user_state_path", lambda *_args: Path("state"))
     writes: list[tuple[str, int, int | None]] = []
-
     monkeypatch.setattr(
-        system_router,
+        runtime_bind,
         "read_runtime_bind",
-        lambda: RuntimeBind(host="0.0.0.0", port=18765, pid=123),
+        lambda: runtime_bind.RuntimeBind(host="0.0.0.0", port=18765, pid=None),
     )
     monkeypatch.setattr(
-        system_router,
+        runtime_bind,
         "write_runtime_bind",
         lambda host, port, *, pid=None: writes.append((host, port, pid)),
     )
-    system_router._preserve_restart_bind()
 
-    assert writes == [("0.0.0.0", 18765, None)]
+    refreshed = runtime_bind.refresh_current_uvicorn_bind(
+        ["-m", "uvicorn", "lorahub.api.app:app", "--host", "0.0.0.0", "--port", "18765"],
+        pid=4321,
+    )
+
+    assert refreshed == runtime_bind.RuntimeBind("0.0.0.0", 18765, 4321)
+    assert writes == [("0.0.0.0", 18765, 4321)]
+
+
+def test_refresh_current_uvicorn_bind_ignores_other_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import runtime_bind
+
+    writes: list[tuple[str, int, int | None]] = []
+    monkeypatch.setattr(
+        runtime_bind,
+        "read_runtime_bind",
+        lambda: runtime_bind.RuntimeBind(host="0.0.0.0", port=18765, pid=None),
+    )
+    monkeypatch.setattr(
+        runtime_bind,
+        "write_runtime_bind",
+        lambda host, port, *, pid=None: writes.append((host, port, pid)),
+    )
+
+    assert runtime_bind.refresh_current_uvicorn_bind(
+        ["-m", "uvicorn", "lorahub.api.app:app", "--port", "19000"],
+        pid=4321,
+    ) is None
+    assert writes == []

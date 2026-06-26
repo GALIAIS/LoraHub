@@ -118,6 +118,7 @@ _error_upstream_dispatcher: UpstreamDispatcher | None = None
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     from lorahub.api.paths import ensure_initialised, project_root
+    from lorahub.api.runtime_bind import refresh_current_uvicorn_bind
     from lorahub.api.store import JobStore, default_store_path
 
     # Pin and chdir to the LoraHub project root before anything else
@@ -131,6 +132,7 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     log.info("project root: %s", project_root())
     if pre_chdir != str(root):
         log.info("cwd was %s, chdir'd to project root", pre_chdir)
+    refresh_current_uvicorn_bind()
 
     # One-time migration: older versions of ``scripts/install.{sh,bat}``
     # dropped portable Python + uv into ``<repo>/.tools/``; the toolchain
