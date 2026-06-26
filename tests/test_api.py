@@ -2425,7 +2425,8 @@ def test_list_templates_returns_validated_configs(client: TestClient) -> None:
         "low_vram",
         "anima_lora_default",
         "anima_lora_8gb",
-        "anima_style_32gb_loha",
+        "anima_loha_32gb",
+        "anima_lokr_32gb",
     }.issubset(ids)
 
     # Each template config must round-trip through the schema.

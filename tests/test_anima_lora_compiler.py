@@ -188,16 +188,16 @@ def test_use_cmmd_true_is_emitted(tmp_path: Path) -> None:
     assert emitted["use_cmmd"] is True
 
 
-def test_style_32gb_loha_template_compiles_to_style_recipe(tmp_path: Path) -> None:
-    """Guard the user-facing 32GB style template against drifting to default."""
+def test_32gb_loha_template_compiles_to_loha_recipe(tmp_path: Path) -> None:
+    """Guard the user-facing 32GB LoHA template against drifting to default."""
     from lorahub.core.config.loader import load_config
 
     root = Path(__file__).resolve().parents[1]
-    cfg = load_config(root / "configs" / "anima_style_32gb_loha.yaml")
+    cfg = load_config(root / "configs" / "anima_loha_32gb.yaml")
     argv, files = compile_config(cfg, tmp_path / "ws")
     emitted = _emitted_toml(argv, files)
 
-    assert emitted["output_name"] == "style_anima_32gb"
+    assert emitted["output_name"] == "anima_loha_32gb"
     assert emitted["network_dim"] == 16
     assert emitted["network_alpha"] == 16.0
     assert emitted["learning_rate"] == 7e-05
@@ -211,6 +211,26 @@ def test_style_32gb_loha_template_compiles_to_style_recipe(tmp_path: Path) -> No
     network_args = emitted["network_args"]
     assert "use_loha=true" in network_args
     assert "use_timestep_mask=false" in network_args
+
+
+def test_32gb_lokr_template_compiles_to_lokr_recipe(tmp_path: Path) -> None:
+    from lorahub.core.config.loader import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root / "configs" / "anima_lokr_32gb.yaml")
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["output_name"] == "anima_lokr_32gb"
+    assert emitted["network_dim"] == 8
+    assert emitted["network_alpha"] == 8.0
+    assert emitted["gradient_checkpointing"] is True
+    assert emitted.get("compile_mode") is None
+    assert emitted["datasets"][0]["batch_size"] == 1
+    network_args = emitted["network_args"]
+    assert "use_lokr=true" in network_args
+    assert "use_loha=false" in network_args
+    assert "min_rank=4" in network_args
 
 
 def test_v100_template_emits_fp16_amp_with_stability_clip(tmp_path: Path) -> None:

@@ -45,7 +45,8 @@ _DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs"
 _FALLBACK_NAME_FROM_ID = {
     "anima_lora_default": "Anima LoRA 默认基线",
     "anima_lora_8gb": "Anima LoRA 8GB",
-    "anima_style_32gb_loha": "Anima 画风 LoHA 32GB",
+    "anima_loha_32gb": "Anima LoHA 32GB",
+    "anima_lokr_32gb": "Anima LoKr 32GB",
     "sdxl_character": "SDXL Character",
     "sdxl_style": "SDXL Style",
     "sd15_character": "SD 1.5 Character",
@@ -55,7 +56,8 @@ _FALLBACK_NAME_FROM_ID = {
 _FALLBACK_DESCRIPTION_FROM_ID = {
     "anima_lora_default": "上游 anima_lora make lora default 的通用复刻基线；用于对照，不是画风强化配方。",
     "anima_lora_8gb": "Anima 8GB 安全档：768 分辨率、低显存优化、关闭采样和验证。",
-    "anima_style_32gb_loha": "32GB 画风 LoRA 起步配方：LoHA、batchSize 2、gradAccum 4、10 epoch、CMMD 验证。",
+    "anima_loha_32gb": "32GB LoHA 配方：batchSize 2、gradAccum 4、10 epoch、CMMD 验证。",
+    "anima_lokr_32gb": "32GB LoKr 保守配方：rank 8、batchSize 1、gradAccum 8、checkpointing on、compile off。",
 }
 
 

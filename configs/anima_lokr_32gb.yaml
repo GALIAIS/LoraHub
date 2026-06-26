@@ -1,12 +1,14 @@
-# Anima style LoRA on the anima_lora backend — 32GB VPS config.
+# Anima LoKr on the anima_lora backend — 32GB config.
 #
 # Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
-# Expected throughput: ~1.2-1.8 s/step (LoHA is ~20% slower than DoRA at the
-# same rank — two LoRA pairs per Linear instead of one).
-# Expected VRAM peak: ~24-27 GB.
+# Conservative LoKr profile. Do not copy the LoHA 32GB runtime knobs directly:
+# LoKr has a different decomposition path and can peak much higher at 1024+.
 #
-# What separates this from anima_character_32gb_dora.yaml:
-#   - algorithm = loha (Hadamard product; effective rank up to r²)
+# What separates this from the LoHA 32GB config:
+#   - algorithm = lokr (Kronecker decomposition)
+#   - lower rank and batch
+#   - lower bucket ceiling
+#   - checkpointing on, compile off
 #   - dataset has wider AR range and heavier caption dropout
 #   - more epochs (style needs more variety per image than character)
 #   - optimizer with slightly higher lr (style trains faster than identity)
@@ -16,8 +18,8 @@
 #      *outside* any caption, so it generalises to prompts you never tagged
 #   2. numRepeats 3-4 → don't burn the same 100 images into the network 8
 #      times per epoch; let it see fresh variety
-#   3. LoHA at r=16 → effective rank ~256, plenty for multi-scale texture /
-#      colour / brush coupling that pure LoRA can't fit at the same params
+#   3. LoKr at r=8 keeps 32GB headroom while still giving a stronger
+#      decomposition than plain LoRA.
 
 schemaVersion: "1.0"
 
@@ -31,13 +33,13 @@ baseModel:
 
 dataset:
   source: ./datasets/your_style
-  resolution: [1024, 1024]
+  resolution: [896, 896]
   bucket:
     enabled: true
     # Style datasets mix portraits / landscapes / scenes — wider AR
     # range than the character config.
     min: 512
-    max: 1664
+    max: 1344
     step: 64
   caption:
     strategy: tag_file
@@ -46,7 +48,7 @@ dataset:
     # Heavier dropRate than character — style should bleed across prompts.
     dropRate: 0.18
     keepTokens: 1
-  # 3 repeats × 200 imgs × 10 epochs / (batch 2 × accum 4) ≈ 750 steps.
+  # 3 repeats × 200 imgs × 10 epochs / (batch 1 × accum 8) ≈ 750 steps.
   # ~15 minutes wall-clock at 1.5 s/step. Style benefits from variety
   # over repetition; if your dataset is small (<100 imgs) bump
   # numRepeats to 4-5.
@@ -54,13 +56,13 @@ dataset:
 
 schedule:
   epochs: 10
-  batchSize: 2
-  gradAccum: 4
+  batchSize: 1
+  gradAccum: 8
   seed: 42
   maxSteps: null
 
 precision: bf16
-gradientCheckpointing: false
+gradientCheckpointing: true
 cacheLatents: true
 cacheLatentsToDisk: true
 skipCacheCheck: true
@@ -69,7 +71,7 @@ sampling:
   enabled: true
   everyNEpochs: 2
   atFirst: true
-  resolution: [1024, 1024]
+  resolution: [896, 896]
   seed: -1
   triggerWord: ""              # 留空 → 启动时从 dataset captions 推断
   outputs:
@@ -130,7 +132,7 @@ sampling:
       height: 1152
 
 output:
-  name: style_anima_32gb
+  name: anima_lokr_32gb
   saveEveryNEpochs: 2
   saveDtype: bf16
 
@@ -164,28 +166,26 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: style_anima_32gb
+    outputName: anima_lokr_32gb
 
-    # Algorithm: LoHA — same choice as the 8GB config, scaled up.
-    # Effective rank is ``r²`` so r=16 here is comparable in expressive
-    # power to a r≈256 plain LoRA, at 32 × the parameter cost (vs r=16
-    # plain LoRA).
+    # algorithm: lokr — Kronecker decomposition. This uses lower rank
+    # than the LoHA 32GB config because LoKr can peak higher during the
+    # DiT block stack.
     lora:
-      algorithm: loha
-      # T-LoRA mask is a no-op for LoHA (atomic decomposition owns the
+      algorithm: lokr
+      minRank: 4
+      # T-LoRA mask is a no-op for LoKr (atomic decomposition owns the
       # full ΔW); explicit off for clarity.
       useTimestepMask: false
-      # channel_scaling_alpha 只对 LoRA / OrthoLoRA factory 生效;LoHA
+      # channel_scaling_alpha 只对 LoRA / OrthoLoRA factory 生效;LoKr
       # 走 atomic 路径会忽略它。这里仍设 0.5,方便用户在不动其它字段
       # 的前提下把 algorithm 切到 ortho 时立刻拿到上游 methods/lora.toml
       # 默认 channel scale。
       channelScalingAlpha: 0.5
 
-    # Network sizing. r=16 here gives effective rank up to 256 via the
-    # Hadamard product. Going higher quickly hits OOM at 1024² because
-    # LoHA stores 4 matrices per Linear (vs LoRA's 2).
-    networkDim: 16
-    networkAlpha: 16.0
+    # Network sizing. r=8 is the 32GB-safe LoKr starting point.
+    networkDim: 8
+    networkAlpha: 8.0
     networkTrainUnetOnly: true
 
     optimizerType: AdamW
@@ -221,18 +221,16 @@ backend:
     # Attention.
     attnMode: torch
 
-    # COMPILE — same fast path as character. cudagraph_trees + LoHA's
-    # forward (two matmul pairs + Hadamard) compiles fine; the
-    # per-step kernel count is higher than DoRA so the % wins from
-    # compilation are if anything bigger here.
-    compileMode: blocks
-    compileInductorMode: reduce-overhead
-    torchCompile: true
+    # Compile off by default for LoKr because first-step graph capture can
+    # push 32GB cards over the edge.
+    compileMode: null
+    compileInductorMode: null
+    torchCompile: false
     useCustomDownAutograd: true
 
     # Memory / offload — all OFF.
     blocksToSwap: 0
-    gradientCheckpointing: false
+    gradientCheckpointing: true
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
     mixedPrecision: bf16

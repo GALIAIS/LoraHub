@@ -9,18 +9,18 @@ LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 sc
 | `anima_lora_default.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 通用 | 100% 复刻上游 anima_lora `make lora` 的三层 merge 链(base + lora + default preset)。新手对照参考的基线。 |
 | `anima_lora_8gb.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 8GB | 在 default 基础上压低显存预算:768²、AdamW8bit、blocks_to_swap=24、gradient_checkpointing on、关 sampling/validation/torch.compile。RTX 3060/4060 等 8GB 卡的安全档。 |
 | `anima_lora_v100_fp16.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | V100 32GB | Tesla V100 兼容档:fp16、PyTorch SDPA、batch=1/accum=2、缓存落盘,避开 bf16/flash 路径。 |
-| `anima_style_32gb_loha.yaml` | anima_lora | LoHa + T-LoRA | 32GB | 画风 LoRA 高吞吐档,同硬件预算用 LoHa(rank=4 等效 dim=16,参数量减半收敛更快)代替 DoRA。 |
+| `anima_loha_32gb.yaml` | anima_lora | LoHA | 32GB | LoHA 高吞吐档,batchSize 2、rank 16、compile on。 |
+| `anima_lokr_32gb.yaml` | anima_lora | LoKr | 32GB | LoKr 保守档,batchSize 1、rank 8、checkpointing on、compile off,避免直接套 LoHA 配置顶满显存。 |
 
 ## 命名约定
 
 ```
-<arch>_<purpose>_<vram-tier>[_<algo>].yaml
+<arch>_<algorithm>_<vram-tier>.yaml
 ```
 
 * `<arch>`:`anima` (Anima DiT) / `kohya` / `dp` (diffusion-pipe) — 当前都是 anima_lora 后端
-* `<purpose>`:`lora`(通用)/ `style`
+* `<algorithm>`:`lora` / `loha` / `lokr`
 * `<vram-tier>`:`8gb` / `32gb` / 省略表示通用基线
-* `<algo>`:`dora` / `loha`,与 default LoRA 的算法不同时显式标注
 
 ## 自定义起步
 
@@ -64,4 +64,4 @@ lorahub train configs/my_config.yaml
 * `anima_style_24gb.yaml` / `anima_style_8gb_loha.yaml`
 * `sdxl_character_8gb.yaml` (kohya 后端,目前未维护)
 
-迁移指南:character / style 8GB 用 `anima_lora_8gb.yaml` 起步, 24GB 用 `anima_lora_default.yaml` 然后按需打开 sampling/compile,32GB 画风直接用 `anima_style_32gb_loha.yaml`。
+迁移指南:8GB 用 `anima_lora_8gb.yaml` 起步,24GB 用 `anima_lora_default.yaml` 然后按需打开 sampling/compile,32GB 按算法选择 `anima_loha_32gb.yaml` 或 `anima_lokr_32gb.yaml`。
