@@ -82,6 +82,16 @@ def test_tlora_algorithm_requires_timestep_mask() -> None:
         )
 
 
+def test_asr_tlora_algorithm_is_separate_from_tlora() -> None:
+    cfg = AnimaLoraMethodLoraConfig(
+        algorithm="asr_tlora",
+        use_timestep_mask=False,
+    )
+    assert cfg.algorithm == "asr_tlora"
+    assert cfg.use_timestep_mask is True
+    assert cfg.per_sample_timestep_mask is False
+
+
 def test_svd_down_init_is_plain_lora_only() -> None:
     cfg = AnimaLoraMethodLoraConfig(
         algorithm="lora",

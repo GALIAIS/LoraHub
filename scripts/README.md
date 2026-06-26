@@ -26,6 +26,19 @@ modes call `lorahub service start --foreground`; dev mode keeps the
 two-process (uvicorn + vite) flow because vite HMR doesn't fit the
 service-daemon shape.
 
+## SSH tunnel
+
+Use this when the VPS web port is not exposed publicly. Keep the terminal
+open, then browse to the printed local URL.
+
+```pwsh
+# Windows
+scripts\tunnel.bat cwadmin@113.108.63.33 13122 18080 18765
+
+# Linux / macOS / WSL
+./scripts/tunnel.sh root@1.2.3.4 22 18080 18765
+```
+
 ## First-time install
 
 Two flavours per platform — pick the one matching your network.
@@ -49,8 +62,8 @@ Installs into the repo:
 
 ## VPS deploy
 
-Two scripts cooperate. Run them from a remote shell on the VPS — there
-is no local-side wrapper script anymore (use ssh + run them directly).
+Two scripts cooperate. Run them from a remote shell on the VPS. If the web
+port is not public, use `scripts/tunnel.*` from your local machine.
 
 | Script | Purpose |
 |--------|---------|

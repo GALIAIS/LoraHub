@@ -15,7 +15,10 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import sqlite3
+import subprocess
+import sys
 import threading
 from collections.abc import Generator
 from datetime import datetime
@@ -46,6 +49,12 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
 """
+
+
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    return 0
 
 
 class JobStore:
@@ -312,21 +321,18 @@ def _reap_orphan(pid: int, expected_create_time: float | None = None) -> bool:
     ):
         # PID belongs to a different process now; do not kill.
         return False
-    import os  # noqa: PLC0415
     import signal  # noqa: PLC0415
-    import sys  # noqa: PLC0415
     import time  # noqa: PLC0415
 
     if sys.platform == "win32":
         # Windows: use taskkill /T to walk the process tree.
-        import subprocess  # noqa: PLC0415
-
         try:
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 capture_output=True,
                 check=False,
                 timeout=10,
+                creationflags=_subprocess_no_window(),
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False

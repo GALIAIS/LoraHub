@@ -792,6 +792,7 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
     flag_for_algorithm: dict[str, str | None] = {
         "lora": None,
         "tlora": None,
+        "asr_tlora": None,
         "ortho": "use_ortho",
         "dora": "use_dora",
         "ia3": "use_ia3",
@@ -813,9 +814,12 @@ def _lora_network_args(opts: AnimaLoraOptions) -> list[str]:
     pieces.append(f"lokr_factor={sub.lokr_factor}")
     pieces.append(f"boft_factors={sub.boft_factors}")
     pieces.append(f"down_init={sub.down_init}")
-    use_timestep_mask = sub.use_timestep_mask or sub.algorithm == "tlora"
+    use_timestep_mask = sub.use_timestep_mask or sub.algorithm in ("tlora", "asr_tlora")
     pieces.append(
         f"use_timestep_mask={'true' if use_timestep_mask else 'false'}",
+    )
+    pieces.append(
+        f"per_sample_timestep_mask={'true' if (sub.per_sample_timestep_mask or sub.algorithm == 'asr_tlora') else 'false'}",
     )
     pieces.append(f"min_rank={sub.min_rank}")
     pieces.append(f"alpha_rank_scale={_fmt_float(sub.alpha_rank_scale)}")

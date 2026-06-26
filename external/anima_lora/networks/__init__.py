@@ -184,6 +184,7 @@ _LYCORIS_ALGO_TO_FLAG: Dict[str, Optional[str]] = {
     "lora": None,
     "locon": None,
     "tlora": "use_timestep_mask",
+    "asr_tlora": "use_timestep_mask",
     "loha": "use_loha",
     "lokr": "use_lokr",
     "ia3": "use_ia3",

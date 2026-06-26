@@ -78,10 +78,11 @@ nav:
       - 概览: configs/index.md
       - 模板: configs/templates.md
       - 字段参考: configs/fields.md
+  - 研究:
+      - Anima Base v1.0: research/anima-base-v1.md
   - CLI:
       - 概览: cli/index.md
       - 命令参考: cli/commands.md
   - API:
       - 概览: api/index.md
       - 端点: api/endpoints.md
-

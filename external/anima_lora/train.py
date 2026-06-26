@@ -1053,10 +1053,12 @@ class AnimaTrainer:
             text_encoder_conds = (
                 text_encoder_outputs_list  # List of text encoder outputs
             )
+        has_cached_text_conds = bool(text_encoder_conds) and any(
+            cond is not None for cond in text_encoder_conds
+        )
 
         if (
-            len(text_encoder_conds) == 0
-            or text_encoder_conds[0] is None
+            not has_cached_text_conds
             or train_text_encoder
         ):
             with (
@@ -1457,12 +1459,17 @@ class AnimaTrainer:
         """Build train/val dataset groups and the collator shared by both loaders."""
         use_dreambooth_method = args.in_json is None
         use_user_config = args.dataset_config is not None
+        inline_dataset_config = getattr(args, "inline_dataset_config", None)
 
         if args.dataset_class is None:
             blueprint_generator = BlueprintGenerator(
                 ConfigSanitizer(support_dropout=True)
             )
-            if use_user_config:
+            if inline_dataset_config:
+                logger.info("Loading dataset config from --config_file inline sections")
+                user_config = inline_dataset_config
+                use_user_config = True
+            elif use_user_config:
                 logger.info(f"Loading dataset config from {args.dataset_config}")
                 user_config = config_util.load_user_config(args.dataset_config)
                 ignored = ["train_data_dir", "reg_data_dir", "in_json"]

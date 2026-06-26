@@ -787,6 +787,24 @@ def test_disk_io_per_device(
 # --------------------------------------------------------------------------- #
 
 
+def test_external_gpu_probe_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(system_stats.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(system_stats.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    def fake_run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(system_stats.subprocess, "run", fake_run)
+
+    system_stats._run_hidden(["nvidia-smi"], check=False)
+
+    assert calls[0]["creationflags"] == 0x08000000
+
+
 def test_gpu_pcie_fields_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     """nvidia-smi --query-gpu with PCIe + clocks columns must populate GpuStats."""
     line = (

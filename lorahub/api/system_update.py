@@ -43,6 +43,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -133,6 +134,12 @@ def _current_version() -> str:
 _VERSION_SOURCES = ("git-describe", "hatch-vcs", "dist-metadata", "changelog", "fallback")
 
 
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    return 0
+
+
 def _git_describe_runtime() -> str | None:
     """Resolve the version via runtime ``git describe`` against the repo.
 
@@ -187,6 +194,7 @@ def _git_describe_runtime() -> str | None:
             text=True,
             timeout=5,
             check=False,
+            creationflags=_subprocess_no_window(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
@@ -425,6 +433,7 @@ def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=_subprocess_no_window(),
     )
 
 

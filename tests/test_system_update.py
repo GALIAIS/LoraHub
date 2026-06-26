@@ -603,6 +603,43 @@ def test_resolve_version_fallback_when_all_sources_fail(
     assert src == "fallback"
 
 
+def test_git_version_probe_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+    (tmp_path / ".git").mkdir()
+
+    monkeypatch.setattr(su.sys, "platform", "win32")
+    monkeypatch.setattr(su.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("lorahub.core.paths.project_root", lambda: tmp_path)
+
+    def fake_run(*_args: object, **kwargs: object):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess([], 0, stdout="v1.0.8\n", stderr="")
+
+    monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+    assert su._git_describe_runtime() == "1.0.8"
+    assert calls[0]["creationflags"] == 0x08000000
+
+
+def test_git_helper_hides_windows_console(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(su.sys, "platform", "win32")
+    monkeypatch.setattr(su.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    def fake_run(*_args: object, **kwargs: object):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(su.subprocess, "run", fake_run)
+
+    su._git(["status", "--porcelain"], cwd=tmp_path)
+
+    assert calls[0]["creationflags"] == 0x08000000
+
+
 def test_check_marks_zip_install_as_non_git(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

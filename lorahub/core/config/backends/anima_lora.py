@@ -41,6 +41,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
         "lora",
         "locon",
         "tlora",
+        "asr_tlora",
         "ortho",
         "dora",
         "ia3",
@@ -96,6 +97,7 @@ class AnimaLoraMethodLoraConfig(BaseModel):
     # (ia3 / lokr / loha / full / diag_oft / boft / glora / vera) but
     # keeping the field on universally simplifies the front-end.
     use_timestep_mask: bool = True
+    per_sample_timestep_mask: bool = False
     min_rank: int = Field(16, ge=1)
     alpha_rank_scale: float = Field(1.0, gt=0)
 
@@ -203,16 +205,19 @@ class AnimaLoraMethodLoraConfig(BaseModel):
 
         # No-op: ``use_X=False`` is just confirming the algorithm not
         # being chosen.
+        if self.algorithm == "asr_tlora":
+            object.__setattr__(self, "use_timestep_mask", True)
+
         if self.algorithm == "tlora" and not self.use_timestep_mask:
             raise ValueError(
-                "AnimaLoraMethodLoraConfig: algorithm='tlora' requires "
+                f"AnimaLoraMethodLoraConfig: algorithm={self.algorithm!r} requires "
                 "use_timestep_mask=True. Pick algorithm='lora' for plain LoRA "
                 "without timestep rank masking."
             )
-        if self.down_init == "weight_svd" and self.algorithm not in ("lora", "tlora"):
+        if self.down_init == "weight_svd" and self.algorithm not in ("lora", "tlora", "asr_tlora"):
             raise ValueError(
                 "AnimaLoraMethodLoraConfig: down_init='weight_svd' is only "
-                "supported for algorithm='lora' or algorithm='tlora'."
+                "supported for algorithm='lora', algorithm='tlora', or algorithm='asr_tlora'."
             )
         return self
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from lorahub.api import state
 from lorahub.api.store import JobStore, default_store_path
@@ -88,6 +91,25 @@ def test_mark_orphans_interrupted_only_touches_live_states(tmp_path: Path) -> No
     assert interrupted["running"].error == "interrupted by server restart"
     assert interrupted["canceling"].finished_at is not None
     assert interrupted["canceling"].error == "interrupted by server restart"
+
+
+def test_reap_orphan_hides_windows_taskkill_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api import store
+
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(store.sys, "platform", "win32")
+    monkeypatch.setattr(store.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(store, "_pid_alive", lambda pid: False)
+
+    def fake_run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(store.subprocess, "run", fake_run)
+
+    assert store._reap_orphan(123) is True
+    assert calls[0]["creationflags"] == 0x08000000
 
 
 def test_registry_persists_creates(tmp_path: Path) -> None:

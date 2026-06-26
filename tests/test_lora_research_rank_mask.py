@@ -74,6 +74,38 @@ def test_per_sample_timestep_mask_kwarg_is_hidden_and_default_off():
     assert enabled_cfg.per_sample_timestep_mask is True
 
 
+def test_per_sample_timestep_mask_broadcasts_over_linear_and_conv_activations():
+    torch = pytest.importorskip("torch")
+    from networks.lora_modules.lora import LoRAModule
+
+    module = LoRAModule(
+        "test_lora",
+        torch.nn.Linear(6, 6, bias=False),
+        lora_dim=4,
+        alpha=4,
+    )
+    module._timestep_mask = torch.tensor(
+        [[[1.0, 1.0, 0.0, 0.0]], [[1.0, 0.0, 0.0, 0.0]]]
+    )
+
+    assert module._rank_mask_for(torch.zeros(2, 4)).shape == (2, 4)
+    assert module._rank_mask_for(torch.zeros(2, 9, 4)).shape == (2, 1, 4)
+    assert module._rank_mask_for(torch.zeros(2, 1, 8, 8, 4)).shape == (
+        2,
+        1,
+        1,
+        1,
+        4,
+    )
+
+    conv_mask = module._rank_mask_for(torch.zeros(2, 4, 8, 8))
+    assert conv_mask.shape == (2, 4, 1, 1)
+    assert conv_mask[:, :, 0, 0].tolist() == [
+        [1.0, 1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+    ]
+
+
 def test_layer_rank_budget_keeps_attention_capacity_before_mlp():
     assert layer_rank_multiplier("net.blocks.0.cross_attn.q_proj") == 1.0
     assert layer_rank_multiplier("net.blocks.0.self_attn.q_proj") == 0.75

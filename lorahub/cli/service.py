@@ -132,6 +132,59 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _resolve_daemon_pid(launched_pid: int, port: int) -> int:
+    """Return the process that actually listens on *port*.
+
+    On Windows, uv/venv ``pythonw.exe`` can be a launcher process that starts
+    the real interpreter as a child.  Persisting the launcher PID makes
+    ``service stop`` leave the real uvicorn process behind, so resolve by the
+    listening TCP port after the health check succeeds.
+    """
+    if sys.platform != "win32" or port <= 0:
+        return launched_pid
+    try:
+        import psutil  # noqa: PLC0415
+    except ImportError:
+        return launched_pid
+
+    try:
+        conns = psutil.net_connections(kind="tcp")
+    except Exception:  # noqa: BLE001
+        return launched_pid
+
+    for conn in conns:
+        laddr = getattr(conn, "laddr", None)
+        conn_port = getattr(laddr, "port", None)
+        if conn_port is None and isinstance(laddr, tuple) and len(laddr) >= 2:
+            conn_port = laddr[1]
+        if conn_port != port or getattr(conn, "pid", None) is None:
+            continue
+        try:
+            proc = psutil.Process(int(conn.pid))
+            cmdline = " ".join(proc.cmdline())
+        except Exception:  # noqa: BLE001
+            continue
+        if "uvicorn" in cmdline and "lorahub.api.app:app" in cmdline:
+            return int(conn.pid)
+    return launched_pid
+
+
+def _terminate_windows_process_tree(pid: int, timeout: float) -> None:
+    import psutil  # noqa: PLC0415
+
+    proc = psutil.Process(pid)
+    processes = proc.children(recursive=True) + [proc]
+    for child in processes:
+        with __import__("contextlib").suppress(psutil.Error):
+            child.terminate()
+    _, alive = psutil.wait_procs(processes, timeout=timeout)
+    for child in alive:
+        with __import__("contextlib").suppress(psutil.Error):
+            child.kill()
+    if alive:
+        psutil.wait_procs(alive, timeout=timeout)
+
+
 def _free_port() -> int:
     """Ask the kernel for any free TCP port.
 
@@ -156,6 +209,15 @@ def _venv_python() -> Path:
     even when the user invoked us via a system-wide shim.
     """
     return Path(sys.executable)
+
+
+def _daemon_python() -> Path:
+    py = _venv_python()
+    if sys.platform == "win32":
+        pythonw = py.with_name("pythonw.exe")
+        if pythonw.exists():
+            return pythonw
+    return py
 
 
 def _wait_for_health(port: int, *, timeout_s: float = 30.0) -> bool:
@@ -234,7 +296,7 @@ def start(
         )
         return
 
-    py = _venv_python()
+    py = _daemon_python()
     cmd = [
         str(py),
         "-m",
@@ -276,14 +338,14 @@ def start(
             close_fds=True,
         )
 
-    write_runtime_bind(host, port, pid=proc.pid)
-
     console.print(t("service.started", pid=proc.pid, port=port))
     console.print(t("service.log_path", path=log))
 
     if _wait_for_health(port, timeout_s=30.0):
+        write_runtime_bind(host, port, pid=_resolve_daemon_pid(proc.pid, port))
         console.print(t("service.healthy", host=host, port=port))
     else:
+        write_runtime_bind(host, port, pid=proc.pid)
         err_console.print(t("service.health_timeout", log=log))
         raise typer.Exit(code=3)
 
@@ -314,12 +376,7 @@ def stop(
         try:
             import psutil  # noqa: PLC0415
 
-            proc = psutil.Process(pid)
-            proc.terminate()
-            try:
-                proc.wait(timeout=timeout)
-            except psutil.TimeoutExpired:
-                proc.kill()
+            _terminate_windows_process_tree(pid, timeout)
         except Exception as exc:  # noqa: BLE001
             err_console.print(t("service.stop.failed", pid=pid, err=exc))
             raise typer.Exit(code=1) from exc

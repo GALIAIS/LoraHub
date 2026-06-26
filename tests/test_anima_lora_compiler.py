@@ -290,10 +290,31 @@ def test_tlora_algorithm_emits_plain_lora_with_timestep_mask(tmp_path: Path) -> 
     network_args = _argv_pairs(argv, files)["--network_args"]
 
     assert "use_timestep_mask=true" in network_args
+    assert "per_sample_timestep_mask=false" in network_args
     assert "min_rank=8" in network_args
     assert "alpha_rank_scale=0.75" in network_args
     assert "use_ortho=false" in network_args
     assert not any(arg.startswith("use_tlora=") for arg in network_args)
+
+
+def test_asr_tlora_algorithm_enables_per_sample_timestep_mask(tmp_path: Path) -> None:
+    from lorahub.core.config.schema import AnimaLoraMethodLoraConfig
+
+    opts = AnimaLoraOptions(
+        lora=AnimaLoraMethodLoraConfig(
+            algorithm="asr_tlora",
+            min_rank=4,
+            alpha_rank_scale=1.15,
+        ),
+    )
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    network_args = _argv_pairs(argv, files)["--network_args"]
+
+    assert "use_timestep_mask=true" in network_args
+    assert "per_sample_timestep_mask=true" in network_args
+    assert "min_rank=4" in network_args
+    assert "alpha_rank_scale=1.15" in network_args
 
 
 def test_svd_down_init_emits_network_arg(tmp_path: Path) -> None:
