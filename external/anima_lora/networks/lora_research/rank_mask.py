@@ -52,13 +52,6 @@ def rank_budget(
     if max_timestep <= 0:
         raise ValueError(f"max_timestep must be > 0, got {max_timestep}")
 
-    if rank < 1:
-        raise ValueError(f"rank must be >= 1, got {rank}")
-    if not 1 <= min_rank <= rank:
-        raise ValueError(f"min_rank must be in [1, rank], got {min_rank}")
-    if max_timestep <= 0:
-        raise ValueError(f"max_timestep must be > 0, got {max_timestep}")
-
     t = timesteps.detach().float().reshape(-1)
     frac = ((max_timestep - t) / max_timestep).clamp(0.0, 1.0)
     budget = frac.pow(float(alpha)) * float(rank - min_rank) + float(min_rank)

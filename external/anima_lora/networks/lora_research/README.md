@@ -22,6 +22,16 @@ Primary sources used before changing this research plan:
 - SVDiff: diffusion personalization can reduce overfitting by training a compact
   singular-value parameter space instead of broad weight updates.
   https://arxiv.org/abs/2303.11305
+- DreamBooth: few-image personalization needs prior preservation to avoid
+  memorizing the small reference set.
+  https://arxiv.org/abs/2208.12242
+- Custom Diffusion: updating a small conditioning subset, especially
+  cross-attention key/value projections, can represent concepts while reducing
+  overfitting.
+  https://arxiv.org/abs/2212.04488
+- StyleDrop: style tuning can work from one/few style references by training a
+  very small parameter subset and using iterative quality feedback.
+  https://arxiv.org/abs/2306.00983
 - T-LoRA: diffusion personalization overfits more at higher/noisier timesteps;
   timestep-dependent rank masking and orthogonal initialization improve concept
   fidelity/text alignment.
@@ -217,6 +227,64 @@ Paper basis:
 Local extension:
 
 - Add a small orthogonality penalty before trying another adapter class.
+
+## Research Track 4: SFR-LoRA
+
+Working name: Style Fidelity Rank LoRA.
+
+Goal: specialize the existing ASR/T-LoRA path for style training without adding
+new trainable parameters or a new checkpoint layout. The algorithm changes
+capacity allocation, not tensor format.
+
+Style training has two regimes:
+
+- Few images: preserve style while avoiding content memorization. Use higher
+  caption dropout, stronger high-sigma rank shrink, cross-attention at full
+  capacity, and lower self-attn/MLP capacity.
+- Many images: style statistics are better covered, so allow more self-attn/MLP
+  capacity and lower caption dropout.
+
+Minimal rule:
+
+```text
+rank(layer, sigma, n_images) =
+  ASR_rank(sigma) * style_layer_multiplier(layer, n_images)
+```
+
+Initial static multipliers:
+
+| Dataset | cross-attn | self-attn | MLP |
+| --- | ---: | ---: | ---: |
+| 1-8 images | 1.0 | 0.625 | 0.375 |
+| 9-80 images | 1.0 | 0.75 | 0.5 |
+| 81+ images | 1.0 | 0.875 | 0.625 |
+
+Initial recipe knobs:
+
+| Dataset | alpha_rank_scale | caption_dropout_rate | min_rank_ratio | spectral_weight |
+| --- | ---: | ---: | ---: | ---: |
+| 1-8 images | 1.5 | 0.28 | 0.25 | 0.02 |
+| 9-80 images | 1.15 | 0.18 | 0.33 | 0.01 |
+| 81+ images | 0.9 | 0.10 | 0.50 | 0.005 |
+
+Paper basis:
+
+- StyleDrop: style can be learned from one/few references, but the trainable
+  subset must stay small and feedback/evaluation matters.
+- DreamBooth: prior preservation is needed when reference count is tiny.
+- Custom Diffusion: conditioning projections are high-leverage for fast concept
+  acquisition.
+- SVDiff/T-LoRA: compact parameter movement and timestep-rank control reduce
+  overfitting and language drift.
+
+Initial code:
+
+- `style_fidelity.py::style_recipe`
+- `style_fidelity.py::style_rank_budget`
+
+Do not implement in production until a real style dataset confirms it beats
+current `anima_style_32gb_loha` and `tlora` on prompt adherence and style
+consistency.
 
 ## Evaluation
 
