@@ -108,6 +108,7 @@ SHARED_KWARG_FLAGS: Tuple[str, ...] = (
     "loraplus_text_encoder_lr_ratio",
     # T-LoRA (timestep-dependent rank masking)
     "use_timestep_mask",
+    "per_sample_timestep_mask",
     "min_rank",
     "alpha_rank_scale",
     # Per-channel input pre-scaling (SmoothQuant-style)

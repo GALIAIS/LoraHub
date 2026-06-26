@@ -1125,9 +1125,44 @@ class LoRANetwork(torch.nn.Module):
             return
 
         max_rank = self.cfg.lora_dim
+        if self.cfg.per_sample_timestep_mask:
+            loras = [
+                lora
+                for lora in self.text_encoder_loras + self.unet_loras
+                if isinstance(lora, (LoRAModule, OrthoLoRAModule))
+            ]
+            if not loras:
+                return
+            batch = int(timesteps.numel())
+            mask = getattr(self, "_shared_timestep_mask", None)
+            if (
+                mask is None
+                or mask.device != timesteps.device
+                or tuple(mask.shape) != (batch, 1, max_rank)
+            ):
+                mask = torch.zeros(batch, 1, max_rank, device=timesteps.device)
+                self._shared_timestep_mask = mask
+                self._timestep_mask_arange = torch.arange(max_rank, device=timesteps.device)
+                for lora in loras:
+                    lora._timestep_mask = mask
+
+            t = timesteps.float().reshape(-1)
+            frac = ((max_timestep - t) / max_timestep).clamp(min=0.0, max=1.0)
+            r = (
+                frac.pow(self.cfg.alpha_rank_scale) * (max_rank - self.cfg.min_rank)
+                + self.cfg.min_rank
+            )
+            r = r.clamp(max=float(max_rank))
+            mask.copy_(
+                (self._timestep_mask_arange.unsqueeze(0) < r.unsqueeze(1))
+                .to(mask.dtype)
+                .unsqueeze(1)
+            )
+            return
+
         # Reuse a single GPU-resident mask to avoid ~200 CPU→GPU transfers per step
         mask = getattr(self, "_shared_timestep_mask", None)
-        if mask is None or mask.device != timesteps.device:
+        if mask is None or mask.device != timesteps.device or tuple(mask.shape) != (1, max_rank):
             mask = torch.zeros(1, max_rank, device=timesteps.device)
             self._shared_timestep_mask = mask
             self._timestep_mask_arange = torch.arange(max_rank, device=timesteps.device)

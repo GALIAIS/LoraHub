@@ -244,6 +244,24 @@ export interface ConfigFormValue {
     atFirst?: boolean
     promptsFile?: string | null
     prompts?: SamplingPromptValue[]
+    sampleSampler?:
+      | "ddim"
+      | "pndm"
+      | "lms"
+      | "euler"
+      | "euler_a"
+      | "heun"
+      | "dpm_2"
+      | "dpm_2_a"
+      | "dpmsolver"
+      | "dpmsolver++"
+      | "dpmsingle"
+      | "k_lms"
+      | "k_euler"
+      | "k_euler_a"
+      | "k_dpm_2"
+      | "k_dpm_2_a"
+      | null
     resolution?: [number, number] | number[]
     seed?: number
     triggerWord?: string | null
@@ -338,7 +356,13 @@ export interface ConfigFormValue {
      * defaults (lora.toml + presets.toml[default]).
      */
     animaLora?: {
-      method?: "lora" | "postfix" | "chimera" | "easycontrol" | "ip_adapter"
+      method?:
+        | "lora"
+        | "postfix"
+        | "chimera"
+        | "easycontrol"
+        | "full_finetune"
+        | "ip_adapter"
       preset?:
         | "default"
         | "low_vram"
@@ -360,7 +384,7 @@ export interface ConfigFormValue {
       networkAlpha?: number
       networkTrainUnetOnly?: boolean
       channelScalingAlpha?: number
-      optimizerType?: "AdamW" | "AdamW8bit" | "Lion" | "Prodigy"
+      optimizerType?: "AdamW" | "AdamW8bit" | "Lion" | "Prodigy" | "CAME"
       lrScheduler?:
         | "constant"
         | "cosine"

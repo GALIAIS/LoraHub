@@ -142,6 +142,14 @@ class BaseLoRAModule(torch.nn.Module):
             return lx, self.scale * (1.0 / (1.0 - self.rank_dropout))
         return lx, self.scale
 
+    def _rank_mask_for(self, lx: torch.Tensor) -> torch.Tensor:
+        mask = self._timestep_mask.to(device=lx.device, dtype=lx.dtype)
+        if mask.ndim == 3 and lx.ndim == 2:
+            return mask[:, 0, :]
+        if mask.ndim == 3 and lx.ndim == 4:
+            return mask[:, 0, :, None, None]
+        return mask
+
     @property
     def device(self):
         return next(self.parameters()).device

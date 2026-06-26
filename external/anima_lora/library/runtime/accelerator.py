@@ -17,6 +17,7 @@ from typing import Optional
 
 import torch
 from accelerate import Accelerator
+from accelerate.utils import GradScalerKwargs
 from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
@@ -140,12 +141,27 @@ def prepare_accelerator(args: argparse.Namespace):
         # of the full forward (which has varying input H/W per bucket).
         dynamo_backend = args.dynamo_backend
 
+    kwargs_handlers = []
+    if args.mixed_precision == "fp16":
+        init_scale_raw = os.environ.get("LORAHUB_ANIMA_FP16_INIT_SCALE", "1024")
+        try:
+            init_scale = float(init_scale_raw)
+        except ValueError:
+            init_scale = 1024.0
+        kwargs_handlers.append(
+            GradScalerKwargs(
+                init_scale=init_scale,
+                growth_interval=1000,
+            )
+        )
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision="no" if args.mixed_precision == "fp32" else args.mixed_precision,
         log_with=log_with,
         project_dir=logging_dir,
         dynamo_backend=dynamo_backend,
+        kwargs_handlers=kwargs_handlers,
     )
     print("accelerator device:", accelerator.device)
     return accelerator

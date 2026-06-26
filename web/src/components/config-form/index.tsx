@@ -187,6 +187,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         >
           <BackendAnimaLoraFields
             value={value.backend?.animaLora}
+            optimizer={value.optimizer}
             set={set}
             errorMap={errorMap}
           />

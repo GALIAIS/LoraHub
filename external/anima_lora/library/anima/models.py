@@ -1832,6 +1832,20 @@ class Anima(nn.Module):
             "adaln_lora_B_T_3D": adaln_lora_B_T_3D,
         }
 
+        fp16_training_island = self.training and x_B_T_H_W_D.dtype == torch.float16
+        if fp16_training_island:
+            x_B_T_H_W_D = x_B_T_H_W_D.float()
+            t_embedding_B_T_D = t_embedding_B_T_D.float()
+            if crossattn_emb is not None:
+                crossattn_emb = crossattn_emb.float()
+            if rope_cos_sin is not None:
+                block_kwargs["rope_cos_sin"] = (
+                    rope_cos_sin[0].float(),
+                    rope_cos_sin[1].float(),
+                )
+            if adaln_lora_B_T_3D is not None:
+                block_kwargs["adaln_lora_B_T_3D"] = adaln_lora_B_T_3D.float()
+
         attn_params = attention_dispatch.AttentionParams.create_attention_params(
             self.attn_mode, self.split_attn, self.attn_softmax_scale
         )
@@ -1913,13 +1927,23 @@ class Anima(nn.Module):
 
         # Block stack runs in _run_blocks — a split point so `compile_core`
         # can wrap just the shape-invariant region while pre/post stay eager.
-        x_B_T_H_W_D = self._run_blocks(
-            x_B_T_H_W_D,
-            t_embedding_B_T_D,
-            crossattn_emb,
-            attn_params,
-            **block_kwargs,
-        )
+        if fp16_training_island and x_B_T_H_W_D.is_cuda:
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                x_B_T_H_W_D = self._run_blocks(
+                    x_B_T_H_W_D,
+                    t_embedding_B_T_D,
+                    crossattn_emb,
+                    attn_params,
+                    **block_kwargs,
+                )
+        else:
+            x_B_T_H_W_D = self._run_blocks(
+                x_B_T_H_W_D,
+                t_embedding_B_T_D,
+                crossattn_emb,
+                attn_params,
+                **block_kwargs,
+            )
 
         # --- Restore original 5D shape after the block stack ---
         # Both flatten paths (static_pad and native) use the same kernel
@@ -1936,9 +1960,17 @@ class Anima(nn.Module):
         t_emb_final = t_embedding_B_T_D + (
             self._mod_guidance_final_w * self._mod_guidance_delta
         ).unsqueeze(1)
-        x_B_T_H_W_O = self.final_layer(
-            x_B_T_H_W_D, t_emb_final, adaln_lora_B_T_3D=adaln_lora_B_T_3D
-        )
+        if fp16_training_island and x_B_T_H_W_D.is_cuda:
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                x_B_T_H_W_O = self.final_layer(
+                    x_B_T_H_W_D,
+                    t_emb_final,
+                    adaln_lora_B_T_3D=adaln_lora_B_T_3D,
+                )
+        else:
+            x_B_T_H_W_O = self.final_layer(
+                x_B_T_H_W_D, t_emb_final, adaln_lora_B_T_3D=adaln_lora_B_T_3D
+            )
         x_B_C_Tt_Hp_Wp = self.unpatchify(x_B_T_H_W_O)
         return x_B_C_Tt_Hp_Wp
 

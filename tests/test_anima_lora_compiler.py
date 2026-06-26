@@ -213,7 +213,7 @@ def test_style_32gb_loha_template_compiles_to_style_recipe(tmp_path: Path) -> No
     assert "use_timestep_mask=false" in network_args
 
 
-def test_v100_template_emits_fp32_compute(tmp_path: Path) -> None:
+def test_v100_template_emits_fp16_amp_with_stability_clip(tmp_path: Path) -> None:
     from lorahub.core.config.loader import load_config
 
     root = Path(__file__).resolve().parents[1]
@@ -221,8 +221,10 @@ def test_v100_template_emits_fp32_compute(tmp_path: Path) -> None:
     argv, files = compile_config(cfg, tmp_path / "ws")
     emitted = _emitted_toml(argv, files)
 
-    assert emitted["mixed_precision"] == "fp32"
+    assert emitted["mixed_precision"] == "fp16"
     assert emitted["save_precision"] == "fp16"
+    assert emitted["max_grad_norm"] == 0.5
+    assert emitted["no_half_vae"] is True
     assert emitted["output_name"] == "style_anima_v100"
 
 
@@ -254,6 +256,22 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     assert len(files) == 1
     [only_path] = list(files.keys())
     assert only_path.name == "_lorahub_anima_config.toml"
+
+
+def test_full_finetune_method_uses_full_model_network(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(
+        method="full_finetune",
+        learning_rate=1e-6,
+        save_precision="fp32",
+    )
+    cfg = _config(tmp_path, opts)
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+
+    assert emitted["network_module"] == "networks.methods.full_finetune"
+    assert emitted["learning_rate"] == 1e-6
+    assert emitted["save_precision"] == "fp32"
+    assert "network_args" not in emitted
 
 
 def test_tlora_algorithm_emits_plain_lora_with_timestep_mask(tmp_path: Path) -> None:
@@ -947,6 +965,37 @@ def test_sample_grid_schema_field_emits_flag(tmp_path: Path) -> None:
     argv, files = compile_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv, files)
     assert "--sample_grid" in pairs
+
+
+def test_sampling_sample_sampler_emits_all_upstream_choices(tmp_path: Path) -> None:
+    choices = [
+        "ddim",
+        "pndm",
+        "lms",
+        "euler",
+        "euler_a",
+        "heun",
+        "dpm_2",
+        "dpm_2_a",
+        "dpmsolver",
+        "dpmsolver++",
+        "dpmsingle",
+        "k_lms",
+        "k_euler",
+        "k_euler_a",
+        "k_dpm_2",
+        "k_dpm_2_a",
+    ]
+
+    for sampler in choices:
+        case_dir = tmp_path / sampler.replace("+", "plus")
+        case_dir.mkdir()
+        cfg = _config(case_dir, AnimaLoraOptions())
+        cfg.sampling.enabled = True
+        cfg.sampling.sample_sampler = sampler
+        argv, files = compile_config(cfg, tmp_path / "ws")
+        pairs = _argv_pairs(argv, files)
+        assert pairs["--sample_sampler"] == [sampler]
 
 
 def test_dora_emits_use_dora_network_arg(tmp_path: Path) -> None:

@@ -83,8 +83,10 @@ class LoHAModule(BaseLoRAModule):
     def _delta(self, multiplier: Optional[float] = None) -> torch.Tensor:
         """Materialise ΔW in W-space."""
         m = multiplier if multiplier is not None else self.multiplier
-        w1 = self.hada_w1_a.float() @ self.hada_w1_b.float()
-        w2 = self.hada_w2_a.float() @ self.hada_w2_b.float()
+        autocast_device = self.hada_w1_a.device.type
+        with torch.amp.autocast(device_type=autocast_device, enabled=False):
+            w1 = self.hada_w1_a.float() @ self.hada_w1_b.float()
+            w2 = self.hada_w2_a.float() @ self.hada_w2_b.float()
         return m * self.scale * (w1 * w2)
 
     def forward(self, x):
@@ -94,9 +96,14 @@ class LoHAModule(BaseLoRAModule):
             return self.org_forward(x)
 
         org = self.org_module_ref[0]
-        delta = self._delta().to(x.dtype)
-        eff = org.weight + delta
-        return torch.nn.functional.linear(x, eff, org.bias)
+        org_forwarded = self.org_forward(x)
+        delta = self._delta()
+        if self.training and x.is_cuda:
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                lora = torch.nn.functional.linear(x.float(), delta, None)
+        else:
+            lora = torch.nn.functional.linear(x.to(delta.dtype), delta, None)
+        return org_forwarded + lora.to(org_forwarded.dtype)
 
     def get_weight(self, multiplier: Optional[float] = None) -> torch.Tensor:
         return self._delta(multiplier)

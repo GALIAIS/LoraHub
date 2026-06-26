@@ -357,8 +357,8 @@ class AnimaLoraOptions(BaseModel):
     pre-merged anima_lora.toml so we don't replay the upstream merge
     layering at runtime.
 
-    Method axis: ``method`` selects which of the five sub-configs (lora,
-    postfix, chimera, easycontrol, ip_adapter) is consumed by the
+    Method axis: ``method`` selects which sub-config (lora, postfix,
+    chimera, easycontrol, ip_adapter) or full-finetune path is consumed by the
     compiler. The other sub-configs may be populated and will simply
     not surface in the emitted TOML — useful for keeping per-method
     presets around without losing them across method switches.
@@ -368,7 +368,12 @@ class AnimaLoraOptions(BaseModel):
 
     # ---- Method + preset axes ----
     method: Literal[
-        "lora", "postfix", "chimera", "easycontrol", "ip_adapter"
+        "lora",
+        "postfix",
+        "chimera",
+        "easycontrol",
+        "ip_adapter",
+        "full_finetune",
     ] = "lora"
     preset: Literal[
         "default", "low_vram", "graft", "half", "quarter", "tenth", "debug"

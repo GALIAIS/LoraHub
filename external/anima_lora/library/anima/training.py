@@ -886,7 +886,11 @@ def do_sample(
     # Latent shape: (1, 16, 1, H/8, W/8) for single image
     latent_h = height // 8
     latent_w = width // 8
-    latent = torch.zeros(1, 16, 1, latent_h, latent_w, device=device, dtype=dtype)
+    model_dtype = dtype
+    latent_dtype = torch.float32 if dtype == torch.float16 else dtype
+    latent = torch.zeros(
+        1, 16, 1, latent_h, latent_w, device=device, dtype=latent_dtype
+    )
 
     # Generate noise
     if seed is not None:
@@ -897,12 +901,11 @@ def do_sample(
         torch.randn(
             latent.size(), dtype=torch.float32, generator=generator, device="cpu"
         )
-        .to(dtype)
         .to(device)
     )
 
     # Timestep schedule: linear from 1.0 to 0.0
-    sigmas = torch.linspace(1.0, 0.0, steps + 1, device=device, dtype=dtype)
+    sigmas = torch.linspace(1.0, 0.0, steps + 1, device=device, dtype=latent_dtype)
     flow_shift = float(flow_shift)
     if flow_shift != 1.0:
         sigmas = (sigmas * flow_shift) / (1 + (flow_shift - 1) * sigmas)
@@ -911,7 +914,9 @@ def do_sample(
     x = noise.clone()
 
     # Padding mask (zeros = no padding) — resized in prepare_embedded_sequence to match latent dims
-    padding_mask = torch.zeros(1, 1, latent_h, latent_w, dtype=dtype, device=device)
+    padding_mask = torch.zeros(
+        1, 1, latent_h, latent_w, dtype=model_dtype, device=device
+    )
 
     use_cfg = guidance_scale > 1.0 and neg_crossattn_emb is not None
 
@@ -939,24 +944,23 @@ def do_sample(
             # also off in that case so the original race doesn't fire.
             pass
         sigma = sigmas[i]
-        t = sigma.unsqueeze(0)  # (1,)
+        t = sigma.to(model_dtype).unsqueeze(0)  # (1,)
+        model_x = x.to(model_dtype)
 
         if use_cfg:
             # CFG: two separate passes to reduce memory usage
-            pos_out = dit(x, t, crossattn_emb, padding_mask=padding_mask)
+            pos_out = dit(model_x, t, crossattn_emb, padding_mask=padding_mask)
             pos_out = pos_out.float()
-            neg_out = dit(x, t, neg_crossattn_emb, padding_mask=padding_mask)
+            neg_out = dit(model_x, t, neg_crossattn_emb, padding_mask=padding_mask)
             neg_out = neg_out.float()
 
             model_output = neg_out + guidance_scale * (pos_out - neg_out)
         else:
-            model_output = dit(x, t, crossattn_emb, padding_mask=padding_mask)
+            model_output = dit(model_x, t, crossattn_emb, padding_mask=padding_mask)
             model_output = model_output.float()
-
         # Euler step: x_{t-1} = x_t - (sigma_t - sigma_{t-1}) * model_output
         dt = sigmas[i + 1] - sigma
         x = x + model_output * dt
-        x = x.to(dtype)
 
     return x
 
@@ -1135,11 +1139,13 @@ def _decode_latents_with_dit_parked(accelerator: Accelerator, dit, vae, latents)
     dit.to("cpu")
     clean_memory_on_device(accelerator.device)
     org_vae_device = vae.device
+    org_vae_dtype = next(vae.parameters()).dtype
     try:
-        vae.to(accelerator.device)
-        return vae.decode_to_pixels(latents).cpu()
+        decode_dtype = torch.float32 if latents.dtype == torch.float32 else org_vae_dtype
+        vae.to(accelerator.device, dtype=decode_dtype)
+        return vae.decode_to_pixels(latents.to(decode_dtype)).cpu()
     finally:
-        vae.to(org_vae_device)
+        vae.to(org_vae_device, dtype=org_vae_dtype)
         if hasattr(dit, "move_to_device_except_swap_blocks"):
             dit.move_to_device_except_swap_blocks(accelerator.device)
         else:
@@ -1288,7 +1294,6 @@ def _sample_image_inference(
         flow_shift,
         neg_crossattn_emb,
     )
-
     # Decode latents
     gc.collect()
     synchronize_device(accelerator.device)

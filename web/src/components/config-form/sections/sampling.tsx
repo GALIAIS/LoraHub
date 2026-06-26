@@ -3,6 +3,7 @@ import { Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { ErrorMap, ConfigFormValue, Setter, SamplingPromptValue } from "../types"
 import {
+  EnumSelect,
   IntInput,
   PathInput,
   ResolutionInput,
@@ -12,6 +13,25 @@ import {
   ToggleSwitch,
 } from "../widgets"
 import { PromptsDialog } from "./prompts-dialog"
+
+const SAMPLE_SAMPLER_OPTIONS = [
+  { value: "ddim", label: "DDIM" },
+  { value: "pndm", label: "PNDM" },
+  { value: "lms", label: "LMS" },
+  { value: "euler", label: "Euler" },
+  { value: "euler_a", label: "Euler a" },
+  { value: "heun", label: "Heun" },
+  { value: "dpm_2", label: "DPM 2" },
+  { value: "dpm_2_a", label: "DPM 2 a" },
+  { value: "dpmsolver", label: "DPMSolver" },
+  { value: "dpmsolver++", label: "DPMSolver++" },
+  { value: "dpmsingle", label: "DPMSingle" },
+  { value: "k_lms", label: "K-LMS" },
+  { value: "k_euler", label: "K-Euler" },
+  { value: "k_euler_a", label: "K-Euler a" },
+  { value: "k_dpm_2", label: "K-DPM 2" },
+  { value: "k_dpm_2_a", label: "K-DPM 2 a" },
+] as const
 
 export const SamplingFields = memo(function SamplingFields({
   value = {},
@@ -72,6 +92,17 @@ export const SamplingFields = memo(function SamplingFields({
             <ToggleSwitch
               checked={v.atFirst ?? false}
               onCheckedChange={(b) => set(["sampling", "atFirst"], b)}
+            />
+          </Row>
+          <Row
+            label="预览采样器"
+            description="传给 anima_lora 的 --sample_sampler；留空使用上游默认 DDIM。"
+            errors={errorMap.get("sampling.sampleSampler")}
+          >
+            <EnumSelect
+              value={v.sampleSampler ?? "ddim"}
+              onChange={(s) => set(["sampling", "sampleSampler"], s === "ddim" ? null : s)}
+              options={SAMPLE_SAMPLER_OPTIONS}
             />
           </Row>
           <Row

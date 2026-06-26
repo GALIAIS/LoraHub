@@ -271,7 +271,7 @@ def _render_full_config(
         cfg_dict["vae"] = _local_path_string(bm.arch_paths.ae)
 
     # ---- Network ----
-    cfg_dict["network_module"] = opts.network_module
+    cfg_dict["network_module"] = _network_module_for_method(opts)
     cfg_dict["network_dim"] = int(opts.network_dim)
     cfg_dict["network_alpha"] = float(opts.network_alpha)
     if opts.network_train_unet_only:
@@ -281,6 +281,8 @@ def _render_full_config(
     cfg_dict["optimizer_type"] = opts.optimizer_type
     cfg_dict["lr_scheduler"] = opts.lr_scheduler
     cfg_dict["learning_rate"] = float(opts.learning_rate)
+    if cfg.optimizer.max_grad_norm != 1.0:
+        cfg_dict["max_grad_norm"] = float(cfg.optimizer.max_grad_norm)
     # ``lr_warmup_steps`` is upstream's dual-typed argparse field:
     #   * float < 1   → ratio of total steps (Backend base.toml default)
     #   * int >= 1    → absolute step count
@@ -521,6 +523,8 @@ def _render_sampling(
         cfg_dict["sample_every_n_epochs"] = int(sampling.every_n_epochs)
     if sampling.every_n_steps and sampling.every_n_steps > 0:
         cfg_dict["sample_every_n_steps"] = int(sampling.every_n_steps)
+    if sampling.sample_sampler:
+        cfg_dict["sample_sampler"] = sampling.sample_sampler
     if sampling.prompts_file is not None:
         prompts_path = Path(str(sampling.prompts_file))
     else:
@@ -616,16 +620,24 @@ def _render_method(opts: AnimaLoraOptions, cfg_dict: dict[str, Any]) -> None:
         if sub.features_cache_to_disk:
             cfg_dict["ip_features_cache_to_disk"] = True
         pieces.extend(_ip_adapter_network_args(opts))
+    elif method == "full_finetune":
+        pass
     else:
         msg = f"unhandled method {opts.method!r} (schema enum drift?)"
         raise CompilationError(msg)
 
     # Universal — the LoRA factory reads this kwarg regardless of method.
-    if opts.use_custom_down_autograd:
+    if method == "lora" and opts.use_custom_down_autograd:
         pieces.append("use_custom_down_autograd=true")
 
     if pieces:
         cfg_dict["network_args"] = pieces
+
+
+def _network_module_for_method(opts: AnimaLoraOptions) -> str:
+    if opts.method == "full_finetune":
+        return "networks.methods.full_finetune"
+    return opts.network_module
 
 
 def _render_dataset(

@@ -8,6 +8,25 @@ from pydantic import BaseModel, Field
 
 from ._shared import _CAMEL_CONFIG
 
+ANIMA_SAMPLE_SAMPLERS = (
+    "ddim",
+    "pndm",
+    "lms",
+    "euler",
+    "euler_a",
+    "heun",
+    "dpm_2",
+    "dpm_2_a",
+    "dpmsolver",
+    "dpmsolver++",
+    "dpmsingle",
+    "k_lms",
+    "k_euler",
+    "k_euler_a",
+    "k_dpm_2",
+    "k_dpm_2_a",
+)
+
 
 class PromptSpec(BaseModel):
     """One sampling prompt persisted in yaml.
@@ -74,6 +93,14 @@ class SamplingConfig(BaseModel):
     # legacy path is used unchanged.
     prompts_file: Path | None = None
     prompts: list[PromptSpec] = Field(default_factory=list)
+    sample_sampler: str | None = Field(
+        default=None,
+        pattern=(
+            r"^(ddim|pndm|lms|euler|euler_a|heun|dpm_2|dpm_2_a|"
+            r"dpmsolver|dpmsolver\+\+|dpmsingle|k_lms|k_euler|"
+            r"k_euler_a|k_dpm_2|k_dpm_2_a)$"
+        ),
+    )
     resolution: list[int] = Field(default_factory=lambda: [1024, 1024])
     # ComfyUI-style sentinel: -1 means "draw a fresh random integer at
     # job-start". Anything else is honoured verbatim. The launcher logs

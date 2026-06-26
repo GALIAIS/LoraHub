@@ -1,14 +1,14 @@
 # Anima style LoRA on the anima_lora backend — V100 32GB stable config.
 #
 # Target hardware: Tesla V100 32GB (sm_70). Based on the stable 32GB style config; only hardware compatibility knobs are changed.
-# Expected throughput: slower than Ada/Ampere; V100 uses fp32 compute and PyTorch SDPA.
+# Expected throughput: slower than Ada/Ampere; V100 uses fp16 AMP with fp32 stability islands and PyTorch SDPA.
 # Expected VRAM peak: fits V100 32GB with batch 1 + gradAccum 16 + checkpointing.
 #
 # This keeps the 32GB style LoHA recipe and changes only V100 compatibility:
 #   - algorithm = loha (Hadamard product; effective rank up to r²)
 #   - dataset has wider AR range and heavier caption dropout
 #   - more epochs (style needs more variety per image than character)
-#   - fp32 instead of bf16, no torch.compile, gradient checkpointing on
+#   - fp16 AMP instead of bf16, no torch.compile, gradient checkpointing on
 #
 # Style training intuition:
 #   1. Caption dropRate 0.15-0.20 → push the network to represent style
@@ -58,7 +58,10 @@ schedule:
   seed: 42
   maxSteps: null
 
-precision: fp32
+optimizer:
+  maxGradNorm: 0.5
+
+precision: fp16
 gradientCheckpointing: true
 cacheLatents: true
 cacheLatentsToDisk: true
@@ -194,7 +197,7 @@ backend:
     # signal vs character training where only a few images carry the
     # specific identity feature).
     learningRate: 1.0e-05
-    lrWarmupRatio: 0.1           # V100 fp32 更保守;前 10% warmup 防初期抖动
+    lrWarmupRatio: 0.1           # V100 fp16 更保守;前 10% warmup 防初期抖动
     maxTrainEpochs: 10
     saveEveryNEpochs: 2
     checkpointingEpochs: 2
@@ -216,6 +219,7 @@ backend:
     useShuffledCaptionVariants: true
     staticTokenCount: 4096
     vaeChunkSize: 64
+    noHalfVae: true
 
     # Attention.
     attnMode: torch
@@ -234,7 +238,7 @@ backend:
     gradientCheckpointing: true
     unslothOffloadCheckpointing: false
     cpuOffloadCheckpointing: false
-    mixedPrecision: fp32
+    mixedPrecision: fp16
     persistentDataLoaderWorkers: true
 
     # Training stabilisers. Same default as character: EMA off to

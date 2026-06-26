@@ -118,6 +118,19 @@ class LoRAModule(BaseLoRAModule):
         if self._skip_module():
             return org_forwarded
 
+        if isinstance(self.lora_down, torch.nn.Linear) and x.is_cuda:
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                x_lora = self._rebalance(x.float())
+                lx = torch.nn.functional.linear(x_lora, self.lora_down.weight.float())
+                lx = lx * self._rank_mask_for(lx)
+                if self.dropout is not None:
+                    lx = torch.nn.functional.dropout(lx, p=self.dropout)
+                lx, scale = self._apply_rank_dropout(lx)
+                lx = torch.nn.functional.linear(lx, self.lora_up.weight.float())
+            return org_forwarded + (lx * self.multiplier * scale).to(
+                org_forwarded.dtype
+            )
+
         work = org_forwarded.dtype
         x_lora = self._rebalance(x.to(work))
         if isinstance(self.lora_down, torch.nn.Linear):
@@ -125,7 +138,7 @@ class LoRAModule(BaseLoRAModule):
         else:
             lx = self.lora_down(x_lora)
 
-        lx = lx * self._timestep_mask
+        lx = lx * self._rank_mask_for(lx)
 
         if self.dropout is not None:
             lx = torch.nn.functional.dropout(lx, p=self.dropout)
