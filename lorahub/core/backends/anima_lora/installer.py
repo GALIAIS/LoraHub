@@ -65,10 +65,10 @@ class BootstrapPlan:
     install_deepspeed: bool = True
     # Optional post-sync torch wheel override. Used for hosts whose driver
     # cannot load anima_lora's upstream CUDA pin.
-    torch_override: bool = False
+    torch_override: bool = sys.platform == "win32"
     cuda_version: str = "cu128"
-    torch_version: str = "2.7.1"
-    torchvision_version: str = "0.22.1"
+    torch_version: str = "2.11.0"
+    torchvision_version: str = "0.26.0"
     torch_index_base: str | None = None
 
     @property
@@ -108,28 +108,44 @@ def sync(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> No
         )
         raise BootstrapError("uv sync anima_lora", 1) from FileNotFoundError(msg)
 
-    args = ["sync", "--directory", str(plan.target)]
     if plan.base_python is not None:
-        args += ["--python", str(plan.base_python)]
+        python_args = ["--python", str(plan.base_python)]
+    else:
+        python_args = []
     label = f"uv sync -> {plan.venv_dir}"
     env = _uv_sync_env(plan)
-    try:
-        # ``run_uv`` injects ``--default-index <plan.pypi_index>`` when
-        # the caller didn't already pin one. The named ``pytorch-cu124``
-        # index in anima's pyproject still wins for torch + torchvision
-        # via ``[tool.uv.sources]`` — only the non-torch packages
-        # (accelerate, diffusers, transformers, ~30 deps) get routed
-        # through the user's mirror, which is still a useful speedup
-        # in regions where pypi.org is slow.
-        _uv.run_uv(
-            args,
-            step=label,
-            progress=progress,
-            pypi_index=plan.pypi_index,
-            env=env,
-        )
-    except RuntimeError as exc:
-        raise BootstrapError("uv sync anima_lora", 1) from exc
+    errors: list[str] = []
+    indexes = _common.torch_index_candidates(plan.torch_index_base, plan.cuda_version)
+    for idx, torch_index in enumerate(indexes):
+        args = [
+            "sync",
+            "--no-dev",
+            "--index",
+            torch_index,
+            "--directory",
+            str(plan.target),
+            *python_args,
+        ]
+        step = label if idx == 0 else f"{label} (torch source {idx + 1}/{len(indexes)})"
+        try:
+            # ``run_uv`` injects ``--default-index <plan.pypi_index>`` for
+            # non-torch packages. The explicit ``--index <torch_index>``
+            # supplies CUDA wheels for torch / torchvision and is tried
+            # with the same mirror fallback list used by the other backends.
+            _uv.run_uv(
+                args,
+                step=step,
+                progress=progress,
+                pypi_index=plan.pypi_index,
+                env=env,
+            )
+            return
+        except RuntimeError as exc:
+            errors.append(f"{torch_index}: {exc}")
+            if idx + 1 < len(indexes) and progress is not None:
+                progress(f"{step} failed; trying {indexes[idx + 1]}")
+    detail = "\n".join(errors[-4:])
+    raise BootstrapError("uv sync anima_lora", 1) from RuntimeError(detail)
 
 
 def _uv_sync_env(plan: BootstrapPlan) -> dict[str, str]:
@@ -202,9 +218,14 @@ def install_torch_override(
     if not plan.torch_override:
         return
     _ensure_no_torch_override_running(plan)
+    torch_version = _with_cuda_local_version(plan.torch_version, plan.cuda_version)
+    torchvision_version = _with_cuda_local_version(
+        plan.torchvision_version,
+        plan.cuda_version,
+    )
     args = [
-        f"torch=={plan.torch_version}",
-        f"torchvision=={plan.torchvision_version}",
+        f"torch=={torch_version}",
+        f"torchvision=={torchvision_version}",
         "--index-url",
         plan.torch_index,
     ]
@@ -214,15 +235,22 @@ def install_torch_override(
             args,
             step=(
                 "override anima_lora torch=="
-                f"{plan.torch_version} ({plan.cuda_version})"
+                f"{torch_version} ({plan.cuda_version})"
             ),
             progress=progress,
         )
     except RuntimeError as exc:
         raise BootstrapError(
-            f"override anima_lora torch=={plan.torch_version}",
+            f"override anima_lora torch=={torch_version}",
             1,
         ) from exc
+
+
+def _with_cuda_local_version(version: str, cuda: str) -> str:
+    """Pin CUDA wheel local version so uv cannot satisfy it with torch+cpu."""
+    if "+" in version:
+        return version
+    return f"{version}+{cuda}"
 
 
 def _ensure_no_torch_override_running(plan: BootstrapPlan) -> None:

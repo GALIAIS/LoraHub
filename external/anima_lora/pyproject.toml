@@ -72,57 +72,47 @@ dependencies = [
     # demand:
     #   uv pip install --python <.venv-python> "sam3 @ git+https://github.com/facebookresearch/sam3.git"
     "triton-windows>=3.6.0 ; sys_platform == 'win32'",
-    "pyside6>=6.11.0",
-    "ruff>=0.15.9",
     "matplotlib",
     "torchsde>=0.2.6",
     "uv>=0.11.7",
     "yarl>=1.23.0",
-    "spandrel>=0.4.2",
-    "sqlalchemy>=2.1.0b2",
     # Keep aiohttp on stable 3.x. With ``prerelease = "allow"`` enabled
     # for torch nightlies, an unconstrained upper bound can resolve to
     # aiohttp 4.0 alpha source builds that fail on CPython 3.13.
     "aiohttp>=3.13.5,<4",
-    "comfy-cli>=1.7.3",
-    "comfy-aimdo>=0.2.14",
-    "av>=17.0.1",
-    "alembic>=1.18.4",
-    "pydantic-settings>=2.14.0",
     "kornia>=0.8.2",
-    "comfy-kitchen>=0.2.8",
     "simpleeval>=1.0.7",
-    "pytest>=9.0.3",
     "blake3>=1.0.8",
 ]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.7"]
+comfy = [
+    "alembic>=1.18.4",
+    "av>=17.0.1",
+    "comfy-aimdo>=0.2.14",
+    "comfy-cli>=1.7.3",
+    "comfy-kitchen>=0.2.8",
+    "pydantic-settings>=2.14.0",
+    "spandrel>=0.4.2",
+    "sqlalchemy>=2.1.0b2",
+]
+gui = ["PySide6>=6.11.0"]
 dev = [
     "pytest>=8.0",
     "pytest-xdist>=3.6",
     "pytest-timeout>=2.3",
+    "ruff>=0.15.9",
 ]
 
 [tool.uv]
-# ``unsafe-best-match`` would otherwise pick PyPI's ``torch+cpu`` wheel
-# over the CUDA build because both satisfy ``torch>=2.11`` and PyPI is
-# tried first. The named ``pytorch-cu128`` index below + the explicit
-# ``[tool.uv.sources]`` map pin torch to the CUDA channel. We use cu128
-# because that's where torch 2.11 / 2.12 wheels actually live — the
-# legacy cu124 channel froze at torch 2.6.
+# ``unsafe-best-match`` lets LoraHub pass the configured PyTorch CUDA
+# wheel index at install time while keeping PyPI as the default source
+# for normal packages. Do not hard-code ``download.pytorch.org`` here:
+# regions with slow official PyTorch access need LoraHub's mirror
+# fallback to pick Aliyun / NJU / SJTU first.
 index-strategy = "unsafe-best-match"
 prerelease = "allow"
 override-dependencies = ["numpy>=2.0.0"]
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
-torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
 
 [tool.pyright]
 extraPaths = ["."]

@@ -199,7 +199,7 @@ rem ---- [4/6] Install Python dependencies ----------------------------
 echo [4/6] Installing Python dependencies ...
 set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
 set "PY_DEPS_INDEX_ARGS="
-if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url ""%UV_DEFAULT_INDEX%"""
+if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url '%UV_DEFAULT_INDEX%'"
 echo   uv default index: %UV_DEFAULT_INDEX%
 echo   running uv pip install -v -e .[api,dev] --python "%VENV_PY%" --link-mode=copy %PY_DEPS_INDEX_ARGS% ^(log: _uv_python_deps.log^)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%UV%' pip install -v -e '.[api,dev]' --python '%VENV_PY%' --link-mode=copy %PY_DEPS_INDEX_ARGS% 2>&1 | Tee-Object -FilePath '%PY_DEPS_LOG%'; exit $LASTEXITCODE"
