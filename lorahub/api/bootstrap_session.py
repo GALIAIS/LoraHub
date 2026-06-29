@@ -29,7 +29,7 @@ def _torch_index_url(settings: Any) -> str | None:
 
 
 class BootstrapRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora", "ai_toolkit"] = "kohya"
     target: str | None = None
     cuda: str = "cu124"
     torch_version: str = "2.6.0"
@@ -241,6 +241,8 @@ def default_build_bootstrap_runner(
         return _build_diffusion_pipe_runner(req)
     if req.backend == "anima_lora":
         return _build_anima_lora_runner(req)
+    if req.backend == "ai_toolkit":
+        return _build_ai_toolkit_runner(req)
     return _build_kohya_runner(req)
 
 
@@ -454,6 +456,66 @@ def _build_anima_lora_runner(
                 detail=(
                     f"failed to clear {plan.venv_dir}; some files may be "
                     "locked. Close any tools using the venv and retry."
+                ),
+            )
+
+    def runner(progress: Callable[[str], None]) -> None:
+        installer.bootstrap(plan, progress=progress)
+
+    return runner
+
+
+def _build_ai_toolkit_runner(
+    req: BootstrapRequest,
+) -> Callable[[Callable[[str], None]], None]:
+    """ai_toolkit install: create a venv under the vendored source tree."""
+    from lorahub.api import app as app_module  # noqa: PLC0415
+    from lorahub.api.torch_options import validate_torch_selection  # noqa: PLC0415
+    from lorahub.core.backends.ai_toolkit import bootstrap as at_bootstrap  # noqa: PLC0415
+    from lorahub.core.backends.ai_toolkit import installer  # noqa: PLC0415
+
+    if error := validate_torch_selection(req.cuda):
+        raise HTTPException(status_code=400, detail=error)
+
+    target_path = (
+        Path(req.target).expanduser().resolve()
+        if req.target
+        else at_bootstrap.default_repo_path()
+    )
+    settings = app_module._settings_store.load()
+    plan = installer.BootstrapPlan(
+        target=target_path,
+        cuda_version=req.cuda,
+        torch_version=req.torch_version,
+        torchvision_version=req.torchvision_version,
+        base_python=_resolve_base_python("3.12"),
+        pypi_index=settings.pypi_index_url,
+        torch_index_base=_torch_index_url(settings),
+    )
+    if not (plan.target / "run.py").is_file():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"vendored ai_toolkit copy at {plan.target} is missing run.py — "
+                "the source tree may be corrupted."
+            ),
+        )
+    if plan.venv_python.parent.parent.exists() and any(plan.venv_python.parent.parent.iterdir()):
+        if not req.force:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"venv {plan.venv_python.parent.parent} already exists; "
+                    "pass force=true to wipe and rebuild it."
+                ),
+            )
+        installer.cleanup_partial(plan)
+        if plan.venv_python.parent.parent.exists() and any(plan.venv_python.parent.parent.iterdir()):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"failed to clear {plan.venv_python.parent.parent}; some files "
+                    "may be locked. Close tools using the venv and retry."
                 ),
             )
 

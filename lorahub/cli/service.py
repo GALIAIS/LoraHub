@@ -220,6 +220,22 @@ def _daemon_python() -> Path:
     return py
 
 
+def _windows_daemon_creationflags(*, allow_breakaway: bool = True) -> int:
+    """Flags for a headless Windows daemon process.
+
+    Windows OpenSSH commonly runs sessions inside a job object.  Without
+    CREATE_BREAKAWAY_FROM_JOB, the spawned uvicorn process can be terminated
+    when the SSH session closes even if it was launched detached.
+    """
+    DETACHED_PROCESS = 0x00000008  # noqa: N806
+    CREATE_BREAKAWAY_FROM_JOB = 0x01000000  # noqa: N806
+    CREATE_NO_WINDOW = 0x08000000  # noqa: N806
+    flags = DETACHED_PROCESS | CREATE_NO_WINDOW
+    if allow_breakaway:
+        flags |= CREATE_BREAKAWAY_FROM_JOB
+    return flags
+
+
 def _wait_for_health(port: int, *, timeout_s: float = 30.0) -> bool:
     """Poll http://127.0.0.1:<port>/api/health until it answers 200."""
     import urllib.error  # noqa: PLC0415
@@ -315,19 +331,27 @@ def start(
     log_fh = log.open("ab")
 
     if sys.platform == "win32":
-        # CREATE_NO_WINDOW + DETACHED_PROCESS lets the child outlive
-        # the spawning console (Powershell / cmd) without a console
-        # window flashing.
-        DETACHED_PROCESS = 0x00000008  # noqa: N806
-        CREATE_NO_WINDOW = 0x08000000  # noqa: N806
-        proc = subprocess.Popen(  # noqa: S603
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fh,
-            stderr=log_fh,
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
-            close_fds=True,
-        )
+        # CREATE_BREAKAWAY_FROM_JOB keeps services started through Windows
+        # OpenSSH alive after the SSH session exits.  Some locked-down job
+        # objects disallow breakaway; fall back so local starts still work.
+        try:
+            proc = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                creationflags=_windows_daemon_creationflags(),
+                close_fds=True,
+            )
+        except OSError:
+            proc = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=log_fh,
+                creationflags=_windows_daemon_creationflags(allow_breakaway=False),
+                close_fds=True,
+            )
     else:
         proc = subprocess.Popen(  # noqa: S603
             cmd,

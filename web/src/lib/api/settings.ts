@@ -9,6 +9,8 @@ export interface SettingsState {
   // fields exist for env / dev override. Most users only set the python.
   anima_lora_repo_path: string | null
   anima_lora_python: string | null
+  ai_toolkit_repo_path: string | null
+  ai_toolkit_python: string | null
   default_backend: BackendId
   tagger_device: "auto" | "cpu" | "cuda"
   max_concurrent_jobs: number

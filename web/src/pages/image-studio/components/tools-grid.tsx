@@ -2,7 +2,7 @@
  * 图像工作台"全部工具"广场页面。
  *
  * 入口在主区顶部 — 当 URL 是 /image-studio (或 ?stage=tools) 时显示。
- * 卡片直接跳到 /image-studio/tools/<id>?path=<datasetPath>，每个工具有独立页面。
+ * 卡片直接跳到 ?stage=<stage>&tool=<id>，对应 stage 直接渲染主工作区。
  *
  * 行为约束：
  *  - 不强制选数据集 — 没选时灰显 requiresDataset=true 的卡片，不直接 disable。
@@ -64,12 +64,11 @@ function ToolCard({
   disabled: boolean
 }) {
   const Icon = tool.icon
-  const to =
-    tool.id === "lora-testbench"
-      ? "/image-studio?stage=lora-test"
-      : datasetPath
-        ? `/image-studio/tools/${tool.id}?path=${encodeURIComponent(datasetPath)}`
-        : `/image-studio/tools/${tool.id}`
+  const sp = new URLSearchParams()
+  sp.set("stage", tool.stage)
+  sp.set("tool", tool.id)
+  if (datasetPath) sp.set("path", datasetPath)
+  const to = `/image-studio?${sp.toString()}`
 
   const inner = (
     <>

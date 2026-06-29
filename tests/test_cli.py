@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import os
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -78,6 +80,59 @@ def test_version_command() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert "lorahub" in result.stdout
+
+
+def test_root_no_args_prints_help_in_non_terminal() -> None:
+    env = os.environ.copy()
+    env["LORAHUB_LANG"] = "en"
+    result = subprocess.run(
+        [sys.executable, "-m", "lorahub"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "Open-source LoRA training workbench" in result.stdout
+    assert "Commands" in result.stdout
+
+
+def test_root_no_tui_prints_help() -> None:
+    env = os.environ.copy()
+    env["LORAHUB_LANG"] = "en"
+    result = subprocess.run(
+        [sys.executable, "-m", "lorahub", "--no-tui"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "Open-source LoRA training workbench" in result.stdout
+    assert "Commands" in result.stdout
+
+
+def test_root_tui_detection_ignores_global_options() -> None:
+    from lorahub.cli.main import _argv_has_flag, _interactive_no_command, _should_open_tui
+
+    assert _interactive_no_command(["--lang", "zh", "--no-tui"])
+    assert _interactive_no_command(["--lang=en", "--tui"])
+    assert _argv_has_flag("--no-tui", ["--lang", "zh", "--no-tui"])
+    assert _should_open_tui(
+        no_tui=False,
+        force_tui=False,
+        argv=["--lang", "zh"],
+        is_terminal=True,
+        stdio_terminal=True,
+    )
+    assert not _should_open_tui(
+        no_tui=False,
+        force_tui=False,
+        argv=["version"],
+        is_terminal=True,
+    )
 
 
 def test_validate_passes(tmp_path: Path) -> None:
@@ -293,6 +348,17 @@ def test_service_daemon_uses_pythonw_on_windows(
     monkeypatch.setattr(service_mod, "_venv_python", lambda: python)
 
     assert service_mod._daemon_python() == pythonw
+
+
+def test_windows_daemon_creationflags_break_away_from_ssh_job() -> None:
+    from lorahub.cli import service as service_mod
+
+    flags = service_mod._windows_daemon_creationflags()
+
+    assert flags & 0x00000008  # DETACHED_PROCESS
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
+    assert flags & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+    assert not service_mod._windows_daemon_creationflags(allow_breakaway=False) & 0x01000000
 
 
 def test_service_resolves_windows_listener_pid(monkeypatch: pytest.MonkeyPatch) -> None:

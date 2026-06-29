@@ -100,6 +100,7 @@ class BaseModelConfig(BaseModel):
         "wan",
         "z_image",
         "ernie_image",
+        "krea2",
     ] = "sdxl"
     # SDXL sub-architectures sharing the SDXL backbone but trained on
     # different finetune lineages (Pony/Illustrious/NoobAI/Animagine).

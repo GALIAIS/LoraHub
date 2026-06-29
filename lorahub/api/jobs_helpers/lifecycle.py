@@ -28,6 +28,7 @@ from typing import Any
 from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.state import JobRecord, JobState
+from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
@@ -57,6 +58,8 @@ def _select_backend(cfg: TrainingConfig):  # type: ignore[no-untyped-def]
         return DiffusionPipeBackend()
     if backend_type == "anima_lora":
         return AnimaLoraBackend()
+    if backend_type == "ai_toolkit":
+        return AIToolkitBackend()
     msg = f"unsupported backend type: {backend_type!r}"
     raise ValueError(msg)
 

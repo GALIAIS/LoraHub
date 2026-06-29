@@ -72,7 +72,7 @@ function BrowserUploadHint({ datasetPath }: { datasetPath: string }) {
 // Local path
 // --------------------------------------------------------------------------- //
 
-export function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
+function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const [sourcePath, setSourcePath] = useState("")
   const [recursive, setRecursive] = useState(true)
@@ -231,7 +231,7 @@ export function LocalPathPanel({ datasetPath }: { datasetPath: string }) {
 // From-dataset
 // --------------------------------------------------------------------------- //
 
-export function FromDatasetPanel({ datasetPath }: { datasetPath: string }) {
+function FromDatasetPanel({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const datasetsQuery = useQuery({
     queryKey: ["image-studio-datasets"],

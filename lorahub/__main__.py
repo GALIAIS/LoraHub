@@ -9,7 +9,7 @@ PATH containing the venv's bin/ — they have an absolute path to
 
 from __future__ import annotations
 
-from lorahub.cli.main import app
+from lorahub.cli.main import main
 
 if __name__ == "__main__":
-    app()
+    main()

@@ -73,7 +73,7 @@ class DistributedTrainingConfig(BaseModel):
 class BackendConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    type: Literal["kohya", "diffusion-pipe", "anima_lora"] = "kohya"
+    type: Literal["kohya", "diffusion-pipe", "anima_lora", "ai_toolkit"] = "kohya"
     pin_version: str | None = None
     # Generic "backend repo path". Accepts every historical key for
     # backward compatibility with YAML files written before the rename:

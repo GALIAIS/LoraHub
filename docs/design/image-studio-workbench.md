@@ -22,14 +22,14 @@ Reading this as: 面向 LoRA 数据集制备的密集生产工作台，用户是
 - `web/src/pages/image-studio/index.tsx`
 - `web/src/pages/image-studio/components/dataset-detail.tsx`
 - `web/src/pages/image-studio/components/stages/*.tsx`
-- `web/src/pages/image-studio/tools/*.tsx`
 - `web/src/pages/image-studio/tools-catalog.ts`
+- `web/src/pages/image-studio/components/stages/*.tsx`
 - `web/src/lib/studio-task-store.ts`
 
 现状页面有三套竞争入口：
 
 - 左侧 `StudioSidebar` 选择数据集、阶段、工具库。
-- `ToolsGrid` 和 `/image-studio/tools/:id` 提供工具广场和单工具页。
+- `ToolsGrid` 提供工具广场，工具卡片通过 `?stage=<stage>&tool=<id>` deep link 回对应 stage。
 - 阶段页又把 `DatasetDetail` 和阶段 panel 拼在一起。
 
 结果是用户进入 `audit / annotate / ship` 时，主屏仍先显示一个完整图片网格，真正当前阶段的功能被塞进底部或右侧面板。这个结构会天然拥挤，并让每个阶段都像附属插件，而不是独立工作流。
@@ -39,7 +39,7 @@ Reading this as: 面向 LoRA 数据集制备的密集生产工作台，用户是
 这次重写优先解决显示和可用性问题：
 
 - 首屏没有明确主任务。用户进来看到很多入口，但不知道先点哪个。
-- 核心功能被藏起来。比如打标能力散在 `AnnotateStage`、`TaggingPanel`、`tools/tagging.tsx`、`tools/ai.tsx`、AI 批量弹窗里，用户无法在一个地方直接看到“WD14 打标 / 智能 caption / 触发词 / 词频 / 批改”。
+- 核心功能被藏起来。比如打标能力散在 `AnnotateStage`、`TaggingPanel`、AI 批量弹窗和多个 stage 子面板里，用户无法在一个地方直接看到“WD14 打标 / 智能 caption / 触发词 / 词频 / 批改”。
 - 页面密度高但信息层级弱。很多小卡片都像同级功能，真正高频动作没有更高优先级。
 - 同一个能力有多个入口。工具广场、阶段面板、独立工具页、弹窗都能通向相似功能，用户会以为是不同东西。
 - 阶段页不是阶段页。非 Curate 阶段仍被图库占据，当前阶段功能被压成附属区域。
@@ -563,7 +563,7 @@ web/src/pages/image-studio/
 - `DatasetDetail` 退役，不再作为所有阶段的根组件。
 - `ImageGrid` 改为 `ImageGridPane`，只管展示和选择，不管 URL、查询、删除、AI。
 - `Inspector` 改为 drawer，独立管理单图编辑。
-- `tools/*.tsx` 里的可用 panel 迁移进对应 `stages/*`，工具页只作为跳转和高亮入口。
+- 工具面板放在对应 `stages/*` 下直渲，`tools-catalog.ts` 只保留工具广场元数据和 deep link。
 - `DatasetManager` 如果已不在主路径使用，应在重构后删除或并入 `DatasetRail`。
 
 ## 9. 交互规范
@@ -614,7 +614,7 @@ web/src/pages/image-studio/
 ### F3 Intake/Audit/Annotate/Ship 阶段化
 
 - 把现有 stage panel 提升为各阶段主视图。
-- 工具页 deep link 回阶段视图并高亮对应 panel。
+- 工具广场 deep link 回阶段视图并高亮或直达对应 panel。
 - 移除“非 Curate 阶段仍常驻图库”的布局。
 - 优先做 `Annotate` 的打标中心，把 WD14、智能 caption、VLM caption 聚合到首屏。
 - 打标中心先只复用已有接口，不新增后端算法。成熟度来自页面组织、默认范围、结果复核和失败重试。

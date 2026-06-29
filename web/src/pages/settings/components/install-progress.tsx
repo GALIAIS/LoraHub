@@ -30,6 +30,11 @@ export const STEP_PLANS: Record<BackendId, StepDef[]> = {
   anima_lora: [
     { id: "sync", label: "uv sync (创建 .venv + 装依赖)", match: /^uv\s+sync/i },
   ],
+  ai_toolkit: [
+    { id: "venv", label: "创建虚拟环境", match: /^(uv\s+venv\b|create\s+venv)/i },
+    { id: "torch", label: "安装 PyTorch", match: /^install\s+torch/i },
+    { id: "requirements", label: "安装 ai-toolkit requirements", match: /ai-toolkit\s+requirements/i },
+  ],
 }
 
 export type StepState = "pending" | "running" | "succeeded" | "failed"

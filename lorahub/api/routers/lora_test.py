@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 import subprocess
 import threading
 import time
@@ -36,7 +37,7 @@ class GenerateRequest(BaseModel):
     checkpoint_path: str
     prompt: str = Field(min_length=1, max_length=8000)
     negative_prompt: str = Field(default="", max_length=8000)
-    width: int = Field(default=912, ge=256, le=2048)
+    width: int = Field(default=896, ge=256, le=2048)
     height: int = Field(default=1632, ge=256, le=2048)
     seed: int = -1
     batch_count: int = Field(default=4, ge=1, le=32)
@@ -196,6 +197,11 @@ def list_lora_test_models() -> dict[str, Any]:
 def start_generation(req: GenerateRequest) -> dict[str, Any]:
     try:
         req.validated_sampler
+        _validate_anima_size(req.width, req.height)
+        for axis in (req.x_axis, req.y_axis):
+            if axis is not None and axis.field == "size":
+                for raw in axis.values:
+                    _parse_size_axis_value(raw)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     resolved = _resolve_model(req.job_id, req.checkpoint_path)
@@ -285,8 +291,8 @@ def _run_generation_session(
     results: list[dict[str, Any]] = []
     try:
         resolved = _resolve_model(req.job_id, req.checkpoint_path)
-        loras = _resolve_loras(req, resolved)
-        cases = _build_cases(req, resolved, loras)
+        loras, weights = _resolve_loras(req, resolved)
+        cases = _build_cases(req, resolved, loras, weights)
         out_dir = _session_output_dir(session_id)
         out_dir.mkdir(parents=True, exist_ok=True)
         store.update(session_id, status="running", percent=1)
@@ -378,18 +384,33 @@ def _run_generation_session(
             _cancel_events.pop(session_id, None)
 
 
-def _resolve_loras(req: GenerateRequest, primary: _ResolvedModel) -> list[_ResolvedModel]:
+def _resolve_loras(
+    req: GenerateRequest,
+    primary: _ResolvedModel,
+) -> tuple[list[_ResolvedModel], list[float]]:
     if not req.loras:
-        return [primary]
-    return [_resolve_model(item.job_id or req.job_id, item.checkpoint_path) for item in req.loras]
+        return [primary], [req.lora_weight]
+    resolved: list[_ResolvedModel] = []
+    weights: list[float] = []
+    seen: set[str] = set()
+    for item in req.loras:
+        model = _resolve_model(item.job_id or req.job_id, item.checkpoint_path)
+        key = str(model.checkpoint.resolve()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(model)
+        weights.append(item.weight)
+    return resolved, weights
 
 
 def _build_cases(
     req: GenerateRequest,
     primary: _ResolvedModel,
     loras: list[_ResolvedModel],
+    lora_weights: list[float],
 ) -> list[_GenerationCase]:
-    base_weights = [item.weight for item in req.loras] if req.loras else [req.lora_weight]
+    base_weights = list(lora_weights)
     x_values = _axis_values(req.x_axis) if req.x_axis else [(None, None)]
     y_values = _axis_values(req.y_axis) if req.y_axis else [(None, None)]
     cases: list[_GenerationCase] = []
@@ -495,9 +516,15 @@ def _parse_size_axis_value(value: str) -> tuple[int, int]:
         raise ValueError("size axis values must look like 912x1632")
     width = int(left)
     height = int(right)
+    _validate_anima_size(width, height)
+    return width, height
+
+
+def _validate_anima_size(width: int, height: int) -> None:
     if width < 256 or width > 2048 or height < 256 or height > 2048:
         raise ValueError("size axis width and height must be between 256 and 2048")
-    return width, height
+    if width % 32 != 0 or height % 32 != 0:
+        raise ValueError("anima_lora generation width and height must be divisible by 32")
 
 
 def _maybe_write_xy_grid(
@@ -552,6 +579,10 @@ def _run_anima_inference(
         config_path=cfg.backend.repo_path,
         config_python=cfg.backend.python_executable,
     )
+    inference_dir = out_path.with_suffix("")
+    if inference_dir.exists():
+        shutil.rmtree(inference_dir)
+    inference_dir.mkdir(parents=True, exist_ok=True)
     argv = [
         str(env.python_executable),
         str(env.script("inference.py")),
@@ -573,7 +604,7 @@ def _run_anima_inference(
         "--sampler",
         case.sampler,
         "--save_path",
-        str(out_path),
+        str(inference_dir),
         "--seed",
         str(case.seed),
     ]
@@ -586,25 +617,43 @@ def _run_anima_inference(
         ]
     if case.negative_prompt.strip():
         argv += ["--negative_prompt", case.negative_prompt.strip()]
-    proc = subprocess.Popen(
-        argv,
-        cwd=env.repo_path,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    while proc.poll() is None:
-        if cancel_evt.is_set():
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            raise RuntimeError("canceled by user")
-        time.sleep(0.5)
-    stdout, stderr = proc.communicate()
+    log_path = out_path.with_suffix(".log")
+    with log_path.open("w", encoding="utf-8", errors="replace") as log:
+        proc = subprocess.Popen(
+            argv,
+            cwd=env.repo_path,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        while proc.poll() is None:
+            if cancel_evt.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise RuntimeError("canceled by user")
+            time.sleep(0.5)
     if proc.returncode != 0:
-        tail = "\n".join((stderr or stdout or "").splitlines()[-20:])
+        tail = _tail_text(log_path, lines=20)
         raise RuntimeError(f"anima_lora inference failed ({proc.returncode}): {tail}")
+    generated = sorted(
+        inference_dir.glob("*.png"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if generated:
+        if out_path.exists():
+            out_path.unlink()
+        generated[0].replace(out_path)
     if not out_path.is_file():
-        raise RuntimeError("anima_lora inference finished but did not write an image")
+        tail = _tail_text(log_path, lines=20)
+        raise RuntimeError(f"anima_lora inference finished but did not write an image: {tail}")
+    shutil.rmtree(inference_dir, ignore_errors=True)
+
+
+def _tail_text(path: Path, *, lines: int) -> str:
+    if not path.is_file():
+        return ""
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])

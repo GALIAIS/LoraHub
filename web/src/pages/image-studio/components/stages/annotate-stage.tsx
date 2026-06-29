@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   CheckCircle2,
@@ -29,6 +30,17 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import {
+  AiCaptionTool,
+  AiQualityTool,
+  AiSmartCaptionTool,
+  AiTriggerWordsTool,
+} from "./annotate-ai-tools"
+import {
+  AiVlmAnimaRewriteTool,
+  AiWd14PrefilterTool,
+} from "./annotate-ai-single-image"
+import { CaptionsBlacklistTool } from "./annotate-caption-tools"
 
 interface Props {
   datasetPath: string
@@ -39,8 +51,53 @@ const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 type PrimaryMode = "tags" | "caption"
 type DetailMode = "vocab" | "replace" | "trigger"
 
+const TOOL_TO_ANNOTATE_VIEW: Record<
+  string,
+  { mode?: PrimaryMode; detail?: DetailMode }
+> = {
+  "tagging-wd14": { mode: "tags" },
+  "captions-vocab": { detail: "vocab" },
+  "captions-find-replace": { detail: "replace" },
+  "captions-inject-trigger": { detail: "trigger" },
+  "captions-blacklist": { detail: "vocab" },
+  "ai-caption": { mode: "caption" },
+  "ai-smart-caption": { mode: "caption" },
+  "ai-wd14-prefilter": { mode: "tags" },
+  "ai-vlm-anima-rewrite": { mode: "caption" },
+  "ai-quality": { mode: "caption" },
+  "ai-trigger-words": { detail: "trigger" },
+}
+
 export function AnnotateStage({ datasetPath }: Props) {
+  const [params] = useSearchParams()
+  const tool = params.get("tool")
+  if (tool === "ai-caption") {
+    return <AiCaptionTool datasetPath={datasetPath} />
+  }
+  if (tool === "ai-smart-caption") {
+    return <AiSmartCaptionTool datasetPath={datasetPath} />
+  }
+  if (tool === "ai-wd14-prefilter") {
+    return <AiWd14PrefilterTool datasetPath={datasetPath} />
+  }
+  if (tool === "ai-vlm-anima-rewrite") {
+    return <AiVlmAnimaRewriteTool datasetPath={datasetPath} />
+  }
+  if (tool === "ai-quality") {
+    return <AiQualityTool datasetPath={datasetPath} />
+  }
+  if (tool === "ai-trigger-words") {
+    return <AiTriggerWordsTool datasetPath={datasetPath} />
+  }
+  if (tool === "captions-blacklist") {
+    return <CaptionsBlacklistTool datasetPath={datasetPath} />
+  }
+  return <AnnotateMainPanel datasetPath={datasetPath} />
+}
+
+function AnnotateMainPanel({ datasetPath }: Props) {
   const qc = useQueryClient()
+  const [params] = useSearchParams()
   const tasks = useStudioTasksFor(datasetPath)
   const latestTask = [...tasks].sort((a, b) => b.startedAt - a.startedAt)[0]
   const [mode, setMode] = useState<PrimaryMode>("tags")
@@ -56,6 +113,15 @@ export function AnnotateStage({ datasetPath }: Props) {
   const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
   const [skipExisting, setSkipExisting] = useState(true)
   const [triggerWord, setTriggerWord] = useState("")
+
+  useEffect(() => {
+    const tool = params.get("tool")
+    if (!tool) return
+    const view = TOOL_TO_ANNOTATE_VIEW[tool]
+    if (!view) return
+    if (view.mode) setMode(view.mode)
+    if (view.detail) setDetail(view.detail)
+  }, [params])
 
   const vocabQuery = useQuery({
     queryKey: ["image-studio-captions-vocab", datasetPath],
@@ -296,67 +362,6 @@ export function AnnotateStage({ datasetPath }: Props) {
           </section>
         </div>
       </div>
-    </div>
-  )
-}
-
-export function VocabPanelTool({ datasetPath }: { datasetPath: string }) {
-  const qc = useQueryClient()
-  const vocabQuery = useQuery({
-    queryKey: ["image-studio-captions-vocab", datasetPath],
-    queryFn: () =>
-      imageStudioCaptionsVocab(datasetPath, { recursive: true, limit: 200 }),
-    enabled: Boolean(datasetPath),
-  })
-  const onMutated = () => {
-    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio"] })
-  }
-  return (
-    <div className="h-full overflow-hidden p-4">
-      <section className="h-full rounded-md border border-border/60 bg-card">
-        <VocabPanel
-          vocab={vocabQuery.data?.vocab ?? []}
-          loading={vocabQuery.isLoading}
-          totalFiles={vocabQuery.data?.files_seen ?? 0}
-          tagCount={vocabQuery.data?.tag_count ?? 0}
-          datasetPath={datasetPath}
-          onMutated={onMutated}
-        />
-      </section>
-    </div>
-  )
-}
-
-export function FindReplaceTool({ datasetPath }: { datasetPath: string }) {
-  const qc = useQueryClient()
-  const onMutated = () => {
-    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio"] })
-  }
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      <section className="max-w-3xl rounded-md border border-border/60 bg-card">
-        <FindReplacePanel datasetPath={datasetPath} onMutated={onMutated} />
-      </section>
-    </div>
-  )
-}
-
-export function TriggerInjectTool({ datasetPath }: { datasetPath: string }) {
-  const qc = useQueryClient()
-  const onMutated = () => {
-    qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
-    qc.invalidateQueries({ queryKey: ["image-studio"] })
-  }
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      <section className="max-w-2xl rounded-md border border-border/60 bg-card">
-        <TriggerInjectPanel datasetPath={datasetPath} onMutated={onMutated} />
-      </section>
     </div>
   )
 }

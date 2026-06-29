@@ -329,7 +329,6 @@ web/src/pages/image-studio/lora-test/
 
 - `web/src/pages/image-studio/index.tsx`
 - `web/src/pages/image-studio/tools-catalog.ts`
-- `web/src/pages/image-studio/tool-registry.tsx`
 - `web/src/pages/artifacts/index.tsx`
 
 ## 状态模型
@@ -376,4 +375,3 @@ localStorage：
 7. 从产物归档加“测试”跳转。
 8. 补移动端布局。
 9. 跑后端路径安全测试和前端 build。
-

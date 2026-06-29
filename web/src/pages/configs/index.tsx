@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useLocation, useNavigate } from "react-router-dom"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
-import { api, type ConfigListEntry } from "@/lib/api"
+import { api, type BackendId, type ConfigListEntry } from "@/lib/api"
 import { useUrlState } from "@/lib/url-state"
 import { Button } from "@/components/ui/button"
 import { WorkbenchSplitLayout } from "@/components/workbench-split-layout"
@@ -38,13 +38,25 @@ const BACKEND_VALUES: BackendFilter[] = [
   "kohya",
   "diffusion-pipe",
   "anima_lora",
+  "ai_toolkit",
+]
+const BACKEND_IDS: BackendId[] = [
+  "kohya",
+  "diffusion-pipe",
+  "anima_lora",
+  "ai_toolkit",
 ]
 const SORT_VALUES: SortOrder[] = ["name-asc", "name-desc", "modified-desc"]
 
 function parseMode(params: URLSearchParams): Mode | null {
   const kind = params.get("mode")
   const name = params.get("name") ?? ""
-  if (kind === "new") return { kind: "new" }
+  if (kind === "new") {
+    const backend = params.get("newBackend") as BackendId | null
+    return backend && BACKEND_IDS.includes(backend)
+      ? { kind: "new", backend }
+      : { kind: "new" }
+  }
   if ((kind === "preview" || kind === "edit") && name) {
     return { kind, name }
   }
@@ -88,11 +100,11 @@ export function ConfigsPage() {
   const setMode = useCallback(
     (next: Mode | null) => {
       if (next === null) {
-        update({ mode: null, name: null })
+        update({ mode: null, name: null, newBackend: null })
       } else if (next.kind === "new") {
-        update({ mode: "new", name: null })
+        update({ mode: "new", name: null, newBackend: next.backend ?? null })
       } else {
-        update({ mode: next.kind, name: next.name })
+        update({ mode: next.kind, name: next.name, newBackend: null })
       }
     },
     [update],
@@ -128,6 +140,10 @@ export function ConfigsPage() {
     (next: string) => update({ q: next || null }),
     [update],
   )
+  const createBackend =
+    backendFilter !== "default" && backendFilter !== "all"
+      ? backendFilter
+      : defaultBackend
 
   // Pre-populated dataset path that flows in from the Datasets page via
   // router state. Once the launch dialog opens we hand it off and clear.
@@ -419,8 +435,14 @@ export function ConfigsPage() {
       <TemplateLibraryDialog
         open={templateOpen}
         onOpenChange={setTemplateOpen}
-        onUseBlank={() => setMode({ kind: "new" })}
+        onUseBlank={() =>
+          setMode({
+            kind: "new",
+            backend: createBackend,
+          })
+        }
         onCreated={(name) => setMode({ kind: "preview", name })}
+        activeBackend={createBackend}
       />
 
       <ImportDialog

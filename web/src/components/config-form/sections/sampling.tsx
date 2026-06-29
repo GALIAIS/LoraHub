@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import type { ErrorMap, ConfigFormValue, Setter, SamplingPromptValue } from "../types"
 import {
   EnumSelect,
+  FloatInput,
   IntInput,
   PathInput,
   ResolutionInput,
@@ -37,15 +38,18 @@ export const SamplingFields = memo(function SamplingFields({
   value = {},
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["sampling"]
   set: Setter
   errorMap: ErrorMap
+  backendType?: "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
 }) {
   const v = value ?? {}
   const enabled = v.enabled ?? true
   const prompts = v.prompts ?? []
   const outputs = v.outputs ?? {}
+  const isAiToolkit = backendType === "ai_toolkit"
   const [promptsOpen, setPromptsOpen] = useState(false)
 
   // Resolution lives as an arbitrary-length list in yaml but the form
@@ -66,16 +70,18 @@ export const SamplingFields = memo(function SamplingFields({
       </Row>
       {enabled && (
         <>
-          <Row label="每 N 回合一次">
-            <IntInput
-              min={1}
-              value={v.everyNEpochs ?? 1}
-              onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)}
-            />
-          </Row>
+          {!isAiToolkit && (
+            <Row label="每 N 回合一次">
+              <IntInput
+                min={1}
+                value={v.everyNEpochs ?? 1}
+                onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)}
+              />
+            </Row>
+          )}
           <Row
             label="每 N 步一次"
-            description="对应 kohya 的 --sample_every_n_steps；与 everyNEpochs 不冲突。留空则仅按回合采样。"
+            description={isAiToolkit ? "对应 ai-toolkit 的 sample.sample_every。" : "对应 --sample_every_n_steps；与回合采样不冲突。留空则仅按回合采样。"}
             errors={errorMap.get("sampling.everyNSteps")}
           >
             <IntInput
@@ -85,26 +91,30 @@ export const SamplingFields = memo(function SamplingFields({
               placeholder="默认"
             />
           </Row>
-          <Row
-            label="训练前先采样"
-            description="对应 kohya 的 --sample_at_first：第 0 步即生成一组基线样图。"
-          >
-            <ToggleSwitch
-              checked={v.atFirst ?? false}
-              onCheckedChange={(b) => set(["sampling", "atFirst"], b)}
-            />
-          </Row>
-          <Row
-            label="预览采样器"
-            description="传给 anima_lora 的 --sample_sampler；留空使用 DDIM。"
-            errors={errorMap.get("sampling.sampleSampler")}
-          >
-            <EnumSelect
-              value={v.sampleSampler ?? "ddim"}
-              onChange={(s) => set(["sampling", "sampleSampler"], s === "ddim" ? null : s)}
-              options={SAMPLE_SAMPLER_OPTIONS}
-            />
-          </Row>
+          {!isAiToolkit && (
+            <>
+              <Row
+                label="训练前先采样"
+                description="第 0 步生成一组基线样图。"
+              >
+                <ToggleSwitch
+                  checked={v.atFirst ?? false}
+                  onCheckedChange={(b) => set(["sampling", "atFirst"], b)}
+                />
+              </Row>
+              <Row
+                label="预览采样器"
+                description="留空使用后端默认采样器。"
+                errors={errorMap.get("sampling.sampleSampler")}
+              >
+                <EnumSelect
+                  value={v.sampleSampler ?? "ddim"}
+                  onChange={(s) => set(["sampling", "sampleSampler"], s === "ddim" ? null : s)}
+                  options={SAMPLE_SAMPLER_OPTIONS}
+                />
+              </Row>
+            </>
+          )}
           <Row
             label="提示词"
             description={
@@ -124,25 +134,52 @@ export const SamplingFields = memo(function SamplingFields({
               {prompts.length > 0 ? `编辑 · ${prompts.length}` : "编辑提示词"}
             </Button>
           </Row>
-          {/* Legacy field — kept visible in case the user wants to point
-              at an existing prompts.txt instead of authoring inline. */}
-          <Row
-            label="提示词文件"
-            description="可选 · 指向外部 prompts.txt；留空则使用上方对话框中的列表。"
-            errors={errorMap.get("sampling.promptsFile")}
-          >
-            <PathInput
-              value={v.promptsFile ?? ""}
-              onChange={(s) => set(["sampling", "promptsFile"], s || null)}
-              placeholder="可选 · ./prompts.txt"
-            />
-          </Row>
+          {!isAiToolkit && (
+            <Row
+              label="提示词文件"
+              description="可选。留空则使用上方提示词列表。"
+              errors={errorMap.get("sampling.promptsFile")}
+            >
+              <PathInput
+                value={v.promptsFile ?? ""}
+                onChange={(s) => set(["sampling", "promptsFile"], s || null)}
+                placeholder="可选 · ./prompts.txt"
+              />
+            </Row>
+          )}
           <Row label="分辨率">
             <ResolutionInput
               value={v.resolution}
               onChange={(r) => set(["sampling", "resolution"], r)}
             />
           </Row>
+          {isAiToolkit && (
+            <>
+              <Row
+                label="采样步数"
+                description="对应 ai-toolkit 的 sample.sample_steps。"
+                errors={errorMap.get("sampling.inferenceSteps")}
+              >
+                <IntInput
+                  min={1}
+                  value={v.inferenceSteps ?? 24}
+                  onChange={(n) => set(["sampling", "inferenceSteps"], n ?? 24)}
+                />
+              </Row>
+              <Row
+                label="CFG"
+                description="对应 ai-toolkit 的 sample.guidance_scale。"
+                errors={errorMap.get("sampling.inferenceCfg")}
+              >
+                <FloatInput
+                  min={0.1}
+                  step={0.1}
+                  value={v.inferenceCfg ?? 5}
+                  onChange={(n) => set(["sampling", "inferenceCfg"], n ?? 5)}
+                />
+              </Row>
+            </>
+          )}
           <Row
             label="随机种子"
             description="-1 = 每次训练随机抽取（与 ComfyUI 同义）；填具体数字即固定种子；骰子按钮会立刻生成新值并固定。"
@@ -153,57 +190,61 @@ export const SamplingFields = memo(function SamplingFields({
             />
           </Row>
 
-          <Row
-            label="触发词"
-            description="训练启动时用此值替换 ${TRIGGER}。留空时从数据集 .txt 描述推断。"
-          >
-            <TextInput
-              value={v.triggerWord ?? ""}
-              onChange={(s) => set(["sampling", "triggerWord"], s || null)}
-              placeholder="例如 thornsdance · 留空自动推断"
-              className="w-72"
-            />
-          </Row>
+          {!isAiToolkit && (
+            <Row
+              label="触发词"
+              description="训练启动时替换提示词中的 ${TRIGGER}。"
+            >
+              <TextInput
+                value={v.triggerWord ?? ""}
+                onChange={(s) => set(["sampling", "triggerWord"], s || null)}
+                placeholder="可选"
+                className="w-72"
+              />
+            </Row>
+          )}
 
-          <Row
-            label="预览输出"
-            description="训练过程中附加生成的预览图产物，按需勾选。"
-          >
-            <div className="flex flex-col gap-1.5 text-[12px]">
-              <OutputToggle
-                label="多 Prompt 网格图"
-                description="每个 ckpt 将所有提示词的产出横向拼接成一张总览图。"
-                checked={outputs.gridStitching ?? true}
-                onCheckedChange={(b) =>
-                  set(["sampling", "outputs", "gridStitching"], b)
-                }
-              />
-              <OutputToggle
-                label="基模对比"
-                description="同一提示词额外渲染一份不挂 LoRA 的基模产出，用于对比。"
-                checked={outputs.baseCompare ?? false}
-                onCheckedChange={(b) =>
-                  set(["sampling", "outputs", "baseCompare"], b)
-                }
-              />
-              <OutputToggle
-                label="跨 Ckpt 动画"
-                description="将同一提示词在各 ckpt 上的产出合成 GIF，可视化训练过程演变。"
-                checked={outputs.crossCkptAnimation ?? false}
-                onCheckedChange={(b) =>
-                  set(["sampling", "outputs", "crossCkptAnimation"], b)
-                }
-              />
-              <OutputToggle
-                label="PNG 元数据"
-                description="将 prompt / seed / step / cfg 写入 PNG parameters 区，兼容 A1111 / ComfyUI。"
-                checked={outputs.pngMetadata ?? true}
-                onCheckedChange={(b) =>
-                  set(["sampling", "outputs", "pngMetadata"], b)
-                }
-              />
-            </div>
-          </Row>
+          {!isAiToolkit && (
+            <Row
+              label="预览输出"
+              description="训练过程中附加生成的预览图产物。"
+            >
+              <div className="flex flex-col gap-1.5 text-[12px]">
+                <OutputToggle
+                  label="多 Prompt 网格图"
+                  description="每个 ckpt 将所有提示词的产出横向拼接成一张总览图。"
+                  checked={outputs.gridStitching ?? true}
+                  onCheckedChange={(b) =>
+                    set(["sampling", "outputs", "gridStitching"], b)
+                  }
+                />
+                <OutputToggle
+                  label="基模对比"
+                  description="同一提示词额外渲染一份不挂 LoRA 的基模产出，用于对比。"
+                  checked={outputs.baseCompare ?? false}
+                  onCheckedChange={(b) =>
+                    set(["sampling", "outputs", "baseCompare"], b)
+                  }
+                />
+                <OutputToggle
+                  label="跨 Ckpt 动画"
+                  description="将同一提示词在各 ckpt 上的产出合成 GIF，可视化训练过程演变。"
+                  checked={outputs.crossCkptAnimation ?? false}
+                  onCheckedChange={(b) =>
+                    set(["sampling", "outputs", "crossCkptAnimation"], b)
+                  }
+                />
+                <OutputToggle
+                  label="PNG 元数据"
+                  description="将 prompt / seed / step / cfg 写入 PNG parameters 区。"
+                  checked={outputs.pngMetadata ?? true}
+                  onCheckedChange={(b) =>
+                    set(["sampling", "outputs", "pngMetadata"], b)
+                  }
+                />
+              </div>
+            </Row>
+          )}
         </>
       )}
 

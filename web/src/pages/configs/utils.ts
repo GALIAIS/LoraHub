@@ -55,6 +55,21 @@ export function buildDefaults(backend?: BackendId): ConfigFormValue {
       },
     }
   }
+  if (effective === "ai_toolkit") {
+    return {
+      ...base,
+      baseModel: {
+        ...base.baseModel,
+        checkpoint: "krea/Krea-2-Raw",
+      },
+      backend: {
+        ...base.backend,
+        extraArgs: {
+          "model.name_or_path": "krea/Krea-2-Raw",
+        },
+      },
+    }
+  }
   return base
 }
 

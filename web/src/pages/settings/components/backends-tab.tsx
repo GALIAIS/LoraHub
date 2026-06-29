@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Save, RotateCcw, Wand2 } from "lucide-react"
 import {
   api,
+  type AIToolkitBackendStatus,
   type AnimaLoraBackendStatus,
   type BackendId,
   type DiffusionPipeBackendStatus,
@@ -31,6 +32,7 @@ const DEFAULT_BACKEND_OPTIONS: { value: BackendId; label: string }[] = [
   { value: "kohya", label: "kohya-ss/sd-scripts" },
   { value: "diffusion-pipe", label: "tdrussell/diffusion-pipe" },
   { value: "anima_lora", label: "sorryhyun/anima_lora (vendored)" },
+  { value: "ai_toolkit", label: "ostris/ai-toolkit (vendored)" },
 ]
 
 interface FieldProps {
@@ -136,6 +138,8 @@ export function BackendsTab() {
     draft.diffusion_pipe_python !== saved.diffusion_pipe_python ||
     draft.anima_lora_repo_path !== saved.anima_lora_repo_path ||
     draft.anima_lora_python !== saved.anima_lora_python ||
+    draft.ai_toolkit_repo_path !== saved.ai_toolkit_repo_path ||
+    draft.ai_toolkit_python !== saved.ai_toolkit_python ||
     draft.default_backend !== saved.default_backend
 
   // The /api/backends probe knows what each backend would resolve to with no
@@ -150,6 +154,9 @@ export function BackendsTab() {
     | undefined
   const animaLoraStatus = backendList.find((b) => b.id === "anima_lora")?.status as
     | AnimaLoraBackendStatus
+    | undefined
+  const aiToolkitStatus = backendList.find((b) => b.id === "ai_toolkit")?.status as
+    | AIToolkitBackendStatus
     | undefined
 
   const detectedKohyaPath = kohyaStatus?.sd_scripts_ok
@@ -166,6 +173,12 @@ export function BackendsTab() {
   const detectedAnimaLoraPython = animaLoraStatus?.python_ok
     ? animaLoraStatus.python
     : null
+  const detectedAiToolkitPath = aiToolkitStatus?.repo_ok
+    ? aiToolkitStatus.repo_path
+    : null
+  const detectedAiToolkitPython = aiToolkitStatus?.python_ok
+    ? aiToolkitStatus.python
+    : null
 
   const autofillAll = () => {
     if (!draft) return
@@ -177,6 +190,8 @@ export function BackendsTab() {
       diffusion_pipe_python: detectedDpPython ?? draft.diffusion_pipe_python,
       anima_lora_repo_path: detectedAnimaLoraPath ?? draft.anima_lora_repo_path,
       anima_lora_python: detectedAnimaLoraPython ?? draft.anima_lora_python,
+      ai_toolkit_repo_path: detectedAiToolkitPath ?? draft.ai_toolkit_repo_path,
+      ai_toolkit_python: detectedAiToolkitPython ?? draft.ai_toolkit_python,
     })
   }
 
@@ -186,7 +201,9 @@ export function BackendsTab() {
     detectedDpPath ||
     detectedDpPython ||
     detectedAnimaLoraPath ||
-    detectedAnimaLoraPython
+    detectedAnimaLoraPython ||
+    detectedAiToolkitPath ||
+    detectedAiToolkitPython
 
   return (
     <div className="space-y-5">
@@ -217,6 +234,9 @@ export function BackendsTab() {
                 </SelectItem>
                 <SelectItem value="anima_lora">
                   sorryhyun/anima_lora (vendored)
+                </SelectItem>
+                <SelectItem value="ai_toolkit">
+                  ostris/ai-toolkit (vendored)
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -264,6 +284,38 @@ export function BackendsTab() {
             placeholder={detectedKohyaPython ?? "<sd-scripts>/venv/Scripts/python.exe"}
             onChange={(v) => setDraft({ ...draft, python_executable: v || null })}
             detected={detectedKohyaPython}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">AI Toolkit 后端 (vendored)</CardTitle>
+          <CardDescription>
+            ostris/ai-toolkit 已随 LoraHub 一起分发，当前用于 Krea2 训练。
+            下方字段用于覆盖默认路径。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field
+            label="repo 路径"
+            description="覆盖 ai-toolkit 源码目录。留空时使用 external/ai_toolkit/。"
+            value={draft.ai_toolkit_repo_path ?? ""}
+            placeholder={detectedAiToolkitPath ?? "<lorahub>/external/ai_toolkit"}
+            onChange={(v) =>
+              setDraft({ ...draft, ai_toolkit_repo_path: v || null })
+            }
+            detected={detectedAiToolkitPath}
+          />
+          <Field
+            label="Python 解释器"
+            description="覆盖 ai-toolkit Python 解释器。留空时使用 external/ai_toolkit/venv。"
+            value={draft.ai_toolkit_python ?? ""}
+            placeholder={detectedAiToolkitPython ?? "<ai_toolkit>/venv/Scripts/python.exe"}
+            onChange={(v) =>
+              setDraft({ ...draft, ai_toolkit_python: v || null })
+            }
+            detected={detectedAiToolkitPython}
           />
         </CardContent>
       </Card>
@@ -364,6 +416,8 @@ export function BackendsTab() {
               diffusion_pipe_python: draft.diffusion_pipe_python,
               anima_lora_repo_path: draft.anima_lora_repo_path,
               anima_lora_python: draft.anima_lora_python,
+              ai_toolkit_repo_path: draft.ai_toolkit_repo_path,
+              ai_toolkit_python: draft.ai_toolkit_python,
               default_backend: draft.default_backend,
             })
           }

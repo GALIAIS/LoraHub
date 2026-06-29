@@ -48,6 +48,8 @@ _PATH_FIELDS: tuple[str, ...] = (
     "diffusion_pipe_python",
     "anima_lora_repo_path",
     "anima_lora_python",
+    "ai_toolkit_repo_path",
+    "ai_toolkit_python",
     "github_proxy",
     "huggingface_endpoint",
     "pypi_index_url",
@@ -102,6 +104,8 @@ class UpdateSettingsRequest(BaseModel):
     diffusion_pipe_python: str | None = None
     anima_lora_repo_path: str | None = None
     anima_lora_python: str | None = None
+    ai_toolkit_repo_path: str | None = None
+    ai_toolkit_python: str | None = None
     default_backend: str | None = None
     tagger_device: str | None = None
     default_tagger: str | None = None

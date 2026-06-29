@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, FilePlus2 } from "lucide-react"
-import { api, type ConfigTemplate } from "@/lib/api"
+import { api, type BackendId, type ConfigTemplate } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,6 +24,7 @@ export function TemplateLibraryDialog({
   onOpenChange,
   onUseBlank,
   onCreated,
+  activeBackend,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -31,6 +32,7 @@ export function TemplateLibraryDialog({
   onUseBlank: () => void
   /** Called after a non-blank template was saved as a new config. */
   onCreated: (name: string) => void
+  activeBackend?: BackendId
 }) {
   const qc = useQueryClient()
   const templates = useQuery({
@@ -56,7 +58,17 @@ export function TemplateLibraryDialog({
     }
   }, [open])
 
-  const list = templates.data?.templates ?? []
+  const allTemplates = templates.data?.templates ?? []
+  const list = useMemo(
+    () =>
+      activeBackend
+        ? allTemplates.filter(
+            (tpl) =>
+              tpl.id === "blank" || templateBackend(tpl) === activeBackend,
+          )
+        : allTemplates,
+    [activeBackend, allTemplates],
+  )
   const selected = useMemo(
     () => list.find((t) => t.id === selectedId) ?? null,
     [list, selectedId],
@@ -219,6 +231,22 @@ export function TemplateLibraryDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function templateBackend(template: ConfigTemplate): BackendId {
+  const backend = template.config.backend
+  if (backend && typeof backend === "object" && "type" in backend) {
+    const type = String((backend as { type?: unknown }).type)
+    if (
+      type === "kohya" ||
+      type === "diffusion-pipe" ||
+      type === "anima_lora" ||
+      type === "ai_toolkit"
+    ) {
+      return type
+    }
+  }
+  return "kohya"
 }
 
 function PickStage({

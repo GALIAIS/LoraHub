@@ -95,6 +95,31 @@ def test_lora_test_generate_rejects_workspace_escape(
     assert r.status_code == 400
 
 
+def test_lora_test_generate_rejects_non_32_multiple_size(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(workspace=workspace, config_snapshot=_anima_snapshot(tmp_path))
+
+    r = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "1girl",
+            "width": 912,
+            "height": 1632,
+        },
+    )
+
+    assert r.status_code == 422
+    assert "divisible by 32" in r.text
+
+
 def test_lora_test_generate_session_completes_with_fake_inference(
     client: TestClient,
     tmp_path: Path,
@@ -137,6 +162,71 @@ def test_lora_test_generate_session_completes_with_fake_inference(
     assert len(status["result"]["images"]) == 2
     assert status["result"]["images"][0]["seed"] == 42
     assert status["result"]["images"][1]["seed"] == 43
+
+
+def test_lora_test_dedupes_loras_and_collects_anima_directory_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from lorahub.api.routers import lora_test
+
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(workspace=workspace, config_snapshot=_anima_snapshot(tmp_path))
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
+    resolved = lora_test._resolve_model(job.id, "output/style.safetensors")
+    req = lora_test.GenerateRequest(
+        job_id=job.id,
+        checkpoint_path="output/style.safetensors",
+        prompt="1girl",
+        loras=[
+            lora_test.LoraInput(job_id=job.id, checkpoint_path="output/style.safetensors", weight=0.7),
+            lora_test.LoraInput(job_id=job.id, checkpoint_path="output/style.safetensors", weight=1.2),
+        ],
+    )
+    loras, weights = lora_test._resolve_loras(req, resolved)
+    cases = lora_test._build_cases(req, resolved, loras, weights)
+
+    assert len(cases[0].loras) == 1
+    assert cases[0].multipliers == [0.7]
+
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+            calls.append([str(item) for item in argv])
+            save_dir = Path(argv[argv.index("--save_path") + 1])
+            save_dir.mkdir(parents=True, exist_ok=True)
+            (save_dir / "sample.png").write_bytes(b"png")
+
+        def poll(self):  # type: ignore[no-untyped-def]
+            return 0
+
+    monkeypatch.setattr(
+        lora_test.anima_bootstrap,
+        "resolve",
+        lambda **_kwargs: SimpleNamespace(
+            python_executable=tmp_path / "python.exe",
+            repo_path=tmp_path,
+            script=lambda name: tmp_path / name,
+        ),
+    )
+    monkeypatch.setattr(lora_test.subprocess, "Popen", FakeProcess)
+
+    out_path = tmp_path / "result.png"
+    lora_test._run_anima_inference(resolved, req, cases[0], out_path, cancel_evt=SimpleNamespace(is_set=lambda: False))
+
+    assert out_path.read_bytes() == b"png"
+    assert not out_path.with_suffix("").exists()
+    assert calls[0].count(str(output / "style.safetensors")) == 1
+    assert calls[0][calls[0].index("--save_path") + 1] == str(out_path.with_suffix(""))
 
 
 def test_lora_test_xy_grid_with_fake_inference(

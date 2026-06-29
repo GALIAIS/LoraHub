@@ -264,6 +264,8 @@ export interface ConfigFormValue {
       | null
     resolution?: [number, number] | number[]
     seed?: number
+    inferenceSteps?: number
+    inferenceCfg?: number
     triggerWord?: string | null
     outputs?: SamplingOutputsValue
   }

@@ -44,6 +44,7 @@ ARCH_MODEL_PARAMS_M: dict[str, int] = {
     "cosmos_predict2": 2000,
     "z_image": 7000,
     "ernie_image": 4000,
+    "krea2": 32000,  # est, Krea 2 large diffusion stack
     # video — sizes are the trunk only; activations dominate at runtime
     "hunyuan_video": 13000,
     "hunyuan_video_15": 13000,
@@ -83,6 +84,7 @@ ARCH_ACTIVATION_BASE_MIB: dict[str, int] = {
     "wan": 4096,
     "z_image": 1280,
     "ernie_image": 1024,
+    "krea2": 2048,
 }
 
 # Conservative defaults for unknown arches (treat them as roughly SDXL-sized

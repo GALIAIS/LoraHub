@@ -43,7 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 
 const SIZE_PRESETS = [
-  { label: "912 x 1632", width: 912, height: 1632 },
+  { label: "896 x 1632", width: 896, height: 1632 },
   { label: "768 x 1344", width: 768, height: 1344 },
   { label: "832 x 1216", width: 832, height: 1216 },
   { label: "1024 x 1024", width: 1024, height: 1024 },
@@ -117,7 +117,7 @@ export function LoraTestPage() {
   const [checkpointPath, setCheckpointPath] = useState(urlCheckpoint)
   const [prompt, setPrompt] = useState("")
   const [negative, setNegative] = useState("")
-  const [width, setWidth] = useState(912)
+  const [width, setWidth] = useState(896)
   const [height, setHeight] = useState(1632)
   const [seed, setSeed] = useState(-1)
   const [batchCount, setBatchCount] = useState(4)
@@ -537,7 +537,7 @@ export function LoraTestPage() {
                     label="尺寸鲁棒性"
                     onClick={() => {
                       setXField("size")
-                      setXValues("768x1344, 912x1632, 1024x1024")
+                      setXValues("768x1344, 896x1632, 1024x1024")
                       setYValues("")
                     }}
                   />
@@ -1112,7 +1112,7 @@ function axisPlaceholder(field: LoraTestAxisInput["field"]): string {
   if (field === "variant") return "base, lora"
   if (field === "prompt") return "每行一个 prompt"
   if (field === "negative_prompt") return "每行一个 negative；empty 表示空负面词"
-  if (field === "size") return "768x1344, 912x1632, 1024x1024"
+  if (field === "size") return "768x1344, 896x1632, 1024x1024"
   return "0.6, 0.8, 1.0, 1.2"
 }
 

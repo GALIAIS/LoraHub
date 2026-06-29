@@ -19,6 +19,9 @@ from typing import Any
 from lorahub.core.backends.anima_lora import bootstrap as anima_lora_bootstrap
 from lorahub.core.backends.anima_lora import installer as anima_lora_installer
 from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
+from lorahub.core.backends.ai_toolkit import bootstrap as ai_toolkit_bootstrap
+from lorahub.core.backends.ai_toolkit import installer as ai_toolkit_installer
+from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.diffusion_pipe import bootstrap as dp_bootstrap
 from lorahub.core.backends.diffusion_pipe import installer as dp_installer
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
@@ -89,6 +92,19 @@ _BACKENDS: dict[str, BackendDescriptor] = {
         default_path_func=anima_lora_bootstrap.default_repo_path,
         bootstrap_func=anima_lora_installer.bootstrap,
         backend_class=AnimaLoraBackend,
+        extras={"vendored": True},
+    ),
+    "ai_toolkit": BackendDescriptor(
+        id="ai_toolkit",
+        name="ostris/ai-toolkit (vendored)",
+        description=(
+            "Vendored ostris/ai-toolkit backend. LoraHub currently exposes "
+            "the Krea2 training path through backend.type='ai_toolkit'."
+        ),
+        repo_url=ai_toolkit_installer.AI_TOOLKIT_REPO_URL,
+        default_path_func=ai_toolkit_bootstrap.default_repo_path,
+        bootstrap_func=ai_toolkit_installer.bootstrap,
+        backend_class=AIToolkitBackend,
         extras={"vendored": True},
     ),
 }

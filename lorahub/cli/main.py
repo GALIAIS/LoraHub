@@ -67,7 +67,7 @@ _pre_parse_lang()
 app = typer.Typer(
     name="lorahub",
     help=t("app.help"),
-    no_args_is_help=True,
+    no_args_is_help=False,
     add_completion=False,
 )
 console = Console()
@@ -109,8 +109,60 @@ app.command(
 err_console = Console(stderr=True)
 
 
-@app.callback()
+def _interactive_no_command(argv: list[str] | None = None) -> bool:
+    args = list(sys.argv[1:] if argv is None else argv)
+    value_options = {"--lang", "-L"}
+    flag_options = {"--no-tui", "--tui"}
+    filtered: list[str] = []
+    skip_next = False
+    for token in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in value_options:
+            skip_next = True
+            continue
+        if token in flag_options:
+            continue
+        if token.startswith("--lang="):
+            continue
+        filtered.append(token)
+    return not filtered
+
+
+def _argv_has_flag(flag: str, argv: list[str] | None = None) -> bool:
+    return flag in list(sys.argv[1:] if argv is None else argv)
+
+
+def _should_open_tui(
+    *,
+    no_tui: bool,
+    force_tui: bool,
+    argv: list[str] | None = None,
+    is_terminal: bool | None = None,
+    stdio_terminal: bool | None = None,
+) -> bool:
+    if no_tui:
+        return False
+    if not force_tui and not _interactive_no_command(argv):
+        return False
+    terminal = console.is_terminal if is_terminal is None else is_terminal
+    if not force_tui and not terminal:
+        return False
+    stdio_ok = (
+        getattr(sys.stdin, "isatty", lambda: False)()
+        and getattr(sys.stdout, "isatty", lambda: False)()
+        if stdio_terminal is None
+        else stdio_terminal
+    )
+    if not force_tui and not stdio_ok:
+        return False
+    return True
+
+
+@app.callback(invoke_without_command=True)
 def _root(
+    ctx: typer.Context,
     lang: Annotated[
         str | None,
         typer.Option(
@@ -120,6 +172,20 @@ def _root(
             show_default=False,
         ),
     ] = None,
+    no_tui: Annotated[
+        bool,
+        typer.Option(
+            "--no-tui",
+            help=t("app.no_tui.option"),
+        ),
+    ] = False,
+    tui: Annotated[
+        bool,
+        typer.Option(
+            "--tui",
+            help=t("app.tui.option"),
+        ),
+    ] = False,
 ) -> None:
     """Root callback: re-affirms the language for subcommand bodies.
 
@@ -129,6 +195,16 @@ def _root(
     """
     if lang is not None:
         set_lang(lang)
+    if ctx.invoked_subcommand is not None:
+        return
+    if _should_open_tui(no_tui=no_tui, force_tui=tui):
+        from lorahub.cli.tui import run_tui  # noqa: PLC0415
+
+        run_tui(console)
+        raise typer.Exit()
+    if _interactive_no_command():
+        console.print(ctx.get_help())
+        raise typer.Exit()
 
 
 @app.command(help=t("app.version.help"))
@@ -330,6 +406,8 @@ def info(
 
     if cfg.backend.type == "anima_lora":
         from lorahub.core.backends.anima_lora.compiler import compile_config as _compile
+    elif cfg.backend.type == "ai_toolkit":
+        from lorahub.core.backends.ai_toolkit.compiler import compile_config as _compile
     elif cfg.backend.type == "diffusion-pipe":
         from lorahub.core.backends.diffusion_pipe.compiler import compile_config as _compile
     else:
@@ -1208,6 +1286,16 @@ def _render_event(ev: TrainingEvent) -> None:
 
 
 def main() -> None:  # pragma: no cover
+    argv = sys.argv[1:]
+    if _should_open_tui(
+        no_tui=_argv_has_flag("--no-tui", argv),
+        force_tui=_argv_has_flag("--tui", argv),
+        argv=argv,
+    ):
+        from lorahub.cli.tui import run_tui  # noqa: PLC0415
+
+        run_tui(console)
+        return
     sys.exit(app())
 
 

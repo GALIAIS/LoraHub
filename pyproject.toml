@@ -78,7 +78,7 @@ docs = [
 ]
 
 [project.scripts]
-lorahub = "lorahub.cli.main:app"
+lorahub = "lorahub.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/GALIAIS/LoraHub"

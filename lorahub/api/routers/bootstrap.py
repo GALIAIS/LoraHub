@@ -161,7 +161,7 @@ async def start_bootstrap(req: BootstrapRequest) -> dict[str, Any]:
 
 
 class InstallDepsRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora", "ai_toolkit"] = "diffusion-pipe"
     install_deepspeed: bool = True
 
 
@@ -276,6 +276,38 @@ def _build_deps_runner(
             al_installer.install_bitsandbytes(plan, progress=progress)
             al_installer.install_deepspeed(plan, progress=progress)
 
+    elif req.backend == "ai_toolkit":
+        from lorahub.core.backends.ai_toolkit import (  # noqa: PLC0415
+            bootstrap as at_bootstrap,
+            installer as at_installer,
+        )
+        import os  # noqa: PLC0415
+
+        repo_raw = (
+            os.environ.get("LORAHUB_AI_TOOLKIT_REPO")
+            or settings.ai_toolkit_repo_path
+            or str(at_bootstrap.default_repo_path())
+        )
+        repo_path = Path(repo_raw).expanduser()
+        venv_py = at_bootstrap._venv_python(repo_path)
+        if not venv_py or not venv_py.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"No venv found at {repo_path}. Run a full install first.",
+            )
+        plan = at_installer.BootstrapPlan(
+            target=repo_path,
+            cuda_version="cu124",
+            torch_version="2.6.0",
+            torchvision_version="0.21.0",
+            base_python=venv_py,
+            pypi_index=settings.pypi_index_url,
+            torch_index_base=settings.torch_index_url,
+        )
+
+        def runner(progress: Callable[[str], None]) -> None:
+            at_installer.install_requirements(plan, progress=progress)
+
     else:
         from lorahub.core.backends.kohya import installer  # noqa: PLC0415
         from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
@@ -335,7 +367,7 @@ _FLASH_ATTN_DOC_URL = "https://github.com/Dao-AILab/flash-attention#installation
 
 
 class InstallFlashAttnRequest(BaseModel):
-    backend: Literal["kohya", "diffusion-pipe", "anima_lora"] = "diffusion-pipe"
+    backend: Literal["kohya", "diffusion-pipe", "anima_lora", "ai_toolkit"] = "diffusion-pipe"
     # FA2 is the only version we install automatically. FA3/FA4 are still
     # accepted so the frontend can surface a single endpoint, but they
     # return 501 with a link to the upstream install docs.
@@ -427,6 +459,17 @@ def _build_flash_attn2_runner(req: InstallFlashAttnRequest) -> Any:
 
         repo_path = al_bootstrap.default_repo_path()
         venv_py = al_bootstrap._venv_python(repo_path)
+    elif req.backend == "ai_toolkit":
+        from lorahub.core.backends.ai_toolkit import bootstrap as at_bootstrap  # noqa: PLC0415
+        import os  # noqa: PLC0415
+
+        repo_raw = (
+            os.environ.get("LORAHUB_AI_TOOLKIT_REPO")
+            or settings.ai_toolkit_repo_path
+            or str(at_bootstrap.default_repo_path())
+        )
+        repo_path = Path(repo_raw).expanduser()
+        venv_py = at_bootstrap._venv_python(repo_path)
     else:
         from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
             _venv_python,

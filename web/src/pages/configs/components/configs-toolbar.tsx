@@ -25,6 +25,7 @@ const BACKEND_FILTER_OPTIONS: { value: BackendFilter; label: string }[] = [
   { value: "kohya", label: "kohya" },
   { value: "diffusion-pipe", label: "diffusion-pipe" },
   { value: "anima_lora", label: "anima_lora" },
+  { value: "ai_toolkit", label: "ai_toolkit" },
 ]
 
 const SORT_OPTIONS: { value: SortOrder; label: string }[] = [

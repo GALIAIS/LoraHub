@@ -43,11 +43,6 @@ const ImageStudioPage = lazyWithRetry(
   () => import("./pages/image-studio").then((m) => ({ default: m.ImageStudioPage })),
   "route:image-studio",
 )
-const ImageStudioToolPage = lazyWithRetry(
-  () =>
-    import("./pages/image-studio/tool-page").then((m) => ({ default: m.ToolPage })),
-  "route:image-studio-tool",
-)
 const GalleryPage = lazyWithRetry(
   () => import("./pages/gallery").then((m) => ({ default: m.GalleryPage })),
   "route:gallery",
@@ -107,10 +102,6 @@ createRoot(document.getElementById("root")!, {
               <Route path="configs" element={<ConfigsPage />} />
               <Route path="datasets" element={<DatasetsPage />} />
               <Route path="image-studio" element={<ImageStudioPage />} />
-              <Route
-                path="image-studio/tools/:toolId"
-                element={<ImageStudioToolPage />}
-              />
               <Route path="gallery" element={<GalleryPage />} />
               <Route path="terminal" element={<TerminalPage />} />
               <Route path="artifacts" element={<ArtifactsPage />} />

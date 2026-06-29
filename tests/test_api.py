@@ -1201,6 +1201,29 @@ def test_put_settings_persists_anima_lora_paths_and_auto_resume(
     assert settings["auto_resume_max_attempts"] == 5
 
 
+def test_put_settings_persists_ai_toolkit_paths(client: TestClient, tmp_path: Path) -> None:
+    repo = tmp_path / "fake-ai-toolkit"
+    repo.mkdir()
+    py = tmp_path / "fake-ai-python.exe"
+    py.write_bytes(b"")
+
+    r = client.put(
+        "/api/settings",
+        json={
+            "ai_toolkit_repo_path": str(repo),
+            "ai_toolkit_python": str(py),
+            "default_backend": "ai_toolkit",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    settings = r.json()["settings"]
+    assert settings["ai_toolkit_repo_path"] == str(repo)
+    assert settings["ai_toolkit_python"] == str(py)
+    assert settings["default_backend"] == "ai_toolkit"
+    assert client.get("/api/settings").json()["settings"]["ai_toolkit_repo_path"] == str(repo)
+
+
 def test_put_settings_rejects_invalid_auto_resume_max_attempts(
     client: TestClient,
 ) -> None:
@@ -2520,13 +2543,15 @@ def test_import_config_from_yaml(
 # --------------------------------------------------------------------------- #
 
 
-def test_get_backends_lists_kohya_and_diffusion_pipe(client: TestClient) -> None:
+def test_get_backends_lists_all_registered_backends(client: TestClient) -> None:
     r = client.get("/api/backends")
     assert r.status_code == 200, r.text
     body = r.json()
     ids = [b["id"] for b in body["backends"]]
     assert "kohya" in ids
     assert "diffusion-pipe" in ids
+    assert "anima_lora" in ids
+    assert "ai_toolkit" in ids
     # Default is kohya until the user picks otherwise.
     assert body["default"] == "kohya"
     # Each entry exposes UI metadata + a probe payload the UI can render.

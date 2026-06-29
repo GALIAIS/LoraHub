@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
@@ -25,6 +26,7 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { MiniHistogram } from "../mini-histogram"
 import { QuarantinePanel } from "../quarantine-panel"
+import { DedupeL1Panel, SimilarityL2Panel } from "./audit-clusters"
 
 interface Props {
   datasetPath: string
@@ -40,11 +42,23 @@ const ISSUE_KIND_META: Record<AuditIssueKind, { label: string; tone: string }> =
 }
 
 export function AuditStage({ datasetPath }: Props) {
+  const [params] = useSearchParams()
+  const tool = params.get("tool")
+
+  if (tool === "dedupe-l1") {
+    return <DedupeL1Panel datasetPath={datasetPath} />
+  }
+  if (tool === "similarity-l2") {
+    return <SimilarityL2Panel datasetPath={datasetPath} />
+  }
+  return <AuditScanPanel datasetPath={datasetPath} />
+}
+
+function AuditScanPanel({ datasetPath }: Props) {
   const qc = useQueryClient()
   const [triggerWord, setTriggerWord] = useState("")
   const [blurCheck, setBlurCheck] = useState(true)
   const [recursive, setRecursive] = useState(true)
-
   const reportQuery = useQuery({
     queryKey: ["image-studio-audit-report", datasetPath],
     queryFn: () => imageStudioAuditReport(datasetPath),

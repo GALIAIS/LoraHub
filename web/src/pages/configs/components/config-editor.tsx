@@ -27,12 +27,13 @@ import { buildDefaults } from "../utils"
 import { useDraftPersistence } from "../use-draft-persistence"
 import { ErrorBanner } from "./error-banner"
 import { PreflightPanel } from "./preflight-panel"
+import { RawConfigFallback } from "./raw-config-fallback"
 
 export function ConfigEditor({
   mode,
   setMode,
 }: {
-  mode: { kind: "edit"; name: string } | { kind: "new" }
+  mode: Mode
   setMode: (m: Mode) => void
 }) {
   const isNew = mode.kind === "new"
@@ -53,6 +54,8 @@ export function ConfigEditor({
     staleTime: 60_000,
   })
   const defaultBackend = settingsQuery.data?.settings?.default_backend
+  const newBackend = mode.kind === "new" ? mode.backend : undefined
+  const seedBackend = newBackend ?? defaultBackend
 
   const [draft, setDraft] = useState<ConfigFormValue | null>(null)
   const [name, setName] = useState<string>(isNew ? "" : mode.name)
@@ -72,17 +75,19 @@ export function ConfigEditor({
   // render (each call to buildDefaults returns a new object), which
   // would make every JSON.stringify diff redundant work.
   const baseline = useMemo<ConfigFormValue | null>(() => {
-    if (isNew) return buildDefaults(defaultBackend)
+    if (isNew) return buildDefaults(seedBackend)
     return (sourceQuery.data?.parsed as unknown as ConfigFormValue) ?? null
-  }, [isNew, defaultBackend, sourceQuery.data])
+  }, [isNew, seedBackend, sourceQuery.data])
   const baselineReady = isNew
     ? settingsQuery.isSuccess || settingsQuery.isError
     : Boolean(sourceQuery.data?.parsed)
 
-  const storageKey = `lorahub.config-draft:${isNew ? "__new__" : mode.name}`
+  const storageKey = `lorahub.config-draft:${
+    isNew ? `__new__:${seedBackend ?? "default"}` : mode.name
+  }`
 
   useEffect(() => {
-    const seedKey = isNew ? "__new__" : mode.name
+    const seedKey = isNew ? `__new__:${seedBackend ?? "default"}` : mode.name
     const alreadySeeded = seededForRef.current === seedKey
     if (isNew) {
       // Don't seed until settings have loaded — buildDefaults reads
@@ -91,7 +96,7 @@ export function ConfigEditor({
       // is fine; once settings land we still want to swap to the user
       // preference, but only on the *initial* seed for this editor.
       if (alreadySeeded) return
-      setDraft(buildDefaults(defaultBackend))
+      setDraft(buildDefaults(seedBackend))
       setName("")
       seededForRef.current = seedKey
     } else if (sourceQuery.data?.parsed) {
@@ -100,7 +105,7 @@ export function ConfigEditor({
       setName(mode.name)
       seededForRef.current = seedKey
     }
-  }, [isNew, sourceQuery.data, mode, defaultBackend])
+  }, [isNew, sourceQuery.data, mode, seedBackend])
 
   const persistence = useDraftPersistence({
     storageKey,
@@ -128,6 +133,7 @@ export function ConfigEditor({
         | "kohya"
         | "diffusion-pipe"
         | "anima_lora"
+        | "ai_toolkit"
         | undefined
       const orphans = unusedSectionsForBackend(backendType)
       const cleanedDraft: Record<string, unknown> = {
@@ -154,7 +160,7 @@ export function ConfigEditor({
       persistence.clearStoredDraft()
       if (isNew) {
         try {
-          window.localStorage.removeItem("lorahub.config-draft:__new__")
+          window.localStorage.removeItem(storageKey)
         } catch {
           // ignore storage failures
         }
@@ -285,12 +291,19 @@ export function ConfigEditor({
               </ul>
             </div>
           )}
+          {sourceQuery.data?.error && (
+            <ErrorBanner title="配置错误" message={sourceQuery.data.error} />
+          )}
           {save.isError && (
             <ErrorBanner title="保存失败" message={(save.error as Error).message} />
           )}
 
           {loading || !draft ? (
-            <div className="text-sm text-muted-foreground px-2 py-6">加载中…</div>
+            sourceQuery.data?.content ? (
+              <RawConfigFallback content={sourceQuery.data.content} />
+            ) : (
+              <div className="text-sm text-muted-foreground px-2 py-6">加载中…</div>
+            )
           ) : (
             <ConfigForm value={draft} onChange={setDraft} errors={errors} />
           )}

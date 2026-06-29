@@ -94,6 +94,7 @@ export const BACKEND_OPTIONS = [
   { value: "kohya", label: "kohya-ss / sd-scripts" },
   { value: "diffusion-pipe", label: "tdrussell / diffusion-pipe" },
   { value: "anima_lora", label: "sorryhyun / anima_lora · vendored" },
+  { value: "ai_toolkit", label: "ostris / ai-toolkit · vendored" },
 ] as const
 
 export const LOSS_TYPE_OPTIONS = [

@@ -77,12 +77,27 @@ export interface AnimaLoraBackendStatus {
   source: "env" | "settings" | "vendored"
 }
 
+export interface AIToolkitBackendStatus {
+  id: "ai_toolkit"
+  repo_path: string
+  repo_ok: boolean
+  missing_files: string[]
+  python: string | null
+  python_ok: boolean
+  venv_detected: boolean
+  requirements_ok: boolean
+  missing_requirements: string[]
+  ready: boolean
+  source: "env" | "settings" | "vendored" | "default"
+}
+
 export type AnyBackendStatus =
   | KohyaBackendStatus
   | DiffusionPipeBackendStatus
   | AnimaLoraBackendStatus
+  | AIToolkitBackendStatus
 
-export type BackendId = "kohya" | "diffusion-pipe" | "anima_lora"
+export type BackendId = "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
 
 export interface BackendDescriptor {
   id: BackendId

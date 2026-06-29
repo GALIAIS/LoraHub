@@ -136,3 +136,6 @@ external/anima_lora/.codex
 external/anima_lora/anima_lora.egg-info/
 external/anima_lora/output/
 external/anima_lora/post_image_dataset/
+
+# Vendored ai-toolkit source is committed, but its local venv is generated.
+external/ai_toolkit/venv/

@@ -1,7 +1,9 @@
+import type { BackendId } from "@/lib/api"
+
 export type Mode =
   | { kind: "preview"; name: string }
   | { kind: "edit"; name: string }
-  | { kind: "new" }
+  | { kind: "new"; backend?: BackendId }
 
 export type LaunchOverrides = {
   datasetSource: string
@@ -19,7 +21,13 @@ export type ArchFilter = "all" | "sdxl" | "sd15" | "flux" | "sd3"
  * field matches the workbench-level default. ``"all"`` is the explicit
  * escape hatch.
  */
-export type BackendFilter = "default" | "all" | "kohya" | "diffusion-pipe" | "anima_lora"
+export type BackendFilter =
+  | "default"
+  | "all"
+  | "kohya"
+  | "diffusion-pipe"
+  | "anima_lora"
+  | "ai_toolkit"
 
 export type SortOrder = "name-asc" | "name-desc" | "modified-desc"
 

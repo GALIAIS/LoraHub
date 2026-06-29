@@ -38,6 +38,11 @@ class Settings:
     anima_lora_repo_path: str | None = None
     anima_lora_python: str | None = None
 
+    # ai_toolkit backend (vendored under external/ai_toolkit). Used for
+    # Krea2 training through ostris/ai-toolkit.
+    ai_toolkit_repo_path: str | None = None
+    ai_toolkit_python: str | None = None
+
     # Which backend the UI defaults to when starting a fresh config.
     default_backend: str = "kohya"
 
@@ -505,12 +510,80 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     }
 
 
+def probe_ai_toolkit_backend(settings: Settings) -> dict[str, Any]:
+    """Inspect whether the vendored ai_toolkit copy is usable."""
+    from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
+        check_requirements,
+    )
+    from lorahub.core.backends.ai_toolkit.bootstrap import (  # noqa: PLC0415
+        _ENV_PYTHON,
+        _ENV_REPO,
+        _REQUIRED_FILES,
+        _venv_python,
+        default_repo_path,
+    )
+
+    repo_raw = (
+        os.environ.get(_ENV_REPO)
+        or settings.ai_toolkit_repo_path
+        or str(default_repo_path())
+    )
+    repo_path = Path(repo_raw).expanduser()
+
+    repo_ok = repo_path.is_dir()
+    missing = (
+        [f for f in _REQUIRED_FILES if not (repo_path / f).is_file()]
+        if repo_ok
+        else list(_REQUIRED_FILES)
+    )
+
+    py_raw = (
+        os.environ.get(_ENV_PYTHON)
+        or settings.ai_toolkit_python
+        or (str(_venv_python(repo_path)) if _venv_python(repo_path) else None)
+    )
+    py_path = Path(py_raw).expanduser() if py_raw else None
+    py_ok = bool(py_path and py_path.is_file())
+
+    requirements_ok = True
+    missing_requirements: list[str] = []
+    if repo_ok and not missing and py_ok and py_path:
+        missing_requirements = check_requirements(
+            py_path,
+            repo_path / "requirements.txt",
+            skip_patterns=("torch", "torchvision", "xformers", "flash-attn"),
+        )
+        requirements_ok = len(missing_requirements) == 0
+
+    if os.environ.get(_ENV_REPO):
+        source = "env"
+    elif settings.ai_toolkit_repo_path:
+        source = "settings"
+    else:
+        source = "vendored" if (repo_path / "run.py").is_file() else "default"
+
+    return {
+        "id": "ai_toolkit",
+        "repo_path": str(repo_path),
+        "repo_ok": repo_ok and not missing,
+        "missing_files": missing,
+        "python": str(py_path) if py_path else None,
+        "python_ok": py_ok,
+        "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
+        "requirements_ok": requirements_ok,
+        "missing_requirements": missing_requirements,
+        "ready": (repo_ok and not missing) and py_ok and requirements_ok,
+        "source": source,
+    }
+
+
 def probe_all_backends(settings: Settings) -> dict[str, dict[str, Any]]:
     """Return a probe payload for every backend in the registry."""
     return {
         "kohya": probe_kohya_backend(settings),
         "diffusion-pipe": probe_diffusion_pipe_backend(settings),
         "anima_lora": probe_anima_lora_backend(settings),
+        "ai_toolkit": probe_ai_toolkit_backend(settings),
     }
 
 
@@ -588,6 +661,7 @@ __all__ = [
     "default_settings_path",
     "env_overrides",
     "probe_all_backends",
+    "probe_ai_toolkit_backend",
     "probe_backend",
     "probe_diffusion_pipe_backend",
     "probe_kohya_backend",

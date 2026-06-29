@@ -1,5 +1,6 @@
 import { useEventStream } from "../use-event-stream"
 import { reportError } from "../error-reporter"
+import type { BackendId } from "./backends"
 
 export interface JobSummary {
   id: string
@@ -160,7 +161,7 @@ export interface JobDiagnosis {
 export interface HyperparamRecommendInput {
   dataset_size: number
   gpu_vram_mb: number
-  backend?: "kohya" | "diffusion-pipe" | "anima_lora"
+  backend?: BackendId
   target?: "character" | "style" | "concept"
 }
 

@@ -43,6 +43,7 @@ class ModelArch(enum.StrEnum):
     wan = "wan"
     z_image = "z_image"
     ernie_image = "ernie_image"
+    krea2 = "krea2"
 
 
 class Severity(enum.StrEnum):

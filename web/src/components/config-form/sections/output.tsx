@@ -16,12 +16,16 @@ export const OutputFields = memo(function OutputFields({
   value = {},
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["output"]
   set: Setter
   errorMap: ErrorMap
+  backendType?: "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
 }) {
   const v = value ?? {}
+  const isDiffusionPipe = backendType === "diffusion-pipe"
+  const isAiToolkit = backendType === "ai_toolkit"
   return (
     <>
       <Row label="名称" description="作为 LoRA 文件名和任务标识。">
@@ -63,30 +67,34 @@ export const OutputFields = memo(function OutputFields({
           placeholder="（默认）"
         />
       </Row>
-      <Row
-        label="保留最近 N 回合"
-        description="只保留最近 N 个回合检查点（kohya）。"
-        errors={errorMap.get("output.saveLastNEpochs")}
-      >
-        <IntInput
-          min={1}
-          value={v.saveLastNEpochs ?? null}
-          onChange={(n) => set(["output", "saveLastNEpochs"], n)}
-          placeholder="（不限）"
-        />
-      </Row>
-      <Row
-        label="保留最近 N 步"
-        description="只保留最近 N 个步级检查点。"
-        errors={errorMap.get("output.saveLastNSteps")}
-      >
-        <IntInput
-          min={1}
-          value={v.saveLastNSteps ?? null}
-          onChange={(n) => set(["output", "saveLastNSteps"], n)}
-          placeholder="（不限）"
-        />
-      </Row>
+      {!isDiffusionPipe && (
+        <>
+          <Row
+            label="保留最近 N 回合"
+            description="只保留最近 N 个回合检查点。"
+            errors={errorMap.get("output.saveLastNEpochs")}
+          >
+            <IntInput
+              min={1}
+              value={v.saveLastNEpochs ?? null}
+              onChange={(n) => set(["output", "saveLastNEpochs"], n)}
+              placeholder="（不限）"
+            />
+          </Row>
+          <Row
+            label="保留最近 N 步"
+            description="只保留最近 N 个步级检查点。"
+            errors={errorMap.get("output.saveLastNSteps")}
+          >
+            <IntInput
+              min={1}
+              value={v.saveLastNSteps ?? null}
+              onChange={(n) => set(["output", "saveLastNSteps"], n)}
+              placeholder="（不限）"
+            />
+          </Row>
+        </>
+      )}
       <Row label="保存精度" description="fp16 文件更小；bf16 需要 Ampere 及以上。">
         <EnumSelect
           value={v.saveDtype ?? "fp16"}
@@ -94,45 +102,51 @@ export const OutputFields = memo(function OutputFields({
           options={SAVE_DTYPE_OPTIONS}
         />
       </Row>
-      <Row label="输出目录" description="默认 <workspace>/output。" errors={errorMap.get("output.outputDir")}>
-        <PathInput
-          value={v.outputDir ?? ""}
-          onChange={(s) => set(["output", "outputDir"], s || null)}
-          placeholder="（默认 workspace/output）"
-        />
-      </Row>
-      <Row
-        label="trainingComment"
-        description="将训练注释烘焙到 LoRA 元数据。"
-      >
-        <TextInput
-          className="w-full max-w-xl"
-          value={v.trainingComment ?? ""}
-          onChange={(s) => set(["output", "trainingComment"], s || null)}
-          placeholder="（可选）"
-        />
-      </Row>
-      <Row
-        label="noMetadata"
-        description="不写入任何 metadata（隐私场景）。"
-      >
-        <ToggleSwitch
-          checked={v.noMetadata ?? false}
-          onCheckedChange={(b) => set(["output", "noMetadata"], b)}
-        />
-      </Row>
-      <Row
-        label="metadata"
-        description="自定义 key=value，每行一对，写入 LoRA 元数据。"
-        errors={errorMap.get("output.metadata")}
-      >
-        <KeyValueTextArea
-          rows={4}
-          value={v.metadata}
-          onChange={(next) => set(["output", "metadata"], next)}
-          placeholder={"author = me\nlicense = CC-BY"}
-        />
-      </Row>
+      {!isAiToolkit && (
+        <Row label="输出目录" description="默认使用任务工作目录下的 output。" errors={errorMap.get("output.outputDir")}>
+          <PathInput
+            value={v.outputDir ?? ""}
+            onChange={(s) => set(["output", "outputDir"], s || null)}
+            placeholder="（默认）"
+          />
+        </Row>
+      )}
+      {!isDiffusionPipe && !isAiToolkit && (
+        <>
+          <Row
+            label="训练注释"
+            description="写入 LoRA 元数据。"
+          >
+            <TextInput
+              className="w-full max-w-xl"
+              value={v.trainingComment ?? ""}
+              onChange={(s) => set(["output", "trainingComment"], s || null)}
+              placeholder="（可选）"
+            />
+          </Row>
+          <Row
+            label="不写元数据"
+            description="不写入 metadata。"
+          >
+            <ToggleSwitch
+              checked={v.noMetadata ?? false}
+              onCheckedChange={(b) => set(["output", "noMetadata"], b)}
+            />
+          </Row>
+          <Row
+            label="元数据"
+            description="自定义 key=value，每行一对。"
+            errors={errorMap.get("output.metadata")}
+          >
+            <KeyValueTextArea
+              rows={4}
+              value={v.metadata}
+              onChange={(next) => set(["output", "metadata"], next)}
+              placeholder={"author = me\nlicense = CC-BY"}
+            />
+          </Row>
+        </>
+      )}
     </>
   )
 })

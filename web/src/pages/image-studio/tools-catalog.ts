@@ -72,9 +72,8 @@ export interface ToolInfo {
   /** 在 URL 里出现的稳定 id (?tool=<id>)。也作为 stage 子页面板高亮的 hint。 */
   id: string
   category: ToolCategory
-  /** 工具进入哪个 stage 子页 — 即点击卡片后路由的 ?stage 参数。
-   *  "library" 是工具库虚拟 stage，不参与 stepper 阶段路径。 */
-  stage: StageId | "library"
+  /** 工具进入哪个 stage 子页 — 即点击卡片后路由的 ?stage 参数。 */
+  stage: StageId | "library" | "lora-test"
   label: string
   /** 一句话描述 — 1-2 句，控制在 60 中文字符内便于卡片排版。 */
   description: string
@@ -258,7 +257,7 @@ export const TOOLS: readonly ToolInfo[] = [
   {
     id: "lora-testbench",
     category: "ai",
-    stage: "library",
+    stage: "lora-test",
     label: "LoRA 生图测试",
     description: "选择训练出的 LoRA checkpoint，调 prompt / seed / CFG 直接验收效果",
     icon: Rocket,

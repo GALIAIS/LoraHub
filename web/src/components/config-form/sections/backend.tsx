@@ -21,18 +21,22 @@ const BACKEND_DESCRIPTIONS: Record<string, string> = {
     "tdrussell/diffusion-pipe。图像与视频训练后端。",
   anima_lora:
     "sorryhyun/anima_lora。Anima DiT 训练后端。",
+  ai_toolkit:
+    "ostris/ai-toolkit。Krea2 等模型训练后端。",
 }
 
 const REPO_LABEL: Record<string, string> = {
   kohya: "sd-scripts 路径",
   "diffusion-pipe": "diffusion-pipe 路径",
   anima_lora: "anima_lora 路径",
+  ai_toolkit: "ai-toolkit 路径",
 }
 
 const REPO_PLACEHOLDER: Record<string, string> = {
   kohya: "设置默认值",
   "diffusion-pipe": "设置默认值",
   anima_lora: "./external/anima_lora",
+  ai_toolkit: "./external/ai_toolkit",
 }
 
 const GPU_DISPATCH_OPTIONS = [
@@ -112,6 +116,15 @@ export const BackendFields = memo(function BackendFields({
             </Badge>
           )}
           {type === "anima_lora" && (
+            <Badge
+              variant="outline"
+              className="rounded-[2px] uppercase text-[10px] border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              title="随 LoraHub 分发"
+            >
+              vendored
+            </Badge>
+          )}
+          {type === "ai_toolkit" && (
             <Badge
               variant="outline"
               className="rounded-[2px] uppercase text-[10px] border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
@@ -307,7 +320,7 @@ export const BackendFields = memo(function BackendFields({
             value={v.pythonExecutable ?? ""}
             onChange={(s) => set(["backend", "pythonExecutable"], s || null)}
             placeholder={
-              type === "anima_lora"
+              type === "anima_lora" || type === "ai_toolkit"
                 ? ".venv/bin/python"
                 : "设置默认值"
             }
@@ -332,7 +345,9 @@ export const BackendFields = memo(function BackendFields({
               ? "透传给 sd-scripts 的额外 CLI flag。每行一条,key=value。bool flag 写 key=true 即可,store_true 由 compiler 兼容。"
               : type === "anima_lora"
                 ? "写入 Anima TOML 顶层。每行 key=value。"
-                : "追加到 diffusion-pipe TOML 顶层。每行 key=value。"
+                : type === "ai_toolkit"
+                  ? "写入 ai-toolkit YAML。支持点号路径,每行 key=value。"
+                  : "追加到 diffusion-pipe TOML 顶层。每行 key=value。"
           }
         >
           <KeyValueTextArea

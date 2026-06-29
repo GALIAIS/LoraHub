@@ -11,6 +11,7 @@ import { applyOverrides, emptyOverrides, extractOverrides } from "../utils"
 import type { LaunchOverrides } from "../types"
 import { ErrorBanner } from "./error-banner"
 import { LaunchOverrideDialog } from "./launch-override-dialog"
+import { RawConfigFallback } from "./raw-config-fallback"
 
 export function ConfigPreview({
   name,
@@ -150,6 +151,8 @@ export function ConfigPreview({
               }}
               readOnly
             />
+          ) : data?.content ? (
+            <RawConfigFallback content={data.content} />
           ) : (
             <div className="text-sm text-muted-foreground px-2 py-6">配置无法解析。</div>
           )}

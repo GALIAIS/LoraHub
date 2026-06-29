@@ -12,6 +12,12 @@ import { IntakeStage } from "./components/stages/intake-stage"
 import { AuditStage } from "./components/stages/audit-stage"
 import { AnnotateStage } from "./components/stages/annotate-stage"
 import { ShipStage } from "./components/stages/ship-stage"
+import {
+  CurateAutoRotateTool,
+  CurateBatchResizeTool,
+  CurateQuarantineTool,
+  CurateRestoreBackupTool,
+} from "./components/stages/curate-tools"
 import { CreateDatasetDialog } from "./components/create-dataset-dialog"
 import { ToolsGrid } from "./components/tools-grid"
 import { LibraryPage } from "./components/library/library-page"
@@ -91,19 +97,17 @@ function ImageStudioPage() {
         }
       >
         <div className="flex-1 min-h-0 overflow-hidden">
-          {stageParam === "tools" && (
+          {stageParam === "lora-test" ? (
+            <LoraTestPage />
+          ) : stageParam === "tools" ? (
             <ToolsGrid datasetPath={datasetPath} />
-          )}
-          {stageParam === "library" && <LibraryPage />}
-          {stageParam === "lora-test" && <LoraTestPage />}
-          {isDatasetStage(stageParam) &&
-            !datasetPath && (
-              <EmptyState onCreateDataset={() => setShowCreate(true)} />
-            )}
-          {isDatasetStage(stageParam) &&
-            datasetPath && (
-              <DatasetWorkspace stage={stageParam} datasetPath={datasetPath} />
-            )}
+          ) : stageParam === "library" ? (
+            <LibraryPage />
+          ) : isDatasetStage(stageParam) && !datasetPath ? (
+            <EmptyState onCreateDataset={() => setShowCreate(true)} />
+          ) : isDatasetStage(stageParam) && datasetPath ? (
+            <DatasetWorkspace stage={stageParam} datasetPath={datasetPath} />
+          ) : null}
         </div>
       </WorkbenchSplitLayout>
 
@@ -126,12 +130,30 @@ function DatasetWorkspace({
   datasetPath: string
 }) {
   if (stage === "curate") {
-    return <DatasetDetail />
+    return <CurateStage datasetPath={datasetPath} />
   }
   if (stage === "annotate") {
     return <AnnotateStage datasetPath={datasetPath} />
   }
   return <StagePanel stage={stage} datasetPath={datasetPath} />
+}
+
+function CurateStage({ datasetPath }: { datasetPath: string }) {
+  const [params] = useSearchParams()
+  const tool = params.get("tool")
+  if (tool === "curate-auto-rotate") {
+    return <CurateAutoRotateTool datasetPath={datasetPath} />
+  }
+  if (tool === "curate-batch-resize") {
+    return <CurateBatchResizeTool datasetPath={datasetPath} />
+  }
+  if (tool === "curate-quarantine") {
+    return <CurateQuarantineTool datasetPath={datasetPath} />
+  }
+  if (tool === "curate-restore-backup") {
+    return <CurateRestoreBackupTool datasetPath={datasetPath} />
+  }
+  return <DatasetDetail />
 }
 
 function StagePanel({

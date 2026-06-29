@@ -1,0 +1,68 @@
+# Built-in config template: Krea2 LoRA via ostris/ai-toolkit.
+
+_template:
+  name: AI Toolkit Krea2
+  description: Krea2 LoRA training through the vendored ai-toolkit backend.
+  arch: krea2
+
+_placeholders:
+  - key: name
+    label: Config / output name
+    path_field: output.name
+    placeholder: krea2_lora_v1
+  - key: dataset
+    label: Dataset directory
+    path_field: dataset.source
+    placeholder: ./datasets/my_dataset
+
+base_model:
+  arch: krea2
+  checkpoint: krea/Krea-2-Raw
+
+dataset:
+  source: ""
+  resolution: [1024, 1024]
+  num_repeats: 10
+
+network:
+  type: lora
+  rank: 16
+  alpha: 16
+  target_unet: true
+  target_text_encoder: false
+
+optimizer:
+  type: adamw
+  lr:
+    unet: 1.0e-4
+    text_encoder: 5.0e-5
+
+schedule:
+  epochs: 10
+  batch_size: 1
+  grad_accum: 1
+
+precision: bf16
+gradient_checkpointing: true
+cache_latents_to_disk: true
+
+sampling:
+  enabled: false
+  every_n_steps: 250
+  resolution: [1024, 1024]
+  seed: 42
+  inference_steps: 24
+  inference_cfg: 5.0
+  prompts:
+    - prompt: "a high quality image"
+
+output:
+  name: krea2_lora
+  save_every_n_steps: 250
+  save_last_n_steps: 4
+  save_dtype: fp16
+
+backend:
+  type: ai_toolkit
+  extra_args:
+    model.name_or_path: krea/Krea-2-Raw

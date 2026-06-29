@@ -54,31 +54,6 @@ export function ShipStage({ datasetPath }: Props) {
   )
 }
 
-// --------------------------------------------------------------------------- //
-// Lint card
-// --------------------------------------------------------------------------- //
-
-export function ShipLintCard({
-  datasetPath,
-}: {
-  datasetPath: string
-}) {
-  const lintQuery = useQuery({
-    queryKey: ["image-studio-ship-lint", datasetPath],
-    queryFn: () => imageStudioShipLint(datasetPath),
-    enabled: Boolean(datasetPath),
-    staleTime: 0,
-  })
-  return (
-    <LintCard
-      report={lintQuery.data}
-      loading={lintQuery.isLoading}
-      onRefresh={() => lintQuery.refetch()}
-      datasetPath={datasetPath}
-    />
-  )
-}
-
 function LintCard({
   report,
   loading,
@@ -311,7 +286,7 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 // Export panel
 // --------------------------------------------------------------------------- //
 
-export function ExportPanel({ datasetPath }: { datasetPath: string }) {
+function ExportPanel({ datasetPath }: { datasetPath: string }) {
   const [includeBackups, setIncludeBackups] = useState(false)
   const [includeQuarantine, setIncludeQuarantine] = useState(false)
 
@@ -389,7 +364,7 @@ export function ExportPanel({ datasetPath }: { datasetPath: string }) {
 // Save-as panel
 // --------------------------------------------------------------------------- //
 
-export function SaveAsPanel({ datasetPath }: { datasetPath: string }) {
+function SaveAsPanel({ datasetPath }: { datasetPath: string }) {
   const qc = useQueryClient()
   const [newName, setNewName] = useState("")
   const [includeBackups, setIncludeBackups] = useState(false)

@@ -40,6 +40,7 @@ export type Arch =
   | "wan"
   | "z_image"
   | "ernie_image"
+  | "krea2"
 
 /**
  * Per-backend supported arch sets. Mirrors:
@@ -85,6 +86,7 @@ export const SUPPORTED_ARCHS_BY_BACKEND: Record<BackendId, ReadonlySet<Arch>> = 
     "ernie_image",
   ]),
   anima_lora: new Set<Arch>(["anima"]),
+  ai_toolkit: new Set<Arch>(["krea2"]),
 }
 
 /** Default arch when the user picks a backend on a fresh config. */
@@ -92,6 +94,7 @@ export const DEFAULT_ARCH_BY_BACKEND: Record<BackendId, Arch> = {
   kohya: "sdxl",
   "diffusion-pipe": "flux",
   anima_lora: "anima",
+  ai_toolkit: "krea2",
 }
 
 export interface BackendBadge {
@@ -123,6 +126,11 @@ export const BACKEND_BADGE: Record<BackendId, BackendBadge> = {
     label: "anima_lora",
     toneClass: "border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
     description: "sorryhyun/anima_lora — Anima DiT 专用,带 OrthoLoRA / T-LoRA / DMD turbo",
+  },
+  ai_toolkit: {
+    label: "ai_toolkit",
+    toneClass: "border-slate-500/40 bg-slate-500/10 text-slate-700 dark:text-slate-300",
+    description: "ostris/ai-toolkit — Krea2 等模型训练后端",
   },
 }
 

@@ -15,12 +15,30 @@ export const LossFields = memo(function LossFields({
   value = {},
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["loss"]
   set: Setter
   errorMap: ErrorMap
+  backendType?: "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
 }) {
   const v = value ?? {}
+  if (backendType === "diffusion-pipe") {
+    return (
+      <Row
+        label="Pseudo Huber C"
+        description="diffusion-pipe 的 pseudo Huber 损失常数。"
+        errors={errorMap.get("loss.pseudoHuberC")}
+      >
+        <FloatInput
+          step={0.01}
+          value={v.pseudoHuberC ?? null}
+          onChange={(n) => set(["loss", "pseudoHuberC"], n)}
+          placeholder="（默认）"
+        />
+      </Row>
+    )
+  }
   const minSnrEnabled = v.minSnrGamma !== null && v.minSnrGamma !== undefined
   const ipNoiseEnabled = v.ipNoiseGamma !== null && v.ipNoiseGamma !== undefined
 

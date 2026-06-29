@@ -65,6 +65,14 @@ MESSAGES: dict[str, dict[Lang, str]] = {
         "zh": "界面语言:zh / en(默认 zh,可用 LORAHUB_LANG 环境变量覆盖)。",
         "en": "Interface language: zh / en (default zh; override via LORAHUB_LANG).",
     },
+    "app.no_tui.option": {
+        "zh": "禁用无参数交互式终端界面,输出普通 CLI 帮助。",
+        "en": "Disable the no-argument terminal UI and print normal CLI help.",
+    },
+    "app.tui.option": {
+        "zh": "强制打开交互式终端界面。",
+        "en": "Force the interactive terminal UI.",
+    },
     "app.version.help": {
         "zh": "打印已安装的 lorahub 版本号。",
         "en": "Print the installed lorahub version.",
