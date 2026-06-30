@@ -6,6 +6,7 @@ import yaml
 from lorahub.api.jobs_helpers import _select_backend
 from lorahub.api.settings import Settings, probe_ai_toolkit_backend
 from lorahub.api.terminal_runner import resolve_backend_session
+from lorahub.core.backends.ai_toolkit import installer
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.ai_toolkit.compiler import compile_config
 from lorahub.core.backends.ai_toolkit.parser import parse_line
@@ -102,6 +103,32 @@ def test_ai_toolkit_parser_recognizes_step_and_checkpoint() -> None:
     assert saved is not None
     assert saved.type is EventType.checkpoint_saved
     assert saved.payload["path"] == "C:/runs/foo.safetensors"
+
+
+def test_ai_toolkit_installer_adds_matching_torchaudio(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(installer._common, "install_torch", lambda plan, progress=None: None)
+    monkeypatch.setattr(
+        installer,
+        "pip_install_with_torch_index_fallback",
+        lambda _plan, args, *, step, progress=None: calls.append((step, args)),
+    )
+
+    plan = installer.BootstrapPlan(
+        target=tmp_path / "ai_toolkit",
+        torch_version="2.7.1+cu128",
+        torchvision_version="0.22.1+cu128",
+        cuda_version="cu128",
+    )
+    installer.install_torch(plan)
+
+    assert calls == [
+        (
+            "install torchaudio==2.7.1+cu128 (cu128)",
+            ["torchaudio==2.7.1+cu128", "--index-url", plan.torch_index],
+        )
+    ]
 
 
 def test_select_backend_returns_ai_toolkit_backend() -> None:
