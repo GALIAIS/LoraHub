@@ -344,8 +344,10 @@ else
         echo "  npm ci still running ... ($(date '+%H:%M:%S'))"
         sleep 15
     done
+    set +e
     wait "$npm_pid"
     npm_rc=$?
+    set -e
     cd "$ROOT"
     if [ "$npm_rc" -ne 0 ]; then
         echo "  [ERROR] npm ci failed; tail of web/_npm_install.log:"

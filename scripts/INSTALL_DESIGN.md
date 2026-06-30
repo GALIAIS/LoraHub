@@ -20,9 +20,9 @@ fixes the ones that drifted.
 | 1 | Download `uv`       | `.lorahub/uv/`     | binary already present and reports its version   |
 | 2 | Install Python 3.12 | `.lorahub/python/` | `uv python find 3.12` returns a path under it    |
 | 3 | Create venv         | `.venv/`           | venv exists and `python --version` says 3.12     |
-| 4 | Install lorahub     | `.venv/`           | `pip show lorahub` reports a version             |
-| 5 | Download Node.js    | `.node/`           | `node --version` returns 20.x or 22.x            |
-| 6 | `npm install`       | `web/node_modules/`| `package-lock.json` is in sync (npm `ci` would   |
+| 4 | Install lorahub     | `.venv/`           | always refresh editable package + dependencies   |
+| 5 | Download Node.js    | `.node/`           | portable Node is at least `20.19.0`              |
+| 6 | `npm ci`            | `web/node_modules/`| `package-lock.json` is in sync (npm `ci` would   |
 |   |                     |                    | be a no-op)                                      |
 
 All output paths are **relative to the repo root** and stay inside
@@ -39,6 +39,7 @@ Both scripts honour the same env vars:
 | `UV_INDEX_URL`             | 4    | PyPI index for `uv pip install`                  |
 | `LORAHUB_NODE_MIRROR`      | 5    | Node binary tarball base (default nodejs.org)    |
 | `NPM_CONFIG_REGISTRY`      | 6    | npm registry (npm reads this natively)           |
+| `LORAHUB_TORCH_INDEX_URL`  | backend bootstrap | PyTorch wheel base URL selected by CN wrappers |
 
 The China-friendly wrappers (`install-cn.sh` / `install-cn.bat`)
 preset every variable in this table. Probe logic for picking the

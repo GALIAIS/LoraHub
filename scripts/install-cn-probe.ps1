@@ -17,10 +17,16 @@ function Probe-Url {
         $resp = $req.GetResponse()
         $stream = $resp.GetResponseStream()
         $buf = New-Object byte[] 8192
-        while ($stream.Read($buf, 0, $buf.Length) -gt 0) {}
+        $total = 0
+        while (($read = $stream.Read($buf, 0, $buf.Length)) -gt 0) {
+            $total += $read
+        }
         $stream.Close()
         $resp.Close()
         $sw.Stop()
+        if ($Url -like '*github.com/astral-sh/uv/releases/*' -and $total -lt 65536) {
+            return -1
+        }
         return $sw.ElapsedMilliseconds
     } catch {
         return -1

@@ -73,7 +73,7 @@ if exist "%UV_DIR%\uv.exe" (
 ) else (
   if not exist "%UV_DIR%" mkdir "%UV_DIR%"
   set "UV_UPSTREAM=https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $up='!UV_UPSTREAM!'; $out='%UV_DIR%\uv.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($p -eq 'https://cdn.gh-proxy.org') { continue }; if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 90 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $up='!UV_UPSTREAM!'; $out='%UV_DIR%\uv.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://gh-proxy.org/','https://hk.gh-proxy.org/','https://v6.gh-proxy.org/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 300 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
   if errorlevel 1 (
     echo   [ERROR] Failed to download uv.
     goto :fail
@@ -106,7 +106,7 @@ rem ---- [2/6] Install Python 3.12 locally ----------------------------
 echo [2/6] Installing Python 3.12 ...
 rem uv lays out two entries per install: a real ``cpython-3.12.<patch>-...``
 rem directory and a junction ``cpython-3.12-...`` pointing at it. The
-rem junction is uv's stable minor-version alias ??? pinning the venv to
+rem junction is uv's stable minor-version alias; pinning the venv to
 rem the junction means a future ``uv python install 3.12`` (which would
 rem repoint the junction to a newer patch) keeps the venv working
 rem instead of breaking pyvenv.cfg.
@@ -131,7 +131,7 @@ if defined PY_EXE (
   if exist "%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe" (
     set "PY_EXE=%PY_DIR%\cpython-3.12-windows-x86_64-none\python.exe"
   )
-  rem Junction missing on older uv builds ??? fall back to the newest
+  rem Junction missing on older uv builds; fall back to the newest
   rem real cpython-3.12.<patch>-... directory.
   if not defined PY_EXE (
     for /d %%d in ("%PY_DIR%\cpython-3.12.*-windows-x86_64-none") do (
@@ -286,7 +286,7 @@ if exist "web\node_modules\.package-lock.json" (
   if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
 )
 if "%NEEDS_NPM_INSTALL%"=="0" (
-  pushd "web" >nul && npm.cmd ls --depth=0 >nul 2>nul
+  pushd "web" >nul && call npm.cmd ls --depth=0 >nul 2>nul
   if errorlevel 1 set "NEEDS_NPM_INSTALL=1"
   popd >nul
 )
@@ -321,7 +321,7 @@ if exist "%NWINFO_DIR%\nwinfo.exe" (
 ) else (
   if not exist "%NWINFO_DIR%" mkdir "%NWINFO_DIR%"
   set "NWINFO_UPSTREAM=https://github.com/a1ive/nwinfo/releases/download/v%NWINFO_VERSION%/NWinfoLite.zip"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $up='!NWINFO_UPSTREAM!'; $out='%NWINFO_DIR%\NWinfoLite.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($p -eq 'https://cdn.gh-proxy.org') { continue }; if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 180 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $up='!NWINFO_UPSTREAM!'; $out='%NWINFO_DIR%\NWinfoLite.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://gh-proxy.org/','https://hk.gh-proxy.org/','https://v6.gh-proxy.org/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 180 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
   if errorlevel 1 (
     echo   skipped: failed to download nwinfo
   ) else (
