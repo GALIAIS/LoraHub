@@ -266,6 +266,14 @@ _PATTERNS: list[tuple[str, str, Severity, str, str]] = [
         "the NCCL_BLOCKING_WAIT / TORCH_NCCL_TIMEOUT_MS env vars.",
     ),
     (
+        "ai_toolkit_sample_prompt_type",
+        r"TypeError: can only concatenate str \(not [\"']bool[\"']\) to str",
+        "error",
+        "ai-toolkit received a boolean sample prompt or negative prompt.",
+        "Regenerate the ai-toolkit YAML with the latest LoraHub. The compiler now "
+        "writes sample.neg as an empty string and sanitizes sample.prompts.",
+    ),
+    (
         "subprocess_returncode",
         r"(subprocess.CalledProcessError|returned non-zero exit status|"
         r"command exited with code [1-9])",

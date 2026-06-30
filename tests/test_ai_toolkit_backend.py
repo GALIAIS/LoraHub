@@ -69,6 +69,7 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
         "sample_every": 250,
         "width": 832,
         "height": 1216,
+        "neg": "",
         "seed": 123,
         "sample_steps": 28,
         "guidance_scale": 4.5,
@@ -105,6 +106,51 @@ def test_ai_toolkit_parser_recognizes_step_and_checkpoint() -> None:
     assert saved is not None
     assert saved.type is EventType.checkpoint_saved
     assert saved.payload["path"] == "C:/runs/foo.safetensors"
+
+
+def test_ai_toolkit_compiler_sanitizes_sample_prompt_types(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {
+                "type": "ai_toolkit",
+                "extraArgs": {"sample.neg": True, "sample.prompts": True},
+            },
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    data = yaml.safe_load(next(iter(files.values())))
+    sample = data["config"]["process"][0]["sample"]
+
+    assert sample["neg"] == ""
+    assert sample["prompts"] == ["a high quality image"]
+
+
+def test_ai_toolkit_parser_summarizes_progress_lines() -> None:
+    ev = parse_line("Caching latents to disk:  25%|██▌| 70/280 [00:23<01:03, 3.31it/s]")
+
+    assert ev is not None
+    assert ev.type is EventType.cache_progress
+    assert ev.payload["phase"] == "latents"
+    assert ev.payload["done"] == 70
+    assert ev.payload["total"] == 280
+
+
+def test_ai_toolkit_parser_reads_tqdm_training_steps() -> None:
+    ev = parse_line(
+        "krea2_real:  27%|██▋| 27/100 [03:04<08:18, 6.83s/it, lr: 1.0e-04 loss: 1.964e-01]"
+    )
+
+    assert ev is not None
+    assert ev.type is EventType.step
+    assert ev.payload["step"] == 27
+    assert ev.payload["total_steps"] == 100
+    assert ev.payload["loss"] == 0.1964
+    assert ev.payload["lr"] == 1.0e-04
+    assert ev.payload["rate"] == "6.83s/it"
+    assert ev.payload["eta"] == "08:18"
 
 
 def test_ai_toolkit_installer_adds_matching_torchaudio(monkeypatch, tmp_path: Path) -> None:

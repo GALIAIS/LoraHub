@@ -29,6 +29,7 @@ def compile_config(
     config_path = workspace / "_lorahub_ai_toolkit.yaml"
     job = _build_job(cfg, workspace)
     _overlay_extra_args(job, cfg.backend.extra_args)
+    _sanitize_job(job)
     return [str(config_path)], {
         config_path: yaml.safe_dump(job, sort_keys=False, allow_unicode=True)
     }
@@ -96,6 +97,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
             "sample_every": int(cfg.sampling.every_n_steps or train_steps),
             "width": int(width),
             "height": int(height),
+            "neg": "",
             "seed": int(cfg.sampling.seed),
             "sample_steps": int(cfg.sampling.inference_steps),
             "guidance_scale": float(cfg.sampling.inference_cfg),
@@ -144,6 +146,24 @@ def _overlay_extra_args(job: dict[str, Any], extra: dict[str, Any]) -> None:
         else:
             if isinstance(cursor, dict):
                 cursor[parts[-1]] = _coerce(value)
+
+
+def _sanitize_job(job: dict[str, Any]) -> None:
+    process = job["config"]["process"][0]
+    sample = process.setdefault("sample", {})
+    if not isinstance(sample, dict):
+        process["sample"] = sample = {}
+
+    neg = sample.get("neg", "")
+    sample["neg"] = neg if isinstance(neg, str) else ""
+
+    prompts = sample.get("prompts", [])
+    if isinstance(prompts, str):
+        prompts = [prompts]
+    if not isinstance(prompts, list):
+        prompts = []
+    prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
+    sample["prompts"] = prompts or ["a high quality image"]
 
 
 def _coerce(value: Any) -> Any:
