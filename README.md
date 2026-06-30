@@ -1,6 +1,6 @@
 # LoraHub
 
-自托管的 LoRA 训练工作台。把 kohya / diffusion-pipe / anima_lora 三个训练后端套在同一份配置 schema、同一套 REST + SSE API 和同一个 React Web UI 之下。
+自托管的 LoRA 训练工作台。统一管理 kohya / diffusion-pipe / anima_lora / ai-toolkit 训练后端，提供配置编辑、任务调度、训练分析、数据集处理、模型下载与产物归档。
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
@@ -9,7 +9,7 @@
 
 ## 安装
 
-需要 Python 3.11 或 3.12，Windows / Linux / macOS 可用，训练时需要一块 8 GB+ 显存的 NVIDIA GPU。至少装一个训练后端。
+需要 Windows 或 Linux，训练时需要 NVIDIA GPU。主程序使用 Python 3.11 / 3.12；vendored 后端会维护自己的独立 venv。
 
 ### 一键脚本
 
@@ -18,14 +18,14 @@
 ```powershell
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-scripts\install.bat              # 默认走 GitHub / PyPI / nodejs.org
-scripts\install-cn.bat           # 国内镜像版（gh-proxy + 清华 PyPI + npmmirror）
+scripts\install.bat              # 默认源
+scripts\install-cn.bat           # 国内镜像版
 ```
 
 ```bash
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-bash scripts/install.sh          # 国外
+bash scripts/install.sh
 bash scripts/install-cn.sh       # 国内镜像版
 ```
 
@@ -48,6 +48,8 @@ scripts\run.bat api          # 仅启动 API
 
 # 之后可在任意目录使用：
 lorahub doctor                # 查看环境健康度
+lorahub                       # 打开 TUI（交互终端下）
+lorahub --no-tui --help       # 传统命令帮助
 lorahub service start         # 启动后台守护（随机端口）
 lorahub service start --port 18765  # 指定端口
 lorahub service status        # 查看运行状态
@@ -67,19 +69,18 @@ lorahub --lang en --help      # 切换为英文 help / 输出
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
 pip install -e ".[api,dev]"
-cd web && npm install && cd ..
+cd web && npm ci && cd ..
 ```
 
 ### 训练后端
 
-`kohya` 与 `diffusion-pipe` 通过 CLI 一键引入：
+训练后端在 Web UI「设置 → 安装与升级」中安装。该流程会按当前 CUDA / 驱动给出可选 PyTorch 版本，并使用已配置的 GitHub / PyPI / PyTorch / npm 镜像。
 
 ```bash
-lorahub bootstrap-kohya              # SD1.5 / SDXL / SD3 / FLUX / Lumina / HunyuanImage / Anima
-lorahub bootstrap-diffusion-pipe     # diffusion-pipe + DeepSpeed
+lorahub bootstrap-kohya              # CLI 仍保留 kohya 安装入口
 ```
 
-`anima_lora` 已 vendored 在 `external/anima_lora/`，无需再 clone。它需要独立的 venv（CPython 3.13 + torch 2.11/2.12 nightly + CUDA 13.x），首次安装可在 Web UI 的「设置 → 安装」面板一键 `uv sync`，再用「下载模型」按钮拉取约 14 GB 的 Anima 基础模型。
+`anima_lora` 位于 `external/anima_lora/`，`ai-toolkit` 位于 `external/ai_toolkit/`，无需再 clone。首次安装后可在 Web UI 下载 Anima / Krea2 等基础模型；下载任务支持镜像、状态持久化与续传。
 
 如需指向已有的 checkout：
 
@@ -87,6 +88,7 @@ lorahub bootstrap-diffusion-pipe     # diffusion-pipe + DeepSpeed
 export LORAHUB_KOHYA_SD_SCRIPTS=/path/to/sd-scripts
 export LORAHUB_DIFFUSION_PIPE=/path/to/diffusion-pipe
 export LORAHUB_ANIMA_LORA_PYTHON=/path/to/anima_lora/.venv/bin/python
+export LORAHUB_AI_TOOLKIT_REPO=/path/to/ai-toolkit
 ```
 
 ### 可选依赖
@@ -104,10 +106,10 @@ export LORAHUB_ANIMA_LORA_PYTHON=/path/to/anima_lora/.venv/bin/python
 ## 快速开始
 
 ```bash
-lorahub init my_character                       # 在 configs/ 下生成模板
-$EDITOR configs/my_character.yaml               # 填 checkpoint 与数据集路径
-lorahub validate configs/my_character.yaml      # 校验配置
-lorahub train    configs/my_character.yaml      # 启动训练
+lorahub init my_character --template anima_lora_default
+$EDITOR my_character.yaml                       # 填 checkpoint 与数据集路径
+lorahub validate my_character.yaml              # 校验配置
+lorahub train    my_character.yaml              # 启动训练
 lorahub serve    --port 18765                   # 启动 Web UI + REST API（可选）
 ```
 
@@ -131,14 +133,14 @@ lorahub serve    --port 18765                   # 启动 Web UI + REST API（可
 
 ## 核心特性
 
-- **三后端一份配置**：在「设置 → 后端配置」选 `kohya` / `diffusion-pipe` / `anima_lora`，三个后端共用同一份 schema 与 UI。
-- **可视化配置编辑器**：每个字段按 schema 与后端可见性过滤，锁定字段、警示字段都有徽标提示。
-- **图像工作台（Image Studio）**：WD14（默认 `SmilingWolf/wd-eva02-large-tagger-v3`）/ JoyTag 标注、smart-caption（WD14 + 视觉 LLM）、感知哈希去重、批量画质评分。
-- **任务调度**：单 GPU 队列，断点续训，多 GPU 通过每槽位 `CUDA_VISIBLE_DEVICES` 切片。重启后非终止任务标记为 `interrupted`，残留训练进程自动回收。
-- **实时事件**：`/api/jobs/{id}/sse`、`/api/system/sse`、`/api/backend/bootstrap/sse`，WebSocket 保留为兜底。
-- **超参 sweep**：grid、random、Optuna TPE 三种模式，TPE 提供 Pareto 视图，进度跨重启恢复。
-- **CLI 与 API 对齐**：`lorahub jobs ls/show/cancel/kill/resume/rerun`、`lorahub sweeps submit/ls`、`lorahub system gpu/info`。
-- **anima_lora 完整工作流**：模型下载、Anima transformer + Qwen-Image VAE + Qwen3 文本编码器配套配置、训练时按 epoch 自动出样本图。
+- **后端独立配置表单**：kohya、diffusion-pipe、anima_lora、ai-toolkit 各自显示自己的字段，避免无关参数混在一起。
+- **训练调度**：队列、取消、强制终止、恢复、异常事件、GPU slot、单任务多 GPU 分布式训练。
+- **多 GPU 策略**：一任务一 GPU、单任务 DDP、Anima FSDP、Anima DeepSpeed ZeRO。
+- **图像工作台**：导入、审计、WD14 / JoyTag 打标、智能 caption、去重、质量筛选、导出、LoRA 生图测试。
+- **训练分析**：损失曲线、检查点、样图、事件时间线、AI 分析、任务对比。
+- **模型下载与产物下载**：ModelScope / Hugging Face 镜像、状态持久化、续传、训练产物归档下载。
+- **维护更新**：正式版 / dev 版本检测、更新说明、依赖重装、前端构建、按上次端口重启。
+- **CLI / TUI / API**：命令行、交互式 TUI、REST + SSE 使用同一套任务与状态数据。
 
 ---
 
@@ -146,17 +148,18 @@ lorahub serve    --port 18765                   # 启动 Web UI + REST API（可
 
 | 后端             | 上游                                                                    | 覆盖范围                                                                | 备注                                              |
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- |
-| `kohya`          | [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)           | SD1.5、SDXL、SD3、FLUX、Lumina、HunyuanImage、Anima                    | 单进程，LoraHub 自建 venv 与 argv。               |
-| `diffusion-pipe` | [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) | DiT 阵列与视频：Wan、HunyuanVideo、LTX、Cosmos、Flux2、Chroma 等        | DeepSpeed pipeline，可选多机 launcher。           |
-| `anima_lora`     | [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora)         | 仅 Anima DiT                                                            | vendored 在 `external/anima_lora/`，详见下文。    |
+| `kohya`          | [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)           | SD1.5、SDXL、SD3、FLUX、Lumina、HunyuanImage、Anima                    | 适合经典 LoRA / LoCon / LoHa / DoRA 工作流。      |
+| `diffusion-pipe` | [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) | Wan、HunyuanVideo、LTX、Cosmos、Flux2、Chroma、Qwen-Image 等            | DeepSpeed / pipeline 训练后端。                   |
+| `anima_lora`     | [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora)         | Anima DiT                                                               | vendored 在 `external/anima_lora/`。              |
+| `ai_toolkit`     | [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit)               | Krea2                                                                  | vendored 在 `external/ai_toolkit/`。              |
 
-每个后端的字段映射在 `lorahub/core/backends/<name>/compiler.py`，schema 字段过滤在 `lorahub/core/config/schema.py`。
+每个后端的字段映射在 `lorahub/core/backends/<name>/compiler.py`。前端配置表单按后端拆分，不再展示无关字段。
 
 ### 关于 vendored 的 anima_lora
 
-`external/anima_lora/` 是 [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora) 的固定 snapshot，按上游 license 随附。它扩展了 Anima DiT 的训练手段：OrthoLoRA 正交分解、T-LoRA 低秩组合、Hydra 多头适配、postfix 注入、EasyControl 条件控制、IP-Adapter、DMD turbo 蒸馏。
+`external/anima_lora/` 是 [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora) 的固定 snapshot，按上游 license 随附。LoraHub 的魔改层提供自动 VAE / TE 预处理、val_loss、采样保护、V100 fp16 稳定化、全量微调、OrthoLoRA / T-LoRA / Hydra / LyCORIS 系列算法、postfix、EasyControl、IP-Adapter、DMD turbo、DDP / FSDP / ZeRO 分布式启动。
 
-不接受针对 `external/` 的直接 PR——bug 修复请去上游。集成层（`lorahub/core/backends/anima_lora/`）的改动属于 LoraHub 范畴，欢迎 PR。
+`external/` 下的 vendored 后端不要直接当作上游项目提交；LoraHub 集成与魔改代码主要在 `lorahub/core/backends/*/`。
 
 ---
 
@@ -184,7 +187,7 @@ REST 端点全部挂在 `/api`：`/api/configs`、`/api/jobs`、`/api/jobs/{id}/
 
 LoraHub 采用 **AGPL-3.0-or-later**。完整文本见 [LICENSE](LICENSE)。如果你修改 LoraHub 并通过网络对外提供服务，AGPL 要求把修改后的源码同时开放给这些用户。
 
-`external/anima_lora/` 由其上游 license 管辖，详见 `external/anima_lora/LICENSE`。
+`external/anima_lora/` 与 `external/ai_toolkit/` 由各自上游 license 管辖，详见对应目录内的 `LICENSE`。
 
 ---
 
@@ -205,6 +208,7 @@ PR 与 issue 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。社区行为规范�
 - [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)
 - [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe)
 - [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora)
+- [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit)
 - [SmilingWolf WD14 / WD-v3 taggers](https://huggingface.co/SmilingWolf)
 - [fpgaminer/joytag](https://github.com/fpgaminer/joytag)
 - [Optuna](https://optuna.org/)
