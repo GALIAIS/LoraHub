@@ -4,7 +4,10 @@ Reads CPU / memory / disk via stdlib (with psutil as an optional accelerator)
 and queries multiple GPU sources so the dashboard makes sense on every host:
 
 * NVIDIA on any platform via `nvidia-smi` (the original path).
+* Windows AMD / Intel precise metrics via optional `nwinfo --gpu`.
+* Windows AMD / Intel / fallback GPU identity via CIM (`Win32_VideoController`).
 * macOS Apple Silicon / Intel GPUs via `system_profiler -json SPDisplaysDataType`.
+* AMD on Linux via `rocm-smi` / bundled `amdgpu_top`, falling back to DRM/sysfs.
 * Linux AMD / Intel iGPUs via `/sys/class/drm` vendor IDs and `hwmon` sensors.
 
 All probes are best-effort: a missing tool, a parse error or a subprocess
@@ -62,6 +65,12 @@ _NVIDIA_SMI: str | None = None
 _NVIDIA_SMI_PROBED = False
 _SYSTEM_PROFILER: str | None = None
 _SYSTEM_PROFILER_PROBED = False
+_ROCM_SMI: str | None = None
+_ROCM_SMI_PROBED = False
+_NWINFO: str | None = None
+_NWINFO_PROBED = False
+_AMDGPU_TOP: str | None = None
+_AMDGPU_TOP_PROBED = False
 
 
 def _run_hidden(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -100,6 +109,66 @@ def _find_system_profiler() -> str | None:
     if Path(candidate).is_file():
         _SYSTEM_PROFILER = candidate
         return candidate
+    return None
+
+
+def _find_rocm_smi() -> str | None:
+    global _ROCM_SMI, _ROCM_SMI_PROBED
+    if _ROCM_SMI_PROBED:
+        return _ROCM_SMI
+    _ROCM_SMI_PROBED = True
+    if platform.system() != "Linux":
+        return None
+    candidate = shutil.which("rocm-smi") or "/opt/rocm/bin/rocm-smi"
+    if Path(candidate).is_file():
+        _ROCM_SMI = candidate
+        return candidate
+    return None
+
+
+def _find_nwinfo() -> str | None:
+    global _NWINFO, _NWINFO_PROBED
+    if _NWINFO_PROBED:
+        return _NWINFO
+    _NWINFO_PROBED = True
+    if platform.system() != "Windows":
+        return None
+    candidate = shutil.which("nwinfo") or shutil.which("nwinfo.exe")
+    if candidate:
+        _NWINFO = candidate
+        return candidate
+    root = Path(__file__).resolve().parents[2]
+    for path in (
+        root / ".lorahub" / "nwinfo" / "nwinfo.exe",
+        root / "tools" / "nwinfo" / "nwinfo.exe",
+        root / "bin" / "nwinfo.exe",
+    ):
+        if path.is_file():
+            _NWINFO = str(path)
+            return _NWINFO
+    return None
+
+
+def _find_amdgpu_top() -> str | None:
+    global _AMDGPU_TOP, _AMDGPU_TOP_PROBED
+    if _AMDGPU_TOP_PROBED:
+        return _AMDGPU_TOP
+    _AMDGPU_TOP_PROBED = True
+    if platform.system() != "Linux":
+        return None
+    candidate = shutil.which("amdgpu_top")
+    if candidate:
+        _AMDGPU_TOP = candidate
+        return candidate
+    root = Path(__file__).resolve().parents[2]
+    for path in (
+        root / ".lorahub" / "amdgpu_top" / "amdgpu_top",
+        root / "tools" / "amdgpu_top" / "amdgpu_top",
+        root / "bin" / "amdgpu_top",
+    ):
+        if path.is_file():
+            _AMDGPU_TOP = str(path)
+            return _AMDGPU_TOP
     return None
 
 
@@ -677,7 +746,460 @@ def _collect_macos_gpus(start_index: int = 0) -> list[GpuStats]:
     return out
 
 
-_SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB|TB)", re.IGNORECASE)
+def _collect_windows_video_gpus(start_index: int = 0) -> list[GpuStats]:
+    powershell = shutil.which("powershell") or shutil.which("powershell.exe")
+    if powershell is None:
+        return []
+    try:
+        proc = _run_hidden(  # noqa: S603
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object Name,AdapterCompatibility,AdapterRAM,DriverVersion | "
+                "ConvertTo-Json -Compress",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return []
+    entries = payload if isinstance(payload, list) else [payload]
+
+    out: list[GpuStats] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("Name") or "").strip()
+        vendor_raw = str(entry.get("AdapterCompatibility") or name).lower()
+        vendor = _gpu_vendor_from_text(vendor_raw)
+        if vendor == "nvidia" and _find_nvidia_smi() is not None:
+            continue
+        if vendor == "unknown" and not name:
+            continue
+        mem_total = _coerce_int(entry.get("AdapterRAM"))
+        out.append(
+            GpuStats(
+                index=start_index + len(out),
+                name=name or "GPU",
+                driver=str(entry.get("DriverVersion") or "") or None,
+                memory_total_bytes=mem_total if mem_total and mem_total > 0 else None,
+                memory_used_bytes=None,
+                memory_free_bytes=None,
+                utilization_percent=None,
+                temperature_c=None,
+                power_w=None,
+                power_limit_w=None,
+                fan_percent=None,
+                vendor=vendor,
+            )
+        )
+    return out
+
+
+def _collect_windows_nwinfo_gpus(start_index: int = 0) -> list[GpuStats]:
+    nwinfo = _find_nwinfo()
+    if nwinfo is None:
+        return []
+    try:
+        proc = _run_hidden(  # noqa: S603
+            [nwinfo, "--format=json", "--cp=UTF8", "--gpu"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return []
+
+    out: list[GpuStats] = []
+    seen: set[str] = set()
+    for entry in _nwinfo_gpu_entries(payload):
+        flat = _nwinfo_flatten(entry)
+        name = _flat_pick_str(flat, ("name", "devicename", "adaptername", "model", "gpu"))
+        vendor = _gpu_vendor_from_text(
+            " ".join(
+                v
+                for v in (
+                    _flat_pick_str(flat, ("vendor", "manufacturer", "adaptercompatibility", "api")),
+                    name,
+                )
+                if v
+            )
+        )
+        if vendor == "nvidia" and _find_nvidia_smi() is not None:
+            continue
+        if not name or vendor == "unknown":
+            continue
+        key = f"{vendor}:{name.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        total = _flat_pick_bytes(flat, ("vramtotal", "memorytotal", "dedicatedmemory", "dedicatedvideomemory", "totalmemory"))
+        used = _flat_pick_bytes(flat, ("vramused", "memoryused", "usedmemory", "dedicatedmemoryused"))
+        free = _flat_pick_bytes(flat, ("vramfree", "memoryfree", "freememory"))
+        if free is None and total is not None and used is not None:
+            free = max(total - used, 0)
+        out.append(
+            GpuStats(
+                index=start_index + len(out),
+                name=name,
+                driver=_flat_pick_str(flat, ("driver", "driverversion")),
+                memory_total_bytes=total,
+                memory_used_bytes=used,
+                memory_free_bytes=free,
+                utilization_percent=_flat_pick_float(flat, ("gpuusage", "gpuutilization", "utilization", "usage", "load")),
+                temperature_c=_flat_pick_float(flat, ("gputemperature", "temperature", "temperaturec")),
+                power_w=_flat_pick_float(flat, ("powerdraw", "boardpower", "gpupower", "power")),
+                power_limit_w=_flat_pick_float(flat, ("powerlimit", "powerlimitw")),
+                fan_percent=_flat_pick_float(flat, ("fanspeed", "fan")),
+                vendor=vendor,
+                sm_clock_mhz=_flat_pick_int(flat, ("coreclock", "gpuclock", "frequency")),
+                mem_clock_mhz=_flat_pick_int(flat, ("memoryclock", "memclock")),
+            )
+        )
+    return out
+
+
+def _nwinfo_gpu_entries(value: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        flat = _nwinfo_flatten(node)
+        has_name = _flat_pick_str(flat, ("name", "devicename", "adaptername", "model", "gpu")) is not None
+        has_metric = any(k in flat for k in ("gpuusage", "gpuutilization", "vramtotal", "memorytotal", "temperature", "powerdraw"))
+        if has_name and has_metric:
+            out.append(node)
+            return
+        for child in node.values():
+            visit(child)
+
+    visit(value)
+    return out
+
+
+def _nwinfo_flatten(value: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+
+    def add(key: str, item: Any) -> None:
+        if item is None or isinstance(item, (dict, list)):
+            return
+        norm = re.sub(r"[^a-z0-9]+", "", key.lower())
+        if norm and norm not in out:
+            out[norm] = str(item)
+
+    def walk(prefix: str, node: Any) -> None:
+        if isinstance(node, dict):
+            for key, item in node.items():
+                text_key = str(key)
+                add(text_key, item)
+                walk(f"{prefix} {text_key}".strip(), item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(prefix, item)
+        else:
+            add(prefix, node)
+
+    walk("", value)
+    return out
+
+
+def _flat_pick_str(flat: dict[str, str], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = flat.get(key)
+        if value and value.lower() not in {"n/a", "na", "none", "not supported"}:
+            return value.strip()
+    return None
+
+
+def _flat_pick_float(flat: dict[str, str], keys: tuple[str, ...]) -> float | None:
+    text = _flat_pick_str(flat, keys)
+    if text is None:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def _flat_pick_int(flat: dict[str, str], keys: tuple[str, ...]) -> int | None:
+    value = _flat_pick_float(flat, keys)
+    return int(value) if value is not None else None
+
+
+def _flat_pick_bytes(flat: dict[str, str], keys: tuple[str, ...]) -> int | None:
+    text = _flat_pick_str(flat, keys)
+    if text is None:
+        return None
+    parsed = _parse_size_string(text)
+    if parsed is not None:
+        return parsed
+    value = _flat_pick_float(flat, keys)
+    return int(value) if value is not None else None
+
+
+def _gpu_vendor_from_text(text: str) -> str:
+    lower = text.lower()
+    if "amd" in lower or "advanced micro devices" in lower or "ati" in lower or "radeon" in lower:
+        return "amd"
+    if "nvidia" in lower:
+        return "nvidia"
+    if "intel" in lower:
+        return "intel"
+    if "apple" in lower:
+        return "apple"
+    return "unknown"
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_amd_rocm_gpus(start_index: int = 0) -> list[GpuStats]:
+    smi = _find_rocm_smi()
+    if smi is None:
+        return []
+    try:
+        proc = _run_hidden(  # noqa: S603
+            [
+                smi,
+                "--showproductname",
+                "--showmeminfo",
+                "vram",
+                "--showuse",
+                "--showtemp",
+                "--showpower",
+                "--showfan",
+                "--showdriverversion",
+                "--json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    cards = sorted(
+        ((k, v) for k, v in payload.items() if isinstance(v, dict)),
+        key=lambda item: _rocm_card_index(item[0]),
+    )
+    out: list[GpuStats] = []
+    for key, card in cards:
+        name = _rocm_pick_str(card, ("Card series", "Card model", "GPU ID", "Device Name"))
+        total = _rocm_pick_bytes(card, ("VRAM Total Memory (B)", "VRAM Total Memory", "vram Total Memory (B)"))
+        used = _rocm_pick_bytes(card, ("VRAM Total Used Memory (B)", "VRAM Total Used Memory", "vram Total Used Memory (B)"))
+        free = max(total - used, 0) if total is not None and used is not None else None
+        out.append(
+            GpuStats(
+                index=start_index + len(out),
+                name=name or key,
+                driver=_rocm_pick_str(card, ("Driver version", "Driver Version")),
+                memory_total_bytes=total,
+                memory_used_bytes=used,
+                memory_free_bytes=free,
+                utilization_percent=_rocm_pick_float(card, ("GPU use (%)", "GPU use")),
+                temperature_c=_rocm_pick_float(card, ("Temperature (Sensor edge) (C)", "Temperature (Sensor junction) (C)", "Temperature")),
+                power_w=_rocm_pick_float(card, ("Average Graphics Package Power (W)", "Current Socket Graphics Package Power (W)", "Power (W)")),
+                power_limit_w=None,
+                fan_percent=_rocm_pick_float(card, ("Fan Speed (%)", "Fan Level (%)")),
+                vendor="amd",
+            )
+        )
+    return out
+
+
+def _collect_amd_amdgpu_top_gpus(start_index: int = 0) -> list[GpuStats]:
+    tool = _find_amdgpu_top()
+    if tool is None:
+        return []
+    try:
+        proc = _run_hidden(  # noqa: S603
+            [tool, "--json", "-n", "1"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+    line = next((ln for ln in proc.stdout.splitlines() if ln.strip().startswith("{")), "")
+    if not line:
+        return []
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return []
+    devices = payload.get("devices") if isinstance(payload, dict) else None
+    if not isinstance(devices, list):
+        return []
+
+    out: list[GpuStats] = []
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        info = device.get("Info") if isinstance(device.get("Info"), dict) else {}
+        name = str(info.get("DeviceName") or info.get("MarketingName") or info.get("Name") or "AMD GPU")
+        total = _amdgpu_top_bytes(device, ("VRAM", "vram"), ("Total", "total"))
+        used = _amdgpu_top_bytes(device, ("VRAM", "vram"), ("Usage", "Used", "used", "usage"))
+        free = max(total - used, 0) if total is not None and used is not None else None
+        out.append(
+            GpuStats(
+                index=start_index + len(out),
+                name=name,
+                driver=None,
+                memory_total_bytes=total,
+                memory_used_bytes=used,
+                memory_free_bytes=free,
+                utilization_percent=_amdgpu_top_metric(device, ("gpu_activity", "GPU Activity"), ("GFX", "gfx", "GPU")),
+                temperature_c=_amdgpu_top_metric(device, ("Sensors", "sensors", "gpu_metrics"), ("Temperature", "Edge Temperature", "edge_temperature")),
+                power_w=_amdgpu_top_metric(device, ("Sensors", "sensors", "gpu_metrics"), ("Power", "Average Power", "average_power")),
+                power_limit_w=None,
+                fan_percent=_amdgpu_top_metric(device, ("Sensors", "sensors"), ("Fan", "Fan Speed", "fan_speed")),
+                vendor="amd",
+            )
+        )
+    return out
+
+
+def _amdgpu_top_metric(device: dict[str, Any], groups: tuple[str, ...], keys: tuple[str, ...]) -> float | None:
+    for group_key in groups:
+        group = device.get(group_key)
+        if not isinstance(group, dict):
+            continue
+        for key in keys:
+            value = group.get(key)
+            if isinstance(value, dict):
+                value = value.get("value")
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _amdgpu_top_bytes(device: dict[str, Any], groups: tuple[str, ...], keys: tuple[str, ...]) -> int | None:
+    for group_key in groups:
+        group = device.get(group_key)
+        if not isinstance(group, dict):
+            continue
+        for key in keys:
+            value = group.get(key)
+            unit = ""
+            if isinstance(value, dict):
+                unit = str(value.get("unit") or "")
+                value = value.get("value")
+            if value is None:
+                continue
+            if isinstance(value, str):
+                parsed = _parse_size_string(value)
+                if parsed is not None:
+                    return parsed
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            factor = 1
+            lower = unit.lower()
+            if lower in {"kb", "kib"}:
+                factor = 1024
+            elif lower in {"mb", "mib"}:
+                factor = 1024**2
+            elif lower in {"gb", "gib"}:
+                factor = 1024**3
+            return int(number * factor)
+    return None
+
+
+def _rocm_card_index(name: str) -> int:
+    m = re.search(r"\d+", name)
+    return int(m.group(0)) if m else 0
+
+
+def _rocm_pick_str(card: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = card.get(key)
+        if value not in (None, "", "N/A", "Not supported"):
+            return str(value)
+    return None
+
+
+def _rocm_pick_float(card: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    text = _rocm_pick_str(card, keys)
+    if text is None:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def _rocm_pick_bytes(card: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    text = _rocm_pick_str(card, keys)
+    if text is None:
+        return None
+    value = _rocm_pick_float(card, keys)
+    if value is None:
+        return None
+    lower = text.lower()
+    if "tib" in lower or "tb" in lower:
+        return int(value * 1024**4)
+    if "gib" in lower or "gb" in lower:
+        return int(value * 1024**3)
+    if "mib" in lower or "mb" in lower:
+        return int(value * 1024**2)
+    if "kib" in lower or "kb" in lower:
+        return int(value * 1024)
+    return int(value)
+
+
+_SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB|TB|TIB)", re.IGNORECASE)
 
 
 def _parse_size_string(text: str) -> int | None:
@@ -689,7 +1211,7 @@ def _parse_size_string(text: str) -> int | None:
     except ValueError:
         return None
     unit = m.group(2).upper()
-    factor = {"KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}[unit]
+    factor = {"B": 1, "KB": 1024, "KIB": 1024, "MB": 1024**2, "MIB": 1024**2, "GB": 1024**3, "GIB": 1024**3, "TB": 1024**4, "TIB": 1024**4}[unit]
     return int(value * factor)
 
 
@@ -777,9 +1299,10 @@ def _collect_linux_drm_gpus(start_index: int = 0) -> list[GpuStats]:
         if vendor_raw is None:
             continue
         vendor_key = vendor_raw.lower()
-        # NVIDIA on Linux is already covered by nvidia-smi when available; we
-        # still report it via DRM only if nvidia-smi is missing.
+        # Vendor-specific tools report richer metrics; DRM is only fallback.
         if vendor_key == "0x10de" and _find_nvidia_smi() is not None:
+            continue
+        if vendor_key == "0x1002" and _find_rocm_smi() is not None:
             continue
         vendor_label, default_name = _DRM_VENDORS.get(vendor_key, ("unknown", "GPU"))
         if vendor_label in {"unknown", "qemu"}:
@@ -823,10 +1346,21 @@ def _collect_gpus() -> list[GpuStats]:
         gpus.extend(_collect_nvidia_gpus(start_index=len(gpus)))
 
     system = platform.system()
-    if system == "Darwin":
+    if system == "Windows":
+        with contextlib.suppress(Exception):
+            gpus.extend(_collect_windows_nwinfo_gpus(start_index=len(gpus)))
+        if not gpus:
+            with contextlib.suppress(Exception):
+                gpus.extend(_collect_windows_video_gpus(start_index=len(gpus)))
+    elif system == "Darwin":
         with contextlib.suppress(Exception):
             gpus.extend(_collect_macos_gpus(start_index=len(gpus)))
     elif system == "Linux":
+        with contextlib.suppress(Exception):
+            gpus.extend(_collect_amd_rocm_gpus(start_index=len(gpus)))
+        if not any(g.vendor == "amd" for g in gpus):
+            with contextlib.suppress(Exception):
+                gpus.extend(_collect_amd_amdgpu_top_gpus(start_index=len(gpus)))
         with contextlib.suppress(Exception):
             gpus.extend(_collect_linux_drm_gpus(start_index=len(gpus)))
     return gpus

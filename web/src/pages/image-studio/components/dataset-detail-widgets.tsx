@@ -1,7 +1,8 @@
 import type { ReactNode } from "react"
-import { Loader2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 
 import { cancelTask, type StudioTaskRecord } from "@/lib/studio-task-store"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -80,26 +81,32 @@ export function Pagination({
   onChange: (p: number) => void
 }) {
   return (
-    <div className="flex items-center justify-center gap-2 pt-4">
-      <button
+    <div className="flex items-center justify-center gap-1.5 pt-4 text-[12px]">
+      <Button
+        size="sm"
+        variant="outline"
         type="button"
         disabled={page <= 1}
         onClick={() => onChange(page - 1)}
-        className="rounded border px-2 py-1 text-xs disabled:opacity-40"
+        aria-label="上一页"
+        className="h-7 w-8 shrink-0 px-0"
       >
-        上一页
-      </button>
-      <span className="text-xs text-muted-foreground">
+        <ChevronLeft className="size-3.5" />
+      </Button>
+      <span className="min-w-[4.75rem] shrink-0 rounded-[6px] border border-border/60 bg-muted/30 px-2 py-1 text-center font-mono text-[11px] tabular-nums text-muted-foreground">
         {page} / {total}
       </span>
-      <button
+      <Button
+        size="sm"
+        variant="outline"
         type="button"
         disabled={page >= total}
         onClick={() => onChange(page + 1)}
-        className="rounded border px-2 py-1 text-xs disabled:opacity-40"
+        aria-label="下一页"
+        className="h-7 w-8 shrink-0 px-0"
       >
-        下一页
-      </button>
+        <ChevronRight className="size-3.5" />
+      </Button>
     </div>
   )
 }

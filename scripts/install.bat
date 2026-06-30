@@ -44,8 +44,10 @@ set "TOOLS_DIR=%CD%\.lorahub"
 set "UV_DIR=%TOOLS_DIR%\uv"
 set "PY_DIR=%TOOLS_DIR%\python"
 set "NODE_DIR=%CD%\.node"
+set "NWINFO_DIR=%TOOLS_DIR%\nwinfo"
 set "NODE_VERSION=20.19.0"
 set "NODE_MIN_VERSION=20.19.0"
+set "NWINFO_VERSION=1.6.4"
 
 if not defined LORAHUB_NODE_MIRROR set "LORAHUB_NODE_MIRROR=https://nodejs.org/dist"
 
@@ -197,12 +199,19 @@ echo.
 rem ---- [4/6] Install Python dependencies ----------------------------
 echo [4/6] Installing Python dependencies ...
 set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
-set "PY_DEPS_INDEX_ARGS="
-if defined UV_DEFAULT_INDEX set "PY_DEPS_INDEX_ARGS=--index-url '%UV_DEFAULT_INDEX%'"
+set "PY_DEPS_VERBOSE="
+if /I "%LORAHUB_INSTALL_VERBOSE%"=="1" set "PY_DEPS_VERBOSE=-v"
 echo   uv default index: %UV_DEFAULT_INDEX%
-echo   running uv pip install -v -e .[api,dev] --python "%VENV_PY%" --link-mode=copy %PY_DEPS_INDEX_ARGS% ^(log: _uv_python_deps.log^)
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%UV%' pip install -v -e '.[api,dev]' --python '%VENV_PY%' --link-mode=copy %PY_DEPS_INDEX_ARGS% 2>&1 | Tee-Object -FilePath '%PY_DEPS_LOG%'; exit $LASTEXITCODE"
-if errorlevel 1 (
+if defined UV_DEFAULT_INDEX (
+  echo   running uv pip install %PY_DEPS_VERBOSE% -e .[api,dev] --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% -e ".[api,dev]" --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" > "%PY_DEPS_LOG%" 2>&1
+) else (
+  echo   running uv pip install %PY_DEPS_VERBOSE% -e .[api,dev] --python "%VENV_PY%" --link-mode=copy ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% -e ".[api,dev]" --python "%VENV_PY%" --link-mode=copy > "%PY_DEPS_LOG%" 2>&1
+)
+set "PY_DEPS_RC=%ERRORLEVEL%"
+type "%PY_DEPS_LOG%"
+if not "%PY_DEPS_RC%"=="0" (
   echo   [ERROR] pip install failed.
   echo   If your network blocks pypi.org, retry with the China-mirror
   echo   wrapper:  scripts\install-cn.bat
@@ -235,7 +244,7 @@ if exist "%NODE_DIR%\node.exe" (
 
 echo   Downloading portable Node.js 20 (mirror: %LORAHUB_NODE_MIRROR%) ...
 if not exist "%NODE_DIR%" mkdir "%NODE_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%LORAHUB_NODE_MIRROR%/v%NODE_VERSION%/node-v%NODE_VERSION%-win-x64.zip' -OutFile '%NODE_DIR%\node.zip'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $out='%NODE_DIR%\node.zip'; $ver='v%NODE_VERSION%'; $zip='node-v%NODE_VERSION%-win-x64.zip'; $mirrors=@('%LORAHUB_NODE_MIRROR%','https://npmmirror.com/mirrors/node','https://mirrors.tuna.tsinghua.edu.cn/nodejs-release','https://mirrors.aliyun.com/nodejs-release','https://nodejs.org/dist'); $seen=@{}; foreach($m in $mirrors){ $m=$m.TrimEnd('/'); if($seen.ContainsKey($m)){continue}; $seen[$m]=$true; $url=$m + '/' + $ver + '/' + $zip; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 600 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
 if errorlevel 1 (
   echo   [ERROR] Failed to download Node.js.
   goto :fail
@@ -302,6 +311,28 @@ if "%NEEDS_NPM_INSTALL%"=="0" (
     goto :fail
   )
   echo   OK Frontend dependencies installed
+)
+echo.
+
+rem ---- [extra] install optional GPU telemetry helpers ---------------
+echo [extra] Installing GPU telemetry helpers ...
+if exist "%NWINFO_DIR%\nwinfo.exe" (
+  echo   OK nwinfo already installed
+) else (
+  if not exist "%NWINFO_DIR%" mkdir "%NWINFO_DIR%"
+  set "NWINFO_UPSTREAM=https://github.com/a1ive/nwinfo/releases/download/v%NWINFO_VERSION%/NWinfoLite.zip"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $up='!NWINFO_UPSTREAM!'; $out='%NWINFO_DIR%\NWinfoLite.zip'; $proxies=@($env:LORAHUB_GH_PROXY,'https://v4.gh-proxy.org/','https://gh-proxy.com/','https://gh.ddlc.top/','https://gh.jasonzeng.dev/','https://gh.zwy.one/','https://ghfast.top/',''); $seen=@{}; foreach($p in $proxies){ if($null -eq $p){$p=''}; $p=$p.Trim(); if($p -eq 'https://cdn.gh-proxy.org') { continue }; if($seen.ContainsKey($p)){continue}; $seen[$p]=$true; $url= if($p){$p.TrimEnd('/') + '/' + $up}else{$up}; Write-Host ('  fetching ' + $url); & curl.exe -L --fail --connect-timeout 10 --max-time 180 -o $out $url; if($LASTEXITCODE -eq 0 -and (Test-Path $out) -and ((Get-Item $out).Length -gt 1000000)){ exit 0 }; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }; exit 1"
+  if errorlevel 1 (
+    echo   skipped: failed to download nwinfo
+  ) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%NWINFO_DIR%\NWinfoLite.zip' -DestinationPath '%NWINFO_DIR%' -Force"
+    del "%NWINFO_DIR%\NWinfoLite.zip" 2>nul
+    if exist "%NWINFO_DIR%\nwinfo.exe" (
+      echo   OK nwinfo installed
+    ) else (
+      echo   skipped: nwinfo.exe not found in archive
+    )
+  )
 )
 echo.
 

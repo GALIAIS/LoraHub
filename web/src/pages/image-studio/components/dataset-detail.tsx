@@ -47,7 +47,8 @@ import { TriggerWordSummary } from "./trigger-word-summary"
 export function DatasetDetail() {
   const [params, setParams] = useSearchParams()
   const path = params.get("path") || ""
-  const page = Number(params.get("page") || "1")
+  const pageRaw = Number.parseInt(params.get("page") || "1", 10)
+  const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? pageRaw : 1
   const sort = params.get("sort") || "name"
   const recursive = params.get("recursive") === "1"
   const view = params.get("view") || "grid"
@@ -75,11 +76,16 @@ export function DatasetDetail() {
   const { activeStudioTask, triggerWordTop, setTriggerWordTop } =
     useDatasetTaskState(path)
 
-  const setPage = (p: number) => {
-    const next = new URLSearchParams(params)
-    next.set("page", String(p))
-    setParams(next)
-  }
+  const setPage = useCallback(
+    (p: number) => {
+      const next = new URLSearchParams(params)
+      next.set("page", String(Math.max(1, p)))
+      setSelectedPath(null)
+      setMultiSelected(new Set())
+      setParams(next)
+    },
+    [params, setParams],
+  )
 
   const goBack = () => setParams(new URLSearchParams())
 
@@ -246,6 +252,7 @@ export function DatasetDetail() {
 
   const data = listQuery.data
   const totalPages = data ? Math.ceil(data.total / data.limit) : 0
+  const displayPage = data?.page ?? page
   const filteredItems = data ? applyFilters(data.items, filters) : []
 
   const handleAiBulkStart = async (tab: AiBulkTab, params: Record<string, unknown>) => {
@@ -355,7 +362,7 @@ export function DatasetDetail() {
                   onContextAction={handleContextAction}
                 />
                 {totalPages > 1 && (
-                  <Pagination page={page} total={totalPages} onChange={setPage} />
+                  <Pagination page={displayPage} total={totalPages} onChange={setPage} />
                 )}
               </>
             )}

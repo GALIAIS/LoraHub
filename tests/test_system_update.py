@@ -543,6 +543,19 @@ def test_apply_raises_when_not_a_git_checkout(monkeypatch: pytest.MonkeyPatch) -
         su.apply(channel="main", build=False)
 
 
+def test_build_pip_command_uses_configured_index_and_copy_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UV_DEFAULT_INDEX", "https://mirror.example/simple")
+    monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
+
+    cmd = su._build_pip_command(Path("repo"))
+
+    assert cmd[:3] == ["uv", "pip", "install"]
+    assert cmd[cmd.index("--index-url") + 1] == "https://mirror.example/simple"
+    assert "--link-mode=copy" in cmd
+
+
 # --------------------------------------------------------------------- #
 # Version resolution (zip-install fallback chain)
 # --------------------------------------------------------------------- #

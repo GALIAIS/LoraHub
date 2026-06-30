@@ -11,6 +11,7 @@ Covers all three enhancement waves:
 
 from __future__ import annotations
 
+import json
 import socket
 from collections import namedtuple
 from pathlib import Path
@@ -859,6 +860,164 @@ def test_gpu_pcie_fields_handle_n_a(monkeypatch: pytest.MonkeyPatch) -> None:
     assert g.mem_clock_max_mhz is None
 
 
+def test_rocm_smi_parses_amd_gpu_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "card0": {
+            "Card series": "AMD Radeon RX 7900 XTX",
+            "Driver version": "6.1.1",
+            "VRAM Total Memory (B)": "25757220864",
+            "VRAM Total Used Memory (B)": "2147483648",
+            "GPU use (%)": "73",
+            "Temperature (Sensor edge) (C)": "62.0",
+            "Average Graphics Package Power (W)": "285.5",
+            "Fan Speed (%)": "44",
+        }
+    }
+    monkeypatch.setattr(system_stats, "_find_rocm_smi", lambda: "rocm-smi")
+    monkeypatch.setattr(
+        system_stats.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    gpu = system_stats._collect_amd_rocm_gpus()[0]
+
+    assert gpu.vendor == "amd"
+    assert gpu.name == "AMD Radeon RX 7900 XTX"
+    assert gpu.driver == "6.1.1"
+    assert gpu.memory_total_bytes == 25757220864
+    assert gpu.memory_used_bytes == 2147483648
+    assert gpu.utilization_percent == 73
+    assert gpu.temperature_c == 62.0
+    assert gpu.power_w == 285.5
+    assert gpu.fan_percent == 44
+
+
+def test_amdgpu_top_parses_linux_amd_gpu_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "devices": [
+            {
+                "Info": {"DeviceName": "AMD Radeon RX 6600"},
+                "VRAM": {
+                    "Total": {"value": 8, "unit": "GB"},
+                    "Usage": {"value": 1536, "unit": "MB"},
+                },
+                "gpu_activity": {"GFX": {"value": 51, "unit": "%"}},
+                "Sensors": {
+                    "Temperature": {"value": 63, "unit": "C"},
+                    "Power": {"value": 87.5, "unit": "W"},
+                    "Fan": {"value": 35, "unit": "%"},
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(system_stats, "_find_amdgpu_top", lambda: "amdgpu_top")
+    monkeypatch.setattr(
+        system_stats.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(payload) + "\n", stderr=""),
+    )
+
+    gpu = system_stats._collect_amd_amdgpu_top_gpus()[0]
+
+    assert gpu.vendor == "amd"
+    assert gpu.name == "AMD Radeon RX 6600"
+    assert gpu.memory_total_bytes == 8 * 1024**3
+    assert gpu.memory_used_bytes == 1536 * 1024**2
+    assert gpu.utilization_percent == 51
+    assert gpu.temperature_c == 63
+    assert gpu.power_w == 87.5
+    assert gpu.fan_percent == 35
+
+
+def test_windows_cim_parses_amd_gpu_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "Name": "AMD Radeon RX 7900 XTX",
+        "AdapterCompatibility": "Advanced Micro Devices, Inc.",
+        "AdapterRAM": 4293918720,
+        "DriverVersion": "31.0.24027.1012",
+    }
+    monkeypatch.setattr(system_stats.shutil, "which", lambda name: "powershell.exe")
+    monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
+    monkeypatch.setattr(
+        system_stats.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    gpu = system_stats._collect_windows_video_gpus()[0]
+
+    assert gpu.vendor == "amd"
+    assert gpu.name == "AMD Radeon RX 7900 XTX"
+    assert gpu.driver == "31.0.24027.1012"
+    assert gpu.memory_total_bytes == 4293918720
+    assert gpu.utilization_percent is None
+
+
+def test_windows_nwinfo_parses_amd_gpu_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "GPU": [
+            {
+                "Name": "AMD Radeon RX 7900 XTX",
+                "Vendor": "AMD",
+                "Driver Version": "32.0.12027.9001",
+                "VRAM Total": "24 GB",
+                "VRAM Used": "3.5 GB",
+                "GPU Usage": "67 %",
+                "Temperature": "58 C",
+                "Power Draw": "212 W",
+                "Fan Speed": "41 %",
+                "Core Clock": "2450 MHz",
+                "Memory Clock": "2500 MHz",
+            }
+        ]
+    }
+    monkeypatch.setattr(system_stats, "_find_nwinfo", lambda: "nwinfo.exe")
+    monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
+    monkeypatch.setattr(
+        system_stats.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    gpu = system_stats._collect_windows_nwinfo_gpus()[0]
+
+    assert gpu.vendor == "amd"
+    assert gpu.name == "AMD Radeon RX 7900 XTX"
+    assert gpu.driver == "32.0.12027.9001"
+    assert gpu.memory_total_bytes == 24 * 1024**3
+    assert gpu.memory_used_bytes == int(3.5 * 1024**3)
+    assert gpu.utilization_percent == 67
+    assert gpu.temperature_c == 58
+    assert gpu.power_w == 212
+    assert gpu.fan_percent == 41
+    assert gpu.sm_clock_mhz == 2450
+
+
+def test_windows_gpu_collection_falls_back_to_cim_without_nwinfo(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "Name": "AMD Radeon RX 7800 XT",
+        "AdapterCompatibility": "AMD",
+        "AdapterRAM": 17171480576,
+        "DriverVersion": "31.0.24027.1012",
+    }
+    monkeypatch.setattr(system_stats.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(system_stats, "_collect_nvidia_gpus", lambda start_index=0: [])
+    monkeypatch.setattr(system_stats, "_find_nwinfo", lambda: None)
+    monkeypatch.setattr(system_stats.shutil, "which", lambda name: "powershell.exe")
+    monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
+    monkeypatch.setattr(
+        system_stats.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    gpu = system_stats._collect_gpus()[0]
+
+    assert gpu.vendor == "amd"
+    assert gpu.name == "AMD Radeon RX 7800 XT"
+
+
 # --------------------------------------------------------------------------- #
 # D. GPU per-process VRAM                                                     #
 # --------------------------------------------------------------------------- #
@@ -928,5 +1087,23 @@ def test_linux_drm_skips_bmc_display_adapters(
 
     monkeypatch.setattr(system_stats, "Path", path_factory)
     monkeypatch.setattr(system_stats, "_find_nvidia_smi", lambda: None)
+
+    assert system_stats._collect_linux_drm_gpus() == []
+
+
+def test_linux_drm_skips_amd_when_rocm_smi_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    drm = tmp_path / "sys" / "class" / "drm"
+    card = drm / "card0"
+    device = card / "device"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text("0x1002", encoding="utf-8")
+    (device / "uevent").write_text("DRIVER=amdgpu\nPCI_ID=1002:744C\n", encoding="utf-8")
+
+    real_path = system_stats.Path
+    monkeypatch.setattr(system_stats, "Path", lambda value: drm if value == "/sys/class/drm" else real_path(value))
+    monkeypatch.setattr(system_stats, "_find_rocm_smi", lambda: "rocm-smi")
 
     assert system_stats._collect_linux_drm_gpus() == []

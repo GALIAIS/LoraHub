@@ -53,6 +53,7 @@ Write-Host "  npm:     $env:NPM_CONFIG_REGISTRY"
 Write-Host "  PyTorch: $env:LORAHUB_TORCH_INDEX_URL"
 Write-Host ""
 
-# Forward any extra args the user passed verbatim to install.bat.
-& cmd.exe /c $InstallBat $args
+# Forward any extra args verbatim. Calling the .bat directly lets
+# PowerShell handle paths with spaces instead of rebuilding a cmd line.
+& $InstallBat @args
 exit $LASTEXITCODE

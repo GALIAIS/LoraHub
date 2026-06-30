@@ -5,6 +5,7 @@ import yaml
 
 from lorahub.api.jobs_helpers import _select_backend
 from lorahub.api.settings import Settings, probe_ai_toolkit_backend
+from lorahub.api.terminal_runner import resolve_backend_session
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.ai_toolkit.compiler import compile_config
 from lorahub.core.backends.ai_toolkit.parser import parse_line
@@ -132,3 +133,22 @@ def test_probe_ai_toolkit_backend_reports_vendored_ready(tmp_path: Path) -> None
     assert status["python_ok"] is True
     assert status["venv_detected"] is True
     assert status["ready"] is True
+
+
+def test_terminal_resolves_ai_toolkit_session(tmp_path: Path) -> None:
+    repo = tmp_path / "ai_toolkit"
+    repo.mkdir()
+    py = repo / ".venv" / "Scripts" / "python.exe"
+    py.parent.mkdir(parents=True)
+    py.write_text("", encoding="utf-8")
+
+    session = resolve_backend_session(
+        "ai_toolkit",
+        Settings(ai_toolkit_repo_path=str(repo), ai_toolkit_python=str(py)),
+    )
+
+    assert session.backend_id == "ai_toolkit"
+    assert session.display_name == "AI Toolkit"
+    assert session.repo_path == repo
+    assert session.python_path == py
+    assert session.ready is True

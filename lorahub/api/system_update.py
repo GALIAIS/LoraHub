@@ -1412,15 +1412,36 @@ def _build_pip_command(cwd: Path) -> list[str]:
     import sys as _sys  # noqa: PLC0415
 
     py = _sys.executable
+    pypi_index = _configured_pypi_index()
     try:
         from lorahub.core.toolchain.uv import find_uv  # noqa: PLC0415
 
         uv = find_uv()
         if uv:
-            return [uv, "-v", "pip", "install", "-e", ".[api,dev]", "--python", py]
+            cmd = [uv, "pip", "install"]
+            if os.environ.get("LORAHUB_INSTALL_VERBOSE") == "1":
+                cmd.append("-v")
+            if pypi_index:
+                cmd += ["--index-url", pypi_index]
+            return [*cmd, "-e", ".[api,dev]", "--python", py, "--link-mode=copy"]
     except Exception:  # noqa: BLE001
         pass
-    return [py, "-m", "pip", "install", "-e", ".[api,dev]"]
+    cmd = [py, "-m", "pip", "install"]
+    if pypi_index:
+        cmd += ["--index-url", pypi_index]
+    return [*cmd, "-e", ".[api,dev]"]
+
+
+def _configured_pypi_index() -> str | None:
+    env_index = (os.environ.get("UV_DEFAULT_INDEX") or os.environ.get("UV_INDEX_URL") or "").strip()
+    if env_index:
+        return env_index
+    try:
+        from lorahub.api import app as _app  # noqa: PLC0415
+
+        return (_app._settings_store.load().pypi_index_url or "").strip() or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _format_cmd(cmd: list[str]) -> str:

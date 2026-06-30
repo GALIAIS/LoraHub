@@ -232,11 +232,15 @@ def test_list_pagination(client: TestClient, sample_dir: Path) -> None:
         "path": str(sample_dir), "limit": 2, "page": 1
     })
     assert r.status_code == 200
-    assert len(r.json()["items"]) == 2
+    body = r.json()
+    assert body["page"] == 1
+    assert [item["name"] for item in body["items"]] == ["a.png", "b.png"]
     r2 = client.get("/api/image-studio/list", params={
         "path": str(sample_dir), "limit": 2, "page": 2
     })
-    assert len(r2.json()["items"]) == 1
+    body2 = r2.json()
+    assert body2["page"] == 2
+    assert [item["name"] for item in body2["items"]] == ["c.png"]
 
 
 def test_dataset_name_endpoints_reject_dot_paths(

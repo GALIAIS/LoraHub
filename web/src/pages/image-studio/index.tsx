@@ -65,6 +65,7 @@ function ImageStudioPage() {
   const selectDataset = (path: string) => {
     const next = new URLSearchParams(params)
     next.set("path", path)
+    next.delete("page")
     const currentStage = next.get("stage")
     if (!currentStage || currentStage === "tools" || currentStage === "library") {
       next.set("stage", "curate")

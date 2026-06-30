@@ -36,6 +36,7 @@ _BACKEND_DISPLAY = {
     "kohya": "Kohya (sd-scripts)",
     "diffusion-pipe": "Diffusion-pipe",
     "anima_lora": "Anima LoRA",
+    "ai_toolkit": "AI Toolkit",
     # Synthetic id — the LoraHub server itself, the venv that runs
     # FastAPI. Useful for installing optional packages (wandb, ruff,
     # huggingface_hub) into the API environment without leaving the
@@ -131,6 +132,8 @@ def resolve_backend_session(backend_id: str, settings: Settings) -> TerminalSess
         return _resolve_diffusion_pipe(settings)
     if backend_id == "anima_lora":
         return _resolve_anima_lora(settings)
+    if backend_id == "ai_toolkit":
+        return _resolve_ai_toolkit(settings)
     if backend_id == "lorahub":
         return _resolve_lorahub(settings)
     raise TerminalDenied(f"unknown backend {backend_id!r}")
@@ -225,6 +228,38 @@ def _resolve_anima_lora(settings: Settings) -> TerminalSession:
     return TerminalSession(
         backend_id="anima_lora",
         display_name=_BACKEND_DISPLAY["anima_lora"],
+        repo_path=repo,
+        python_path=py_path,
+        venv_dir=venv_dir,
+        ready=repo.is_dir() and py_path is not None,
+    )
+
+
+def _resolve_ai_toolkit(settings: Settings) -> TerminalSession:
+    from lorahub.core.backends.ai_toolkit.bootstrap import (  # noqa: PLC0415
+        _ENV_PYTHON,
+        _ENV_REPO,
+        default_repo_path,
+    )
+
+    raw = (
+        os.environ.get(_ENV_REPO)
+        or settings.ai_toolkit_repo_path
+        or str(default_repo_path())
+    )
+    repo = Path(raw).expanduser()
+    py_raw = (
+        os.environ.get(_ENV_PYTHON)
+        or settings.ai_toolkit_python
+        or (str(venv_python(repo)) if venv_python(repo) else None)
+    )
+    py_path = Path(py_raw).expanduser() if py_raw else None
+    if py_path is not None and not py_path.is_file():
+        py_path = None
+    venv_dir = py_path.parent.parent if py_path is not None else None
+    return TerminalSession(
+        backend_id="ai_toolkit",
+        display_name=_BACKEND_DISPLAY["ai_toolkit"],
         repo_path=repo,
         python_path=py_path,
         venv_dir=venv_dir,

@@ -65,6 +65,8 @@ def list_images(
             aspect=filter_aspect,
         )
 
+    page = max(int(page), 1)
+    limit = min(max(int(limit), 1), 500)
     total = len(images)
     start = (page - 1) * limit
     page_items = images[start : start + limit]

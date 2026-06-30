@@ -48,8 +48,10 @@ TOOLS_DIR="$ROOT/.lorahub"
 UV_DIR="$TOOLS_DIR/uv"
 PY_DIR="$TOOLS_DIR/python"
 NODE_DIR="$ROOT/.node"
+AMDGPU_TOP_DIR="$TOOLS_DIR/amdgpu_top"
 NODE_VERSION="20.19.0"
 NODE_MIN_VERSION="20.19.0"
+AMDGPU_TOP_VERSION="0.11.5"
 
 GH_PROXY="${LORAHUB_GH_PROXY:-}"
 NODE_MIRROR="${LORAHUB_NODE_MIRROR:-https://nodejs.org/dist}"
@@ -85,6 +87,52 @@ version_ge() {
     return 0
 }
 
+download_github_asset() {
+    local upstream="$1"
+    local output="$2"
+    local max_time="${3:-300}"
+    local candidates=()
+    local seen="|"
+    if [ -n "$GH_PROXY" ]; then candidates+=("$GH_PROXY"); fi
+    if [ -n "${LORAHUB_GH_PROXY_FALLBACKS:-}" ]; then
+        IFS=';' read -r -a candidates_from_env <<< "$LORAHUB_GH_PROXY_FALLBACKS"
+        candidates+=("${candidates_from_env[@]}")
+    else
+        candidates+=("" "https://v4.gh-proxy.org/" "https://gh-proxy.com/" "https://gh.ddlc.top/" "https://gh.jasonzeng.dev/" "https://gh.zwy.one/" "https://ghfast.top/" "https://gh-proxy.org/")
+    fi
+    for proxy in "${candidates[@]}"; do
+        proxy="${proxy%/}"
+        case "$seen" in *"|$proxy|"*) continue ;; esac
+        seen="$seen$proxy|"
+        local url="$upstream"
+        if [ -n "$proxy" ]; then url="$proxy/$upstream"; fi
+        echo "  fetching $url"
+        if curl -L --fail --show-error --connect-timeout 10 --max-time "$max_time" \
+            "$url" -o "$output"; then
+            return 0
+        fi
+        rm -f "$output"
+    done
+    return 1
+}
+
+download_url() {
+    local output="$1"
+    local max_time="$2"
+    shift 2
+    local url
+    for url in "$@"; do
+        [ -n "$url" ] || continue
+        echo "  fetching $url"
+        if curl -L --fail --show-error --connect-timeout 10 --max-time "$max_time" \
+            "$url" -o "$output"; then
+            return 0
+        fi
+        rm -f "$output"
+    done
+    return 1
+}
+
 # ---- [1/6] Install uv locally ---------------------------------------
 echo "[1/6] Installing uv ..."
 if [ -f "$UV_DIR/uv" ]; then
@@ -97,15 +145,12 @@ else
         aarch64) UV_ARCH="aarch64-unknown-linux-gnu" ;;
         *)       echo "  [ERROR] Unsupported architecture: $ARCH"; exit 1 ;;
     esac
-    UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz"
-    [ -n "$GH_PROXY" ] && UV_URL="${GH_PROXY%/}/${UV_URL}"
-    echo "  fetching $UV_URL"
     # --connect-timeout bounds the TCP handshake so a black-holed mirror
     # fails fast instead of hanging the whole install. --max-time caps
     # the full transfer so a stalled-but-alive socket eventually errors
     # out (uv tarball is ~25MB; 300s covers even slow 4G).
-    curl -L --fail --show-error --connect-timeout 10 --max-time 300 \
-        "$UV_URL" -o "$UV_DIR/uv.tar.gz"
+    UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}.tar.gz"
+    download_github_asset "$UV_URL" "$UV_DIR/uv.tar.gz" 300
     tar -xzf "$UV_DIR/uv.tar.gz" -C "$UV_DIR" --strip-components=1
     rm -f "$UV_DIR/uv.tar.gz"
     if [ ! -f "$UV_DIR/uv" ]; then
@@ -201,7 +246,11 @@ echo ""
 # ---- [4/6] Install Python dependencies ------------------------------
 echo "[4/6] Installing Python dependencies ..."
 PY_DEPS_LOG="$ROOT/_uv_python_deps.log"
-PY_DEPS_ARGS=(pip install -v -e ".[api,dev]" --python "$VENV_PY" --link-mode=copy)
+PY_DEPS_ARGS=(pip install)
+if [ "${LORAHUB_INSTALL_VERBOSE:-}" = "1" ]; then
+    PY_DEPS_ARGS+=(-v)
+fi
+PY_DEPS_ARGS+=(-e ".[api,dev]" --python "$VENV_PY" --link-mode=copy)
 if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
     PY_DEPS_ARGS+=(--index-url "$UV_DEFAULT_INDEX")
 fi
@@ -245,9 +294,12 @@ if [ "${NEED_NODE_INSTALL:-0}" = "1" ]; then
     NODE_VER="v${NODE_VERSION}"
     NODE_TAR="node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz"
     NODE_URL="${NODE_MIRROR%/}/${NODE_VER}/${NODE_TAR}"
-    echo "  fetching $NODE_URL"
-    curl -L --fail --show-error --connect-timeout 10 --max-time 600 \
-        "$NODE_URL" -o "$NODE_DIR/$NODE_TAR"
+    download_url "$NODE_DIR/$NODE_TAR" 600 \
+        "$NODE_URL" \
+        "https://npmmirror.com/mirrors/node/${NODE_VER}/${NODE_TAR}" \
+        "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/${NODE_VER}/${NODE_TAR}" \
+        "https://mirrors.aliyun.com/nodejs-release/${NODE_VER}/${NODE_TAR}" \
+        "https://nodejs.org/dist/${NODE_VER}/${NODE_TAR}"
     tar -xf "$NODE_DIR/$NODE_TAR" -C "$NODE_DIR" --strip-components=1
     rm -f "$NODE_DIR/$NODE_TAR"
     if [ ! -f "$NODE_DIR/bin/node" ] || [ ! -f "$NODE_DIR/bin/npm" ]; then
@@ -301,6 +353,43 @@ else
         exit 1
     fi
     echo "  OK Frontend dependencies installed"
+fi
+echo ""
+
+# ---- [extra] install optional GPU telemetry helpers -----------------
+echo "[extra] Installing GPU telemetry helpers ..."
+if [ -f "$AMDGPU_TOP_DIR/amdgpu_top" ]; then
+    echo "  OK amdgpu_top already installed"
+else
+    mkdir -p "$AMDGPU_TOP_DIR"
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  AMDGPU_TOP_ARCH="x86_64-unknown-linux-gnu" ;;
+        aarch64) AMDGPU_TOP_ARCH="aarch64-unknown-linux-gnu" ;;
+        *)       AMDGPU_TOP_ARCH="" ;;
+    esac
+    if [ -z "$AMDGPU_TOP_ARCH" ]; then
+        echo "  skipped: unsupported architecture $ARCH"
+    else
+        AMDGPU_TOP_TAR="amdgpu_top-${AMDGPU_TOP_VERSION}-${AMDGPU_TOP_ARCH}.tar.gz"
+        AMDGPU_TOP_URL="https://github.com/Umio-Yasuno/amdgpu_top/releases/download/v${AMDGPU_TOP_VERSION}/${AMDGPU_TOP_TAR}"
+        if download_github_asset "$AMDGPU_TOP_URL" "$AMDGPU_TOP_DIR/amdgpu_top.tar.gz" 300; then
+            tar -xzf "$AMDGPU_TOP_DIR/amdgpu_top.tar.gz" -C "$AMDGPU_TOP_DIR"
+            rm -f "$AMDGPU_TOP_DIR/amdgpu_top.tar.gz"
+            found="$(find "$AMDGPU_TOP_DIR" -type f -name amdgpu_top 2>/dev/null | head -1)"
+            if [ -n "$found" ] && [ "$found" != "$AMDGPU_TOP_DIR/amdgpu_top" ]; then
+                cp "$found" "$AMDGPU_TOP_DIR/amdgpu_top"
+            fi
+            chmod +x "$AMDGPU_TOP_DIR/amdgpu_top" 2>/dev/null || true
+            if [ -f "$AMDGPU_TOP_DIR/amdgpu_top" ]; then
+                echo "  OK amdgpu_top installed"
+            else
+                echo "  skipped: amdgpu_top binary not found in archive"
+            fi
+        else
+            echo "  skipped: failed to download amdgpu_top"
+        fi
+    fi
 fi
 echo ""
 

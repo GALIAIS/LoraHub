@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
@@ -70,11 +70,11 @@ export function DatasetsPage() {
   const advanced = readBool(params, "advanced")
 
   const setSubmitted = useCallback(
-    (next: string) => update({ path: next || null }),
+    (next: string) => update({ path: next || null, page: null }),
     [update],
   )
   const setRecursive = useCallback(
-    (next: boolean) => update({ recursive: next ? "1" : null }),
+    (next: boolean) => update({ recursive: next ? "1" : null, page: null }),
     [update],
   )
   const setAdvanced = useCallback(
@@ -93,7 +93,7 @@ export function DatasetsPage() {
   const pageSize =
     PAGE_SIZE_OPTIONS.includes(pageSizeRaw) ? pageSizeRaw : 48
   const setPageSize = useCallback(
-    (next: number) => update({ page_size: next === 48 ? null : String(next) }),
+    (next: number) => update({ page_size: next === 48 ? null : String(next), page: null }),
     [update],
   )
 
@@ -116,18 +116,6 @@ export function DatasetsPage() {
       setPath(knownDatasets[0].path)
     }
   }, [knownDatasets, submitted, setSubmitted])
-
-  // Reset to page 1 whenever the scan target changes — otherwise the user
-  // can land on an out-of-range page after switching directories. Skipped
-  // on mount so a deep link with ``?page=N`` keeps its page on first load.
-  const firstScanResetRef = useRef(true)
-  useEffect(() => {
-    if (firstScanResetRef.current) {
-      firstScanResetRef.current = false
-      return
-    }
-    setPage(1)
-  }, [submitted, recursive, pageSize, setPage])
 
   const offset = (page - 1) * pageSize
   const scan = useQuery({
