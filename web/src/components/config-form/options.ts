@@ -12,6 +12,7 @@ export const ARCH_OPTIONS = [
   { value: "sd15", label: "SD 1.5 · Stable Diffusion 1.5 (512/768)" },
   { value: "sd3", label: "SD 3 · Stable Diffusion 3" },
   { value: "flux", label: "FLUX.1 · black-forest-labs" },
+  { value: "krea2", label: "Krea 2 · krea/Krea-2-Raw" },
   // 其他主流静态图
   { value: "sd2", label: "SD 2 · Stable Diffusion 2.x" },
   { value: "flux2", label: "FLUX 2 · black-forest-labs (next-gen)" },

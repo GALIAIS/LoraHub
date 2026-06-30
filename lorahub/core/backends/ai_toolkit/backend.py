@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from lorahub.core.backends.base import (
 )
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import TrainingEvent
+from lorahub.core.paths import project_root
 
 _SUPPORTED: set[ModelArch] = {ModelArch.krea2}
 
@@ -103,6 +105,14 @@ class AIToolkitBackend:
             path.write_text(content, encoding="utf-8")
 
         job_id = str(ulid.new())
+        runner_env = dict(env or {})
+        if (
+            "HF_HOME" not in os.environ
+            and "HF_HOME" not in runner_env
+            and "HUGGINGFACE_HUB_CACHE" not in os.environ
+            and "HUGGINGFACE_HUB_CACHE" not in runner_env
+        ):
+            runner_env["HF_HOME"] = str(project_root() / "models" / "huggingface")
         runner = AIToolkitRunner(
             python=bootstrap_env.python_executable,
             repo=bootstrap_env.repo_path,
@@ -110,7 +120,7 @@ class AIToolkitBackend:
             workspace=workspace,
             on_event=on_event,
             job_id=job_id,
-            env=env,
+            env=runner_env,
         )
         runner.start()
         return TrainingHandle(

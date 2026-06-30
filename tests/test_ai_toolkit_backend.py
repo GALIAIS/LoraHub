@@ -1,11 +1,13 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import yaml
 
 from lorahub.api.jobs_helpers import _select_backend
 from lorahub.api.settings import Settings, probe_ai_toolkit_backend
 from lorahub.api.terminal_runner import resolve_backend_session
+from lorahub.core.backends.ai_toolkit import backend as ai_backend
 from lorahub.core.backends.ai_toolkit import installer
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.ai_toolkit.compiler import compile_config
@@ -129,6 +131,53 @@ def test_ai_toolkit_installer_adds_matching_torchaudio(monkeypatch, tmp_path: Pa
             ["torchaudio==2.7.1+cu128", "--index-url", plan.torch_index],
         )
     ]
+
+
+def test_ai_toolkit_launch_defaults_hf_cache_under_models(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    py = tmp_path / "python"
+    py.write_text("", encoding="utf-8")
+
+    class FakeRunner:
+        pid = 123
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def stop(self, *, graceful: bool = True) -> None:
+            captured["stopped"] = graceful
+
+        def wait(self, timeout=None):
+            return SimpleNamespace(returncode=0)
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    monkeypatch.setattr(
+        ai_backend._bootstrap,
+        "resolve",
+        lambda **_: SimpleNamespace(repo_path=repo, python_executable=py),
+    )
+    monkeypatch.setattr(ai_backend, "AIToolkitRunner", FakeRunner)
+    monkeypatch.setattr(ai_backend, "project_root", lambda: tmp_path)
+
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": str(tmp_path), "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+    AIToolkitBackend().launch(cfg, tmp_path / "run", lambda _ev: None)
+
+    assert captured["started"] is True
+    assert captured["env"] == {"HF_HOME": str(tmp_path / "models" / "huggingface")}
 
 
 def test_select_backend_returns_ai_toolkit_backend() -> None:

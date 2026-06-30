@@ -83,10 +83,12 @@ export const BackendFields = memo(function BackendFields({
   value = {},
   set,
   errorMap,
+  onTypeChange,
 }: {
   value: ConfigFormValue["backend"]
   set: Setter
   errorMap: ErrorMap
+  onTypeChange: (backend: string) => void
 }) {
   const v = value ?? {}
   const type = v.type ?? "kohya"
@@ -104,7 +106,7 @@ export const BackendFields = memo(function BackendFields({
         <div className="flex items-center gap-2 flex-wrap">
           <EnumSelect
             value={type}
-            onChange={(t) => set(["backend", "type"], t)}
+            onChange={onTypeChange}
             options={BACKEND_OPTIONS}
           />
           {badge && (
