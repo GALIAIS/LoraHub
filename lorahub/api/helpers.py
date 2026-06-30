@@ -9,19 +9,40 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
-from lorahub.core.backends.kohya.backend import KohyaBackend
+from lorahub.core.backends.registry import get_backend
 from lorahub.core.config.schema import TrainingConfig
 
 _IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 # Matches the leading-char + 1-63 trailing chars name rule used by save_config.
 _NAME_RE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+_DATASET_SCAN_TTL_S = 2.0
+_DATASET_SCAN_CACHE_MAX = 64
+_DATASET_SCAN_CACHE: dict[
+    tuple[str, bool],
+    tuple[float, list[Path], list[bool], list[str], int],
+] = {}
+
+
+def _clear_dataset_scan_cache(path: Path | None = None) -> None:
+    if path is None:
+        _DATASET_SCAN_CACHE.clear()
+        return
+    root = str(path.expanduser().resolve())
+    for key in list(_DATASET_SCAN_CACHE):
+        if (
+            key[0] == root
+            or key[0].startswith(root + os.sep)
+            or root.startswith(key[0] + os.sep)
+        ):
+            _DATASET_SCAN_CACHE.pop(key, None)
 
 
 def _configs_dir() -> Path:
@@ -56,7 +77,7 @@ def _config_path(name: str) -> Path:
 
 
 def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
-    backend = KohyaBackend()
+    backend = get_backend(cfg.backend.type).backend_class()
     issues = [
         {
             **asdict(issue),
@@ -115,25 +136,21 @@ def _scan_dataset_path(
     capped_offset = max(int(offset), 0)
 
     if exists:
-        iterator = root.rglob("*") if recursive else root.iterdir()
-        image_files = sorted(
-            p for p in iterator if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+        image_files, caption_exists, missing_caption_files, caption_files = (
+            _dataset_scan_index(root, recursive=recursive)
         )
-        # Walk every image so we have an honest caption coverage count,
-        # but only build sample dicts for the requested page slice.
+        # Use the cached scan index for counts and the requested page
+        # slice. Caption text itself is read live for visible rows only.
         for index, image in enumerate(image_files):
-            caption_path = image.with_suffix(".txt")
-            has_caption = caption_path.is_file()
+            has_caption = caption_exists[index]
             caption: str | None = None
-            if has_caption:
-                caption_files += 1
-            else:
-                missing_caption_files.append(image.relative_to(root).as_posix())
             in_page = capped_offset <= index < capped_offset + capped_limit
             if in_page:
                 if has_caption:
                     with contextlib.suppress(Exception):
-                        caption = caption_path.read_text(encoding="utf-8").strip()
+                        caption = image.with_suffix(".txt").read_text(
+                            encoding="utf-8"
+                        ).strip()
                 samples.append(
                     {
                         "name": image.name,
@@ -156,6 +173,41 @@ def _scan_dataset_path(
         "limit": capped_limit,
         "offset": capped_offset,
     }
+
+
+def _dataset_scan_index(
+    root: Path, *, recursive: bool
+) -> tuple[list[Path], list[bool], list[str], int]:
+    now = time.monotonic()
+    key = (str(root), recursive)
+    cached = _DATASET_SCAN_CACHE.get(key)
+    if cached is not None:
+        built_at, images, caption_exists, missing, caption_count = cached
+        if now - built_at <= _DATASET_SCAN_TTL_S:
+            return images, caption_exists, missing, caption_count
+
+    iterator = root.rglob("*") if recursive else root.iterdir()
+    images = sorted(
+        p for p in iterator if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+    )
+    caption_exists = []
+    missing = []
+    caption_count = 0
+    for image in images:
+        has_caption = image.with_suffix(".txt").is_file()
+        caption_exists.append(has_caption)
+        if has_caption:
+            caption_count += 1
+        else:
+            missing.append(image.relative_to(root).as_posix())
+
+    _DATASET_SCAN_CACHE[key] = (now, images, caption_exists, missing, caption_count)
+    if len(_DATASET_SCAN_CACHE) > _DATASET_SCAN_CACHE_MAX:
+        for old_key in list(_DATASET_SCAN_CACHE)[
+            : len(_DATASET_SCAN_CACHE) - _DATASET_SCAN_CACHE_MAX
+        ]:
+            _DATASET_SCAN_CACHE.pop(old_key, None)
+    return images, caption_exists, missing, caption_count
 
 
 def ulid_new() -> Any:

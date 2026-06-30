@@ -49,14 +49,15 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
   const [pendingEdit, setPendingEdit] = useState<DatasetInfo | null>(null)
 
   const datasetsQuery = useQuery({
-    queryKey: ["datasets"],
+    queryKey: ["image-studio-datasets"],
     queryFn: datasetList,
+    staleTime: 5_000,
   })
 
   const createMutation = useMutation({
     mutationFn: datasetCreate,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
       setShowCreate(false)
       onOpen(data.path)
       toast.success("数据集已创建", { description: data.path })
@@ -71,7 +72,7 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
   const deleteMutation = useMutation({
     mutationFn: datasetDelete,
     onSuccess: (_, name) => {
-      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
       toast.success(`数据集 "${name}" 已删除`)
     },
     onError: (e) => {
@@ -90,7 +91,7 @@ export function DatasetManager({ onOpen }: DatasetManagerProps) {
       body: { description?: string; targetResolution?: string; triggerWord?: string }
     }) => datasetUpdateMeta(name, body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
       setPendingEdit(null)
       toast.success("信息已更新")
     },

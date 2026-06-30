@@ -50,6 +50,10 @@ _METRICS_DOWNSAMPLE_THRESHOLD = 50_000
 # A series whose absolute slope falls below this is considered "flat".
 _OVERFIT_FLAT_EPS = 1e-4
 
+_MetricsCacheKey = tuple[str, int, int]
+_METRICS_CACHE: dict[_MetricsCacheKey, dict[str, Any]] = {}
+_METRICS_CACHE_MAX = 128
+
 
 def _classify_artifact(rel: Path) -> str:
     name = rel.name
@@ -210,6 +214,15 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     if not log_path.is_file():
         return empty
 
+    try:
+        stat = log_path.stat()
+    except OSError:
+        return empty
+    cache_key = (str(log_path.resolve()), stat.st_size, stat.st_mtime_ns)
+    cached = _METRICS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     loss: list[dict[str, Any]] = []
     val_loss: list[dict[str, Any]] = []
     epochs: list[dict[str, Any]] = []
@@ -367,7 +380,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
 
     overfit_signal = _compute_overfit_signal(loss, val_loss)
 
-    return {
+    result = {
         "loss": loss,
         "val_loss": val_loss,
         "epochs": epochs,
@@ -385,6 +398,11 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "total_steps": total_steps,
         "overfit_signal": overfit_signal,
     }
+    _METRICS_CACHE[cache_key] = result
+    if len(_METRICS_CACHE) > _METRICS_CACHE_MAX:
+        for old_key in list(_METRICS_CACHE)[: len(_METRICS_CACHE) - _METRICS_CACHE_MAX]:
+            _METRICS_CACHE.pop(old_key, None)
+    return result
 
 
 def _empty_overfit_signal() -> dict[str, Any]:

@@ -69,14 +69,15 @@ export function StudioSidebar({
   const [pendingDelete, setPendingDelete] = useState<DatasetInfo | null>(null)
 
   const datasetsQuery = useQuery({
-    queryKey: ["datasets"],
+    queryKey: ["image-studio-datasets"],
     queryFn: datasetList,
+    staleTime: 5_000,
   })
 
   const deleteMutation = useMutation({
     mutationFn: datasetDelete,
     onSuccess: (_, name) => {
-      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
       toast.success(`数据集 "${name}" 已删除`)
     },
     onError: (e) => {

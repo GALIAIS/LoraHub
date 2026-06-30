@@ -951,6 +951,47 @@ def test_runtime_bind_round_trips_and_preserves_legacy_port(
     assert preserved.pid is None
 
 
+def test_update_restart_spawns_service_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import sys
+
+    from lorahub.api import runtime_bind
+
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    class FakePopen:
+        def __init__(self, cmd: list[str], **kwargs: Any) -> None:
+            calls.append((cmd, kwargs))
+
+    monkeypatch.setattr(runtime_bind, "log_file", lambda: tmp_path / "uvicorn.log")
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+
+    ok = runtime_bind.spawn_service_restart(
+        runtime_bind.RuntimeBind("0.0.0.0", 18765, 1234),
+        cwd=tmp_path,
+    )
+
+    assert ok is True
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert cmd == [
+        sys.executable,
+        "-m",
+        "lorahub.cli.main",
+        "--no-tui",
+        "service",
+        "restart",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "18765",
+    ]
+    assert kwargs["cwd"] == str(tmp_path)
+    assert (tmp_path / "uvicorn.log").is_file()
+
+
 def test_update_restart_args_preserve_recorded_uvicorn_bind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

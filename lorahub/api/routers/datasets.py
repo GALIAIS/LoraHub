@@ -14,7 +14,7 @@ from lorahub.api.dataset_files import (
     resolve_caption_path,
     resolve_image_path,
 )
-from lorahub.api.helpers import _scan_dataset_path
+from lorahub.api.helpers import _clear_dataset_scan_cache, _scan_dataset_path
 
 router = APIRouter(prefix="/api")
 
@@ -105,6 +105,7 @@ def put_caption(body: CaptionUpdate) -> dict[str, Any]:
     try:
         caption_path.parent.mkdir(parents=True, exist_ok=True)
         caption_path.write_text(text, encoding="utf-8", newline="\n")
+        _clear_dataset_scan_cache(caption_path.parent)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {

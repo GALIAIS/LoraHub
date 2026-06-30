@@ -24,6 +24,7 @@ import pytest
 
 from lorahub.core.backends.anima_lora.bootstrap import AnimaLoraEnv
 from lorahub.core.backends.anima_lora.preprocess import (
+    PreprocessCanceled,
     PreprocessError,
     ensure_cache,
 )
@@ -245,3 +246,41 @@ def test_ensure_cache_propagates_subprocess_failure(tmp_path: Path) -> None:
             env=env,
             runner_factory=failing_factory,
         )
+
+
+def test_ensure_cache_cancel_stops_running_step(tmp_path: Path) -> None:
+    import subprocess
+    import threading
+
+    env = _env(tmp_path)
+    bm = _base_model(tmp_path)
+    image_dir = tmp_path / "raw"
+    image_dir.mkdir()
+    (image_dir / "a.jpg").write_bytes(b"")
+    workspace = tmp_path / "ws"
+    cancel_event = threading.Event()
+    stopped: list[bool] = []
+
+    def blocking_factory(**kwargs: Any) -> Any:  # noqa: ANN401
+        runner = MagicMock()
+        runner.start = MagicMock(return_value=None)
+        runner.stop = MagicMock(side_effect=lambda graceful=True: stopped.append(graceful))
+
+        def wait(timeout: float | None = None) -> Any:
+            cancel_event.set()
+            raise subprocess.TimeoutExpired(cmd=kwargs["argv"], timeout=timeout)
+
+        runner.wait = MagicMock(side_effect=wait)
+        return runner
+
+    with pytest.raises(PreprocessCanceled):
+        ensure_cache(
+            image_dir=image_dir,
+            workspace=workspace,
+            base_model=bm,
+            env=env,
+            runner_factory=blocking_factory,
+            cancel_event=cancel_event,
+        )
+
+    assert stopped == [False]

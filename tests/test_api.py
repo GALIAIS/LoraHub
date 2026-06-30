@@ -561,6 +561,54 @@ def test_cancel_queued_job_short_circuits_to_canceled(
     assert fake_scheduler.canceled == [job.id]
 
 
+def test_cancel_preparing_job_stops_before_training_process(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from lorahub.api import jobs_helpers
+    from lorahub.core.backends.base import TrainingHandle
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            *,
+            extra_argv: list[str] | None = None,
+            env: dict[str, str] | None = None,
+            cancel_event: Any = None,
+        ) -> TrainingHandle:
+            assert cancel_event is not None
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not cancel_event.is_set():
+                time.sleep(0.02)
+            if cancel_event.is_set():
+                raise RuntimeError("preprocess canceled")
+            raise RuntimeError("cancel_event was not set")
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if client.get(f"/api/jobs/{job_id}").json()["state"] == "preparing":
+            break
+        time.sleep(0.02)
+
+    r = client.delete(f"/api/jobs/{job_id}")
+    assert r.status_code == 200
+    final = _wait_terminal(client, job_id, timeout=5.0)
+
+    assert final["state"] == "canceled", final
+    assert final["error"] is None
+
+
 def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
     client: TestClient,
     tmp_path: Path,
@@ -1038,6 +1086,106 @@ def test_validate_config_returns_normalized_payload(
     assert body["preflight"]["paths"]["dataset_exists"] is True
     assert body["preflight"]["vram"]["total_mib"] > 0
     assert isinstance(body["preflight"]["issues"], list)
+
+
+def test_validate_anima_config_does_not_run_kohya_repo_check(
+    client: TestClient,
+) -> None:
+    cfg_path = Path(__file__).resolve().parents[1] / "configs" / "anima_lora_default.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+
+    r = client.post("/api/configs/validate", json={"config": cfg})
+
+    assert r.status_code == 200
+    issues = r.json()["preflight"]["issues"]
+    joined = "\n".join(str(issue) for issue in issues)
+    assert "sd-scripts" not in joined
+    assert "kohya-ss" not in joined
+
+
+@pytest.mark.parametrize(
+    ("backend_type", "arch", "expected_label", "forbidden_labels"),
+    [
+        (
+            "kohya",
+            "sdxl",
+            "kohya-ss/sd-scripts",
+            ("tdrussell/diffusion-pipe", "sorryhyun/anima_lora", "ostris/ai-toolkit"),
+        ),
+        (
+            "diffusion-pipe",
+            "sdxl",
+            "tdrussell/diffusion-pipe",
+            ("kohya-ss/sd-scripts", "sorryhyun/anima_lora", "ostris/ai-toolkit"),
+        ),
+        (
+            "anima_lora",
+            "anima",
+            "sorryhyun/anima_lora",
+            ("kohya-ss/sd-scripts", "tdrussell/diffusion-pipe", "ostris/ai-toolkit"),
+        ),
+        (
+            "ai_toolkit",
+            "krea2",
+            "ostris/ai-toolkit",
+            ("kohya-ss/sd-scripts", "tdrussell/diffusion-pipe", "sorryhyun/anima_lora"),
+        ),
+    ],
+)
+def test_validate_config_uses_selected_backend_preflight(
+    client: TestClient,
+    tmp_path: Path,
+    backend_type: str,
+    arch: str,
+    expected_label: str,
+    forbidden_labels: tuple[str, ...],
+) -> None:
+    cfg = _valid_config_dict(tmp_path)
+    cfg["base_model"]["arch"] = arch
+    cfg["backend"] = {
+        "type": backend_type,
+        "repo_path": str(tmp_path / f"{backend_type}-missing"),
+    }
+    if arch == "anima":
+        cfg["base_model"]["archPaths"] = {
+            "ae": str(tmp_path / "ae.safetensors"),
+            "qwen3": str(tmp_path / "qwen3"),
+        }
+
+    r = client.post("/api/configs/validate", json={"config": cfg})
+
+    assert r.status_code == 200
+    joined = "\n".join(
+        str(issue) for issue in r.json()["preflight"]["issues"]
+    )
+    assert expected_label in joined
+    for label in forbidden_labels:
+        assert label not in joined
+
+
+def test_anima_missing_repo_hint_points_to_repo_path(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    cfg = _valid_config_dict(tmp_path)
+    cfg["base_model"]["arch"] = "anima"
+    cfg["base_model"]["archPaths"] = {
+        "ae": str(tmp_path / "ae.safetensors"),
+        "qwen3": str(tmp_path / "qwen3"),
+    }
+    cfg["backend"] = {
+        "type": "anima_lora",
+        "repo_path": str(tmp_path / "missing-anima"),
+    }
+
+    r = client.post("/api/configs/validate", json={"config": cfg})
+
+    assert r.status_code == 200
+    joined = "\n".join(
+        str(issue) for issue in r.json()["preflight"]["issues"]
+    )
+    assert "backend.repo_path" in joined
+    assert "backend.python_executable" not in joined
 
 
 def test_validate_config_reports_dataset_caption_preflight(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import {
   Database,
@@ -45,7 +45,7 @@ export function DatasetsPage() {
   const datasetsList = useQuery({
     queryKey: ["image-studio-datasets"],
     queryFn: () => datasetList(),
-    staleTime: 30_000,
+    staleTime: 5_000,
   })
   // Keep the array reference stable across renders. Without this,
   // ``datasetsList.data?.datasets ?? []`` produces a fresh ``[]``
@@ -122,9 +122,8 @@ export function DatasetsPage() {
     queryKey: ["dataset-scan", submitted, recursive, pageSize, offset],
     queryFn: () => api.scanDataset(submitted, recursive, pageSize, offset),
     enabled: submitted.trim().length > 0,
-    // 翻页时被命中的页可能已经在缓存里;5s 内的回扫直接用缓存,
-    // 减掉重复 IO(扫盘 + caption 文件计数)。
-    staleTime: 5_000,
+    placeholderData: keepPreviousData,
+    staleTime: 1_000,
   })
 
   const data = scan.data

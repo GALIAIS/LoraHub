@@ -32,6 +32,7 @@ export function DatasetSourceSelect({ value, onChange, placeholder }: Props) {
   const datasets = useQuery({
     queryKey: ["image-studio-datasets"],
     queryFn: () => datasetList(),
+    staleTime: 5_000,
   })
   const list = datasets.data?.datasets ?? []
 

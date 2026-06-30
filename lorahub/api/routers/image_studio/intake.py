@@ -36,6 +36,8 @@ from pydantic import BaseModel, Field
 
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
 
+from ._shared import _clear_dataset_view_caches
+
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 
@@ -323,6 +325,8 @@ def intake_local_path(req: LocalPathRequest) -> dict[str, Any]:
         except (OSError, shutil.Error) as exc:
             failed.append({"source_path": str(f), "error": str(exc)})
 
+    if imported:
+        _clear_dataset_view_caches(dst)
     return {
         "imported_count": len(imported),
         "skipped_count": len(skipped),
@@ -408,6 +412,8 @@ def intake_from_dataset(req: FromDatasetRequest) -> dict[str, Any]:
         except OSError as exc:
             failed.append({"source_path": str(img), "error": str(exc)})
 
+    if imported:
+        _clear_dataset_view_caches(dst)
     return {
         "candidate_count": len(candidates),
         "imported_count": len(imported),

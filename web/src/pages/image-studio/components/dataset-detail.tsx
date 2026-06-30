@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
   imageStudioList,
@@ -93,6 +98,8 @@ export function DatasetDetail() {
     queryKey: ["image-studio", "list", path, page, sort, recursive],
     queryFn: () => imageStudioList({ path, page, limit: 48, sort, recursive }),
     enabled: !!path,
+    placeholderData: keepPreviousData,
+    staleTime: 1_000,
   })
 
   const detailQuery = useQuery({
@@ -106,6 +113,7 @@ export function DatasetDetail() {
     onSuccess: () => {
       setMultiSelected(new Set())
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
     },
   })
 
@@ -294,7 +302,10 @@ export function DatasetDetail() {
       {/* Upload drop zone */}
       <UploadDropZone
         datasetName={datasetName}
-        onComplete={() => queryClient.invalidateQueries({ queryKey: ["image-studio"] })}
+        onComplete={() => {
+          queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+          queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
+        }}
       />
 
       {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
@@ -446,6 +457,11 @@ export function DatasetDetail() {
                   .then(() =>
                     queryClient.invalidateQueries({
                       queryKey: ["image-studio"],
+                    }),
+                  )
+                  .then(() =>
+                    queryClient.invalidateQueries({
+                      queryKey: ["image-studio-datasets"],
                     }),
                   )
                   .then(() => toast.success("已删除"))

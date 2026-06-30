@@ -47,7 +47,7 @@ function ImageStudioPage() {
   const createMutation = useMutation({
     mutationFn: datasetCreate,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["datasets"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
       setShowCreate(false)
       const next = new URLSearchParams(params)
       next.set("path", data.path)

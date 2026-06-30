@@ -32,6 +32,7 @@ from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
 from lorahub.core.backends.kohya.backend import KohyaBackend
+from lorahub.core.backends.base import TrainingHandle
 from lorahub.core.config.loader import dump_config
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent, normalize_event
@@ -202,6 +203,13 @@ def _enqueue_launch(
     # would hit a closed sink and raise RuntimeError.
     _sink_closed = False
 
+    def close_sink() -> None:
+        nonlocal _sink_closed
+        if _sink_closed:
+            return
+        _sink_closed = True
+        sink.__exit__(None, None, None)
+
     def on_event(ev: TrainingEvent) -> None:
         nonlocal _sink_closed
         if _sink_closed and ev.type is not EventType.done:
@@ -299,8 +307,7 @@ def _enqueue_launch(
                 )
                 with contextlib.suppress(Exception):
                     report_terminal_job(j)
-            _sink_closed = True
-            sink.__exit__(None, None, None)
+            close_sink()
 
     def task(slot: int | list[int]) -> None:
         current = state.registry.get(job.id)
@@ -327,6 +334,12 @@ def _enqueue_launch(
         meta["gpu_slots"] = assigned_slots
         meta["gpu_dispatch_mode"] = _gpu_dispatch_mode(cfg)
         current.metadata = meta
+        launch_cancel = threading.Event()
+        current.handle = TrainingHandle(
+            job_id=job.id,
+            pid=None,
+            _stop_fn=lambda _graceful: launch_cancel.set(),
+        )
         state.registry.update(current)
         sink.__enter__()
         try:
@@ -336,6 +349,8 @@ def _enqueue_launch(
             }
             if _backend_accepts_gpu_count(backend):
                 kwargs["gpu_count"] = len(assigned_slots)
+            if _backend_accepts_cancel_event(backend):
+                kwargs["cancel_event"] = launch_cancel
             handle = backend.launch(
                 cfg,
                 workspace=workspace,
@@ -345,36 +360,54 @@ def _enqueue_launch(
         except Exception as exc:  # noqa: BLE001
             j = state.registry.get(job.id)
             if j is not None:
-                j.state = JobState.failed
-                j.error = repr(exc)
+                if j.state is JobState.canceling or launch_cancel.is_set():
+                    j.state = JobState.canceled
+                    j.error = None
+                else:
+                    j.state = JobState.failed
+                    j.error = repr(exc)
                 j.finished_at = datetime.now(UTC)
+                j.handle = None
                 state.registry.update(j)
-                from lorahub.api.error_reporter import (  # noqa: PLC0415
-                    capture_exception,
-                )
-
-                with contextlib.suppress(Exception):
-                    capture_exception(
-                        exc,
-                        source="backend.job",
-                        category="launch_failed",
-                        title=f"backend.launch raised before training started: {job.id[-12:]}",
-                        job_id=job.id,
-                        context={
-                            "workspace": str(workspace),
-                            "stage": "launch",
-                        },
+                if j.state is JobState.failed:
+                    from lorahub.api.error_reporter import (  # noqa: PLC0415
+                        capture_exception,
                     )
+
+                    with contextlib.suppress(Exception):
+                        capture_exception(
+                            exc,
+                            source="backend.job",
+                            category="launch_failed",
+                            title=f"backend.launch raised before training started: {job.id[-12:]}",
+                            job_id=job.id,
+                            context={
+                                "workspace": str(workspace),
+                                "stage": "launch",
+                            },
+                        )
                 from lorahub.api.sweep_runtime import (  # noqa: PLC0415
                     report_terminal_job,
                 )
                 with contextlib.suppress(Exception):
                     report_terminal_job(j)
             with contextlib.suppress(Exception):
-                _sink_closed = True
-                sink.__exit__(None, None, None)
+                close_sink()
             return
         j = state.registry.get(job.id)
+        if launch_cancel.is_set() or (j is not None and j.state is JobState.canceling):
+            handle.stop(graceful=True)
+            with contextlib.suppress(Exception):
+                handle.wait(timeout=None)
+            j = state.registry.get(job.id)
+            if j is not None and j.state not in _TERMINAL_STATES:
+                j.state = JobState.canceled
+                j.error = None
+                j.finished_at = datetime.now(UTC)
+                j.handle = None
+                state.registry.update(j)
+            close_sink()
+            return
         if j is not None:
             j.handle = handle
             j.pid = handle.pid
@@ -460,6 +493,13 @@ def _slots_required(cfg: TrainingConfig) -> int:
 def _backend_accepts_gpu_count(backend: Any) -> bool:
     try:
         return "gpu_count" in inspect.signature(backend.launch).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _backend_accepts_cancel_event(backend: Any) -> bool:
+    try:
+        return "cancel_event" in inspect.signature(backend.launch).parameters
     except (TypeError, ValueError):
         return False
 

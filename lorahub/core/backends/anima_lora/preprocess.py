@@ -44,6 +44,8 @@ to spend the preprocess time again than to hit
 from __future__ import annotations
 
 import json
+import subprocess
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -58,6 +60,7 @@ from lorahub.core.config.schema import BaseModelConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 __all__ = [
+    "PreprocessCanceled",
     "PreprocessError",
     "ensure_cache",
 ]
@@ -80,6 +83,15 @@ _IMAGE_EXTS: frozenset[str] = frozenset(
 
 class PreprocessError(RuntimeError):
     """A preprocess subprocess exited non-zero, or no images were found."""
+
+
+class PreprocessCanceled(PreprocessError):
+    """Preprocess was stopped by a user cancel request."""
+
+
+def _raise_if_canceled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise PreprocessCanceled("anima_lora preprocess canceled by user")
 
 
 def _list_images(image_dir: Path) -> list[Path]:
@@ -239,6 +251,7 @@ def _run_step(
     workspace: Path,
     on_event: EventListener | None,
     runner_factory: RunnerFactory,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     """Spawn one preprocess script, stream its output, raise on non-zero exit.
 
@@ -275,6 +288,7 @@ def _run_step(
                 },
             )
         )
+    _raise_if_canceled(cancel_event)
     runner = runner_factory(
         argv=argv,
         workspace=workspace,
@@ -284,7 +298,15 @@ def _run_step(
         thread_label=f"anima_lora_preprocess_{label}",
     )
     runner.start()
-    result = runner.wait()
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            runner.stop(graceful=False)
+            raise PreprocessCanceled("anima_lora preprocess canceled by user")
+        try:
+            result = runner.wait(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            continue
     if result.returncode != 0:
         msg = (
             f"anima_lora preprocess step {label!r} failed "
@@ -374,6 +396,7 @@ def ensure_cache(
     on_event: EventListener | None = None,
     runner_factory: RunnerFactory | None = None,
     opts: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     """Bring ``<workspace>/post_image_dataset/lora`` up to date.
 
@@ -402,6 +425,7 @@ def ensure_cache(
     """
     image_dir = image_dir.resolve()
     workspace = workspace.resolve()
+    _raise_if_canceled(cancel_event)
 
     images = _list_images(image_dir)
     if not images:
@@ -505,12 +529,14 @@ def ensure_cache(
         workspace=workspace,
         on_event=on_event,
         runner_factory=factory,
+        cancel_event=cancel_event,
     )
 
     # Step 2: VAE latent caches against resized images. Requires the
     # ``base_model.arch_paths.ae`` path to be set, otherwise we cannot
     # locate the QwenImage VAE.
     ae_path = base_model.arch_paths.ae
+    _raise_if_canceled(cancel_event)
     if ae_path is None:
         msg = (
             "anima_lora preprocess: base_model.archPaths.ae must point at "
@@ -524,6 +550,7 @@ def ensure_cache(
         workspace=workspace,
         on_event=on_event,
         runner_factory=factory,
+        cancel_event=cancel_event,
     )
 
     # Step 3: TE caches. Reads .txt sidecars from the *raw* image_dir
@@ -532,6 +559,7 @@ def ensure_cache(
     # raw dir means a caption edit is picked up immediately without a
     # resize re-run).
     qwen3_path = base_model.arch_paths.qwen3
+    _raise_if_canceled(cancel_event)
     if qwen3_path is None:
         msg = (
             "anima_lora preprocess: base_model.archPaths.qwen3 must point "
@@ -550,6 +578,7 @@ def ensure_cache(
         workspace=workspace,
         on_event=on_event,
         runner_factory=factory,
+        cancel_event=cancel_event,
     )
 
     # Persist the bucket fingerprint so the next launch can detect

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from lorahub.api.dataset_files import IMAGE_SUFFIXES
 
-from ._shared import _sse_event
+from ._shared import _clear_dataset_view_caches, _sse_event
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
@@ -141,6 +141,7 @@ def create_dataset(body: CreateDatasetInput) -> dict[str, Any]:
         "triggerWord": body.triggerWord,
     }
     _write_dataset_meta(ds_path, meta)
+    _clear_dataset_view_caches(ds_path)
     return {"ok": True, "path": str(ds_path), "meta": meta}
 
 
@@ -171,6 +172,7 @@ def update_dataset_meta(name: str, body: UpdateDatasetMetaInput) -> dict[str, An
     if body.triggerWord is not None:
         meta["triggerWord"] = body.triggerWord
     _write_dataset_meta(ds_path, meta)
+    _clear_dataset_view_caches(ds_path)
     return {"ok": True, "meta": meta}
 
 
@@ -185,6 +187,7 @@ def delete_dataset(name: str) -> dict[str, Any]:
     trash = Path("runs") / "_dataset_trash" / datetime.now(UTC).strftime("%Y-%m-%d")
     trash.mkdir(parents=True, exist_ok=True)
     shutil.move(str(ds_path), str(trash / canonical))
+    _clear_dataset_view_caches(ds_path)
     return {"ok": True}
 
 
@@ -399,6 +402,7 @@ async def upload_to_dataset(
             })
             await asyncio.sleep(0)
 
+        _clear_dataset_view_caches(ds_path)
         yield _sse_event("complete", {
             "totalExtracted": total_extracted,
             "errors": all_errors,

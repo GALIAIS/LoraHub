@@ -122,7 +122,7 @@ def resolve(
         required_files=_REQUIRED_FILES,
         env_var=_ENV_REPO,
         default_path=default_repo_path(),
-        config_field="python_executable",
+        config_field="repo_path",
     )
     _common.check_python(python)
 

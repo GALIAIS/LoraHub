@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -114,6 +115,41 @@ def restart_args(executable: str, argv: list[str]) -> list[str]:
     return ensure_uvicorn_bind_args(args, host=bind.host, port=bind.port)
 
 
+def spawn_service_restart(bind: RuntimeBind, *, cwd: Path | None = None) -> bool:
+    """Launch ``lorahub service restart`` detached on the saved bind."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "lorahub.cli.main",
+        "--no-tui",
+        "service",
+        "restart",
+        "--host",
+        bind.host,
+        "--port",
+        str(bind.port),
+    ]
+    log = log_file()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with log.open("ab") as fh:
+            kwargs: dict[str, object] = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": fh,
+                "stderr": fh,
+                "cwd": str(cwd or Path.cwd()),
+                "close_fds": True,
+            }
+            if sys.platform == "win32":
+                kwargs["creationflags"] = 0x00000008 | 0x08000000
+            else:
+                kwargs["start_new_session"] = True
+            subprocess.Popen(cmd, **kwargs)  # noqa: S603
+    except OSError:
+        return False
+    return True
+
+
 def refresh_current_uvicorn_bind(argv: list[str] | None = None, *, pid: int | None = None) -> RuntimeBind | None:
     """Refresh pid for the current uvicorn process when it matches the saved bind."""
     bind = read_runtime_bind()
@@ -196,6 +232,7 @@ __all__ = [
     "record_current_process_bind",
     "refresh_current_uvicorn_bind",
     "restart_args",
+    "spawn_service_restart",
     "state_dir",
     "write_runtime_bind",
 ]

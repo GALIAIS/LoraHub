@@ -12,6 +12,7 @@ import hashlib
 import json as json_stdlib
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,31 @@ from lorahub.api.image_studio_store import (
     ImageStudioStore,
 )
 
+_SCAN_CACHE_TTL_S = 2.0
+_SCAN_CACHE_MAX = 64
+_SCAN_CACHE: dict[tuple[str, bool], tuple[float, list[Path]]] = {}
+
+
+def _clear_scan_cache(path: Path | None = None) -> None:
+    if path is None:
+        _SCAN_CACHE.clear()
+        return
+    root = str(path.resolve())
+    for key in list(_SCAN_CACHE):
+        if (
+            key[0] == root
+            or key[0].startswith(root + os.sep)
+            or root.startswith(key[0] + os.sep)
+        ):
+            _SCAN_CACHE.pop(key, None)
+
+
+def _clear_dataset_view_caches(path: Path | None = None) -> None:
+    _clear_scan_cache(path)
+    from lorahub.api.helpers import _clear_dataset_scan_cache  # noqa: PLC0415
+
+    _clear_dataset_scan_cache(path)
+
 
 def _store() -> ImageStudioStore:
     """Return the process-wide ImageStudioStore (or 503 if not initialised)."""
@@ -35,6 +61,14 @@ def _store() -> ImageStudioStore:
 
 def _scan_images(directory: Path, recursive: bool) -> list[Path]:
     """Collect image files from directory, respecting IMAGE_SUFFIXES."""
+    now = time.monotonic()
+    key = (str(directory.resolve()), recursive)
+    cached = _SCAN_CACHE.get(key)
+    if cached is not None:
+        built_at, paths = cached
+        if now - built_at <= _SCAN_CACHE_TTL_S:
+            return list(paths)
+
     results: list[Path] = []
     if recursive:
         for root, _dirs, files in os.walk(directory):
@@ -46,6 +80,10 @@ def _scan_images(directory: Path, recursive: bool) -> list[Path]:
         for p in directory.iterdir():
             if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
                 results.append(p)
+    _SCAN_CACHE[key] = (now, results)
+    if len(_SCAN_CACHE) > _SCAN_CACHE_MAX:
+        for old_key in list(_SCAN_CACHE)[: len(_SCAN_CACHE) - _SCAN_CACHE_MAX]:
+            _SCAN_CACHE.pop(old_key, None)
     return results
 
 

@@ -33,6 +33,7 @@ from lorahub.core.backends.anima_lora.compiler import (
     compile_turbo_config,
 )
 from lorahub.core.backends.anima_lora.preprocess import (
+    PreprocessCanceled,
     PreprocessError,
     ensure_cache,
 )
@@ -160,6 +161,7 @@ class AnimaLoraBackend:
         extra_argv: list[str] | None = None,
         env: dict[str, str] | None = None,
         gpu_count: int = 1,
+        cancel_event: threading.Event | None = None,
     ) -> TrainingHandle:
         bootstrap_env = _bootstrap.resolve(
             config_path=cfg.backend.repo_path,
@@ -196,7 +198,10 @@ class AnimaLoraBackend:
                 env=bootstrap_env,
                 on_event=on_event,
                 opts=cfg.backend.anima_lora,
+                cancel_event=cancel_event,
             )
+        except PreprocessCanceled as e:
+            raise CompilationError(str(e)) from e
         except PreprocessError as e:
             on_event(
                 TrainingEvent(
@@ -208,6 +213,8 @@ class AnimaLoraBackend:
             raise CompilationError(msg) from e
 
         _prepare_sample_prompts_file(cfg, workspace)
+        if cancel_event is not None and cancel_event.is_set():
+            raise CompilationError("anima_lora launch canceled by user")
 
         # Branch: turbo distillation (scripts/distill_turbo.py) vs the
         # regular train.py path. Turbo is picked when the recipe has

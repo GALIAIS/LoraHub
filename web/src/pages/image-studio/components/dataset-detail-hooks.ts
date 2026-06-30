@@ -36,6 +36,7 @@ export function useDatasetTaskState(path: string) {
   useEffect(() => {
     if (terminalSig) {
       queryClient.invalidateQueries({ queryKey: ["image-studio"] })
+      queryClient.invalidateQueries({ queryKey: ["image-studio-datasets"] })
     }
   }, [terminalSig, queryClient])
 

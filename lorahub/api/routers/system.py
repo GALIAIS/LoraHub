@@ -24,7 +24,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from lorahub.api.runtime_bind import clear_runtime_bind, read_runtime_bind, restart_args
+from lorahub.api.runtime_bind import (
+    clear_runtime_bind,
+    read_runtime_bind,
+    restart_args,
+    spawn_service_restart,
+)
 from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
@@ -312,16 +317,21 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
 
 
 def _trigger_restart() -> None:
-    """Re-exec the current process so the just-installed code wins.
+    """Restart through the service CLI when possible, then fall back to re-exec.
 
-    POSIX: ``os.execv`` replaces the running uvicorn process in place.
-    Windows: spawn a fresh process detached + exit cleanly. Either way
-    the systemd / launchd / Task Scheduler unit (if any) sees a clean
-    exit and won't fight us — we set ``Restart=on-failure`` so a
-    voluntary exit followed by a re-spawn from the unit is fine.
+    The CLI path is more reliable after an update because it stops the
+    current PID, starts a fresh daemon, and health-checks the reused port.
+    Direct re-exec stays as the fallback for foreground/non-service runs.
     """
     import os
     import sys
+
+    bind = read_runtime_bind()
+    if bind is not None and spawn_service_restart(
+        bind,
+        cwd=system_update._git_root(),
+    ):
+        return
 
     _preserve_restart_bind()
 

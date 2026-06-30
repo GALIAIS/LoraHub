@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from lorahub.api.dataset_files import _resolve_under_roots
 from lorahub.api.image_studio_store import PendingOp
 
-from ._shared import _soft_delete, _store
+from ._shared import _clear_dataset_view_caches, _soft_delete, _store
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
@@ -76,6 +76,8 @@ def apply_ops(body: ApplyOpsInput) -> dict[str, Any]:
             store.delete_pending_op(op.id)
         except Exception as exc:  # noqa: BLE001
             errors.append({"id": op.id, "error": str(exc)})
+    if applied:
+        _clear_dataset_view_caches(file_path.parent)
     return {"applied": applied, "errors": errors}
 
 

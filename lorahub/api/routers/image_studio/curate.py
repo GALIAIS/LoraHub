@@ -42,6 +42,8 @@ from lorahub.api.task_sessions import (
     default_task_store_path,
 )
 
+from ._shared import _clear_dataset_view_caches
+
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 _KIND_AUTO_ROTATE = "image_studio_auto_rotate"
 _KIND_BATCH_RESIZE = "image_studio_batch_resize"
@@ -449,7 +451,10 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
-    return _auto_rotate_images(req, _auto_rotate_targets(req, root))
+    result = _auto_rotate_images(req, _auto_rotate_targets(req, root))
+    if result.get("rotated_count"):
+        _clear_dataset_view_caches(root)
+    return result
 
 
 @router.post("/curate/auto-rotate/start", status_code=202)
@@ -488,6 +493,7 @@ def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
                 on_failed=session.add_failed,
                 should_stop=session.should_stop,
             )
+            _clear_dataset_view_caches(root)
             session.finish("canceled" if session.should_stop() else "succeeded")
         except InterruptedError:
             session.cancel()
@@ -597,6 +603,8 @@ def curate_quarantine(req: QuarantineRequest) -> dict[str, Any]:
         except OSError as exc:
             failed.append({"path": raw, "error": str(exc)})
 
+    if moved:
+        _clear_dataset_view_caches(root)
     return {
         "moved": moved,
         "moved_count": len(moved),
@@ -725,6 +733,8 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
         for entry in entries:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    if restored:
+        _clear_dataset_view_caches(root)
     return {
         "restored": restored,
         "restored_count": len(restored),
@@ -1033,7 +1043,10 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
     root = Path(req.dataset_path).resolve()
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
-    return _resize_images(req, _batch_resize_targets(req, root))
+    result = _resize_images(req, _batch_resize_targets(req, root))
+    if result.get("resampled_count"):
+        _clear_dataset_view_caches(root)
+    return result
 
 
 @router.post("/curate/batch-resize/start", status_code=202)
@@ -1075,6 +1088,7 @@ def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
                 on_failed=session.add_failed,
                 should_stop=session.should_stop,
             )
+            _clear_dataset_view_caches(root)
             session.finish("canceled" if session.should_stop() else "succeeded")
         except InterruptedError:
             session.cancel()
@@ -1254,6 +1268,8 @@ def curate_restore_backup(req: RestoreBackupRequest) -> dict[str, Any]:
             restored.append(str(dst))
         except (OSError, ValueError) as exc:
             failed.append({"path": raw, "error": str(exc)})
+    if restored:
+        _clear_dataset_view_caches(root)
     return {
         "restored": restored,
         "restored_count": len(restored),

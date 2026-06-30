@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { api, useJobStream, type TrainingEvent } from "@/lib/api"
@@ -30,11 +30,16 @@ import { JobDetailHeader } from "./job-detail-header"
 type TabKey = "monitor" | "logs" | "files"
 
 function eventIdentity(event: TrainingEvent): string {
+  const p = event.payload ?? {}
   return [
     event.type,
     event.timestamp,
     event.job_id ?? "",
-    JSON.stringify(event.payload ?? {}),
+    p.step ?? "",
+    p.epoch ?? "",
+    p.path ?? p.checkpoint ?? p.sample ?? p.file ?? "",
+    p.level ?? "",
+    p.message ?? p.error ?? "",
   ].join("|")
 }
 
@@ -96,6 +101,39 @@ export function JobDetail({
     staleTime: 2_000,
   })
   const stream = useJobStream(jobId)
+  const lastReactedEventRef = useRef<string | null>(null)
+  useEffect(() => {
+    const latest = stream.events[stream.events.length - 1]
+    if (!latest) return
+    const key = eventIdentity(latest)
+    if (lastReactedEventRef.current === key) return
+    lastReactedEventRef.current = key
+
+    if (latest.type === "done") {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      void queryClient.invalidateQueries({ queryKey: ["job", jobId] })
+      void queryClient.invalidateQueries({ queryKey: ["job-metrics", jobId] })
+      void queryClient.invalidateQueries({ queryKey: ["job-files", jobId] })
+      void queryClient.invalidateQueries({ queryKey: ["artifacts"] })
+      return
+    }
+
+    if (
+      latest.type === "checkpoint_saved"
+      || latest.type === "sample_ready"
+      || latest.type === "validation"
+      || latest.type === "lora_spectrum"
+      || latest.type === "forgetting_probe"
+    ) {
+      void queryClient.invalidateQueries({ queryKey: ["job-metrics", jobId] })
+      void queryClient.invalidateQueries({ queryKey: ["job-files", jobId] })
+    }
+
+    if (latest.type === "error" || latest.type === "oom") {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      void queryClient.invalidateQueries({ queryKey: ["job", jobId] })
+    }
+  }, [jobId, queryClient, stream.events])
   const eventHistory = useQuery({
     queryKey: ["job-events", jobId],
     queryFn: () => api.getEvents(jobId, 5000),
@@ -107,7 +145,7 @@ export function JobDetail({
       if (terminal || hasDone) return false
       return 10_000
     },
-    staleTime: 5_000,
+    staleTime: 1_000,
   })
   const [busy, setBusy] = useState<null | "rerun" | "reveal" | "archive" | "kill" | "pause" | "resume">(null)
   const [actionError, setActionError] = useState<string | null>(null)
