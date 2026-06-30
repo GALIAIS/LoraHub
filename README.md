@@ -117,6 +117,18 @@ lorahub serve    --port 18765                   # 启动 Web UI + REST API（可
 
 ---
 
+## 界面预览
+
+| 数据面板 | 训练配置 |
+| --- | --- |
+| <img src="docs/assets/screenshots/dashboard.png" alt="数据面板" width="420"> | <img src="docs/assets/screenshots/training-configs.png" alt="训练配置" width="420"> |
+| 数据集 | 图像工作台 |
+| <img src="docs/assets/screenshots/datasets.png" alt="数据集" width="420"> | <img src="docs/assets/screenshots/image-workbench.png" alt="图像工作台" width="420"> |
+| 终端 | 参数搜索 |
+| <img src="docs/assets/screenshots/terminal.png" alt="终端" width="420"> | <img src="docs/assets/screenshots/param-search.png" alt="参数搜索" width="420"> |
+
+---
+
 ## 核心特性
 
 - **三后端一份配置**：在「设置 → 后端配置」选 `kohya` / `diffusion-pipe` / `anima_lora`，三个后端共用同一份 schema 与 UI。
