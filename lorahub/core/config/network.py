@@ -30,12 +30,12 @@ class PerModuleLRConfig(BaseModel):
 class NetworkConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
-    type: Literal["lora", "locon", "loha", "dora"] = "lora"
+    type: Literal["lora", "locon", "loha", "lokr", "lorm", "dora"] = "lora"
     rank: int = Field(32, ge=1, le=512)
     alpha: int = Field(16, ge=1)
     target_unet: bool = True
     target_text_encoder: bool = False
-    # Convolutional rank/alpha for locon/loha. Plain `lora` doesn't touch
+    # Convolutional rank/alpha for locon/loha/lokr. Plain `lora` doesn't touch
     # conv layers, so these only make sense on lycoris flavours and the
     # validator below rejects them otherwise. `conv_alpha=None` means
     # "let sd-scripts default it (commonly mirrors `alpha`)".
@@ -68,16 +68,16 @@ class NetworkConfig(BaseModel):
         """`lora` and `dora` don't expose conv layers in sd-scripts, so
         rejecting `conv_dim` / `conv_alpha` upfront avoids a confusing
         runtime crash inside the trainer."""
-        if self.type in ("lora", "dora"):
+        if self.type in ("lora", "lorm", "dora"):
             if self.conv_dim is not None:
                 msg = (
-                    f"network.conv_dim is only valid for locon/loha "
+                    f"network.conv_dim is only valid for locon/loha/lokr "
                     f"(got network.type={self.type!r})"
                 )
                 raise ValueError(msg)
             if self.conv_alpha is not None:
                 msg = (
-                    f"network.conv_alpha is only valid for locon/loha "
+                    f"network.conv_alpha is only valid for locon/loha/lokr "
                     f"(got network.type={self.type!r})"
                 )
                 raise ValueError(msg)

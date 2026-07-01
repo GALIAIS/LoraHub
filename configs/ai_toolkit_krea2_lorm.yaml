@@ -1,15 +1,15 @@
-# Built-in config template: Krea2 LoRA via ostris/ai-toolkit.
+# Built-in config template: Krea2 LoRM via ostris/ai-toolkit.
 
 _template:
-  name: AI Toolkit Krea2
-  description: Krea2 LoRA training through the vendored ai-toolkit backend.
+  name: AI Toolkit Krea2 LoRM
+  description: Krea2 LoRM training through the vendored ai-toolkit backend.
   arch: krea2
 
 _placeholders:
   - key: name
     label: Config / output name
     path_field: output.name
-    placeholder: krea2_lora_v1
+    placeholder: krea2_lorm_v1
   - key: dataset
     label: Dataset directory
     path_field: dataset.source
@@ -25,7 +25,7 @@ dataset:
   num_repeats: 10
 
 network:
-  type: lora
+  type: lorm
   rank: 16
   alpha: 16
   target_unet: true
@@ -34,7 +34,7 @@ network:
 optimizer:
   type: adamw
   lr:
-    unet: 1.0e-4
+    unet: 6.0e-5
     text_encoder: 5.0e-5
 
 schedule:
@@ -57,7 +57,7 @@ sampling:
     - prompt: "a high quality image"
 
 output:
-  name: krea2_lora
+  name: krea2_lorm
   save_every_n_steps: 250
   save_last_n_steps: 4
   save_dtype: fp16

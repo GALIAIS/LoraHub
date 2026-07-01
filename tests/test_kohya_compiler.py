@@ -170,6 +170,14 @@ def test_network_locon_emits_algo() -> None:
     assert "algo=locon" in args
 
 
+def test_network_lokr_emits_algo() -> None:
+    cfg = _config(network={"type": "lokr", "rank": 8, "alpha": 8})
+    args = _argv(cfg)
+    assert "--network_module=lycoris.kohya" in args
+    assert "--network_args" in args
+    assert "algo=lokr" in args
+
+
 def test_optimizer_maps_adamw8bit() -> None:
     args = _argv(_config())
     assert "--optimizer_type=AdamW8bit" in args
@@ -1706,4 +1714,3 @@ def test_b1_default_config_argv_byte_identical_after_b1() -> None:
         assert flag in args, flag
     # Path-bearing flags use platform separators; check prefix.
     assert any(a.startswith("--pretrained_model_name_or_path=") for a in args)
-

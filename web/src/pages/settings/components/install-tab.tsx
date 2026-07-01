@@ -152,6 +152,8 @@ export function InstallTab() {
   // Same gating for the status badge so a "failed" tag from another
   // backend doesn't bleed onto the freshly-selected one.
   const status = sameSession ? rawStatus : "idle"
+  const showSessionDetails = isRunning || isRetryableStatus(status)
+  const visibleEvents: BootstrapEvent[] = showSessionDetails ? events : []
 
   const start = useMutation({
     mutationFn: (backend: BackendId) => {
@@ -237,7 +239,7 @@ export function InstallTab() {
   }, [status, qc])
 
   const startError = start.error as Error | null
-  const lastError = events.find((e) => e.level === "error")
+  const lastError = visibleEvents.find((e) => e.level === "error")
 
   const descriptor: BackendDescriptor | undefined = useMemo(() => {
     if (!backendsQuery.data || !effective) return undefined
@@ -267,10 +269,10 @@ export function InstallTab() {
 
   // Step plan + state derivation for the chosen backend.
   const plan: StepDef[] = effective ? STEP_PLANS[effective as BackendId] ?? [] : []
-  const { states } = computeStepStates(plan, events, status)
+  const { states } = computeStepStates(plan, visibleEvents, status)
   const doneCount = states.filter((s) => s === "succeeded").length
   const failedCount = states.filter((s) => s === "failed").length
-  const showSteps = plan.length > 0 && (events.length > 0 || isRunning)
+  const showSteps = plan.length > 0 && (visibleEvents.length > 0 || isRunning)
 
   // The only 409 case left after we always send force=true is "failed to
   // clear" — surface that clearly so the user knows to free the locks.
@@ -546,7 +548,7 @@ export function InstallTab() {
             />
           )}
 
-          {events.length > 0 && <EventLog events={events} />}
+          {visibleEvents.length > 0 && <EventLog events={visibleEvents} />}
         </CardContent>
       </Card>
     </div>

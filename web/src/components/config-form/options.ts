@@ -52,7 +52,29 @@ export const NETWORK_TYPE_OPTIONS = [
   { value: "lora", label: "LoRA" },
   { value: "locon", label: "LoCon" },
   { value: "loha", label: "LoHA" },
+  { value: "lokr", label: "LoKr" },
+  { value: "lorm", label: "LoRM" },
   { value: "dora", label: "DoRA" },
+] as const
+
+export const AI_TOOLKIT_NETWORK_TYPE_OPTIONS = [
+  { value: "lora", label: "LoRA" },
+  { value: "dora", label: "DoRA" },
+  { value: "loha", label: "LoHA" },
+  { value: "lokr", label: "LoKr" },
+  { value: "lorm", label: "LoRM" },
+] as const
+
+export const KOHYA_NETWORK_TYPE_OPTIONS = [
+  { value: "lora", label: "LoRA" },
+  { value: "locon", label: "LoCon" },
+  { value: "loha", label: "LoHA" },
+  { value: "lokr", label: "LoKr" },
+  { value: "dora", label: "DoRA" },
+] as const
+
+export const DIFFUSION_PIPE_NETWORK_TYPE_OPTIONS = [
+  { value: "lora", label: "LoRA" },
 ] as const
 
 export const OPTIMIZER_OPTIONS = [

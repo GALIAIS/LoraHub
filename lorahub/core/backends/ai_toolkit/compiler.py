@@ -16,6 +16,9 @@ class CompilationError(ValueError):
     """Raised when a config cannot be expressed as an ai-toolkit job."""
 
 
+_KREA2_NETWORK_TYPES = {"lora", "dora", "loha", "lokr", "lorm"}
+
+
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
@@ -49,11 +52,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
         "type": "diffusion_trainer",
         "training_folder": str(workspace / "ai_toolkit_output"),
         "device": "cuda",
-        "network": {
-            "type": "lora",
-            "linear": int(cfg.network.rank),
-            "linear_alpha": int(cfg.network.alpha),
-        },
+        "network": _network_section(cfg),
         "save": {
             "dtype": _dtype(cfg.output.save_dtype),
             "save_every": int(cfg.output.save_every_n_steps or train_steps),
@@ -120,6 +119,29 @@ def _resolution_pair(value: list[int] | tuple[int, ...]) -> tuple[int, int]:
     return int(value[0]), int(value[1])
 
 
+def _network_section(cfg: TrainingConfig) -> dict[str, Any]:
+    n = cfg.network
+    if n.type not in _KREA2_NETWORK_TYPES:
+        allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
+        raise CompilationError(
+            f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {n.type!r}"
+        )
+    network: dict[str, Any] = {
+        "type": n.type,
+        "linear": int(n.rank),
+        "linear_alpha": int(n.alpha),
+    }
+    if n.type == "lorm":
+        network["lorm"] = {
+            "extract_mode": "fixed",
+            "extract_mode_param": int(n.rank),
+            "parameter_threshold": 0,
+        }
+    if n.network_dropout > 0:
+        network["dropout"] = float(n.network_dropout)
+    return network
+
+
 def _dtype(value: str) -> str:
     if value in {"bf16", "bfloat16"}:
         return "bf16"
@@ -164,6 +186,16 @@ def _sanitize_job(job: dict[str, Any]) -> None:
         prompts = []
     prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
     sample["prompts"] = prompts or ["a high quality image"]
+
+    network = process.get("network", {})
+    if isinstance(network, dict):
+        ntype = str(network.get("type", "lora")).lower()
+        if ntype not in _KREA2_NETWORK_TYPES:
+            allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
+            raise CompilationError(
+                f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {ntype!r}"
+            )
+        network["type"] = ntype
 
 
 def _coerce(value: Any) -> Any:

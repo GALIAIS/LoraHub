@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from lorahub.api.jobs_helpers import _select_backend
@@ -40,6 +41,45 @@ def test_ai_toolkit_compiler_emits_krea2_yaml(tmp_path: Path) -> None:
     assert process["model"]["arch"] == "krea2"
     assert process["model"]["name_or_path"] == "krea/Krea-2-Turbo"
     assert process["model"]["assistant_lora_path"] == "adapter.safetensors"
+
+
+def test_ai_toolkit_compiler_emits_supported_krea2_network_types(tmp_path: Path) -> None:
+    for network_type in ("lora", "dora", "loha", "lokr", "lorm"):
+        cfg = TrainingConfig.model_validate(
+            {
+                "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+                "dataset": {"source": ".", "resolution": [1024, 1024]},
+                "network": {"type": network_type, "rank": 12, "alpha": 12},
+                "backend": {"type": "ai_toolkit"},
+            }
+        )
+
+        _, files = compile_config(cfg, tmp_path)
+        data = yaml.safe_load(next(iter(files.values())))
+        network = data["config"]["process"][0]["network"]
+
+        assert network["type"] == network_type
+        assert network["linear"] == 12
+        assert network["linear_alpha"] == 12
+        if network_type == "lorm":
+            assert network["lorm"]["extract_mode"] == "fixed"
+            assert network["lorm"]["extract_mode_param"] == 12
+
+
+def test_ai_toolkit_compiler_rejects_unsupported_krea2_network_type(
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "network": {"type": "locon"},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    with pytest.raises(ValueError, match="ai_toolkit krea2 supports"):
+        compile_config(cfg, tmp_path)
 
 
 def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> None:
@@ -151,6 +191,30 @@ def test_ai_toolkit_parser_reads_tqdm_training_steps() -> None:
     assert ev.payload["lr"] == 1.0e-04
     assert ev.payload["rate"] == "6.83s/it"
     assert ev.payload["eta"] == "08:18"
+
+
+def test_ai_toolkit_sample_scan_emits_relative_sample_ready(tmp_path: Path) -> None:
+    sample_dir = tmp_path / "ai_toolkit_output" / "krea2_lora" / "samples"
+    sample_dir.mkdir(parents=True)
+    sample = sample_dir / "preview.jpg"
+    sample.write_bytes(b"jpg")
+    seen: set[str] = set()
+
+    events = ai_backend._scan_new_samples(
+        tmp_path / "ai_toolkit_output", tmp_path, seen, job_id="job-1"
+    )
+
+    assert len(events) == 1
+    assert events[0].type is EventType.sample_ready
+    assert events[0].job_id == "job-1"
+    assert (
+        events[0].payload["path"]
+        == "ai_toolkit_output/krea2_lora/samples/preview.jpg"
+    )
+    assert (
+        ai_backend._scan_new_samples(tmp_path / "ai_toolkit_output", tmp_path, seen)
+        == []
+    )
 
 
 def test_ai_toolkit_installer_adds_matching_torchaudio(monkeypatch, tmp_path: Path) -> None:

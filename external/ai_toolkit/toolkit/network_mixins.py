@@ -774,6 +774,11 @@ class ToolkitNetworkMixin:
             dtype = first_module.lokr_w1_a.dtype
             if hasattr(first_module.lokr_w1_a, '_memory_management_device'):
                 device = first_module.lokr_w1_a._memory_management_device
+        elif hasattr(first_module, 'hada_w1_a'):
+            device = first_module.hada_w1_a.device
+            dtype = first_module.hada_w1_a.dtype
+            if hasattr(first_module.hada_w1_a, '_memory_management_device'):
+                device = first_module.hada_w1_a._memory_management_device
         elif hasattr(first_module, 'diff'):
             # full weight module
             device = first_module.diff.device
