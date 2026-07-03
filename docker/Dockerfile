@@ -137,6 +137,7 @@ COPY --from=web-build /build/web/dist ./web/dist
 # state (runs/, configs/, models/, .lorahub/, .cache/, XDG, HF) lives
 # under /data, which is a named volume — survives `compose down`.
 ENV LORAHUB_HOME=/data
+ENV LORAHUB_DOCKER=1
 ENV LORAHUB_WEB_DIST=/app/web/dist
 # Container-internal bind is 0.0.0.0; the compose port mapping keeps
 # the host side at 127.0.0.1 by default (no built-in auth — see README).

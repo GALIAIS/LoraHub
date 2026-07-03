@@ -64,12 +64,13 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _require_git() -> None:
+def _require_git(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip the whole module when git is missing (rare on CI runners)."""
     import shutil
 
     if shutil.which("git") is None:
         pytest.skip("git not on PATH")
+    monkeypatch.setenv("LORAHUB_DOCKER", "0")
 
 
 def _capturing_emit() -> tuple[list[tuple[str, str, str]], Callable[[str, str, str], None]]:
@@ -539,7 +540,16 @@ def test_apply_restores_configs_when_pip_fails(
 
 def test_apply_raises_when_not_a_git_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setenv("LORAHUB_DOCKER", "0")
     with pytest.raises(RuntimeError, match="不是 git 检出"):
+        su.apply(channel="main", build=False)
+
+
+def test_apply_raises_with_docker_specific_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setenv("LORAHUB_DOCKER", "1")
+
+    with pytest.raises(RuntimeError, match="Docker 容器内不支持"):
         su.apply(channel="main", build=False)
 
 
@@ -662,6 +672,7 @@ def test_check_marks_zip_install_as_non_git(
     instead of letting the user click into a RuntimeError.
     """
     monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setenv("LORAHUB_DOCKER", "0")
     monkeypatch.setattr(su, "_resolve_version", lambda: ("0.4.0", "changelog"))
     # Bypass network — return a stub remote payload directly.
     monkeypatch.setattr(
@@ -680,8 +691,38 @@ def test_check_marks_zip_install_as_non_git(
 
     info = su.check(channel="tag", force=True)
     assert info.git_checkout is False
+    assert info.install_kind == "archive"
     assert info.version_source == "changelog"
     assert info.current == "0.4.0"
+
+
+def test_check_marks_docker_install_as_non_updatable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setenv("LORAHUB_DOCKER", "1")
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.8", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "localsha")
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "remotesha")
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.0.9",
+            "version_str": "1.0.9",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda blob: None)
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.install_kind == "docker"
+    assert info.git_checkout is False
+    assert info.update_available is True
 
 
 def test_check_tag_detects_retagged_same_version(

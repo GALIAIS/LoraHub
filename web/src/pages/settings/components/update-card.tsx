@@ -217,6 +217,7 @@ export function UpdateCard() {
   const checkedAt = info?.checked_at
     ? new Date(info.checked_at).toLocaleString()
     : "—"
+  const isDockerInstall = info?.install_kind === "docker"
 
   const headerStatus = (() => {
     if (!info) return null
@@ -326,10 +327,19 @@ export function UpdateCard() {
                 安装方式
               </span>
               <span className="text-amber-700 dark:text-amber-400 text-[12px]">
-                未检测到 .git 目录(看起来是直接下载 ZIP 解压安装)。
-                在线更新无法运行,请改用 git clone 或在当前目录
-                <code className="font-mono text-[11px] mx-1">git init</code>
-                后从 origin/main 拉取一次。
+                {isDockerInstall ? (
+                  <>
+                    Docker 安装不在容器内改写源码。请在宿主机执行
+                    <code className="font-mono text-[11px] mx-1">git pull</code>
+                    后重新
+                    <code className="font-mono text-[11px] mx-1">docker compose up -d --build</code>
+                    。
+                  </>
+                ) : (
+                  <>
+                    未检测到 .git 目录。在线更新无法运行,请改用 git clone 安装。
+                  </>
+                )}
               </span>
             </>
           )}
@@ -407,7 +417,9 @@ export function UpdateCard() {
             variant={force ? "destructive" : "default"}
             title={
               info?.git_checkout === false
-                ? "ZIP 安装无法在线更新 — 请按上方提示重装为 git 检出"
+                ? isDockerInstall
+                  ? "Docker 安装请在宿主机拉取代码后重建容器"
+                  : "非 git 安装无法在线更新"
                 : undefined
             }
           >
