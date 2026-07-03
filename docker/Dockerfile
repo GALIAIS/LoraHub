@@ -52,6 +52,8 @@ RUN npm run build
 # Stage 2 — runtime: Python + uv + LoraHub app
 # ──────────────────────────────────────────────────────────────────────
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
 # ca-certificates + curl for healthcheck & bootstrap downloads;
 # git for `lorahub manage update` / kohya clone; build-essential for
@@ -71,7 +73,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (pyproject.toml: requires-python = ">=3.11,<3.13"; install.sh pins
 # 3.12). uv is the canonical installer across the project's own
 # scripts, so we use it here too for parity.
-ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
     && add-apt-repository -y ppa:deadsnakes/ppa \
