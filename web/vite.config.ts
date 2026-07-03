@@ -75,6 +75,11 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    // Windows can keep web/dist/index.html open while the production
+    // service is serving it. Vite's default pre-build rm then fails
+    // with EBUSY before it writes anything. Hashed assets make stale
+    // files harmless, so overwrite in place instead of emptying dist.
+    emptyOutDir: false,
     // ``hidden`` keeps source maps next to the bundle (so a debugger
     // can resolve frames if it picks them up) without referencing
     // them from the ship-able .js — production stack traces stay

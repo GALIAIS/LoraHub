@@ -79,8 +79,10 @@ const MOBILE_NAV = [
 ] as const
 
 type ThemeMode = "light" | "dark" | "system"
+type StyleMode = "shiro" | "polar"
 
 const THEME_MODE_KEY = "lorahub.theme.mode"
+const STYLE_MODE_KEY = "lorahub.ui.style"
 
 export default function App() {
   const location = useLocation()
@@ -89,6 +91,11 @@ export default function App() {
     if (typeof window === "undefined") return "system"
     const stored = window.localStorage.getItem(THEME_MODE_KEY)
     return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+  })
+  const [styleMode, setStyleMode] = useState<StyleMode>(() => {
+    if (typeof window === "undefined") return "shiro"
+    const stored = window.localStorage.getItem(STYLE_MODE_KEY)
+    return stored === "polar" || stored === "shiro" ? stored : "shiro"
   })
 
   useEffect(() => {
@@ -110,7 +117,14 @@ export default function App() {
     return () => media.removeEventListener("change", apply)
   }, [mode])
 
-  useAnimeThemeTransition([mode])
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const root = document.documentElement
+    root.dataset.uiStyle = styleMode
+    window.localStorage.setItem(STYLE_MODE_KEY, styleMode)
+  }, [styleMode])
+
+  useAnimeThemeTransition([mode, styleMode])
 
   // Eagerly warm every route chunk during browser idle time so the
   // first click on a nav item never pays a network round-trip. We
@@ -281,6 +295,26 @@ export default function App() {
                   title={label}
                 >
                   <Icon className="size-3" />
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-1 pt-1">
+              {([
+                { value: "shiro" as const, label: "Shiro" },
+                { value: "polar" as const, label: "Polar" },
+              ]).map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={(e) => runThemeChange(e, () => setStyleMode(value))}
+                  className={cn(
+                    "h-7 rounded-[6px] border px-2 text-[11px] font-medium transition-colors duration-150",
+                    styleMode === value
+                      ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
+                      : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
+                  )}
+                >
+                  {label}
                 </button>
               ))}
             </div>
