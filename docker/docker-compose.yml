@@ -1,0 +1,142 @@
+# LoraHub — docker-compose
+#
+# Two profiles share ONE image:
+#   * GPU (default):  docker compose up
+#   * CPU:            docker compose --profile cpu up
+#
+# All LoraHub state lives in the named volume `lorahub-data`, mounted
+# at /data (= LORAHUB_HOME). `docker compose down` keeps the volume;
+# `docker compose down -v` (or `docker volume rm lorahub-data`) wipes
+# ALL user data — jobs, configs, models, backend venvs. See
+# docs/getting-started/docker.md.
+#
+# The host port binds 127.0.0.1 by default: LoraHub has NO built-in
+# auth. To expose on a LAN, set LORAHUB_BIND_ADDR=0.0.0.0 in .env and
+# put it behind a reverse proxy with authentication. Never publish the
+# port directly to the public internet.
+
+services:
+  # ──────────────────────────────────────────────────────────────────
+  # Default — GPU training. Requires NVIDIA Container Toolkit on the
+  # host: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+  # ──────────────────────────────────────────────────────────────────
+  lorahub:
+    image: lorahub:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        LORAHUB_PYPI_INDEX: ${LORAHUB_PYPI_INDEX:-}
+        LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+    container_name: lorahub
+    init: true
+    restart: unless-stopped
+
+    ports:
+      - "${LORAHUB_BIND_ADDR:-127.0.0.1}:${LORAHUB_PORT:-18765}:18765"
+
+    environment:
+      LORAHUB_HOME: /data
+      LORAHUB_WEB_DIST: /app/web/dist
+      LORAHUB_BIND_HOST: 0.0.0.0
+      LORAHUB_PORT: "18765"
+      LORAHUB_LANG: ${LORAHUB_LANG:-zh}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+      # Mirror sources — picked up by backend bootstrap (uv sync / git
+      # clone) and the in-app model downloader. Empty = upstream.
+      LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
+      UV_DEFAULT_INDEX: ${LORAHUB_PYPI_INDEX:-}
+      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      # Allow the React dev origin if anyone runs vite against the API.
+      LORAHUB_ALLOWED_ORIGINS: ${LORAHUB_ALLOWED_ORIGINS:-}
+
+    volumes:
+      # Main state volume — runs/, configs/, datasets/, models/, .lorahub/,
+      # .cache/, xdg/, hf-home/ all live under here.
+      - lorahub-data:/data
+      # Vendored backend source is in the read-only image layer; their
+      # venvs must be writable, so mount named volumes over the .venv
+      # paths. anima_lora's uv sync writes here, ai-toolkit likewise.
+      - lorahub-anima-venv:/app/external/anima_lora/.venv
+      - lorahub-aitoolkit-venv:/app/external/ai_toolkit/venv
+      # Optional: bind-mount host dirs instead of named volumes for
+      # datasets / models if you keep them on the host. Uncomment and
+      # adjust. (Paths are absolute on the host.)
+      # - /path/to/your/datasets:/data/datasets
+      # - /path/to/your/models:/data/models
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${LORAHUB_GPU_COUNT:-all}
+              capabilities: [gpu]
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18765/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ──────────────────────────────────────────────────────────────────
+  # CPU profile. Same image, no GPU device. Use for API/UI/dataset
+  # management / CPU WD14 tagging on machines without an NVIDIA GPU.
+  # Training backends that require CUDA will fail to launch — that's
+  # expected.
+  # ──────────────────────────────────────────────────────────────────
+  lorahub-cpu:
+    profiles: ["cpu"]
+    image: lorahub:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        LORAHUB_PYPI_INDEX: ${LORAHUB_PYPI_INDEX:-}
+        LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+    container_name: lorahub
+    init: true
+    restart: unless-stopped
+
+    ports:
+      - "${LORAHUB_BIND_ADDR:-127.0.0.1}:${LORAHUB_PORT:-18765}:18765"
+
+    environment:
+      LORAHUB_HOME: /data
+      LORAHUB_WEB_DIST: /app/web/dist
+      LORAHUB_BIND_HOST: 0.0.0.0
+      LORAHUB_PORT: "18765"
+      LORAHUB_LANG: ${LORAHUB_LANG:-zh}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+      LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
+      UV_DEFAULT_INDEX: ${LORAHUB_PYPI_INDEX:-}
+      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      LORAHUB_ALLOWED_ORIGINS: ${LORAHUB_ALLOWED_ORIGINS:-}
+
+    volumes:
+      - lorahub-data:/data
+      - lorahub-anima-venv:/app/external/anima_lora/.venv
+      - lorahub-aitoolkit-venv:/app/external/ai_toolkit/venv
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18765/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  lorahub-data:
+  lorahub-anima-venv:
+  lorahub-aitoolkit-venv:
