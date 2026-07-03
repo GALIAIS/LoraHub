@@ -52,7 +52,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from packaging.version import InvalidVersion, Version
 from platformdirs import user_state_path
@@ -141,7 +141,7 @@ def _subprocess_no_window() -> int:
 
 
 def _git_describe_runtime() -> str | None:
-    """Resolve the version via runtime ``git describe`` against the repo.
+    """Resolve a readable runtime version from the git checkout.
 
     Why this lives in front of ``hatch-vcs`` in the resolution chain:
     ``_version.py`` is *generated at install time* — running
@@ -154,10 +154,11 @@ def _git_describe_runtime() -> str | None:
     frontend bundle whose ``__APP_VERSION__`` came from running git
     describe at vite build time.
 
-    This shells out to ``git describe --tags --dirty --always`` from
-    the project root, mirroring exactly what ``vite.config.ts`` does
-    on the frontend side. Same tool + same flags + same cwd → the two
-    halves agree without anyone having to re-run ``pip install``.
+    The user-facing shape is ``<tag>-<branch>-g<sha8>``:
+    ``1.1.0-main-g2e1c81ef`` for release branch builds and
+    ``1.1.0-dev-g2e1c81ef`` for dev builds. Dirty working-tree state
+    is reported separately by the update endpoint; it should not be
+    folded into the version identity.
 
     Returns ``None`` (so callers fall through) when:
 
@@ -166,8 +167,8 @@ def _git_describe_runtime() -> str | None:
       * the call times out (5s ceiling so a hung ``index.lock`` can't
         wedge ``/api/health``)
 
-    The frontend's leading ``v`` from a tag is stripped here too, so
-    the two halves produce byte-identical strings on the same commit.
+    The frontend strips a leading ``v`` too, so the two halves produce
+    byte-identical strings on the same commit.
     """
     try:
         from lorahub.core.paths import project_root  # noqa: PLC0415
@@ -188,7 +189,7 @@ def _git_describe_runtime() -> str | None:
 
     try:
         result = subprocess.run(
-            ["git", "describe", "--tags", "--dirty", "--always"],
+            ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
             cwd=root,
             capture_output=True,
             text=True,
@@ -200,10 +201,28 @@ def _git_describe_runtime() -> str | None:
         return None
     if result.returncode != 0:
         return None
-    raw = result.stdout.strip()
-    if not raw:
+    base = result.stdout.strip()
+    if not base:
         return None
-    return raw[1:] if raw.startswith("v") else raw
+    sha = _git(["rev-parse", "--short=8", "HEAD"], cwd=root).stdout.strip()
+    branch = _git(["branch", "--show-current"], cwd=root).stdout.strip()
+    if not branch:
+        branch = _branch_from_remote_contains(root) or "detached"
+    branch = re.sub(r"[^0-9A-Za-z._-]+", "-", branch).strip("-") or "detached"
+    version = base[1:] if base.startswith("v") else base
+    return f"{version}-{branch}-g{sha}" if sha else version
+
+
+def _branch_from_remote_contains(root: Path) -> str | None:
+    out = _git(["branch", "-r", "--contains", "HEAD"], cwd=root)
+    if out.returncode != 0:
+        return None
+    refs = {line.strip().removeprefix("origin/") for line in out.stdout.splitlines()}
+    if "main" in refs:
+        return "main"
+    if "dev" in refs:
+        return "dev"
+    return next((ref for ref in sorted(refs) if ref and " -> " not in ref), None)
 
 
 def _resolve_version() -> tuple[str, str]:
@@ -237,7 +256,8 @@ def _resolve_version() -> tuple[str, str]:
 
     # 3. importlib.metadata — wheel / pip install / static metadata.
     try:
-        from importlib.metadata import PackageNotFoundError, version as dist_version  # noqa: PLC0415
+        from importlib.metadata import PackageNotFoundError  # noqa: PLC0415
+        from importlib.metadata import version as dist_version
 
         try:
             v = dist_version("lorahub").strip()
@@ -293,6 +313,7 @@ def _normalize_version(raw: str) -> str:
         s = s[1:]
     if s.endswith("-dirty"):
         s = s[:-6]
+    s = re.sub(r"-[0-9A-Za-z._-]+-g[0-9a-f]{7,40}$", "", s, flags=re.IGNORECASE)
     return s
 
 
@@ -1371,7 +1392,7 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
         raise RuntimeError(msg)
     if not build:
         return
-    emit("build", "info", "npm run build (web/)")
+    emit("build", "info", f"npm run build (web/, v{_current_version()})")
     npm = _find_npm(cwd)
     if npm is None:
         emit("build", "warn", "npm not found; skipping SPA rebuild.")
@@ -1379,11 +1400,11 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     web = cwd / "web"
     _ensure_frontend_deps(web, npm=Path(npm), emit=emit)
     rc = _stream_subprocess(
-        [npm, "run", "build"],
+        [npm, "--silent", "run", "build"],
         cwd=web,
         phase="build",
         emit=emit,
-        env=_npm_env(Path(npm)),
+        env=_npm_env(Path(npm), app_version=_current_version()),
     )
     if rc != 0:
         msg = f"npm run build failed (exit {rc})"
@@ -1511,10 +1532,12 @@ def _find_npm(repo: Path) -> str | None:
     return found if found else None
 
 
-def _npm_env(npm: Path) -> dict[str, str]:
+def _npm_env(npm: Path, *, app_version: str | None = None) -> dict[str, str]:
     """Ensure npm lifecycle scripts can find the matching node binary."""
     env = os.environ.copy()
     env["PATH"] = f"{npm.parent}{os.pathsep}{env.get('PATH', '')}"
+    if app_version:
+        env["LORAHUB_APP_VERSION"] = app_version
     return env
 
 

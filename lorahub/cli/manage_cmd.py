@@ -321,11 +321,13 @@ def build() -> None:
         err_console.print(t("manage.build.no_npm"))
         raise typer.Exit(code=1)
     web = root / "web"
+    app_version = _resolve_build_version()
+    console.print(t("manage.build.start", version=app_version))
     rc = subprocess.run(  # noqa: S603
-        [str(npm), "run", "build"],
+        [str(npm), "--silent", "run", "build"],
         cwd=web,
         check=False,
-        env=_npm_env(npm),
+        env=_npm_env(npm, app_version=app_version),
     ).returncode
     if rc != 0:
         err_console.print(t("manage.build.npm_failed"))
@@ -355,11 +357,24 @@ def _find_npm(root: Path) -> Path | None:
     return Path(found) if found else None
 
 
-def _npm_env(npm: Path) -> dict[str, str]:
+def _resolve_build_version() -> str:
+    """Resolve the version passed into Vite for a CLI-triggered build."""
+    try:
+        from lorahub.api.system_update import _current_version  # noqa: PLC0415
+
+        version = _current_version().strip()
+        return version or "dev"
+    except Exception:  # noqa: BLE001
+        return "dev"
+
+
+def _npm_env(npm: Path, *, app_version: str | None = None) -> dict[str, str]:
     """Ensure npm lifecycle scripts can find the matching node binary."""
     env = os.environ.copy()
     bin_dir = npm.parent
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    if app_version:
+        env["LORAHUB_APP_VERSION"] = app_version
     return env
 
 

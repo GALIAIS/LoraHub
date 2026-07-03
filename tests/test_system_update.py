@@ -24,7 +24,6 @@ import pytest
 
 from lorahub.api import system_update as su
 
-
 # --------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------- #
@@ -636,13 +635,19 @@ def test_git_version_probe_hides_windows_console(
     monkeypatch.setattr(su.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr("lorahub.core.paths.project_root", lambda: tmp_path)
 
-    def fake_run(*_args: object, **kwargs: object):
+    def fake_run(args: list[str], **kwargs: object):
         calls.append(kwargs)
-        return subprocess.CompletedProcess([], 0, stdout="v1.0.8\n", stderr="")
+        if args[1] == "describe":
+            return subprocess.CompletedProcess([], 0, stdout="v1.0.8\n", stderr="")
+        if args[1:3] == ["rev-parse", "--short=8"]:
+            return subprocess.CompletedProcess([], 0, stdout="abc12345\n", stderr="")
+        if args[1:3] == ["branch", "--show-current"]:
+            return subprocess.CompletedProcess([], 0, stdout="main\n", stderr="")
+        return subprocess.CompletedProcess([], 1, stdout="", stderr="")
 
     monkeypatch.setattr(su.subprocess, "run", fake_run)
 
-    assert su._git_describe_runtime() == "1.0.8"
+    assert su._git_describe_runtime() == "1.0.8-main-gabc12345"
     assert calls[0]["creationflags"] == 0x08000000
 
 

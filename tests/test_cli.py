@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -138,6 +139,38 @@ def test_manage_install_posix_shim_runs_module_from_checkout() -> None:
     assert "PYTHONPATH=/opt/LoraHub:${PYTHONPATH:-}" in body
     assert 'exec /opt/LoraHub/.venv/bin/python -m lorahub "$@"' in body
     assert "/bin/lorahub" not in body
+
+
+def test_manage_build_uses_quiet_npm_and_exports_resolved_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.cli import manage_cmd
+
+    root = tmp_path / "repo"
+    (root / "web").mkdir(parents=True)
+    npm = tmp_path / ("npm.cmd" if sys.platform == "win32" else "npm")
+    npm.write_text("", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(manage_cmd, "_find_npm", lambda _root: npm)
+    monkeypatch.setattr(manage_cmd, "_resolve_build_version", lambda: "1.1.0")
+    monkeypatch.setattr("lorahub.core.paths.project_root", lambda: root)
+
+    def fake_run(cmd, *, cwd, check, env):  # type: ignore[no-untyped-def]
+        calls.append({"cmd": cmd, "cwd": cwd, "check": check, "env": env})
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(manage_cmd.subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["manage", "build"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls
+    assert calls[0]["cmd"] == [str(npm), "--silent", "run", "build"]
+    assert calls[0]["cwd"] == root / "web"
+    assert calls[0]["env"]["LORAHUB_APP_VERSION"] == "1.1.0"  # type: ignore[index]
+    assert "0.0.0-dev" not in result.stdout
+    assert "1.1.0" in result.stdout
 
 
 def test_root_tui_detection_ignores_global_options() -> None:

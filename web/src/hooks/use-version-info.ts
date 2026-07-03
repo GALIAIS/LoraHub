@@ -47,8 +47,7 @@ export interface VersionInfo {
  * Two formats fly around the project:
  *
  *   git describe (frontend):
- *     `1.0.2-85-g7ddfe7852[-dirty]` → drop the `-N-g<sha>` and `-dirty`
- *     suffixes → `1.0.2`. The base is the **last** released tag.
+ *     `1.1.0-dev-g7ddfe78` → drop the branch / sha suffix → `1.1.0`.
  *
  *   hatch-vcs (backend):
  *     `1.0.3.dev85+g7ddfe7852.d20260523` → drop the `.devN+g<sha>(.d<date>)?`
@@ -65,6 +64,7 @@ export function baseVersion(raw: string | null | undefined): string {
   if (!raw) return ""
   return raw
     .replace(/-dirty$/, "")
+    .replace(/-[0-9A-Za-z._-]+-g[0-9a-f]{7,40}$/, "") // LoraHub branch+sha
     .replace(/-\d+-g[0-9a-f]+$/, "")            // git describe between tags
     .replace(/\.dev\d+\+g[0-9a-f]+(\.d\d+)?$/, "") // hatch-vcs
     .replace(/^v/, "")
@@ -82,6 +82,12 @@ export function extractCommitSha(raw: string | null | undefined): string | null 
   return match ? match[1].toLowerCase() : null
 }
 
+export function extractChannel(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const match = raw.match(/^[v]?\d+\.\d+\.\d+(?:[a-zA-Z0-9.+-]*)?-([0-9A-Za-z._-]+)-g[0-9a-f]{7,40}$/i)
+  return match ? match[1] : null
+}
+
 const UNKNOWN_LITERALS = new Set(["", "dev", "0.0.0+unknown", "0.0.0"])
 
 export function useVersionInfo(): VersionInfo {
@@ -96,6 +102,8 @@ export function useVersionInfo(): VersionInfo {
 
   const fSha = extractCommitSha(frontend)
   const bSha = extractCommitSha(backend)
+  const fChannel = extractChannel(frontend)
+  const bChannel = extractChannel(backend)
   const fBase = baseVersion(frontend)
   const bBase = baseVersion(backend)
 
@@ -135,12 +143,12 @@ export function useVersionInfo(): VersionInfo {
   if (fSha && bSha && fSha === bSha) {
     // Same commit — anchor display on the released tag (frontend's
     // base) so users see a number tied to their last release.
-    const canonical = formatDisplay(fBase || bBase, fSha)
+    const canonical = formatDisplay(fBase || bBase, fSha, fChannel || bChannel)
     frontendDisplay = canonical
     backendDisplay = canonical
   } else {
-    frontendDisplay = formatDisplay(fBase, fSha)
-    backendDisplay = formatDisplay(bBase, bSha)
+    frontendDisplay = formatDisplay(fBase, fSha, fChannel)
+    backendDisplay = formatDisplay(bBase, bSha, bChannel)
   }
 
   return {
@@ -158,8 +166,8 @@ export function useVersionInfo(): VersionInfo {
  * just the version (`1.0.3`); dev builds show ``base-g<sha7>`` so the
  * user can correlate with `git log` without parsing PEP 440.
  */
-function formatDisplay(base: string, sha: string | null): string {
+function formatDisplay(base: string, sha: string | null, channel: string | null): string {
   if (!base) return "?"
   if (!sha) return base
-  return `${base}-g${sha.slice(0, 7)}`
+  return channel ? `${base}-${channel}-g${sha.slice(0, 7)}` : `${base}-g${sha.slice(0, 7)}`
 }

@@ -206,6 +206,10 @@ MESSAGES: dict[str, dict[Lang, str]] = {
         "zh": "[red]npm run build 失败。[/]",
         "en": "[red]npm run build failed.[/]",
     },
+    "manage.build.start": {
+        "zh": "构建前端 v{version}",
+        "en": "building web frontend v{version}",
+    },
     "manage.build.complete": {
         "zh": "[green]构建完成[/]",
         "en": "[green]build complete[/]",

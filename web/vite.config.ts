@@ -13,20 +13,58 @@ const API_TARGET = process.env.LORAHUB_API_TARGET ?? "http://127.0.0.1:18765"
  * Resolve the user-facing version string at build time.
  *
  * Priority:
- *  1. `git describe --tags --dirty --always`, e.g. `v0.3.0`,
- *     `v0.3.0-12-g1a2b3c4`, or `1a2b3c4-dirty` if the user is between
- *     tags / on a fresh clone with no tags yet.
- *  2. `web/package.json`'s `version` field — kept around as a fallback
+ *  1. `LORAHUB_APP_VERSION` from `lorahub manage build` / update flows.
+ *  2. Git tag + branch + sha, e.g. `1.1.0-main-g2e1c81ef`
+ *     or `1.1.0-dev-g2e1c81ef`.
+ *  3. `web/package.json`'s `version` field — kept around as a fallback
  *     for environments where git history isn't available (CI tarball
  *     downloads, vendored bundles).
- *  3. The literal `dev` so the UI never crashes on a missing string.
+ *  4. The literal `dev` so the UI never crashes on a missing string.
  *
  * The leading `v` from a git tag is stripped so the runtime can
  * append it consistently (`v{__APP_VERSION__}`).
  */
 function resolveAppVersion(): string {
+  const envVersion = process.env.LORAHUB_APP_VERSION?.trim()
+  if (envVersion) return envVersion.replace(/^v/, "")
   try {
-    const raw = execSync("git describe --tags --dirty --always", {
+    const root = path.resolve(__dirname, "..")
+    const tag = execSync("git describe --tags --abbrev=0 --match v[0-9]*", {
+      cwd: root,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim()
+      .replace(/^v/, "")
+    const sha = execSync("git rev-parse --short=8 HEAD", {
+      cwd: root,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim()
+    let branch = execSync("git branch --show-current", {
+      cwd: root,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim()
+    if (!branch) {
+      const refs = execSync("git branch -r --contains HEAD", {
+        cwd: root,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .toString()
+        .split(/\r?\n/)
+        .map((line) => line.trim().replace(/^origin\//, ""))
+      branch = refs.includes("main") ? "main" : refs.includes("dev") ? "dev" : "detached"
+    }
+    branch = branch.replace(/[^0-9A-Za-z._-]+/g, "-").replace(/^-+|-+$/g, "") || "detached"
+    if (tag && sha) return `${tag}-${branch}-g${sha}`
+  } catch {
+    // git not installed, not a checkout, or no tags reachable.
+  }
+  try {
+    const raw = execSync("git describe --tags --always", {
       cwd: path.resolve(__dirname, ".."),
       stdio: ["ignore", "pipe", "ignore"],
     })

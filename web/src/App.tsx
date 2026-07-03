@@ -82,7 +82,8 @@ type ThemeMode = "light" | "dark" | "system"
 type StyleMode = "shiro" | "polar"
 
 const THEME_MODE_KEY = "lorahub.theme.mode"
-const STYLE_MODE_KEY = "lorahub.ui.style"
+const STYLE_MODE_KEY = "lorahub.ui.style.v2"
+const LEGACY_STYLE_MODE_KEY = "lorahub.ui.style"
 
 export default function App() {
   const location = useLocation()
@@ -122,6 +123,7 @@ export default function App() {
     const root = document.documentElement
     root.dataset.uiStyle = styleMode
     window.localStorage.setItem(STYLE_MODE_KEY, styleMode)
+    window.localStorage.removeItem(LEGACY_STYLE_MODE_KEY)
   }, [styleMode])
 
   useAnimeThemeTransition([mode, styleMode])
