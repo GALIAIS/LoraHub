@@ -202,10 +202,12 @@ export interface UpdateInfo {
   version_source: "git-describe" | "hatch-vcs" | "dist-metadata" | "changelog" | "fallback"
   /**
    * `false` iff this install is not a real git checkout. The
-   * updater can't function on a ZIP extract (no tree to checkout),
-   * so the UI greys out the apply button when this flag is false.
+   * updater can't function on archive extracts or Docker image
+   * installs, so the UI greys out the apply button when this flag is
+   * false.
    */
   git_checkout: boolean
+  install_kind?: "git" | "archive" | "docker" | string
 }
 
 export interface UpdateEvent {

@@ -131,6 +131,33 @@ def test_preflight_missing_checkpoint_blocks(tmp_path: Path) -> None:
     assert any(f.field == "baseModel.checkpoint" for f in matches), findings
 
 
+def test_preflight_allows_ai_toolkit_krea2_repo_id(tmp_path: Path) -> None:
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "krea2",
+            "base_model.checkpoint": "krea/Krea-2-Raw",
+            "backend.type": "ai_toolkit",
+        },
+    )
+    findings = run_preflight(
+        cfg,
+        tmp_path / "ws",
+        skip=(
+            "backend_repo_missing",
+            "venv_missing",
+            "disk_low",
+            "path_encoding",
+            "optional_dependencies",
+        ),
+    )
+    assert not [
+        f
+        for f in findings
+        if f.category == "model_missing" and f.field == "baseModel.checkpoint"
+    ]
+
+
 def test_preflight_missing_dataset_blocks(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, **{"dataset.source": str(tmp_path / "ghost-data")})
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))

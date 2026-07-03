@@ -36,6 +36,9 @@ class UpdateInfo:
     version_source: str = "hatch-vcs"
     # ``True`` iff this install is a real ``git`` checkout.
     git_checkout: bool = True
+    # Install shape. Docker/container installs are intentionally not
+    # self-mutated; users update them by rebuilding/recreating the image.
+    install_kind: str = "git"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

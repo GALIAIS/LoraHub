@@ -95,7 +95,17 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
                 "seed": 123,
                 "inferenceSteps": 28,
                 "inferenceCfg": 4.5,
-                "prompts": [{"prompt": "test prompt"}],
+                "prompts": [
+                    {
+                        "prompt": "test prompt",
+                        "negative": "low quality",
+                        "width": 768,
+                        "height": 1152,
+                        "seed": 321,
+                        "cfg": 3.5,
+                        "steps": 18,
+                    }
+                ],
             },
         }
     )
@@ -107,6 +117,7 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
     assert process["train"]["disable_sampling"] is False
     assert process["sample"] == {
         "sample_every": 250,
+        "sampler": "flowmatch",
         "width": 832,
         "height": 1216,
         "neg": "",
@@ -114,6 +125,17 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
         "sample_steps": 28,
         "guidance_scale": 4.5,
         "prompts": ["test prompt"],
+        "samples": [
+            {
+                "prompt": "test prompt",
+                "neg": "low quality",
+                "width": 768,
+                "height": 1152,
+                "seed": 321,
+                "guidance_scale": 3.5,
+                "sample_steps": 18,
+            }
+        ],
     }
 
 
@@ -155,7 +177,11 @@ def test_ai_toolkit_compiler_sanitizes_sample_prompt_types(tmp_path: Path) -> No
             "dataset": {"source": ".", "resolution": [1024, 1024]},
             "backend": {
                 "type": "ai_toolkit",
-                "extraArgs": {"sample.neg": True, "sample.prompts": True},
+                "extraArgs": {
+                    "sample.neg": True,
+                    "sample.prompts": True,
+                    "sample.samples": True,
+                },
             },
         }
     )
@@ -166,6 +192,7 @@ def test_ai_toolkit_compiler_sanitizes_sample_prompt_types(tmp_path: Path) -> No
 
     assert sample["neg"] == ""
     assert sample["prompts"] == ["a high quality image"]
+    assert "samples" not in sample
 
 
 def test_ai_toolkit_parser_summarizes_progress_lines() -> None:

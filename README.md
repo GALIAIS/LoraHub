@@ -72,6 +72,21 @@ pip install -e ".[api,dev]"
 cd web && npm ci && cd ..
 ```
 
+### Docker
+
+一份 `Dockerfile` 同时服务 GPU 训练与 CPU 仅 API/管理两种形态，所有用户数据通过命名卷持久化，`docker compose down` 不丢任务历史与配置：
+
+```bash
+git clone https://github.com/GALIAIS/LoraHub
+cd LoraHub
+cp docker/.env.example docker/.env          # 可选：填镜像源 / token
+docker compose -f docker/docker-compose.yml --profile gpu up -d --build
+# CPU 机器：
+docker compose -f docker/docker-compose.yml --profile cpu up -d --build
+```
+
+访问 `http://127.0.0.1:18765`。镜像只携带应用本体，训练后端(kohya / diffusion-pipe / anima_lora / ai-toolkit)启动后在挂载卷里通过 Web UI 或 `lorahub bootstrap-kohya` 安装，与本地哲学一致。完整说明见 [docs/getting-started/docker.md](docs/getting-started/docker.md)。
+
 ### 训练后端
 
 训练后端在 Web UI「设置 → 安装与升级」中安装。该流程会按当前 CUDA / 驱动给出可选 PyTorch 版本，并使用已配置的 GitHub / PyPI / PyTorch / npm 镜像。

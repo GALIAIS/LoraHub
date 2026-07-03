@@ -511,6 +511,25 @@ def _git_root() -> Path | None:
     return None
 
 
+def _is_container_install() -> bool:
+    """Return True when LoraHub is running from the Docker image."""
+    marker = os.environ.get("LORAHUB_DOCKER", "").strip().lower()
+    if marker:
+        return marker not in {"0", "false", "no", "off"}
+    if not Path("/.dockerenv").exists():
+        return False
+    return (
+        os.environ.get("LORAHUB_HOME") == "/data"
+        or os.environ.get("LORAHUB_WEB_DIST") == "/app/web/dist"
+    )
+
+
+def _install_kind(cwd: Path | None) -> str:
+    if _is_container_install():
+        return "docker"
+    return "git" if cwd is not None else "archive"
+
+
 def _detect_detached_head(cwd: Path) -> str | None:
     """Return the current commit SHA if HEAD is detached, else None.
 
@@ -687,7 +706,8 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     cwd = _git_root()
     is_dirty = _detect_dirty(cwd) if cwd else False
     current, version_source = _resolve_version()
-    is_git_checkout = cwd is not None
+    install_kind = _install_kind(cwd)
+    is_git_checkout = cwd is not None and install_kind == "git"
     current_commit = _current_commit(cwd)
 
     blob = _read_cache()
@@ -716,6 +736,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                 "is_dirty": is_dirty,
                 "version_source": version_source,
                 "git_checkout": is_git_checkout,
+                "install_kind": install_kind,
                 "current_commit": current_commit,
                 "latest_commit": cached_latest_commit,
                 "update_available": (
@@ -747,6 +768,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                     "is_dirty": is_dirty,
                     "version_source": version_source,
                     "git_checkout": is_git_checkout,
+                    "install_kind": install_kind,
                     "current_commit": current_commit,
                 }
             )
@@ -763,6 +785,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             error=f"refresh failed: {exc}",
             version_source=version_source,
             git_checkout=is_git_checkout,
+            install_kind=install_kind,
             current_commit=current_commit,
         )
 
@@ -816,6 +839,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         latest_commit=latest_commit,
         version_source=version_source,
         git_checkout=is_git_checkout,
+        install_kind=install_kind,
     )
 
     blob.data[channel] = info.to_dict()
@@ -874,6 +898,18 @@ def apply(
     # forced rename pass.
     channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
     cwd = _git_root()
+    if _is_container_install():
+        msg = (
+            "Docker 容器内不支持维护页直接改写应用源码。容器文件系统是镜像产物,"
+            "在容器内 git checkout / pip install / npm build 会造成运行态与镜像层漂移,"
+            "容器重建后也会丢失。\n"
+            "请在宿主机项目目录执行:\n"
+            "  git pull\n"
+            "  docker compose -f docker/docker-compose.yml --profile gpu up -d --build\n"
+            "如使用 CPU profile,将 gpu 改为 cpu。命名卷中的 runs/、models/、datasets/、configs/ "
+            "会保留。"
+        )
+        raise RuntimeError(msg)
     if cwd is None:
         # This is the path ZIP-extracted users hit. The check() endpoint
         # already exposes ``git_checkout=False`` so the UI can grey out

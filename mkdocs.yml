@@ -72,6 +72,7 @@ nav:
   - 首页: index.md
   - 上手:
       - 安装: getting-started/install.md
+      - Docker 部署: getting-started/docker.md
       - 快速开始: getting-started/quickstart.md
       - 端到端教程: getting-started/smoke-test.md
   - 配置:
