@@ -80,8 +80,9 @@ cd web && npm ci && cd ..
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
 cp docker/.env.example docker/.env          # 可选：填镜像源 / token
-docker compose -f docker/docker-compose.yml up -d --build   # GPU 默认
-# CPU 机器：加 --profile cpu
+docker compose -f docker/docker-compose.yml --profile gpu up -d --build
+# CPU 机器：
+docker compose -f docker/docker-compose.yml --profile cpu up -d --build
 ```
 
 访问 `http://127.0.0.1:18765`。镜像只携带应用本体，训练后端(kohya / diffusion-pipe / anima_lora / ai-toolkit)启动后在挂载卷里通过 Web UI 或 `lorahub bootstrap-kohya` 安装，与本地哲学一致。完整说明见 [docs/getting-started/docker.md](docs/getting-started/docker.md)。

@@ -1,8 +1,8 @@
 # LoraHub — docker-compose
 #
 # Two profiles share ONE image:
-#   * GPU (default):  docker compose up
-#   * CPU:            docker compose --profile cpu up
+#   * GPU: docker compose --profile gpu up
+#   * CPU: docker compose --profile cpu up
 #
 # All LoraHub state lives in the named volume `lorahub-data`, mounted
 # at /data (= LORAHUB_HOME). `docker compose down` keeps the volume;
@@ -21,6 +21,7 @@ services:
   # host: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
   # ──────────────────────────────────────────────────────────────────
   lorahub:
+    profiles: ["gpu"]
     image: lorahub:dev
     build:
       context: ..
@@ -138,5 +139,8 @@ services:
 
 volumes:
   lorahub-data:
+    name: lorahub-data
   lorahub-anima-venv:
+    name: lorahub-anima-venv
   lorahub-aitoolkit-venv:
+    name: lorahub-aitoolkit-venv

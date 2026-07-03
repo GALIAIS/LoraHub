@@ -2,8 +2,8 @@
 # LoraHub — Docker image (GPU-default, CPU-capable)
 #
 # One image serves both profiles:
-#   * GPU (default):  docker compose up              → nvidia runtime, WD14/onnxruntime-gpu
-#   * CPU:            docker compose --profile cpu up → same image, no GPU device attached
+#   * GPU: docker compose --profile gpu up → nvidia runtime, WD14/onnxruntime-gpu
+#   * CPU: docker compose --profile cpu up → same image, no GPU device attached
 #
 # The image carries the LoraHub *application* only — code, vendored
 # `external/` backends, the built SPA, and the main venv with the
@@ -35,8 +35,12 @@ WORKDIR /build/web
 # Copy lockfile + manifests first for layer caching. package-lock.json is
 # the source of truth; `npm ci` refuses to run without it.
 COPY web/package.json web/package-lock.json ./
+ARG NPM_CONFIG_REGISTRY=""
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund
+    if [ -n "$NPM_CONFIG_REGISTRY" ]; then \
+        npm config set registry "$NPM_CONFIG_REGISTRY"; \
+    fi \
+    && npm ci --no-audit --no-fund
 
 # Now copy the rest of the source and build. Vite needs the full tree
 # (index.html, src/, public/, tsconfig, vite.config) to compile.

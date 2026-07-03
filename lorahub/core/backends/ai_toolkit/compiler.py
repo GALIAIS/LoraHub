@@ -48,6 +48,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
     width, height = _resolution_pair(cfg.sampling.resolution or cfg.dataset.resolution)
     dataset_width, dataset_height = _resolution_pair(cfg.dataset.resolution)
 
+    sample = _sample_section(cfg, width=width, height=height, train_steps=train_steps)
     process: dict[str, Any] = {
         "type": "diffusion_trainer",
         "training_folder": str(workspace / "ai_toolkit_output"),
@@ -92,16 +93,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
             "low_vram": False,
             "compile": bool(cfg.optimization.torch_compile),
         },
-        "sample": {
-            "sample_every": int(cfg.sampling.every_n_steps or train_steps),
-            "width": int(width),
-            "height": int(height),
-            "neg": "",
-            "seed": int(cfg.sampling.seed),
-            "sample_steps": int(cfg.sampling.inference_steps),
-            "guidance_scale": float(cfg.sampling.inference_cfg),
-            "prompts": [p.prompt for p in cfg.sampling.prompts] or ["a high quality image"],
-        },
+        "sample": sample,
         "logging": {"log_every": 1, "use_ui_logger": False},
     }
     if cfg.schedule.seed is not None:
@@ -111,6 +103,49 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
         "config": {"name": output_name, "process": [process]},
         "meta": {"name": output_name, "version": "1.0"},
     }
+
+
+def _sample_section(
+    cfg: TrainingConfig,
+    *,
+    width: int,
+    height: int,
+    train_steps: int,
+) -> dict[str, Any]:
+    sample: dict[str, Any] = {
+        "sampler": "flowmatch",
+        "sample_every": int(cfg.sampling.every_n_steps or train_steps),
+        "width": int(width),
+        "height": int(height),
+        "neg": "",
+        "seed": int(cfg.sampling.seed),
+        "sample_steps": int(cfg.sampling.inference_steps),
+        "guidance_scale": float(cfg.sampling.inference_cfg),
+    }
+    prompt_rows = cfg.sampling.prompts
+    if not prompt_rows:
+        sample["prompts"] = ["a high quality image"]
+        return sample
+
+    samples: list[dict[str, Any]] = []
+    for row in prompt_rows:
+        item: dict[str, Any] = {"prompt": row.prompt}
+        if row.negative:
+            item["neg"] = row.negative
+        if row.width is not None:
+            item["width"] = int(row.width)
+        if row.height is not None:
+            item["height"] = int(row.height)
+        if row.seed is not None:
+            item["seed"] = int(row.seed)
+        if row.cfg is not None:
+            item["guidance_scale"] = float(row.cfg)
+        if row.steps is not None:
+            item["sample_steps"] = int(row.steps)
+        samples.append(item)
+    sample["prompts"] = [item["prompt"] for item in samples]
+    sample["samples"] = samples
+    return sample
 
 
 def _resolution_pair(value: list[int] | tuple[int, ...]) -> tuple[int, int]:
@@ -186,6 +221,29 @@ def _sanitize_job(job: dict[str, Any]) -> None:
         prompts = []
     prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
     sample["prompts"] = prompts or ["a high quality image"]
+    raw_samples = sample.get("samples", [])
+    if isinstance(raw_samples, dict):
+        raw_samples = [raw_samples]
+    if isinstance(raw_samples, list):
+        clean_samples = []
+        for item in raw_samples:
+            if not isinstance(item, dict):
+                continue
+            prompt = item.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                continue
+            clean = dict(item)
+            clean["prompt"] = prompt
+            if "neg" in clean and not isinstance(clean["neg"], str):
+                clean["neg"] = ""
+            clean_samples.append(clean)
+        if clean_samples:
+            sample["samples"] = clean_samples
+            sample["prompts"] = [item["prompt"] for item in clean_samples]
+        else:
+            sample.pop("samples", None)
+    else:
+        sample.pop("samples", None)
 
     network = process.get("network", {})
     if isinstance(network, dict):

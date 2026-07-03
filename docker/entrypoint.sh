@@ -23,6 +23,10 @@ LORAHUB_PORT="${LORAHUB_PORT:-18765}"
 LORAHUB_BIND_HOST="${LORAHUB_BIND_HOST:-0.0.0.0}"
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
+BACKEND_VENV_DIRS=(
+    "/app/external/anima_lora/.venv"
+    "/app/external/ai_toolkit/venv"
+)
 
 # State redirects — must match the Dockerfile ENV block. Re-stated so
 # a manual `docker run --entrypoint bash` invocation still lands state
@@ -66,7 +70,10 @@ if [ "$(id -u)" = "0" ]; then
         "$LORAHUB_HOME/xdg/data" \
         "$LORAHUB_HOME/xdg/state" \
         "$LORAHUB_HOME/hf-home"
-    chown -R lorahub:lorahub "$LORAHUB_HOME"
+    for dir in "${BACKEND_VENV_DIRS[@]}"; do
+        mkdir -p "$dir"
+    done
+    chown -R lorahub:lorahub "$LORAHUB_HOME" "${BACKEND_VENV_DIRS[@]}"
 
     exec gosu lorahub:lorahub "$0" "$@"
 fi
@@ -85,7 +92,8 @@ mkdir -p \
     "$XDG_DATA_HOME" \
     "$XDG_STATE_HOME" \
     "$HF_HOME" \
-    "$HUGGINGFACE_HUB_CACHE"
+    "$HUGGINGFACE_HUB_CACHE" \
+    "${BACKEND_VENV_DIRS[@]}"
 
 # ── 4. Launch uvicorn ────────────────────────────────────────────────
 # `lorahub.api.app:app` is the same target scripts/run.sh uses. The

@@ -9,7 +9,7 @@
 | 文件 | 作用 |
 | --- | --- |
 | `docker/Dockerfile` | 多阶段构建:node 构建前端 → nvidia/cuda 运行时装 Python+uv+`[api,gpu,tagging]` extras |
-| `docker/docker-compose.yml` | GPU 默认 + `--profile cpu` 备选,命名卷,127.0.0.1 端口 |
+| `docker/docker-compose.yml` | `gpu` / `cpu` 两个互斥 profile,命名卷,127.0.0.1 端口 |
 | `docker/entrypoint.sh` | 非 root 降权、XDG/HF 缓存重定向、`exec uvicorn --host 0.0.0.0` |
 | `docker/.env.example` | 镜像源 / token / UID 等占位 |
 | 仓库根 `.dockerignore` | 排除本地状态/用户数据(Docker 要求放在 context 根,即 repo root) |
@@ -21,8 +21,8 @@ git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
 cp docker/.env.example docker/.env          # 可选:按需填镜像源
 
-# GPU(默认)
-docker compose -f docker/docker-compose.yml up -d --build
+# GPU
+docker compose -f docker/docker-compose.yml --profile gpu up -d --build
 
 # CPU
 docker compose -f docker/docker-compose.yml --profile cpu up -d --build

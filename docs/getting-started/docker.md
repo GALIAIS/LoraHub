@@ -28,8 +28,8 @@ cd LoraHub
 # (可选)复制环境变量文件,按需填写镜像源 / token
 cp docker/.env.example docker/.env
 
-# 构建并启动(GPU 默认)
-docker compose -f docker/docker-compose.yml up -d --build
+# 构建并启动 GPU 形态
+docker compose -f docker/docker-compose.yml --profile gpu up -d --build
 ```
 
 启动后访问 `http://127.0.0.1:18765`。健康检查:
@@ -156,7 +156,7 @@ docker run --rm -v lorahub-data:/data -v "$PWD":/backup \
 # 新机:构建镜像 → 恢复
 docker run --rm -v lorahub-data:/data -v "$PWD":/backup \
   ubuntu tar xzf /backup/lorahub-data-2026-07-03.tar.gz -C /
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml --profile gpu up -d
 ```
 
 ---
