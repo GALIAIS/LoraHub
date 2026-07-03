@@ -41,10 +41,10 @@ scripts\run.bat api          # 仅启动 API
 
 ```bash
 # Linux / macOS / WSL
-.venv/bin/lorahub manage install   # → ~/.local/bin/lorahub
+.venv/bin/python -m lorahub manage install   # → ~/.local/bin/lorahub
 
 # Windows
-.venv\Scripts\lorahub manage install   # → %LOCALAPPDATA%\lorahub\bin\lorahub.cmd
+.venv\Scripts\python.exe -m lorahub manage install   # → %LOCALAPPDATA%\lorahub\bin\lorahub.cmd
 
 # 之后可在任意目录使用：
 lorahub doctor                # 查看环境健康度

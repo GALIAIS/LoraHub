@@ -16,6 +16,7 @@ stay in English regardless.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,35 @@ def _venv_lorahub() -> Path | None:
     return cand if cand.is_file() else None
 
 
+def _venv_python() -> Path | None:
+    python = Path(sys.executable)
+    return python if python.is_file() else None
+
+
+def _project_root_for_shim() -> Path:
+    from lorahub.core.paths import project_root  # noqa: PLC0415
+
+    return project_root()
+
+
+def _windows_shim_body(python: Path, root: Path) -> str:
+    return (
+        "@echo off\r\n"
+        "setlocal\r\n"
+        f'set "PYTHONPATH={root};%PYTHONPATH%"\r\n'
+        f'call "{python}" -m lorahub %*\r\n'
+    )
+
+
+def _posix_shim_body(python: Path, root: Path) -> str:
+    return (
+        "#!/usr/bin/env sh\n"
+        f"PYTHONPATH={shlex.quote(str(root))}:${{PYTHONPATH:-}}\n"
+        "export PYTHONPATH\n"
+        f"exec {shlex.quote(str(python))} -m lorahub \"$@\"\n"
+    )
+
+
 @manage_app.command(help=t("manage.path.help"))
 def path() -> None:
     """Print the location of the currently-running ``lorahub`` command."""
@@ -102,14 +132,15 @@ def path() -> None:
 def install() -> None:
     """Add a ``lorahub`` shim to the user PATH.
 
-    Linux/macOS: symlink ``~/.local/bin/lorahub`` -> the venv entry.
+    Linux/macOS: write ``~/.local/bin/lorahub`` launcher.
     Windows: write ``%LOCALAPPDATA%\\lorahub\\bin\\lorahub.cmd`` and
     prepend that directory to the user PATH via ``setx``.
     """
-    venv_entry = _venv_lorahub()
-    if venv_entry is None:
+    venv_python = _venv_python()
+    if venv_python is None:
         err_console.print(t("manage.install.no_venv_entry"))
         raise typer.Exit(code=1)
+    project_root = _project_root_for_shim()
 
     shim_dir = _shim_dir()
     shim_dir.mkdir(parents=True, exist_ok=True)
@@ -119,14 +150,14 @@ def install() -> None:
         # cmd.exe parses .cmd files using the active ANSI code page (mbcs),
         # not ASCII or UTF-8. Using ascii here breaks any path containing
         # non-ASCII characters (e.g. CJK folder names, accented usernames).
-        shim_body = "@echo off\r\n" f'call "{venv_entry}" %*\r\n'
+        shim_body = _windows_shim_body(venv_python, project_root)
         try:
             shim.write_bytes(shim_body.encode("mbcs"))
         except UnicodeEncodeError as exc:
             err_console.print(
                 t(
                     "manage.install.path_unencodable",
-                    venv_entry=venv_entry,
+                    venv_entry=venv_python,
                     err=exc,
                 )
             )
@@ -168,12 +199,14 @@ def install() -> None:
         console.print(t("manage.install.windows_done", shim=shim, shim_dir=shim_dir))
         return
 
-    # POSIX: replace any existing shim with a fresh symlink so a venv
-    # rename doesn't leave a dangling link behind.
+    # POSIX: write a tiny launcher instead of symlinking the console
+    # script. It keeps working when the editable entry point is stale
+    # but the source checkout is present.
     if shim.exists() or shim.is_symlink():
         shim.unlink()
-    shim.symlink_to(venv_entry)
-    console.print(t("manage.install.posix_done", shim=shim, target=venv_entry))
+    shim.write_text(_posix_shim_body(venv_python, project_root), encoding="utf-8")
+    shim.chmod(0o755)
+    console.print(t("manage.install.posix_done", shim=shim, target=venv_python))
     if str(shim_dir) not in os.environ.get("PATH", "").split(os.pathsep):
         console.print(t("manage.install.path_hint", shim_dir=shim_dir))
 

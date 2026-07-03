@@ -337,11 +337,9 @@ if exist "%NWINFO_DIR%\nwinfo.exe" (
 echo.
 
 rem ---- [extra] register the `lorahub` CLI in the user PATH ----------
-rem ``.venv\Scripts\lorahub.exe`` exists after the editable install, but
-rem we want users to type ``lorahub`` from any cmd window. ``self install``
-rem writes ``%LOCALAPPDATA%\lorahub\bin\lorahub.cmd`` and adds that dir to
-rem the user PATH via setx. Errors are non-fatal — the venv shim still
-rem works, the user just has to invoke it via the full path.
+rem Register a user-PATH launcher that calls the venv Python with
+rem ``-m lorahub`` from this checkout. This avoids depending on a stale
+rem generated ``.venv\Scripts\lorahub.exe`` entry point.
 echo [extra] Registering lorahub CLI ...
 "%VENV_PY%" -m lorahub manage install
 echo.

@@ -6,7 +6,7 @@ import sys
 import os
 import subprocess
 import textwrap
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -112,6 +112,32 @@ def test_root_no_tui_prints_help() -> None:
     assert result.returncode == 0
     assert "Open-source LoRA training workbench" in result.stdout
     assert "Commands" in result.stdout
+
+
+def test_manage_install_windows_shim_runs_module_from_checkout() -> None:
+    from lorahub.cli import manage_cmd
+
+    body = manage_cmd._windows_shim_body(
+        Path(r"E:\AIGC\LoraHub\.venv\Scripts\python.exe"),
+        Path(r"E:\AIGC\LoraHub"),
+    )
+
+    assert r'set "PYTHONPATH=E:\AIGC\LoraHub;%PYTHONPATH%"' in body
+    assert r'call "E:\AIGC\LoraHub\.venv\Scripts\python.exe" -m lorahub %*' in body
+    assert "lorahub.exe" not in body
+
+
+def test_manage_install_posix_shim_runs_module_from_checkout() -> None:
+    from lorahub.cli import manage_cmd
+
+    body = manage_cmd._posix_shim_body(
+        PurePosixPath("/opt/LoraHub/.venv/bin/python"),
+        PurePosixPath("/opt/LoraHub"),
+    )
+
+    assert "PYTHONPATH=/opt/LoraHub:${PYTHONPATH:-}" in body
+    assert 'exec /opt/LoraHub/.venv/bin/python -m lorahub "$@"' in body
+    assert "/bin/lorahub" not in body
 
 
 def test_root_tui_detection_ignores_global_options() -> None:
@@ -359,6 +385,37 @@ def test_windows_daemon_creationflags_break_away_from_ssh_job() -> None:
     assert flags & 0x08000000  # CREATE_NO_WINDOW
     assert flags & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
     assert not service_mod._windows_daemon_creationflags(allow_breakaway=False) & 0x01000000
+
+
+def test_service_child_env_prepends_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.cli import service as service_mod
+
+    monkeypatch.setenv("PYTHONPATH", "old")
+
+    env = service_mod._pythonpath_env(Path(r"E:\AIGC\LoraHub"))
+
+    assert env["PYTHONPATH"].startswith(r"E:\AIGC\LoraHub")
+    assert env["PYTHONPATH"].endswith("old")
+
+
+def test_service_units_export_pythonpath_for_checkout() -> None:
+    from lorahub.cli import service as service_mod
+
+    systemd = service_mod._render_systemd_unit(
+        py="/opt/LoraHub/.venv/bin/python",
+        repo=PurePosixPath("/opt/LoraHub"),
+        host="0.0.0.0",
+        port=18765,
+    )
+    launchd = service_mod._render_launchd_plist(
+        py="/opt/LoraHub/.venv/bin/python",
+        repo=PurePosixPath("/opt/LoraHub"),
+        host="0.0.0.0",
+        port=18765,
+    )
+
+    assert "Environment=PYTHONPATH=/opt/LoraHub" in systemd
+    assert "<key>PYTHONPATH</key><string>/opt/LoraHub</string>" in launchd
 
 
 def test_service_resolves_windows_listener_pid(monkeypatch: pytest.MonkeyPatch) -> None:

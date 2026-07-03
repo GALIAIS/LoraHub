@@ -396,11 +396,9 @@ fi
 echo ""
 
 # ---- [extra] register the `lorahub` CLI in the user PATH ----------
-# .venv/bin/lorahub already exists thanks to ``uv pip install -e .``,
-# but it isn't reachable without the venv being activated. Run the
-# CLI's own self-install path so a fresh shell can call ``lorahub``
-# from anywhere — silent when already installed, fails soft so a
-# weird HOME / permission setup doesn't sink the whole installer.
+# Register a user-PATH launcher that calls the venv Python with
+# `-m lorahub` from this checkout. This avoids depending on a stale
+# generated `.venv/bin/lorahub` entry point.
 echo "[extra] Registering lorahub CLI ..."
 "$VENV_PY" -m lorahub manage install 2>&1 || true
 LOCAL_BIN="$HOME/.local/bin"

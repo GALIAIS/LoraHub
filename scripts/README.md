@@ -95,14 +95,14 @@ outside China can override with `LORAHUB_PYPI_INDEX=...`,
 ## CLI reference
 
 After running `scripts/install.{sh,bat}` once, the `lorahub` console
-script lives in `.venv/bin/`. Add it to your user PATH with:
+launcher can be registered in your user PATH with:
 
 ```bash
 # Linux / macOS / WSL
-.venv/bin/lorahub manage install   # creates ~/.local/bin/lorahub symlink
+.venv/bin/python -m lorahub manage install
 
 # Windows
-.venv\Scripts\lorahub manage install   # writes %LOCALAPPDATA%\lorahub\bin shim + setx PATH
+.venv\Scripts\python.exe -m lorahub manage install
 ```
 
 After that, `lorahub` is available globally. Restart your shell to pick

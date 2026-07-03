@@ -32,6 +32,7 @@ Layout decisions:
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -220,6 +221,13 @@ def _daemon_python() -> Path:
     return py
 
 
+def _pythonpath_env(repo: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(repo) + (os.pathsep + existing if existing else "")
+    return env
+
+
 def _windows_daemon_creationflags(*, allow_breakaway: bool = True) -> int:
     """Flags for a headless Windows daemon process.
 
@@ -329,6 +337,7 @@ def start(
     log = _log_file()
     log.parent.mkdir(parents=True, exist_ok=True)
     log_fh = log.open("ab")
+    child_env = _pythonpath_env(_resolve_repo_root())
 
     if sys.platform == "win32":
         # CREATE_BREAKAWAY_FROM_JOB keeps services started through Windows
@@ -340,6 +349,7 @@ def start(
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh,
                 stderr=log_fh,
+                env=child_env,
                 creationflags=_windows_daemon_creationflags(),
                 close_fds=True,
             )
@@ -349,6 +359,7 @@ def start(
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh,
                 stderr=log_fh,
+                env=child_env,
                 creationflags=_windows_daemon_creationflags(allow_breakaway=False),
                 close_fds=True,
             )
@@ -358,6 +369,7 @@ def start(
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
+            env=child_env,
             start_new_session=True,  # POSIX: detach from controlling tty
             close_fds=True,
         )
@@ -626,10 +638,22 @@ def install_unit(
     if sys.platform == "darwin":
         text = _render_launchd_plist(py=py, repo=repo_root, host=host, port=port)
     elif sys.platform == "win32":
+        task_cmd = subprocess.list2cmdline(
+            [py, "-m", "uvicorn", "lorahub.api.app:app", "--host", host, "--port", str(port)]
+        )
+        task_tr = subprocess.list2cmdline(
+            [
+                "cmd",
+                "/d",
+                "/c",
+                f'cd /d "{repo_root}" && set "PYTHONPATH={repo_root};%PYTHONPATH%" && {task_cmd}',
+            ]
+        )
         text = (
             "rem schtasks invocation — register at logon\n"
+            f'rem run from: {repo_root}\n'
             f'schtasks /Create /SC ONLOGON /TN LoraHub /F /RL HIGHEST '
-            f'/TR "{py} -m uvicorn lorahub.api.app:app --host {host} --port {port}"\n'
+            f'/TR "{task_tr}"\n'
         )
     else:
         text = _render_systemd_unit(py=py, repo=repo_root, host=host, port=port)
@@ -650,14 +674,18 @@ def _resolve_repo_root() -> Path:
 
 
 def _render_systemd_unit(*, py: str, repo: Path, host: str, port: int) -> str:
+    py_q = shlex.quote(py)
+    repo_q = shlex.quote(str(repo))
+    pythonpath_q = shlex.quote(f"PYTHONPATH={repo}")
     return (
         "[Unit]\n"
         "Description=LoraHub Workbench API\n"
         "After=network.target\n\n"
         "[Service]\n"
         "Type=simple\n"
-        f"WorkingDirectory={repo}\n"
-        f"ExecStart={py} -m uvicorn lorahub.api.app:app --host {host} --port {port}\n"
+        f"WorkingDirectory={repo_q}\n"
+        f"Environment={pythonpath_q}\n"
+        f"ExecStart={py_q} -m uvicorn lorahub.api.app:app --host {host} --port {port}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n\n"
         "[Install]\n"
@@ -680,6 +708,9 @@ def _render_launchd_plist(*, py: str, repo: Path, host: str, port: int) -> str:
         f"    <string>--port</string><string>{port}</string>\n"
         "  </array>\n"
         f"  <key>WorkingDirectory</key><string>{repo}</string>\n"
+        "  <key>EnvironmentVariables</key><dict>\n"
+        f"    <key>PYTHONPATH</key><string>{repo}</string>\n"
+        "  </dict>\n"
         "  <key>RunAtLoad</key><true/>\n"
         "  <key>KeepAlive</key><true/>\n"
         "</dict></plist>\n"

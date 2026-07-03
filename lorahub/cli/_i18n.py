@@ -92,27 +92,27 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     },
     "manage.path.shutil_which": {"zh": "shutil.which:   ", "en": "shutil.which:   "},
     "manage.path.venv_entry": {"zh": "venv 入口:     ", "en": "venv entry:     "},
-    "manage.path.shim": {"zh": "用户 PATH 软链:", "en": "user-PATH shim:"},
+    "manage.path.shim": {"zh": "用户 PATH 启动器:", "en": "user-PATH launcher:"},
     "manage.path.not_on_path": {"zh": "不在 PATH 上", "en": "not on PATH"},
     "manage.path.none": {"zh": "未安装", "en": "none"},
     "manage.path.exists": {"zh": "已存在", "en": "exists"},
     "manage.path.absent": {"zh": "缺失", "en": "absent"},
 
     "manage.install.help": {
-        "zh": "把 `lorahub` 软链 / 启动器写入用户 PATH。",
-        "en": "Add a ``lorahub`` shim to the user PATH.",
+        "zh": "把 `lorahub` 启动器写入用户 PATH。",
+        "en": "Add a ``lorahub`` launcher to the user PATH.",
     },
     "manage.install.no_venv_entry": {
-        "zh": "[red]当前 venv 中没有 lorahub 入口[/]\n请先运行 scripts/install.{sh,bat} 让 .venv/bin/lorahub 存在。",
-        "en": "[red]no lorahub entry in the active venv[/]\nRun scripts/install.{sh,bat} first so .venv/bin/lorahub exists.",
+        "zh": "[red]当前 venv 中没有 Python 解释器[/]\n请先运行 scripts/install.{sh,bat} 创建 .venv。",
+        "en": "[red]no Python interpreter in the active venv[/]\nRun scripts/install.{sh,bat} first to create .venv.",
     },
     "manage.install.path_unencodable": {
         "zh": "[red]无法写入 lorahub 启动器:venv 入口路径含有当前 Windows ANSI 代码页(mbcs)无法编码的字符。[/]\n  venv 入口:{venv_entry}\n  编码错误:{err}\n请把项目移到只包含 ANSI 代码页可表示字符的目录(避免中文以外的特殊符号、表情或当前代码页未覆盖的字符)。",
-        "en": "[red]cannot write lorahub shim: the venv entry path contains characters the active Windows ANSI code page (mbcs) cannot encode.[/]\n  venv entry: {venv_entry}\n  encode error: {err}\nMove the project to a directory whose path only uses characters representable in your current ANSI code page.",
+        "en": "[red]cannot write lorahub launcher: the venv entry path contains characters the active Windows ANSI code page (mbcs) cannot encode.[/]\n  venv entry: {venv_entry}\n  encode error: {err}\nMove the project to a directory whose path only uses characters representable in your current ANSI code page.",
     },
     "manage.install.setx_failed": {
-        "zh": "[yellow]软链写入 {shim},但 setx PATH 失败:[/] {err}\n请手动把 {shim_dir} 加到用户 PATH。",
-        "en": "[yellow]wrote shim {shim}, but setx PATH failed:[/] {err}\nAdd this to your user PATH manually: {shim_dir}",
+        "zh": "[yellow]启动器已写入 {shim},但 setx PATH 失败:[/] {err}\n请手动把 {shim_dir} 加到用户 PATH。",
+        "en": "[yellow]wrote launcher {shim}, but setx PATH failed:[/] {err}\nAdd this to your user PATH manually: {shim_dir}",
     },
     "manage.install.windows_done": {
         "zh": "[green]已安装[/] {shim}\n[dim]已把 {shim_dir} 加到用户 PATH(打开新终端后生效)[/]",
@@ -128,20 +128,20 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     },
 
     "manage.uninstall.help": {
-        "zh": "从用户 PATH 中移除 `lorahub` 软链。",
-        "en": "Remove the ``lorahub`` shim from the user PATH.",
+        "zh": "从用户 PATH 中移除 `lorahub` 启动器。",
+        "en": "Remove the ``lorahub`` launcher from the user PATH.",
     },
     "manage.uninstall.no_shim": {
-        "zh": "[dim]{shim} 处没有软链[/]",
-        "en": "[dim]no shim at {shim}[/]",
+        "zh": "[dim]{shim} 处没有启动器[/]",
+        "en": "[dim]no launcher at {shim}[/]",
     },
     "manage.uninstall.removed": {
         "zh": "[green]已移除[/] {shim}",
         "en": "[green]removed[/] {shim}",
     },
     "manage.uninstall.dir_hint": {
-        "zh": "[dim]提示:软链所在目录仍在你的用户 PATH 上。[/]\n如想彻底清理,请通过 设置 → 环境变量 移除。",
-        "en": "[dim]note: the shim directory is still on your user PATH.[/]\nRemove it via Settings → Environment Variables if you want a clean slate.",
+        "zh": "[dim]提示:启动器所在目录仍在你的用户 PATH 上。[/]\n如想彻底清理,请通过 设置 → 环境变量 移除。",
+        "en": "[dim]note: the launcher directory is still on your user PATH.[/]\nRemove it via Settings → Environment Variables if you want a clean slate.",
     },
 
     "manage.update.help": {
