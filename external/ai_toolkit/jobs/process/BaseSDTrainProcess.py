@@ -34,7 +34,7 @@ from toolkit.ip_adapter import IPAdapter
 from toolkit.lora_special import LoRASpecialNetwork
 from toolkit.lorm import convert_diffusers_unet_to_lorm, count_parameters, print_lorm_extract_details, \
     lorm_ignore_if_contains, lorm_parameter_threshold, LORM_TARGET_REPLACE_MODULE
-from toolkit.lycoris_special import LycorisSpecialNetwork
+from toolkit.lycoris_special import LycorisSpecialNetwork, LohaSpecialModule
 from toolkit.models.decorator import Decorator
 from toolkit.network_mixins import Network
 from toolkit.optimizer import get_optimizer
@@ -1758,9 +1758,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 is_lorm = self.network_config.type.lower() == 'lorm'
                 # default to LoCON if there are any conv layers or if it is named
                 NetworkClass = LoRASpecialNetwork
-                if self.network_config.type.lower() == 'locon' or self.network_config.type.lower() == 'lycoris':
+                if self.network_config.type.lower() in {'locon', 'loha', 'lycoris'}:
                     NetworkClass = LycorisSpecialNetwork
                     is_lycoris = True
+                    if self.network_config.type.lower() == 'loha':
+                        network_kwargs['network_module'] = LohaSpecialModule
 
                 if is_lorm:
                     network_kwargs['ignore_if_contains'] = lorm_ignore_if_contains

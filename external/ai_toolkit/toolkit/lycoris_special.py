@@ -4,6 +4,7 @@ from typing import Optional, Union, List, Type
 
 import torch
 from lycoris.kohya import LycorisNetwork, LoConModule
+from lycoris.modules.loha import LohaModule
 from lycoris.modules.glora import GLoRAModule
 from torch import nn
 from transformers import CLIPTextModel
@@ -105,6 +106,74 @@ class LoConSpecialModule(ToolkitModuleMixin, LoConModule, ExtractableModuleMixin
 
     def load_weight_hook(self, *args, **kwargs):
         self.scalar = nn.Parameter(torch.ones_like(self.scalar))
+
+
+class LohaSpecialModule(LohaModule, ToolkitModuleMixin):
+    def __init__(
+            self,
+            lora_name, org_module: nn.Module,
+            multiplier=1.0,
+            lora_dim=4, alpha=1,
+            dropout=0., rank_dropout=0., module_dropout=0.,
+            use_cp=False,
+            network: 'LycorisSpecialNetwork' = None,
+            **kwargs,
+    ):
+        ToolkitModuleMixin.__init__(self, network=network)
+        LohaModule.__init__(
+            self,
+            lora_name,
+            org_module,
+            multiplier,
+            lora_dim,
+            alpha,
+            dropout,
+            rank_dropout,
+            module_dropout,
+            use_cp,
+            **kwargs,
+        )
+        self.can_merge_in = True
+
+    def apply_to(self):
+        self.org_forward = self.org_module[0].forward
+        self.org_module[0].forward = self.forward
+
+    def load_weight_hook(self, *args, **kwargs):
+        self.scalar = nn.Parameter(torch.ones_like(self.scalar))
+
+    def forward(self, x, *args, **kwargs):
+        network = self.network_ref()
+        if (not network.is_active) or network.is_merged_in or network._multiplier == 0:
+            return self.org_forward(x, *args, **kwargs)
+        old_multiplier = self.multiplier
+        multiplier = network.torch_multiplier
+        self.multiplier = multiplier.mean() if isinstance(multiplier, torch.Tensor) else multiplier
+        try:
+            return LohaModule.forward(self, x)
+        finally:
+            self.multiplier = old_multiplier
+
+    def reset_weights(self):
+        with torch.no_grad():
+            self.scalar.zero_()
+
+    @torch.no_grad()
+    def merge_in(self, merge_weight=1.0):
+        if not self.can_merge_in:
+            return
+        org = self.org_module[0]
+        org_sd = org.state_dict()
+        if 'weight._data' in org_sd:
+            return
+        weight = org.weight.float()
+        delta = self.get_weight(weight).to(weight.device, dtype=weight.dtype)
+        org_sd["weight"] = (weight + merge_weight * delta * self.scalar).to(org.weight.dtype)
+        org.load_state_dict(org_sd)
+
+    @torch.no_grad()
+    def merge_out(self, merge_out_weight=1.0):
+        self.merge_in(merge_weight=-abs(merge_out_weight))
 
 
 class LycorisSpecialNetwork(ToolkitNetworkMixin, LycorisNetwork):

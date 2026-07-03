@@ -181,14 +181,14 @@ class SettingsStore:
 
     def load(self) -> Settings:
         if not self.path.is_file():
-            return Settings()
+            return _apply_process_env(Settings())
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return Settings()
+            return _apply_process_env(Settings())
         if not isinstance(data, dict):
-            return Settings()
-        return Settings.from_dict(data)
+            return _apply_process_env(Settings())
+        return _apply_process_env(Settings.from_dict(data))
 
     def save(self, settings: Settings) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,6 +198,22 @@ class SettingsStore:
             encoding="utf-8",
         )
         tmp.replace(self.path)
+
+
+def _first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
+
+
+def _apply_process_env(settings: Settings) -> Settings:
+    """Apply container/script environment aliases that should win at runtime."""
+    github_proxy = _first_env("LORAHUB_GITHUB_PROXY", "LORAHUB_GH_PROXY")
+    if github_proxy is not None:
+        settings.github_proxy = github_proxy
+    return settings
 
 
 # --------------------------------------------------------------------------- #

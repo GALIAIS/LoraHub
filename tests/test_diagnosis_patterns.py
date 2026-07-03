@@ -83,6 +83,9 @@ _FIXTURES: dict[str, str] = {
         "Watchdog caught collective operation timeout: "
         "WorkNCCL(SeqNum=42, OpType=ALLREDUCE)"
     ),
+    "ai_toolkit_sample_prompt_type": (
+        'TypeError: can only concatenate str (not "bool") to str'
+    ),
     "subprocess_returncode": (
         "subprocess.CalledProcessError: Command '['accelerate','launch']' "
         "returned non-zero exit status 1"

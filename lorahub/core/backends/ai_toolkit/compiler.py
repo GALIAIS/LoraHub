@@ -16,6 +16,9 @@ class CompilationError(ValueError):
     """Raised when a config cannot be expressed as an ai-toolkit job."""
 
 
+_KREA2_NETWORK_TYPES = {"lora", "dora", "loha", "lokr", "lorm"}
+
+
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
@@ -29,6 +32,7 @@ def compile_config(
     config_path = workspace / "_lorahub_ai_toolkit.yaml"
     job = _build_job(cfg, workspace)
     _overlay_extra_args(job, cfg.backend.extra_args)
+    _sanitize_job(job)
     return [str(config_path)], {
         config_path: yaml.safe_dump(job, sort_keys=False, allow_unicode=True)
     }
@@ -44,15 +48,12 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
     width, height = _resolution_pair(cfg.sampling.resolution or cfg.dataset.resolution)
     dataset_width, dataset_height = _resolution_pair(cfg.dataset.resolution)
 
+    sample = _sample_section(cfg, width=width, height=height, train_steps=train_steps)
     process: dict[str, Any] = {
         "type": "diffusion_trainer",
         "training_folder": str(workspace / "ai_toolkit_output"),
         "device": "cuda",
-        "network": {
-            "type": "lora",
-            "linear": int(cfg.network.rank),
-            "linear_alpha": int(cfg.network.alpha),
-        },
+        "network": _network_section(cfg),
         "save": {
             "dtype": _dtype(cfg.output.save_dtype),
             "save_every": int(cfg.output.save_every_n_steps or train_steps),
@@ -92,15 +93,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
             "low_vram": False,
             "compile": bool(cfg.optimization.torch_compile),
         },
-        "sample": {
-            "sample_every": int(cfg.sampling.every_n_steps or train_steps),
-            "width": int(width),
-            "height": int(height),
-            "seed": int(cfg.sampling.seed),
-            "sample_steps": int(cfg.sampling.inference_steps),
-            "guidance_scale": float(cfg.sampling.inference_cfg),
-            "prompts": [p.prompt for p in cfg.sampling.prompts] or ["a high quality image"],
-        },
+        "sample": sample,
         "logging": {"log_every": 1, "use_ui_logger": False},
     }
     if cfg.schedule.seed is not None:
@@ -112,10 +105,76 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
     }
 
 
+def _sample_section(
+    cfg: TrainingConfig,
+    *,
+    width: int,
+    height: int,
+    train_steps: int,
+) -> dict[str, Any]:
+    sample: dict[str, Any] = {
+        "sampler": "flowmatch",
+        "sample_every": int(cfg.sampling.every_n_steps or train_steps),
+        "width": int(width),
+        "height": int(height),
+        "neg": "",
+        "seed": int(cfg.sampling.seed),
+        "sample_steps": int(cfg.sampling.inference_steps),
+        "guidance_scale": float(cfg.sampling.inference_cfg),
+    }
+    prompt_rows = cfg.sampling.prompts
+    if not prompt_rows:
+        sample["prompts"] = ["a high quality image"]
+        return sample
+
+    samples: list[dict[str, Any]] = []
+    for row in prompt_rows:
+        item: dict[str, Any] = {"prompt": row.prompt}
+        if row.negative:
+            item["neg"] = row.negative
+        if row.width is not None:
+            item["width"] = int(row.width)
+        if row.height is not None:
+            item["height"] = int(row.height)
+        if row.seed is not None:
+            item["seed"] = int(row.seed)
+        if row.cfg is not None:
+            item["guidance_scale"] = float(row.cfg)
+        if row.steps is not None:
+            item["sample_steps"] = int(row.steps)
+        samples.append(item)
+    sample["prompts"] = [item["prompt"] for item in samples]
+    sample["samples"] = samples
+    return sample
+
+
 def _resolution_pair(value: list[int] | tuple[int, ...]) -> tuple[int, int]:
     if len(value) == 1:
         return int(value[0]), int(value[0])
     return int(value[0]), int(value[1])
+
+
+def _network_section(cfg: TrainingConfig) -> dict[str, Any]:
+    n = cfg.network
+    if n.type not in _KREA2_NETWORK_TYPES:
+        allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
+        raise CompilationError(
+            f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {n.type!r}"
+        )
+    network: dict[str, Any] = {
+        "type": n.type,
+        "linear": int(n.rank),
+        "linear_alpha": int(n.alpha),
+    }
+    if n.type == "lorm":
+        network["lorm"] = {
+            "extract_mode": "fixed",
+            "extract_mode_param": int(n.rank),
+            "parameter_threshold": 0,
+        }
+    if n.network_dropout > 0:
+        network["dropout"] = float(n.network_dropout)
+    return network
 
 
 def _dtype(value: str) -> str:
@@ -144,6 +203,57 @@ def _overlay_extra_args(job: dict[str, Any], extra: dict[str, Any]) -> None:
         else:
             if isinstance(cursor, dict):
                 cursor[parts[-1]] = _coerce(value)
+
+
+def _sanitize_job(job: dict[str, Any]) -> None:
+    process = job["config"]["process"][0]
+    sample = process.setdefault("sample", {})
+    if not isinstance(sample, dict):
+        process["sample"] = sample = {}
+
+    neg = sample.get("neg", "")
+    sample["neg"] = neg if isinstance(neg, str) else ""
+
+    prompts = sample.get("prompts", [])
+    if isinstance(prompts, str):
+        prompts = [prompts]
+    if not isinstance(prompts, list):
+        prompts = []
+    prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
+    sample["prompts"] = prompts or ["a high quality image"]
+    raw_samples = sample.get("samples", [])
+    if isinstance(raw_samples, dict):
+        raw_samples = [raw_samples]
+    if isinstance(raw_samples, list):
+        clean_samples = []
+        for item in raw_samples:
+            if not isinstance(item, dict):
+                continue
+            prompt = item.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                continue
+            clean = dict(item)
+            clean["prompt"] = prompt
+            if "neg" in clean and not isinstance(clean["neg"], str):
+                clean["neg"] = ""
+            clean_samples.append(clean)
+        if clean_samples:
+            sample["samples"] = clean_samples
+            sample["prompts"] = [item["prompt"] for item in clean_samples]
+        else:
+            sample.pop("samples", None)
+    else:
+        sample.pop("samples", None)
+
+    network = process.get("network", {})
+    if isinstance(network, dict):
+        ntype = str(network.get("type", "lora")).lower()
+        if ntype not in _KREA2_NETWORK_TYPES:
+            allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
+            raise CompilationError(
+                f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {ntype!r}"
+            )
+        network["type"] = ntype
 
 
 def _coerce(value: Any) -> Any:

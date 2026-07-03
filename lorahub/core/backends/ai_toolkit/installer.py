@@ -11,6 +11,7 @@ from lorahub.core.backends._common.installer import (
     DEFAULT_TORCH,
     DEFAULT_TORCHVISION,
     ProgressCallback,
+    pip_install_with_torch_index_fallback,
 )
 from lorahub.core.backends.errors import BootstrapError
 from lorahub.core.toolchain import uv as _uv
@@ -43,6 +44,21 @@ def create_venv(plan: BootstrapPlan, *, progress: ProgressCallback | None = None
 
 def install_torch(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) -> None:
     _common.install_torch(plan, progress=progress)
+    torchaudio_version = plan.torch_version
+    args = [
+        f"torchaudio=={torchaudio_version}",
+        "--index-url",
+        plan.torch_index,
+    ]
+    try:
+        pip_install_with_torch_index_fallback(
+            plan,
+            args,
+            step=f"install torchaudio=={torchaudio_version} ({plan.cuda_version})",
+            progress=progress,
+        )
+    except RuntimeError as exc:
+        raise BootstrapError(f"install torchaudio=={torchaudio_version}", 1) from exc
 
 
 def install_requirements(

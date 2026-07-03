@@ -59,6 +59,7 @@ import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
 import { ValidationFields } from "./sections/validation"
 import { ResumeFields } from "./sections/resume"
 import { FLOW_MATCH_ARCHES } from "./options"
+import { defaultArchFor, isArchSupported } from "./backend-meta"
 import { buildErrorMap, setIn } from "./types"
 import type { ConfigFormValue } from "./types"
 import { ReadOnlyProvider, Section } from "./widgets"
@@ -66,6 +67,11 @@ import { ReadOnlyProvider, Section } from "./widgets"
 export type { ConfigFormValue } from "./types"
 
 export type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
+const AI_TOOLKIT_DEFAULT_CHECKPOINT = "krea/Krea-2-Raw"
+const AI_TOOLKIT_KREA_CHECKPOINTS = new Set([
+  "krea/Krea-2-Raw",
+  "krea/Krea-2-Turbo",
+])
 
 const UNUSED_SECTIONS: Record<BackendKey, readonly string[]> = {
   kohya: [],
@@ -135,6 +141,30 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
     [value, onChange],
   )
 
+  const setBackendType = useCallback(
+    (raw: string) => {
+      const nextBackend = raw as BackendKey
+      let next = setIn(value, ["backend", "type"], nextBackend)
+      let archChanged = false
+      if (!isArchSupported(nextBackend, value.baseModel?.arch)) {
+        const nextArch = defaultArchFor(nextBackend)
+        next = setIn(next, ["baseModel", "arch"], nextArch)
+        archChanged = true
+        if (nextArch !== "sdxl" && next.baseModel?.archVariant) {
+          next = setIn(next, ["baseModel", "archVariant"], "")
+        }
+      }
+      if (nextBackend === "ai_toolkit") {
+        const checkpoint = String(next.baseModel?.checkpoint ?? "").trim()
+        if (archChanged || !checkpoint || !AI_TOOLKIT_KREA_CHECKPOINTS.has(checkpoint)) {
+          next = setIn(next, ["baseModel", "checkpoint"], AI_TOOLKIT_DEFAULT_CHECKPOINT)
+        }
+      }
+      onChange(next)
+    },
+    [value, onChange],
+  )
+
   const backendType = (value.backend?.type ?? undefined) as
     | "kohya"
     | "diffusion-pipe"
@@ -151,7 +181,12 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         title="后端选择"
         subtitle="选择训练后端。表单按后端显示对应字段。"
       >
-        <BackendFields value={value.backend} set={set} errorMap={errorMap} />
+        <BackendFields
+          value={value.backend}
+          set={set}
+          errorMap={errorMap}
+          onTypeChange={setBackendType}
+        />
       </Section>
 
       {backendType === "diffusion-pipe" ? (

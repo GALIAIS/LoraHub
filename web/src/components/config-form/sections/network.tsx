@@ -1,5 +1,11 @@
-import { memo } from "react"
-import { NETWORK_DTYPE_OPTIONS, NETWORK_TYPE_OPTIONS } from "../options"
+import { memo, useEffect } from "react"
+import {
+  AI_TOOLKIT_NETWORK_TYPE_OPTIONS,
+  DIFFUSION_PIPE_NETWORK_TYPE_OPTIONS,
+  KOHYA_NETWORK_TYPE_OPTIONS,
+  NETWORK_DTYPE_OPTIONS,
+  NETWORK_TYPE_OPTIONS,
+} from "../options"
 import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import { EnumSelect, FloatInput, IntInput, PathInput, Row, ToggleSwitch } from "../widgets"
 
@@ -18,18 +24,36 @@ export const NetworkFields = memo(function NetworkFields({
   const type = v.type ?? "lora"
   const isDiffusionPipe = backendType === "diffusion-pipe"
   const isAiToolkit = backendType === "ai_toolkit"
+  const networkTypeOptions =
+    backendType === "ai_toolkit"
+      ? AI_TOOLKIT_NETWORK_TYPE_OPTIONS
+      : backendType === "diffusion-pipe"
+        ? DIFFUSION_PIPE_NETWORK_TYPE_OPTIONS
+        : backendType === "kohya"
+          ? KOHYA_NETWORK_TYPE_OPTIONS
+          : NETWORK_TYPE_OPTIONS
+  const selectedType = networkTypeOptions.some((option) => option.value === type)
+    ? type
+    : "lora"
+
+  useEffect(() => {
+    if (type !== selectedType) {
+      set(["network", "type"], selectedType)
+    }
+  }, [selectedType, set, type])
+
   // Pure LoRA / DoRA in sd-scripts don't expose conv layers; the schema
   // rejects conv_dim / conv_alpha on those types, so hide the fields.
-  const supportsConv = !isDiffusionPipe && !isAiToolkit && (type === "locon" || type === "loha")
+  const supportsConv = !isDiffusionPipe && !isAiToolkit && (selectedType === "locon" || selectedType === "loha" || selectedType === "lokr")
   const swnEnabled =
     v.scaleWeightNorms !== null && v.scaleWeightNorms !== undefined
   return (
     <>
       <Row label="网络类型">
         <EnumSelect
-          value={type}
+          value={selectedType}
           onChange={(t) => set(["network", "type"], t)}
-          options={NETWORK_TYPE_OPTIONS}
+          options={networkTypeOptions}
         />
       </Row>
       <Row
@@ -84,7 +108,7 @@ export const NetworkFields = memo(function NetworkFields({
             <>
               <Row
                 label="Conv Rank"
-                description="LyCORIS conv 层秩。仅对 locon / loha 生效。"
+                description="LyCORIS conv 层秩。"
                 errors={errorMap.get("network.convDim")}
               >
                 <IntInput

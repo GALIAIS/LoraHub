@@ -54,6 +54,14 @@ export const BaseModelFields = memo(function BaseModelFields({
     )
   }, [backendType])
 
+  const isAiToolkit = backendType === "ai_toolkit"
+  const checkpointDescription = isAiToolkit
+    ? "Krea2 模型仓库 ID 或本地快照目录。"
+    : "基础模型 .safetensors 文件路径。可从 models/ 目录扫描结果下拉选择，或手动输入绝对/相对路径。"
+  const checkpointPlaceholder = isAiToolkit
+    ? "krea/Krea-2-Raw"
+    : "./models/sdxl_base_1.0.safetensors"
+
   return (
     <>
       <Row label="架构" required errors={errorMap.get("baseModel.arch")}>
@@ -79,26 +87,28 @@ export const BaseModelFields = memo(function BaseModelFields({
       <Row
         label="基础模型"
         required
-        description="基础模型 .safetensors 文件路径。可从 models/ 目录扫描结果下拉选择，或手动输入绝对/相对路径。"
+        description={checkpointDescription}
         errors={errorMap.get("baseModel.checkpoint")}
       >
         <ModelPathPicker
           value={value.checkpoint}
           onChange={(v) => set(["baseModel", "checkpoint"], v)}
-          placeholder="./models/sdxl_base_1.0.safetensors"
+          placeholder={checkpointPlaceholder}
         />
       </Row>
-      <Row
-        label="VAE 覆盖"
-        description="可选。使用自定义 VAE 替代基础模型自带的。"
-        errors={errorMap.get("baseModel.vae")}
-      >
-        <ModelPathPicker
-          value={value.vae ?? ""}
-          onChange={(v) => set(["baseModel", "vae"], v || null)}
-          placeholder="./models/sdxl_vae.safetensors（可选）"
-        />
-      </Row>
+      {!isAiToolkit && (
+        <Row
+          label="VAE 覆盖"
+          description="可选。使用自定义 VAE 替代基础模型自带的。"
+          errors={errorMap.get("baseModel.vae")}
+        >
+          <ModelPathPicker
+            value={value.vae ?? ""}
+            onChange={(v) => set(["baseModel", "vae"], v || null)}
+            placeholder="./models/sdxl_vae.safetensors（可选）"
+          />
+        </Row>
+      )}
     </>
   )
 })

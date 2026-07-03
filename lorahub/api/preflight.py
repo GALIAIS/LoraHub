@@ -155,7 +155,11 @@ def _check_model_files(cfg: TrainingConfig) -> list[PreflightFinding]:
     out: list[PreflightFinding] = []
 
     ckpt = cfg.base_model.checkpoint
-    if ckpt is None or not _path_exists_as_file_or_dir(ckpt):
+    if (
+        ckpt is None
+        or not _checkpoint_is_remote_model(cfg, ckpt)
+        and not _path_exists_as_file_or_dir(ckpt)
+    ):
         out.append(
             PreflightFinding(
                 category="model_missing",
@@ -240,6 +244,14 @@ def _check_model_files(cfg: TrainingConfig) -> list[PreflightFinding]:
                 )
 
     return out
+
+
+def _checkpoint_is_remote_model(cfg: TrainingConfig, ckpt: Path) -> bool:
+    """ai-toolkit Krea2 accepts Hugging Face repo IDs as model.name_or_path."""
+    if cfg.backend.type != "ai_toolkit" or cfg.base_model.arch != "krea2":
+        return False
+    value = str(ckpt).strip().replace("\\", "/")
+    return value in {"krea/Krea-2-Raw", "krea/Krea-2-Turbo"}
 
 
 def _check_dataset(cfg: TrainingConfig) -> list[PreflightFinding]:

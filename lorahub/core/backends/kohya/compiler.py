@@ -90,6 +90,7 @@ _NETWORK_MODULE_MAP: dict[str, str] = {
     "lora": "networks.lora",
     "locon": "lycoris.kohya",
     "loha": "lycoris.kohya",
+    "lokr": "lycoris.kohya",
     "dora": "networks.lora",
 }
 
@@ -261,6 +262,8 @@ def _emit_network_args(cfg: TrainingConfig, args: list[str]) -> None:
         network_args.append("algo=locon")
     elif n.type == "loha":
         network_args.append("algo=loha")
+    elif n.type == "lokr":
+        network_args.append("algo=lokr")
     elif n.type == "dora":
         network_args.append("dora_wd=True")
 
@@ -1248,4 +1251,3 @@ def _emit_metadata_args(cfg: TrainingConfig, args: list[str]) -> None:
                 "field; passing through verbatim",
                 key,
             )
-

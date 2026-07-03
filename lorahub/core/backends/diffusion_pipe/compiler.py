@@ -580,7 +580,7 @@ def _adapter_section(cfg: TrainingConfig) -> list[str]:
         # `Adapter type {x} is not implemented`.
         msg = (
             f"diffusion-pipe only supports network.type='lora'; got {n.type!r}. "
-            "Use the kohya backend for locon/loha/dora."
+            "Use the kohya backend for locon/loha/lokr/dora."
         )
         raise CompilationError(msg)
 
