@@ -573,11 +573,22 @@ def test_build_pip_command_uses_configured_index_and_copy_mode(
 def test_resolve_version_prefers_hatch_vcs(monkeypatch: pytest.MonkeyPatch) -> None:
     """When _version.py is materialised, hatch-vcs wins."""
     import lorahub
+    monkeypatch.delenv("LORAHUB_APP_VERSION", raising=False)
     monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.5.1.post3+gabc1234")
     v, src = su._resolve_version()
     assert v == "0.5.1.post3+gabc1234"
     assert src == "hatch-vcs"
+
+
+def test_resolve_version_prefers_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_APP_VERSION", "v1.1.0-main-g12345678")
+    monkeypatch.setattr(su, "_git_describe_runtime", lambda: "1.1.0-dev-gdeadbeef")
+
+    v, src = su._resolve_version()
+
+    assert v == "1.1.0-main-g12345678"
+    assert src == "env"
 
 
 def test_resolve_version_falls_through_placeholders(
@@ -590,6 +601,7 @@ def test_resolve_version_falls_through_placeholders(
     other sources.
     """
     import lorahub
+    monkeypatch.delenv("LORAHUB_APP_VERSION", raising=False)
     monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.0.0+unknown")
     # Block dist metadata too so we definitely land on the changelog branch.
@@ -611,6 +623,7 @@ def test_resolve_version_fallback_when_all_sources_fail(
 ) -> None:
     """Nothing on disk → ``0.0.0+unknown`` + source ``fallback``."""
     import lorahub
+    monkeypatch.delenv("LORAHUB_APP_VERSION", raising=False)
     monkeypatch.setattr(su, "_git_describe_runtime", lambda: None)
     monkeypatch.setattr(lorahub, "__version__", "0.0.0")
     monkeypatch.setattr(su, "_read_changelog_version", lambda: None)

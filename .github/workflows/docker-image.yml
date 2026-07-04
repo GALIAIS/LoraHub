@@ -21,6 +21,15 @@ jobs:
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve build version
+        id: build_version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          sha="${GITHUB_SHA::8}"
+          echo "app=${tag}-main-g${sha}" >> "$GITHUB_OUTPUT"
+          echo "pep440=${tag}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -53,5 +62,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            LORAHUB_APP_VERSION=${{ steps.build_version.outputs.app }}
+            LORAHUB_PEP440_VERSION=${{ steps.build_version.outputs.pep440 }}
           provenance: false
           sbom: false

@@ -199,7 +199,7 @@ export interface UpdateInfo {
    * tags (typical for ZIP-extracted trees) — the UI surfaces a
    * tooltip so users understand the version may lag a commit.
    */
-  version_source: "git-describe" | "hatch-vcs" | "dist-metadata" | "changelog" | "fallback"
+  version_source: "env" | "git-describe" | "hatch-vcs" | "dist-metadata" | "changelog" | "fallback"
   /**
    * `false` iff this install is not a real git checkout. The
    * updater can't function on archive extracts or Docker image

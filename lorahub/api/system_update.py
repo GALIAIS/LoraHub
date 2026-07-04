@@ -131,7 +131,7 @@ def _current_version() -> str:
 
 # Source label so the UI can mark a version as "guessed" rather than
 # implying parity with hatch-vcs precision.
-_VERSION_SOURCES = ("git-describe", "hatch-vcs", "dist-metadata", "changelog", "fallback")
+_VERSION_SOURCES = ("env", "git-describe", "hatch-vcs", "dist-metadata", "changelog", "fallback")
 
 
 def _subprocess_no_window() -> int:
@@ -234,6 +234,10 @@ def _resolve_version() -> tuple[str, str]:
     by a commit or two.
     """
     placeholders = {"", "0.0.0", "0.0.0+unknown"}
+
+    env_v = os.environ.get("LORAHUB_APP_VERSION", "").strip().removeprefix("v")
+    if env_v and env_v not in placeholders:
+        return env_v, "env"
 
     # 1. Live ``git describe`` — preferred over the static hatch-vcs
     # snapshot because ``_version.py`` only refreshes when pip runs.

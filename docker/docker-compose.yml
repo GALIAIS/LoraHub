@@ -1,8 +1,8 @@
 # LoraHub — docker-compose
 #
-# Two profiles share ONE image:
-#   * GPU: docker compose --profile gpu up
-#   * CPU: docker compose --profile cpu up
+# One default GPU service plus one CPU profile:
+#   * GPU: docker compose up
+#   * CPU: docker compose --profile cpu up lorahub-cpu
 #
 # All LoraHub state lives in the named volume `lorahub-data`, mounted
 # at /data (= LORAHUB_HOME). `docker compose down` keeps the volume;
@@ -21,12 +21,13 @@ services:
   # host: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
   # ──────────────────────────────────────────────────────────────────
   lorahub:
-    profiles: ["gpu"]
-    image: lorahub:dev
+    image: ${LORAHUB_IMAGE:-ghcr.io/galiais/lorahub:latest}
     build:
       context: ..
       dockerfile: docker/Dockerfile
       args:
+        LORAHUB_APP_VERSION: ${LORAHUB_APP_VERSION:-}
+        LORAHUB_PEP440_VERSION: ${LORAHUB_PEP440_VERSION:-0.0.0}
         LORAHUB_PYPI_INDEX: ${LORAHUB_PYPI_INDEX:-}
         LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
@@ -94,11 +95,13 @@ services:
   # ──────────────────────────────────────────────────────────────────
   lorahub-cpu:
     profiles: ["cpu"]
-    image: lorahub:dev
+    image: ${LORAHUB_IMAGE:-ghcr.io/galiais/lorahub:latest}
     build:
       context: ..
       dockerfile: docker/Dockerfile
       args:
+        LORAHUB_APP_VERSION: ${LORAHUB_APP_VERSION:-}
+        LORAHUB_PEP440_VERSION: ${LORAHUB_PEP440_VERSION:-0.0.0}
         LORAHUB_PYPI_INDEX: ${LORAHUB_PYPI_INDEX:-}
         LORAHUB_GH_PROXY: ${LORAHUB_GH_PROXY:-}
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}

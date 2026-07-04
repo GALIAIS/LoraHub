@@ -20,6 +20,7 @@ from typing import Any
 
 from lorahub.api.settings import Settings
 from lorahub.core.backends._common.bootstrap import venv_python
+from lorahub.core.paths import project_root
 
 _log = logging.getLogger(__name__)
 
@@ -112,6 +113,8 @@ class TerminalSession:
         env["PYTHONNOUSERSITE"] = "1"
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         env["LORAHUB_TERMINAL"] = "1"
+        if self.backend_id == "ai_toolkit":
+            env.setdefault("MODELS_PATH", str(project_root() / "models"))
         # Force unbuffered Python output so streamed lines show up live —
         # without this pip can sit silent for ages while it resolves.
         env["PYTHONUNBUFFERED"] = "1"

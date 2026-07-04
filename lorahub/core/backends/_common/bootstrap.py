@@ -76,6 +76,50 @@ def default_repo_path(dir_name: str) -> Path:
     return cwd_local
 
 
+def ensure_models_link(repo: Path, target: Path | None = None) -> Path:
+    """Point a backend's top-level model data dir at ``<root>/models``.
+
+    Populated real directories are left untouched; deleting user checkpoints
+    to make a cleaner link would be worse than the duplicate directory.
+    """
+    from lorahub.core.paths import project_root  # noqa: PLC0415
+
+    target = target or project_root() / "models"
+    target.mkdir(parents=True, exist_ok=True)
+    link = repo / "models"
+    try:
+        if link.exists():
+            try:
+                if link.samefile(target):
+                    return link
+            except OSError:
+                pass
+            if link.is_dir() and not link.is_symlink():
+                try:
+                    next(link.iterdir())
+                except StopIteration:
+                    link.rmdir()
+                else:
+                    return link
+            else:
+                return link
+        elif link.is_symlink():
+            link.unlink()
+
+        if sys.platform == "win32":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                check=True,
+                capture_output=True,
+                creationflags=_subprocess_no_window(),
+            )
+        else:
+            link.symlink_to(target, target_is_directory=True)
+    except (OSError, subprocess.CalledProcessError):
+        return target
+    return link
+
+
 def check_python(python: Path) -> None:
     """Raise BootstrapError if ``python`` does not point at a real file."""
     if not python.exists():
@@ -235,6 +279,7 @@ __all__ = [
     "check_repo",
     "check_requirements",
     "default_repo_path",
+    "ensure_models_link",
     "path_from_env",
     "resolve_python",
     "venv_python",

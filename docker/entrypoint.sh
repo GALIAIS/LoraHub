@@ -27,6 +27,10 @@ BACKEND_VENV_DIRS=(
     "/app/external/anima_lora/.venv"
     "/app/external/ai_toolkit/venv"
 )
+BACKEND_MODELS_LINKS=(
+    "/app/external/anima_lora/models"
+    "/app/external/ai_toolkit/models"
+)
 
 # State redirects — must match the Dockerfile ENV block. Re-stated so
 # a manual `docker run --entrypoint bash` invocation still lands state
@@ -73,7 +77,15 @@ if [ "$(id -u)" = "0" ]; then
     for dir in "${BACKEND_VENV_DIRS[@]}"; do
         mkdir -p "$dir"
     done
+    for link in "${BACKEND_MODELS_LINKS[@]}"; do
+        if [ ! -e "$link" ] && [ ! -L "$link" ]; then
+            ln -s "$LORAHUB_HOME/models" "$link"
+        fi
+    done
     chown -R lorahub:lorahub "$LORAHUB_HOME" "${BACKEND_VENV_DIRS[@]}"
+    for link in "${BACKEND_MODELS_LINKS[@]}"; do
+        chown -h lorahub:lorahub "$link" 2>/dev/null || true
+    done
 
     exec gosu lorahub:lorahub "$0" "$@"
 fi

@@ -17,6 +17,7 @@
 # restricted networks route pip / npm / git through mirrors — same
 # knobs the in-tree install scripts expose:
 #
+#   LORAHUB_APP_VERSION  Runtime/UI version string (e.g. 1.1.0-main-gabc12345)
 #   LORAHUB_PYPI_INDEX   PyPI index URL            (e.g. https://pypi.tuna.tsinghua.edu.cn/simple)
 #   LORAHUB_GH_PROXY     GitHub proxy prefix       (e.g. https://gh-proxy.org/)
 #   NPM_CONFIG_REGISTRY  npm registry              (e.g. https://registry.npmmirror.com)
@@ -45,6 +46,8 @@ RUN --mount=type=cache,target=/root/.npm \
 # Now copy the rest of the source and build. Vite needs the full tree
 # (index.html, src/, public/, tsconfig, vite.config) to compile.
 COPY web/ ./
+ARG LORAHUB_APP_VERSION=""
+ENV LORAHUB_APP_VERSION="${LORAHUB_APP_VERSION}"
 RUN npm run build
 
 
@@ -123,9 +126,11 @@ COPY . ./
 # UV_INDEX_URL / UV_DEFAULT_INDEX are uv-native; set when a mirror is
 # requested.
 ARG LORAHUB_PYPI_INDEX=""
+ARG LORAHUB_PEP440_VERSION="0.0.0"
 RUN if [ -n "$LORAHUB_PYPI_INDEX" ]; then \
         export UV_DEFAULT_INDEX="$LORAHUB_PYPI_INDEX"; \
     fi ; \
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LORAHUB="$LORAHUB_PEP440_VERSION" ; \
     uv pip install -e ".[api,gpu,tagging]" --link-mode=copy
 
 # Frontend from stage 1. The API serves this SPA directly
@@ -138,6 +143,8 @@ COPY --from=web-build /build/web/dist ./web/dist
 # under /data, which is a named volume — survives `compose down`.
 ENV LORAHUB_HOME=/data
 ENV LORAHUB_DOCKER=1
+ARG LORAHUB_APP_VERSION=""
+ENV LORAHUB_APP_VERSION="${LORAHUB_APP_VERSION}"
 ENV LORAHUB_WEB_DIST=/app/web/dist
 # Container-internal bind is 0.0.0.0; the compose port mapping keeps
 # the host side at 127.0.0.1 by default (no built-in auth — see README).

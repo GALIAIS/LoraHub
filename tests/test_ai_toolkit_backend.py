@@ -314,7 +314,10 @@ def test_ai_toolkit_launch_defaults_hf_cache_under_models(
     AIToolkitBackend().launch(cfg, tmp_path / "run", lambda _ev: None)
 
     assert captured["started"] is True
-    assert captured["env"] == {"HF_HOME": str(tmp_path / "models" / "huggingface")}
+    assert captured["env"] == {
+        "HF_HOME": str(tmp_path / "models" / "huggingface"),
+        "MODELS_PATH": str(tmp_path / "models"),
+    }
 
 
 def test_select_backend_returns_ai_toolkit_backend() -> None:

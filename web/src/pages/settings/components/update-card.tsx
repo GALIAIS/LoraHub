@@ -292,7 +292,9 @@ export function UpdateCard() {
                 title={
                   info.version_source === "fallback"
                     ? "无法读取版本元数据,使用回退占位"
-                    : info.version_source === "changelog"
+                    : info.version_source === "env"
+                      ? "从运行环境读取的版本"
+                      : info.version_source === "changelog"
                       ? "从 CHANGELOG.md 读取的最近发布版本(可能落后于 commit)"
                       : "从 dist 元数据读取(非 git 检出)"
                 }
@@ -301,7 +303,9 @@ export function UpdateCard() {
                   ? "未知"
                   : info.version_source === "changelog"
                     ? "估算"
-                    : "已安装"}
+                    : info.version_source === "env"
+                      ? "镜像"
+                      : "已安装"}
               </Badge>
             )}
           </span>
@@ -325,9 +329,9 @@ export function UpdateCard() {
                 {isDockerInstall ? (
                   <>
                     Docker 安装不在容器内改写源码。请在宿主机执行
-                    <code className="font-mono text-[11px] mx-1">git pull</code>
+                    <code className="font-mono text-[11px] mx-1">docker compose pull</code>
                     后重新
-                    <code className="font-mono text-[11px] mx-1">docker compose up -d --build</code>
+                    <code className="font-mono text-[11px] mx-1">docker compose up -d</code>
                     。
                   </>
                 ) : (
@@ -413,7 +417,7 @@ export function UpdateCard() {
             title={
               info?.git_checkout === false
                 ? isDockerInstall
-                  ? "Docker 安装请在宿主机拉取代码后重建容器"
+                  ? "Docker 安装请在宿主机拉取镜像后重建容器"
                   : "非 git 安装无法在线更新"
                 : undefined
             }

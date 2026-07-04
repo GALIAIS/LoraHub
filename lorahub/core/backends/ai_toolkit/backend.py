@@ -10,6 +10,7 @@ from pathlib import Path
 
 import ulid
 
+from lorahub.core.backends._common.bootstrap import ensure_models_link
 from lorahub.core.backends._common.vram import estimate_vram as _shared_estimate_vram
 from lorahub.core.backends.ai_toolkit import bootstrap as _bootstrap
 from lorahub.core.backends.ai_toolkit.compiler import CompilationError, compile_config
@@ -111,6 +112,9 @@ class AIToolkitBackend:
 
         job_id = str(ulid.new())
         runner_env = dict(env or {})
+        models_dir = project_root() / "models"
+        ensure_models_link(bootstrap_env.repo_path, models_dir)
+        runner_env.setdefault("MODELS_PATH", str(models_dir))
         if (
             "HF_HOME" not in os.environ
             and "HF_HOME" not in runner_env

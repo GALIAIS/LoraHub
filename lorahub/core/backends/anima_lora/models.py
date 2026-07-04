@@ -18,13 +18,14 @@ place — re-running the download is a no-op.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from lorahub.core.backends._common.bootstrap import ensure_models_link
 from lorahub.core.backends.anima_lora.bootstrap import default_repo_path
+from lorahub.core.paths import project_root
 from lorahub.core.models.downloader import (
     DownloadProgress,
     DownloadRequest,
@@ -68,7 +69,7 @@ class DownloadEvent:
 
 def models_root() -> Path:
     """The unified models directory at the LoRaHub project root."""
-    return Path.cwd() / "models"
+    return project_root() / "models"
 
 
 def expected_files() -> list[Path]:
@@ -103,29 +104,7 @@ def _link_anima_models_dir() -> None:
     require admin rights — symlink would. On Linux/macOS a regular
     symlink is fine.
     """
-    target = models_root()
-    target.mkdir(parents=True, exist_ok=True)
-    link = default_repo_path() / "models"
-
-    if link.exists() or link.is_symlink():
-        # Already set up (symlink, junction, or a real dir from a prior
-        # install). If it's a real directory with content, leave it alone
-        # — the user may have downloaded models there manually.
-        return
-
-    if sys.platform == "win32":
-        # Junction works for directories on every NTFS volume without
-        # SeCreateSymbolicLink privilege. mklink is a cmd-builtin so we
-        # have to go through cmd.exe.
-        import subprocess  # noqa: PLC0415
-
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-            check=True,
-            capture_output=True,
-        )
-    else:
-        link.symlink_to(target, target_is_directory=True)
+    ensure_models_link(default_repo_path())
 
 
 def download_models(
