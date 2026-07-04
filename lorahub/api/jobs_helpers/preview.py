@@ -182,7 +182,18 @@ def _gpu_sampler_loop(
     slots = [slot] if isinstance(slot, int) else list(slot)
     while not stop_evt.wait(interval):
         try:
-            gpus = collect_snapshot_shared().gpus
+            # Filter to NVIDIA-only: ``gpu_slot`` is a scheduler-assigned
+            # CUDA device index, and the old ``_collect_nvidia_gpus()``
+            # path returned a NVIDIA-only list indexed 0..N-1.
+            # ``collect_snapshot().gpus`` is mixed-vendor (NVIDIA first,
+            # then AMD/Intel/Apple appended by the platform collectors),
+            # so without this filter a transient ``nvidia-smi`` failure on
+            # a multi-vendor host would leave a non-NVIDIA GPU at a low
+            # index and the sampler would emit its metrics under the wrong
+            # ``gpu_index`` instead of skipping the slot.
+            gpus = [
+                g for g in collect_snapshot_shared().gpus if g.vendor == "nvidia"
+            ]
         except Exception:  # noqa: BLE001
             continue
         if not gpus:

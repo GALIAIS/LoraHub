@@ -1965,8 +1965,6 @@ _snapshot_cache_lock = threading.Lock()
 def collect_snapshot_shared(
     *,
     ttl_seconds: float = _SNAPSHOT_TTL_DEFAULT,
-    extra_disk_paths: list[Path] | None = None,
-    top_processes_n: int = 5,
 ) -> SystemSnapshot:
     """Return a cached snapshot if one is fresher than ``ttl_seconds``.
 
@@ -1975,6 +1973,13 @@ def collect_snapshot_shared(
     ``nvidia-smi`` / PowerShell / process-scan every second. The first
     caller after the TTL expires pays the probe cost; everyone else in the
     same TTL window gets the same object.
+
+    The cache serves the *canonical* snapshot (``collect_snapshot()`` with
+    default args). It deliberately does NOT accept ``extra_disk_paths`` /
+    ``top_processes_n``: the cache key is time alone, so honouring those
+    would let one caller's params leak into another caller's cache hit.
+    Callers that need a customised snapshot (extra disk paths, more top
+    processes) must call ``collect_snapshot()`` directly and forgo caching.
     """
     global _snapshot_cache
     now = time.monotonic()
@@ -1988,10 +1993,7 @@ def collect_snapshot_shared(
         cached = _snapshot_cache
         if cached is not None and (time.monotonic() - cached[0]) < ttl_seconds:
             return cached[1]
-        snap = collect_snapshot(
-            extra_disk_paths=extra_disk_paths,
-            top_processes_n=top_processes_n,
-        )
+        snap = collect_snapshot()
         _snapshot_cache = (time.monotonic(), snap)
         return snap
 

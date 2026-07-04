@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from lorahub.api import system_stats
+from lorahub.api.system_stats_types import SystemSnapshot
 
 
 
@@ -651,17 +652,50 @@ def test_snapshot_has_processes_field() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_collect_snapshot_shared_caches_within_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two reads inside the TTL return the same object and probe only once."""
-    system_stats.invalidate_snapshot_cache()
+def _stub_snapshot() -> SystemSnapshot:
+    """A minimal SystemSnapshot for cache tests.
+
+    Cache tests only exercise the hit/miss/invalidate logic — they never
+    read snapshot fields — so the required nested dataclasses are left
+    ``None`` to avoid constructing the full probe payload. Using a stub
+    (instead of calling the real ``collect_snapshot``) keeps the tests
+    fast and offline: the real probe spawns ``nvidia-smi`` and hits the
+    public-IP network endpoints, which would both slow CI and risk flaky
+    timeouts (and pollute the rolling ``_last_perdisk_sample`` /
+    ``_last_process_cpu`` caches for later tests).
+    """
+    return SystemSnapshot(
+        timestamp=0.0,
+        host=None,  # type: ignore[arg-type]
+        cpu=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        disks=[],
+        gpus=[],
+        has_psutil=False,
+        has_nvidia_smi=False,
+    )
+
+
+def _patch_snapshot_with_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Replace ``collect_snapshot`` with a stub-returning counter.
+
+    Returns the ``calls`` dict so each test can assert on the probe count.
+    """
     calls = {"n": 0}
-    real = system_stats.collect_snapshot
 
-    def _counting(*args: Any, **kwargs: Any) -> Any:
+    def _count(*args: Any, **kwargs: Any) -> SystemSnapshot:
         calls["n"] += 1
-        return real(*args, **kwargs)
+        return _stub_snapshot()
 
-    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+    monkeypatch.setattr(system_stats, "collect_snapshot", _count)
+    return calls
+
+
+def test_collect_snapshot_shared_caches_within_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two reads inside the TTL return the same object and probe only once."""
+    calls = _patch_snapshot_with_counter(monkeypatch)
 
     first = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
     second = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
@@ -670,17 +704,14 @@ def test_collect_snapshot_shared_caches_within_ttl(monkeypatch: pytest.MonkeyPat
     assert calls["n"] == 1
 
 
-def test_collect_snapshot_shared_reprobes_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collect_snapshot_shared_reprobes_after_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An expired cache triggers a fresh probe."""
-    system_stats.invalidate_snapshot_cache()
-    calls = {"n": 0}
-    real = system_stats.collect_snapshot
-
-    def _counting(*args: Any, **kwargs: Any) -> Any:
-        calls["n"] += 1
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+    calls = _patch_snapshot_with_counter(monkeypatch)
+    # Patching ``system_stats.time.monotonic`` patches the global ``time``
+    # module, but no real probe runs here (the stub returns instantly with
+    # no subprocess), so there is no ``subprocess.run`` timeout to disable.
     monkeypatch.setattr(system_stats.time, "monotonic", lambda: 0.0)
 
     system_stats.collect_snapshot_shared(ttl_seconds=1.0)
@@ -695,21 +726,14 @@ def test_collect_snapshot_shared_invalidate_drops_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """invalidate_snapshot_cache forces the next read to re-probe."""
-    system_stats.invalidate_snapshot_cache()
-    calls = {"n": 0}
-    real = system_stats.collect_snapshot
-
-    def _counting(*args: Any, **kwargs: Any) -> Any:
-        calls["n"] += 1
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+    calls = _patch_snapshot_with_counter(monkeypatch)
 
     system_stats.collect_snapshot_shared(ttl_seconds=1.0)
     system_stats.invalidate_snapshot_cache()
     system_stats.collect_snapshot_shared(ttl_seconds=1.0)
 
     assert calls["n"] == 2
+
 
 # === disk_tests.py ===
 
