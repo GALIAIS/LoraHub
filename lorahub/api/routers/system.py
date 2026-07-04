@@ -35,6 +35,7 @@ from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
     attention_backends_for_gpu,
     collect_snapshot,
+    collect_snapshot_shared,
 )
 from lorahub.api import app as app_module
 from lorahub.api.task_sessions import (
@@ -48,7 +49,10 @@ router = APIRouter(prefix="/api")
 
 @router.get("/system/stats")
 def system_stats() -> dict[str, Any]:
-    return collect_snapshot().to_dict()
+    # Shared 1s TTL cache: the SSE + WS streams and this poll endpoint all
+    # hit the same probe, so an open dashboard tab plus a polling client
+    # don't each spawn their own nvidia-smi / process scan every second.
+    return collect_snapshot_shared().to_dict()
 
 
 @router.get("/system/attention-backends")

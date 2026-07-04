@@ -38,6 +38,7 @@ def _reset_module_state() -> None:
     system_stats._last_pernic_sample.clear()
     system_stats._public_ip_cache = None
     system_stats._public_ip_cache_monotonic = None
+    system_stats.invalidate_snapshot_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -643,6 +644,72 @@ def test_snapshot_has_processes_field() -> None:
         "frequency_per_core_mhz",
     ):
         assert key in cpu
+
+
+# --------------------------------------------------------------------------- #
+# Shared snapshot cache                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_collect_snapshot_shared_caches_within_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two reads inside the TTL return the same object and probe only once."""
+    system_stats.invalidate_snapshot_cache()
+    calls = {"n": 0}
+    real = system_stats.collect_snapshot
+
+    def _counting(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+
+    first = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+    second = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+
+    assert first is second
+    assert calls["n"] == 1
+
+
+def test_collect_snapshot_shared_reprobes_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An expired cache triggers a fresh probe."""
+    system_stats.invalidate_snapshot_cache()
+    calls = {"n": 0}
+    real = system_stats.collect_snapshot
+
+    def _counting(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+    monkeypatch.setattr(system_stats.time, "monotonic", lambda: 0.0)
+
+    system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+    # Advance past the TTL.
+    monkeypatch.setattr(system_stats.time, "monotonic", lambda: 2.0)
+    system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+
+    assert calls["n"] == 2
+
+
+def test_collect_snapshot_shared_invalidate_drops_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """invalidate_snapshot_cache forces the next read to re-probe."""
+    system_stats.invalidate_snapshot_cache()
+    calls = {"n": 0}
+    real = system_stats.collect_snapshot
+
+    def _counting(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", _counting)
+
+    system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+    system_stats.invalidate_snapshot_cache()
+    system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+
+    assert calls["n"] == 2
 
 # === disk_tests.py ===
 

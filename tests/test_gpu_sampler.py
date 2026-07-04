@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from lorahub.api.jobs_helpers.preview import _gpu_sampler_loop
-from lorahub.api.system_stats_types import GpuStats
+from lorahub.api.system_stats_types import GpuStats, SystemSnapshot
 from lorahub.core.events import EventType, TrainingEvent
 
 
@@ -33,13 +33,29 @@ def _gpu(index: int, util: float) -> GpuStats:
     )
 
 
+def _snapshot(gpus: list[GpuStats]) -> SystemSnapshot:
+    """Minimal SystemSnapshot — only ``gpus`` is read by the sampler loop."""
+    return SystemSnapshot(
+        timestamp=0.0,
+        host=None,  # type: ignore[arg-type]
+        cpu=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        disks=[],
+        gpus=gpus,
+        has_psutil=False,
+        has_nvidia_smi=True,
+    )
+
+
 def test_gpu_sampler_emits_all_assigned_slots(monkeypatch: Any) -> None:
     from lorahub.api import system_stats
 
+    # The sampler now reads GPUs from the shared snapshot cache rather than
+    # calling _collect_nvidia_gpus directly, so patch the cache entry point.
     monkeypatch.setattr(
         system_stats,
-        "_collect_nvidia_gpus",
-        lambda: [_gpu(0, 12.0), _gpu(1, 87.0)],
+        "collect_snapshot_shared",
+        lambda **_: _snapshot([_gpu(0, 12.0), _gpu(1, 87.0)]),
     )
     events: list[TrainingEvent] = []
 
