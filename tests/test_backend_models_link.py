@@ -55,8 +55,28 @@ def test_link_anima_models_dir_silent_on_success(
     repo = tmp_path / "anima_lora"
     repo.mkdir()
     link = repo / "models"
+    link.mkdir()
 
     monkeypatch.setattr(anima_models, "default_repo_path", lambda: repo)
+    monkeypatch.setattr(anima_models, "models_root", lambda: link)
     monkeypatch.setattr(anima_models, "ensure_models_link", lambda _repo: link)
 
     anima_models._link_anima_models_dir()  # must not raise
+
+
+def test_link_anima_models_dir_rejects_backend_local_models_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "anima_lora"
+    link = repo / "models"
+    root_models = tmp_path / "root-models"
+    link.mkdir(parents=True)
+    root_models.mkdir()
+    (link / "local.safetensors").write_text("keep", encoding="utf-8")
+
+    monkeypatch.setattr(anima_models, "default_repo_path", lambda: repo)
+    monkeypatch.setattr(anima_models, "models_root", lambda: root_models)
+    monkeypatch.setattr(anima_models, "ensure_models_link", lambda _repo: link)
+
+    with pytest.raises(OSError, match="does not point"):
+        anima_models._link_anima_models_dir()

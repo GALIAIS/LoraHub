@@ -25,12 +25,12 @@ from typing import Literal
 
 from lorahub.core.backends._common.bootstrap import ensure_models_link
 from lorahub.core.backends.anima_lora.bootstrap import default_repo_path
-from lorahub.core.paths import project_root
 from lorahub.core.models.downloader import (
     DownloadProgress,
     DownloadRequest,
     download,
 )
+from lorahub.core.paths import project_root
 
 ProgressCallback = Callable[["DownloadEvent"], None]
 Source = Literal["modelscope", "huggingface"]
@@ -104,22 +104,13 @@ def _link_anima_models_dir() -> None:
     require admin rights — symlink would. On Linux/macOS a regular
     symlink is fine.
 
-    Raises ``OSError`` if the link cannot be created. ``ensure_models_link``
-    silently returns the *target* directory (``<root>/models``) when link
-    creation fails, but without the link anima's hardcoded ``models/...``
-    paths don't resolve and training / preview can't find the checkpoints
-    that ``download_models`` just wrote. Surfacing the failure here stops
-    ``download_models`` from reporting success in that case — e.g. Docker
-    ``--user`` runs or read-only checkouts that can't create the junction
-    or symlink.
+    Raises ``OSError`` if the link cannot be created or if a pre-existing
+    real directory would make anima read a different tree than the unified
+    root ``models/`` directory.
     """
     repo = default_repo_path()
     link = repo / "models"
     result = ensure_models_link(repo)
-    # ``ensure_models_link`` returns the *link* (repo/models) on success or
-    # when an existing real directory is left in place, and falls back to
-    # returning the *target* (<root>/models) ONLY when link creation raised.
-    # That fallback is a silent failure for anima — detect and surface it.
     if result != link:
         raise OSError(
             f"Failed to link {link} -> {result}: the anima backend resolves "
@@ -129,6 +120,15 @@ def _link_anima_models_dir() -> None:
             "`--user` runs and read-only repos cannot create the "
             "junction/symlink)."
         )
+    try:
+        if not link.samefile(models_root()):
+            raise OSError
+    except OSError as exc:
+        raise OSError(
+            f"{link} does not point to {models_root()}. Move or rename the "
+            "backend-local models directory so LoraHub can link it to the "
+            "unified root models directory."
+        ) from exc
 
 
 def download_models(

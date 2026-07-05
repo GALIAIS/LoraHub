@@ -329,9 +329,9 @@ export function UpdateCard() {
                 {isDockerInstall ? (
                   <>
                     Docker 安装不在容器内改写源码。请在宿主机执行
-                    <code className="font-mono text-[11px] mx-1">docker compose pull</code>
+                    <code className="font-mono text-[11px] mx-1">docker compose --profile gpu pull</code>
                     后重新
-                    <code className="font-mono text-[11px] mx-1">docker compose up -d</code>
+                    <code className="font-mono text-[11px] mx-1">docker compose --profile gpu up -d</code>
                     。
                   </>
                 ) : (
