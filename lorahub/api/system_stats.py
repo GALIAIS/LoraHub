@@ -1964,6 +1964,33 @@ def collect_snapshot(
     )
 
 
+# --------------------------------------------------------------------------- #
+# Shared snapshot cache
+# --------------------------------------------------------------------------- #
+#
+# `collect_snapshot()` spawns 1-3 `nvidia-smi` subprocesses, on Windows a
+# PowerShell/CIM call (cold-start 150-400ms), a full `psutil.process_iter`
+# scan, and a `disk_usage` probe over every real mount point. A single call
+# is 200-800ms on Windows. Four consumers hit it independently:
+#
+#   * /api/system/sse          — every 1.0s, in an asyncio generator
+#   * /api/system/stream (WS)  — every 1.0s, in an asyncio generator
+#   * /api/system/stats (HTTP) — every poll
+#   * the per-job GPU sampler  — every 5s
+#
+# Without sharing, an open SSE tab + one polling client re-ran the whole
+# probe 2-3×/second, and because the SSE/WS generators call it synchronously
+# on the asyncio loop, each call blocked *every* other async handler (API
+# requests included) for hundreds of milliseconds.
+#
+# `collect_snapshot_shared()` returns a cached snapshot when one was taken
+# within `ttl_seconds`, so concurrent consumers coalesce onto a single
+# underlying probe. Callers that need a guaranteed-fresh reading (the
+# `lorahub system gpu` CLI, `/attention-backends` which reads the GPU's
+# compute capability) keep calling `collect_snapshot()` directly.
+#
+# The cached object is shared by reference; callers must not mutate it (they
+# only ever `.to_dict()` / read fields).
 _SNAPSHOT_TTL_DEFAULT = 1.0
 _snapshot_cache: tuple[float, SystemSnapshot] | None = None
 _snapshot_cache_lock = threading.Lock()
@@ -2026,7 +2053,21 @@ def collect_snapshot_shared(
     ttl_seconds: float = _SNAPSHOT_TTL_DEFAULT,
     block_on_miss: bool = True,
 ) -> SystemSnapshot:
-    """Return a short-lived shared snapshot for live telemetry consumers."""
+    """Return a cached snapshot if one is fresher than ``ttl_seconds``.
+
+    Coalesces concurrent consumers onto a single underlying probe so the
+    SSE stream, the WS stream, and HTTP polling don't each spawn their own
+    ``nvidia-smi`` / PowerShell / process-scan every second. The first
+    caller after the TTL expires pays the probe cost; everyone else in the
+    same TTL window gets the same object.
+
+    The cache serves the *canonical* snapshot (``collect_snapshot()`` with
+    default args). It deliberately does NOT accept ``extra_disk_paths`` /
+    ``top_processes_n``: the cache key is time alone, so honouring those
+    would let one caller's params leak into another caller's cache hit.
+    Callers that need a customised snapshot (extra disk paths, more top
+    processes) must call ``collect_snapshot()`` directly and forgo caching.
+    """
     global _snapshot_cache, _snapshot_refreshing
     now = time.monotonic()
     cached = _snapshot_cache
@@ -2059,6 +2100,10 @@ def collect_snapshot_shared(
 
 
 def invalidate_snapshot_cache() -> None:
+    """Drop the cached snapshot so the next read re-probes.
+
+    Mainly for tests; production callers rely on the TTL.
+    """
     global _snapshot_cache, _snapshot_refreshing
     with _snapshot_cache_lock:
         _snapshot_cache = None

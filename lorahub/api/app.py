@@ -780,6 +780,13 @@ async def stream_system_sse(request: Request) -> StreamingResponse:
 
     No replay buffer here: snapshots are stateless, the freshest one is
     always good enough, so Last-Event-ID is ignored.
+
+    The probe is routed through ``collect_snapshot_shared`` (a 1s TTL
+    cache shared with the WS stream + HTTP poll) *and* offloaded to a
+    worker thread via ``asyncio.to_thread``: a single ``collect_snapshot``
+    spawns 1-3 ``nvidia-smi`` subprocesses plus a full process scan and
+    runs 200-800ms on Windows, so running it inline on the event loop
+    blocked every other async handler once a second.
     """
     from lorahub.api.system_stats import collect_snapshot_shared  # noqa: PLC0415
     import json as _json  # noqa: PLC0415
@@ -895,7 +902,12 @@ async def stream_bootstrap(ws: WebSocket) -> None:
 
 @app.websocket("/api/system/stream")
 async def stream_system(ws: WebSocket) -> None:
-    """Push a hardware/host snapshot every second until the client disconnects."""
+    """Push a hardware/host snapshot every second until the client disconnects.
+
+    Shares the same 1s TTL cache as the SSE stream + HTTP poll, and
+    offloads the probe to a worker thread so the event loop stays free
+    while ``nvidia-smi`` / the process scan runs.
+    """
     from lorahub.api.system_stats import collect_snapshot_shared  # noqa: PLC0415
 
     await ws.accept()

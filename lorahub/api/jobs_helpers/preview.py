@@ -168,17 +168,32 @@ def _gpu_sampler_loop(
 ) -> None:
     """Emit a `gpu_sample` event every ~5s while the job is running.
 
-    Snapshot comes from the same nvidia-smi path the dashboard uses, so
-    no extra dependency. Failures are swallowed (the trend chart is a
-    nice-to-have; we never want it to crash a training run).
+    Reads GPU data from the shared snapshot cache rather than spawning its
+    own ``nvidia-smi``: the dashboard SSE/WS streams already probe GPUs on
+    a 1s cadence, so reusing that cache drops a redundant subprocess
+    spawn every 5s per running job. The 1s TTL is well inside the 5s
+    sample interval, so values are always fresh enough for a trend chart.
+    Failures are swallowed (the trend chart is a nice-to-have; we never
+    want it to crash a training run).
     """
-    from lorahub.api.system_stats import _collect_nvidia_gpus  # noqa: PLC0415
+    from lorahub.api.system_stats import collect_snapshot_shared  # noqa: PLC0415
 
     interval = 5.0
     slots = [slot] if isinstance(slot, int) else list(slot)
     while not stop_evt.wait(interval):
         try:
-            gpus = _collect_nvidia_gpus()
+            # Filter to NVIDIA-only: ``gpu_slot`` is a scheduler-assigned
+            # CUDA device index, and the old ``_collect_nvidia_gpus()``
+            # path returned a NVIDIA-only list indexed 0..N-1.
+            # ``collect_snapshot().gpus`` is mixed-vendor (NVIDIA first,
+            # then AMD/Intel/Apple appended by the platform collectors),
+            # so without this filter a transient ``nvidia-smi`` failure on
+            # a multi-vendor host would leave a non-NVIDIA GPU at a low
+            # index and the sampler would emit its metrics under the wrong
+            # ``gpu_index`` instead of skipping the slot.
+            gpus = [
+                g for g in collect_snapshot_shared().gpus if g.vendor == "nvidia"
+            ]
         except Exception:  # noqa: BLE001
             continue
         if not gpus:
