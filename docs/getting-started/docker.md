@@ -76,7 +76,7 @@ docker compose -f docker/docker-compose.yml --profile cpu up -d --build
 
 ### `down` 的行为
 
-- `docker compose down`:**保留**命名卷,上述全部数据存活,`up` 即恢复。
+- `docker compose down`:**保留**命名卷,上述全部数据存活,`--profile gpu up`(或 `--profile cpu up`)即恢复。
 - `docker compose down -v` 或 `docker volume rm lorahub-data lorahub-anima-venv lorahub-aitoolkit-venv`:**清空全部用户数据**(任务历史、配置、模型、后端 venv)。谨慎使用。
 
 ---
@@ -186,7 +186,7 @@ LoraHub 默认绑定 `127.0.0.1:18765`,**无内置鉴权**。如需远程访问:
 
 ## 常见问题
 
-### `docker compose up` 后访问 `127.0.0.1:18765` 打不开
+### `docker compose --profile gpu up` 后访问 `127.0.0.1:18765` 打不开
 
 1. `docker compose logs lorahub` 看是否启动失败(常见:GPU 工具链未装、卷权限)。
 2. `docker compose exec lorahub curl -fsS http://127.0.0.1:18765/api/health` 验证容器内是否通。

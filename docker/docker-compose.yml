@@ -1,8 +1,16 @@
 # LoraHub — docker-compose
 #
-# One default GPU service plus one CPU profile:
-#   * GPU: docker compose up
-#   * CPU: docker compose --profile cpu up lorahub-cpu
+# Two profile-gated services share ONE image. Neither service has a
+# default, so `docker compose up` with no profile starts NOTHING — pick
+# one explicitly:
+#   * GPU:  docker compose --profile gpu up
+#   * CPU:  docker compose --profile cpu up
+#
+# Gating the GPU service behind a profile is deliberate: without it the
+# GPU service is "always enabled" (Docker Compose profile rule), so
+# `--profile cpu up` would start BOTH services and they'd collide on
+# `container_name: lorahub` / port 18765 — CPU installs would fail
+# before the app starts.
 #
 # All LoraHub state lives in the named volume `lorahub-data`, mounted
 # at /data (= LORAHUB_HOME). `docker compose down` keeps the volume;
@@ -17,10 +25,11 @@
 
 services:
   # ──────────────────────────────────────────────────────────────────
-  # Default — GPU training. Requires NVIDIA Container Toolkit on the
-  # host: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+  # GPU profile. Requires NVIDIA Container Toolkit on the host:
+  # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
   # ──────────────────────────────────────────────────────────────────
   lorahub:
+    profiles: ["gpu"]
     image: ${LORAHUB_IMAGE:-ghcr.io/galiais/lorahub:latest}
     build:
       context: ..
