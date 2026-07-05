@@ -103,8 +103,32 @@ def _link_anima_models_dir() -> None:
     On Windows we use a directory junction (``mklink /J``) which doesn't
     require admin rights — symlink would. On Linux/macOS a regular
     symlink is fine.
+
+    Raises ``OSError`` if the link cannot be created. ``ensure_models_link``
+    silently returns the *target* directory (``<root>/models``) when link
+    creation fails, but without the link anima's hardcoded ``models/...``
+    paths don't resolve and training / preview can't find the checkpoints
+    that ``download_models`` just wrote. Surfacing the failure here stops
+    ``download_models`` from reporting success in that case — e.g. Docker
+    ``--user`` runs or read-only checkouts that can't create the junction
+    or symlink.
     """
-    ensure_models_link(default_repo_path())
+    repo = default_repo_path()
+    link = repo / "models"
+    result = ensure_models_link(repo)
+    # ``ensure_models_link`` returns the *link* (repo/models) on success or
+    # when an existing real directory is left in place, and falls back to
+    # returning the *target* (<root>/models) ONLY when link creation raised.
+    # That fallback is a silent failure for anima — detect and surface it.
+    if result != link:
+        raise OSError(
+            f"Failed to link {link} -> {result}: the anima backend resolves "
+            "hardcoded `models/...` paths relative to its checkout, so "
+            "without this link training/preview cannot find the downloaded "
+            "checkpoints. Ensure the backend checkout is writable (Docker "
+            "`--user` runs and read-only repos cannot create the "
+            "junction/symlink)."
+        )
 
 
 def download_models(
