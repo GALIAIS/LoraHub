@@ -7,7 +7,6 @@
  * user never has to leave the current page to know "is the GPU busy / is
  * the network downloading / am I online?".
  */
-import { useQuery } from "@tanstack/react-query"
 import {
   Activity,
   ArrowDown,
@@ -20,30 +19,22 @@ import {
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { api, useSystemStream, type SystemSnapshot } from "@/lib/api"
+import type { SystemSnapshot } from "@/lib/api"
 import type { JobSummary, SystemGpu } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { useSystemVersion } from "@/hooks/use-system-version"
 import { useStudioTasks } from "@/hooks/use-studio-tasks"
 import type { StudioTaskRecord } from "@/lib/studio-task-store"
+import { useSystemTelemetry } from "@/lib/system-telemetry"
 import { cn } from "@/lib/utils"
 
-const POLL_MS = 10_000
-
 export function GlobalStatusBar() {
-  const stream = useSystemStream(true)
-  const polled = useQuery({
-    queryKey: ["system", "stats"],
-    queryFn: api.getSystemStats,
-    refetchInterval: stream.status === "open" ? false : POLL_MS,
-    staleTime: 3_000,
-  })
+  const telemetry = useSystemTelemetry()
   const jobsQuery = useJobsList()
   const studioTasks = useStudioTasks()
   const studioRunning = studioTasks.filter((t) => t.status === "running")
 
-  const snapshot: SystemSnapshot | null =
-    stream.snapshot ?? polled.data ?? null
+  const snapshot: SystemSnapshot | null = telemetry.snapshot
   const runningJobs = (jobsQuery.data?.jobs ?? []).filter(
     (j) => j.state === "running",
   )
@@ -52,7 +43,7 @@ export function GlobalStatusBar() {
   return (
     <div className="shrink-0 border-b border-border/60 bg-background/92 px-3 py-1.5 text-[11px] backdrop-blur-xl md:px-4">
       <div className="no-scrollbar flex min-h-8 items-center gap-2 overflow-x-auto md:overflow-visible">
-      <ConnectionDot live={stream.status === "open"} />
+      <ConnectionDot live={telemetry.live} />
       {snapshot ? (
         <>
           <MetricChip

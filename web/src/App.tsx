@@ -26,6 +26,7 @@ import { GlobalStatusBar } from "@/components/global-status-bar"
 import { useVersionInfo } from "@/hooks/use-version-info"
 import { useAnimeEnter } from "@/hooks/use-anime-enter"
 import { useAnimeThemeTransition } from "@/hooks/use-anime-theme-transition"
+import { SystemTelemetryProvider } from "@/lib/system-telemetry"
 import {
   Sidebar,
   SidebarContent,
@@ -128,23 +129,14 @@ export default function App() {
 
   useAnimeThemeTransition([mode, styleMode])
 
-  // Eagerly warm every route chunk during browser idle time so the
-  // first click on a nav item never pays a network round-trip. We
-  // also kick a queueMicrotask fallback for browsers without
-  // requestIdleCallback (Safari).
+  // Keep first paint quiet: route chunks are warmed on hover/focus below.
+  // Only settings is small and broadly reused enough to prefetch after idle.
   useEffect(() => {
     if (typeof window === "undefined") return
-    const keys = NAV.map((n) => n.routeKey)
     let cancelled = false
 
     const warm = () => {
       if (cancelled) return
-      for (const key of keys) {
-        void preloadAppRoute(key)
-      }
-      // Prefetch the workbench-level settings so pages that need
-      // `default_backend` (e.g. ConfigsPage's backend filter) don't
-      // flash an unfiltered list before the response arrives.
       void queryClient.prefetchQuery({
         queryKey: ["settings"],
         queryFn: api.getSettings,
@@ -160,9 +152,9 @@ export default function App() {
     let idleId: number | undefined
     let timerId: number | undefined
     if (typeof w.requestIdleCallback === "function") {
-      idleId = w.requestIdleCallback(warm, { timeout: 2000 })
+      idleId = w.requestIdleCallback(warm, { timeout: 5000 })
     } else {
-      timerId = window.setTimeout(warm, 600)
+      timerId = window.setTimeout(warm, 3000)
     }
 
     return () => {
@@ -327,40 +319,42 @@ export default function App() {
       {/* --- Main content --- */}
       <SidebarInset className="shiro-page-canvas h-[100dvh] overflow-hidden">
         <div className="relative flex h-full flex-col overflow-hidden">
-          {/* Header */}
-          <header className="shrink-0 z-30">
-            <div className="shiro-toolbar px-3 py-3 md:px-4">
-              <div className="flex items-center gap-3">
-                <SidebarTrigger />
-                <div className="hidden h-8 w-px bg-border/70 md:block" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-base font-semibold tracking-[-0.01em]">
-                    {resolvedTitle}
+          <SystemTelemetryProvider>
+            {/* Header */}
+            <header className="shrink-0 z-30">
+              <div className="shiro-toolbar px-3 py-3 md:px-4">
+                <div className="flex items-center gap-3">
+                  <SidebarTrigger />
+                  <div className="hidden h-8 w-px bg-border/70 md:block" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-base font-semibold tracking-[-0.01em]">
+                      {resolvedTitle}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <GlobalStatusBar />
-          </header>
+              <GlobalStatusBar />
+            </header>
 
-          {/* Page content */}
-          <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden pb-[calc(4.25rem+env(safe-area-inset-bottom))] md:pb-0">
-            <Suspense
-              fallback={
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="h-full w-full bg-muted/30 shiro-loading-pulse"
-                />
-              }
-            >
-              <ErrorBoundary resetKey={location.pathname}>
-                <div ref={pageEnterRef} className="flex-1 min-h-0 flex flex-col">
-                  <Outlet />
-                </div>
-              </ErrorBoundary>
-            </Suspense>
-          </div>
+            {/* Page content */}
+            <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden pb-[calc(4.25rem+env(safe-area-inset-bottom))] md:pb-0">
+              <Suspense
+                fallback={
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="h-full w-full bg-muted/30 shiro-loading-pulse"
+                  />
+                }
+              >
+                <ErrorBoundary resetKey={location.pathname}>
+                  <div ref={pageEnterRef} className="flex-1 min-h-0 flex flex-col">
+                    <Outlet />
+                  </div>
+                </ErrorBoundary>
+              </Suspense>
+            </div>
+          </SystemTelemetryProvider>
           <MobileBottomNav isRouteActive={isRouteActive} prefetchRoute={prefetchRoute} />
         </div>
       </SidebarInset>

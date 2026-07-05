@@ -13,8 +13,10 @@ import { UsageBar, fmtBytes, formatFrequency, toneForPercent } from "./_shared"
 
 export const CpuMemoryCard = memo(function CpuMemoryCard({
   snapshot,
+  variant = "both",
 }: {
   snapshot: SystemSnapshot
+  variant?: "both" | "cpu" | "memory"
 }) {
   const cpu = snapshot.cpu
   const mem = snapshot.memory
@@ -56,8 +58,9 @@ export const CpuMemoryCard = memo(function CpuMemoryCard({
   const perCoreFreq = cpu.frequency_per_core_mhz ?? []
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <Card>
+    <div className={cn("grid h-full grid-cols-1 gap-4", variant === "both" && "lg:grid-cols-2")}>
+      {variant !== "memory" && (
+        <Card className="flex h-full min-h-0 flex-col">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Cpu className="size-4 text-muted-foreground" />
@@ -72,7 +75,7 @@ export const CpuMemoryCard = memo(function CpuMemoryCard({
             <div>{description.join(" · ")}</div>
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="min-h-0 flex-1 space-y-4">
           <UsageBar
             label="总体利用率"
             percent={cpuPercent}
@@ -86,7 +89,7 @@ export const CpuMemoryCard = memo(function CpuMemoryCard({
                 </span>
                 <span>每核利用率（{cpu.per_core_percent.length} 核）</span>
               </summary>
-              <div className="mt-2 max-h-48 overflow-y-auto rounded-[4px] border border-border/40 bg-muted/20 p-2">
+              <div className="mt-2 max-h-40 overflow-y-auto rounded-[4px] border border-border/40 bg-muted/20 p-2">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {cpu.per_core_percent.map((p, i) => (
                     <CoreBar
@@ -101,9 +104,11 @@ export const CpuMemoryCard = memo(function CpuMemoryCard({
             </details>
           )}
         </CardContent>
-      </Card>
+        </Card>
+      )}
 
-      <Card>
+      {variant !== "cpu" && (
+        <Card className="h-full">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <MemoryStick className="size-4 text-muted-foreground" />
@@ -129,7 +134,8 @@ export const CpuMemoryCard = memo(function CpuMemoryCard({
             />
           )}
         </CardContent>
-      </Card>
+        </Card>
+      )}
     </div>
   )
 })

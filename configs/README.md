@@ -6,11 +6,11 @@ LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 sc
 
 | 文件 | 后端 | 算法 | 显存档 | 简介 |
 |------|------|------|--------|------|
-| `anima_lora_default.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 通用 | 100% 复刻上游 anima_lora `make lora` 的三层 merge 链(base + lora + default preset)。新手对照参考的基线。 |
-| `anima_lora_8gb.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 8GB | 在 default 基础上压低显存预算:768²、AdamW8bit、blocks_to_swap=24、gradient_checkpointing on、关 sampling/validation/torch.compile。RTX 3060/4060 等 8GB 卡的安全档。 |
+| `anima_lora_default.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 通用 | 100% 复刻上游 anima_lora `make lora` 的三层 merge 链(base + lora + default preset)。新手对照参考的基线。输出名为 `anima-lora`。 |
+| `anima_lora_8gb.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | 8GB | 在 default 基础上压低显存预算:768²、AdamW8bit、gradient_checkpointing on。输出名为 `anima-lora-8gb`。 |
 | `anima_lora_v100_fp16.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | V100 32GB | Tesla V100 兼容档:fp16、PyTorch SDPA、batch=1/accum=2、缓存落盘,避开 bf16/flash 路径。 |
-| `anima_loha_32gb.yaml` | anima_lora | LoHA | 32GB | LoHA 高吞吐档,batchSize 2、rank 16、compile on。 |
-| `anima_lokr_32gb.yaml` | anima_lora | factorized LoKr | 32GB | LoKr 省显存档,batchSize 1、rank 8、checkpointing on、compile off,forward 不 materialize 完整 ΔW。 |
+| `anima_loha_32gb.yaml` | anima_lora | LoHA | 32GB | LoHA 高吞吐档,batchSize 2、rank 16、compile on。输出名为 `anima-loha-32gb`。 |
+| `anima_lokr_32gb.yaml` | anima_lora | factorized LoKr | 32GB | LoKr 省显存档,batchSize 1、rank 8、checkpointing on、compile off,forward 不 materialize 完整 ΔW。输出名为 `anima-lokr-32gb`。 |
 
 ## 命名约定
 

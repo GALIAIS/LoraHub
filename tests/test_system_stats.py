@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
+import time
 from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +23,7 @@ from typing import Any
 import pytest
 
 from lorahub.api import system_stats
+from lorahub.api.system_stats_types import SystemSnapshot
 
 
 
@@ -38,6 +41,7 @@ def _reset_module_state() -> None:
     system_stats._last_pernic_sample.clear()
     system_stats._public_ip_cache = None
     system_stats._public_ip_cache_monotonic = None
+    system_stats.invalidate_snapshot_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -643,6 +647,120 @@ def test_snapshot_has_processes_field() -> None:
         "frequency_per_core_mhz",
     ):
         assert key in cpu
+
+
+def _stub_snapshot(ts: float = 0.0) -> SystemSnapshot:
+    return SystemSnapshot(
+        timestamp=ts,
+        host=None,  # type: ignore[arg-type]
+        cpu=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        disks=[],
+        gpus=[],
+        has_psutil=False,
+        has_nvidia_smi=False,
+    )
+
+
+def test_collect_snapshot_shared_reuses_snapshot_within_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def fake_collect() -> SystemSnapshot:
+        calls["n"] += 1
+        return _stub_snapshot(float(calls["n"]))
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", fake_collect)
+
+    first = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+    second = system_stats.collect_snapshot_shared(ttl_seconds=1.0)
+
+    assert first is second
+    assert calls["n"] == 1
+
+
+def test_collect_snapshot_shared_reprobes_after_invalidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def fake_collect() -> SystemSnapshot:
+        calls["n"] += 1
+        return _stub_snapshot(float(calls["n"]))
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", fake_collect)
+
+    first = system_stats.collect_snapshot_shared(ttl_seconds=60.0)
+    system_stats.invalidate_snapshot_cache()
+    second = system_stats.collect_snapshot_shared(ttl_seconds=60.0)
+
+    assert first is not second
+    assert calls["n"] == 2
+
+
+def test_collect_snapshot_shared_nonblocking_seeds_then_refreshes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_summary() -> SystemSnapshot:
+        return _stub_snapshot(0.0)
+
+    def fake_collect() -> SystemSnapshot:
+        started.set()
+        assert release.wait(2)
+        return _stub_snapshot(1.0)
+
+    monkeypatch.setattr(system_stats, "collect_summary_snapshot", fake_summary)
+    monkeypatch.setattr(system_stats, "collect_snapshot", fake_collect)
+
+    first = system_stats.collect_snapshot_shared(block_on_miss=False)
+
+    assert first.timestamp == 0.0
+    assert started.wait(1)
+    release.set()
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        refreshed = system_stats.collect_snapshot_shared(block_on_miss=False)
+        if refreshed.timestamp == 1.0:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("background refresh did not publish the full snapshot")
+
+
+def test_collect_snapshot_shared_refresh_does_not_block_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    monkeypatch.setattr(system_stats, "collect_summary_snapshot", lambda: _stub_snapshot(0.0))
+
+    def fake_collect() -> SystemSnapshot:
+        started.set()
+        assert release.wait(2)
+        return _stub_snapshot(1.0)
+
+    monkeypatch.setattr(system_stats, "collect_snapshot", fake_collect)
+    worker = threading.Thread(
+        target=lambda: system_stats.collect_snapshot_shared(block_on_miss=True),
+        daemon=True,
+    )
+    worker.start()
+    assert started.wait(1)
+
+    t0 = time.perf_counter()
+    summary = system_stats.collect_snapshot_shared(block_on_miss=False)
+    elapsed = time.perf_counter() - t0
+    release.set()
+    worker.join(2)
+
+    assert summary.timestamp == 0.0
+    assert elapsed < 0.1
 
 # === disk_tests.py ===
 

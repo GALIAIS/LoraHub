@@ -35,6 +35,7 @@ from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
     attention_backends_for_gpu,
     collect_snapshot,
+    collect_snapshot_shared,
 )
 from lorahub.api import app as app_module
 from lorahub.api.task_sessions import (
@@ -48,7 +49,12 @@ router = APIRouter(prefix="/api")
 
 @router.get("/system/stats")
 def system_stats() -> dict[str, Any]:
-    return collect_snapshot().to_dict()
+    return collect_snapshot_shared().to_dict()
+
+
+@router.get("/system/summary")
+def system_summary() -> dict[str, Any]:
+    return collect_snapshot_shared(block_on_miss=False).to_dict()
 
 
 @router.get("/system/attention-backends")

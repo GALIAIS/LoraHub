@@ -1,4 +1,4 @@
-# Anima factorized LoKr on the anima_lora backend — 32GB config.
+# Anima factorized LoKr on the anima_lora backend - 32GB config.
 #
 # Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
 # Conservative factorized LoKr profile. Do not copy the LoHA 32GB runtime
@@ -24,6 +24,11 @@
 #      decomposition than plain LoRA.
 
 schemaVersion: "1.0"
+
+_template:
+  name: Anima LoKr 32GB
+  description: Anima factorized LoKr 省显存模板。rank 8、checkpointing on、compile off。
+  arch: anima
 
 baseModel:
   arch: anima
@@ -134,7 +139,7 @@ sampling:
       height: 1152
 
 output:
-  name: anima_lokr_32gb
+  name: anima-lokr-32gb
   saveEveryNEpochs: 2
   saveDtype: bf16
 
@@ -168,7 +173,7 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: anima_lokr_32gb
+    outputName: anima-lokr-32gb
 
     # algorithm: lokr_factorized — same checkpoint layout as LoKr, but
     # the adapter forward avoids materializing full ΔW.

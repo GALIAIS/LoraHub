@@ -1,3 +1,8 @@
+_template:
+  name: Anima LoRA Default
+  description: Anima 通用基线。适合作为普通 LoRA 对照模板。
+  arch: anima
+
 schemaVersion: '1.0'
 baseModel:
   arch: anima
@@ -173,7 +178,7 @@ sampling:
   inferenceCfg: 5.0
   spectrumAnalysis: true
 output:
-  name: anima_lora
+  name: anima-lora
   saveEveryNEpochs: 1
   saveDtype: fp16
   noMetadata: false
@@ -200,7 +205,7 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: anima_lora
+    outputName: anima-lora
     networkModule: networks.lora_anima
     networkDim: 32
     networkAlpha: 32.0

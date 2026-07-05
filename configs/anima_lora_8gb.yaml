@@ -1,3 +1,8 @@
+_template:
+  name: Anima LoRA 8GB
+  description: Anima 低显存基线。768 训练分辨率，AdamW8bit，适合 8GB 显存。
+  arch: anima
+
 schemaVersion: '1.0'
 baseModel:
   arch: anima
@@ -145,7 +150,7 @@ sampling:
   inferenceCfg: 5.0
   spectrumAnalysis: true
 output:
-  name: anima_lora_8gb
+  name: anima-lora-8gb
   saveEveryNEpochs: 1
   saveDtype: fp16
   noMetadata: false
@@ -156,7 +161,7 @@ backend:
   animaLora:
     method: lora
     preset: low_vram
-    outputName: anima_lora_8gb
+    outputName: anima-lora-8gb
     networkModule: networks.lora_anima
     networkDim: 32             # 上游 methods/lora.toml 默认；rank=32 容量更稳
     networkAlpha: 32.0         # 上游默认；与 rank 同值保持 alpha/rank=1.0

@@ -1,4 +1,4 @@
-# Anima style LoRA on the anima_lora backend — V100 32GB stable config.
+# Anima style LoRA on the anima_lora backend - V100 32GB stable config.
 #
 # Target hardware: Tesla V100 32GB (sm_70). Based on the stable 32GB style config; only hardware compatibility knobs are changed.
 # Expected throughput: slower than Ada/Ampere; V100 uses fp16 AMP with fp32 stability islands and PyTorch SDPA.
@@ -19,6 +19,11 @@
 #      colour / brush coupling that pure LoRA can't fit at the same params
 
 schemaVersion: '1.0'
+
+_template:
+  name: Anima LoRA V100 FP16
+  description: Anima V100 兼容模板。fp16、PyTorch SDPA、关闭 torch.compile。
+  arch: anima
 
 baseModel:
   arch: anima
@@ -132,7 +137,7 @@ sampling:
       height: 896
 
 output:
-  name: style_anima_v100
+  name: style-anima-v100
   saveEveryNEpochs: 2
   saveDtype: fp16
 
@@ -166,7 +171,7 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: style_anima_v100
+    outputName: style-anima-v100
 
     # Algorithm: LoHA — same choice as the 8GB config, scaled up.
     # Effective rank is ``r²`` so r=16 here is comparable in expressive

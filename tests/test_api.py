@@ -2603,7 +2603,7 @@ def test_list_templates_returns_validated_configs(client: TestClient) -> None:
     # Each template config must round-trip through the schema.
     for tpl in body["templates"]:
         cfg = TrainingConfig.model_validate(tpl["config"])
-        assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3", "anima"}
+        assert cfg.base_model.arch in {"sdxl", "sd15", "flux", "sd3", "anima", "krea2"}
 
 
 def test_list_templates_skips_invalid_yaml_files(

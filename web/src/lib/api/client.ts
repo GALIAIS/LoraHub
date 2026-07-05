@@ -483,6 +483,7 @@ export const api = {
       `/ai/keys/${encodeURIComponent(keyId)}/reset-runtime`,
       { method: "POST" },
     ),
+  getSystemSummary: () => http<SystemSnapshot>("/system/summary"),
   getSystemStats: () => http<SystemSnapshot>("/system/stats"),
   getLatestTask: (kind: string) =>
     http<TaskSessionRecord>(`/tasks/latest?kind=${encodeURIComponent(kind)}`),

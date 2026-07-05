@@ -60,6 +60,8 @@ yarn-debug.log*
 yarn-error.log*
 dist/
 .vite/
+desktop-tauri/src-tauri/target/
+desktop-tauri/src-tauri/gen/schemas/
 
 # LoraHub runtime artifacts
 workspaces/

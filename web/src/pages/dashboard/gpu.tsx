@@ -25,7 +25,7 @@ export const GpuSection = memo(function GpuSection({
   // 已经探测到设备时直接渲染，让多源 GPU 都有展示。
   if (gpus.length > 0) {
     return (
-      <div className="space-y-3">
+      <div className="flex h-full flex-col gap-3">
         {gpus.map((gpu) => (
           <GpuCard key={gpu.index} gpu={gpu} />
         ))}
@@ -41,7 +41,7 @@ export const GpuSection = memo(function GpuSection({
   // 没有任何 GPU 数据 - 给个友好提示。
   if (!hasNvidiaSmi) {
     return (
-      <Card>
+      <Card className="h-full">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Zap className="size-4 text-muted-foreground" />
@@ -53,7 +53,7 @@ export const GpuSection = memo(function GpuSection({
     )
   }
   return (
-    <Card className="rounded-[6px] border-amber-500/30 bg-amber-500/5 shadow-[var(--panel-shadow)]">
+    <Card className="h-full rounded-[6px] border-amber-500/30 bg-amber-500/5 shadow-[var(--panel-shadow)]">
       <CardContent className="px-4 py-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
         <AlertTriangle className="size-4" />
         nvidia-smi 已安装但未返回任何设备信息。
@@ -72,7 +72,7 @@ const GpuCard = memo(function GpuCard({ gpu }: { gpu: SystemGpu }) {
   const vendor = vendorBadge(gpu)
   const isAppleSilicon = gpu.vendor === "apple"
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div>

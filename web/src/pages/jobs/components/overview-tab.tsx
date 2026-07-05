@@ -1,11 +1,7 @@
 import { useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import {
-  api,
-  useSystemStream,
-  type JobSummary,
-  type TrainingEvent,
-} from "@/lib/api"
+import { api, type JobSummary, type TrainingEvent } from "@/lib/api"
+import { useSystemTelemetry } from "@/lib/system-telemetry"
 import { Stat } from "./stat"
 import {
   EtaTile,
@@ -69,10 +65,7 @@ export function OverviewTab({
   // 中" while the GPU is actually busy resizing / caching latents.
   const isActive = job ? ACTIVE_STATES.has(job.state) : false
 
-  // Telemetry stream stays open whenever the user is on this tab so the cards
-  // refresh without waiting for a poll. Only opening it for live jobs would
-  // cost us a fresh handshake every time the job restarts.
-  const system = useSystemStream(true)
+  const system = useSystemTelemetry()
 
   const lastStep = useMemo(
     () => [...events].reverse().find((e) => e.type === "step"),

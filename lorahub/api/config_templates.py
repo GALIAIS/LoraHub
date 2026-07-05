@@ -43,10 +43,11 @@ _DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs"
 
 # Fallback metadata used when a YAML file omits the ``_template`` block.
 _FALLBACK_NAME_FROM_ID = {
-    "anima_lora_default": "Anima LoRA 默认基线",
+    "anima_lora_default": "Anima LoRA Default",
     "anima_lora_8gb": "Anima LoRA 8GB",
     "anima_loha_32gb": "Anima LoHA 32GB",
     "anima_lokr_32gb": "Anima LoKr 32GB",
+    "anima_lora_v100_fp16": "Anima LoRA V100 FP16",
     "sdxl_character": "SDXL Character",
     "sdxl_style": "SDXL Style",
     "sd15_character": "SD 1.5 Character",
@@ -54,10 +55,11 @@ _FALLBACK_NAME_FROM_ID = {
 }
 
 _FALLBACK_DESCRIPTION_FROM_ID = {
-    "anima_lora_default": "上游 anima_lora make lora default 的通用复刻基线；用于对照，不是画风强化配方。",
-    "anima_lora_8gb": "Anima 8GB 安全档：768 分辨率、低显存优化、关闭采样和验证。",
+    "anima_lora_default": "Anima 通用基线；用于对照，不是画风强化配方。",
+    "anima_lora_8gb": "Anima 8GB 安全档：768 分辨率、低显存优化。",
     "anima_loha_32gb": "32GB LoHA 配方：batchSize 2、gradAccum 4、10 epoch、CMMD 验证。",
     "anima_lokr_32gb": "32GB factorized LoKr 配方：rank 8、batchSize 1、gradAccum 8、checkpointing on、compile off。",
+    "anima_lora_v100_fp16": "V100 兼容档：fp16、PyTorch SDPA、关闭 torch.compile。",
 }
 
 

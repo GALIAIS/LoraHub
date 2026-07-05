@@ -781,7 +781,7 @@ async def stream_system_sse(request: Request) -> StreamingResponse:
     No replay buffer here: snapshots are stateless, the freshest one is
     always good enough, so Last-Event-ID is ignored.
     """
-    from lorahub.api.system_stats import collect_snapshot  # noqa: PLC0415
+    from lorahub.api.system_stats import collect_snapshot_shared  # noqa: PLC0415
     import json as _json  # noqa: PLC0415
 
     async def gen() -> Any:
@@ -791,7 +791,12 @@ async def stream_system_sse(request: Request) -> StreamingResponse:
             if await request.is_disconnected():
                 return
             try:
-                snap = collect_snapshot().to_dict()
+                snap = (
+                    await asyncio.to_thread(
+                        collect_snapshot_shared,
+                        block_on_miss=False,
+                    )
+                ).to_dict()
                 yield _sse_format(event_id=str(sent), data=_json.dumps(snap))
                 sent += 1
             except Exception:  # noqa: BLE001
@@ -891,13 +896,17 @@ async def stream_bootstrap(ws: WebSocket) -> None:
 @app.websocket("/api/system/stream")
 async def stream_system(ws: WebSocket) -> None:
     """Push a hardware/host snapshot every second until the client disconnects."""
-    from lorahub.api.system_stats import collect_snapshot  # noqa: PLC0415
+    from lorahub.api.system_stats import collect_snapshot_shared  # noqa: PLC0415
 
     await ws.accept()
     try:
         while True:
             try:
-                await ws.send_json(collect_snapshot().to_dict())
+                snap = await asyncio.to_thread(
+                    collect_snapshot_shared,
+                    block_on_miss=False,
+                )
+                await ws.send_json(snap.to_dict())
             except WebSocketDisconnect:
                 raise
             except Exception:  # noqa: BLE001

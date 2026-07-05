@@ -197,7 +197,7 @@ def test_32gb_loha_template_compiles_to_loha_recipe(tmp_path: Path) -> None:
     argv, files = compile_config(cfg, tmp_path / "ws")
     emitted = _emitted_toml(argv, files)
 
-    assert emitted["output_name"] == "anima_loha_32gb"
+    assert emitted["output_name"] == "anima-loha-32gb"
     assert emitted["network_dim"] == 16
     assert emitted["network_alpha"] == 16.0
     assert emitted["learning_rate"] == 7e-05
@@ -221,7 +221,7 @@ def test_32gb_lokr_template_compiles_to_lokr_recipe(tmp_path: Path) -> None:
     argv, files = compile_config(cfg, tmp_path / "ws")
     emitted = _emitted_toml(argv, files)
 
-    assert emitted["output_name"] == "anima_lokr_32gb"
+    assert emitted["output_name"] == "anima-lokr-32gb"
     assert emitted["network_dim"] == 8
     assert emitted["network_alpha"] == 8.0
     assert emitted["gradient_checkpointing"] is True
@@ -249,7 +249,7 @@ def test_v100_template_emits_fp16_amp_with_stability_clip(tmp_path: Path) -> Non
     assert emitted["save_precision"] == "fp16"
     assert emitted["max_grad_norm"] == 0.5
     assert emitted["no_half_vae"] is True
-    assert emitted["output_name"] == "style_anima_v100"
+    assert emitted["output_name"] == "style-anima-v100"
 
 
 def test_lora_method_emits_default_stack(tmp_path: Path) -> None:

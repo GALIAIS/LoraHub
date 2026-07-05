@@ -18,6 +18,7 @@ endpoint always has *something* to render.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import json
 import os
 import platform
@@ -25,6 +26,7 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -71,6 +73,12 @@ _NWINFO: str | None = None
 _NWINFO_PROBED = False
 _AMDGPU_TOP: str | None = None
 _AMDGPU_TOP_PROBED = False
+_HOST_INFO = HostInfo(
+    hostname=platform.node() or "",
+    system=platform.system(),
+    release=platform.release(),
+    python=platform.python_version(),
+)
 
 
 def _run_hidden(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -388,6 +396,38 @@ def _collect_memory() -> MemoryStats:
         except OSError:
             pass
     return MemoryStats(total_bytes=0, used_bytes=0, available_bytes=0, percent=0.0)
+
+
+def _collect_summary_memory() -> MemoryStats:
+    if platform.system() == "Windows":
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MemoryStatusEx()
+        stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+            total = int(stat.ullTotalPhys)
+            available = int(stat.ullAvailPhys)
+            used = max(total - available, 0)
+            return MemoryStats(
+                total_bytes=total,
+                used_bytes=used,
+                available_bytes=available,
+                percent=float(stat.dwMemoryLoad),
+                swap_total_bytes=int(stat.ullTotalPageFile),
+                swap_used_bytes=max(int(stat.ullTotalPageFile - stat.ullAvailPageFile), 0),
+            )
+    return _collect_memory()
 
 
 # Pseudo / virtual filesystems we never want to report as a "disk" - they
@@ -1409,12 +1449,7 @@ def _collect_battery() -> BatteryStats | None:
 
 
 def _collect_host() -> HostInfo:
-    return HostInfo(
-        hostname=platform.node() or "",
-        system=platform.system(),
-        release=platform.release(),
-        python=platform.python_version(),
-    )
+    return _HOST_INFO
 
 
 # Lightweight rolling state for network throughput. We snapshot the
@@ -1929,6 +1964,107 @@ def collect_snapshot(
     )
 
 
+_SNAPSHOT_TTL_DEFAULT = 1.0
+_snapshot_cache: tuple[float, SystemSnapshot] | None = None
+_snapshot_cache_lock = threading.Lock()
+_snapshot_refreshing = False
+
+
+def collect_summary_snapshot() -> SystemSnapshot:
+    """Cheap shape-compatible snapshot for first paint while full probes run."""
+    if _HAS_PSUTIL:
+        cpu_usage = psutil.cpu_percent(interval=None)
+        memory = _collect_summary_memory()
+    else:
+        cpu_usage = None
+        memory = _collect_summary_memory()
+    return SystemSnapshot(
+        timestamp=time.time(),
+        host=_collect_host(),
+        cpu=CpuStats(
+            cores_logical=os.cpu_count() or 0,
+            cores_physical=None,
+            usage_percent=cpu_usage,
+            arch=platform.machine(),
+        ),
+        memory=memory,
+        disks=[],
+        gpus=[],
+        has_psutil=_HAS_PSUTIL,
+        has_nvidia_smi=_NVIDIA_SMI is not None,
+    )
+
+
+def _refresh_snapshot_cache() -> None:
+    global _snapshot_cache, _snapshot_refreshing
+    snap: SystemSnapshot | None = None
+    try:
+        snap = collect_snapshot()
+    except Exception:  # noqa: BLE001
+        snap = None
+    finally:
+        with _snapshot_cache_lock:
+            if snap is not None:
+                _snapshot_cache = (time.monotonic(), snap)
+            _snapshot_refreshing = False
+
+
+def _start_snapshot_refresh_locked() -> None:
+    global _snapshot_refreshing
+    if _snapshot_refreshing:
+        return
+    _snapshot_refreshing = True
+    threading.Thread(
+        target=_refresh_snapshot_cache,
+        name="lorahub-system-snapshot",
+        daemon=True,
+    ).start()
+
+
+def collect_snapshot_shared(
+    *,
+    ttl_seconds: float = _SNAPSHOT_TTL_DEFAULT,
+    block_on_miss: bool = True,
+) -> SystemSnapshot:
+    """Return a short-lived shared snapshot for live telemetry consumers."""
+    global _snapshot_cache, _snapshot_refreshing
+    now = time.monotonic()
+    cached = _snapshot_cache
+    if cached is not None and (now - cached[0]) < ttl_seconds:
+        return cached[1]
+
+    with _snapshot_cache_lock:
+        cached = _snapshot_cache
+        if cached is not None and (time.monotonic() - cached[0]) < ttl_seconds:
+            return cached[1]
+        if not block_on_miss:
+            _start_snapshot_refresh_locked()
+            if cached is not None:
+                return cached[1]
+            snap = collect_summary_snapshot()
+            _snapshot_cache = (time.monotonic(), snap)
+            return snap
+        if _snapshot_refreshing:
+            return cached[1] if cached is not None else collect_summary_snapshot()
+        _snapshot_refreshing = True
+
+    try:
+        snap = collect_snapshot()
+    except Exception:  # noqa: BLE001
+        snap = cached[1] if cached is not None else collect_summary_snapshot()
+    with _snapshot_cache_lock:
+        _snapshot_cache = (time.monotonic(), snap)
+        _snapshot_refreshing = False
+    return snap
+
+
+def invalidate_snapshot_cache() -> None:
+    global _snapshot_cache, _snapshot_refreshing
+    with _snapshot_cache_lock:
+        _snapshot_cache = None
+        _snapshot_refreshing = False
+
+
 __all__ = [
     "BatteryStats",
     "CpuStats",
@@ -1945,7 +2081,10 @@ __all__ = [
     "TcpConnectionStats",
     "ALL_ATTENTION_BACKENDS",
     "attention_backends_for_gpu",
+    "collect_summary_snapshot",
     "collect_snapshot",
+    "collect_snapshot_shared",
+    "invalidate_snapshot_cache",
 ]
 
 

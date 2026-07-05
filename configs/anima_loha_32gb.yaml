@@ -1,4 +1,4 @@
-# Anima LoHA on the anima_lora backend — 32GB config.
+# Anima LoHA on the anima_lora backend - 32GB config.
 #
 # Target hardware: RTX 4080 32G / RTX 5090 / RTX 6000 Ada / A6000 / A100 40G.
 # Expected throughput: ~1.2-1.8 s/step (LoHA is ~20% slower than DoRA at the
@@ -20,6 +20,11 @@
 #      colour / brush coupling that pure LoRA can't fit at the same params
 
 schemaVersion: "1.0"
+
+_template:
+  name: Anima LoHA 32GB
+  description: Anima LoHA 高显存模板。batch 2、rank 16、compile on。
+  arch: anima
 
 baseModel:
   arch: anima
@@ -130,7 +135,7 @@ sampling:
       height: 1152
 
 output:
-  name: anima_loha_32gb
+  name: anima-loha-32gb
   saveEveryNEpochs: 2
   saveDtype: bf16
 
@@ -164,7 +169,7 @@ backend:
   animaLora:
     method: lora
     preset: default
-    outputName: anima_loha_32gb
+    outputName: anima-loha-32gb
 
     # Algorithm: LoHA — same choice as the 8GB config, scaled up.
     # Effective rank is ``r²`` so r=16 here is comparable in expressive

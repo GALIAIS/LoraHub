@@ -4,15 +4,11 @@
  * 通过 SSE /api/system/sse 每秒接收一次系统快照（旧 WS 端点保留作 fallback），
  * 实时通道不可用时降级为 5 秒一次的 REST 轮询。任务统计仍走 /api/jobs（3 秒轮询）。
  */
-import { useMemo } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMemo, useState } from "react"
 import { Loader2 } from "lucide-react"
-import {
-  api,
-  useSystemStream,
-  type SystemSnapshot,
-} from "@/lib/api"
+import type { SystemSnapshot } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
+import { useSystemTelemetry } from "@/lib/system-telemetry"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { JobStatGrid } from "./job-stats"
@@ -29,22 +25,10 @@ import { RecentJobsCard } from "./recent-jobs"
 // (sweeps / analysis / jobs pages still use it).
 export { StateBadge } from "./recent-jobs"
 
-const POLL_INTERVAL_SYSTEM_MS = 5_000
-
 export function DashboardPage() {
-  const stream = useSystemStream(true)
-
-  // 实时通道不通时降级为 5s REST 轮询，保证看板永远有数据。
-  // 共用同一个 query key 让 GlobalStatusBar 和「参数方案」对话框
-  // 直接复用同一份缓存，避免三处轮询撞同一个端点。
-  const polled = useQuery({
-    queryKey: ["system", "stats"],
-    queryFn: api.getSystemStats,
-    refetchInterval: stream.status === "open" ? false : POLL_INTERVAL_SYSTEM_MS,
-    staleTime: 3_000,
-  })
-
-  const snapshot: SystemSnapshot | null = stream.snapshot ?? polled.data ?? null
+  const telemetry = useSystemTelemetry()
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const snapshot: SystemSnapshot | null = telemetry.snapshot
 
   const jobs = useJobsList()
   const allJobs = jobs.data?.jobs ?? []
@@ -62,7 +46,7 @@ export function DashboardPage() {
     return { running, queued, succeeded, failed }
   }, [allJobs])
 
-  const liveStream = stream.status === "open"
+  const liveStream = telemetry.live
 
   return (
     <div className="h-full overflow-y-auto">
@@ -90,45 +74,53 @@ export function DashboardPage() {
 
         {snapshot ? (
           <>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+            <HostInfoCard snapshot={snapshot} />
+
+            <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.95fr)]">
+              <CpuMemoryCard snapshot={snapshot} variant="cpu" />
               <GpuSection
                 gpus={snapshot.gpus}
                 hasNvidiaSmi={snapshot.has_nvidia_smi}
                 system={snapshot.host.system}
               />
-              <DiskSection disks={snapshot.disks} />
             </div>
 
             <RecentJobsCard jobs={allJobs} />
 
-            <details className="rounded-[6px] border border-border/60 bg-background/60">
+            <details
+              className="rounded-[6px] border border-border/60 bg-background/60"
+              open={diagnosticsOpen}
+              onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}
+            >
               <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
                 系统诊断详情
               </summary>
-              <div className="space-y-4 border-t border-border/60 p-4">
-                <HostInfoCard snapshot={snapshot} />
-                <CpuMemoryCard snapshot={snapshot} />
-                {snapshot.processes !== undefined && (
-                  <TopProcessesCard processes={snapshot.processes ?? []} />
-                )}
-                {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
-                {snapshot.gpu_processes !== undefined && (
-                  <GpuProcessesCard processes={snapshot.gpu_processes ?? []} />
-                )}
-                {snapshot.disk_io !== undefined && (
-                  <DiskIoCard io={snapshot.disk_io ?? null} />
-                )}
-                {snapshot.network?.interfaces !== undefined && (
-                  <NetworkInterfacesCard interfaces={snapshot.network?.interfaces ?? []} />
-                )}
-                {(snapshot.network?.tcp_connections !== undefined ||
-                  snapshot.network?.public_ip !== undefined) && (
-                  <NetworkSummaryCard
-                    tcp={snapshot.network?.tcp_connections ?? null}
-                    publicIp={snapshot.network?.public_ip ?? null}
-                  />
-                )}
-              </div>
+              {diagnosticsOpen && (
+                <div className="space-y-4 border-t border-border/60 p-4">
+                  <CpuMemoryCard snapshot={snapshot} variant="memory" />
+                  <DiskSection disks={snapshot.disks} />
+                  {snapshot.processes !== undefined && (
+                    <TopProcessesCard processes={snapshot.processes ?? []} />
+                  )}
+                  {snapshot.battery && <BatteryCard battery={snapshot.battery} />}
+                  {snapshot.gpu_processes !== undefined && (
+                    <GpuProcessesCard processes={snapshot.gpu_processes ?? []} />
+                  )}
+                  {snapshot.disk_io !== undefined && (
+                    <DiskIoCard io={snapshot.disk_io ?? null} />
+                  )}
+                  {snapshot.network?.interfaces !== undefined && (
+                    <NetworkInterfacesCard interfaces={snapshot.network?.interfaces ?? []} />
+                  )}
+                  {(snapshot.network?.tcp_connections !== undefined ||
+                    snapshot.network?.public_ip !== undefined) && (
+                    <NetworkSummaryCard
+                      tcp={snapshot.network?.tcp_connections ?? null}
+                      publicIp={snapshot.network?.public_ip ?? null}
+                    />
+                  )}
+                </div>
+              )}
             </details>
           </>
         ) : (
