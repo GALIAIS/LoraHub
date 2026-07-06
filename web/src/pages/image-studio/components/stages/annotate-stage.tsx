@@ -40,6 +40,10 @@ import {
   AiVlmAnimaRewriteTool,
   AiWd14PrefilterTool,
 } from "./annotate-ai-single-image"
+import {
+  useRefreshCaptionViewsOnTaskDone,
+  useTaggerDownloadDisplay,
+} from "./annotate-ai-shared"
 import { CaptionsBlacklistTool } from "./annotate-caption-tools"
 
 interface Props {
@@ -98,6 +102,7 @@ export function AnnotateStage({ datasetPath }: Props) {
 function AnnotateMainPanel({ datasetPath }: Props) {
   const qc = useQueryClient()
   const [params] = useSearchParams()
+  useRefreshCaptionViewsOnTaskDone(datasetPath)
   const tasks = useStudioTasksFor(datasetPath)
   const latestTask = [...tasks].sort((a, b) => b.startedAt - a.startedAt)[0]
   const [mode, setMode] = useState<PrimaryMode>("tags")
@@ -499,7 +504,8 @@ function TaskCard({
   task,
 }: {
   task:
-    | {
+        | {
+        kind?: string
         label: string
         status: string
         processed?: number
@@ -509,9 +515,12 @@ function TaskCard({
       }
     | undefined
 }) {
+  const download = useTaggerDownloadDisplay(
+    task?.status === "running" && (task.kind === "wd14" || task.kind === "smart-caption"),
+  )
   const total = task?.total ?? 0
   const processed = task?.processed ?? 0
-  const percent = total > 0 ? Math.round((processed / total) * 100) : 0
+  const percent = download?.percent ?? (total > 0 ? Math.round((processed / total) * 100) : 0)
   return (
     <section className="rounded-md border border-border/60 bg-card p-4">
       <div className="flex items-center gap-2">
@@ -529,7 +538,7 @@ function TaskCard({
       ) : (
         <div className="mt-3 space-y-2 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">{task.label}</span>
+            <span className="font-medium">{download?.label ?? task.label}</span>
             <span className="text-muted-foreground">{task.status}</span>
           </div>
           <div className="shiro-progress-track h-1.5 border-0 bg-muted">

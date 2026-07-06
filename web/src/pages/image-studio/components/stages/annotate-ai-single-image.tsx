@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ImageIcon, Loader2, Play, Sparkles, Tags } from "lucide-react"
 import { toast } from "sonner"
 
@@ -263,6 +263,7 @@ function PrefilterResultCard({ result }: { result: Wd14PrefilterResult | null })
 // --------------------------------------------------------------------------- //
 
 export function AiVlmAnimaRewriteTool({ datasetPath }: { datasetPath: string }) {
+  const qc = useQueryClient()
   const [json, setJson] = useState("")
   const [mergeStrategy, setMergeStrategy] = useState("replace")
   const [result, setResult] = useState<{
@@ -293,12 +294,16 @@ export function AiVlmAnimaRewriteTool({ datasetPath }: { datasetPath: string }) 
         skipLlm: parsed.skipLlm,
       })
     },
-    onSuccess: (data) =>
+    onSuccess: (data) => {
       setResult({
         path: data.path,
         wd14Tags: data.wd14Tags,
         caption: data.caption,
-      }),
+      })
+      qc.invalidateQueries({ queryKey: ["image-studio-captions-vocab", datasetPath] })
+      qc.invalidateQueries({ queryKey: ["image-studio-audit-report", datasetPath] })
+      qc.invalidateQueries({ queryKey: ["image-studio"] })
+    },
     onError: (err) =>
       toast.error("VLM 重写失败", {
         description: err instanceof Error ? err.message : String(err),
