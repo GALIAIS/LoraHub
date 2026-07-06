@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.LORAHUB_SYNC_TOKEN || github.token }}
 
       - name: Fast-forward dev only when it is behind main
         shell: bash
@@ -40,7 +41,14 @@ jobs:
               exit 0
             fi
             echo "dev is behind main; fast-forwarding dev."
-            git push origin origin/main:dev
+            if ! output="$(git push origin origin/main:dev 2>&1)"; then
+              echo "$output"
+              if grep -q "Repository rule violations" <<<"$output"; then
+                echo "Repository rules rejected direct pushes to dev; add a ruleset bypass for GitHub Actions or sync dev through a PR."
+                exit 0
+              fi
+              exit 1
+            fi
           else
             echo "dev is ahead of or diverged from main; skipping."
           fi
