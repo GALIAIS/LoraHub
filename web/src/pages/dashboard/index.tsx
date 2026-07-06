@@ -76,13 +76,13 @@ export function DashboardPage() {
           <>
             <HostInfoCard snapshot={snapshot} />
 
-            <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.95fr)]">
-              <CpuMemoryCard snapshot={snapshot} variant="cpu" />
+            <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(360px,0.95fr)_minmax(0,1fr)]">
               <GpuSection
                 gpus={snapshot.gpus}
                 hasNvidiaSmi={snapshot.has_nvidia_smi}
                 system={snapshot.host.system}
               />
+              <CpuMemoryCard snapshot={snapshot} variant="cpu" />
             </div>
 
             <RecentJobsCard jobs={allJobs} />
