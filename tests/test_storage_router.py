@@ -134,6 +134,10 @@ def test_hf_cache_clear_succeeds_when_path_exists(
     fake_cache.mkdir()
     (fake_cache / "blob.bin").write_bytes(b"q" * 4096)
     monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", str(fake_cache))
+    monkeypatch.setattr(
+        "lorahub.core.paths.project_root",
+        lambda: tmp_path / "missing-lorahub-root",
+    )
 
     r = client.delete("/api/storage/hf-cache")
     assert r.status_code == 200, r.text

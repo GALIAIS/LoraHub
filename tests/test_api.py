@@ -2960,15 +2960,21 @@ def test_settings_persists_error_upstream_block(client: TestClient) -> None:
     assert "error_upstream_channel" in r_bad.json()["detail"]
 
 
-def test_env_overrides_injects_hf_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_overrides_injects_hf_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from lorahub.api.settings import Settings, env_overrides
 
+    monkeypatch.setattr("lorahub.core.net.project_root", lambda: tmp_path)
     monkeypatch.delenv("HF_ENDPOINT", raising=False)
     monkeypatch.delenv("HUGGINGFACE_HUB_ENDPOINT", raising=False)
     s = Settings(huggingface_endpoint="https://hf-mirror.com")
     out = env_overrides(s)
     assert out["HF_ENDPOINT"] == "https://hf-mirror.com"
     assert out["HUGGINGFACE_HUB_ENDPOINT"] == "https://hf-mirror.com"
+    assert out["HF_HOME"] == str(tmp_path / "models" / "huggingface")
+    assert out["HF_HUB_CACHE"] == str(tmp_path / "models" / "huggingface" / "hub")
+    assert out["HUGGINGFACE_HUB_CACHE"] == out["HF_HUB_CACHE"]
 
     # When the user already exported HF_ENDPOINT we don't overwrite it.
     monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")

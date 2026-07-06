@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -316,6 +316,8 @@ def test_ai_toolkit_launch_defaults_hf_cache_under_models(
     assert captured["started"] is True
     assert captured["env"] == {
         "HF_HOME": str(tmp_path / "models" / "huggingface"),
+        "HF_HUB_CACHE": str(tmp_path / "models" / "huggingface" / "hub"),
+        "HUGGINGFACE_HUB_CACHE": str(tmp_path / "models" / "huggingface" / "hub"),
         "MODELS_PATH": str(tmp_path / "models"),
     }
 

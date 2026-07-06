@@ -398,6 +398,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         check just confirms the interpreter exists; package presence
         is the user's responsibility.
     """
+    from lorahub.core.backends.anima_lora import msvc as _anima_msvc  # noqa: PLC0415
     from lorahub.core.backends.anima_lora.bootstrap import (  # noqa: PLC0415
         _ENV_PYTHON,
         _ENV_REPO,
@@ -408,7 +409,6 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     from lorahub.core.backends.anima_lora.models import (  # noqa: PLC0415
         missing_files as _anima_missing_models,
     )
-    from lorahub.core.backends.anima_lora import msvc as _anima_msvc  # noqa: PLC0415
 
     repo_raw = (
         os.environ.get(_ENV_REPO)
@@ -644,6 +644,13 @@ def env_overrides(settings: Settings) -> dict[str, str]:
     the user hasn't set the variable themselves.
     """
     overrides: dict[str, str] = {}
+    from lorahub.core.net import hf_cache_home  # noqa: PLC0415
+
+    hf_home = hf_cache_home()
+    hf_hub_cache = str(Path(hf_home) / "hub")
+    overrides["HF_HOME"] = hf_home
+    overrides["HF_HUB_CACHE"] = hf_hub_cache
+    overrides["HUGGINGFACE_HUB_CACHE"] = hf_hub_cache
     hf = (settings.huggingface_endpoint or "").strip().rstrip("/")
     if hf and "HF_ENDPOINT" not in os.environ:
         overrides["HF_ENDPOINT"] = hf

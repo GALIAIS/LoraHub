@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -115,13 +114,10 @@ class AIToolkitBackend:
         models_dir = project_root() / "models"
         ensure_models_link(bootstrap_env.repo_path, models_dir)
         runner_env.setdefault("MODELS_PATH", str(models_dir))
-        if (
-            "HF_HOME" not in os.environ
-            and "HF_HOME" not in runner_env
-            and "HUGGINGFACE_HUB_CACHE" not in os.environ
-            and "HUGGINGFACE_HUB_CACHE" not in runner_env
-        ):
-            runner_env["HF_HOME"] = str(project_root() / "models" / "huggingface")
+        hf_home = models_dir / "huggingface"
+        runner_env["HF_HOME"] = str(hf_home)
+        runner_env["HF_HUB_CACHE"] = str(hf_home / "hub")
+        runner_env["HUGGINGFACE_HUB_CACHE"] = str(hf_home / "hub")
         runner = AIToolkitRunner(
             python=bootstrap_env.python_executable,
             repo=bootstrap_env.repo_path,

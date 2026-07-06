@@ -50,6 +50,7 @@ def test_huggingface_download_emits_per_file_progress_and_uses_workers(
         local_dir: str,
         endpoint: str | None = None,
         token: str | None = None,
+        **_kw: Any,
     ) -> str:
         worker_names.add(threading.current_thread().name)
         assert filename not in {"README.md", "preview.png"}
@@ -248,6 +249,42 @@ def test_huggingface_explicit_endpoint_wins_over_env(
     ]
 
 
+def test_huggingface_download_ignores_bad_hf_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HF_HOME", "F:\\missing")
+    monkeypatch.setattr("lorahub.core.net.project_root", lambda: tmp_path / "root")
+    siblings = [types.SimpleNamespace(rfilename="model.safetensors", size=1)]
+    seen: list[dict[str, Any]] = []
+
+    class FakeApi:
+        def __init__(self, endpoint: str | None = None, token: str | None = None) -> None:
+            pass
+
+        def model_info(self, *_args: Any, **_kwargs: Any):
+            return types.SimpleNamespace(siblings=siblings)
+
+    def fake_hf_hub_download(**kw: Any) -> str:
+        seen.append(kw)
+        out = Path(kw["local_dir"]) / kw["filename"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return str(out)
+
+    fake_hub = types.SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+
+    downloader.download(
+        DownloadRequest(
+            source="huggingface",
+            repo_id="owner/name",
+            target_dir=tmp_path / "hf",
+        )
+    )
+
+    assert seen[0]["cache_dir"] == str(tmp_path / "root" / "models" / "huggingface" / "hub")
+
+
 def test_list_remote_files_marks_default_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     files = [
         ("README.md", 10),
@@ -425,7 +462,7 @@ def test_modelscope_file_download_does_not_leave_partial_target(
         def __init__(self) -> None:
             self._reads = 0
 
-        def __enter__(self) -> "BrokenResponse":
+        def __enter__(self) -> BrokenResponse:
             return self
 
         def __exit__(self, *_args: Any) -> None:

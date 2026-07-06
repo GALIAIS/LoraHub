@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import shutil
-from fnmatch import fnmatch
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from lorahub.core.net import hf_endpoint, proxy_env
+from lorahub.core.net import hf_api, hf_download, hf_endpoint, proxy_env
 
 ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
@@ -176,9 +176,7 @@ def _hf_list_files(
     token: str | None = None,
 ) -> list[tuple[str, int]]:
     """Return [(rfilename, size_bytes)] for every file in the snapshot."""
-    from huggingface_hub import HfApi  # noqa: PLC0415
-
-    api = HfApi(endpoint=endpoint, token=token) if (endpoint or token) else HfApi()
+    api = hf_api(endpoint=endpoint, token=token) if (endpoint or token) else hf_api()
     info = api.model_info(repo_id, revision=revision, files_metadata=True, token=token)
     out: list[tuple[str, int]] = []
     for sibling in info.siblings or []:
@@ -198,8 +196,6 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     listing; for repos with many small files it pays for itself within a
     second.
     """
-    from huggingface_hub import hf_hub_download  # noqa: PLC0415
-
     endpoint = hf_endpoint(req.huggingface_endpoint)
     token = (req.huggingface_token or "").strip() or None
     revision = "main" if req.revision == "master" else req.revision
@@ -252,7 +248,7 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
         if token:
             kw["token"] = token
         with proxy_env(req.proxy):
-            hf_hub_download(**kw)
+            hf_download(**kw)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
             size = (target / name).stat().st_size

@@ -107,14 +107,15 @@ def _resolve_archive_entry(name: str) -> Path:
 def _hf_cache_root() -> Path | None:
     """Best-effort HuggingFace cache directory lookup.
 
-    Honors HF_HOME / HUGGINGFACE_HUB_CACHE if set; falls back to the
-    huggingface_hub library's own constant if importable; finally to the
-    historical default `~/.cache/huggingface/hub`. Returns None when none
-    of the candidates exist on disk.
+    Prefer LoraHub's project-local cache. Environment variables are kept as
+    fallbacks only for older installs and manual user caches.
     """
     import os  # noqa: PLC0415
 
+    from lorahub.core.paths import project_root  # noqa: PLC0415
+
     candidates: list[Path] = []
+    candidates.append(project_root() / "models" / "huggingface" / "hub")
     if hub_cache := os.environ.get("HUGGINGFACE_HUB_CACHE"):
         candidates.append(Path(hub_cache))
     if hf_home := os.environ.get("HF_HOME"):

@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from lorahub.core.paths import project_root
+
 
 def _clean_endpoint(value: str | None) -> str | None:
     return (value or "").strip().rstrip("/") or None
@@ -97,9 +99,25 @@ def hf_download(
         kw["revision"] = revision
     if local_dir:
         kw["local_dir"] = local_dir
+    if "cache_dir" not in kw:
+        kw["cache_dir"] = _default_hf_cache_dir()
     if tqdm_class is not None:
         kw["tqdm_class"] = tqdm_class
     return hf_hub_download(**kw)
+
+
+def _default_hf_cache_dir() -> str:
+    """Project-local HF cache, independent from stale user HF_HOME values."""
+    path = project_root() / "models" / "huggingface" / "hub"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def hf_cache_home() -> str:
+    """HF_HOME value for subprocesses; points at LoraHub-owned model cache."""
+    path = project_root() / "models" / "huggingface"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def subprocess_env(
@@ -114,9 +132,13 @@ def subprocess_env(
     """
     env = dict(os.environ)
     endpoint = hf_endpoint()
+    hf_home = hf_cache_home()
     if endpoint:
         env["HF_ENDPOINT"] = endpoint
         env["HUGGINGFACE_HUB_ENDPOINT"] = endpoint
+    env["HF_HOME"] = hf_home
+    env["HF_HUB_CACHE"] = str(project_root() / "models" / "huggingface" / "hub")
+    env["HUGGINGFACE_HUB_CACHE"] = env["HF_HUB_CACHE"]
     if include_proxy:
         proxy = _download_proxy()
         if proxy:
