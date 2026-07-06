@@ -13,6 +13,13 @@ from PIL import Image
 from lorahub.core.tagging import wd14
 
 
+def test_tagging_package_exports_download_status() -> None:
+    from lorahub.core.tagging import download_status
+    from lorahub.core.tagging.download_status import snapshot
+
+    assert download_status.snapshot is snapshot
+
+
 @dataclass
 class _FakeSpec:
     name: str = "input"

@@ -6,10 +6,12 @@ from lorahub.core.tagging.base import (
     TaggerKind,
     TaggingProgress,
 )
+from lorahub.core.tagging import download_status
 
 __all__ = [
     "BaseTagger",
     "ProgressCallback",
     "TaggerKind",
     "TaggingProgress",
+    "download_status",
 ]
