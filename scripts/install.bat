@@ -202,12 +202,15 @@ set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
 set "PY_DEPS_VERBOSE="
 if /I "%LORAHUB_INSTALL_VERBOSE%"=="1" set "PY_DEPS_VERBOSE=-v"
 echo   uv default index: %UV_DEFAULT_INDEX%
+rem Windows uses a regular local install instead of editable mode.
+rem This avoids PEP 660 launcher/path edge cases that can leave an
+rem apparently installed .venv unable to import ``lorahub``.
 if defined UV_DEFAULT_INDEX (
-  echo   running uv pip install %PY_DEPS_VERBOSE% -e .[api,dev] --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" ^(log: _uv_python_deps.log^)
-  "%UV%" pip install %PY_DEPS_VERBOSE% -e ".[api,dev]" --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" > "%PY_DEPS_LOG%" 2>&1
+  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev] --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev]" --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" > "%PY_DEPS_LOG%" 2>&1
 ) else (
-  echo   running uv pip install %PY_DEPS_VERBOSE% -e .[api,dev] --python "%VENV_PY%" --link-mode=copy ^(log: _uv_python_deps.log^)
-  "%UV%" pip install %PY_DEPS_VERBOSE% -e ".[api,dev]" --python "%VENV_PY%" --link-mode=copy > "%PY_DEPS_LOG%" 2>&1
+  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev] --python "%VENV_PY%" --link-mode=copy ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev]" --python "%VENV_PY%" --link-mode=copy > "%PY_DEPS_LOG%" 2>&1
 )
 set "PY_DEPS_RC=%ERRORLEVEL%"
 type "%PY_DEPS_LOG%"

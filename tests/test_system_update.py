@@ -565,6 +565,30 @@ def test_build_pip_command_uses_configured_index_and_copy_mode(
     assert "--link-mode=copy" in cmd
 
 
+def test_build_pip_command_uses_regular_install_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su.sys, "platform", "win32")
+    monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
+
+    cmd = su._build_pip_command(Path("repo"))
+
+    assert ".[api,dev]" in cmd
+    assert "-e" not in cmd
+
+
+def test_build_pip_command_keeps_editable_install_off_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su.sys, "platform", "linux")
+    monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
+
+    cmd = su._build_pip_command(Path("repo"))
+
+    assert "-e" in cmd
+    assert cmd[cmd.index("-e") + 1] == ".[api,dev]"
+
+
 # --------------------------------------------------------------------- #
 # Version resolution (zip-install fallback chain)
 # --------------------------------------------------------------------- #

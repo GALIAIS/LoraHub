@@ -903,8 +903,9 @@ def apply(
       1. ``git fetch --tags origin``
       2. ``git checkout origin/dev`` (channel=dev) or
          ``git checkout v<latest>`` (channel=tag)
-      3. ``uv pip install -e .[api,dev]`` if the project has uv on PATH,
-         else ``pip install -e .[api,dev]``
+      3. reinstall ``.[api,dev]`` into the running venv. Windows uses
+         a regular local install to avoid PEP 660 editable launcher
+         edge cases; POSIX keeps editable installs for developer trees.
       4. ``npm run build`` if ``build`` is True
 
     When ``force`` is True, local working-tree changes that would
@@ -949,8 +950,7 @@ def apply(
             "搬过去即可继承数据。\n"
             "  2) 在当前目录 `git init && git remote add origin "
             "https://github.com/GALIAIS/LoraHub.git && git fetch && git reset "
-            "--hard origin/dev`,然后重跑 `pip install -e .` 让 hatch-vcs "
-            "重写 _version.py。\n"
+            "--hard origin/dev`,然后重跑 `pip install .` 重装当前工作树。\n"
             "完成任一步骤后,Web 设置页 → 软件更新 即可正常使用。"
         )
         raise RuntimeError(msg)
@@ -1474,6 +1474,7 @@ def _build_pip_command(cwd: Path) -> list[str]:
 
     py = _sys.executable
     pypi_index = _configured_pypi_index()
+    project_spec = [".[api,dev]"] if _sys.platform == "win32" else ["-e", ".[api,dev]"]
     try:
         from lorahub.core.toolchain.uv import find_uv  # noqa: PLC0415
 
@@ -1484,13 +1485,13 @@ def _build_pip_command(cwd: Path) -> list[str]:
                 cmd.append("-v")
             if pypi_index:
                 cmd += ["--index-url", pypi_index]
-            return [*cmd, "-e", ".[api,dev]", "--python", py, "--link-mode=copy"]
+            return [*cmd, *project_spec, "--python", py, "--link-mode=copy"]
     except Exception:  # noqa: BLE001
         pass
     cmd = [py, "-m", "pip", "install"]
     if pypi_index:
         cmd += ["--index-url", pypi_index]
-    return [*cmd, "-e", ".[api,dev]"]
+    return [*cmd, *project_spec]
 
 
 def _configured_pypi_index() -> str | None:
