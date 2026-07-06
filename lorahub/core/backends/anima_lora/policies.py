@@ -17,9 +17,7 @@ that need sub-second feedback while the user types.
 
 from __future__ import annotations
 
-import shutil
-import sys
-from typing import Iterable
+from collections.abc import Iterable
 
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.config.schema import AnimaLoraOptions, TrainingConfig
@@ -225,8 +223,12 @@ def _optimizer_conflicts(
 ) -> Iterable[ValidationIssue]:
     """8bit optimizers need bitsandbytes; LR / scheduler shape sanity."""
     optimizer_type = (opts.optimizer_type or cfg.optimizer.type or "").strip()
-    is_8bit = optimizer_type.lower().endswith("8bit")
-    if is_8bit and not _has_bitsandbytes():
+    optimizer_key = optimizer_type.lower()
+    needs_bitsandbytes = optimizer_key.endswith("8bit") or optimizer_key in {
+        "pagedadamw",
+        "pagedadamw32bit",
+    }
+    if needs_bitsandbytes and not _has_bitsandbytes():
         yield ValidationIssue(
             Severity.warning,
             "backend.animaLora.optimizerType",
@@ -337,6 +339,35 @@ def _schedule_conflicts(
 ) -> Iterable[ValidationIssue]:
     """Save / checkpoint cadence vs total epochs."""
     max_epochs = opts.max_train_epochs or cfg.schedule.epochs
+    scheduler = (opts.lr_scheduler or "").strip()
+
+    if (
+        scheduler == "piecewise_constant"
+        and "step_rules" not in cfg.optimizer.scheduler_args
+    ):
+        yield ValidationIssue(
+            Severity.error,
+            "optimizer.schedulerArgs",
+            "piecewise_constant 需要 scheduler_args.step_rules。"
+            "例如 step_rules='1:10,0.1:20,0.01'。",
+        )
+
+    if scheduler == "warmup_stable_decay" and cfg.schedule.lr_decay_steps is None:
+        yield ValidationIssue(
+            Severity.error,
+            "schedule.lrDecaySteps",
+            "warmup_stable_decay 需要设置 lrDecaySteps。",
+        )
+
+    if (
+        scheduler == "cosine_with_min_lr"
+        and cfg.optimizer.scheduler_min_lr_ratio is None
+    ):
+        yield ValidationIssue(
+            Severity.warning,
+            "optimizer.schedulerMinLrRatio",
+            "cosine_with_min_lr 未设置最小 LR 比例,将使用后端默认值。",
+        )
 
     if opts.save_every_n_epochs and opts.save_every_n_epochs > max_epochs:
         yield ValidationIssue(
@@ -409,11 +440,11 @@ def _fp16_conflicts(
 def _validation_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
     # 16 是 schema 默认 (来自 anima 上游 base.toml), 不当成"用户主动开了 holdout"
     # 处理。只在用户**显式改成非默认值**且 use_cmmd=false 时给提示。
-    SPLIT_DEFAULT = 16
+    split_default = 16
     if (
         opts.validation_split_num
         and opts.validation_split_num > 0
-        and opts.validation_split_num != SPLIT_DEFAULT
+        and opts.validation_split_num != split_default
         and not opts.use_cmmd
     ):
         yield ValidationIssue(

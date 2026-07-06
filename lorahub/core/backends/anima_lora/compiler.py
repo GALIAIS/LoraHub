@@ -300,6 +300,26 @@ def _render_full_config(
     cfg_dict["learning_rate"] = float(opts.learning_rate)
     if cfg.optimizer.max_grad_norm != 1.0:
         cfg_dict["max_grad_norm"] = float(cfg.optimizer.max_grad_norm)
+    if cfg.optimizer.optimizer_args:
+        cfg_dict["optimizer_args"] = [
+            f"{k}={v}" for k, v in cfg.optimizer.optimizer_args.items()
+        ]
+    if cfg.optimizer.scheduler_module is not None:
+        cfg_dict["lr_scheduler_type"] = cfg.optimizer.scheduler_module
+    if cfg.optimizer.scheduler_args:
+        cfg_dict["lr_scheduler_args"] = [
+            f"{k}={v}" for k, v in cfg.optimizer.scheduler_args.items()
+        ]
+    if cfg.optimizer.scheduler_num_cycles != 1:
+        cfg_dict["lr_scheduler_num_cycles"] = int(cfg.optimizer.scheduler_num_cycles)
+    if cfg.optimizer.scheduler_power != 1.0:
+        cfg_dict["lr_scheduler_power"] = float(cfg.optimizer.scheduler_power)
+    if cfg.optimizer.scheduler_timescale is not None:
+        cfg_dict["lr_scheduler_timescale"] = int(cfg.optimizer.scheduler_timescale)
+    if cfg.optimizer.scheduler_min_lr_ratio is not None:
+        cfg_dict["lr_scheduler_min_lr_ratio"] = float(cfg.optimizer.scheduler_min_lr_ratio)
+    if cfg.schedule.lr_decay_steps is not None:
+        cfg_dict["lr_decay_steps"] = int(cfg.schedule.lr_decay_steps)
     # ``lr_warmup_steps`` is upstream's dual-typed argparse field:
     #   * float < 1   → ratio of total steps (Backend base.toml default)
     #   * int >= 1    → absolute step count
@@ -1015,7 +1035,7 @@ def _toml_value(v: Any) -> str:
         return "[" + ", ".join(_toml_value(x) for x in v) + "]"
     if v is None:
         # Should never happen — _render_full_config skips None values.
-        msg = f"cannot serialise None to TOML (key dropped upstream?)"
+        msg = "cannot serialise None to TOML (key dropped upstream?)"
         raise CompilationError(msg)
     msg = f"unsupported TOML value type: {type(v).__name__} = {v!r}"
     raise CompilationError(msg)

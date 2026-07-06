@@ -431,9 +431,43 @@ class AnimaLoraOptions(BaseModel):
     channel_scaling_alpha: float = Field(0.5, gt=0, le=1)
 
     # ---- Optimizer / schedule ----
-    optimizer_type: Literal["AdamW", "AdamW8bit", "Lion", "Prodigy", "CAME"] = "AdamW"
+    optimizer_type: Literal[
+        "AdamW",
+        "AdamW8bit",
+        "PagedAdamW",
+        "PagedAdamW8bit",
+        "PagedAdamW32bit",
+        "Lion",
+        "Lion8bit",
+        "PagedLion8bit",
+        "SGDNesterov",
+        "SGDNesterov8bit",
+        "DAdaptation",
+        "DAdaptAdamPreprint",
+        "DAdaptAdaGrad",
+        "DAdaptAdam",
+        "DAdaptAdan",
+        "DAdaptAdanIP",
+        "DAdaptLion",
+        "DAdaptSGD",
+        "Prodigy",
+        "Adafactor",
+        "CAME",
+        "AdamWScheduleFree",
+        "RAdamScheduleFree",
+        "SGDScheduleFree",
+    ] = "AdamW"
     lr_scheduler: Literal[
-        "constant", "cosine", "cosine_with_restarts", "linear", "polynomial"
+        "constant",
+        "constant_with_warmup",
+        "linear",
+        "cosine",
+        "cosine_with_restarts",
+        "polynomial",
+        "inverse_sqrt",
+        "cosine_with_min_lr",
+        "warmup_stable_decay",
+        "piecewise_constant",
     ] = "cosine"
     learning_rate: float = Field(2.0e-5, gt=0)
     # Warmup as a *ratio* of total steps. Upstream's ``--lr_warmup_steps``

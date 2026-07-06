@@ -70,18 +70,42 @@ export const MIXED_PRECISION_OPTIONS = [
 
 export const OPTIMIZER_OPTIONS = [
   { value: "AdamW", label: "AdamW · 默认" },
-  { value: "AdamW8bit", label: "AdamW8bit" },
-  { value: "Lion", label: "Lion" },
-  { value: "Prodigy", label: "Prodigy" },
-  { value: "CAME", label: "CAME" },
+  { value: "AdamW8bit", label: "AdamW8bit · 省显存" },
+  { value: "PagedAdamW", label: "PagedAdamW · 分页状态" },
+  { value: "PagedAdamW8bit", label: "PagedAdamW8bit · 分页省显存" },
+  { value: "PagedAdamW32bit", label: "PagedAdamW32bit" },
+  { value: "Lion", label: "Lion · 低状态量" },
+  { value: "Lion8bit", label: "Lion8bit" },
+  { value: "PagedLion8bit", label: "PagedLion8bit" },
+  { value: "SGDNesterov", label: "SGD Nesterov" },
+  { value: "SGDNesterov8bit", label: "SGD Nesterov 8bit" },
+  { value: "DAdaptation", label: "D-Adaptation" },
+  { value: "DAdaptAdamPreprint", label: "DAdapt Adam Preprint" },
+  { value: "DAdaptAdaGrad", label: "DAdapt AdaGrad" },
+  { value: "DAdaptAdam", label: "DAdapt Adam" },
+  { value: "DAdaptAdan", label: "DAdapt Adan" },
+  { value: "DAdaptAdanIP", label: "DAdapt AdanIP" },
+  { value: "DAdaptLion", label: "DAdapt Lion" },
+  { value: "DAdaptSGD", label: "DAdapt SGD" },
+  { value: "Prodigy", label: "Prodigy · 自适应 LR" },
+  { value: "Adafactor", label: "Adafactor · 低显存" },
+  { value: "CAME", label: "CAME · 低显存" },
+  { value: "AdamWScheduleFree", label: "AdamW Schedule-Free" },
+  { value: "RAdamScheduleFree", label: "RAdam Schedule-Free" },
+  { value: "SGDScheduleFree", label: "SGD Schedule-Free" },
 ] as const
 
 export const LR_SCHEDULER_OPTIONS = [
   { value: "constant", label: "constant · 默认" },
+  { value: "constant_with_warmup", label: "constant_with_warmup" },
+  { value: "linear", label: "linear" },
   { value: "cosine", label: "cosine" },
   { value: "cosine_with_restarts", label: "cosine_with_restarts" },
-  { value: "linear", label: "linear" },
   { value: "polynomial", label: "polynomial" },
+  { value: "inverse_sqrt", label: "inverse_sqrt" },
+  { value: "cosine_with_min_lr", label: "cosine_with_min_lr" },
+  { value: "warmup_stable_decay", label: "warmup_stable_decay" },
+  { value: "piecewise_constant", label: "piecewise_constant" },
 ] as const
 
 export const TARGET_PRESET_OPTIONS = [

@@ -22,9 +22,11 @@ import {
   EnumSelect,
   FloatInput,
   IntInput,
+  KeyValueTextArea,
   PathInput,
   Row,
   Section,
+  TextInput,
   ToggleSwitch,
 } from "../widgets"
 import {
@@ -68,6 +70,16 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
   errorMap: ErrorMap
 }) {
   const v = value ?? {}
+  const lrScheduler = v.lrScheduler ?? "constant"
+  const showSchedulerCycles =
+    lrScheduler === "cosine_with_restarts" ||
+    lrScheduler === "cosine_with_min_lr" ||
+    lrScheduler === "warmup_stable_decay"
+  const showSchedulerPower = lrScheduler === "polynomial"
+  const showSchedulerTimescale = lrScheduler === "inverse_sqrt"
+  const showSchedulerMinLr =
+    lrScheduler === "cosine_with_min_lr" ||
+    lrScheduler === "warmup_stable_decay"
   const method = v.method ?? "lora"
   const isFullFinetune = method === "full_finetune"
 
@@ -219,7 +231,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         </Row>
         <Row label="学习率调度器">
           <EnumSelect
-            value={v.lrScheduler ?? "constant"}
+            value={lrScheduler}
             onChange={(s) => set(["backend", "animaLora", "lrScheduler"], s)}
             options={LR_SCHEDULER_OPTIONS}
           />
@@ -245,6 +257,117 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={0}
           />
         </Row>
+        <details className="rounded-[6px] border border-border/50 bg-muted/20">
+          <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground">
+            高级优化参数
+          </summary>
+          <div className="space-y-3.5 border-t border-border/40 px-3 py-3">
+            <Row
+              label="optimizer_args"
+              description="传给优化器的 key=value 参数。"
+              errors={errorMap.get("optimizer.optimizerArgs")}
+            >
+              <KeyValueTextArea
+                value={optimizer?.optimizerArgs}
+                onChange={(next) => set(["optimizer", "optimizerArgs"], next)}
+                placeholder={"weight_decay = 0.01\nbetas = 0.9,0.999"}
+                rows={3}
+              />
+            </Row>
+            <Row
+              label="自定义调度器"
+              description="torch.optim.lr_scheduler 或完整 Python 路径。"
+              errors={errorMap.get("optimizer.schedulerModule")}
+            >
+              <TextInput
+                className="w-64"
+                value={optimizer?.schedulerModule ?? ""}
+                onChange={(s) =>
+                  set(["optimizer", "schedulerModule"], s || null)
+                }
+                placeholder="（可选）"
+              />
+            </Row>
+            <Row
+              label="scheduler_args"
+              description="传给调度器的 key=value 参数。"
+              errors={errorMap.get("optimizer.schedulerArgs")}
+            >
+              <KeyValueTextArea
+                value={optimizer?.schedulerArgs}
+                onChange={(next) => set(["optimizer", "schedulerArgs"], next)}
+                placeholder={
+                  lrScheduler === "piecewise_constant"
+                    ? 'step_rules = "1:10,0.1:20,0.01"'
+                    : "T_max = 1000"
+                }
+                rows={3}
+              />
+            </Row>
+            {showSchedulerCycles && (
+              <Row
+                label="调度周期"
+                description="重启次数或 WSD/cosine 周期数。"
+                errors={errorMap.get("optimizer.schedulerNumCycles")}
+              >
+                <IntInput
+                  min={1}
+                  value={optimizer?.schedulerNumCycles ?? 1}
+                  onChange={(n) =>
+                    set(["optimizer", "schedulerNumCycles"], n ?? 1)
+                  }
+                />
+              </Row>
+            )}
+            {showSchedulerPower && (
+              <Row
+                label="多项式幂"
+                description="polynomial 调度器 power。"
+                errors={errorMap.get("optimizer.schedulerPower")}
+              >
+                <FloatInput
+                  step={0.1}
+                  value={optimizer?.schedulerPower ?? 1.0}
+                  onChange={(n) =>
+                    set(["optimizer", "schedulerPower"], n ?? 1.0)
+                  }
+                />
+              </Row>
+            )}
+            {showSchedulerTimescale && (
+              <Row
+                label="时间尺度"
+                description="inverse_sqrt 调度器 timescale。"
+                errors={errorMap.get("optimizer.schedulerTimescale")}
+              >
+                <IntInput
+                  min={1}
+                  value={optimizer?.schedulerTimescale ?? null}
+                  onChange={(n) => set(["optimizer", "schedulerTimescale"], n)}
+                  placeholder="（默认）"
+                />
+              </Row>
+            )}
+            {showSchedulerMinLr && (
+              <Row
+                label="最小 LR 比例"
+                description="末端学习率占初始学习率的比例。"
+                errors={errorMap.get("optimizer.schedulerMinLrRatio")}
+              >
+                <FloatInput
+                  step={0.01}
+                  min={0}
+                  max={1}
+                  value={optimizer?.schedulerMinLrRatio ?? null}
+                  onChange={(n) =>
+                    set(["optimizer", "schedulerMinLrRatio"], n)
+                  }
+                  placeholder="（默认）"
+                />
+              </Row>
+            )}
+          </div>
+        </details>
         <Row
           label="LR Warmup 比例"
           description="占总训练步数的比例。0.05 表示 5%。"

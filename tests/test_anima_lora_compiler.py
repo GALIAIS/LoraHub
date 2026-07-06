@@ -133,6 +133,38 @@ def _render_scalar(value: Any) -> str:
     return str(value)
 
 
+def test_optimizer_and_scheduler_args_compile_to_anima_toml(tmp_path: Path) -> None:
+    cfg = _config(
+        tmp_path,
+        AnimaLoraOptions(
+            optimizerType="AdamWScheduleFree",
+            lrScheduler="warmup_stable_decay",
+            lrWarmupRatio=0.1,
+        ),
+    )
+    cfg.optimizer.optimizer_args = {"weight_decay": "0.01"}
+    cfg.optimizer.scheduler_args = {"num_cycles": "0.5"}
+    cfg.optimizer.scheduler_num_cycles = 2
+    cfg.optimizer.scheduler_power = 0.5
+    cfg.optimizer.scheduler_timescale = 1000
+    cfg.optimizer.scheduler_min_lr_ratio = 0.1
+    cfg.schedule.lr_decay_steps = 12
+
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    toml = _emitted_toml(argv, files)
+
+    assert toml["optimizer_type"] == "AdamWScheduleFree"
+    assert toml["lr_scheduler"] == "warmup_stable_decay"
+    assert toml["optimizer_args"] == ["weight_decay=0.01"]
+    assert toml["lr_scheduler_args"] == ["num_cycles=0.5"]
+    assert toml["lr_scheduler_num_cycles"] == 2
+    assert toml["lr_scheduler_power"] == 0.5
+    assert toml["lr_scheduler_timescale"] == 1000
+    assert toml["lr_scheduler_min_lr_ratio"] == 0.1
+    assert toml["lr_decay_steps"] == 12
+    assert toml["lr_warmup_steps"] == 0.1
+
+
 # --------------------------------------------------------------------------- #
 # Method routing — every method must select itself + emit core knobs
 # --------------------------------------------------------------------------- #

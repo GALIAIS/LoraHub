@@ -69,6 +69,16 @@ def test_default_anima_lora_options_constructs_clean() -> None:
     assert opts.ip_adapter is None
 
 
+def test_anima_lora_accepts_extended_optimizer_and_scheduler() -> None:
+    opts = AnimaLoraOptions(
+        optimizerType="AdamWScheduleFree",
+        lrScheduler="warmup_stable_decay",
+    )
+
+    assert opts.optimizer_type == "AdamWScheduleFree"
+    assert opts.lr_scheduler == "warmup_stable_decay"
+
+
 def test_layer_range_requires_end_after_start() -> None:
     opts = AnimaLoraOptions(layerStart=8, layerEnd=16)
     assert opts.layer_start == 8

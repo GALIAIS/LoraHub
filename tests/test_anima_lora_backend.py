@@ -538,6 +538,22 @@ def test_validate_warns_on_v100_risky_fp16_combo(tmp_path: Path) -> None:
     assert "sampling.atFirst" in fields
 
 
+def test_validate_rejects_piecewise_scheduler_without_rules(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, animaLora={"lrScheduler": "piecewise_constant"})
+
+    issues = AnimaLoraBackend().validate(cfg)
+    errors = {i.field for i in issues if i.severity.value == "error"}
+    assert "optimizer.schedulerArgs" in errors
+
+
+def test_validate_rejects_wsd_without_decay_steps(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, animaLora={"lrScheduler": "warmup_stable_decay"})
+
+    issues = AnimaLoraBackend().validate(cfg)
+    errors = {i.field for i in issues if i.severity.value == "error"}
+    assert "schedule.lrDecaySteps" in errors
+
+
 def test_validate_wrong_arch_errors(tmp_path: Path) -> None:
     """Config targets sdxl but type=anima_lora — clear error pointing back to kohya."""
     cfg = _config(tmp_path)
