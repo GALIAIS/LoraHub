@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Eye,
   Send,
+  CheckCircle2,
   Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -80,6 +81,18 @@ export function DetailPanel({
       setSending(false)
     }
   }
+  const handleResolution = async (status: ErrorReportItem["resolution_status"]) => {
+    try {
+      await errorReportsApi.setResolution(item.id, { status })
+      toast.success(status === "open" ? "已重新打开" : status === "resolved" ? "已标记处理" : "已忽略")
+      qc.invalidateQueries({ queryKey: ["error-reports"] })
+      qc.invalidateQueries({ queryKey: ["error-reports-summary"] })
+    } catch (e) {
+      toast.error("更新状态失败", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
 
   return (
     <Card className="flex flex-col min-h-[420px] max-h-[calc(100vh-360px)]">
@@ -134,6 +147,36 @@ export function DetailPanel({
               <Send className="size-3" />
               {sending ? "发送中…" : "发送到远端"}
             </Button>
+            {item.resolution_status === "open" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleResolution("resolved")}
+                  className="gap-1.5"
+                >
+                  <CheckCircle2 className="size-3" />
+                  标记处理
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleResolution("ignored")}
+                  className="gap-1.5"
+                >
+                  忽略
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleResolution("open")}
+                className="gap-1.5"
+              >
+                重新打开
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -154,6 +197,7 @@ export function DetailPanel({
             value={SOURCE_LABEL[item.source] ?? item.source}
           />
           <Field label="分类" value={item.category} />
+          <Field label="处理状态" value={RESOLUTION_LABEL[item.resolution_status]} />
           <Field label="lorahub 版本" value={item.version || "—"} />
           <Field label="平台" value={item.platform || "—"} />
           {item.job_id && <Field label="关联任务" value={item.job_id} />}
@@ -178,6 +222,12 @@ export function DetailPanel({
           )}
           {item.upstream_error && (
             <Field label="远端错误" value={item.upstream_error} />
+          )}
+          {item.resolved_at && (
+            <Field
+              label="处理时间"
+              value={new Date(item.resolved_at).toLocaleString()}
+            />
           )}
         </div>
 
@@ -207,6 +257,12 @@ export function DetailPanel({
       </CardContent>
     </Card>
   )
+}
+
+const RESOLUTION_LABEL: Record<ErrorReportItem["resolution_status"], string> = {
+  open: "未处理",
+  resolved: "已处理",
+  ignored: "已忽略",
 }
 
 function UpstreamPreviewPane({ reportId }: { reportId: string }) {

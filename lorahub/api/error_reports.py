@@ -30,21 +30,23 @@ import logging
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 log = logging.getLogger(__name__)
 
 
 Severity = Literal["info", "warn", "error", "fatal"]
+ResolutionStatus = Literal["open", "resolved", "ignored"]
 """``fatal`` is reserved for unrecoverable boot / lifespan failures.
 Everything routine (job died, preflight blocked, 500 reply) is ``error``.
 """
 
-# Bump together with a real ALTER path. Schema 1 = the columns below.
-_SCHEMA_VERSION = 2
+# Bump together with a real ALTER path. v3 adds local resolution tracking.
+_SCHEMA_VERSION = 3
 # Tables-only DDL, run unconditionally on every open. ``CREATE TABLE IF
 # NOT EXISTS`` won't reshape an existing table, which is exactly what
 # we want — the ALTER pass below brings v1 stores up to v2 by adding
@@ -93,6 +95,8 @@ CREATE INDEX IF NOT EXISTS error_reports_job_id
     ON error_reports (job_id);
 CREATE INDEX IF NOT EXISTS error_reports_fp
     ON error_reports (fingerprint);
+CREATE INDEX IF NOT EXISTS error_reports_resolution
+    ON error_reports (resolution_status);
 """
 
 _UPSTREAM_COLUMNS = (
@@ -102,6 +106,9 @@ _UPSTREAM_COLUMNS = (
     ("upstream_id", "TEXT"),
     ("upstream_error", "TEXT"),
     ("sent_at", "TEXT"),
+    ("resolution_status", "TEXT NOT NULL DEFAULT 'open'"),
+    ("resolved_at", "TEXT"),
+    ("resolution_note", "TEXT"),
 )
 
 
@@ -153,6 +160,9 @@ class ErrorReport:
     upstream_id: str | None = None
     upstream_error: str | None = None
     sent_at: datetime | None = None
+    resolution_status: ResolutionStatus = "open"
+    resolved_at: datetime | None = None
+    resolution_note: str | None = None
 
     @classmethod
     def create(
@@ -211,6 +221,9 @@ class ErrorReport:
             "upstream_id": self.upstream_id,
             "upstream_error": self.upstream_error,
             "sent_at": self.sent_at.isoformat() if self.sent_at else None,
+            "resolution_status": self.resolution_status,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolution_note": self.resolution_note,
         }
 
 
@@ -232,9 +245,9 @@ class ErrorReportStore:
             #    is a no-op on a legacy v1 store, leaving its column set
             #    intact for the ALTER pass below.
             conn.executescript(_SCHEMA_TABLES)
+            conn.execute("DELETE FROM error_reports_schema_version")
             conn.execute(
-                "INSERT OR IGNORE INTO error_reports_schema_version (version) "
-                "VALUES (?)",
+                "INSERT INTO error_reports_schema_version (version) VALUES (?)",
                 (_SCHEMA_VERSION,),
             )
             # 2. Idempotent column-add migration for stores predating the
@@ -296,6 +309,9 @@ class ErrorReportStore:
                 report.upstream_id,
                 report.upstream_error,
                 report.sent_at.isoformat() if report.sent_at else None,
+                report.resolution_status,
+                report.resolved_at.isoformat() if report.resolved_at else None,
+                report.resolution_note,
             )
             with self._lock, self._connect() as conn:
                 conn.execute(
@@ -304,8 +320,9 @@ class ErrorReportStore:
                     "message, stack, context, job_id, request_id, "
                     "request_path, version, platform, "
                     "fingerprint, upstream_status, upstream_url, "
-                    "upstream_id, upstream_error, sent_at"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "upstream_id, upstream_error, sent_at, "
+                    "resolution_status, resolved_at, resolution_note"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     payload,
                 )
                 # Bound the table so a long-running install with a noisy
@@ -360,6 +377,32 @@ class ErrorReportStore:
                 "could not update upstream state for %s: %r", report_id, exc,
             )
 
+    def update_resolution(
+        self,
+        report_id: str,
+        *,
+        status: ResolutionStatus,
+        note: str | None = None,
+    ) -> ErrorReport | None:
+        resolved_at = datetime.now().isoformat() if status != "open" else None
+        try:
+            with self._lock, self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE error_reports SET "
+                    "  resolution_status = ?,"
+                    "  resolved_at = ?,"
+                    "  resolution_note = ? "
+                    "WHERE id = ?",
+                    (status, resolved_at, note, report_id),
+                )
+                conn.commit()
+                if cur.rowcount == 0:
+                    return None
+        except (sqlite3.Error, OSError) as exc:
+            log.warning("could not update resolution state for %s: %r", report_id, exc)
+            return None
+        return self.get(report_id)
+
     def get(self, report_id: str) -> ErrorReport | None:
         with self._lock, self._connect() as conn:
             row = conn.execute(
@@ -375,8 +418,180 @@ class ErrorReportStore:
         severity: Severity | None = None,
         source: str | None = None,
         job_id: str | None = None,
+        fingerprint: str | None = None,
+        resolution_status: ResolutionStatus | None = None,
+        q: str | None = None,
     ) -> list[ErrorReport]:
         """Return reports newest-first. Filters compose with AND."""
+        clauses, params = self._filter_sql(
+            severity=severity,
+            source=source,
+            job_id=job_id,
+            fingerprint=fingerprint,
+            resolution_status=resolution_status,
+            q=q,
+        )
+        sql = "SELECT * FROM error_reports"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([max(1, min(1000, limit)), max(0, offset)])
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_report(r) for r in rows]
+
+    def count(
+        self,
+        *,
+        severity: Severity | None = None,
+        source: str | None = None,
+        job_id: str | None = None,
+        fingerprint: str | None = None,
+        resolution_status: ResolutionStatus | None = None,
+        q: str | None = None,
+    ) -> int:
+        clauses, params = self._filter_sql(
+            severity=severity,
+            source=source,
+            job_id=job_id,
+            fingerprint=fingerprint,
+            resolution_status=resolution_status,
+            q=q,
+        )
+        sql = "SELECT COUNT(*) AS n FROM error_reports"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        with self._lock, self._connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row["n"]) if row else 0
+
+    def summary(
+        self,
+        *,
+        severity: Severity | None = None,
+        source: str | None = None,
+        job_id: str | None = None,
+        fingerprint: str | None = None,
+        resolution_status: ResolutionStatus | None = None,
+        q: str | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate counts for the current filter.
+
+        Kept in SQL so the Settings panel can track a large registry
+        without pulling thousands of rows into React.
+        """
+        clauses, params = self._filter_sql(
+            severity=severity,
+            source=source,
+            job_id=job_id,
+            fingerprint=fingerprint,
+            resolution_status=resolution_status,
+            q=q,
+        )
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._lock, self._connect() as conn:
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) AS n FROM error_reports{where}",
+                    params,
+                ).fetchone()["n"]
+            )
+            by_severity = {
+                row["severity"]: int(row["n"])
+                for row in conn.execute(
+                    f"SELECT severity, COUNT(*) AS n FROM error_reports{where} "
+                    "GROUP BY severity",
+                    params,
+                ).fetchall()
+            }
+            by_source = {
+                row["source"]: int(row["n"])
+                for row in conn.execute(
+                    f"SELECT source, COUNT(*) AS n FROM error_reports{where} "
+                    "GROUP BY source ORDER BY n DESC LIMIT 8",
+                    params,
+                ).fetchall()
+            }
+            by_resolution = {
+                row["resolution_status"]: int(row["n"])
+                for row in conn.execute(
+                    f"SELECT resolution_status, COUNT(*) AS n FROM error_reports{where} "
+                    "GROUP BY resolution_status",
+                    params,
+                ).fetchall()
+            }
+            upstream_attention = int(
+                conn.execute(
+                    f"SELECT COUNT(*) AS n FROM error_reports{where}"
+                    + (" AND " if where else " WHERE ")
+                    + "(upstream_status IN ('failed', 'retrying', 'queued') "
+                    "OR upstream_error IS NOT NULL)",
+                    params,
+                ).fetchone()["n"]
+            )
+            duplicate_groups = [
+                {
+                    "fingerprint": row["fingerprint"],
+                    "count": int(row["n"]),
+                    "latest_title": row["latest_title"],
+                    "latest_timestamp": row["latest_ts"],
+                    "severity": row["severity"],
+                }
+                for row in conn.execute(
+                    f"""
+                    SELECT
+                        fingerprint,
+                        COUNT(*) AS n,
+                        MAX(timestamp) AS latest_ts,
+                        (
+                            SELECT title FROM error_reports e2
+                            WHERE e2.fingerprint = e1.fingerprint
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        ) AS latest_title,
+                        (
+                            SELECT severity FROM error_reports e3
+                            WHERE e3.fingerprint = e1.fingerprint
+                            ORDER BY
+                                CASE severity
+                                    WHEN 'fatal' THEN 4
+                                    WHEN 'error' THEN 3
+                                    WHEN 'warn' THEN 2
+                                    ELSE 1
+                                END DESC,
+                                timestamp DESC
+                            LIMIT 1
+                        ) AS severity
+                    FROM error_reports e1
+                    {where}
+                    {"AND" if where else "WHERE"} fingerprint IS NOT NULL
+                    GROUP BY fingerprint
+                    HAVING n > 1
+                    ORDER BY n DESC, latest_ts DESC
+                    LIMIT 5
+                    """,
+                    params,
+                ).fetchall()
+            ]
+        return {
+            "total": total,
+            "by_severity": by_severity,
+            "by_source": by_source,
+            "by_resolution": by_resolution,
+            "upstream_attention": upstream_attention,
+            "duplicate_groups": duplicate_groups,
+        }
+
+    @staticmethod
+    def _filter_sql(
+        *,
+        severity: Severity | None = None,
+        source: str | None = None,
+        job_id: str | None = None,
+        fingerprint: str | None = None,
+        resolution_status: ResolutionStatus | None = None,
+        q: str | None = None,
+    ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
         if severity is not None:
@@ -388,19 +603,20 @@ class ErrorReportStore:
         if job_id is not None:
             clauses.append("job_id = ?")
             params.append(job_id)
-        sql = "SELECT * FROM error_reports"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-        params.extend([max(1, min(1000, limit)), max(0, offset)])
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return [_row_to_report(r) for r in rows]
-
-    def count(self) -> int:
-        with self._lock, self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS n FROM error_reports").fetchone()
-        return int(row["n"]) if row else 0
+        if fingerprint is not None:
+            clauses.append("fingerprint = ?")
+            params.append(fingerprint)
+        if resolution_status is not None:
+            clauses.append("resolution_status = ?")
+            params.append(resolution_status)
+        needle = (q or "").strip()
+        if needle:
+            like = f"%{needle.casefold()}%"
+            clauses.append(
+                "(lower(title) LIKE ? OR lower(message) LIKE ? OR lower(category) LIKE ?)"
+            )
+            params.extend([like, like, like])
+        return clauses, params
 
     def delete(self, report_id: str) -> bool:
         with self._lock, self._connect() as conn:
@@ -451,6 +667,7 @@ def _row_to_report(row: sqlite3.Row) -> ErrorReport:
         return row[name] if name in keys else None
 
     sent_at_raw = _opt("sent_at")
+    resolved_at_raw = _opt("resolved_at")
     return ErrorReport(
         id=row["id"],
         timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -472,6 +689,9 @@ def _row_to_report(row: sqlite3.Row) -> ErrorReport:
         upstream_id=_opt("upstream_id"),
         upstream_error=_opt("upstream_error"),
         sent_at=datetime.fromisoformat(sent_at_raw) if sent_at_raw else None,
+        resolution_status=(_opt("resolution_status") or "open"),  # type: ignore[arg-type]
+        resolved_at=datetime.fromisoformat(resolved_at_raw) if resolved_at_raw else None,
+        resolution_note=_opt("resolution_note"),
     )
 
 
@@ -512,5 +732,6 @@ __all__ = [
     "ErrorReport",
     "ErrorReportStore",
     "Severity",
+    "ResolutionStatus",
     "default_error_report_store_path",
 ]

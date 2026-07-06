@@ -10,6 +10,7 @@ Three layers under test:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -200,6 +201,107 @@ def test_http_filters_by_severity(client_with_store: TestClient) -> None:
     ).json()
     assert all(r["severity"] == "error" for r in only_error["items"])
     assert any(r["title"] == "t-error" for r in only_error["items"])
+    assert only_error["total"] == 1
+
+
+def test_http_search_runs_in_store_not_current_page(client_with_store: TestClient) -> None:
+    for i in range(5):
+        client_with_store.post(
+            "/api/error-reports",
+            json={
+                "severity": "info",
+                "source": "user.report",
+                "category": "x",
+                "title": f"ordinary-{i}",
+                "message": "m",
+            },
+        )
+    client_with_store.post(
+        "/api/error-reports",
+        json={
+            "severity": "error",
+            "source": "backend.job",
+            "category": "traceback",
+            "title": "rare needle",
+            "message": "deep message",
+        },
+    )
+
+    body = client_with_store.get("/api/error-reports?limit=2&q=needle").json()
+
+    assert body["total"] == 1
+    assert [r["title"] for r in body["items"]] == ["rare needle"]
+
+
+def test_http_summary_groups_duplicates_by_fingerprint(client_with_store: TestClient) -> None:
+    store = app_module._error_report_store
+    assert store is not None
+    for i in range(3):
+        rep = ErrorReport.create(
+            severity="error",
+            source="backend.job",
+            category="nan",
+            title=f"same crash {i}",
+            message="Loss became NaN",
+        )
+        rep.fingerprint = "fp-nan"
+        store.insert(rep)
+
+    body = client_with_store.get("/api/error-reports/summary").json()
+
+    assert body["total"] == 3
+    assert body["by_severity"]["error"] == 3
+    assert body["by_source"]["backend.job"] == 3
+    assert body["duplicate_groups"][0]["fingerprint"] == "fp-nan"
+    assert body["duplicate_groups"][0]["count"] == 3
+
+
+def test_http_filters_by_fingerprint(client_with_store: TestClient) -> None:
+    store = app_module._error_report_store
+    assert store is not None
+    for fp in ("fp-a", "fp-b"):
+        rep = ErrorReport.create(
+            severity="error",
+            source="backend.job",
+            category="x",
+            title=fp,
+            message="m",
+        )
+        rep.fingerprint = fp
+        store.insert(rep)
+
+    listing = client_with_store.get("/api/error-reports?fingerprint=fp-a").json()
+    summary = client_with_store.get("/api/error-reports/summary?fingerprint=fp-a").json()
+
+    assert listing["total"] == 1
+    assert listing["items"][0]["fingerprint"] == "fp-a"
+    assert summary["total"] == 1
+
+
+def test_http_updates_resolution_status(client_with_store: TestClient) -> None:
+    created = client_with_store.post(
+        "/api/error-reports",
+        json={
+            "severity": "error",
+            "source": "backend.job",
+            "category": "x",
+            "title": "needs handling",
+            "message": "m",
+        },
+    ).json()
+
+    updated = client_with_store.post(
+        f"/api/error-reports/{created['id']}/resolution",
+        json={"status": "resolved", "note": "fixed"},
+    ).json()
+    listing = client_with_store.get("/api/error-reports?resolution_status=resolved").json()
+    summary = client_with_store.get("/api/error-reports/summary?resolution_status=resolved").json()
+
+    assert updated["resolution_status"] == "resolved"
+    assert updated["resolved_at"]
+    assert updated["resolution_note"] == "fixed"
+    assert listing["total"] == 1
+    assert summary["by_resolution"]["resolved"] == 1
 
 
 def test_http_clear_drops_everything(client_with_store: TestClient) -> None:
@@ -340,6 +442,16 @@ def test_store_migrates_v1_schema_to_v2(tmp_path: Path) -> None:
     assert rec2 is not None
     assert rec2.fingerprint == "abc123"
     assert rec2.upstream_status == "queued"
+    assert rec2.resolution_status == "open"
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        version = conn.execute(
+            "SELECT version FROM error_reports_schema_version"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert version == 3
 
 
 def test_http_upstream_health_uses_draft_body_when_provided(

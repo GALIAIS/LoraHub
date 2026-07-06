@@ -30,6 +30,9 @@ export interface ErrorReportItem {
   upstream_id: string | null
   upstream_error: string | null
   sent_at: string | null
+  resolution_status: "open" | "resolved" | "ignored"
+  resolved_at: string | null
+  resolution_note: string | null
 }
 
 export interface ErrorReportListResponse {
@@ -37,6 +40,21 @@ export interface ErrorReportListResponse {
   total: number
   limit: number
   offset: number
+}
+
+export interface ErrorReportSummaryResponse {
+  total: number
+  by_severity: Partial<Record<ErrorReportItem["severity"], number>>
+  by_source: Record<string, number>
+  by_resolution: Partial<Record<ErrorReportItem["resolution_status"], number>>
+  upstream_attention: number
+  duplicate_groups: {
+    fingerprint: string
+    count: number
+    latest_title: string
+    latest_timestamp: string
+    severity: ErrorReportItem["severity"]
+  }[]
 }
 
 export interface UpstreamSendResponse {
@@ -66,6 +84,8 @@ export const errorReportsApi = {
     severity?: ErrorReportItem["severity"]
     source?: string
     job_id?: string
+    fingerprint?: string
+    resolution_status?: ErrorReportItem["resolution_status"]
     q?: string
   } = {}) => {
     const qs = new URLSearchParams()
@@ -74,15 +94,44 @@ export const errorReportsApi = {
     if (params.severity) qs.set("severity", params.severity)
     if (params.source) qs.set("source", params.source)
     if (params.job_id) qs.set("job_id", params.job_id)
+    if (params.fingerprint) qs.set("fingerprint", params.fingerprint)
+    if (params.resolution_status) qs.set("resolution_status", params.resolution_status)
     if (params.q) qs.set("q", params.q)
     return http<ErrorReportListResponse>(
       `/error-reports${qs.size ? `?${qs.toString()}` : ""}`,
+    )
+  },
+  summary: (params: {
+    severity?: ErrorReportItem["severity"]
+    source?: string
+    job_id?: string
+    fingerprint?: string
+    resolution_status?: ErrorReportItem["resolution_status"]
+    q?: string
+  } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.severity) qs.set("severity", params.severity)
+    if (params.source) qs.set("source", params.source)
+    if (params.job_id) qs.set("job_id", params.job_id)
+    if (params.fingerprint) qs.set("fingerprint", params.fingerprint)
+    if (params.resolution_status) qs.set("resolution_status", params.resolution_status)
+    if (params.q) qs.set("q", params.q)
+    return http<ErrorReportSummaryResponse>(
+      `/error-reports/summary${qs.size ? `?${qs.toString()}` : ""}`,
     )
   },
   get: (id: string) =>
     http<ErrorReportItem>(`/error-reports/${encodeURIComponent(id)}`),
   delete: (id: string) =>
     http<void>(`/error-reports/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setResolution: (
+    id: string,
+    body: { status: ErrorReportItem["resolution_status"]; note?: string | null },
+  ) =>
+    http<ErrorReportItem>(`/error-reports/${encodeURIComponent(id)}/resolution`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   clear: () =>
     http<{ deleted: number }>(`/error-reports/clear`, { method: "POST" }),
   exportUrl: (): string => "/api/error-reports/export",

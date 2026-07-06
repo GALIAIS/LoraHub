@@ -50,6 +50,7 @@ import { DetailPanel } from "./errors-detail-panel"
 import { SEVERITY_LABEL, SEVERITY_TONE, SOURCE_LABEL } from "./errors-labels"
 
 type SeverityFilter = "all" | ErrorReportItem["severity"]
+type ResolutionFilter = "all" | ErrorReportItem["resolution_status"]
 type SourceFilter =
   | "all"
   | "backend.exception"
@@ -66,7 +67,9 @@ type SourceFilter =
 export function ErrorsTab() {
   const qc = useQueryClient()
   const [severity, setSeverity] = useState<SeverityFilter>("all")
+  const [resolution, setResolution] = useState<ResolutionFilter>("open")
   const [source, setSource] = useState<SourceFilter>("all")
+  const [fingerprint, setFingerprint] = useState("")
   const [q, setQ] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [enabled, setEnabledLocal] = useState(getReportingEnabled())
@@ -77,19 +80,33 @@ export function ErrorsTab() {
   const [clearing, setClearing] = useState(false)
 
   const list = useQuery({
-    queryKey: ["error-reports", severity, source, q],
+    queryKey: ["error-reports", severity, resolution, source, fingerprint, q],
     queryFn: () =>
       errorReportsApi.list({
         limit: 200,
         severity: severity === "all" ? undefined : severity,
+        resolution_status: resolution === "all" ? undefined : resolution,
         source: source === "all" ? undefined : source,
+        fingerprint: fingerprint || undefined,
+        q: q || undefined,
+      }),
+    refetchInterval: 30_000,
+  })
+  const summary = useQuery({
+    queryKey: ["error-reports-summary", severity, resolution, source, fingerprint, q],
+    queryFn: () =>
+      errorReportsApi.summary({
+        severity: severity === "all" ? undefined : severity,
+        resolution_status: resolution === "all" ? undefined : resolution,
+        source: source === "all" ? undefined : source,
+        fingerprint: fingerprint || undefined,
         q: q || undefined,
       }),
     refetchInterval: 30_000,
   })
 
   const items = list.data?.items ?? []
-  const total = list.data?.total ?? 0
+  const total = summary.data?.total ?? list.data?.total ?? 0
   const selected = useMemo(
     () => items.find((it) => it.id === selectedId) ?? items[0] ?? null,
     [items, selectedId],
@@ -216,6 +233,20 @@ export function ErrorsTab() {
               </SelectContent>
             </Select>
             <Select
+              value={resolution}
+              onValueChange={(v) => setResolution(v as ResolutionFilter)}
+            >
+              <SelectTrigger className="w-[140px]" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="open">未处理</SelectItem>
+                <SelectItem value="resolved">已处理</SelectItem>
+                <SelectItem value="ignored">已忽略</SelectItem>
+                <SelectItem value="all">全部状态</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
               value={source}
               onValueChange={(v) => setSource(v as SourceFilter)}
             >
@@ -240,9 +271,70 @@ export function ErrorsTab() {
                 className="pl-8"
               />
             </div>
+            {fingerprint && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setFingerprint("")}
+                className="max-w-full gap-1.5 font-mono text-[11px]"
+                title={fingerprint}
+              >
+                指纹: {fingerprint.slice(0, 12)}...
+                <span className="text-muted-foreground">清除</span>
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
+
+      <div className="grid gap-2 md:grid-cols-4">
+        <MetricCard label="筛选结果" value={total} />
+        <MetricCard label="未处理" value={summary.data?.by_resolution.open ?? 0} />
+        <MetricCard
+          label="严重/错误"
+          value={(summary.data?.by_severity.fatal ?? 0) + (summary.data?.by_severity.error ?? 0)}
+        />
+        <MetricCard label="待处理上游" value={summary.data?.upstream_attention ?? 0} />
+      </div>
+
+      {(summary.data?.duplicate_groups.length ?? 0) > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">高频重复</CardTitle>
+            <CardDescription>
+              按指纹聚合。优先处理重复次数高的根因。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {summary.data?.duplicate_groups.map((group) => (
+              <button
+                type="button"
+                key={group.fingerprint}
+                onClick={() => setFingerprint(group.fingerprint)}
+                className="rounded-md border border-border/60 bg-muted/20 p-3 text-left text-xs hover:bg-muted/40"
+              >
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={`rounded-[2px] ${SEVERITY_TONE[group.severity]}`}
+                  >
+                    {SEVERITY_LABEL[group.severity]}
+                  </Badge>
+                  <span className="ml-auto font-mono text-muted-foreground">
+                    {group.count} 次
+                  </span>
+                </div>
+                <div className="mt-2 truncate font-medium" title={group.latest_title}>
+                  {group.latest_title}
+                </div>
+                <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                  {group.fingerprint}
+                </div>
+              </button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[420px,1fr] gap-3 items-stretch">
         <Card className="flex flex-col min-h-[420px] max-h-[calc(100vh-360px)]">
@@ -332,5 +424,16 @@ export function ErrorsTab() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+function MetricCard({ label, value }: { label: string; value: number }) {
+  return (
+    <Card>
+      <CardContent className="p-3">
+        <div className="text-[11px] text-muted-foreground">{label}</div>
+        <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+      </CardContent>
+    </Card>
   )
 }

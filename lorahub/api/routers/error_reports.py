@@ -22,17 +22,24 @@ not a server feature.
 
 from __future__ import annotations
 
-import io
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.api.error_reports import ErrorReport, Severity
+from lorahub.api.error_reports import ErrorReport, ResolutionStatus, Severity
 
 router = APIRouter(prefix="/api")
+_LIMIT_QUERY = Query(default=100, ge=1, le=1000)
+_OFFSET_QUERY = Query(default=0, ge=0)
+_SEVERITY_QUERY = Query(default=None)
+_SOURCE_QUERY = Query(default=None, max_length=64)
+_JOB_ID_QUERY = Query(default=None)
+_FINGERPRINT_QUERY = Query(default=None, max_length=128)
+_RESOLUTION_QUERY = Query(default=None)
+_SEARCH_QUERY = Query(default=None, max_length=200)
 
 
 class _ReportOut(BaseModel):
@@ -50,9 +57,18 @@ class _ReportOut(BaseModel):
     request_path: str | None = None
     version: str
     platform: str
+    fingerprint: str | None = None
+    upstream_status: str | None = None
+    upstream_url: str | None = None
+    upstream_id: str | None = None
+    upstream_error: str | None = None
+    sent_at: str | None = None
+    resolution_status: ResolutionStatus = "open"
+    resolved_at: str | None = None
+    resolution_note: str | None = None
 
     @classmethod
-    def from_report(cls, r: ErrorReport) -> "_ReportOut":
+    def from_report(cls, r: ErrorReport) -> _ReportOut:
         return cls.model_validate(r.to_dict())
 
 
@@ -61,6 +77,23 @@ class _ListOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class _DuplicateGroupOut(BaseModel):
+    fingerprint: str
+    count: int
+    latest_title: str
+    latest_timestamp: str
+    severity: Severity
+
+
+class _SummaryOut(BaseModel):
+    total: int
+    by_severity: dict[str, int]
+    by_source: dict[str, int]
+    by_resolution: dict[str, int]
+    upstream_attention: int
+    duplicate_groups: list[_DuplicateGroupOut]
 
 
 class _CreateBody(BaseModel):
@@ -92,27 +125,60 @@ def _store():
 
 @router.get("/error-reports", response_model=_ListOut)
 def list_reports(
-    limit: int = Query(default=100, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-    severity: Severity | None = Query(default=None),
-    source: str | None = Query(default=None, max_length=64),
-    job_id: str | None = Query(default=None),
-    q: str | None = Query(default=None, max_length=200),
+    limit: int = _LIMIT_QUERY,
+    offset: int = _OFFSET_QUERY,
+    severity: Severity | None = _SEVERITY_QUERY,
+    source: str | None = _SOURCE_QUERY,
+    job_id: str | None = _JOB_ID_QUERY,
+    fingerprint: str | None = _FINGERPRINT_QUERY,
+    resolution_status: ResolutionStatus | None = _RESOLUTION_QUERY,
+    q: str | None = _SEARCH_QUERY,
 ) -> _ListOut:
     store = _store()
-    items = store.list(limit=limit, offset=offset, severity=severity,
-                       source=source, job_id=job_id)
-    if q:
-        needle = q.casefold()
-        items = [
-            r for r in items
-            if needle in r.title.casefold() or needle in r.message.casefold()
-        ]
-    return _ListOut(
-        items=[_ReportOut.from_report(r) for r in items],
-        total=store.count(),
+    items = store.list(
         limit=limit,
         offset=offset,
+        severity=severity,
+        source=source,
+        job_id=job_id,
+        fingerprint=fingerprint,
+        resolution_status=resolution_status,
+        q=q,
+    )
+    return _ListOut(
+        items=[_ReportOut.from_report(r) for r in items],
+        total=store.count(
+            severity=severity,
+            source=source,
+            job_id=job_id,
+            fingerprint=fingerprint,
+            resolution_status=resolution_status,
+            q=q,
+        ),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/error-reports/summary", response_model=_SummaryOut)
+def reports_summary(
+    severity: Severity | None = _SEVERITY_QUERY,
+    source: str | None = _SOURCE_QUERY,
+    job_id: str | None = _JOB_ID_QUERY,
+    fingerprint: str | None = _FINGERPRINT_QUERY,
+    resolution_status: ResolutionStatus | None = _RESOLUTION_QUERY,
+    q: str | None = _SEARCH_QUERY,
+) -> _SummaryOut:
+    store = _store()
+    return _SummaryOut.model_validate(
+        store.summary(
+            severity=severity,
+            source=source,
+            job_id=job_id,
+            fingerprint=fingerprint,
+            resolution_status=resolution_status,
+            q=q,
+        )
     )
 
 
@@ -148,6 +214,20 @@ def export_reports() -> StreamingResponse:
 def get_report(report_id: str) -> _ReportOut:
     store = _store()
     rec = store.get(report_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return _ReportOut.from_report(rec)
+
+
+class _ResolutionBody(BaseModel):
+    status: ResolutionStatus
+    note: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/error-reports/{report_id}/resolution", response_model=_ReportOut)
+def update_report_resolution(report_id: str, body: _ResolutionBody) -> _ReportOut:
+    store = _store()
+    rec = store.update_resolution(report_id, status=body.status, note=body.note)
     if rec is None:
         raise HTTPException(status_code=404, detail="report not found")
     return _ReportOut.from_report(rec)
