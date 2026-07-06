@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from pathlib import Path
 
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/api")
 class HealthResponse(BaseModel):
     status: str
     version: str
+    service_token: str | None = None
     backend: dict[str, Any]
     backends: dict[str, dict[str, Any]]
 
@@ -39,6 +41,7 @@ def health() -> HealthResponse:
         # /api/health version lag the frontend bundle's git-describe
         # version on every editable-install dev tree.
         version=_current_version(),
+        service_token=os.environ.get("LORAHUB_SERVICE_TOKEN") or None,
         backend=backends["kohya"],
         backends=backends,
     )

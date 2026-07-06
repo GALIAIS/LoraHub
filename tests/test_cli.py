@@ -393,6 +393,48 @@ def test_service_restart_reuses_previous_port(monkeypatch: pytest.MonkeyPatch) -
     assert calls == [("0.0.0.0", 19090)]
 
 
+def test_service_read_pid_recovers_listener_when_pid_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.runtime_bind import RuntimeBind
+    from lorahub.cli import service as service_mod
+
+    monkeypatch.setattr(service_mod, "_pid_file", lambda: tmp_path / "missing.pid")
+    monkeypatch.setattr(
+        service_mod,
+        "read_runtime_bind",
+        lambda: RuntimeBind("0.0.0.0", 19090, None),
+    )
+    monkeypatch.setattr(service_mod, "_find_lorahub_uvicorn_pid", lambda port: 456)
+
+    assert service_mod._read_pid() == 456
+
+
+def test_service_health_requires_matching_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.cli import service as service_mod
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, token: str) -> None:
+            self.token = token
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return f'{{"service_token": "{self.token}"}}'.encode()
+
+    responses = [FakeResponse("old"), FakeResponse("new")]
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: responses.pop(0))
+    monkeypatch.setattr(service_mod.time, "sleep", lambda _seconds: None)
+
+    assert service_mod._wait_for_health(19090, timeout_s=10, service_token="new") is True
+
+
 def test_service_daemon_uses_pythonw_on_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

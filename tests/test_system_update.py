@@ -1176,6 +1176,28 @@ def test_refresh_current_uvicorn_bind_records_exec_pid(
     assert writes == [("0.0.0.0", 18765, 4321)]
 
 
+def test_refresh_current_uvicorn_bind_records_direct_script_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import runtime_bind
+
+    writes: list[tuple[str, int, int | None]] = []
+    monkeypatch.setattr(runtime_bind, "read_runtime_bind", lambda: None)
+    monkeypatch.setattr(
+        runtime_bind,
+        "write_runtime_bind",
+        lambda host, port, *, pid=None: writes.append((host, port, pid)),
+    )
+
+    refreshed = runtime_bind.refresh_current_uvicorn_bind(
+        ["-m", "uvicorn", "lorahub.api.app:app", "--host", "0.0.0.0", "--port", "6006"],
+        pid=4321,
+    )
+
+    assert refreshed == runtime_bind.RuntimeBind("0.0.0.0", 6006, 4321)
+    assert writes == [("0.0.0.0", 6006, 4321)]
+
+
 def test_refresh_current_uvicorn_bind_ignores_other_ports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

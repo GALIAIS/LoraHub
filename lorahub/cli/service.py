@@ -31,7 +31,9 @@ Layout decisions:
 
 from __future__ import annotations
 
+import json
 import os
+import secrets
 import shlex
 import signal
 import socket
@@ -87,17 +89,19 @@ def _log_file() -> Path:
 def _read_pid() -> int | None:
     """Return the PID stored in the pid file, or None if missing/dead."""
     p = _pid_file()
+    bind = read_runtime_bind()
     if not p.is_file():
-        return None
+        return _find_lorahub_uvicorn_pid(bind.port) if bind is not None else None
     try:
         pid = int(p.read_text().strip())
     except (ValueError, OSError):
-        return None
+        return _find_lorahub_uvicorn_pid(bind.port) if bind is not None else None
     if not _pid_alive(pid):
         # Stale pid file — clean up so callers don't confuse themselves
         # over a terminated daemon.
         clear_runtime_bind(keep_bind=True)
-        return None
+        bind = read_runtime_bind()
+        return _find_lorahub_uvicorn_pid(bind.port) if bind is not None else None
     return pid
 
 
@@ -133,25 +137,19 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _resolve_daemon_pid(launched_pid: int, port: int) -> int:
-    """Return the process that actually listens on *port*.
-
-    On Windows, uv/venv ``pythonw.exe`` can be a launcher process that starts
-    the real interpreter as a child.  Persisting the launcher PID makes
-    ``service stop`` leave the real uvicorn process behind, so resolve by the
-    listening TCP port after the health check succeeds.
-    """
-    if sys.platform != "win32" or port <= 0:
-        return launched_pid
+def _find_lorahub_uvicorn_pid(port: int) -> int | None:
+    """Return the LoraHub uvicorn process listening on *port*, if visible."""
+    if port <= 0:
+        return None
     try:
         import psutil  # noqa: PLC0415
     except ImportError:
-        return launched_pid
+        return None
 
     try:
         conns = psutil.net_connections(kind="tcp")
     except Exception:  # noqa: BLE001
-        return launched_pid
+        return None
 
     for conn in conns:
         laddr = getattr(conn, "laddr", None)
@@ -167,7 +165,12 @@ def _resolve_daemon_pid(launched_pid: int, port: int) -> int:
             continue
         if "uvicorn" in cmdline and "lorahub.api.app:app" in cmdline:
             return int(conn.pid)
-    return launched_pid
+    return None
+
+
+def _resolve_daemon_pid(launched_pid: int, port: int) -> int:
+    """Return the process that actually listens on *port*."""
+    return _find_lorahub_uvicorn_pid(port) or launched_pid
 
 
 def _terminate_windows_process_tree(pid: int, timeout: float) -> None:
@@ -244,7 +247,12 @@ def _windows_daemon_creationflags(*, allow_breakaway: bool = True) -> int:
     return flags
 
 
-def _wait_for_health(port: int, *, timeout_s: float = 30.0) -> bool:
+def _wait_for_health(
+    port: int,
+    *,
+    timeout_s: float = 30.0,
+    service_token: str | None = None,
+) -> bool:
     """Poll http://127.0.0.1:<port>/api/health until it answers 200."""
     import urllib.error  # noqa: PLC0415
     import urllib.request  # noqa: PLC0415
@@ -254,9 +262,19 @@ def _wait_for_health(port: int, *, timeout_s: float = 30.0) -> bool:
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:
-                if resp.status == 200:
+                if resp.status != 200:
+                    continue
+                if service_token is None:
                     return True
-        except (urllib.error.URLError, ConnectionError, OSError):
+                body = json.loads(resp.read().decode("utf-8"))
+                if body.get("service_token") == service_token:
+                    return True
+        except (
+            json.JSONDecodeError,
+            urllib.error.URLError,
+            ConnectionError,
+            OSError,
+        ):
             pass
         time.sleep(0.5)
     return False
@@ -338,6 +356,8 @@ def start(
     log.parent.mkdir(parents=True, exist_ok=True)
     log_fh = log.open("ab")
     child_env = _pythonpath_env(_resolve_repo_root())
+    service_token = secrets.token_hex(16)
+    child_env["LORAHUB_SERVICE_TOKEN"] = service_token
 
     if sys.platform == "win32":
         # CREATE_BREAKAWAY_FROM_JOB keeps services started through Windows
@@ -377,7 +397,7 @@ def start(
     console.print(t("service.started", pid=proc.pid, port=port))
     console.print(t("service.log_path", path=log))
 
-    if _wait_for_health(port, timeout_s=30.0):
+    if _wait_for_health(port, timeout_s=30.0, service_token=service_token):
         write_runtime_bind(host, port, pid=_resolve_daemon_pid(proc.pid, port))
         console.print(t("service.healthy", host=host, port=port))
     else:

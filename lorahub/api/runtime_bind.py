@@ -151,14 +151,21 @@ def spawn_service_restart(bind: RuntimeBind, *, cwd: Path | None = None) -> bool
 
 
 def refresh_current_uvicorn_bind(argv: list[str] | None = None, *, pid: int | None = None) -> RuntimeBind | None:
-    """Refresh pid for the current uvicorn process when it matches the saved bind."""
-    bind = read_runtime_bind()
-    if bind is None:
-        return None
+    """Record or refresh the current uvicorn process bind."""
     args = list(sys.argv if argv is None else argv)
     if not _looks_like_uvicorn_args(args):
         return None
+    bind = read_runtime_bind()
     arg_port = _get_option(args, "--port")
+    if bind is None:
+        try:
+            port = int(arg_port) if arg_port is not None else 8000
+        except ValueError:
+            return None
+        host = _get_option(args, "--host") or "127.0.0.1"
+        actual_pid = os.getpid() if pid is None else pid
+        write_runtime_bind(host, port, pid=actual_pid)
+        return RuntimeBind(host=host, port=port, pid=actual_pid)
     if arg_port is not None:
         try:
             if int(arg_port) != bind.port:
