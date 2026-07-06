@@ -18,7 +18,9 @@ Channels:
   ``dev`` — checkout origin/dev (rolling pre-release; was named
             "main" through v1.0.3 — see ``_LEGACY_CHANNEL_ALIASES``
             for the back-compat shim).
-  ``tag`` — checkout the highest semver ``v*`` tag.
+  ``tag`` — display the highest semver ``v*`` tag as the formal
+            version, but update to ``origin/main`` so hotfix commits
+            pushed after the tag are visible and installable.
 
 Mirrors:
   Read from ``Settings.github_proxy``; if empty, the request goes to
@@ -74,8 +76,10 @@ GITHUB_REPO = "LoraHub"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 TAGS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
 COMMITS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/dev"
+MAIN_COMMITS_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
 WEB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 WEB_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits/dev"
+WEB_MAIN_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits/main"
 
 CACHE_TTL_SECONDS = 5 * 60
 HTTP_TIMEOUT_S = 12.0
@@ -337,16 +341,54 @@ def _tag_update_available(
     current: str,
     latest_commit: str | None,
     current_commit: str | None,
+    cwd: Path | None = None,
 ) -> bool:
     if not latest:
         return False
     version_cmp = _compare_versions(latest, current)
-    return version_cmp > 0 or (
-        version_cmp == 0
-        and bool(latest_commit)
-        and bool(current_commit)
-        and latest_commit != current_commit
-    )
+    if version_cmp > 0:
+        return True
+    if version_cmp < 0:
+        return False
+    if not latest_commit or not current_commit or latest_commit == current_commit:
+        return False
+    relation = _commit_relation(cwd, current_commit, latest_commit)
+    if relation == "local_ahead":
+        return False
+    if relation in {"remote_ahead", "diverged"}:
+        return True
+    # If git cannot prove ancestry, keep the older same-version retag
+    # behavior so users can still recover from a moved release ref.
+    return True
+
+
+def _commit_relation(
+    cwd: Path | None,
+    current_commit: str,
+    latest_commit: str,
+) -> str:
+    """Return local/remote ancestry for same-version update decisions."""
+    if cwd is None or not cwd.is_dir():
+        return "unknown"
+    try:
+        current_is_ancestor = _git(
+            ["merge-base", "--is-ancestor", current_commit, latest_commit],
+            cwd=cwd,
+        )
+        if current_is_ancestor.returncode == 0:
+            return "remote_ahead"
+        latest_is_ancestor = _git(
+            ["merge-base", "--is-ancestor", latest_commit, current_commit],
+            cwd=cwd,
+        )
+        if latest_is_ancestor.returncode == 0:
+            return "local_ahead"
+        merge_base = _git(["merge-base", current_commit, latest_commit], cwd=cwd)
+        if merge_base.returncode == 0 and merge_base.stdout.strip():
+            return "diverged"
+    except OSError:
+        return "unknown"
+    return "unknown"
 
 
 def _release_notes_from_git(
@@ -595,6 +637,18 @@ def _refresh_dev(cwd: Path) -> dict[str, Any]:
     }
 
 
+def _refresh_main() -> dict[str, Any]:
+    """Probe origin/main via the GitHub commits API."""
+    info = _fetch_json(MAIN_COMMITS_API)
+    sha = str(info.get("sha") or "")
+    msg = (info.get("commit") or {}).get("message") or ""
+    return {
+        "commit": sha or None,
+        "release_notes": msg.split("\n", 1)[0][:300],
+        "published_at": (info.get("commit") or {}).get("committer", {}).get("date") or None,
+    }
+
+
 def _refresh_tag() -> dict[str, Any]:
     """Probe the latest GitHub release.
 
@@ -612,13 +666,17 @@ def _refresh_tag() -> dict[str, Any]:
         return _refresh_tag_via_tags_api()
 
     tag = str(info.get("tag_name") or "")
-    commit = str((info.get("target_commitish") or "")).strip() or None
+    commit = str(info.get("target_commitish") or "").strip() or None
+    main: dict[str, Any] = {}
+    with contextlib.suppress(OSError, ValueError):
+        main = _refresh_main()
     return {
         "tag_name": tag or None,
         "version_str": _normalize_version(tag) if tag else "",
         "commit": commit,
+        "branch_commit": main.get("commit"),
         "release_notes": str(info.get("body") or "")[:8000],
-        "published_at": str(info.get("published_at") or "") or None,
+        "published_at": str(info.get("published_at") or "") or main.get("published_at"),
     }
 
 
@@ -669,14 +727,18 @@ def _refresh_tag_via_tags_api() -> dict[str, Any]:
 
     candidates.sort(key=lambda t: t[0], reverse=True)
     best_ver, best_name, sha = candidates[0]
+    main: dict[str, Any] = {}
+    with contextlib.suppress(OSError, ValueError):
+        main = _refresh_main()
     return {
         "tag_name": best_name,
         "version_str": str(best_ver),
         "commit": sha or None,
+        "branch_commit": main.get("commit"),
         # Lightweight tags don't carry release notes; the UI just gets
         # an empty string and the "open in GitHub" link still works.
-        "release_notes": "",
-        "published_at": None,
+        "release_notes": main.get("release_notes") or "",
+        "published_at": main.get("published_at"),
     }
 
 
@@ -717,6 +779,41 @@ def _remote_tag_commit(cwd: Path | None, tag_name: str | None) -> str | None:
     return None
 
 
+def _remote_branch_commit(cwd: Path | None, branch: str) -> str | None:
+    if cwd is None:
+        return None
+    try:
+        out = _git(["ls-remote", "--heads", "origin", f"refs/heads/{branch}"], cwd=cwd)
+    except OSError:
+        return None
+    if out.returncode != 0:
+        return None
+    line = out.stdout.strip().splitlines()
+    if not line:
+        return None
+    sha = line[0].split()[0].strip()
+    return sha or None
+
+
+def _release_channel_commit(
+    cwd: Path | None,
+    tag_name: str | None,
+    cached_commit: str | None = None,
+) -> str | None:
+    """Resolve the formal channel commit.
+
+    The displayed formal version still comes from the newest semver tag,
+    but the update target is the current ``main`` head. This prevents the
+    Settings page from treating a local build after the tag as "behind"
+    merely because the latest tag points at an older SHA.
+    """
+    return (
+        _remote_branch_commit(cwd, "main")
+        or _remote_tag_commit(cwd, tag_name)
+        or cached_commit
+    )
+
+
 def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     """Resolve current-vs-remote for the given channel.
 
@@ -748,7 +845,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     if fresh_enough:
         cached_latest = cached.get("latest")
         cached_latest_commit = (
-            _remote_tag_commit(cwd, cached.get("tag_name"))
+            _release_channel_commit(cwd, cached.get("tag_name"), cached.get("latest_commit"))
             if channel == "tag"
             else cached.get("latest_commit")
         )
@@ -770,6 +867,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
                         current=current,
                         latest_commit=cached_latest_commit,
                         current_commit=current_commit,
+                        cwd=cwd,
                     )
                     if channel == "tag"
                     else cached.get("update_available", False)
@@ -815,11 +913,13 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         )
 
     latest = remote["version_str"] or None
-    latest_commit = (
-        _remote_tag_commit(cwd, remote.get("tag_name"))
-        if channel == "tag"
-        else remote.get("commit")
-    )
+    if channel == "tag":
+        latest_commit = remote.get("branch_commit") or _release_channel_commit(
+            cwd,
+            remote.get("tag_name"),
+        )
+    else:
+        latest_commit = remote.get("commit")
     if latest_commit is None:
         latest_commit = remote.get("commit")
     release_notes = remote["release_notes"]
@@ -839,6 +939,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             current=current,
             latest_commit=latest_commit,
             current_commit=current_commit,
+            cwd=cwd,
         )
     elif channel == "dev" and latest and cwd:
         # For dev, "update available" means HEAD is not on the
@@ -880,7 +981,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
 #   2. _snapshot_configs — tarball the user's untracked configs/* (presets
 #                          remain owned by git so upstream changes apply)
 #   3. _fetch            — git fetch --tags origin
-#   4. _apply_ref        — checkout the resolved ref (origin/dev or v…)
+#   4. _apply_ref        — checkout the resolved ref (origin/dev or origin/main)
 #   5. _install_deps     — pip install + optional npm run build
 #
 # Shared mutable state (stash flag, snapshot archive path) lives in
@@ -902,7 +1003,7 @@ def apply(
     Steps:
       1. ``git fetch --tags origin``
       2. ``git checkout origin/dev`` (channel=dev) or
-         ``git checkout v<latest>`` (channel=tag)
+         ``git checkout origin/main`` (channel=tag)
       3. reinstall ``.[api,dev]`` into the running venv. Windows uses
          a regular local install to avoid PEP 660 editable launcher
          edge cases; POSIX keeps editable installs for developer trees.
@@ -1363,13 +1464,7 @@ def _apply_ref(
     force: bool,
     emit: ProgressCallback,
 ) -> None:
-    if channel == "tag":
-        target_ref = _resolve_latest_tag(cwd)
-        if not target_ref:
-            msg = "no v* tag reachable from origin; switch to channel=dev."
-            raise RuntimeError(msg)
-    else:
-        target_ref = "origin/dev"
+    target_ref = "origin/main" if channel == "tag" else "origin/dev"
     emit("git", "info", f"git checkout {target_ref}")
     checkout_cmd = ["git", "checkout"]
     if force:

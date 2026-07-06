@@ -1,0 +1,46 @@
+name: Sync dev from main
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-dev-from-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout refs
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward dev only when it is behind main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --prune origin main dev
+
+          if ! git show-ref --verify --quiet refs/remotes/origin/dev; then
+            echo "origin/dev does not exist; skipping."
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor origin/dev origin/main; then
+            if git merge-base --is-ancestor origin/main origin/dev; then
+              echo "dev already matches main; skipping."
+              exit 0
+            fi
+            echo "dev is behind main; fast-forwarding dev."
+            git push origin origin/main:dev
+          else
+            echo "dev is ahead of or diverged from main; skipping."
+          fi

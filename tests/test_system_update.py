@@ -428,14 +428,14 @@ def test_apply_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert any(p == "done" for p, _, _ in events)
 
 
-def test_apply_tag_resolves_latest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_apply_tag_updates_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     calls = _stub_apply(monkeypatch, repo)
     events, emit = _capturing_emit()
 
     su.apply(channel="tag", build=False, progress=emit)
 
-    assert any(c == ["git", "checkout", "v9.9.9"] for c in calls), calls
+    assert any(c == ["git", "checkout", "origin/main"] for c in calls), calls
 
 
 def test_apply_refuses_detached_head_without_force(
@@ -794,6 +794,99 @@ def test_check_tag_detects_retagged_same_version(
     assert info.update_available is True
     assert info.current_commit == "oldsha"
     assert info.latest_commit == "newsha"
+
+
+def test_check_tag_uses_main_head_for_latest_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.7", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "tagsha")
+    monkeypatch.setattr(su, "_release_notes_from_commit", lambda _sha: "")
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.0.7",
+            "version_str": "1.0.7",
+            "commit": "tagsha",
+            "branch_commit": "mainsha",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda blob: None)
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.latest_commit == "mainsha"
+    assert info.update_available is True
+
+
+def test_tag_update_ignores_local_commit_ahead_of_main(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    remote_head = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (repo / "README.md").write_text("hello\nlocal ahead\n")
+    _run_git(["add", "README.md"], cwd=repo)
+    _run_git(["commit", "-q", "-m", "local ahead"], cwd=repo)
+    local_head = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert (
+        su._tag_update_available(
+            latest="1.0.7",
+            current="1.0.7-main-gdeadbee",
+            latest_commit=remote_head,
+            current_commit=local_head,
+            cwd=repo,
+        )
+        is False
+    )
+
+
+def test_tag_update_detects_remote_main_ahead(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    current_head = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (repo / "README.md").write_text("hello\nremote ahead\n")
+    _run_git(["add", "README.md"], cwd=repo)
+    _run_git(["commit", "-q", "-m", "remote ahead"], cwd=repo)
+    remote_head = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert (
+        su._tag_update_available(
+            latest="1.0.7",
+            current="1.0.7-main-gdeadbee",
+            latest_commit=remote_head,
+            current_commit=current_head,
+            cwd=repo,
+        )
+        is True
+    )
 
 
 def test_check_tag_adds_git_notes_when_release_body_missing(
