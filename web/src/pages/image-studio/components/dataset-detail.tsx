@@ -27,6 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { FilterPanel } from "./filter-panel"
 import { ImageGrid } from "./image-grid"
 import { Inspector } from "./inspector"
@@ -385,6 +386,19 @@ export function DatasetDetail() {
             </aside>
           )}
 
+        </div>
+      )}
+
+      <Dialog
+        open={selectedPath != null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedPath(null)
+        }}
+      >
+        <DialogContent
+          className="max-h-[min(88dvh,56rem)] max-w-[min(calc(100%-2rem),72rem)] overflow-hidden p-0"
+          showCloseButton={false}
+        >
           {selectedPath && (
             <Inspector
               detail={detailQuery.data ?? null}
@@ -392,10 +406,12 @@ export function DatasetDetail() {
               path={selectedPath}
               onClose={() => setSelectedPath(null)}
               onOpenLightbox={() => setLightboxPath(selectedPath)}
+              className="max-h-[min(88dvh,56rem)] w-full overflow-hidden border-0"
+              modalLayout
             />
           )}
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {/* Batch toolbar */}
       <BatchToolbar

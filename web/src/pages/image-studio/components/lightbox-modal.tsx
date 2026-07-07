@@ -95,7 +95,7 @@ export function LightboxModal({
   }, [open, goPrev, goNext])
 
   const filename = item?.name ?? ""
-  const rawUrl = item ? api.datasetThumbUrl(item.path, 4096) : ""
+  const rawUrl = item ? api.datasetThumbUrl(item.path, 1024) : ""
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>

@@ -54,7 +54,7 @@ IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 # tiny degenerate requests from spamming the cache; upper bound prevents
 # someone from asking us to render a 10k-by-10k preview.
 _MIN_THUMB_SIZE = 32
-_MAX_THUMB_SIZE = 1024
+_MAX_THUMB_SIZE = 4096
 
 # Cache lives under the workspace's `runs/` tree so it gets the same
 # git-ignore + cleanup treatment as everything else the server writes.

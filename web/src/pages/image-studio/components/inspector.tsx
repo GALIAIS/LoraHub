@@ -43,9 +43,11 @@ interface InspectorProps {
   path: string
   onClose: () => void
   onOpenLightbox?: () => void
+  className?: string
+  modalLayout?: boolean
 }
 
-export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: InspectorProps) {
+export function Inspector({ detail, loading, path, onClose, onOpenLightbox, className, modalLayout = false }: InspectorProps) {
   const queryClient = useQueryClient()
   const [editingCaption, setEditingCaption] = useState(false)
   const [captionDraft, setCaptionDraft] = useState("")
@@ -159,7 +161,7 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
   const manualQuality = normalizeManualQuality(detail?.annotation?.userQualityLabel)
 
   return (
-    <aside className="shiro-page-aside w-[22rem] shrink-0 overflow-y-auto p-3">
+    <aside className={cn("shiro-page-aside w-[22rem] shrink-0 overflow-y-auto p-3", className)}>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium truncate">{detail?.name ?? "..."}</h3>
         <Button
@@ -175,8 +177,18 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
       {loading && <p className="text-xs text-muted-foreground">加载中...</p>}
 
       {detail && (
-        <div className="flex flex-col gap-3">
-          <div className="aspect-square overflow-hidden rounded-md border bg-muted">
+        <div
+          className={cn(
+            "flex flex-col gap-3",
+            modalLayout && "md:grid md:grid-cols-[minmax(0,1fr)_24rem] md:items-start md:gap-4",
+          )}
+        >
+          <div
+            className={cn(
+              "aspect-square overflow-hidden rounded-md border bg-muted",
+              modalLayout && "md:aspect-auto md:h-[calc(min(88dvh,56rem)-4rem)]",
+            )}
+          >
             {imageBroken ? (
               <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground/70">
                 <ImageOff className="size-6" />
@@ -193,6 +205,12 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
             )}
           </div>
 
+          <div
+            className={cn(
+              "flex flex-col gap-3",
+              modalLayout && "min-h-0 md:max-h-[calc(min(88dvh,56rem)-4rem)] md:overflow-y-auto md:pr-1",
+            )}
+          >
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <span className="text-muted-foreground">文件大小</span>
             <span>{formatBytes(detail.bytes)}</span>
@@ -440,6 +458,7 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
             >
               <Trash2 className="size-3" /> 删除
             </Button>
+          </div>
           </div>
         </div>
       )}
