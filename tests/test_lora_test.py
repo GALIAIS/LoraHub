@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -196,12 +196,14 @@ def test_lora_test_dedupes_loras_and_collects_anima_directory_output(
     assert cases[0].multipliers == [0.7]
 
     calls: list[list[str]] = []
+    popen_kwargs: list[dict[str, object]] = []
 
     class FakeProcess:
         returncode = 0
 
-        def __init__(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+        def __init__(self, argv, **kwargs):  # type: ignore[no-untyped-def]
             calls.append([str(item) for item in argv])
+            popen_kwargs.append(kwargs)
             save_dir = Path(argv[argv.index("--save_path") + 1])
             save_dir.mkdir(parents=True, exist_ok=True)
             (save_dir / "sample.png").write_bytes(b"png")
@@ -219,6 +221,8 @@ def test_lora_test_dedupes_loras_and_collects_anima_directory_output(
         ),
     )
     monkeypatch.setattr(lora_test.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(lora_test.sys, "platform", "win32")
+    monkeypatch.setattr(lora_test.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
 
     out_path = tmp_path / "result.png"
     lora_test._run_anima_inference(resolved, req, cases[0], out_path, cancel_evt=SimpleNamespace(is_set=lambda: False))
@@ -227,6 +231,7 @@ def test_lora_test_dedupes_loras_and_collects_anima_directory_output(
     assert not out_path.with_suffix("").exists()
     assert calls[0].count(str(output / "style.safetensors")) == 1
     assert calls[0][calls[0].index("--save_path") + 1] == str(out_path.with_suffix(""))
+    assert popen_kwargs[0]["creationflags"] == 0x08000000
 
 
 def test_lora_test_xy_grid_with_fake_inference(
@@ -235,6 +240,7 @@ def test_lora_test_xy_grid_with_fake_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
+
     from lorahub.api.routers import lora_test
 
     workspace = tmp_path / "ws"
@@ -285,6 +291,7 @@ def test_lora_test_base_prompt_seed_axes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
+
     from lorahub.api.routers import lora_test
 
     workspace = tmp_path / "ws"
@@ -332,6 +339,7 @@ def test_lora_test_size_negative_and_base_weight_axes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
+
     from lorahub.api.routers import lora_test
 
     workspace = tmp_path / "ws"

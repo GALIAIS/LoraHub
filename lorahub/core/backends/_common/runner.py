@@ -30,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, Any, TextIO
 
 from lorahub.core.events import EventType, TrainingEvent
 
@@ -153,9 +153,10 @@ class SubprocessRunner:
                 if stale is None or not stale.strip():
                     full_env.pop("VCINSTALLDIR", None)
                     full_env.pop("VCToolsVersion", None)
-            creationflags = (
-                subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-            )
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+                creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
             start_new_session = sys.platform != "win32"
 
             self._started_at = time.time()
@@ -488,7 +489,14 @@ class SubprocessRunner:
         if force:
             args.append("/F")
         try:
-            subprocess.run(args, capture_output=True, check=False, timeout=10)
+            kwargs: dict[str, Any] = {
+                "capture_output": True,
+                "check": False,
+                "timeout": 10,
+            }
+            if sys.platform == "win32":
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.run(args, **kwargs)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             # Last-ditch: at least try to flag the immediate child.
             self._proc.terminate() if not force else self._proc.kill()

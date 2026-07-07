@@ -37,6 +37,12 @@ FALLBACK_TORCH_INDEX_BASES: tuple[str, ...] = (
 )
 
 
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
+
+
 class BootstrapPlanLike(Protocol):
     """The minimum shape every backend's BootstrapPlan must expose.
 
@@ -84,6 +90,7 @@ def run_step(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,  # line-buffered so we get progress lines as they're written
+        creationflags=_subprocess_no_window(),
     )
     tail: collections.deque[str] = collections.deque(maxlen=12)
     assert proc.stderr is not None  # noqa: S101 -- PIPE above guarantees this
@@ -114,6 +121,7 @@ def _is_complete_git_repo(target: Path) -> bool:
         capture_output=True,
         text=True,
         check=False,
+        creationflags=_subprocess_no_window(),
     )
     return result.returncode == 0 and result.stdout.strip() == "true"
 

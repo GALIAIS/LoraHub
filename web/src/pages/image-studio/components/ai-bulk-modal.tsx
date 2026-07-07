@@ -5,6 +5,10 @@ import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import type { AiBulkTab } from "./types"
 import { TriggerPicker } from "./library/trigger-picker"
+import {
+  CaptionPromptPicker,
+  type CaptionPromptValue,
+} from "./caption-prompt-picker"
 
 interface AiBulkModalProps {
   paths: string[]
@@ -18,7 +22,7 @@ const tabs: { id: AiBulkTab; label: string }[] = [
   { id: "quality-score", label: "质量评分" },
   { id: "trigger-words", label: "触发词候选" },
 ]
-type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm"
+type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm" | "toriigate"
 
 // Server-side fallback when ``/api/tagging/wd14/models`` hasn't
 // resolved yet — same id the backend defaults to. Without this the
@@ -37,6 +41,9 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   const [characterThreshold, setCharacterThreshold] = useState(0.85)
   const [overwrite, setOverwrite] = useState(false)
   const [captionMode, setCaptionMode] = useState<"general" | "style" | "character">("style")
+  const [captionPrompt, setCaptionPrompt] =
+    useState<CaptionPromptValue>("style")
+  const [promptTemplate, setPromptTemplate] = useState<string | undefined>()
   // "vlm" — multimodal model sees the image (best quality, more
   // expensive, requires a vision-capable model + quota).
   // "tags" — text-only LLM composes from the WD14 tag list. Useful
@@ -101,8 +108,15 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           mergeStrategy,
           path: datasetPath,
           captionMode,
+          promptTemplate,
           captionSource:
-            annotationMode === "tag-llm" ? "tags" : annotationMode === "nl" ? "vlm" : captionSource,
+            annotationMode === "tag-llm"
+              ? "tags"
+              : annotationMode === "toriigate"
+                ? "toriigate"
+                : annotationMode === "nl"
+                  ? "vlm"
+                  : captionSource,
           triggerWord: triggerWord.trim() || undefined,
           stripStyleTags,
           useWd14: annotationMode !== "nl" && useWd14,
@@ -215,6 +229,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   <option value="nl">NL 模式</option>
                   <option value="tag-llm">TAG+LLM 模式</option>
                   <option value="tag-vlm">TAG+VLM 模式</option>
+                  <option value="toriigate">ToriiGate 模式</option>
                 </select>
               </label>
               {annotationMode === "tag" ? (
@@ -274,7 +289,9 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                       ? "视觉模型直接生成自然语言 caption，不调用 WD14。"
                       : annotationMode === "tag-llm"
                         ? "先生成 TAG，再由 LLM 按训练用途重写 caption。"
-                        : "先生成 TAG，再由 VLM 看图按训练用途重写 caption。"}
+                        : annotationMode === "toriigate"
+                          ? "使用 ToriiGate 官方格式生成 caption。"
+                          : "先生成 TAG，再由 VLM 看图按训练用途重写 caption。"}
                   </p>
                   {annotationMode !== "nl" && (
                     <label className="flex items-center gap-1.5 text-xs">
@@ -284,7 +301,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   onChange={(e) => setUseWd14(e.target.checked)}
                   className="size-3"
                 />
-                <span>启用 WD14 标签预处理</span>
+                <span>{annotationMode === "toriigate" ? "使用 WD14 参考标签" : "启用 WD14 标签预处理"}</span>
                 <span className="text-muted-foreground/70">
                   （关闭后仅用 LLM 描述 + 触发词，不调用 WD14 模型）
                 </span>
@@ -303,20 +320,22 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                         ? "角色模式：LLM 输出『描述 + 修正后的标签』，过滤掉外貌身份词（hair / eyes / skin / body）与矛盾标签。"
                         : annotationMode === "tag-llm"
                           ? "LLM 不会看到图片，仅根据 WD14 标签列表撰写。提示词已针对此场景优化，避免凭空虚构。"
+                          : annotationMode === "toriigate"
+                            ? "使用 ToriiGate 官方 short caption 格式，适合 ToriiGate-0.5 服务商。"
                           : "多模态模型直接读取图片。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
               {annotationMode !== "nl" && (
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>
-                <select
-                  value={captionMode}
-                  onChange={(e) => setCaptionMode(e.target.value as typeof captionMode)}
-                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
-                >
-                  <option value="style">风格 LoRA（描述 + 修正后的标签，禁画风词）</option>
-                  <option value="character">角色 LoRA（描述 + 修正后的标签，禁外貌词）</option>
-                  <option value="general">通用（描述全部内容）</option>
-                </select>
+                <CaptionPromptPicker
+                  value={captionPrompt}
+                  onChange={(next) => {
+                    setCaptionPrompt(next.value)
+                    setCaptionMode(next.captionMode)
+                    setPromptTemplate(next.promptTemplate)
+                  }}
+                  className="flex-1"
+                />
               </label>
               )}
               <div className="flex items-center gap-2">

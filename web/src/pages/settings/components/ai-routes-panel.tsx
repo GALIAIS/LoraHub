@@ -27,30 +27,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-
-const TASK_LABELS: Record<AITaskId, string> = {
-  "global.default": "默认 (兜底)",
-  "tagging.assist": "VLM 补打标签",
-  "caption.rewrite": "Caption 改写",
-  "dataset.analyze": "数据集分析",
-  "training.diagnose": "训练诊断",
-  "error.diagnose": "错误自助",
-  "quality.score": "图片质量评分",
-  "trigger.suggest": "Trigger 生成",
-}
-
-const TASK_DESCRIPTIONS: Record<AITaskId, string> = {
-  "global.default": "其它任务未单独配置时的兜底路由",
-  "tagging.assist": "用 VLM 给图补充 wd14 不擅长的描述 (光照、角度、自然语言)",
-  "caption.rewrite": "把 wd14 标签改写为自然语言或统一格式",
-  "dataset.analyze": "对扫描结果做诊断 — caption 长度、tag 分布等",
-  "training.diagnose": "解读 loss/grad_norm 曲线并输出调整方案",
-  "error.diagnose": "分析训练 / 安装失败并输出处理方案",
-  "quality.score": "VLM 评估图片质量 (0-100 + 优/中/差)",
-  "trigger.suggest": "根据数据集特征生成 trigger word 和模板",
-}
+import { TASK_DESCRIPTIONS, TASK_LABELS } from "./ai-task-meta"
 
 const REASONING_EFFORTS = ["low", "medium", "high"] as const
+const DEFAULT_SELECT_VALUE = "__default__"
 
 export function RoutesPanel() {
   const providers = useQuery({
@@ -68,12 +48,6 @@ export function RoutesPanel() {
     queryFn: () => api.aiListModels(),
     staleTime: 30_000,
   })
-  const recommended = useQuery({
-    queryKey: ["ai-recommended-prompts"],
-    queryFn: api.aiListRecommendedPrompts,
-    staleTime: 60 * 60 * 1000,
-  })
-
   const providerList = providers.data?.providers ?? []
   const routeMap = useMemo(() => {
     const m = new Map<string, AIRouteRecord>()
@@ -93,7 +67,6 @@ export function RoutesPanel() {
           route={routeMap.get(taskId) ?? null}
           providers={providerList}
           allModels={allModels.data?.models ?? []}
-          recommendedPrompt={recommended.data?.prompts?.[taskId]}
         />
       ))}
     </div>
@@ -105,18 +78,15 @@ function RouteRow({
   route,
   providers,
   allModels,
-  recommendedPrompt,
 }: {
   taskId: AITaskId
   route: AIRouteRecord | null
   providers: AIProviderRecord[]
   allModels: AIModelRecord[]
-  recommendedPrompt?: string
 }) {
   const qc = useQueryClient()
   const [providerId, setProviderId] = useState(route?.providerId ?? "")
   const [modelId, setModelId] = useState(route?.modelId ?? "")
-  const [systemPrompt, setSystemPrompt] = useState(route?.systemPrompt ?? "")
   const [enabled, setEnabled] = useState(route?.enabled ?? true)
   const [advanced, setAdvanced] = useState(false)
   const [temperature, setTemperature] = useState<string>(
@@ -132,7 +102,6 @@ function RouteRow({
   useEffect(() => {
     setProviderId(route?.providerId ?? "")
     setModelId(route?.modelId ?? "")
-    setSystemPrompt(route?.systemPrompt ?? "")
     setEnabled(route?.enabled ?? true)
     setTemperature(route?.temperature?.toString() ?? "")
     setMaxOutputTokens(route?.maxOutputTokens?.toString() ?? "")
@@ -145,14 +114,21 @@ function RouteRow({
         taskId,
         providerId: providerId || null,
         modelId: modelId || null,
-        systemPrompt,
+        systemPrompt: route?.systemPrompt ?? "",
+        stream: route?.stream ?? null,
         temperature: temperature.trim() ? Number(temperature) : null,
+        topP: route?.topP ?? null,
+        frequencyPenalty: route?.frequencyPenalty ?? null,
+        presencePenalty: route?.presencePenalty ?? null,
         maxOutputTokens: maxOutputTokens.trim() ? Number(maxOutputTokens) : null,
+        seed: route?.seed ?? null,
         reasoningEffort: (reasoningEffort.trim() || null) as
           | "low"
           | "medium"
           | "high"
           | null,
+        thinkingBudgetTokens: route?.thinkingBudgetTokens ?? null,
+        includeReasoning: route?.includeReasoning ?? null,
         stopSequences: route?.stopSequences ?? [],
         extraBodyJson: route?.extraBodyJson ?? "",
         enabled,
@@ -230,25 +206,6 @@ function RouteRow({
             </Select>
           </Field>
         </div>
-        <Field label="System Prompt">
-          <textarea
-            value={systemPrompt}
-            onChange={(e) => setSystemPrompt(e.target.value)}
-            rows={2}
-            className="font-mono text-[12px] w-full rounded-[3px] border border-input bg-background/76 px-2 py-1.5"
-            placeholder="可选 — 会作为 system 消息加在用户 prompt 之前"
-          />
-          {recommendedPrompt && recommendedPrompt !== systemPrompt && (
-            <button
-              type="button"
-              onClick={() => setSystemPrompt(recommendedPrompt)}
-              className="text-[11px] text-primary hover:underline mt-1"
-              title="将 Anima caption 模板填入此字段（点保存才会持久化）"
-            >
-              使用 Anima prompt
-            </button>
-          )}
-        </Field>
         <button
           type="button"
           onClick={() => setAdvanced((v) => !v)}
@@ -276,14 +233,16 @@ function RouteRow({
             </Field>
             <Field label="reasoning_effort">
               <Select
-                value={reasoningEffort}
-                onValueChange={(v) => setReasoningEffort(v ?? "")}
+                value={reasoningEffort || DEFAULT_SELECT_VALUE}
+                onValueChange={(v) =>
+                  setReasoningEffort(v === DEFAULT_SELECT_VALUE ? "" : (v ?? ""))
+                }
               >
                 <SelectTrigger className="h-8 text-[12px]">
                   <SelectValue placeholder="(默认)" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">(默认)</SelectItem>
+                  <SelectItem value={DEFAULT_SELECT_VALUE}>(默认)</SelectItem>
                   {REASONING_EFFORTS.map((e) => (
                     <SelectItem key={e} value={e}>
                       {e}

@@ -127,6 +127,23 @@ def test_run_uv_merges_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert env["UV_CACHE_DIR"] == "/work/.cache/uv"
 
 
+def test_run_uv_hides_windows_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_uv, "_UV_CACHED", "/fake/uv", raising=False)
+    monkeypatch.setattr(_uv.sys, "platform", "win32")
+    monkeypatch.setattr(_uv.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    captured: list[dict[str, object]] = []
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> _FakePopen:
+        captured.append(kwargs)
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(_uv.subprocess, "Popen", fake_popen)
+
+    _uv.run_uv(["sync"], step="sync")
+
+    assert captured[0]["creationflags"] == 0x08000000
+
+
 def test_venv_python_picks_right_layout_per_platform(tmp_path: Path) -> None:
     py = _uv.venv_python(tmp_path / "proj")
     if sys.platform == "win32":

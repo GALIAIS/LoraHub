@@ -887,6 +887,7 @@ def kill_job(job_id: str) -> dict[str, Any]:
                 capture_output=True,
                 check=False,
                 timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             error = repr(exc)

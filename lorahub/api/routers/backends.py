@@ -8,6 +8,7 @@ its own probe.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -26,12 +27,16 @@ from lorahub.api.task_sessions import (
     TaskSessionStore,
     default_task_store_path,
 )
+from lorahub.core.backends.anima_lora import msvc as _anima_msvc
 from lorahub.core.backends.anima_lora.models import (
     DownloadEvent,
+)
+from lorahub.core.backends.anima_lora.models import (
     download_models as _download_anima_models,
+)
+from lorahub.core.backends.anima_lora.models import (
     missing_files as _anima_missing_models,
 )
-from lorahub.core.backends.anima_lora import msvc as _anima_msvc
 from lorahub.core.backends.diffusion_pipe.bootstrap import (
     default_repo_path as _dp_default_repo,
 )
@@ -519,6 +524,9 @@ def start_msvc_install() -> dict[str, Any]:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0,
             )
             assert proc.stdout is not None
             for line in proc.stdout:

@@ -1099,6 +1099,39 @@ def test_stream_subprocess_decodes_utf8_glyphs(tmp_path: Path) -> None:
     assert "构建前端" in body, f"CJK lost in decode: {body!r}"
 
 
+def test_stream_subprocess_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeProc:
+        stdout = iter(["done\n"])
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(*_args: object, **kwargs: object) -> FakeProc:
+        captured.append(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr(su.sys, "platform", "win32")
+    monkeypatch.setattr(su.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(su.subprocess, "Popen", fake_popen)
+
+    rc = su._stream_subprocess(
+        ["npm", "run", "build"],
+        cwd=tmp_path,
+        phase="build",
+        emit=lambda *_args: None,
+    )
+
+    assert rc == 0
+    assert captured[0]["creationflags"] == 0x08000000
+
+
 # --------------------------------------------------------------------- #
 # Runtime bind persistence used by the in-app updater restart path
 # --------------------------------------------------------------------- #

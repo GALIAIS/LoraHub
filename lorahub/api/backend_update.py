@@ -18,11 +18,18 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
 
 
 @dataclass(slots=True)
@@ -50,6 +57,7 @@ def _git(repo: Path, *args: str, timeout: float = 30) -> subprocess.CompletedPro
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        creationflags=_subprocess_no_window(),
     )
 
 

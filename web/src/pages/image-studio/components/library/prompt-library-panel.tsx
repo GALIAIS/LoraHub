@@ -38,6 +38,11 @@ const EMPTY_DRAFT: DraftState = {
   notes: "",
 }
 
+interface PromptLibraryPanelProps {
+  categoryPrefix?: string
+  defaultDraft?: Partial<DraftState>
+}
+
 function entryToDraft(e: LibraryPromptEntry): DraftState {
   return {
     id: e.id,
@@ -50,14 +55,20 @@ function entryToDraft(e: LibraryPromptEntry): DraftState {
   }
 }
 
-export function PromptLibraryPanel() {
+export function PromptLibraryPanel({
+  categoryPrefix,
+  defaultDraft,
+}: PromptLibraryPanelProps = {}) {
   const qc = useQueryClient()
-  const [category, setCategory] = useState("")
+  const [category, setCategory] = useState(categoryPrefix ?? "")
   const [draft, setDraft] = useState<DraftState | null>(null)
 
   const promptsQuery = useQuery({
-    queryKey: ["library", "prompts", category],
-    queryFn: () => libraryListPrompts({ category: category || undefined }),
+    queryKey: ["library", "prompts", category, categoryPrefix],
+    queryFn: () =>
+      categoryPrefix
+        ? libraryListPrompts()
+        : libraryListPrompts({ category: category || undefined }),
   })
 
   const create = useMutation({
@@ -128,24 +139,39 @@ export function PromptLibraryPanel() {
     }
   }
 
-  const prompts = promptsQuery.data?.prompts ?? []
+  const prompts = (promptsQuery.data?.prompts ?? []).filter((p) =>
+    categoryPrefix ? p.category.startsWith(categoryPrefix) : true,
+  )
   const editing = draft?.id !== null && draft?.id !== undefined
   const submitting = create.isPending || upsert.isPending
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-6 py-2.5">
-        <Input
-          placeholder="按分类筛选（caption / quality / ...）"
-          className="h-8 w-64 text-xs"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        />
+        {categoryPrefix ? (
+          <div className="rounded border bg-muted/25 px-2 py-1 text-xs text-muted-foreground">
+            {categoryPrefix}*
+          </div>
+        ) : (
+          <Input
+            placeholder="按分类筛选（caption / quality / ...）"
+            className="h-8 w-64 text-xs"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          />
+        )}
         <div className="flex-1" />
         {!draft && (
           <Button
             size="sm"
-            onClick={() => setDraft({ ...EMPTY_DRAFT })}
+            onClick={() =>
+              setDraft({
+                ...EMPTY_DRAFT,
+                ...defaultDraft,
+                category:
+                  defaultDraft?.category ?? categoryPrefix ?? EMPTY_DRAFT.category,
+              })
+            }
             className="h-8 gap-1"
           >
             <Plus className="size-3.5" />

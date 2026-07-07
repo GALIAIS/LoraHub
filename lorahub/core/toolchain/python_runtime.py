@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import platform
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,12 @@ RECOMMENDED_VERSIONS: tuple[str, ...] = ("3.11", "3.12", "3.13")
 
 
 _PB_PROGRESS = _uv.ProgressCallback
+
+
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
 
 
 def default_version() -> str:
@@ -104,7 +111,12 @@ def installed_runtimes() -> list[dict[str, Any]]:
         "--install-dir", str(PYTHON_ROOT),
     ]
     result = subprocess.run(
-        cmd, check=False, capture_output=True, text=True, env=_uv_python_env(),
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_uv_python_env(),
+        creationflags=_subprocess_no_window(),
     )
     if result.returncode != 0:
         # Older uv builds reject ``--install-dir`` on list. Retry without.
@@ -113,8 +125,12 @@ def installed_runtimes() -> list[dict[str, Any]]:
             "list", "--only-installed", "--output-format", "json",
         ]
         result = subprocess.run(
-            cmd_legacy, check=False, capture_output=True, text=True,
+            cmd_legacy,
+            check=False,
+            capture_output=True,
+            text=True,
             env=_uv_python_env(),
+            creationflags=_subprocess_no_window(),
         )
         if result.returncode != 0:
             return _scan_install_dir()
@@ -131,7 +147,12 @@ def available_runtimes() -> list[dict[str, Any]]:
     """Return runtimes uv knows it could install on this host."""
     cmd = [*_uv_python_command(), "list", "--output-format", "json"]
     result = subprocess.run(
-        cmd, check=False, capture_output=True, text=True, env=_uv_python_env(),
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_uv_python_env(),
+        creationflags=_subprocess_no_window(),
     )
     if result.returncode != 0:
         return []
@@ -241,7 +262,12 @@ def install_runtime(
     if progress is not None:
         progress(f"uv python install {version} -> {PYTHON_ROOT}")
     result = subprocess.run(
-        cmd, check=False, stderr=subprocess.PIPE, text=True, env=_uv_python_env(),
+        cmd,
+        check=False,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_uv_python_env(),
+        creationflags=_subprocess_no_window(),
     )
     if result.returncode != 0:
         tail = "\n".join((result.stderr or "").strip().splitlines()[-12:])

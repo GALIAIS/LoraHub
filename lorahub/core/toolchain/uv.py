@@ -54,6 +54,12 @@ def _local_uv_path() -> Path:
 _UV_CACHED: str | None = None
 
 
+def _subprocess_no_window() -> int:
+    if sys.platform == "win32":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
+
+
 def find_uv() -> str | None:
     """Return the path to a discoverable `uv` binary or None if not present.
 
@@ -107,7 +113,13 @@ def _bootstrap_uv(progress: ProgressCallback | None) -> str:
             cmd[5:5] = ["--index-url", pypi_index, "--trusted-host", pypi_index.split("//")[-1].split("/")[0]]
     except Exception:  # noqa: BLE001
         pass
-    result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(
+        cmd,
+        check=False,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=_subprocess_no_window(),
+    )
     if result.returncode != 0:
         tail_text = (result.stderr or "").strip()
         tail = "\n".join(tail_text.splitlines()[-10:])
@@ -197,6 +209,7 @@ def _capture(
         text=True,
         bufsize=1,
         env=full_env,
+        creationflags=_subprocess_no_window(),
     )
     tail: deque[str] = deque(maxlen=12)
     assert proc.stdout is not None  # noqa: S101

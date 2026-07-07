@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from lorahub.core.events import EventType, TrainingEvent
+from lorahub.core.backends._common import runner as runner_mod
 from lorahub.core.backends._common.runner import (
     SubprocessRunner,
     _TRAINING_LOG_FILENAME,
@@ -185,3 +186,68 @@ def test_listener_failure_does_not_kill_pipe_pump(tmp_path: Path) -> None:
     assert "line-before-listener-error" in body
     assert "lorahub listener error: OSError(22, 'Invalid argument')" in body
     assert "returncode=0" in body
+
+
+def test_windows_training_spawn_hides_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+    monkeypatch.setattr(runner_mod.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    class FakeProc:
+        stdout = None
+        stderr = None
+        pid = 123
+
+        def __init__(self, _argv: list[str], **kwargs: object) -> None:
+            calls.append(kwargs)
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", FakeProc)
+    runner = SubprocessRunner(
+        argv=["python", "train.py"],
+        workspace=tmp_path,
+        on_event=lambda _ev: None,
+        parse_line=_identity_parser,
+    )
+    runner.start()
+
+    assert calls
+    flags = calls[0]["creationflags"]
+    assert isinstance(flags, int)
+    assert flags & 0x200
+    assert flags & 0x08000000
+
+
+def test_windows_taskkill_hides_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    def fake_run(_args: list[str], **kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    runner = SubprocessRunner(
+        argv=["python", "train.py"],
+        workspace=Path("."),
+        on_event=lambda _ev: None,
+        parse_line=_identity_parser,
+    )
+
+    class FakeProc:
+        pid = 123
+
+    runner._proc = FakeProc()  # type: ignore[assignment]
+    runner._taskkill(force=True)
+
+    assert calls
+    assert calls[0]["creationflags"] == 0x08000000

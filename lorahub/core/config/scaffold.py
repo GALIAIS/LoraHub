@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,9 @@ def detect_gpu_vram_mib() -> int | None:
             text=True,
             check=False,
             timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
     except (subprocess.SubprocessError, OSError):
         return None

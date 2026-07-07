@@ -15,6 +15,7 @@ export const AI_TASK_IDS = [
   "error.diagnose",
   "quality.score",
   "trigger.suggest",
+  "config.recommend",
 ] as const
 export type AITaskId = (typeof AI_TASK_IDS)[number]
 

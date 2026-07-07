@@ -6,6 +6,7 @@ Anima-format captions used for LoRA training.
 
 from __future__ import annotations
 
+import re
 import threading
 import time as _time
 import uuid
@@ -1357,6 +1358,15 @@ _TAGS_ONLY_PROMPT_GENERAL = (
     "Plain English, no headers or labels.\n\nWD14 tags: {tags}"
 )
 
+_TORIIGATE_SYSTEM_PROMPT = (
+    "You are image captioning expert. Describe user's picture according to requested "
+    "format and instructions."
+)
+_TORIIGATE_SHORT_PROMPT = (
+    "The caption for image should be quite short without long purple prose and slop. "
+    "Cover main objects and details."
+)
+
 
 def _drop_tags(tags: list[str], drop: set[str]) -> list[str]:
     """Case-insensitive filter — keep order, drop matches."""
@@ -1373,6 +1383,57 @@ def _split_normalize_tags(raw: str) -> list[str]:
             seen.add(t)
             out.append(t)
     return out
+
+
+def _toriigate_user_query(s1: _StageOneResult, caption_mode: str) -> str:
+    drop = set(_QUALITY_NOISE_TAGS)
+    if caption_mode == "style":
+        drop |= _STYLE_NOISE_TAGS
+    tags = _drop_tags(s1.general_tags, drop)
+    if caption_mode == "character":
+        tags = _drop_appearance_tags(tags)
+    tags_string = " ".join(t.replace(" ", "_") for t in tags)
+    query = f"# Captioning format:\n{_TORIIGATE_SHORT_PROMPT}\n"
+    if tags_string:
+        query += f"\n# Booru tags for the image\n[{tags_string}]\n"
+    if s1.character_tags:
+        chars = " ".join(t.replace(" ", "_") for t in s1.character_tags)
+        query += (
+            "\n# Characters on picture:\n"
+            f"Here are names/tags for characters from the picture, make sure to use them: [{chars}].\n"
+        )
+    else:
+        query += "\n# Characters on picture:\nAvoid to guess names for characters.\n"
+    return query
+
+
+def _clean_toriigate_caption(raw: str) -> str:
+    """Drop prompt echoes and markdown section labels from ToriiGate output."""
+    kept: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip().strip("-").strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("#"):
+            continue
+        if low.startswith(("part 1:", "part 2:")):
+            tail = line.split(":", 1)[1].strip()
+            if re.search(
+                r"\b(sentence|tag|caption|describ\w*|description|list|natural language)\b",
+                tail,
+                re.I,
+            ):
+                continue
+            line = tail
+        if re.search(r"\b(captioning format|booru tags|characters on picture)\b", line, re.I):
+            continue
+        if re.search(r"\b(output only|do not use|strict|precise list|cover main objects)\b", line, re.I):
+            continue
+        line = re.sub(r"^[-*]\s*[^:]{1,40}:\s*", "", line)
+        kept.append(line)
+    return " ".join(kept).strip() or raw.strip()
+
 
 def _build_anima_caption(
     *,
@@ -1460,6 +1521,7 @@ class SmartCaptionBatchInput(BaseModel):
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
     captionMode: str = "style"  # general | style | character
+    promptTemplate: str | None = None
     # "vlm" — multimodal LLM sees the image directly (default behaviour
     #         since the feature shipped). Best caption quality but
     #         requires a vision-capable model and burns image tokens.
@@ -1550,6 +1612,8 @@ def _smart_caption_stage_one(
     caption_source: str = "vlm",
     strip_style_tags: bool = True,
     use_wd14: bool = True,
+    custom_prompt_template: str | None = None,
+    trigger_word: str | None = None,
 ) -> _StageOneResult:
     """Run WD14 tagging + image prep — everything that doesn't need the VLM.
 
@@ -1590,7 +1654,11 @@ def _smart_caption_stage_one(
     # that skips the LLM is "WD14 disabled in style mode" — there's
     # nothing for the LLM to write in that case (no image input, no
     # tag context, just the trigger word).
-    skip_llm = caption_mode == "style" and not use_wd14
+    skip_llm = (
+        caption_mode == "style"
+        and not use_wd14
+        and caption_source != "toriigate"
+    )
 
     # Build the LLM-facing reference tags. Always strip the quality-noise
     # set; additionally strip the style/medium set when requested AND the
@@ -1643,14 +1711,22 @@ def _smart_caption_stage_one(
             prompt_template = _SMART_CAPTION_PROMPT_CHARACTER
         else:
             prompt_template = _SMART_CAPTION_PROMPT_GENERAL
-    prompt_text = prompt_template.format(tags=tags_for_prompt)
+    if custom_prompt_template and custom_prompt_template.strip():
+        prompt_text = (
+            custom_prompt_template
+            .replace("{tags}", tags_for_prompt)
+            .replace("{wd14_tags}", tags_for_prompt)
+            .replace("{trigger}", (trigger_word or "").strip())
+        )
+    else:
+        prompt_text = prompt_template.format(tags=tags_for_prompt)
     # Note: the new prompt templates already embed the
     # [STRICT STYLE DROP INSTRUCTION] / [STRICT IDENTITY DROP INSTRUCTION]
     # blocks inline; we no longer prepend the legacy
     # ``_STYLE_DROP_INSTRUCTION`` override (it's still defined as
     # documentation but unused at runtime).
 
-    return _StageOneResult(
+    s1 = _StageOneResult(
         img_path=img_path,
         rating_name=rating_name,
         general_tags=general_tags,
@@ -1661,6 +1737,9 @@ def _smart_caption_stage_one(
         strip_style_tags=strip_style_tags,
         skip_llm=False,
     )
+    if caption_source == "toriigate" and not (custom_prompt_template or "").strip():
+        s1.prompt_text = _toriigate_user_query(s1, caption_mode)
+    return s1
 
 
 def _smart_caption_stage_two(
@@ -1718,7 +1797,10 @@ def _smart_caption_stage_two(
         }
 
     messages: list[dict[str, Any]] = []
-    if route.system_prompt:
+    is_toriigate = s1.caption_source == "toriigate"
+    if is_toriigate:
+        messages.append({"role": "system", "content": _TORIIGATE_SYSTEM_PROMPT})
+    elif route.system_prompt:
         messages.append({"role": "system", "content": route.system_prompt})
     if s1.caption_source == "tags":
         # Text-only path — many cheap / non-vision LLMs reject the
@@ -1744,6 +1826,8 @@ def _smart_caption_stage_two(
     )
 
     nl_text = result.content.strip()
+    if is_toriigate:
+        nl_text = _clean_toriigate_caption(nl_text)
     new_caption = _build_anima_caption(
         rating_tag=s1.rating_name,
         general_tags=s1.general_tags,
@@ -1770,7 +1854,7 @@ def _smart_caption_stage_two(
             image_path=str(s1.img_path),
             sha256=_file_sha256(s1.img_path),
         )
-    ann.ai_caption = result.content
+    ann.ai_caption = nl_text
     ann.ai_caption_provider = f"{result.provider_name}/{result.model_id}"
     ann.ai_caption_at = datetime.now(UTC).isoformat()
     store.upsert_annotation(ann)
@@ -1795,6 +1879,7 @@ def _smart_caption_single_image(
     *,
     caption_source: str = "vlm",
     use_wd14: bool = True,
+    prompt_template: str | None = None,
 ) -> dict[str, Any]:
     """Single-image pipeline kept for the /single endpoint and tests.
 
@@ -1810,6 +1895,8 @@ def _smart_caption_single_image(
         caption_source=caption_source,
         strip_style_tags=strip_style_tags,
         use_wd14=use_wd14,
+        custom_prompt_template=prompt_template,
+        trigger_word=trigger_word,
     )
     return _smart_caption_stage_two(
         s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
@@ -1939,6 +2026,8 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     caption_source=body.captionSource,
                     strip_style_tags=body.stripStyleTags,
                     use_wd14=body.useWd14,
+                    custom_prompt_template=body.promptTemplate,
+                    trigger_word=body.triggerWord,
                 )
             except Exception as exc:  # noqa: BLE001
                 err_msg = f"WD14: {type(exc).__name__}: {exc}"
@@ -2145,6 +2234,7 @@ class SmartCaptionSingleInput(BaseModel):
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
     captionMode: str = "style"
+    promptTemplate: str | None = None
     captionSource: str = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
@@ -2189,6 +2279,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
             strip_style_tags=body.stripStyleTags,
             caption_source=body.captionSource,
             use_wd14=body.useWd14,
+            prompt_template=body.promptTemplate,
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001
@@ -2215,6 +2306,7 @@ class Wd14PrefilterInput(BaseModel):
     generalThreshold: float = 0.35
     characterThreshold: float = 0.85
     captionMode: str = "general"
+    promptTemplate: str | None = None
     captionSource: str = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
@@ -2247,6 +2339,8 @@ def ai_wd14_prefilter(body: Wd14PrefilterInput) -> dict[str, Any]:
         caption_source=body.captionSource,
         strip_style_tags=body.stripStyleTags,
         use_wd14=True,
+        custom_prompt_template=body.promptTemplate,
+        trigger_word=body.triggerWord,
     )
     return {
         "path": str(s1.img_path),

@@ -1669,6 +1669,7 @@ def _stream_subprocess(
         errors="replace",
         bufsize=1,
         env=env,
+        creationflags=_subprocess_no_window(),
     )
     assert proc.stdout is not None  # noqa: S101
     lines: queue.Queue[str | None] = queue.Queue()

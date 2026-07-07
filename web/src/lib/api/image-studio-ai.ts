@@ -6,15 +6,17 @@ export async function imageStudioSmartCaption(params: {
   device?: string
   mergeStrategy?: string
   captionMode?: "general" | "style" | "character"
+  promptTemplate?: string
   /**
    * "vlm"  — multimodal LLM sees the image directly (default).
    * "tags" — LLM only sees the WD14 tag list, never the image. Use
    *          when the configured VLM is rate-limited / quota-exhausted
    *          or when a cheaper text-only LLM is preferred.
    */
-  captionSource?: "vlm" | "tags"
+  captionSource?: "vlm" | "tags" | "toriigate"
   triggerWord?: string
   stripStyleTags?: boolean
+  useWd14?: boolean
   /** Skip images that already have a non-empty .txt sidecar. Default true. */
   skipExisting?: boolean
   /** Optional progress callback. Fires after each poll with the latest snapshot. */
@@ -83,9 +85,11 @@ export async function startSmartCaptionSession(params: {
   device?: string
   mergeStrategy?: string
   captionMode?: "general" | "style" | "character"
-  captionSource?: "vlm" | "tags"
+  promptTemplate?: string
+  captionSource?: "vlm" | "tags" | "toriigate"
   triggerWord?: string
   stripStyleTags?: boolean
+  useWd14?: boolean
   skipExisting?: boolean
 }): Promise<{ session_id: string; total: number; status_url: string }> {
   return http<{ session_id: string; total: number; status_url: string }>(
@@ -101,9 +105,11 @@ export async function imageStudioSmartCaptionSingle(params: {
   path: string
   device?: string
   captionMode?: "general" | "style" | "character"
-  captionSource?: "vlm" | "tags"
+  promptTemplate?: string
+  captionSource?: "vlm" | "tags" | "toriigate"
   triggerWord?: string
   stripStyleTags?: boolean
+  useWd14?: boolean
   mergeStrategy?: string
 }): Promise<{ caption: string; tags: string }> {
   return http<{ caption: string; tags: string }>(
@@ -122,7 +128,7 @@ export interface Wd14PrefilterResult {
   characterTags: string[]
   promptText: string
   dataUrl: string
-  captionSource: "vlm" | "tags"
+  captionSource: "vlm" | "tags" | "toriigate"
   stripStyleTags: boolean
   skipLlm: boolean
 }
@@ -134,7 +140,8 @@ export async function imageStudioWd14Prefilter(params: {
   generalThreshold?: number
   characterThreshold?: number
   captionMode?: "general" | "style" | "character"
-  captionSource?: "vlm" | "tags"
+  promptTemplate?: string
+  captionSource?: "vlm" | "tags" | "toriigate"
   triggerWord?: string
   stripStyleTags?: boolean
 }): Promise<Wd14PrefilterResult> {
@@ -149,7 +156,8 @@ export async function imageStudioVlmAnimaRewrite(params: {
   visionTask?: string
   mergeStrategy?: string
   captionMode?: "general" | "style" | "character"
-  captionSource?: "vlm" | "tags"
+  promptTemplate?: string
+  captionSource?: "vlm" | "tags" | "toriigate"
   triggerWord?: string
   stripStyleTags?: boolean
   ratingName?: string | null

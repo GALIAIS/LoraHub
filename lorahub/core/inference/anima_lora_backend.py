@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,9 @@ class AnimaLoraInferenceBackend:
                 text=True,
                 timeout=self._timeout,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0,
             )
         except subprocess.TimeoutExpired as exc:
             msg = (

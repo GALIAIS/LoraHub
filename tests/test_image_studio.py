@@ -401,6 +401,51 @@ def test_smart_caption_status_reads_persisted_result_after_memory_clear(
     assert body["processed"] == 2
 
 
+def test_toriigate_caption_cleaner_drops_prompt_echoes() -> None:
+    from lorahub.api.routers.image_studio import ai as ai_router
+
+    raw = """Part 1: 3-4 concise, highly dense natural language sentences describing the image
+Part 2: A strict, precise list of corrected tags for accurate captioning
+
+# 1. Thoughts about characters
+The image shows one girl smiling at the viewer.
+# 2. Description of the image
+- Face: soft blush and brown eyes.
+- Clothing: red capelet over a cow-print top.
+"""
+
+    cleaned = ai_router._clean_toriigate_caption(raw)
+
+    assert "Part 1" not in cleaned
+    assert "3-4 concise" not in cleaned
+    assert "Thoughts" not in cleaned
+    assert "The image shows one girl" in cleaned
+    assert "soft blush" in cleaned
+
+
+def test_toriigate_stage_one_uses_official_short_prompt() -> None:
+    from pathlib import Path
+
+    from lorahub.api.routers.image_studio import ai as ai_router
+
+    s1 = ai_router._StageOneResult(
+        img_path=Path("x.png"),
+        rating_name="safe",
+        general_tags=["1girl", "masterpiece", "brown hair"],
+        character_tags=["kuwayama chiyuki"],
+        prompt_text="",
+        data_url="data:image/png;base64,x",
+        caption_source="toriigate",
+    )
+    prompt = ai_router._toriigate_user_query(s1, "style")
+
+    assert "# Captioning format:" in prompt
+    assert "quite short" in prompt
+    assert "Part 1" not in prompt
+    assert "Part 2" not in prompt
+    assert "kuwayama_chiyuki" in prompt
+
+
 @pytest.mark.parametrize(
     ("kind", "url"),
     [

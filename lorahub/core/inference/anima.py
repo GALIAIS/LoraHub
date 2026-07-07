@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -283,6 +284,9 @@ class AnimaInferenceBackend:
                 text=True,
                 timeout=cfg.timeout_per_image_s,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0,
             )
         except subprocess.TimeoutExpired:
             shutil.rmtree(scratch_dir, ignore_errors=True)

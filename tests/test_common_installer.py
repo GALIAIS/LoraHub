@@ -106,6 +106,17 @@ def test_run_step_no_progress_callback_still_raises(
     assert info.value.returncode == 2
 
 
+def test_run_step_hides_windows_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = MagicMock()
+    monkeypatch.setattr(common.sys, "platform", "win32")
+    monkeypatch.setattr(common.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    _patch_popen(monkeypatch, _FakeProc([], rc=0), recorder=recorder)
+
+    common.run_step(["git", "clone", "x"], step="clone foo", progress=None)
+
+    assert recorder.call_args.kwargs["creationflags"] == 0x08000000
+
+
 def test_clone_repo_passes_progress_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

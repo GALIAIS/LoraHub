@@ -39,6 +39,10 @@ import {
   useTaggerDownloadDisplay,
 } from "./annotate-ai-shared"
 import { CaptionsBlacklistTool } from "./annotate-caption-tools"
+import {
+  CaptionPromptPicker,
+  type CaptionPromptValue,
+} from "../caption-prompt-picker"
 
 interface Props {
   datasetPath: string
@@ -46,7 +50,7 @@ interface Props {
 
 const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 
-type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm"
+type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm" | "toriigate"
 type DetailMode = "vocab" | "replace" | "trigger"
 
 const TOOL_TO_ANNOTATE_VIEW: Record<
@@ -97,6 +101,10 @@ function AnnotateMainPanel({ datasetPath }: Props) {
   const [character, setCharacter] = useState(0.85)
   const [captionMode, setCaptionMode] =
     useState<"general" | "style" | "character">("style")
+  const [captionPrompt, setCaptionPrompt] =
+    useState<CaptionPromptValue>("style")
+  const [promptTemplate, setPromptTemplate] = useState<string | undefined>()
+  const [useWd14, setUseWd14] = useState(true)
   const [skipExisting, setSkipExisting] = useState(true)
   const [triggerWord, setTriggerWord] = useState("")
 
@@ -174,25 +182,33 @@ function AnnotateMainPanel({ datasetPath }: Props) {
         })
         return `NL 模式已启动，共 ${session.total} 张`
       }
-      const captionSource = mode === "tag-llm" ? "tags" : "vlm"
+      const captionSource =
+        mode === "tag-llm" ? "tags" : mode === "toriigate" ? "toriigate" : "vlm"
       const session = await startSmartCaptionSession({
         path: datasetPath,
         recursive,
         device,
         captionMode,
+        promptTemplate,
         captionSource,
         triggerWord: triggerWord.trim() || undefined,
         stripStyleTags: true,
+        useWd14: mode === "toriigate" ? useWd14 : undefined,
         skipExisting,
       })
       addTask({
         id: session.session_id,
         kind: "smart-caption",
         datasetPath,
-        label: mode === "tag-llm" ? "TAG+LLM 模式" : "TAG+VLM 模式",
+        label:
+          mode === "tag-llm"
+            ? "TAG+LLM 模式"
+            : mode === "toriigate"
+              ? "ToriiGate 模式"
+              : "TAG+VLM 模式",
         total: session.total,
       })
-      return `${mode === "tag-llm" ? "TAG+LLM" : "TAG+VLM"} 模式已启动，共 ${session.total} 张`
+      return `${mode === "tag-llm" ? "TAG+LLM" : mode === "toriigate" ? "ToriiGate" : "TAG+VLM"} 模式已启动，共 ${session.total} 张`
     },
     onSuccess: (message) => {
       toast.success(message)
@@ -230,6 +246,7 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                   <option value="nl">NL 模式</option>
                   <option value="tag-llm">TAG+LLM 模式</option>
                   <option value="tag-vlm">TAG+VLM 模式</option>
+                  <option value="toriigate">ToriiGate 模式</option>
                 </select>
               </Field>
 
@@ -264,21 +281,22 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                 <div className="grid gap-3 md:grid-cols-2">
                   <DeviceSelect value={device} onChange={setDevice} />
                   <Field label="Caption 类型">
-                    <select
-                      value={captionMode}
-                      onChange={(e) =>
-                        setCaptionMode(e.target.value as "general" | "style" | "character")
-                      }
-                      className="h-8 w-full rounded border bg-background px-2 text-xs"
-                    >
-                      <option value="style">风格训练</option>
-                      <option value="character">角色训练</option>
-                      <option value="general">通用描述</option>
-                    </select>
+                    <CaptionPromptPicker
+                      value={captionPrompt}
+                      onChange={(next) => {
+                        setCaptionPrompt(next.value)
+                        setCaptionMode(next.captionMode)
+                        setPromptTemplate(next.promptTemplate)
+                      }}
+                    />
                   </Field>
                   <Field label="来源">
                     <div className="flex h-8 items-center rounded border bg-muted/25 px-2 text-xs text-muted-foreground">
-                      {mode === "tag-llm" ? "TAG → LLM 文本重写" : "TAG → VLM 视觉重写"}
+                      {mode === "tag-llm"
+                        ? "TAG → LLM 文本重写"
+                        : mode === "toriigate"
+                          ? "ToriiGate 官方 short 格式"
+                          : "TAG → VLM 视觉重写"}
                     </div>
                   </Field>
                   <Field label="触发词">
@@ -299,6 +317,9 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                 ) : (
                   <Toggle label="跳过已有 caption" checked={skipExisting} onChange={setSkipExisting} />
                 )}
+                {mode === "toriigate" ? (
+                  <Toggle label="使用 WD14 参考标签" checked={useWd14} onChange={setUseWd14} />
+                ) : null}
                 <Button
                   type="button"
                   disabled={startMutation.isPending || latestTask?.status === "running"}

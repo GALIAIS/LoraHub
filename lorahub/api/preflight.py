@@ -1245,6 +1245,9 @@ def _probe_python_import(python: Path, module: str) -> bool | None:
             text=True,
             timeout=10,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

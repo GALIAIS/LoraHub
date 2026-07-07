@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -490,6 +491,9 @@ def _ensure_deepspeed_available(python: Path) -> None:
             text=True,
             timeout=30,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         msg = f"DeepSpeed availability probe failed: {exc}"
@@ -868,6 +872,9 @@ def _ensure_wandb_if_enabled(
             text=True,
             timeout=15,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
         return proc.returncode, (proc.stderr or proc.stdout or "").strip()
 
@@ -904,6 +911,9 @@ def _ensure_wandb_if_enabled(
             text=True,
             timeout=600,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         msg = (

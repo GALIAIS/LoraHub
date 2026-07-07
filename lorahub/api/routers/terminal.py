@@ -30,6 +30,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,9 +41,9 @@ from pydantic import BaseModel, Field
 from lorahub.api import app as app_module
 from lorahub.api.settings import VALID_BACKEND_IDS
 from lorahub.api.terminal_runner import (
+    _TERMINAL_ONLY_IDS,
     TerminalDenied,
     TerminalSession,
-    _TERMINAL_ONLY_IDS,
     resolve_backend_session,
     stream_command,
 )
@@ -450,6 +451,9 @@ def _venv_has_pip(python_path: Path) -> bool:
             capture_output=True,
             timeout=5,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

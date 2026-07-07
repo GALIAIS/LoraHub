@@ -6,6 +6,7 @@ import json
 import random
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -625,6 +626,9 @@ def _run_anima_inference(
             stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if sys.platform == "win32"
+            else 0,
         )
         while proc.poll() is None:
             if cancel_evt.is_set():
