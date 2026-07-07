@@ -7,7 +7,6 @@ import {
   Play,
   RefreshCw,
   Replace,
-  Sparkles,
   Tag as TagIcon,
   Trash2,
   Wand2,
@@ -19,6 +18,7 @@ import {
   imageStudioCaptionsFindReplace,
   imageStudioCaptionsInjectTrigger,
   imageStudioCaptionsVocab,
+  startCaptionSession,
   startSmartCaptionSession,
   startTaggingSession,
   type CaptionDiff,
@@ -31,15 +31,9 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import {
-  AiCaptionTool,
   AiQualityTool,
-  AiSmartCaptionTool,
   AiTriggerWordsTool,
 } from "./annotate-ai-tools"
-import {
-  AiVlmAnimaRewriteTool,
-  AiWd14PrefilterTool,
-} from "./annotate-ai-single-image"
 import {
   useRefreshCaptionViewsOnTaskDone,
   useTaggerDownloadDisplay,
@@ -52,41 +46,29 @@ interface Props {
 
 const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 
-type PrimaryMode = "tags" | "caption"
+type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm"
 type DetailMode = "vocab" | "replace" | "trigger"
 
 const TOOL_TO_ANNOTATE_VIEW: Record<
   string,
-  { mode?: PrimaryMode; detail?: DetailMode }
+  { mode?: AnnotationMode; detail?: DetailMode }
 > = {
-  "tagging-wd14": { mode: "tags" },
+  "tagging-wd14": { mode: "tag" },
   "captions-vocab": { detail: "vocab" },
   "captions-find-replace": { detail: "replace" },
   "captions-inject-trigger": { detail: "trigger" },
   "captions-blacklist": { detail: "vocab" },
-  "ai-caption": { mode: "caption" },
-  "ai-smart-caption": { mode: "caption" },
-  "ai-wd14-prefilter": { mode: "tags" },
-  "ai-vlm-anima-rewrite": { mode: "caption" },
-  "ai-quality": { mode: "caption" },
+  "ai-caption": { mode: "nl" },
+  "ai-smart-caption": { mode: "tag-vlm" },
+  "ai-wd14-prefilter": { mode: "tag" },
+  "ai-vlm-anima-rewrite": { mode: "tag-vlm" },
+  "ai-quality": { mode: "nl" },
   "ai-trigger-words": { detail: "trigger" },
 }
 
 export function AnnotateStage({ datasetPath }: Props) {
   const [params] = useSearchParams()
   const tool = params.get("tool")
-  if (tool === "ai-caption") {
-    return <AiCaptionTool datasetPath={datasetPath} />
-  }
-  if (tool === "ai-smart-caption") {
-    return <AiSmartCaptionTool datasetPath={datasetPath} />
-  }
-  if (tool === "ai-wd14-prefilter") {
-    return <AiWd14PrefilterTool datasetPath={datasetPath} />
-  }
-  if (tool === "ai-vlm-anima-rewrite") {
-    return <AiVlmAnimaRewriteTool datasetPath={datasetPath} />
-  }
   if (tool === "ai-quality") {
     return <AiQualityTool datasetPath={datasetPath} />
   }
@@ -105,7 +87,7 @@ function AnnotateMainPanel({ datasetPath }: Props) {
   useRefreshCaptionViewsOnTaskDone(datasetPath)
   const tasks = useStudioTasksFor(datasetPath)
   const latestTask = [...tasks].sort((a, b) => b.startedAt - a.startedAt)[0]
-  const [mode, setMode] = useState<PrimaryMode>("tags")
+  const [mode, setMode] = useState<AnnotationMode>("tag")
   const [detail, setDetail] = useState<DetailMode>("vocab")
   const [model, setModel] = useState(FALLBACK_DEFAULT_MODEL)
   const [device, setDevice] = useState<"auto" | "cuda" | "cpu">("auto")
@@ -115,7 +97,6 @@ function AnnotateMainPanel({ datasetPath }: Props) {
   const [character, setCharacter] = useState(0.85)
   const [captionMode, setCaptionMode] =
     useState<"general" | "style" | "character">("style")
-  const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
   const [skipExisting, setSkipExisting] = useState(true)
   const [triggerWord, setTriggerWord] = useState("")
 
@@ -159,7 +140,7 @@ function AnnotateMainPanel({ datasetPath }: Props) {
 
   const startMutation = useMutation({
     mutationFn: async () => {
-      if (mode === "tags") {
+      if (mode === "tag") {
         const session = await startTaggingSession({
           path: datasetPath,
           model_id: model,
@@ -173,10 +154,27 @@ function AnnotateMainPanel({ datasetPath }: Props) {
           id: session.session_id,
           kind: "wd14",
           datasetPath,
-          label: "自动打标",
+          label: "TAG 模式",
         })
-        return "自动打标已启动"
+        return "TAG 模式已启动"
       }
+      if (mode === "nl") {
+        const session = await startCaptionSession({
+          path: datasetPath,
+          recursive,
+          skipAnnotated: skipExisting,
+          mergeStrategy: "replace",
+        })
+        addTask({
+          id: session.session_id,
+          kind: "caption",
+          datasetPath,
+          label: "NL 模式",
+          total: session.total,
+        })
+        return `NL 模式已启动，共 ${session.total} 张`
+      }
+      const captionSource = mode === "tag-llm" ? "tags" : "vlm"
       const session = await startSmartCaptionSession({
         path: datasetPath,
         recursive,
@@ -191,10 +189,10 @@ function AnnotateMainPanel({ datasetPath }: Props) {
         id: session.session_id,
         kind: "smart-caption",
         datasetPath,
-        label: "智能 Caption",
+        label: mode === "tag-llm" ? "TAG+LLM 模式" : "TAG+VLM 模式",
         total: session.total,
       })
-      return `智能 Caption 已启动，共 ${session.total} 张`
+      return `${mode === "tag-llm" ? "TAG+LLM" : "TAG+VLM"} 模式已启动，共 ${session.total} 张`
     },
     onSuccess: (message) => {
       toast.success(message)
@@ -214,32 +212,28 @@ function AnnotateMainPanel({ datasetPath }: Props) {
             <div className="border-b border-border/60 px-4 py-3">
               <div className="flex items-center gap-2">
                 <TagIcon className="size-4" />
-                <h2 className="text-sm font-semibold">标注任务</h2>
+                <h2 className="text-sm font-semibold">打标任务</h2>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                先完成自动标签或 Caption，再进入下方维护区清理词表。
+                选择一种模式后启动，结果统一写入图片同名 txt。
               </p>
             </div>
 
             <div className="space-y-4 p-4">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <ModeButton
-                  active={mode === "tags"}
-                  icon={<TagIcon className="size-4" />}
-                  title="自动标签"
-                  text="WD14/JoyTag 写入训练标签"
-                  onClick={() => setMode("tags")}
-                />
-                <ModeButton
-                  active={mode === "caption"}
-                  icon={<Sparkles className="size-4" />}
-                  title="智能 Caption"
-                  text="基于标签或视觉模型生成描述"
-                  onClick={() => setMode("caption")}
-                />
-              </div>
+              <Field label="模式">
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value as AnnotationMode)}
+                  className="h-9 w-full rounded border bg-background px-2 text-sm"
+                >
+                  <option value="tag">TAG 模式</option>
+                  <option value="nl">NL 模式</option>
+                  <option value="tag-llm">TAG+LLM 模式</option>
+                  <option value="tag-vlm">TAG+VLM 模式</option>
+                </select>
+              </Field>
 
-              {mode === "tags" ? (
+              {mode === "tag" ? (
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="模型">
                     <select
@@ -258,6 +252,14 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                   <NumberField label="通用阈值" value={general} onChange={setGeneral} />
                   <NumberField label="角色阈值" value={character} onChange={setCharacter} />
                 </div>
+              ) : mode === "nl" ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="输出">
+                    <div className="flex h-8 items-center rounded border bg-muted/25 px-2 text-xs text-muted-foreground">
+                      VLM 自然语言描述
+                    </div>
+                  </Field>
+                </div>
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
                   <DeviceSelect value={device} onChange={setDevice} />
@@ -275,14 +277,9 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                     </select>
                   </Field>
                   <Field label="来源">
-                    <select
-                      value={captionSource}
-                      onChange={(e) => setCaptionSource(e.target.value as "vlm" | "tags")}
-                      className="h-8 w-full rounded border bg-background px-2 text-xs"
-                    >
-                      <option value="vlm">视觉模型</option>
-                      <option value="tags">仅标签</option>
-                    </select>
+                    <div className="flex h-8 items-center rounded border bg-muted/25 px-2 text-xs text-muted-foreground">
+                      {mode === "tag-llm" ? "TAG → LLM 文本重写" : "TAG → VLM 视觉重写"}
+                    </div>
                   </Field>
                   <Field label="触发词">
                     <Input
@@ -297,7 +294,7 @@ function AnnotateMainPanel({ datasetPath }: Props) {
 
               <div className="flex flex-wrap items-center gap-4 border-t border-border/50 pt-3 text-xs">
                 <Toggle label="递归子目录" checked={recursive} onChange={setRecursive} />
-                {mode === "tags" ? (
+                {mode === "tag" ? (
                   <Toggle label="覆盖已有" checked={overwrite} onChange={setOverwrite} />
                 ) : (
                   <Toggle label="跳过已有 caption" checked={skipExisting} onChange={setSkipExisting} />
@@ -368,35 +365,6 @@ function AnnotateMainPanel({ datasetPath }: Props) {
         </div>
       </div>
     </div>
-  )
-}
-
-function ModeButton({
-  active,
-  icon,
-  title,
-  text,
-  onClick,
-}: {
-  active: boolean
-  icon: React.ReactNode
-  title: string
-  text: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-active={active || undefined}
-      className="rounded-md border border-border/60 p-3 text-left hover:bg-muted/30 data-[active=true]:border-ring data-[active=true]:bg-muted/45"
-    >
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {icon}
-        {title}
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">{text}</p>
-    </button>
   )
 }
 

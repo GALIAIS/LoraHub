@@ -1847,23 +1847,6 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     if route is None or not (route.provider_id and route.model_id):
         raise HTTPException(409, f"no AI route for task {body.visionTask!r}")
 
-    # Initialize WD14 tagger (cached per-process so we don't re-load 1.2GB
-    # of weights on every request). This is the only call we keep in the
-    # request thread — it takes ~1s on a warm cache and the UI freezing for
-    # a second is fine; running it in the background means the user has no
-    # signal that the tagger failed to load.
-    if body.useWd14:
-        tagger = _get_tagger(
-            body.taggerModel,
-            body.generalThreshold,
-            body.characterThreshold,
-            body.device,
-        )
-    else:
-        # WD14 disabled — caption is trigger + LLM nl_text only (or just
-        # the trigger word for style mode where the LLM is also off).
-        tagger = None
-
     images = _scan_images(directory, body.recursive)
     if body.skipExisting:
         # Drop images that already have a non-empty .txt sidecar.
@@ -2029,6 +2012,24 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
 
         try:
             _task_store().update(session.session_id, status="running", percent=0)
+            if body.useWd14:
+                session._append_task_event(
+                    "loading wd14",
+                    percent=0,
+                    payload={
+                        "model_id": body.taggerModel,
+                        "device": body.device,
+                    },
+                )
+                tagger = _get_tagger(
+                    body.taggerModel,
+                    body.generalThreshold,
+                    body.characterThreshold,
+                    body.device,
+                )
+            else:
+                # WD14 disabled — caption is trigger + LLM nl_text only.
+                tagger = None
             # Producer pool — small, GPU-bound. We use the executor as
             # a futures collector so we can apply a per-image timeout
             # against stage 1 (a hung WD14 forward shouldn't stall

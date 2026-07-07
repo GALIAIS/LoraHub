@@ -14,11 +14,11 @@ interface AiBulkModalProps {
 }
 
 const tabs: { id: AiBulkTab; label: string }[] = [
-  { id: "smart-caption", label: "智能标注" },
+  { id: "smart-caption", label: "标注" },
   { id: "quality-score", label: "质量评分" },
-  { id: "wd14", label: "WD14 标注" },
   { id: "trigger-words", label: "触发词候选" },
 ]
+type AnnotationMode = "tag" | "nl" | "tag-llm" | "tag-vlm"
 
 // Server-side fallback when ``/api/tagging/wd14/models`` hasn't
 // resolved yet — same id the backend defaults to. Without this the
@@ -29,6 +29,7 @@ const FALLBACK_DEFAULT_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
 
 export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModalProps) {
   const [activeTab, setActiveTab] = useState<AiBulkTab>("smart-caption")
+  const [annotationMode, setAnnotationMode] = useState<AnnotationMode>("tag-vlm")
   const [device, setDevice] = useState("auto")
   const [mergeStrategy, setMergeStrategy] = useState("replace")
   const [taggerModel, setTaggerModel] = useState<string>(FALLBACK_DEFAULT_MODEL)
@@ -40,7 +41,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
   // expensive, requires a vision-capable model + quota).
   // "tags" — text-only LLM composes from the WD14 tag list. Useful
   // when the configured VLM is rate-limited / quota-exhausted.
-  const [captionSource, setCaptionSource] = useState<"vlm" | "tags">("vlm")
+  const [captionSource] = useState<"vlm" | "tags">("vlm")
   const [triggerWord, setTriggerWord] = useState("")
   const [triggerPickerOpen, setTriggerPickerOpen] = useState(false)
   const [stripStyleTags, setStripStyleTags] = useState(true)
@@ -84,15 +85,27 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
     const base = { device, paths }
     switch (activeTab) {
       case "smart-caption":
+        if (annotationMode === "tag") {
+          onStart("wd14", {
+            ...base,
+            path: datasetPath,
+            model_id: taggerModel,
+            general: generalThreshold,
+            character: characterThreshold,
+            overwrite,
+          })
+          break
+        }
         onStart(activeTab, {
           ...base,
           mergeStrategy,
           path: datasetPath,
           captionMode,
-          captionSource,
+          captionSource:
+            annotationMode === "tag-llm" ? "tags" : annotationMode === "nl" ? "vlm" : captionSource,
           triggerWord: triggerWord.trim() || undefined,
           stripStyleTags,
-          useWd14,
+          useWd14: annotationMode !== "nl" && useWd14,
           skipExisting: skipDone,
         })
         break
@@ -101,16 +114,6 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
           ...base,
           path: datasetPath,
           skipScored: skipDone,
-        })
-        break
-      case "wd14":
-        onStart(activeTab, {
-          ...base,
-          path: datasetPath,
-          model_id: taggerModel,
-          general: generalThreshold,
-          character: characterThreshold,
-          overwrite,
         })
         break
       case "trigger-words":
@@ -174,10 +177,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
             </select>
           </label>
 
-          {/* Shared "skip done" toggle. WD14 has its own overwrite control
-              right inside the wd14 panel below, so we only show this for
-              the four non-WD14 tabs. */}
-          {activeTab !== "wd14" && (
+          {activeTab !== "smart-caption" || annotationMode !== "tag" ? (
             <label className="flex items-center gap-1.5 text-xs mb-3">
               <input
                 type="checkbox"
@@ -200,14 +200,84 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                 })
               </span>
             </label>
-          )}
+          ) : null}
 
           {activeTab === "smart-caption" && (
             <div className="flex flex-col gap-3">
-              <p className="text-xs text-muted-foreground">
-                WD14 标签 + LLM 综合标注，按训练用途自动调整 prompt
-              </p>
-              <label className="flex items-center gap-1.5 text-xs">
+              <label className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-16">模式</span>
+                <select
+                  value={annotationMode}
+                  onChange={(e) => setAnnotationMode(e.target.value as AnnotationMode)}
+                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                >
+                  <option value="tag">TAG 模式</option>
+                  <option value="nl">NL 模式</option>
+                  <option value="tag-llm">TAG+LLM 模式</option>
+                  <option value="tag-vlm">TAG+VLM 模式</option>
+                </select>
+              </label>
+              {annotationMode === "tag" ? (
+                <>
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-16">模型</span>
+                    <select
+                      value={taggerModel}
+                      onChange={(e) => setTaggerModel(e.target.value)}
+                      className="rounded border bg-background px-2 py-1 text-xs flex-1"
+                    >
+                      {wd14Options.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-16">通用阈值</span>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      max="1"
+                      value={generalThreshold}
+                      onChange={(e) => setGeneralThreshold(Number(e.target.value))}
+                      className="rounded border bg-background px-2 py-1 text-xs w-20"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-16">角色阈值</span>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      max="1"
+                      value={characterThreshold}
+                      onChange={(e) => setCharacterThreshold(Number(e.target.value))}
+                      className="rounded border bg-background px-2 py-1 text-xs w-20"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={overwrite}
+                      onChange={(e) => setOverwrite(e.target.checked)}
+                      className="size-3"
+                    />
+                    覆盖已有标签
+                  </label>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    {annotationMode === "nl"
+                      ? "视觉模型直接生成自然语言 caption，不调用 WD14。"
+                      : annotationMode === "tag-llm"
+                        ? "先生成 TAG，再由 LLM 按训练用途重写 caption。"
+                        : "先生成 TAG，再由 VLM 看图按训练用途重写 caption。"}
+                  </p>
+                  {annotationMode !== "nl" && (
+                    <label className="flex items-center gap-1.5 text-xs">
                 <input
                   type="checkbox"
                   checked={useWd14}
@@ -219,31 +289,23 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   （关闭后仅用 LLM 描述 + 触发词，不调用 WD14 模型）
                 </span>
               </label>
-              <label className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16">LLM 输入</span>
-                <select
-                  value={captionSource}
-                  onChange={(e) => setCaptionSource(e.target.value as typeof captionSource)}
-                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
-                  disabled={!useWd14 && captionMode === "style"}
-                >
-                  <option value="vlm">视觉模型（看图）</option>
-                  <option value="tags">仅 WD14 标签 · 不上传图片</option>
-                </select>
-              </label>
+                  )}
               <p className="text-[11px] text-muted-foreground/80 -mt-1.5 pl-[4.5rem]">
-                {!useWd14 && captionMode === "style"
+                {annotationMode === "nl"
+                  ? "自然语言模式适合快速生成描述，不输出 booru tag。"
+                  : !useWd14 && captionMode === "style"
                   ? "WD14 关闭 + 风格模式：caption 仅含触发词，不调用 LLM。"
                   : !useWd14
                     ? "WD14 已关闭：LLM 直接看图描述并自行写 caption（无标签参考）。"
-                    : captionMode === "style"
+                  : captionMode === "style"
                       ? "风格模式：LLM 看图（或 WD14 标签）后输出『描述 + 修正后的标签』，过滤掉画风词与矛盾标签。caption 末尾不再硬拼接原始 WD14。"
                       : captionMode === "character"
                         ? "角色模式：LLM 输出『描述 + 修正后的标签』，过滤掉外貌身份词（hair / eyes / skin / body）与矛盾标签。"
-                        : captionSource === "tags"
+                        : annotationMode === "tag-llm"
                           ? "LLM 不会看到图片，仅根据 WD14 标签列表撰写。提示词已针对此场景优化，避免凭空虚构。"
                           : "多模态模型直接读取图片。若服务商额度耗尽或当前模型不支持视觉，可切换为「仅标签」。"}
               </p>
+              {annotationMode !== "nl" && (
               <label className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">训练用途</span>
                 <select
@@ -256,6 +318,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   <option value="general">通用（描述全部内容）</option>
                 </select>
               </label>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground w-16">触发词</span>
                 <div className="relative flex-1 flex items-center gap-1">
@@ -295,7 +358,7 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   <option value="prepend">前置</option>
                 </select>
               </label>
-              {captionMode === "style" && useWd14 && (
+              {annotationMode !== "nl" && captionMode === "style" && useWd14 && (
                 <label className="flex items-center gap-1.5 text-xs">
                   <input
                     type="checkbox"
@@ -306,6 +369,8 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
                   自动剔除画风/质量类 WD14 标签（anime / illustration / masterpiece 等）
                 </label>
               )}
+                </>
+              )}
             </div>
           )}
 
@@ -313,61 +378,6 @@ export function AiBulkModal({ paths, datasetPath, onClose, onStart }: AiBulkModa
             <p className="text-xs text-muted-foreground">
               使用 AI 模型对图片质量进行评分（优 / 中 / 差）
             </p>
-          )}
-
-          {activeTab === "wd14" && (
-            <div className="flex flex-col gap-3">
-              <p className="text-xs text-muted-foreground">
-                运行 WD14/JoyTag 标注器生成标签
-              </p>
-              <label className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16">模型</span>
-                <select
-                  value={taggerModel}
-                  onChange={(e) => setTaggerModel(e.target.value)}
-                  className="rounded border bg-background px-2 py-1 text-xs flex-1"
-                >
-                  {wd14Options.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16">通用阈值</span>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="1"
-                  value={generalThreshold}
-                  onChange={(e) => setGeneralThreshold(Number(e.target.value))}
-                  className="rounded border bg-background px-2 py-1 text-xs w-20"
-                />
-              </label>
-              <label className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16">角色阈值</span>
-                <input
-                  type="number"
-                  step="0.05"
-                  min="0"
-                  max="1"
-                  value={characterThreshold}
-                  onChange={(e) => setCharacterThreshold(Number(e.target.value))}
-                  className="rounded border bg-background px-2 py-1 text-xs w-20"
-                />
-              </label>
-              <label className="flex items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  checked={overwrite}
-                  onChange={(e) => setOverwrite(e.target.checked)}
-                  className="size-3"
-                />
-                覆盖已有标签
-              </label>
-            </div>
           )}
 
           {activeTab === "trigger-words" && (
