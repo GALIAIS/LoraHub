@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { FlipHorizontal, Heart, ImageOff, Maximize2, Pencil, RotateCw, Save, Sparkles, Trash2, X } from "lucide-react"
+import { FlipHorizontal, Heart, ImageOff, Maximize2, Pencil, RotateCw, Save, Sparkles, Star, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   api,
@@ -22,7 +22,20 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
 import { TagChipEditor } from "./tag-chip-editor"
+
+const MANUAL_QUALITY_STARS = [1, 2, 3, 4, 5] as const
+
+function normalizeManualQuality(value: string | null | undefined): number | null {
+  if (!value) return null
+  const match = /^star_([1-5])$/.exec(value)
+  if (match) return Number(match[1])
+  if (value === "good") return 5
+  if (value === "ok" || value === "medium") return 3
+  if (value === "bad") return 1
+  return null
+}
 
 interface InspectorProps {
   detail: ImageStudioDetailItem | null
@@ -143,6 +156,7 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
   }
 
   const displayedCaption = optimisticCaption ?? detail?.caption ?? ""
+  const manualQuality = normalizeManualQuality(detail?.annotation?.userQualityLabel)
 
   return (
     <aside className="shiro-page-aside w-[22rem] shrink-0 overflow-y-auto p-3">
@@ -301,24 +315,35 @@ export function Inspector({ detail, loading, path, onClose, onOpenLightbox }: In
 
           <div className="flex flex-col gap-1">
             <span className="text-xs font-medium">人工质量评级</span>
-            <div className="flex gap-1">
-              {(["good", "ok", "bad"] as const).map((label) => {
-                const active = detail.annotation?.userQualityLabel === label
+            <div className="flex items-center gap-1">
+              {MANUAL_QUALITY_STARS.map((value) => {
+                const active = manualQuality != null && value <= manualQuality
+                const next = `star_${value}`
                 return (
                   <Button
-                    key={label}
-                    variant={active ? "default" : "outline"}
-                    size="sm"
-                    className="h-7 flex-1 text-[11px]"
+                    key={value}
+                    variant="ghost"
+                    size="icon-sm"
+                    className={cn(
+                      "size-7 rounded-[6px] text-muted-foreground hover:text-primary",
+                      active && "text-primary",
+                    )}
                     onClick={() =>
-                      qualityMutation.mutate(active ? null : label)
+                      qualityMutation.mutate(manualQuality === value ? null : next)
                     }
                     disabled={qualityMutation.isPending}
+                    title={`${value} 星`}
+                    aria-label={`设为 ${value} 星`}
                   >
-                    {label === "good" ? "优" : label === "ok" ? "中" : "差"}
+                    <Star className={cn("size-4", active && "fill-current")} />
                   </Button>
                 )
               })}
+              {manualQuality != null && (
+                <span className="ml-1 text-[11px] text-muted-foreground tabular-nums">
+                  {manualQuality}/5
+                </span>
+              )}
             </div>
           </div>
 

@@ -12,8 +12,8 @@ from __future__ import annotations
 
 # Used by the `caption.rewrite` and `tagging.assist` routes, plus the
 # Image Studio "AI 标注" preset. The text is an end-to-end prompt: the
-# VLM is expected to emit the *full* training caption (rating prefix +
-# count + char trigger + series + artist + tag list + 2+ NL sentences),
+# VLM is expected to emit the *full* training caption (count + char
+# trigger + series + artist + tag list + 2+ NL sentences),
 # not just the natural-language sentence the smart-caption pipeline
 # builds incrementally.
 ANIMA_CAPTION_PROMPT = """你是一个专门为 Anima Base 扩散模型（DiT + Qwen3 TE）生成训练标注的 AI。你的任务是根据输入的图像，生成严格符合 Anima 官方推荐格式的文本标注（caption）。直接输出标注内容，不要包含任何开场白、解释或代码块标记。
@@ -21,12 +21,10 @@ ANIMA_CAPTION_PROMPT = """你是一个专门为 Anima Base 扩散模型（DiT + 
 标注格式要求
 基础规则
   - 所有标签使用全小写，用空格分隔（下划线 _ 一律替换为空格）。
-  - 评分/安全标签例外，保留原样（如 score_7、score_6）。
-  - 必须以前缀开头：masterpiece, best quality, score_7, safe,
-   （如果图像明显属于敏感内容，可将 safe 替换为 sensitive 或 nsfw，但尽量保持 safe 若非必要）。
+  - 不要自动添加质量、评分、安全前缀；即使输入里出现这些前缀，也不要写入最终标注。
 
 标签顺序（强烈遵循）
-  [quality/rating/safety] [计数] [角色触发词] [系列名] [artist (@名称)] [通用标签]
+  [计数] [角色触发词] [系列名] [artist (@名称)] [通用标签]
   - 计数示例：1girl、solo、2boys、1girl, 1boy 等。
   - 角色触发词：仅当你能准确识别出知名角色时，才添加角色触发词（如 kanachan、hatsune miku）。否则跳过。
   - 系列名：若识别出系列（如 genshin impact），可填入，否则省略。
@@ -49,14 +47,12 @@ ANIMA_CAPTION_PROMPT = """你是一个专门为 Anima Base 扩散模型（DiT + 
 
 示例参考（格式示例，不要原样照抄）
 示例1（角色图像）
-masterpiece, best quality, score_7, safe,
 1girl, solo, kanachan,
 A close-up portrait of a young girl with an angry expression looking directly at the viewer. Her bound hair with a blue scrunchie is visible on the right side of the image, and a small ahoge rises from the top of her head.
 brown eyes, left side ponytail, ahoge, brown hair, double parted bangs, medium hair, blue scrunchie, angry, frown, looking at viewer, portrait, bare shoulders,
 white background, simple background
 
 示例2（风格插画）
-masterpiece, best quality, score_7, safe,
 1girl, @my_artist_style,
 A vibrant anime illustration in a detailed lineart style with soft cel shading and dynamic lighting. The scene features intricate backgrounds and expressive poses.
 highres, detailed background, dynamic angle, vibrant colors, painterly, clean lines

@@ -983,14 +983,22 @@ def ai_batch_quality_cancel(session_id: str) -> dict[str, Any]:
 # Smart caption (WD14 + Vision LLM)
 # --------------------------------------------------------------------------- #
 
-# Tags that are pure quality/medium noise (the Anima header carries quality
-# explicitly, so don't double-print them in the general-tag section).
+# Tags that are pure quality/medium noise; don't auto-carry them into
+# generated training captions.
 _QUALITY_NOISE_TAGS = {
     "highres", "absurdres", "best quality", "masterpiece", "high quality",
     "low quality", "worst quality", "normal quality", "lowres",
     "official art", "key visual", "promotional art", "screencap",
     "artist name", "signature", "watermark", "logo", "english text",
     "dated", "twitter username", "patreon username", "artist logo",
+    "score_7", "safe",
+}
+_FORBIDDEN_CAPTION_TAGS = {
+    "masterpiece",
+    "best quality",
+    "score_7",
+    "score 7",
+    "safe",
 }
 
 # Style / medium / rendering descriptors. Stripped when the user asks for
@@ -1141,14 +1149,6 @@ def _drop_appearance_tags(tags: list[str]) -> list[str]:
     correlated with the character's appearance across the dataset.
     """
     return [t for t in tags if not _is_appearance_tag(t)]
-
-# Map WD14 rating tag -> Anima rating keyword for the header line.
-_RATING_MAP = {
-    "general": "safe",
-    "sensitive": "sensitive",
-    "questionable": "nsfw",
-    "explicit": "nsfw",
-}
 
 # Process-level cache for loaded WD14 taggers, keyed by full config tuple.
 # EVA02-large weights are ~1.2GB so re-loading per request kills throughput.
@@ -1385,6 +1385,23 @@ def _split_normalize_tags(raw: str) -> list[str]:
     return out
 
 
+def _strip_forbidden_caption_tags(text: str) -> str:
+    """Remove tags that LoraHub must never auto-write into captions."""
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        kept: list[str] = []
+        for piece in line.split(","):
+            token = piece.strip()
+            low = token.lower()
+            if low in _FORBIDDEN_CAPTION_TAGS or low.replace("_", " ") in _FORBIDDEN_CAPTION_TAGS:
+                continue
+            if token:
+                kept.append(token)
+        if kept:
+            cleaned_lines.append(", ".join(kept))
+    return "\n".join(cleaned_lines).strip()
+
+
 def _toriigate_user_query(s1: _StageOneResult, caption_mode: str) -> str:
     drop = set(_QUALITY_NOISE_TAGS)
     if caption_mode == "style":
@@ -1449,11 +1466,10 @@ def _build_anima_caption(
 
     Layout (trigger-first):
       <trigger word>,
-      masterpiece, best quality, score_7, <safe|sensitive|nsfw>,
       [1girl/1boy/etc],            # subject-count tag from WD14
       [WD14 character predictions],
       <LLM payload>                # sentences + LLM-pruned tag list
-                                   # (or empty when skip_llm path took over)
+                                    # (or empty when skip_llm path took over)
 
     The LLM output is expected to contain BOTH the natural-language
     description AND a corrected/filtered tag list (Part 1 + Part 2 in
@@ -1473,11 +1489,7 @@ def _build_anima_caption(
     Part 2 list inside ``nl_text``. ``strip_style_tags`` is now a
     pure stage-one knob; the in-caption rebuild ignores it.
     """
-    rating = _RATING_MAP.get((rating_tag or "").lower(), "safe")
-    header = f"masterpiece, best quality, score_7, {rating}"
-
-    # Pick subject-count tag (1girl, 2girls, 1boy, etc.) — Anima wants
-    # this immediately after the header. Everything else from
+    # Pick subject-count tag (1girl, 2girls, 1boy, etc.). Everything else from
     # ``general_tags`` is intentionally dropped: the LLM has already
     # written its own pruned tag list inside ``nl_text``.
     subject_pattern = (
@@ -1500,14 +1512,15 @@ def _build_anima_caption(
     # Trigger word leads — kohya keep_tokens convention.
     if trig:
         parts.append(trig)
-    parts.append(header)
+    line2 = _strip_forbidden_caption_tags(line2)
+    nl_clean = _strip_forbidden_caption_tags(nl_text.strip())
     if line2:
         parts.append(line2)
-    if nl_text.strip():
-        parts.append(nl_text.strip())
+    if nl_clean:
+        parts.append(nl_clean)
     # Suppress unused-arg linter: kept in signature for back-compat
     # callers + future reintroduction of stage-three filtering.
-    _ = strip_style_tags
+    _ = (rating_tag, strip_style_tags)
     return ",\n".join(parts)
 
 
@@ -1626,7 +1639,7 @@ def _smart_caption_stage_one(
     every tag-derived field is empty; ``tagger`` may be ``None``.
 
     The LLM is the source of truth for everything except the trigger
-    word and the rating/header — its output covers both natural-
+    word — its output covers both natural-
     language description AND the pruned-and-corrected tag list. The
     backend no longer re-pastes raw WD14 output into the caption tail
     because that's exactly the path that lets contradictions and

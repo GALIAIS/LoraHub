@@ -446,6 +446,25 @@ def test_toriigate_stage_one_uses_official_short_prompt() -> None:
     assert "kuwayama_chiyuki" in prompt
 
 
+def test_smart_caption_does_not_inject_quality_rating_prefix() -> None:
+    from lorahub.api.routers.image_studio import ai as ai_router
+
+    caption = ai_router._build_anima_caption(
+        rating_tag="general",
+        general_tags=["1girl", "masterpiece", "score_7"],
+        character_tags=[],
+        nl_text="masterpiece, brown hair, score_7, safe, smiling, best quality",
+        caption_mode="general",
+        trigger_word=None,
+    )
+
+    assert caption == "1girl,\nbrown hair, smiling"
+    assert "masterpiece" not in caption
+    assert "best quality" not in caption
+    assert "score_7" not in caption
+    assert "safe" not in caption
+
+
 @pytest.mark.parametrize(
     ("kind", "url"),
     [

@@ -237,7 +237,8 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
             ("config.recommend", "智能推荐:LLM 根据硬件 / 数据集 / 用户意图给训练配置建议"),
         )
         for task_id, hint in _LORAHUB_TASKS:
-            if _ai_store.get_route(task_id) is None:
+            route = _ai_store.get_route(task_id)
+            if route is None:
                 # Caption-shaped tasks get the Anima recommended prompt
                 # as a starting point so a fresh install can run AI
                 # captioning end-to-end without the user hand-writing
@@ -259,6 +260,16 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
                     )
                 )
                 log.debug("seeded empty AI route for %s (%s)", task_id, hint)
+            elif (
+                task_id in ANIMA_CAPTION_DEFAULT_TASKS
+                and all(
+                    token in route.system_prompt
+                    for token in ("masterpiece", "best quality", "score_7")
+                )
+            ):
+                route.system_prompt = ANIMA_CAPTION_PROMPT
+                _ai_store.upsert_route(route)
+                log.debug("refreshed legacy AI caption prompt for %s", task_id)
 
     if _image_studio_library is None:
         # Reuse the studio sqlite file — disjoint table prefixes mean a

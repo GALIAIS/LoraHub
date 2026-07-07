@@ -3,7 +3,7 @@ import type { ImageStudioItem } from "@/lib/api"
 // Filter state for the filter panel
 export interface FilterState {
   caption: "all" | "has" | "missing"
-  quality: "all" | "good" | "medium" | "bad" | "unrated" | "favorite"
+  quality: "all" | "star_5" | "star_4" | "star_3" | "star_2" | "star_1" | "unrated" | "favorite"
   aspect: "all" | "landscape" | "portrait" | "square"
   /** Free-text search over caption + filename. Empty string disables. */
   search: string
@@ -109,13 +109,13 @@ export function applyFilters(
 
     // Quality filter
     if (filters.quality !== "all") {
-      const label = item.annotation?.aiQualityLabel ?? item.annotation?.userQualityLabel
+      const userQuality = normalizeManualQuality(item.annotation?.userQualityLabel)
       if (filters.quality === "favorite") {
         if (!item.annotation?.favorite) return false
       } else if (filters.quality === "unrated") {
-        if (label) return false
+        if (item.annotation?.aiQualityLabel || item.annotation?.userQualityLabel) return false
       } else {
-        if (label !== filters.quality) return false
+        if (userQuality !== filters.quality) return false
       }
     }
 
@@ -129,6 +129,15 @@ export function applyFilters(
 
     return true
   })
+}
+
+function normalizeManualQuality(value: string | null | undefined): FilterState["quality"] | null {
+  if (!value) return null
+  if (/^star_[1-5]$/.test(value)) return value as FilterState["quality"]
+  if (value === "good") return "star_5"
+  if (value === "ok" || value === "medium") return "star_3"
+  if (value === "bad") return "star_1"
+  return null
 }
 
 /**

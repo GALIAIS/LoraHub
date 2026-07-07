@@ -125,9 +125,11 @@ export function FilterPanel({
         <FilterRadio
           options={[
             { value: "all", label: "全部" },
-            { value: "good", label: "优" },
-            { value: "medium", label: "中" },
-            { value: "bad", label: "差" },
+            { value: "star_5", label: "5 星" },
+            { value: "star_4", label: "4 星" },
+            { value: "star_3", label: "3 星" },
+            { value: "star_2", label: "2 星" },
+            { value: "star_1", label: "1 星" },
             { value: "unrated", label: "未评" },
             { value: "favorite", label: "收藏" },
           ]}
@@ -391,10 +393,15 @@ function summarizePreset(state: FilterState): string {
   const parts: string[] = []
   if (state.search) parts.push(`搜="${state.search}"`)
   if (state.caption !== "all") parts.push(`描述=${state.caption}`)
-  if (state.quality !== "all") parts.push(`质量=${state.quality}`)
+  if (state.quality !== "all") parts.push(`质量=${formatQualityFilter(state.quality)}`)
   if (state.aspect !== "all") parts.push(`宽高比=${state.aspect}`)
   if (state.subdir) parts.push(`子目录=${state.subdir}`)
   return parts.length === 0 ? "默认筛选" : parts.join(" · ")
+}
+
+function formatQualityFilter(value: FilterState["quality"]): string {
+  const match = /^star_([1-5])$/.exec(value)
+  return match ? `${match[1]}星` : value
 }
 
 function cryptoRandomId(): string {
