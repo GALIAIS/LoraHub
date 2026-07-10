@@ -422,7 +422,11 @@ def test_apply_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 
     su.apply(channel="main", build=False, progress=emit)
 
-    fetched = any(c[:2] == ["git", "fetch"] for c in calls)
+    fetched = any(
+        c[:2] == ["git", "fetch"]
+        and "+refs/heads/dev:refs/remotes/origin/dev" in c
+        for c in calls
+    )
     checked_out_dev = any(c == ["git", "checkout", "origin/dev"] for c in calls)
     assert fetched and checked_out_dev, calls
     assert any(p == "done" for p, _, _ in events)
@@ -435,7 +439,43 @@ def test_apply_tag_updates_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     su.apply(channel="tag", build=False, progress=emit)
 
+    assert any(
+        "+refs/heads/main:refs/remotes/origin/main" in call for call in calls
+    ), calls
     assert any(c == ["git", "checkout", "origin/main"] for c in calls), calls
+
+
+def test_apply_tag_can_restore_verified_release(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    _run_git(["tag", "v1.0.8"], cwd=repo)
+    sha = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    calls = _stub_apply(monkeypatch, repo)
+    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: sha)
+    events, emit = _capturing_emit()
+
+    su.apply(channel="tag", target_tag="v1.0.8", build=False, progress=emit)
+
+    assert ["git", "checkout", "refs/tags/v1.0.8"] in calls
+
+
+@pytest.mark.parametrize(
+    ("channel", "target_tag"),
+    [("dev", "v1.0.8"), ("tag", "v1.0.8-rc1"), ("tag", "main")],
+)
+def test_apply_rejects_invalid_release_target(
+    channel: str,
+    target_tag: str,
+) -> None:
+    with pytest.raises(ValueError, match="stable vX.Y.Z"):
+        su.apply(channel=channel, target_tag=target_tag)  # type: ignore[arg-type]
 
 
 def test_apply_refuses_detached_head_without_force(
@@ -736,6 +776,27 @@ def test_check_marks_zip_install_as_non_git(
     assert info.install_kind == "archive"
     assert info.version_source == "changelog"
     assert info.current == "0.4.0"
+
+
+def test_list_release_history_sorts_and_filters_stable_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        su,
+        "_fetch_json",
+        lambda _url: [
+            {"name": "v1.0.9", "commit": {"sha": "sha109"}},
+            {"name": "docs-v2", "commit": {"sha": "docs"}},
+            {"name": "v1.1.1", "commit": {"sha": "sha111"}},
+            {"name": "v1.1.0-rc1", "commit": {"sha": "rc"}},
+            {"name": "v1.1.0", "commit": {"sha": "sha110"}},
+        ],
+    )
+
+    releases = su.list_release_history(limit=2)
+
+    assert [release["tag_name"] for release in releases] == ["v1.1.1", "v1.1.0"]
+    assert releases[0]["commit"] == "sha111"
 
 
 def test_check_marks_docker_install_as_non_updatable(

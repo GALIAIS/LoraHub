@@ -196,6 +196,64 @@ def test_system_update_writes_task_session(
     ]
 
 
+def test_system_release_history(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from lorahub.api.routers import system as system_router
+
+    monkeypatch.setattr(
+        system_router.system_update,
+        "list_release_history",
+        lambda limit: [
+            {
+                "tag_name": "v1.1.1",
+                "commit": "abc123",
+            }
+        ][:limit],
+    )
+
+    response = client.get("/api/system/releases?limit=3")
+
+    assert response.status_code == 200
+    assert response.json()["releases"][0]["tag_name"] == "v1.1.1"
+
+
+def test_system_update_passes_release_target(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import system as system_router
+
+    received: dict[str, Any] = {}
+
+    def fake_apply(**kwargs: Any) -> None:
+        received.update(kwargs)
+        kwargs["progress"]("done", "info", "rollback applied")
+
+    monkeypatch.setattr(system_router.system_update, "apply", fake_apply)
+
+    response = client.post(
+        "/api/system/update",
+        json={
+            "channel": "tag",
+            "target_tag": "v1.0.9",
+            "build": False,
+            "restart": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert received["target_tag"] == "v1.0.9"
+    latest = client.get("/api/tasks/latest?kind=system_update").json()
+    assert latest["metadata"]["target_tag"] == "v1.0.9"
+
+
+def test_system_update_rejects_release_target_on_dev(client: TestClient) -> None:
+    response = client.post(
+        "/api/system/update",
+        json={"channel": "dev", "target_tag": "v1.0.9", "restart": False},
+    )
+
+    assert response.status_code == 422
+
+
 def test_config_schema_is_valid_json_schema(client: TestClient) -> None:
     r = client.get("/api/configs/schema")
     assert r.status_code == 200

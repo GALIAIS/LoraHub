@@ -51,7 +51,12 @@ import type {
   AIInvokeTaskInput,
   AIInvokeTaskResult,
 } from "./ai"
-import type { SystemSnapshot, UpdateInfo, UpdateEvent } from "./system"
+import type {
+  ReleaseVersion,
+  SystemSnapshot,
+  UpdateInfo,
+  UpdateEvent,
+} from "./system"
 import type { TaskSessionRecord } from "./tasks"
 import type {
   LoraTestGenerateInput,
@@ -514,6 +519,10 @@ export const api = {
       return { ...legacy, channel: "dev" }
     }
   },
+  listSystemReleases: (limit = 6) =>
+    http<{ releases: ReleaseVersion[] }>(
+      `/system/releases?limit=${encodeURIComponent(limit)}`,
+    ),
   /**
    * Run a self-update via the SSE stream endpoint. ``onEvent`` fires
    * for every progress line; the returned promise resolves when the
@@ -526,6 +535,7 @@ export const api = {
       build: boolean
       restart: boolean
       force?: boolean
+      target_tag?: string
     },
     onEvent: (ev: UpdateEvent) => void,
     signal?: AbortSignal,

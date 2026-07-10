@@ -216,6 +216,11 @@ export interface UpdateEvent {
   message: string
 }
 
+export interface ReleaseVersion {
+  tag_name: string
+  commit: string | null
+}
+
 /**
  * Subscribe to /api/system/sse for hardware telemetry. Falls back to the
  * legacy WS endpoint when EventSource isn't available.

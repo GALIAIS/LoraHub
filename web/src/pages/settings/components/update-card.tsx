@@ -2,9 +2,8 @@
  * Self-update card — version check + one-click upgrade.
  *
  * The card mirrors ShiroManager's update-status panel:
- *  - Shows current vs latest tag/commit on the chosen channel.
- *  - Lets the user pick channel: ``tag`` (release cuts, default) or
- *    ``main`` (bleeding edge).
+ *  - Shows the running version plus formal and development update targets.
+ *  - Update targets are one-shot actions, not a persisted branch preference.
  *  - "立即更新" runs the SSE-streamed upgrade (git → deps → build) and
  *    by default re-execs the daemon at the end so the new code wins
  *    without the user having to touch the shell.
@@ -18,6 +17,8 @@ import {
   CheckCircle,
   Download,
   ExternalLink,
+  GitBranch,
+  History,
   Loader2,
   RefreshCw,
 } from "lucide-react"
@@ -47,10 +48,12 @@ import {
 } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
@@ -63,6 +66,26 @@ const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
 }
 
 const ACTIVE_UPDATE_TASK_STATUSES = new Set(["pending", "running"])
+
+interface RequestedUpdate {
+  channel: UpdateChannel
+  label: string
+  targetTag?: string
+}
+
+interface UpdateTargetRowProps {
+  title: string
+  description: string
+  version: string
+  detail: string
+  tone: string
+  updateAvailable: boolean
+  loading: boolean
+  error?: string | null
+  disabled: boolean
+  buttonLabel: string
+  onApply: () => void
+}
 
 function isUpdateEvent(value: unknown): value is UpdateEvent {
   if (!value || typeof value !== "object") return false
@@ -111,28 +134,95 @@ function currentDetailLabel(
   return info?.current ?? "—"
 }
 
+function currentVersionTone(
+  info: ReturnType<typeof useSystemVersion>["data"],
+): string {
+  return /(^|[-.])dev([-.]|$)/i.test(info?.current ?? "")
+    ? channelVersionTone("dev")
+    : channelVersionTone("tag")
+}
+
 function remoteDetailLabel(
   info: ReturnType<typeof useSystemVersion>["data"],
 ): string {
   return info?.latest_commit?.slice(0, 7) ?? info?.tag_name ?? info?.latest ?? "—"
 }
 
+function UpdateTargetRow({
+  title,
+  description,
+  version,
+  detail,
+  tone,
+  updateAvailable,
+  loading,
+  error,
+  disabled,
+  buttonLabel,
+  onApply,
+}: UpdateTargetRowProps) {
+  const actionLabel = loading
+    ? "检查中…"
+    : error
+      ? "检查失败"
+      : updateAvailable
+        ? buttonLabel
+        : "已是最新"
+  const showDetail = detail !== "—" && detail !== version
+
+  return (
+    <div className="grid gap-3 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-[13px] font-medium">{title}</span>
+          <code className={cn("font-mono text-[11px] font-medium", tone)}>
+            {version}
+          </code>
+          {showDetail && (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {detail}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
+      </div>
+      <Button
+        size="sm"
+        variant={updateAvailable && !error ? "default" : "outline"}
+        className="w-full sm:w-auto"
+        disabled={disabled || loading || Boolean(error) || !updateAvailable}
+        onClick={onApply}
+        title={error ?? undefined}
+      >
+        {loading ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : updateAvailable && !error ? (
+          <Download className="size-3" />
+        ) : error ? (
+          <AlertTriangle className="size-3" />
+        ) : (
+          <CheckCircle className="size-3" />
+        )}
+        {actionLabel}
+      </Button>
+    </div>
+  )
+}
+
 export function UpdateCard() {
   const qc = useQueryClient()
-  const [channel, setChannel] = useState<UpdateChannel>("tag")
   const tagVersion = useSystemVersion("tag")
   const devVersion = useSystemVersion("dev")
-  const version = channel === "tag" ? tagVersion : devVersion
+  const version = tagVersion
   const [restart, setRestart] = useState(true)
   const [build, setBuild] = useState(true)
   // ``force`` discards local changes (git reset --hard + clean -fd)
   // before checkout. Destructive — guarded by the AlertDialog below.
   const [force, setForce] = useState(false)
-  // Two-phase confirm: when force is on, the apply button instead
-  // pops a dialog asking the user to acknowledge what they're about
-  // to lose. Cancel rolls force back to false; confirm runs the
-  // upgrade.
+  // Force updates and release rollbacks require explicit confirmation.
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [requestedUpdate, setRequestedUpdate] = useState<RequestedUpdate | null>(null)
+  const [rollbackTag, setRollbackTag] = useState("")
   const [events, setEvents] = useState<UpdateEvent[]>([])
   const [running, setRunning] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -147,6 +237,19 @@ export function UpdateCard() {
       query.state.data?.status === "running" ? 3000 : false,
     throwOnError: false,
   })
+
+  const releases = useQuery({
+    queryKey: ["system-releases"],
+    queryFn: () => api.listSystemReleases(6),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
+
+  useEffect(() => {
+    if (!rollbackTag && releases.data?.releases[0]) {
+      setRollbackTag(releases.data.releases[0].tag_name)
+    }
+  }, [releases.data?.releases, rollbackTag])
 
   // Auto-scroll the log to the latest line as events stream in.
   useEffect(() => {
@@ -166,20 +269,36 @@ export function UpdateCard() {
   }, [events.length, latestUpdateTask.data, running])
 
   const recheck = useMutation({
-    mutationFn: () => api.getSystemVersion(channel, true),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["system-version", channel] })
+    mutationFn: async () => {
+      const [tag, dev] = await Promise.all([
+        api.getSystemVersion("tag", true),
+        api.getSystemVersion("dev", true),
+      ])
+      return { tag, dev }
+    },
+    onSuccess: ({ tag, dev }) => {
+      qc.setQueryData(["system-version", "tag"], tag)
+      qc.setQueryData(["system-version", "dev"], dev)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["system-releases"] })
     },
   })
 
-  const runUpdate = async () => {
+  const runUpdate = async (target: RequestedUpdate) => {
     setEvents([])
     setRunning(true)
     const ac = new AbortController()
     abortRef.current = ac
     try {
       await api.applySystemUpdate(
-        { channel, build, restart, force },
+        {
+          channel: target.channel,
+          build,
+          restart,
+          force,
+          target_tag: target.targetTag,
+        },
         (ev) => setEvents((prev) => [...prev, ev]),
         ac.signal,
       )
@@ -191,21 +310,21 @@ export function UpdateCard() {
       ])
     } finally {
       setRunning(false)
+      setRequestedUpdate(null)
       abortRef.current = null
       qc.invalidateQueries({ queryKey: ["system-version"] })
       qc.invalidateQueries({ queryKey: ["tasks", "latest", "system_update"] })
     }
   }
 
-  // Apply-button click: force=on sends the user through the
-  // destructive-confirm dialog first; force=off goes straight to
-  // runUpdate. The dialog's Confirm calls runUpdate after closing.
-  const onApplyClick = () => {
-    if (force) {
+  // Force updates and release rollbacks require explicit confirmation.
+  const onApplyClick = (target: RequestedUpdate) => {
+    setRequestedUpdate(target)
+    if (force || target.targetTag) {
       setConfirmOpen(true)
       return
     }
-    void runUpdate()
+    void runUpdate(target)
   }
 
   const cancel = () => {
@@ -213,15 +332,23 @@ export function UpdateCard() {
   }
 
   const info = version.data
-  const versionTone = channelVersionTone(channel)
+  const versionTone = currentVersionTone(info)
   const checkedAt = info?.checked_at
     ? new Date(info.checked_at).toLocaleString()
     : "—"
   const isDockerInstall = info?.install_kind === "docker"
+  const selectedRelease = releases.data?.releases.find(
+    (release) => release.tag_name === rollbackTag,
+  )
+  const rollbackIsCurrent = Boolean(
+    selectedRelease?.commit &&
+      info?.current_commit === selectedRelease.commit,
+  )
+  const confirmIsRollback = Boolean(requestedUpdate?.targetTag)
 
   const headerStatus = (() => {
     if (!info) return null
-    if (info.error) {
+    if (info.error || devVersion.data?.error) {
       return (
         <Badge variant="outline" className="rounded-[2px] gap-1 text-amber-700 dark:text-amber-400 border-amber-500/40">
           <AlertTriangle className="size-3" />
@@ -229,7 +356,7 @@ export function UpdateCard() {
         </Badge>
       )
     }
-    if (info.update_available) {
+    if (info.update_available || devVersion.data?.update_available) {
       return (
         <Badge className="rounded-[2px] gap-1 bg-primary/15 text-primary border-primary/40">
           <Download className="size-3" />
@@ -255,30 +382,13 @@ export function UpdateCard() {
               软件更新
             </CardTitle>
             <CardDescription>
-              通过 GitHub Releases 检查并升级 LoraHub。镜像加速可在「网络加速」配置。
+              选择本次更新目标，或切换到近期正式版本。
             </CardDescription>
           </div>
           {headerStatus}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Tabs value={channel} onValueChange={(v) => setChannel(v as UpdateChannel)}>
-          <TabsList variant="line" className="h-8">
-            <TabsTrigger value="tag" className="text-xs">
-              <span>正式版</span>
-              <span className="font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
-                {channelVersionLabel(tagVersion.data, "tag")}
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="dev" className="text-xs">
-              <span>Dev</span>
-              <span className="font-mono text-[11px] text-sky-700 dark:text-sky-400">
-                {channelVersionLabel(devVersion.data, "dev")}
-              </span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
         <div className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
           <span className="text-muted-foreground">当前版本</span>
           <span className="flex items-center gap-2 flex-wrap">
@@ -308,13 +418,6 @@ export function UpdateCard() {
                       : "已安装"}
               </Badge>
             )}
-          </span>
-
-          <span className="text-muted-foreground">远端版本</span>
-          <span className="flex items-center gap-2 flex-wrap">
-            <code className={cn("font-mono text-[12px] font-medium", versionTone)}>
-              {remoteDetailLabel(info)}
-            </code>
           </span>
 
           <span className="text-muted-foreground">最近检查</span>
@@ -366,6 +469,45 @@ export function UpdateCard() {
           )}
         </div>
 
+        <section className="space-y-2">
+          <div className="flex items-center gap-2">
+            <GitBranch className="size-3.5 text-muted-foreground" />
+            <h3 className="text-[12px] font-medium">本次更新目标</h3>
+          </div>
+          <div className="divide-y overflow-hidden rounded-[6px] border border-border/70">
+            <UpdateTargetRow
+              title="正式更新"
+              description="稳定发布与后续修复"
+              version={channelVersionLabel(tagVersion.data, "tag")}
+              detail={remoteDetailLabel(tagVersion.data)}
+              tone="text-emerald-700 dark:text-emerald-400"
+              updateAvailable={Boolean(tagVersion.data?.update_available)}
+              loading={tagVersion.isLoading || recheck.isPending}
+              error={tagVersion.data?.error}
+              disabled={running || info?.git_checkout === false}
+              buttonLabel="更新到正式版本"
+              onApply={() =>
+                onApplyClick({ channel: "tag", label: "正式版本" })
+              }
+            />
+            <UpdateTargetRow
+              title="Dev 预览"
+              description="最新开发提交，仅用于提前测试"
+              version={channelVersionLabel(devVersion.data, "dev")}
+              detail={remoteDetailLabel(devVersion.data)}
+              tone="text-sky-700 dark:text-sky-400"
+              updateAvailable={Boolean(devVersion.data?.update_available)}
+              loading={devVersion.isLoading || recheck.isPending}
+              error={devVersion.data?.error}
+              disabled={running || info?.git_checkout === false}
+              buttonLabel="更新到 Dev"
+              onApply={() =>
+                onApplyClick({ channel: "dev", label: "Dev 预览" })
+              }
+            />
+          </div>
+        </section>
+
         {info?.release_notes && (
           <details className="rounded-[4px] border border-border/60 bg-muted/30 px-3 py-2">
             <summary className="text-[12px] cursor-pointer select-none text-muted-foreground hover:text-foreground">
@@ -376,6 +518,68 @@ export function UpdateCard() {
             </pre>
           </details>
         )}
+
+        <section className="rounded-[6px] border border-border/70 p-3">
+          <div className="flex items-start gap-2">
+            <History className="mt-0.5 size-3.5 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-[12px] font-medium">版本回退</h3>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                切换到近期正式版本，并重新安装依赖、构建前端和重启服务。
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,14rem)_auto] sm:items-center">
+            <Select
+              value={rollbackTag}
+              disabled={running || releases.isFetching}
+              onValueChange={(value) => value && setRollbackTag(value)}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full font-mono text-xs"
+                aria-label="选择回退版本"
+              >
+                <SelectValue placeholder={releases.isLoading ? "读取版本…" : "选择版本"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(releases.data?.releases ?? []).map((release) => (
+                  <SelectItem key={release.tag_name} value={release.tag_name}>
+                    {release.tag_name} · {release.commit?.slice(0, 7) ?? "未知"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full sm:w-auto"
+              disabled={
+                running ||
+                releases.isFetching ||
+                !selectedRelease ||
+                rollbackIsCurrent ||
+                info?.git_checkout === false
+              }
+              onClick={() =>
+                selectedRelease &&
+                onApplyClick({
+                  channel: "tag",
+                  label: selectedRelease.tag_name,
+                  targetTag: selectedRelease.tag_name,
+                })
+              }
+            >
+              <History className="size-3" />
+              {rollbackIsCurrent ? "当前版本" : "切换到此版本"}
+            </Button>
+          </div>
+          {releases.isError && (
+            <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
+              无法读取版本历史，请重新检查网络后重试。
+            </p>
+          )}
+        </section>
 
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-[12px]">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -404,31 +608,7 @@ export function UpdateCard() {
           </label>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            disabled={
-              running ||
-              !info?.update_available ||
-              info?.git_checkout === false
-            }
-            onClick={onApplyClick}
-            variant={force ? "destructive" : "default"}
-            title={
-              info?.git_checkout === false
-                ? isDockerInstall
-                  ? "Docker 安装请在宿主机拉取镜像后重建容器"
-                  : "非 git 安装无法在线更新"
-                : undefined
-            }
-          >
-            {running ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Download className="size-3" />
-            )}
-            {running ? "正在升级…" : force ? "强制升级 (危险)" : "立即更新"}
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
           {running && (
             <Button size="sm" variant="outline" onClick={cancel}>
               取消
@@ -481,48 +661,63 @@ export function UpdateCard() {
         )}
       </CardContent>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          setConfirmOpen(open)
+          if (!open) setRequestedUpdate(null)
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="size-5 text-destructive" />
-              确认强制升级
+              {force ? (
+                <AlertTriangle className="size-5 text-destructive" />
+              ) : (
+                <History className="size-5 text-muted-foreground" />
+              )}
+              {force
+                ? `确认强制更新到${requestedUpdate?.label ?? "目标版本"}`
+                : `确认切换到 ${requestedUpdate?.label ?? "目标版本"}`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              此操作会执行 <code className="font-mono">git reset --hard</code> +{" "}
-              <code className="font-mono">git clean -fd</code>,
-              <strong className="text-destructive">
-                丢弃工作树内全部本地修改 (含未跟踪文件)
-              </strong>
-              ,然后切到目标版本。已 commit 的提交不会丢失,但未提交修改不可恢复。
+              {force ? (
+                <>
+                  将重置未提交的源码修改后切换版本。训练配置、数据集、模型、运行记录、
+                  输出和环境配置会保留。
+                </>
+              ) : (
+                <>
+                  将代码、Python 依赖和前端恢复到该正式版本，完成后按当前设置重启服务。
+                  用户数据与训练配置不会回退。
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="space-y-2 text-sm leading-relaxed">
-            <p className="text-muted-foreground">
-              受影响的典型路径:
+          {force && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              未提交且不在受保护数据目录内的源码、脚本和临时文件将被删除，无法恢复。
             </p>
-            <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-0.5">
-              <li>
-                <code className="font-mono">configs/</code> 自定义训练配置
-              </li>
-              <li>
-                <code className="font-mono">.env</code> 本地凭据 / 覆盖
-              </li>
-              <li>未跟踪的临时脚本、调试代码</li>
-            </ul>
-          </div>
+          )}
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setConfirmOpen(false)}>
+            <AlertDialogCancel>
               取消
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                setConfirmOpen(false)
-                void runUpdate()
+                const target = requestedUpdate
+                if (target) void runUpdate(target)
               }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className={cn(
+                force &&
+                  "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+              )}
             >
-              我已了解,继续强制升级
+              {force
+                ? "强制更新"
+                : confirmIsRollback
+                  ? "确认回退"
+                  : "确认更新"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

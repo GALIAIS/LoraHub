@@ -83,6 +83,7 @@ WEB_MAIN_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits
 
 CACHE_TTL_SECONDS = 5 * 60
 HTTP_TIMEOUT_S = 12.0
+_RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
 
 
 def _state_dir() -> Path:
@@ -704,28 +705,10 @@ def _refresh_tag_via_tags_api() -> dict[str, Any]:
     entries (e.g. ``docs-v1`` annotated tags).
     """
     tags_raw = _fetch_json(TAGS_API)
-    if not isinstance(tags_raw, list):
-        return _empty_tag_payload()
-
-    candidates: list[tuple[Version, str, str]] = []
-    for entry in tags_raw:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("name") or "")
-        if not name.startswith("v"):
-            continue
-        normalized = _normalize_version(name)
-        try:
-            ver = Version(normalized)
-        except InvalidVersion:
-            continue
-        sha = str(entry.get("commit", {}).get("sha") or "")
-        candidates.append((ver, name, sha))
-
+    candidates = _stable_tag_candidates(tags_raw)
     if not candidates:
         return _empty_tag_payload()
 
-    candidates.sort(key=lambda t: t[0], reverse=True)
     best_ver, best_name, sha = candidates[0]
     main: dict[str, Any] = {}
     with contextlib.suppress(OSError, ValueError):
@@ -740,6 +723,44 @@ def _refresh_tag_via_tags_api() -> dict[str, Any]:
         "release_notes": main.get("release_notes") or "",
         "published_at": main.get("published_at"),
     }
+
+
+def _stable_tag_candidates(raw: Any) -> list[tuple[Version, str, str]]:
+    if not isinstance(raw, list):
+        return []
+    candidates: list[tuple[Version, str, str]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        if not _RELEASE_TAG_PATTERN.fullmatch(name):
+            continue
+        try:
+            version = Version(name.removeprefix("v"))
+        except InvalidVersion:
+            continue
+        sha = str(entry.get("commit", {}).get("sha") or "")
+        candidates.append((version, name, sha))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates
+
+
+def list_release_history(limit: int = 6) -> list[dict[str, str | None]]:
+    """Return recent stable release tags for the rollback picker."""
+    bounded_limit = max(1, min(limit, 20))
+    return [
+        {
+            "tag_name": name,
+            "commit": sha or None,
+        }
+        for _version, name, sha in _stable_tag_candidates(_fetch_json(TAGS_API))[
+            :bounded_limit
+        ]
+    ]
+
+
+def is_release_tag(value: str) -> bool:
+    return bool(_RELEASE_TAG_PATTERN.fullmatch(value))
 
 
 def _empty_tag_payload() -> dict[str, Any]:
@@ -981,7 +1002,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
 #   2. _snapshot_configs — tarball the user's untracked configs/* (presets
 #                          remain owned by git so upstream changes apply)
 #   3. _fetch            — git fetch --tags origin
-#   4. _apply_ref        — checkout the resolved ref (origin/dev or origin/main)
+#   4. _apply_ref        — checkout origin/dev, origin/main, or a verified tag
 #   5. _install_deps     — pip install + optional npm run build
 #
 # Shared mutable state (stash flag, snapshot archive path) lives in
@@ -997,13 +1018,15 @@ def apply(
     build: bool = True,
     progress: ProgressCallback | None = None,
     force: bool = False,
+    target_tag: str | None = None,
 ) -> None:
     """Execute the upgrade in the current working tree.
 
     Steps:
       1. ``git fetch --tags origin``
-      2. ``git checkout origin/dev`` (channel=dev) or
-         ``git checkout origin/main`` (channel=tag)
+      2. ``git checkout origin/dev`` (channel=dev),
+         ``git checkout origin/main`` (channel=tag), or a verified stable
+         release tag when ``target_tag`` is provided
       3. reinstall ``.[api,dev]`` into the running venv. Windows uses
          a regular local install to avoid PEP 660 editable launcher
          edge cases; POSIX keeps editable installs for developer trees.
@@ -1024,6 +1047,8 @@ def apply(
     # tests / old scripts / cached UI state keep working without a
     # forced rename pass.
     channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
+    if target_tag and (channel != "tag" or not is_release_tag(target_tag)):
+        raise ValueError("target_tag must be a stable vX.Y.Z tag on the formal channel")
     cwd = _git_root()
     if _is_container_install():
         msg = (
@@ -1109,8 +1134,14 @@ def apply(
             if rc == 0:
                 ctx.stash_active = True
 
-        _fetch(cwd, emit)
-        _apply_ref(cwd, channel=channel, force=force, emit=emit)
+        _fetch(cwd, channel=channel, emit=emit)
+        _apply_ref(
+            cwd,
+            channel=channel,
+            force=force,
+            emit=emit,
+            target_tag=target_tag,
+        )
 
         _install_deps(cwd, build=build, emit=emit)
 
@@ -1439,10 +1470,27 @@ def _restore_configs(
 # --------------------------------------------------------------------- #
 
 
-def _fetch(cwd: Path, emit: ProgressCallback) -> None:
-    emit("git", "info", "git fetch --tags --force origin")
+def _fetch(
+    cwd: Path,
+    *,
+    channel: ChannelName,
+    emit: ProgressCallback,
+) -> None:
+    target_branch = "main" if channel == "tag" else "dev"
+    branch_refspec = (
+        f"+refs/heads/{target_branch}:refs/remotes/origin/{target_branch}"
+    )
+    emit("git", "info", f"git fetch --tags --force origin {target_branch}")
     rc = _stream_subprocess(
-        ["git", "fetch", "--tags", "--force", "--prune", "origin"],
+        [
+            "git",
+            "fetch",
+            "--tags",
+            "--force",
+            "--prune",
+            "origin",
+            branch_refspec,
+        ],
         cwd=cwd,
         phase="git",
         emit=emit,
@@ -1463,8 +1511,19 @@ def _apply_ref(
     channel: ChannelName,
     force: bool,
     emit: ProgressCallback,
+    target_tag: str | None = None,
 ) -> None:
-    target_ref = "origin/main" if channel == "tag" else "origin/dev"
+    if target_tag:
+        remote_sha = _remote_tag_commit(cwd, target_tag)
+        local = _git(
+            ["rev-parse", "--verify", f"refs/tags/{target_tag}^{{commit}}"],
+            cwd=cwd,
+        )
+        if not remote_sha or local.returncode != 0 or local.stdout.strip() != remote_sha:
+            raise RuntimeError(f"release tag is not available from origin: {target_tag}")
+        target_ref = f"refs/tags/{target_tag}"
+    else:
+        target_ref = "origin/main" if channel == "tag" else "origin/dev"
     emit("git", "info", f"git checkout {target_ref}")
     checkout_cmd = ["git", "checkout"]
     if force:
@@ -1712,5 +1771,7 @@ __all__ = [
     "UpdateInfo",
     "apply",
     "check",
+    "is_release_tag",
     "last_check",
+    "list_release_history",
 ]

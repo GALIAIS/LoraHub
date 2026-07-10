@@ -24,20 +24,20 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from lorahub.api import app as app_module
+from lorahub.api import system_update
 from lorahub.api.runtime_bind import (
     clear_runtime_bind,
     read_runtime_bind,
     restart_args,
     spawn_service_restart,
 )
-from lorahub.api import system_update
 from lorahub.api.system_stats import (
     ALL_ATTENTION_BACKENDS,
     attention_backends_for_gpu,
     collect_snapshot,
     collect_snapshot_shared,
 )
-from lorahub.api import app as app_module
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSessionStore,
@@ -190,10 +190,20 @@ def system_version(
     return info.to_dict()
 
 
+@router.get("/system/releases")
+def system_releases(limit: int = 6) -> dict[str, Any]:
+    try:
+        releases = system_update.list_release_history(limit)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(502, f"release history refresh failed: {exc}") from exc
+    return {"releases": releases}
+
+
 class _UpdateRequest(BaseModel):
     channel: Literal["dev", "tag", "main"] = "tag"
     build: bool = True
     restart: bool = True
+    target_tag: str | None = None
     # Destructive: when True, ``git reset --hard`` + ``git clean -fd``
     # blow away local changes before checkout. The UI guards this
     # behind an explicit confirm dialog; the API itself stays cheap
@@ -216,14 +226,19 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
     """
     if req.channel not in _VALID_CHANNELS:
         raise HTTPException(422, f"channel must be one of {_VALID_CHANNELS}")
+    if req.target_tag and (
+        req.channel != "tag" or not system_update.is_release_tag(req.target_tag)
+    ):
+        raise HTTPException(422, "target_tag requires channel=tag and format vX.Y.Z")
     if not _UPDATE_LOCK.acquire(blocking=False):
         raise HTTPException(409, "system update is already running")
 
     task = _task_store().create(
         kind=_KIND_SYSTEM_UPDATE,
-        title=f"system update:{req.channel}",
+        title=f"system update:{req.target_tag or req.channel}",
         metadata={
             "channel": req.channel,
+            "target_tag": req.target_tag,
             "build": req.build,
             "restart": req.restart,
             "force": req.force,
@@ -257,6 +272,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 build=req.build,
                 progress=emit,
                 force=req.force,
+                target_tag=req.target_tag,
             )
         except Exception as exc:  # noqa: BLE001
             emit("error", "error", f"{type(exc).__name__}: {exc}")
@@ -264,7 +280,11 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 task.id,
                 status="failed",
                 error=str(exc),
-                result={"channel": req.channel, "build": req.build},
+                result={
+                    "channel": req.channel,
+                    "target_tag": req.target_tag,
+                    "build": req.build,
+                },
                 finished=True,
             )
             loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -275,7 +295,11 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 task.id,
                 status="succeeded",
                 percent=100,
-                result={"channel": req.channel, "build": req.build},
+                result={
+                    "channel": req.channel,
+                    "target_tag": req.target_tag,
+                    "build": req.build,
+                },
                 finished=True,
             )
             if req.restart:
