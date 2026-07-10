@@ -65,10 +65,49 @@ def test_dump_and_reload_round_trips(tmp_path: Path) -> None:
     assert reloaded.output.name == cfg.output.name
 
 
+def test_dump_config_failure_preserves_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = TrainingConfig.model_validate(MINIMAL_RECIPE)
+    out = tmp_path / "out.yaml"
+    out.write_text("original\n", encoding="utf-8")
+
+    def fail_replace(_self: Path, _target: Path) -> Path:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        dump_config(cfg, out)
+
+    assert out.read_text(encoding="utf-8") == "original\n"
+    assert list(tmp_path.glob(".out.yaml.*.tmp")) == []
+
+
 def test_invalid_resolution_rejected() -> None:
     bad = {**MINIMAL_RECIPE, "dataset": {"source": "./x", "resolution": [1, 2, 3]}}
     with pytest.raises(Exception, match="resolution"):
         TrainingConfig.model_validate(bad)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../escape", r"nested\escape", "CON", "bad:name", "trailing."],
+)
+def test_output_name_rejects_unsafe_file_names(name: str) -> None:
+    bad = {**MINIMAL_RECIPE, "output": {"name": name}}
+
+    with pytest.raises(Exception, match="output name"):
+        TrainingConfig.model_validate(bad)
+
+
+def test_output_name_keeps_spaces_and_unicode() -> None:
+    cfg = TrainingConfig.model_validate(
+        {**MINIMAL_RECIPE, "output": {"name": "角色 LoRA 01"}}
+    )
+
+    assert cfg.output.name == "角色 LoRA 01"
 
 
 def test_extra_fields_rejected() -> None:

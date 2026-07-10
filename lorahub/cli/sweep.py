@@ -22,6 +22,7 @@ import typer
 import yaml
 from rich.console import Console
 
+from lorahub.api.auth import api_auth_headers
 from lorahub.cli._i18n import t
 
 console = Console()
@@ -71,7 +72,7 @@ def sweep_submit(
         url,
         data=json.dumps(body).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **api_auth_headers()},
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
@@ -92,7 +93,8 @@ def sweep_ls() -> None:
     """List every sweep on the running server."""
     url = f"{_api_url().rstrip('/')}/api/sweeps"
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+        req = urllib.request.Request(url, headers=api_auth_headers())
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             payload: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as exc:
         console.print(t("sweepapp.unreachable", url=url, reason=exc.reason))

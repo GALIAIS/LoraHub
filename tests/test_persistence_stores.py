@@ -91,3 +91,19 @@ def test_session_store_list_recent_orders_by_started_at_desc(tmp_path: Path) -> 
     listed = store.list_recent("tagging")
     started_ats = [r["started_at"] for r in listed]
     assert started_ats == sorted(started_ats, reverse=True)
+
+
+def test_session_store_list_recent_bounds_limit(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    for i in range(105):
+        store.upsert_tagging(
+            {
+                "session_id": f"s{i}",
+                "path": "/d",
+                "status": "succeeded",
+                "started_at": float(i),
+            }
+        )
+
+    assert len(store.list_recent("tagging", limit=-1)) == 1
+    assert len(store.list_recent("tagging", limit=1000)) == 100

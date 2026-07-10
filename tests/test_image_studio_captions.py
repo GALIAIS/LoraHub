@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 # Bootstrap app namespace before touching sub-routers.
 from lorahub.api import app as _app_module  # noqa: F401
-
 from lorahub.api.routers.image_studio.captions import (
     BlacklistRequest,
     FindReplaceRequest,
@@ -18,6 +18,11 @@ from lorahub.api.routers.image_studio.captions import (
     captions_inject_trigger,
     captions_vocab,
 )
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
 
 
 def _seed(tmp_path: Path) -> Path:
@@ -49,6 +54,24 @@ def test_vocab_lowercases_and_counts(tmp_path: Path) -> None:
     assert vocab["smile"] == 2
     assert vocab["long hair"] == 1
     assert res["files_seen"] == 3
+
+
+def test_caption_workflows_skip_linked_sidecars(tmp_path: Path) -> None:
+    d = _seed(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private, smile", encoding="utf-8")
+    (d / "a.txt").unlink()
+    try:
+        (d / "a.txt").symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    result = captions_blacklist(
+        BlacklistRequest(dataset_path=str(d), tags=["smile"]),
+    )
+
+    assert result["removed_count"] == 1
+    assert outside.read_text(encoding="utf-8") == "private, smile"
 
 
 # --------------------------------------------------------------------------- #

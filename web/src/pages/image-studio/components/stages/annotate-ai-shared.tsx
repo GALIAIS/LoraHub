@@ -3,8 +3,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2, X } from "lucide-react"
 
 import { api } from "@/lib/api"
-import { cancelTask, removeTask } from "@/lib/studio-task-store"
+import {
+  cancelTask,
+  isStudioTaskActive,
+  removeTask,
+} from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
+import { toastApiError } from "@/lib/toast-api-error"
 
 // ai-bulk-modal.tsx 里同款 fallback。WD14 模型清单从 /tagging/wd14/models
 // 来；首次还没拿到时先用一个真实存在的默认值，避免 401。
@@ -43,7 +48,7 @@ export function useRefreshCaptionViewsOnTaskDone(datasetPath: string) {
 
   useEffect(() => {
     for (const task of tasks) {
-      if (task.status === "running" || !CAPTION_WRITING_TASKS.has(task.kind)) continue
+      if (isStudioTaskActive(task.status) || !CAPTION_WRITING_TASKS.has(task.kind)) continue
       const key = `${task.id}:${task.status}`
       if (seen.current.has(key)) continue
       seen.current.add(key)
@@ -58,15 +63,18 @@ export function TaskBanner({ datasetPath }: { datasetPath: string }) {
   useRefreshCaptionViewsOnTaskDone(datasetPath)
   const tasks = useStudioTasksFor(datasetPath)
   const newest = [...tasks].sort((a, b) => b.startedAt - a.startedAt)[0]
-  const running = newest?.status === "running"
+  const active = newest ? isStudioTaskActive(newest.status) : false
+  const stopping = newest?.status === "stopping"
   const download = useTaggerDownloadDisplay(
-    Boolean(newest && running && (newest.kind === "wd14" || newest.kind === "smart-caption")),
+    Boolean(newest && active && (newest.kind === "wd14" || newest.kind === "smart-caption")),
   )
   if (!newest) return null
   const lastImageName = newest.lastImage
     ? newest.lastImage.split(/[/\\]/).pop() ?? ""
     : ""
-  const label = download?.label ?? (running
+  const label = download?.label ?? (stopping
+    ? `正在停止${newest.label}…`
+    : active
     ? newest.kind === "caption"
       ? `${newest.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : newest.kind === "smart-caption"
@@ -81,7 +89,7 @@ export function TaskBanner({ datasetPath }: { datasetPath: string }) {
     : newest.label)
   return (
     <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 mb-3">
-      {running && <Loader2 className="size-4 animate-spin text-primary" />}
+      {active && <Loader2 className="size-4 animate-spin text-primary" />}
       <span className="text-xs font-medium">{label}</span>
       {download && (
         <div className="shiro-progress-track h-1.5 w-24 border-0 bg-muted">
@@ -102,14 +110,19 @@ export function TaskBanner({ datasetPath }: { datasetPath: string }) {
           {newest.errorMsg}
         </span>
       )}
-      {running ? (
+      {active ? (
         <button
           type="button"
-          onClick={() => void cancelTask(newest)}
+          onClick={() => {
+            void cancelTask(newest).catch((error) => {
+              toastApiError(error, { title: "停止任务失败" })
+            })
+          }}
+          disabled={stopping}
           className="ml-auto text-xs text-muted-foreground hover:text-destructive"
           title="停止"
         >
-          停止
+          {stopping ? "正在停止" : "停止"}
         </button>
       ) : (
         <button

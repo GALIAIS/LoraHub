@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import threading
 from collections.abc import Iterator
@@ -21,6 +22,7 @@ from typing import Any
 from lorahub.api.settings import Settings
 from lorahub.core.backends._common.bootstrap import venv_python
 from lorahub.core.paths import project_root
+from lorahub.core.redaction import redact_argv, redact_command_text
 
 _log = logging.getLogger(__name__)
 
@@ -398,14 +400,19 @@ def stream_command(
     leaves ``shell_cmd`` ``None`` and uses the safer pure-argv path.
     """
     creationflags = 0
+    start_new_session = os.name != "nt"
     if os.name == "nt":
         # CREATE_NO_WINDOW so spawning ``python -m pip`` from the API
         # process doesn't briefly flash a console window.
-        creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        creationflags = (  # type: ignore[attr-defined]
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    display_argv = redact_argv(argv)
 
     _log.info(
         "terminal exec: argv=%s cwd=%s python=%s shell=%s",
-        argv,
+        display_argv,
         cwd,
         env.get("VIRTUAL_ENV", "(none)"),
         shell_cmd is not None,
@@ -429,6 +436,7 @@ def stream_command(
                 bufsize=1,
                 shell=True,
                 creationflags=creationflags,
+                start_new_session=start_new_session,
             )
         else:
             proc = subprocess.Popen(  # noqa: S603
@@ -443,15 +451,22 @@ def stream_command(
                 errors="replace",
                 bufsize=1,
                 creationflags=creationflags,
+                start_new_session=start_new_session,
             )
     except FileNotFoundError as exc:
-        msg = f"无法启动子进程: {exc}\nargv = {argv}\ncwd = {cwd}"
+        msg = (
+            f"无法启动子进程: {redact_command_text(str(exc))}\n"
+            f"argv = {display_argv}\ncwd = {cwd}"
+        )
         _log.warning("terminal exec FileNotFoundError: %s", msg)
         yield {"type": "error", "data": msg}
         yield {"type": "exit", "code": -1}
         return
     except OSError as exc:
-        msg = f"OSError 启动子进程: {exc}\nargv = {argv}\ncwd = {cwd}"
+        msg = (
+            f"OSError 启动子进程: {redact_command_text(str(exc))}\n"
+            f"argv = {display_argv}\ncwd = {cwd}"
+        )
         _log.warning("terminal exec OSError: %s", msg)
         yield {"type": "error", "data": msg}
         yield {"type": "exit", "code": -1}
@@ -483,38 +498,72 @@ def stream_command(
     for t in threads:
         t.start()
 
-    closed = 0
-    deadline = _monotonic() + timeout_s
-    timed_out = False
-    while closed < 2:
-        try:
-            label, data = queue.get(timeout=0.5)
-        except Empty:
-            if _monotonic() > deadline:
-                timed_out = True
-                break
-            continue
-        if data is None:
-            closed += 1
-            continue
-        # Strip the trailing newline so the client controls line breaks
-        # itself. Ship the rest verbatim — pip / uv emit ANSI for colour
-        # which the UI decides to render or strip.
-        text = data.rstrip("\r\n")
-        yield {"type": label, "data": text}
+    try:
+        closed = 0
+        deadline = _monotonic() + timeout_s
+        timed_out = False
+        while closed < 2:
+            try:
+                label, data = queue.get(timeout=0.5)
+            except Empty:
+                if _monotonic() > deadline:
+                    timed_out = True
+                    break
+                continue
+            if data is None:
+                closed += 1
+                continue
+            # Keep terminal output exportable without persisting credentials
+            # echoed by package managers or remote endpoints.
+            text = redact_command_text(data.rstrip("\r\n"))
+            yield {"type": label, "data": text}
 
-    if timed_out:
-        try:
-            proc.kill()
-        finally:
+        if timed_out:
+            _terminate_process_tree(proc)
             yield {
                 "type": "error",
                 "data": f"命令运行超过 {timeout_s} 秒，已强制结束。",
             }
 
-    rc = proc.wait()
-    _log.info("terminal exec finished: rc=%d argv=%s", rc, argv)
-    yield {"type": "exit", "code": int(rc)}
+        rc = proc.wait()
+        _log.info("terminal exec finished: rc=%d argv=%s", rc, display_argv)
+        yield {"type": "exit", "code": int(rc)}
+    finally:
+        # Closing the browser aborts the streaming response. Ensure the
+        # subprocess and any package-manager children do not survive it.
+        if proc.poll() is None:
+            _terminate_process_tree(proc)
+
+
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Best-effort cleanup for a timed-out or disconnected terminal command."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode != 0 and proc.poll() is None:
+                proc.kill()
+        except (OSError, subprocess.TimeoutExpired):
+            proc.kill()
+        return
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=2)
+    except ProcessLookupError:
+        return
+    except (PermissionError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
 
 
 def _monotonic() -> float:

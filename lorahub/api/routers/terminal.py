@@ -39,6 +39,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.dataset_files import is_link_like
 from lorahub.api.settings import VALID_BACKEND_IDS
 from lorahub.api.terminal_runner import (
     _TERMINAL_ONLY_IDS,
@@ -47,6 +48,7 @@ from lorahub.api.terminal_runner import (
     resolve_backend_session,
     stream_command,
 )
+from lorahub.core.redaction import redact_argv
 
 router = APIRouter(prefix="/api/terminal")
 
@@ -208,6 +210,7 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
     # work as the user expects. Restricted mode keeps the safe
     # argv-only path with the venv-router policy applied.
     use_shell = settings.terminal_unrestricted
+    cwd = session.repo_path
     argv: list[str]
     shell_cmd: str | None = None
     if use_shell:
@@ -238,12 +241,13 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
                 argv,
                 python_path=session.python_path,
                 unrestricted=False,
+                cwd=cwd,
             )
         except TerminalDenied as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     timeout_s = max(5, int(settings.terminal_command_timeout_s))
-    cwd = session.repo_path
+    display_argv = redact_argv(argv)
 
     def event_stream():
         # Announce the resolved process up-front so the UI can render the
@@ -251,7 +255,7 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
         yield _sse(
             {
                 "type": "start",
-                "argv": argv,
+                "argv": display_argv,
                 "cwd": str(cwd),
             }
         )
@@ -294,19 +298,18 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
 _ALLOWED_TOP_LEVEL = {
     # Package / interpreter (rewritten through the venv resolver below)
     "pip", "pip3", "python", "python3", "py", "uv",
-    # LoraHub self — picks up the in-tree CLI through PATH; required so
-    # users can run "lorahub ref-extract ..." in the same env the API
-    # server uses.
+    # LoraHub self — picks up the in-tree CLI through PATH for read-only
+    # diagnostics such as doctor/version.
     "lorahub",
     # Diagnostic / inspection commands. These pass through verbatim,
     # they don't get the venv-router rewrite.
     "which", "where", "whereis", "command", "type",
-    "ls", "dir", "pwd", "cd",  # cd is dropped on first command — see note in stream_command
-    "cat", "head", "tail", "less", "more",
+    "ls", "pwd",
+    "cat", "head", "tail",
     "echo", "printf",
     "git",
     "nvidia-smi", "nvcc",
-    "ps", "df", "du", "free", "uname",
+    "df", "du", "free", "uname",
     # Useful for sanity-checking model / cache locations.
     "find", "tree", "stat", "wc", "grep", "rg", "fgrep", "egrep",
 }
@@ -316,9 +319,135 @@ _PYTHON_ALIASES = {"python", "python3", "py"}
 # _ALLOWED_TOP_LEVEL passes through to PATH unchanged.
 _VENV_ROUTED = _PIP_ALIASES | _PYTHON_ALIASES | {"uv"}
 
+_PYTHON_SAFE_MODULES = frozenset({"pip"})
+_GIT_READ_ONLY_COMMANDS = frozenset(
+    {
+        "blame",
+        "cat-file",
+        "describe",
+        "diff",
+        "log",
+        "ls-files",
+        "ls-tree",
+        "rev-parse",
+        "shortlog",
+        "show",
+        "status",
+    }
+)
+_GIT_BRANCH_FLAGS = frozenset(
+    {
+        "-a",
+        "--all",
+        "--color",
+        "--column",
+        "--ignore-case",
+        "-r",
+        "--remotes",
+        "--show-current",
+        "-v",
+        "-vv",
+        "--verbose",
+    }
+)
+_GIT_BRANCH_VALUE_FLAGS = frozenset(
+    {
+        "--contains",
+        "--format",
+        "--merged",
+        "--no-contains",
+        "--no-merged",
+        "--points-at",
+        "--sort",
+    }
+)
+_GIT_MUTATING_TAG_FLAGS = frozenset(
+    {"-a", "--annotate", "-d", "--delete", "-f", "--force", "-s", "--sign", "-u", "--local-user"}
+)
+_GIT_OUTPUT_FLAGS = frozenset({"-o", "--output"})
+_GIT_UNSAFE_READ_FLAGS = frozenset(
+    {"--ext-diff", "--filters", "--no-index", "--textconv"}
+)
+_GIT_EXTERNAL_INPUT_FLAGS = frozenset(
+    {
+        "--contents",
+        "--exclude-from",
+        "--exclude-per-directory",
+        "--pathspec-from-file",
+    }
+)
+_LORAHUB_READ_ONLY_COMMANDS = frozenset({"doctor", "info", "validate", "version"})
+_FIND_MUTATING_ACTIONS = frozenset(
+    {
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-fls",
+        "-fprint",
+        "-fprintf",
+        "-ok",
+        "-okdir",
+    }
+)
+_PATH_SCOPED_COMMANDS = frozenset(
+    {
+        "cat", "df", "du", "find", "grep", "head", "ls", "rg", "stat",
+        "tail", "tree", "wc", "fgrep", "egrep",
+    }
+)
+_NVIDIA_SMI_FLAG_ONLY = frozenset(
+    {"-B", "-h", "--help", "-L", "--list-gpus", "-q", "--query", "--version"}
+)
+_NVIDIA_SMI_VALUE_FLAGS = frozenset(
+    {"-d", "--display", "-i", "--id", "-l", "--loop", "-lms", "--loop-ms", "--format"}
+)
+_NVIDIA_SMI_VALUE_PREFIXES = (
+    "--display=",
+    "--format=",
+    "--id=",
+    "--loop=",
+    "--loop-ms=",
+    "--query-accounted-apps=",
+    "--query-compute-apps=",
+    "--query-gpu=",
+    "--query-supported-clocks=",
+)
+_PIP_ALLOWED_COMMANDS = frozenset(
+    {
+        "--help",
+        "--version",
+        "check",
+        "debug",
+        "freeze",
+        "help",
+        "index",
+        "inspect",
+        "list",
+        "show",
+    }
+)
+_PIP_EXTERNAL_TARGET_FLAGS = frozenset(
+    {
+        "--cache-dir",
+        "--log",
+        "--prefix",
+        "--python",
+        "--report",
+        "--root",
+        "--target",
+        "--user",
+        "-p",
+        "-t",
+    }
+)
+
 
 def _enforce_command_policy(
-    argv: list[str], *, python_path: Path | None, unrestricted: bool
+    argv: list[str],
+    *,
+    python_path: Path | None,
+    unrestricted: bool,
+    cwd: Path | None = None,
 ) -> list[str]:
     """Validate + rewrite the parsed argv per the workbench policy.
 
@@ -339,7 +468,7 @@ def _enforce_command_policy(
     """
     head = argv[0]
     if not unrestricted:
-        base = head.split("/")[-1].split("\\")[-1]
+        base = head.split("/")[-1].split("\\")[-1].lower()
         if base not in _ALLOWED_TOP_LEVEL:
             raise TerminalDenied(
                 f"命令 {head!r} 不在白名单中。受限模式只允许 pip / uv / python / "
@@ -347,7 +476,13 @@ def _enforce_command_policy(
                 "如需任意命令 + shell 语法 ($() / | / && / >),请到 设置 → 终端 "
                 "中开启「自由命令模式」。"
             )
+        if head.lower() != base:
+            raise TerminalDenied("受限模式禁止从自定义路径执行白名单同名程序。")
         head = base
+        _validate_restricted_command(head, argv[1:], cwd=cwd)
+
+    if head == "git" and not unrestricted:
+        return _restricted_git_argv(argv[1:])
 
     if head in _PYTHON_ALIASES:
         if python_path is None:
@@ -371,6 +506,284 @@ def _enforce_command_policy(
     # discovery (e.g. ``which lorahub`` would be useless if we hard-coded
     # the venv python here).
     return argv
+
+
+def _validate_restricted_command(
+    head: str,
+    args: list[str],
+    *,
+    cwd: Path | None,
+) -> None:
+    """Reject whitelist entries whose subcommands can escape argv-only mode."""
+    if head in _PIP_ALIASES:
+        _validate_pip_command(args, cwd=cwd)
+        return
+
+    if head in _PYTHON_ALIASES:
+        if not args or args[0] in {"-h", "--help", "-V", "--version"}:
+            return
+        if len(args) >= 2 and args[0] == "-m" and args[1] in _PYTHON_SAFE_MODULES:
+            if args[1] == "pip":
+                _validate_pip_command(args[2:], cwd=cwd)
+            return
+        raise TerminalDenied(
+            "受限模式只允许查看 Python 版本或运行 python -m pip 查询；"
+            "脚本、-c 和其他模块需要开启自由命令模式。"
+        )
+
+    if head == "uv":
+        if not args or args[0] in {"-h", "--help", "-V", "--version", "help"}:
+            return
+        if args[0] == "pip":
+            _validate_pip_command(args[1:], cwd=cwd)
+            return
+        raise TerminalDenied(
+            "受限模式只允许 uv pip 与 uv 的帮助/版本命令；"
+            "uv run/tool 等执行入口需要开启自由命令模式。"
+        )
+
+    if head == "git":
+        _validate_git_command(args)
+        return
+
+    if head == "nvidia-smi":
+        _validate_nvidia_smi(args)
+        return
+
+    if head == "nvcc":
+        if any(value not in {"-h", "--help", "-V", "--version"} for value in args):
+            raise TerminalDenied("受限模式下 nvcc 仅允许查看帮助或版本。")
+        return
+
+    if head == "find":
+        lowered = {value.lower() for value in args}
+        blocked = sorted(lowered & _FIND_MUTATING_ACTIONS)
+        if blocked:
+            raise TerminalDenied(
+                f"受限模式禁止 find 的执行或写文件动作：{', '.join(blocked)}。"
+            )
+        _validate_scoped_arguments(head, args, cwd=cwd)
+        return
+
+    if head == "rg" and any(
+        value == "--pre" or value.startswith("--pre=") for value in args
+    ):
+        raise TerminalDenied("受限模式禁止 rg --pre 执行外部预处理程序。")
+
+    if head == "tree" and any(
+        value in {"-o", "--output"} or value.startswith("--output=")
+        for value in args
+    ):
+        raise TerminalDenied("受限模式禁止 tree 将结果写入文件。")
+
+    if head in _PATH_SCOPED_COMMANDS:
+        _validate_scoped_arguments(head, args, cwd=cwd)
+        return
+
+    if head == "lorahub":
+        _validate_lorahub_command(args)
+
+
+def _validate_pip_command(args: list[str], *, cwd: Path | None) -> None:
+    if not args:
+        return
+    command = args[0].lower()
+    if command not in _PIP_ALLOWED_COMMANDS:
+        raise TerminalDenied(
+            "受限模式只允许 pip 查询与依赖检查；install/uninstall/download/"
+            "wheel/config/cache 等变更命令需要开启自由命令模式。"
+        )
+
+    for index, value in enumerate(args[1:], start=1):
+        option, separator, option_value = value.partition("=")
+        lowered = option.lower()
+        if lowered in _PIP_EXTERNAL_TARGET_FLAGS:
+            raise TerminalDenied(
+                f"受限模式禁止 pip 使用 {option} 改写目标环境或输出位置。"
+            )
+        if lowered.startswith(("-p", "-t")) and len(lowered) > 2:
+            raise TerminalDenied("受限模式禁止 pip 改写目标环境或输出位置。")
+        if lowered.startswith(("-c", "-r")) and len(value) > 2:
+            _validate_path_value(value[2:], cwd=cwd)
+        if any(
+            lowered.startswith(f"{flag}=") for flag in _PIP_EXTERNAL_TARGET_FLAGS
+        ):
+            raise TerminalDenied("受限模式禁止 pip 改写目标环境或输出位置。")
+        if separator:
+            _validate_path_value(option_value, cwd=cwd)
+        elif index > 0:
+            _validate_path_value(value, cwd=cwd)
+
+
+def _validate_scoped_arguments(
+    command: str,
+    args: list[str],
+    *,
+    cwd: Path | None,
+) -> None:
+    for value in args:
+        if command in {"grep", "rg", "fgrep", "egrep"} and value.startswith("-f") and len(value) > 2:
+            _validate_path_value(value[2:], cwd=cwd)
+        candidate = value.partition("=")[2] if "=" in value else value
+        _validate_path_value(candidate, cwd=cwd)
+    if cwd is None:
+        return
+    try:
+        cwd.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise TerminalDenied(f"{command} 的工作目录不可用。") from exc
+
+
+def _validate_path_value(value: str, *, cwd: Path | None) -> None:
+    """Reject absolute/escaping file operands and linked paths outside cwd."""
+    raw = value.strip().strip('"\'')
+    if not raw or raw in {"-", "--"}:
+        return
+    lowered = raw.lower()
+    if "file://" in lowered or lowered.startswith("file:"):
+        raise TerminalDenied("受限模式禁止通过 file: URI 访问后端目录外的文件。")
+    if "://" in raw and not lowered.startswith("file:"):
+        return
+
+    normalised = raw.replace("\\", "/")
+    parts = [part for part in normalised.split("/") if part not in {"", "."}]
+    windows_absolute = len(normalised) >= 3 and normalised[1:3] == ":/"
+    if (
+        normalised.startswith("/")
+        or windows_absolute
+        or ".." in parts
+        or "../" in normalised
+        or normalised.endswith("/..")
+    ):
+        raise TerminalDenied("受限模式只允许访问当前后端目录内的相对路径。")
+    if cwd is None or raw.startswith("-"):
+        return
+
+    candidate = cwd / raw
+    if not (candidate.exists() or is_link_like(candidate)):
+        return
+    try:
+        candidate.resolve().relative_to(cwd.resolve())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise TerminalDenied("受限模式拒绝指向后端目录外的链接路径。") from exc
+
+
+def _validate_git_command(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help", "--version"}:
+        return
+    command = args[0].lower()
+    if command in _GIT_READ_ONLY_COMMANDS:
+        options = args[1:]
+        if any(
+            value in _GIT_UNSAFE_READ_FLAGS
+            or value.startswith(("--filters=", "--textconv="))
+            for value in options
+        ):
+            raise TerminalDenied("受限模式禁止 Git 调用外部程序或读取仓库外文件。")
+        if any(
+            value in _GIT_EXTERNAL_INPUT_FLAGS
+            or any(value.startswith(f"{flag}=") for flag in _GIT_EXTERNAL_INPUT_FLAGS)
+            for value in options
+        ):
+            raise TerminalDenied("受限模式禁止 Git 从后端目录外的文件读取参数或内容。")
+        if any(
+            value in _GIT_OUTPUT_FLAGS
+            or value.startswith("--output=")
+            or (value.startswith("-o") and value != "-o")
+            for value in options
+        ):
+            raise TerminalDenied("受限模式禁止 Git 将查询结果写入文件。")
+        return
+    if command == "branch" and _git_branch_is_read_only(args[1:]):
+        return
+    if command == "remote" and args[1:] in ([], ["-v"], ["--verbose"]):
+        return
+    if command == "tag":
+        lowered = {value.lower() for value in args[1:]}
+        if not (lowered & _GIT_MUTATING_TAG_FLAGS) and (
+            not args[1:] or "-l" in lowered or "--list" in lowered
+        ):
+            return
+    raise TerminalDenied(
+        "受限模式下 git 仅允许 status/log/diff/show 等只读查询；"
+        "checkout/reset/clean/merge/push 等操作需要开启自由命令模式。"
+    )
+
+
+def _restricted_git_argv(args: list[str]) -> list[str]:
+    """Disable repository-configured helpers for accepted Git diagnostics."""
+    prefix = [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.pager=cat",
+        "-c",
+        "pager.branch=false",
+    ]
+    if args and args[0].lower() in {"diff", "log", "show"}:
+        return [*prefix, args[0], "--no-ext-diff", "--no-textconv", *args[1:]]
+    return [*prefix, *args]
+
+
+def _validate_nvidia_smi(args: list[str]) -> None:
+    """Allow telemetry queries while rejecting reset/configuration commands."""
+    index = 0
+    while index < len(args):
+        value = args[index]
+        if value in _NVIDIA_SMI_FLAG_ONLY or value.startswith(_NVIDIA_SMI_VALUE_PREFIXES):
+            index += 1
+            continue
+        if value in _NVIDIA_SMI_VALUE_FLAGS:
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                raise TerminalDenied(f"nvidia-smi {value} 缺少查询参数。")
+            index += 2
+            continue
+        raise TerminalDenied(
+            "受限模式下 nvidia-smi 仅允许状态查询；功耗、时钟、MIG、重置和输出文件参数均被拒绝。"
+        )
+
+
+def _git_branch_is_read_only(args: list[str]) -> bool:
+    index = 0
+    while index < len(args):
+        value = args[index]
+        if value in _GIT_BRANCH_FLAGS or value.startswith(("--color=", "--column=")):
+            index += 1
+            continue
+        if value in _GIT_BRANCH_VALUE_FLAGS:
+            if index + 1 >= len(args):
+                return False
+            index += 2
+            continue
+        if any(value.startswith(f"{flag}=") for flag in _GIT_BRANCH_VALUE_FLAGS):
+            index += 1
+            continue
+        return False
+    return True
+
+
+def _validate_lorahub_command(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help", "--version"}:
+        return
+    command = args[0].lower()
+    if command in _LORAHUB_READ_ONLY_COMMANDS:
+        return
+    if command == "jobs" and len(args) >= 2 and args[1] in {"ls", "show"}:
+        return
+    if command == "service" and len(args) >= 2 and args[1] in {"logs", "status"}:
+        return
+    if command == "system" and len(args) >= 2 and args[1] in {
+        "errors",
+        "errors-show",
+        "gpu",
+        "info",
+    }:
+        return
+    raise TerminalDenied(
+        "受限模式下 lorahub 仅允许诊断和查询；"
+        "训练、更新、服务控制及任务变更需要开启自由命令模式。"
+    )
 
 
 def _route_pip(python_path: Path, pip_args: list[str]) -> list[str]:

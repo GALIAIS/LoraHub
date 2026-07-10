@@ -35,7 +35,14 @@ def task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
         result = dict(task.result)
         result.setdefault("events", [event.to_dict() for event in task.events])
         return result
-    if task.status in {"queued", "running", "interrupted", "failed", "canceled"}:
+    if task.status in {
+        "queued",
+        "running",
+        "stop_requested",
+        "interrupted",
+        "failed",
+        "canceled",
+    }:
         metadata = task.metadata
         total = int(metadata.get("total") or metadata.get("selected") or 0)
         path = str(metadata.get("path") or metadata.get("dataset_path") or "")

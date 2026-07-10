@@ -393,12 +393,12 @@ export function NetworkTab() {
               github_proxy: draft.github_proxy || null,
               huggingface_endpoint: draft.huggingface_endpoint || null,
               modelscope_enabled: draft.modelscope_enabled,
-              modelscope_token: draft.modelscope_token || null,
+              modelscope_token: draft.modelscope_token,
               pypi_index_url: draft.pypi_index_url || null,
               torch_index_url: draft.torch_index_url || null,
-              download_proxy: draft.download_proxy || null,
-              huggingface_token: draft.huggingface_token || null,
-              wandb_api_key: draft.wandb_api_key || null,
+              download_proxy: draft.download_proxy,
+              huggingface_token: draft.huggingface_token,
+              wandb_api_key: draft.wandb_api_key,
               wandb_base_url: draft.wandb_base_url || null,
             })
           }

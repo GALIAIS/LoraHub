@@ -147,7 +147,7 @@ export function InstallTab() {
   // We only render events when (a) a session is actively running for
   // the selected backend, OR (b) the most recent finished session
   // matches the selected backend.
-  const sameSession = sessionBackend && sessionBackend === selected
+  const sameSession = Boolean(sessionBackend && sessionBackend === effective)
   const events: BootstrapEvent[] = sameSession ? rawEvents : []
   // Same gating for the status badge so a "failed" tag from another
   // backend doesn't bleed onto the freshly-selected one.
@@ -156,13 +156,10 @@ export function InstallTab() {
   const visibleEvents: BootstrapEvent[] = showSessionDetails ? events : []
 
   const start = useMutation({
-    mutationFn: (backend: BackendId) => {
-      // Always force-overwrite. Users have repeatedly tripped on the
-      // "target not empty" 409 because the install panel's whole point is
-      // to wipe and re-install — there's no other meaningful intent.
+    mutationFn: ({ backend, force }: { backend: BackendId; force: boolean }) => {
       return api.startBootstrap({
         backend,
-        force: true,
+        force,
         cuda: selectedTorchOption?.cuda,
         torch_version: selectedTorchOption?.torch_version,
         torchvision_version: selectedTorchOption?.torchvision_version,
@@ -190,7 +187,10 @@ export function InstallTab() {
     queryFn: api.getAnimaModelDownloadStatus,
     enabled: effective === "anima_lora",
     refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 1500 : false,
+      query.state.data?.status === "running" ||
+      query.state.data?.status === "stop_requested"
+        ? 1500
+        : false,
     staleTime: 750,
   })
 
@@ -201,6 +201,13 @@ export function InstallTab() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["backends"] })
+    },
+  })
+
+  const stopAnimaModels = useMutation({
+    mutationFn: (sessionId: string) => api.stopAnimaModelDownload(sessionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["anima-model-download-status"] })
     },
   })
 
@@ -288,7 +295,9 @@ export function InstallTab() {
           <CardTitle className="text-base">安装训练后端</CardTitle>
           <CardDescription>
             克隆仓库、创建 venv，并安装 PyTorch 与依赖。
-            <strong className="text-foreground">已存在的目标目录会被清空后重装</strong>。
+            <strong className="text-foreground">
+              重新安装只重建受管虚拟环境，不会清空完整的后端源码仓库
+            </strong>。
             与命令行 <code className="text-foreground">lorahub bootstrap-*</code> 等价；
             安装在后台运行，请保持本页打开。
           </CardDescription>
@@ -363,7 +372,13 @@ export function InstallTab() {
                 !effective ||
                 !backendsQuery.data
               }
-              onClick={() => effective && start.mutate(effective as BackendId)}
+              onClick={() =>
+                effective &&
+                start.mutate({
+                  backend: effective as BackendId,
+                  force: Boolean(descriptor?.ready || isRetryableStatus(status)),
+                })
+              }
             >
               {isRunning ? (
                 <Loader2 className="size-3 animate-spin" />
@@ -442,6 +457,11 @@ export function InstallTab() {
                 status={animaModelStatus.data}
                 isPending={downloadAnimaModels.isPending}
                 onDownload={() => downloadAnimaModels.mutate()}
+                isStopping={stopAnimaModels.isPending}
+                onStop={() => {
+                  const sessionId = animaModelStatus.data?.session_id
+                  if (sessionId) stopAnimaModels.mutate(sessionId)
+                }}
                 error={
                   downloadAnimaModels.error instanceof Error
                     ? downloadAnimaModels.error.message

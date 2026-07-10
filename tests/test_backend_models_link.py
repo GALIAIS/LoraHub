@@ -55,8 +55,25 @@ def test_link_anima_models_dir_silent_on_success(
     repo = tmp_path / "anima_lora"
     repo.mkdir()
     link = repo / "models"
+    for subdir, filename, _repo_path in anima_models._TARGETS:
+        destination = link / subdir / filename
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"checkpoint")
 
     monkeypatch.setattr(anima_models, "default_repo_path", lambda: repo)
     monkeypatch.setattr(anima_models, "ensure_models_link", lambda _repo: link)
 
     anima_models._link_anima_models_dir()  # must not raise
+
+
+def test_anima_download_cleanup_preserves_unknown_split_files(tmp_path: Path) -> None:
+    split_root = tmp_path / "split_files"
+    custom = split_root / "custom" / "user-model.safetensors"
+    custom.parent.mkdir(parents=True)
+    custom.write_bytes(b"user data")
+    for subdir, _filename, _repo_path in anima_models._TARGETS:
+        (split_root / subdir).mkdir(parents=True, exist_ok=True)
+
+    anima_models._remove_empty_download_dirs(tmp_path)
+
+    assert custom.read_bytes() == b"user data"

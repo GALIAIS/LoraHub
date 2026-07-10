@@ -91,11 +91,7 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
-    import shutil
-
-    for venv in (plan.target / "venv", plan.target / ".venv"):
-        if venv.is_dir():
-            shutil.rmtree(venv, ignore_errors=True)
+    _common.cleanup_managed_venvs(plan.target)
 
 
 __all__ = [

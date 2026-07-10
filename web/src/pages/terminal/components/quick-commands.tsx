@@ -18,9 +18,9 @@ const PRESETS: Array<{ label: string; command: string; hint?: string }> = [
     hint: "可升级的包",
   },
   {
-    label: "升级 pip",
-    command: "pip install --upgrade pip",
-    hint: "更新 pip 自身（uv venv 自动用 uv pip 路由）",
+    label: "依赖检查",
+    command: "pip check",
+    hint: "检查已安装包的依赖一致性",
   },
   {
     label: "uv pip list",
@@ -34,9 +34,9 @@ const PRESETS: Array<{ label: string; command: string; hint?: string }> = [
   },
   { label: "python -V", command: "python -V", hint: "解释器版本" },
   {
-    label: "torch.cuda",
-    command: "python -c \"import torch; print(torch.version.cuda, torch.cuda.is_available())\"",
-    hint: "检查 PyTorch + CUDA",
+    label: "GPU 状态",
+    command: "lorahub system gpu",
+    hint: "GPU、驱动与显存状态",
   },
 ]
 

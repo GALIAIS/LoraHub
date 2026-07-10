@@ -28,7 +28,11 @@ docker compose -f docker/docker-compose.yml --profile gpu up -d --build
 docker compose -f docker/docker-compose.yml --profile cpu up -d --build
 ```
 
-访问 `http://127.0.0.1:18765`。
+访问 `http://127.0.0.1:18765`。首次启动使用下列命令读取持久化访问令牌：
+
+```bash
+docker exec lorahub python -c "from lorahub.api.auth import api_token_path; print(api_token_path().read_text().strip())"
+```
 
 ## 数据持久化
 
@@ -54,4 +58,4 @@ docker compose exec lorahub lorahub bootstrap-kohya
 
 ## 远程访问
 
-默认 `127.0.0.1`,**无内置鉴权**。远程访问请用反代加 TLS + 认证,勿直接 publish 到公网。详见完整文档。
+默认绑定 `127.0.0.1`，并启用 API 令牌认证。远程访问仍应使用 TLS，避免令牌在明文 HTTP 上传输。

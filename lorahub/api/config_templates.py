@@ -32,6 +32,7 @@ from typing import Any
 
 import yaml
 
+from lorahub.api.dataset_files import is_link_like
 from lorahub.core.config.schema import TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,9 @@ def load_templates(directory: Path | None = None) -> list[dict[str, Any]]:
             continue
         for path in sorted(base.glob("*.y*ml")):
             if path.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            if is_link_like(path):
+                logger.warning("skipping linked config template %s", path)
                 continue
             if path.stem in seen:
                 continue

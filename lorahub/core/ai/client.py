@@ -44,6 +44,7 @@ from lorahub.api.ai_store import (
     AIRoute,
     AIStore,
 )
+from lorahub.core.redaction import redact_command_text
 
 _log = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ class ConnectionTestResult:
 
 
 _TRAILING_SLASHES = re.compile(r"/+$")
+_MAX_CHAT_RESPONSE_BYTES = 16 * 1024**2
+_MAX_MODELS_RESPONSE_BYTES = 8 * 1024**2
 
 
 def build_endpoint_url(base_url: str, endpoint_path: str) -> str:
@@ -109,8 +112,10 @@ def build_endpoint_url(base_url: str, endpoint_path: str) -> str:
     if not base_url or not base_url.strip():
         raise ValueError("AI provider base URL is required.")
     parts = urlsplit(base_url.strip())
-    if not parts.scheme or not parts.netloc:
-        raise ValueError(f"AI provider base URL is malformed: {base_url!r}")
+    if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+        raise ValueError("AI provider base URL must use HTTP or HTTPS")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("AI provider base URL cannot contain credentials")
     base_path = _TRAILING_SLASHES.sub("", parts.path or "")
     suffix = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
     if base_path == "/v1" or base_path.endswith("/v1"):
@@ -151,25 +156,31 @@ def _post_chat(
     url = build_endpoint_url(base_url, "/v1/chat/completions")
     try:
         with httpx.Client(timeout=timeout) as client:
-            r = client.post(url, headers=headers, json=body)
+            with client.stream("POST", url, headers=headers, json=body) as response:
+                status_code = response.status_code
+                raw = _read_http_body(response, _MAX_CHAT_RESPONSE_BYTES)
     except httpx.HTTPError as exc:
         raise AIError(
-            f"network error reaching {url}: {exc}",
+            "network error reaching AI provider: "
+            + redact_command_text(str(exc))[:500],
             status_code=None,
             retryable=True,
         ) from exc
-    if r.status_code != 200:
+    if status_code != 200:
+        detail = redact_command_text(raw.decode("utf-8", errors="replace"))[:500]
         raise AIError(
-            f"upstream returned {r.status_code}: {r.text[:500]}",
-            status_code=r.status_code,
-            retryable=r.status_code in {408, 429, 500, 502, 503, 504, 529},
+            f"upstream returned {status_code}: {detail}",
+            status_code=status_code,
+            retryable=status_code in {408, 429, 500, 502, 503, 504, 529},
         )
     try:
-        return r.json()
-    except ValueError as exc:
-        raise AIError(
-            f"upstream returned non-JSON: {r.text[:500]}",
-        ) from exc
+        decoded = json.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
+        detail = redact_command_text(raw.decode("utf-8", errors="replace"))[:500]
+        raise AIError(f"upstream returned non-JSON: {detail}") from exc
+    if not isinstance(decoded, dict):
+        raise AIError("upstream returned a non-object JSON response")
+    return decoded
 
 
 def _get_models(
@@ -182,21 +193,28 @@ def _get_models(
     url = build_endpoint_url(base_url, "/v1/models")
     try:
         with httpx.Client(timeout=timeout) as client:
-            r = client.get(url, headers=headers)
+            with client.stream("GET", url, headers=headers) as response:
+                status_code = response.status_code
+                raw = _read_http_body(response, _MAX_MODELS_RESPONSE_BYTES)
     except httpx.HTTPError as exc:
         raise AIError(
-            f"network error reaching {url}: {exc}",
+            "network error reaching AI provider: "
+            + redact_command_text(str(exc))[:500],
             retryable=True,
         ) from exc
-    if r.status_code != 200:
+    if status_code != 200:
+        detail = redact_command_text(raw.decode("utf-8", errors="replace"))[:500]
         raise AIError(
-            f"models endpoint returned {r.status_code}: {r.text[:500]}",
-            status_code=r.status_code,
+            f"models endpoint returned {status_code}: {detail}",
+            status_code=status_code,
         )
     try:
-        data = r.json()
-    except ValueError as exc:
-        raise AIError(f"models endpoint returned non-JSON: {r.text[:500]}") from exc
+        data = json.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
+        detail = redact_command_text(raw.decode("utf-8", errors="replace"))[:500]
+        raise AIError(f"models endpoint returned non-JSON: {detail}") from exc
+    if not isinstance(data, dict):
+        raise AIError("models endpoint returned a non-object JSON response")
     items = data.get("data") or data.get("models") or []
     if not isinstance(items, list):
         return []
@@ -207,6 +225,24 @@ def _get_models(
         elif isinstance(item, str):
             out.append({"id": item})
     return out
+
+
+def _read_http_body(response: Any, limit: int) -> bytes:
+    declared = response.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > limit:
+                raise AIError(f"AI provider response exceeds {limit} bytes")
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes():
+        total += len(chunk)
+        if total > limit:
+            raise AIError(f"AI provider response exceeds {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # --------------------------------------------------------------------------- #
@@ -302,18 +338,27 @@ def _apply_extra_body(
 ) -> dict[str, Any]:
     """Merge a JSON-encoded `extra_body` into the request body.
 
-    Invalid JSON is logged and ignored — we never want a malformed
-    routes table to break a chat request silently.
+    Invalid JSON and core-field overrides are rejected with an actionable
+    client error instead of silently changing the request contract.
     """
     if not extra_body_json:
         return body
     try:
         extra = json.loads(extra_body_json)
     except json.JSONDecodeError as exc:
-        _log.warning("ignoring invalid extra_body_json: %s", exc)
-        return body
-    if isinstance(extra, dict):
-        body.update(extra)
+        raise AIError(
+            f"extraBodyJson is invalid JSON at position {exc.pos}",
+            status_code=400,
+        ) from exc
+    if not isinstance(extra, dict):
+        raise AIError("extraBodyJson must contain a JSON object", status_code=400)
+    reserved = {"messages", "model"}.intersection(extra)
+    if reserved:
+        raise AIError(
+            "extraBodyJson cannot override: " + ", ".join(sorted(reserved)),
+            status_code=400,
+        )
+    body.update(extra)
     return body
 
 
@@ -342,26 +387,39 @@ def _parse_chat_response(
     raw: dict[str, Any], provider: AIProvider, model_id: str
 ) -> InvokeResult:
     choices = raw.get("choices") or []
-    if not choices:
+    if not isinstance(choices, list) or not choices:
         raise AIError(
             f"empty choices in response from {provider.id}",
             provider_id=provider.id,
         )
-    msg = choices[0].get("message") or {}
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise AIError("upstream returned an invalid choices entry")
+    msg = first.get("message") or {}
+    if not isinstance(msg, dict):
+        raise AIError("upstream returned an invalid message object")
     content = msg.get("content")
     if isinstance(content, list):
         # Multimodal-style content list — concat text parts.
         content = "".join(
-            p.get("text", "") for p in content if isinstance(p, dict)
+            str(p.get("text") or "") for p in content if isinstance(p, dict)
         )
     if content is None:
         content = ""
+    elif not isinstance(content, str):
+        raise AIError("upstream returned invalid message content")
     usage = raw.get("usage") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    reasoning = msg.get("reasoning") or msg.get("reasoning_content")
+    if reasoning is not None and not isinstance(reasoning, str):
+        reasoning = str(reasoning)
+    response_model = raw.get("model") or model_id
     return InvokeResult(
         content=content,
-        reasoning=msg.get("reasoning") or msg.get("reasoning_content"),
-        finish_reason=choices[0].get("finish_reason"),
-        model_id=raw.get("model") or model_id,
+        reasoning=reasoning,
+        finish_reason=first.get("finish_reason"),
+        model_id=str(response_model),
         provider_id=provider.id,
         provider_name=provider.name,
         usage_input_tokens=usage.get("prompt_tokens"),
@@ -430,7 +488,10 @@ def invoke(
                 _now() + timedelta(seconds=cooldown_seconds_on_rate_limit)
             ).isoformat()
         store.update_key_runtime(
-            key.id, success=False, error=str(exc), cooldown_until=cooldown_until
+            key.id,
+            success=False,
+            error=redact_command_text(str(exc))[:2_000],
+            cooldown_until=cooldown_until,
         )
         store.update_provider_last_index(provider.id, idx)
         raise
@@ -466,13 +527,18 @@ def discover_models(store: AIStore, provider_id: str) -> list[AIModel]:
     try:
         items = _get_models(provider.base_url, headers, timeout=15.0)
     except AIError as exc:
-        store.update_key_runtime(key.id, success=False, error=str(exc))
+        store.update_key_runtime(
+            key.id,
+            success=False,
+            error=redact_command_text(str(exc))[:2_000],
+        )
         raise
     store.update_key_runtime(key.id, success=True)
     store.update_provider_last_index(provider.id, idx)
     drafts: list[AIModel] = []
     for item in items:
-        mid = (item.get("id") or "").strip()
+        raw_id = item.get("id")
+        mid = raw_id.strip() if isinstance(raw_id, str) else ""
         if not mid:
             continue
         drafts.append(

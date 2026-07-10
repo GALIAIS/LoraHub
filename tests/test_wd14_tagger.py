@@ -20,6 +20,22 @@ def test_tagging_package_exports_download_status() -> None:
     assert download_status.snapshot is snapshot
 
 
+def test_download_progress_honors_stop_request() -> None:
+    from lorahub.core.tagging import download_status
+
+    stop = False
+    progress_type = download_status.tqdm_class_for(
+        "owner/model",
+        "model.onnx",
+        lambda: stop,
+    )
+    progress = progress_type(total=10)
+    stop = True
+
+    with pytest.raises(InterruptedError, match="stopped by user"):
+        progress.update(1)
+
+
 @dataclass
 class _FakeSpec:
     name: str = "input"

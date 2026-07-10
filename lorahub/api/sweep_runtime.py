@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from lorahub.api.paths import resolve_sweep_variant_path
 from lorahub.api.state import JobRecord
 from lorahub.core.sweep import MaterialisedSweep, SweepError
 
@@ -503,7 +504,15 @@ def build_streaming_launch(
                 variant_name,
             )
             return None
-        workspace_v = (workspace_root / variant_name).resolve()
+        try:
+            workspace_v = resolve_sweep_variant_path(workspace_root, variant_name)
+        except ValueError:
+            log.exception(
+                "sweep %s: streaming launch refused unsafe variant %s",
+                sweep_id,
+                variant_name,
+            )
+            return None
         metadata = {
             "sweep_id": sweep_id,
             "variant_name": variant_name,

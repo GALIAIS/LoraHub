@@ -12,14 +12,20 @@ deepspeed, etc.).
 from __future__ import annotations
 
 import collections
+import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
 from lorahub.core.backends.errors import BootstrapError
+from lorahub.core.paths import project_root
+from lorahub.core.redaction import redact_command_text
 from lorahub.core.toolchain import uv as _uv
 
 ProgressCallback = Callable[[str], None]
@@ -95,7 +101,7 @@ def run_step(
     tail: collections.deque[str] = collections.deque(maxlen=12)
     assert proc.stderr is not None  # noqa: S101 -- PIPE above guarantees this
     for raw_line in proc.stderr:
-        line = raw_line.rstrip()
+        line = redact_command_text(raw_line.rstrip())
         if not line:
             continue
         tail.append(line)
@@ -126,6 +132,62 @@ def _is_complete_git_repo(target: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+def is_complete_git_repo(target: Path) -> bool:
+    """Public, side-effect-free checkout probe used by bootstrap safety gates."""
+    return _is_complete_git_repo(target)
+
+
+def _install_marker_path(target: Path) -> Path:
+    return target.parent / f".{target.name}.lorahub-install.json"
+
+
+def _write_install_marker(target: Path, repo_url: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    marker = _install_marker_path(target)
+    payload = json.dumps(
+        {"target": str(target.expanduser().resolve()), "repo_url": repo_url},
+        ensure_ascii=True,
+    )
+    fd, raw = tempfile.mkstemp(
+        dir=marker.parent,
+        prefix=f".{marker.name}.",
+        suffix=".tmp",
+    )
+    tmp = Path(raw)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        tmp.replace(marker)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def is_managed_partial_install(target: Path, repo_url: str) -> bool:
+    """Return whether an interrupted clone marker owns this exact target."""
+    marker = _install_marker_path(target)
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("target") == str(target.expanduser().resolve())
+        and payload.get("repo_url") == repo_url
+    )
+
+
+def clear_install_marker(target: Path, repo_url: str) -> None:
+    marker = _install_marker_path(target)
+    if is_managed_partial_install(target, repo_url):
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def clone_repo(
     plan: BootstrapPlanLike,
     *,
@@ -146,8 +208,16 @@ def clone_repo(
     diffusion-pipe, which keeps ComfyUI and HunyuanVideo as submodules whose
     contents are imported at training time (e.g. ``import comfy``).
     """
+    try:
+        validate_backend_source_target(plan.target)
+    except ValueError as exc:
+        raise BootstrapError("validate clone target", 1) from exc
+    if plan.target.exists() and not plan.target.is_dir():
+        msg = f"target path is not a directory: {plan.target}"
+        raise BootstrapError("clone", 1) from NotADirectoryError(msg)
     if plan.target.exists() and any(plan.target.iterdir()):
         if _is_complete_git_repo(plan.target):
+            clear_install_marker(plan.target, repo_url)
             if progress is not None:
                 progress(f"clone {label} -> {plan.target} (already complete, skipped)")
             if recurse_submodules:
@@ -169,7 +239,12 @@ def clone_repo(
     if recurse_submodules:
         cmd += ["--recurse-submodules", "--shallow-submodules"]
     cmd += [proxied, str(plan.target)]
+    try:
+        _write_install_marker(plan.target, repo_url)
+    except OSError as exc:
+        raise BootstrapError("prepare clone", 1) from exc
     run_step(cmd, f"clone {label} -> {plan.target}", progress)
+    clear_install_marker(plan.target, repo_url)
 
 
 def _ensure_submodules(
@@ -199,8 +274,9 @@ def create_venv(
     progress: ProgressCallback | None = None,
 ) -> None:
     try:
+        validate_backend_source_target(plan.target)
         _uv.create_venv(plan.target, python=plan.base_python, progress=progress)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise BootstrapError("create venv", 1) from exc
 
 
@@ -308,7 +384,7 @@ def pip_install_with_torch_index_fallback(
     raise RuntimeError(f"{step} failed on all PyTorch indexes:\n{detail}")
 
 
-def cleanup_partial(target: Path) -> None:
+def cleanup_partial(target: Path, repo_url: str) -> None:
     """Remove a half-installed checkout so the user can retry.
 
     Git pack files inside ``.git/objects/pack/*.idx`` are written read-only
@@ -319,6 +395,18 @@ def cleanup_partial(target: Path) -> None:
     """
     if not target.exists():
         return
+    validate_destructive_cleanup_target(target, allow_managed_backend=True)
+    if not is_managed_partial_install(target, repo_url):
+        raise ValueError(
+            f"refusing to delete backend without a matching install marker: {target}"
+        )
+
+    _rmtree_force(target)
+    clear_install_marker(target, repo_url)
+
+
+def _rmtree_force(target: Path) -> None:
+    """Remove a verified directory, retrying read-only files on Windows."""
 
     def _force_writable(func: Any, path: str, _exc_info: Any) -> None:  # noqa: ANN401
         import stat as _stat  # noqa: PLC0415
@@ -335,6 +423,146 @@ def cleanup_partial(target: Path) -> None:
         shutil.rmtree(target, onerror=_force_writable)
 
 
+def cleanup_managed_venvs(target: Path) -> None:
+    """Remove only backend-owned venv directories, never backend source."""
+    if _path_uses_link(target):
+        raise ValueError(f"backend source cannot use links during cleanup: {target}")
+    root = validate_backend_source_target(target)
+    for name in (".venv", "venv"):
+        venv = root / name
+        if venv.is_symlink():
+            venv.unlink(missing_ok=True)
+            continue
+        try:
+            attrs = getattr(os.lstat(venv), "st_file_attributes", 0)
+        except OSError:
+            attrs = 0
+        if attrs & 0x400:
+            os.rmdir(venv)
+            continue
+        if venv.is_dir():
+            _rmtree_force(venv)
+
+
+def validate_destructive_cleanup_target(
+    target: Path,
+    *,
+    allow_managed_backend: bool = False,
+) -> Path:
+    """Reject recursive deletion targets that overlap code or user data."""
+    if _path_uses_link(target):
+        raise ValueError(f"refusing to recursively delete linked path: {target}")
+    resolved = target.expanduser().resolve()
+    root = project_root().resolve()
+    home = Path.home().resolve()
+    if resolved.parent == resolved or resolved in {home, root}:
+        raise ValueError(f"refusing to delete protected directory: {resolved}")
+    try:
+        root.relative_to(resolved)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"refusing to delete a parent of the project: {resolved}")
+
+    external_root = (root / "external").resolve()
+    protected = {
+        root / ".git",
+        root / ".lorahub",
+        root / ".venv",
+        root / "configs",
+        root / "datasets",
+        root / "docker",
+        root / "external",
+        root / "lorahub",
+        root / "models",
+        root / "output",
+        root / "runs",
+        root / "scripts",
+        root / "tests",
+        root / "web",
+    }
+    if allow_managed_backend:
+        try:
+            relative_backend = resolved.relative_to(external_root)
+        except ValueError:
+            pass
+        else:
+            # Cloned backends are direct children of external/. A marker is
+            # checked by cleanup_partial before any removal occurs.
+            if len(relative_backend.parts) == 1:
+                protected.remove(root / "external")
+    for env_name in ("LORAHUB_DATASETS_ROOT", "LORAHUB_MODELS_ROOT"):
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            protected.add(Path(raw).expanduser().resolve())
+    for item in protected:
+        item = item.resolve()
+        try:
+            resolved.relative_to(item)
+            target_inside = True
+        except ValueError:
+            target_inside = False
+        try:
+            item.relative_to(resolved)
+            contains_protected = True
+        except ValueError:
+            contains_protected = False
+        if target_inside or contains_protected:
+            raise ValueError(f"refusing to delete protected directory: {item}")
+    return resolved
+
+
+def validate_backend_source_target(target: Path) -> Path:
+    """Ensure an installer cannot treat an application or data root as a backend."""
+    if _path_uses_link(target):
+        raise ValueError(f"backend target cannot use links: {target}")
+    resolved = target.expanduser().resolve()
+    data_root = project_root().resolve()
+    code_root = Path(__file__).resolve().parents[4]
+    exact_roots = {Path.home().resolve(), data_root, code_root}
+    if resolved.parent == resolved or resolved in exact_roots:
+        raise ValueError(f"backend target overlaps a protected root: {resolved}")
+
+    protected_data = {
+        data_root / "configs",
+        data_root / "datasets",
+        data_root / "models",
+        data_root / "output",
+        data_root / "runs",
+    }
+    for env_name in ("LORAHUB_DATASETS_ROOT", "LORAHUB_MODELS_ROOT"):
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            protected_data.add(Path(raw).expanduser().resolve())
+    for item in protected_data:
+        try:
+            resolved.relative_to(item.resolve())
+        except ValueError:
+            continue
+        raise ValueError(f"backend target overlaps user data: {item.resolve()}")
+    return resolved
+
+
+def _is_link_path(path: Path) -> bool:
+    try:
+        attrs = getattr(os.lstat(path), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return path.is_symlink() or bool(
+        attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
+def _path_uses_link(path: Path) -> bool:
+    current = path.expanduser().absolute()
+    while True:
+        if _is_link_path(current):
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
 __all__ = [
     "DEFAULT_CUDA",
     "DEFAULT_DEPTH",
@@ -345,12 +573,18 @@ __all__ = [
     "BootstrapPlanLike",
     "ProgressCallback",
     "cleanup_partial",
+    "cleanup_managed_venvs",
+    "clear_install_marker",
     "clone_repo",
     "create_venv",
     "install_torch",
+    "is_complete_git_repo",
+    "is_managed_partial_install",
     "pip_install_with_torch_index_fallback",
     "run_step",
     "torch_index_candidates",
     "torch_index_from_base",
     "upgrade_pip",
+    "validate_destructive_cleanup_target",
+    "validate_backend_source_target",
 ]

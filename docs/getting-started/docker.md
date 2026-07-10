@@ -32,7 +32,13 @@ cp docker/.env.example docker/.env
 docker compose -f docker/docker-compose.yml --profile gpu up -d --build
 ```
 
-启动后访问 `http://127.0.0.1:18765`。健康检查:
+启动后访问 `http://127.0.0.1:18765`。首次登录令牌可通过下列命令读取：
+
+```bash
+docker exec lorahub python -c "from lorahub.api.auth import api_token_path; print(api_token_path().read_text().strip())"
+```
+
+健康检查:
 
 ```bash
 curl http://127.0.0.1:18765/api/health
@@ -163,21 +169,23 @@ docker compose -f docker/docker-compose.yml --profile gpu up -d
 
 ## 文件权限
 
-镜像以非 root 用户 `lorahub` 运行(UID/GID 由 `PUID`/`PGID` 控制,默认 1000)。`entrypoint.sh` 启动前把 `/data` 的属主改成 `PUID:PGID`,使卷内文件与宿主机用户对齐。若 bind mount 的宿主机目录属主不是 1000,在 `.env` 设:
+镜像以非 root 用户 `lorahub` 运行(UID/GID 由 `PUID`/`PGID` 控制,默认 1000)。`entrypoint.sh` 只设置受管目录本身的属主，不递归修改模型、数据集或 bind mount 内已有文件。若 bind mount 的宿主机目录不可由 1000 访问，在 `.env` 中填写宿主机实际 UID/GID:
 
 ```bash
 PUID=1002        # 改成宿主机用户的 UID(id -u)
 PGID=1002        # 同上(id -g)
 ```
 
+`PUID` 与 `PGID` 必须是大于 0 的数字。已有文件仍由宿主机负责授权；启动容器不会批量改写其属主。
+
 ---
 
 ## 远程访问与安全
 
-LoraHub 默认绑定 `127.0.0.1:18765`,**无内置鉴权**。如需远程访问:
+LoraHub 默认绑定 `127.0.0.1:18765`，容器内部启用 API 令牌认证。如需远程访问:
 
 1. 保持 `LORAHUB_BIND_ADDR=127.0.0.1`(默认)。
-2. 用反向代理(Nginx / Caddy / Tailscale Funnel 等)加 TLS + 基本认证或 OAuth。
+2. 用反向代理(Nginx / Caddy / Tailscale Funnel 等)加 TLS；可再叠加基本认证或 OAuth。
 3. 反代需支持 SSE / WebSocket 长连接(任务事件流、系统遥测)。Nginx 关键配置:`proxy_buffering off;`、`proxy_read_timeout 1h;`。
 
 **不要**直接把端口 publish 到公网。

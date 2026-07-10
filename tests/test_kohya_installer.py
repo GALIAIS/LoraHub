@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from lorahub.core.backends._common import installer as common
 from lorahub.core.backends.kohya import installer
 from lorahub.core.toolchain import uv as _uv
 
@@ -171,5 +172,6 @@ def test_cleanup_removes_partial_target(tmp_path: Path) -> None:
     target = tmp_path / "sd"
     target.mkdir()
     (target / "x").write_text("y", encoding="utf-8")
+    common._write_install_marker(target, installer.KOHYA_REPO_URL)
     installer.cleanup_partial(installer.BootstrapPlan(target=target))
     assert not target.exists()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from lorahub.api.helpers import (
     _configs_dir,
 )
 from lorahub.api import config_templates as config_templates_module
+from lorahub.api.dataset_files import is_link_like
 from lorahub.core.config.loader import dump_config, load_config, strip_template_metadata
 from lorahub.core.config.schema import TrainingConfig
 
@@ -155,12 +158,70 @@ def _new_config_target(name: str) -> Path:
     """Resolve the destination path for a write under configs_dir, blocking traversal."""
     base = _configs_dir()
     base.mkdir(parents=True, exist_ok=True)
-    target = (base / f"{name}.yaml").resolve()
+    target = Path(os.path.abspath(base / f"{name}.yaml"))
+    if is_link_like(target):
+        raise HTTPException(status_code=400, detail="config path cannot be a link")
     try:
         target.relative_to(base)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid name") from exc
     return target
+
+
+def _reserve_config_target(target: Path) -> None:
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"config {target.stem!r} already exists",
+        ) from exc
+    os.close(fd)
+
+
+def _persist_config(
+    cfg: TrainingConfig,
+    target: Path,
+    *,
+    overwrite: bool,
+) -> bool:
+    existed = target.exists()
+    if existed and not overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=f"config {target.stem!r} already exists; pass overwrite=true to replace",
+        )
+    reserved = False
+    if not existed:
+        _reserve_config_target(target)
+        reserved = True
+    try:
+        dump_config(cfg, target)
+    except Exception:
+        if reserved:
+            target.unlink(missing_ok=True)
+        raise
+    return existed
+
+
+def _copy_config_atomic(src: Path, dst: Path) -> None:
+    _reserve_config_target(dst)
+    temp_path: Path | None = None
+    try:
+        fd, raw = tempfile.mkstemp(
+            dir=dst.parent,
+            prefix=f".{dst.name}.",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        temp_path = Path(raw)
+        shutil.copy2(src, temp_path)
+        temp_path.replace(dst)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        dst.unlink(missing_ok=True)
+        raise
 
 
 @router.get("/configs/schema")
@@ -283,7 +344,7 @@ def list_configs() -> dict[str, Any]:
 
     items: list[dict[str, Any]] = []
     for p in sorted(base.glob("*.y*ml")):
-        if p.suffix.lower() not in {".yaml", ".yml"}:
+        if p.suffix.lower() not in {".yaml", ".yml"} or is_link_like(p):
             continue
         stat = p.stat()
         entry: dict[str, Any] = {
@@ -323,18 +384,12 @@ def save_config(req: SaveConfigRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target = _new_config_target(name)
-    if target.exists() and not req.overwrite:
-        raise HTTPException(
-            status_code=409,
-            detail=f"config {name!r} already exists; pass overwrite=true to replace",
-        )
-
-    dump_config(cfg, target)
+    overwritten = _persist_config(cfg, target, overwrite=req.overwrite)
     return {
         "name": name,
         "filename": target.name,
         "path": str(target),
-        "overwritten": target.exists(),
+        "overwritten": overwritten,
     }
 
 
@@ -384,13 +439,7 @@ def instantiate_config_template(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target = _new_config_target(name)
-    if target.exists() and not req.overwrite:
-        raise HTTPException(
-            status_code=409,
-            detail=f"config {name!r} already exists; pass overwrite=true to replace",
-        )
-
-    dump_config(cfg, target)
+    _persist_config(cfg, target, overwrite=req.overwrite)
     return {
         "name": name,
         "filename": target.name,
@@ -413,7 +462,7 @@ async def import_config(
     """
     canonical = _validate_config_name(name)
 
-    raw = await file.read()
+    raw = await file.read(_MAX_IMPORT_BYTES + 1)
     if len(raw) > _MAX_IMPORT_BYTES:
         raise HTTPException(
             status_code=413,
@@ -479,14 +528,7 @@ async def import_config(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target = _new_config_target(canonical)
-    already_exists = target.exists()
-    if already_exists and not overwrite:
-        raise HTTPException(
-            status_code=409,
-            detail=f"config {canonical!r} already exists; pass overwrite=true to replace",
-        )
-
-    dump_config(cfg, target)
+    already_exists = _persist_config(cfg, target, overwrite=overwrite)
     return {
         "name": canonical,
         "filename": target.name,
@@ -506,12 +548,6 @@ def duplicate_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
     new_name = _validate_config_name(req.new_name)
     dst = _new_config_target(new_name)
 
-    if dst.exists():
-        raise HTTPException(
-            status_code=409,
-            detail=f"config {new_name!r} already exists",
-        )
-
     # Sanity-check that the source is at least readable as YAML; we don't fail
     # the whole copy on a model-validation error so users can clone a config
     # they're still fixing.
@@ -520,7 +556,7 @@ def duplicate_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"cannot read source: {exc}") from exc
 
-    shutil.copy2(src, dst)
+    _copy_config_atomic(src, dst)
     return {
         "name": new_name,
         "filename": dst.name,
@@ -535,13 +571,13 @@ def rename_config(name: str, req: RenameConfigRequest) -> dict[str, Any]:
     new_name = _validate_config_name(req.new_name)
     dst = _new_config_target(new_name)
 
-    if dst.exists() and dst != src:
-        raise HTTPException(
-            status_code=409,
-            detail=f"config {new_name!r} already exists",
-        )
-
-    src.rename(dst)
+    if dst != src:
+        _reserve_config_target(dst)
+        try:
+            src.replace(dst)
+        except Exception:
+            dst.unlink(missing_ok=True)
+            raise
     return {
         "name": new_name,
         "filename": dst.name,

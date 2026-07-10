@@ -19,7 +19,7 @@ export interface ModelDownloadSession {
   target_dir: string | null
   threads: number
   paths: string[]
-  status: "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+  status: "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   percent: number
   events: ModelDownloadEvent[]
   result: {
@@ -38,7 +38,7 @@ export interface ModelDownloadSession {
 export interface LatestModelDownloadSession
   extends Partial<Omit<ModelDownloadSession, "session_id" | "status">> {
   session_id: string | null
-  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+  status: "idle" | "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   events: ModelDownloadEvent[]
   result: ModelDownloadSession["result"]
   error: string | null

@@ -15,6 +15,8 @@ helper to return canned responses.
 
 from __future__ import annotations
 
+import io
+import time
 from datetime import datetime
 from typing import Any
 
@@ -273,6 +275,32 @@ def test_webhook_network_error_is_retryable(monkeypatch: pytest.MonkeyPatch) -> 
     res = sink.send(_make_report())
     assert res.ok is False
     assert res.retryable is True
+
+
+def test_webhook_rejects_non_http_url() -> None:
+    sink = WebhookSink(url="file:///tmp/secret")
+    res = sink.send(_make_report())
+    assert res.ok is False
+    assert res.retryable is False
+    assert "http" in res.error.lower()
+
+
+def test_webhook_success_does_not_expose_secret_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sinks_module, "_http", lambda *a, **kw: (204, ""))
+    sink = WebhookSink(url="https://hooks.example.com/private?token=secret-value")
+    res = sink.send(_make_report())
+    assert res.ok is True
+    assert res.url == ""
+
+
+def test_http_response_reader_is_bounded() -> None:
+    payload = b"x" * (sinks_module._MAX_HTTP_RESPONSE_BYTES + 1024)
+    result = sinks_module._read_limited(io.BytesIO(payload))
+    assert result.startswith(b"x" * 32)
+    assert result.endswith(b"...[response truncated]")
+    assert len(result) < len(payload)
 
 
 # --------------------------------------------------------------------- #
@@ -560,6 +588,72 @@ def test_dispatcher_send_now_records_failed_when_channel_off(tmp_path) -> None: 
     persisted = store.get(rep.id)
     assert persisted is not None
     assert persisted.upstream_status == "failed"
+
+
+def test_dispatcher_send_now_does_not_resend_completed_report(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from lorahub.api.error_reports import ErrorReportStore
+
+    store = ErrorReportStore(tmp_path / "errors.sqlite")
+    sink = _StubSink([SendResult(ok=True, upstream_id="55", url="https://x/55")])
+    dispatcher = UpstreamDispatcher(store=store, sink_factory=lambda: sink)
+    rep = _make_report()
+    store.insert(rep)
+
+    first = dispatcher.send_now(rep)
+    second = dispatcher.send_now(rep)
+
+    assert first.ok and second.ok
+    assert sink.calls == 1
+
+
+def test_dispatcher_sink_factory_failure_is_redacted(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from lorahub.api.error_reports import ErrorReportStore
+
+    store = ErrorReportStore(tmp_path / "errors.sqlite")
+    rep = _make_report()
+    store.insert(rep)
+
+    def broken_factory():  # type: ignore[no-untyped-def]
+        raise RuntimeError("token=secret-value-123456")
+
+    dispatcher = UpstreamDispatcher(store=store, sink_factory=broken_factory)
+    res = dispatcher.send_now(rep)
+
+    assert res.ok is False
+    assert "secret-value" not in res.error
+    persisted = store.get(rep.id)
+    assert persisted is not None
+    assert persisted.upstream_status == "failed"
+    assert "secret-value" not in (persisted.upstream_error or "")
+
+
+def test_dispatcher_recovers_durable_queue_after_restart(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from lorahub.api.error_reports import ErrorReportStore
+
+    store = ErrorReportStore(tmp_path / "errors.sqlite")
+    sink = _StubSink([SendResult(ok=True, upstream_id="56", url="https://x/56")])
+    rep = _make_report()
+    rep.upstream_status = "queued"
+    store.insert(rep)
+    dispatcher = UpstreamDispatcher(
+        store=store,
+        sink_factory=lambda: sink,
+        poll_interval_s=0.01,
+    )
+
+    dispatcher.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        persisted = store.get(rep.id)
+        if persisted is not None and persisted.upstream_status == "sent":
+            break
+        time.sleep(0.01)
+    dispatcher.stop(timeout=1.0)
+
+    persisted = store.get(rep.id)
+    assert persisted is not None
+    assert persisted.upstream_status == "sent"
+    assert sink.calls == 1
 
 
 # --------------------------------------------------------------------- #

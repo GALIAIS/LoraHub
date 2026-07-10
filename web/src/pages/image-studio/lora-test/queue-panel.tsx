@@ -25,7 +25,11 @@ export function QueuePanel({
   onCancel: () => void
   canceling: boolean
 }) {
-  const active = session?.status === "queued" || session?.status === "running"
+  const active =
+    session?.status === "queued" ||
+    session?.status === "running" ||
+    session?.status === "stop_requested"
+  const stopping = session?.status === "stop_requested" || canceling
   return (
     <Card size="sm">
       <CardHeader>
@@ -60,10 +64,10 @@ export function QueuePanel({
                 variant="destructive"
                 size="sm"
                 onClick={onCancel}
-                disabled={canceling}
+                disabled={stopping}
               >
-                {canceling ? <Loader2 className="animate-spin" /> : <Square />}
-                停止
+                {stopping ? <Loader2 className="animate-spin" /> : <Square />}
+                {stopping ? "正在停止" : "停止"}
               </Button>
             )}
             <div className="flex flex-col gap-2">

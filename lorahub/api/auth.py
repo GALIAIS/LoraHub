@@ -1,0 +1,353 @@
+"""Remote-access authentication for the HTTP and WebSocket surface."""
+
+from __future__ import annotations
+
+import hmac
+import html
+import ipaddress
+import os
+import secrets
+import stat
+import time
+from contextlib import suppress
+from http.cookies import CookieError, SimpleCookie
+from pathlib import Path
+from typing import Annotated
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.datastructures import Headers
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from lorahub.api.runtime_bind import state_dir
+
+API_TOKEN_ENV = "LORAHUB_API_TOKEN"
+COOKIE_NAME = "lorahub_access"
+router = APIRouter(prefix="/api")
+
+
+def _token_path() -> Path:
+    return state_dir() / "api-token"
+
+
+def api_token_path() -> Path:
+    """Return the persistent token path without reading its secret value."""
+    return _token_path()
+
+
+def configured_api_token() -> str | None:
+    return os.environ.get(API_TOKEN_ENV, "").strip() or None
+
+
+def _is_link_like(path: Path) -> bool:
+    """Return true for a symlink or Windows junction/reparse directory."""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
+
+
+def _read_token_file(path: Path) -> str:
+    """Read a small regular token file without following Unix symlinks."""
+    if _is_link_like(path):
+        raise RuntimeError(f"refusing to read linked API token file: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"API token path is not a regular file: {path}")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            value = handle.read(4097)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(value) > 4096:
+        raise RuntimeError(f"API token file is unexpectedly large: {path}")
+    return value.strip()
+
+
+def ensure_api_token() -> str:
+    """Return a stable per-user token and expose it to the API process."""
+    token = configured_api_token()
+    if token:
+        return token
+
+    path = _token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with suppress(OSError):
+        path.parent.chmod(0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    for attempt in range(21):
+        try:
+            token = _read_token_file(path)
+        except FileNotFoundError:
+            token = ""
+        except RuntimeError:
+            raise
+        except OSError as exc:
+            if attempt < 20:
+                time.sleep(0.05)
+                continue
+            raise RuntimeError(f"could not read API token file at {path}: {exc}") from exc
+        if token:
+            with suppress(OSError):
+                path.chmod(0o600)
+            os.environ[API_TOKEN_ENV] = token
+            return token
+
+        if path.exists():
+            if _is_link_like(path):
+                raise RuntimeError(f"refusing to replace linked API token file: {path}")
+            if attempt < 20:
+                time.sleep(0.05)
+                continue
+            with suppress(OSError):
+                path.unlink()
+
+        token = secrets.token_urlsafe(32)
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        with suppress(OSError):
+            path.chmod(0o600)
+        os.environ[API_TOKEN_ENV] = token
+        return token
+
+    raise RuntimeError(f"could not create a non-empty API token at {path}")
+
+
+def api_auth_headers() -> dict[str, str]:
+    """Headers for local CLI clients talking to a protected daemon."""
+    token = configured_api_token()
+    if token is None:
+        try:
+            token = _read_token_file(_token_path()) or None
+        except (OSError, RuntimeError):
+            token = None
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def is_loopback_host(host: str) -> bool:
+    value = host.strip().lower().strip("[]")
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _host_name(headers: Headers) -> str:
+    value = headers.get("host", "")
+    if value.startswith("["):
+        end = value.find("]")
+        return value[1:end] if end > 0 else value
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+def _origin_allows_local_bypass(
+    scope: Scope,
+    headers: Headers,
+    allowed_origins: frozenset[str],
+) -> bool:
+    origin = headers.get("origin", "").strip().rstrip("/")
+    if not origin:
+        # Native clients such as the CLI/curl do not send Origin.
+        return True
+    if origin in allowed_origins:
+        return True
+    scheme = str(scope.get("scheme") or "http").lower()
+    authority = headers.get("host", "").strip().lower().rstrip("/")
+    return bool(authority and origin.lower() == f"{scheme}://{authority}")
+
+
+def _is_local_scope(
+    scope: Scope,
+    headers: Headers,
+    allowed_origins: frozenset[str] = frozenset(),
+) -> bool:
+    if any(
+        headers.get(name)
+        for name in ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip")
+    ):
+        return False
+    client = scope.get("client")
+    client_host = str(client[0]) if client else ""
+    if client_host == "testclient":
+        return _origin_allows_local_bypass(scope, headers, allowed_origins)
+    return (
+        is_loopback_host(client_host)
+        and is_loopback_host(_host_name(headers))
+        and _origin_allows_local_bypass(scope, headers, allowed_origins)
+    )
+
+
+def _provided_token(headers: Headers) -> str | None:
+    authorization = headers.get("authorization", "")
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip()
+    direct = headers.get("x-lorahub-token", "").strip()
+    if direct:
+        return direct
+    raw_cookie = headers.get("cookie", "")
+    if raw_cookie:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw_cookie)
+        except CookieError:
+            return None
+        morsel = cookie.get(COOKIE_NAME)
+        if morsel is not None:
+            return morsel.value
+    return None
+
+
+def _valid_token(provided: str | None, expected: str | None) -> bool:
+    return bool(provided and expected and hmac.compare_digest(provided, expected))
+
+
+class RemoteAccessMiddleware:
+    """Require authentication whenever the request is not strictly local."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        allowed_origins: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        self.app = app
+        self.allowed_origins = frozenset(
+            origin.strip().rstrip("/")
+            for origin in (allowed_origins or ())
+            if origin.strip()
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        path = str(scope.get("path", ""))
+        token = configured_api_token()
+        local = _is_local_scope(scope, headers, self.allowed_origins)
+        if path == "/api/auth/session" or (
+            scope["type"] == "http" and scope.get("method") == "OPTIONS"
+        ):
+            await self.app(scope, receive, send)
+            return
+        if token is None and local:
+            await self.app(scope, receive, send)
+            return
+        if path == "/api/health" and local:
+            await self.app(scope, receive, send)
+            return
+        if _valid_token(_provided_token(headers), token):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 4401 if token else 4403})
+            return
+        if path.startswith("/api/"):
+            detail = (
+                "remote access requires authentication"
+                if token
+                else "remote access is disabled; set LORAHUB_API_TOKEN or use an SSH tunnel"
+            )
+            response = JSONResponse({"detail": detail}, status_code=401 if token else 403)
+        elif token:
+            query = bytes(scope.get("query_string", b"")).decode("latin-1")
+            next_path = f"{path}?{query}" if query else path
+            response = RedirectResponse(
+                f"/api/auth/session?{urlencode({'next': next_path})}",
+                status_code=303,
+            )
+        else:
+            response = HTMLResponse(
+                "Remote access is disabled. Set LORAHUB_API_TOKEN or use an SSH tunnel.",
+                status_code=403,
+            )
+        await response(scope, receive, send)
+
+
+def _safe_next(value: str) -> str:
+    if (
+        value.startswith("/")
+        and not value.startswith("//")
+        and "\\" not in value
+        and "\r" not in value
+        and "\n" not in value
+    ):
+        return value
+    return "/"
+
+
+def _login_page(next_path: str, *, error: str = "", status_code: int = 200) -> HTMLResponse:
+    safe_next = html.escape(_safe_next(next_path), quote=True)
+    message = f'<p style="color:#b42318">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>LoRaHub</title></head>"
+        "<body style='font:14px system-ui;max-width:360px;margin:12vh auto;padding:24px'>"
+        "<h1 style='font-size:20px'>LoRaHub</h1>"
+        "<p>输入启动日志所指令牌文件中的令牌，或已配置的访问令牌。</p>"
+        f"{message}<form method=post>"
+        f"<input type=hidden name=next value='{safe_next}'>"
+        "<input name=token type=password required autofocus autocomplete=current-password "
+        "style='box-sizing:border-box;width:100%;padding:10px'>"
+        "<button type=submit style='margin-top:12px;padding:9px 16px'>登录</button>"
+        "</form></body></html>",
+        status_code=status_code,
+    )
+
+
+@router.get("/auth/session", response_class=HTMLResponse, include_in_schema=False)
+def login_page(next: str = "/") -> HTMLResponse:
+    if configured_api_token() is None:
+        return HTMLResponse("Remote access is not configured.", status_code=403)
+    return _login_page(next)
+
+
+@router.post("/auth/session", include_in_schema=False)
+def create_session(
+    request: Request,
+    token: Annotated[str, Form()],
+    next: Annotated[str, Form()] = "/",
+) -> Response:
+    expected = configured_api_token()
+    if not _valid_token(token, expected):
+        return _login_page(next, error="访问令牌无效。", status_code=401)
+    assert expected is not None
+    response = RedirectResponse(_safe_next(next), status_code=303)
+    response.set_cookie(
+        COOKIE_NAME,
+        expected,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        max_age=30 * 24 * 60 * 60,
+    )
+    return response
+
+
+__all__ = [
+    "RemoteAccessMiddleware",
+    "api_auth_headers",
+    "api_token_path",
+    "configured_api_token",
+    "ensure_api_token",
+    "is_loopback_host",
+    "router",
+]

@@ -5,6 +5,7 @@ export const API_BASE = "/api"
 // indefinitely. Overridable per-call via ``init.signal`` (the caller's
 // signal takes precedence and can extend or shorten the deadline).
 export const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_SSE_BUFFER_CHARS = 2 * 1024 * 1024
 
 /**
  * Structured error thrown by every API client function.
@@ -22,8 +23,16 @@ export class ApiError extends Error {
   readonly body: unknown
   /** Path the request targeted (relative, sans API_BASE prefix). */
   readonly path: string
+  /** Correlation id returned by the API or reverse proxy. */
+  readonly requestId: string | null
 
-  constructor(status: number, statusText: string, body: unknown, path: string) {
+  constructor(
+    status: number,
+    statusText: string,
+    body: unknown,
+    path: string,
+    requestId: string | null = null,
+  ) {
     const detail =
       typeof body === "object" && body && "detail" in body
         ? (body as { detail: unknown }).detail
@@ -41,6 +50,25 @@ export class ApiError extends Error {
     this.status = status
     this.body = body
     this.path = path
+    this.requestId = requestId ?? this.bodyRequestId
+  }
+
+  get backendReportId(): string | null {
+    const detail = this.detailObject
+    return typeof detail?.report_id === "string" ? detail.report_id : null
+  }
+
+  private get bodyRequestId(): string | null {
+    const detail = this.detailObject
+    return typeof detail?.request_id === "string" ? detail.request_id : null
+  }
+
+  private get detailObject(): Record<string, unknown> | null {
+    if (typeof this.body !== "object" || this.body === null) return null
+    const detail = (this.body as { detail?: unknown }).detail
+    return typeof detail === "object" && detail !== null
+      ? (detail as Record<string, unknown>)
+      : null
   }
 
   /** Structured preflight blockers, when the server returned them.
@@ -130,21 +158,19 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
       ? AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
       : undefined
-  const signals = [init?.signal, timeoutSignal].filter(
-    (s): s is AbortSignal => Boolean(s),
-  )
-  const signal: AbortSignal | undefined =
-    signals.length === 0
-      ? undefined
-      : signals.length === 1
-        ? signals[0]
-        : "any" in AbortSignal
-          ? (AbortSignal as unknown as { any: (sigs: AbortSignal[]) => AbortSignal }).any(signals)
-          : signals[0]
+  // An explicit caller signal owns the deadline. This is how long-running
+  // operations opt into a larger timeout without racing the 30-second default.
+  const signal = init?.signal ?? timeoutSignal
 
+  const headers = new Headers(init?.headers)
+  const bodyIsFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData
+  if (init?.body != null && !bodyIsFormData && !headers.has("content-type")) {
+    headers.set("content-type", "application/json")
+  }
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers,
     signal,
   })
   if (!res.ok) {
@@ -155,9 +181,20 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Plain-text error body (e.g. nginx 502 page) — keep as string.
     }
-    throw new ApiError(res.status, res.statusText, body, path)
+    throw new ApiError(
+      res.status,
+      res.statusText,
+      body,
+      path,
+      res.headers.get("x-request-id"),
+    )
   }
-  return res.json() as Promise<T>
+  if (res.status === 204 || res.status === 205) return undefined as T
+  const raw = await res.text()
+  if (!raw) return undefined as T
+  const contentType = res.headers.get("content-type")?.toLowerCase() ?? ""
+  if (contentType.includes("json")) return JSON.parse(raw) as T
+  return raw as unknown as T
 }
 
 /**
@@ -180,24 +217,69 @@ async function* iterSseFrames(
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ""
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buf += decoder
-      .decode(value, { stream: true })
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
+  let pendingCarriageReturn = false
+  let completed = false
+
+  function appendDecoded(text: string, final = false): void {
+    if (pendingCarriageReturn) {
+      text = `\r${text}`
+      pendingCarriageReturn = false
+    }
+    if (!final && text.endsWith("\r")) {
+      pendingCarriageReturn = true
+      text = text.slice(0, -1)
+    }
+    buf += text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    if (buf.length > MAX_SSE_BUFFER_CHARS) {
+      throw new Error("SSE frame exceeded the client buffer limit")
+    }
+  }
+
+  function takeFrames(final = false): string[] {
+    const frames: string[] = []
     let nl: number
     while ((nl = buf.indexOf("\n\n")) >= 0) {
-      const frame = buf.slice(0, nl)
+      frames.push(buf.slice(0, nl))
       buf = buf.slice(nl + 2)
-      const data = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n")
+    }
+    if (final && buf.trim()) {
+      frames.push(buf)
+      buf = ""
+    }
+    return frames
+  }
+
+  function frameData(frame: string): string {
+    return frame
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n")
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        completed = true
+        break
+      }
+      appendDecoded(decoder.decode(value, { stream: true }))
+      for (const frame of takeFrames()) {
+        const data = frameData(frame)
+        if (data) yield data
+      }
+    }
+    appendDecoded(decoder.decode(), true)
+    for (const frame of takeFrames(true)) {
+      const data = frameData(frame)
       if (data) yield data
     }
+  } finally {
+    if (!completed) {
+      await reader.cancel().catch(() => undefined)
+    }
+    reader.releaseLock()
   }
 }
 
@@ -206,10 +288,16 @@ export async function readSseEvents<T>(
   onEvent: (ev: T) => void,
 ): Promise<void> {
   for await (const frame of iterSseFrames(res)) {
+    let parsed: T
     try {
-      onEvent(JSON.parse(frame) as T)
+      parsed = JSON.parse(frame) as T
     } catch {
       // Malformed frame — skip rather than tear down the whole stream.
+      continue
     }
+    // Callback failures are application errors and must propagate to the
+    // caller; swallowing them here makes an update or terminal stream look
+    // successful while the UI silently stops processing events.
+    onEvent(parsed)
   }
 }

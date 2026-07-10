@@ -18,6 +18,10 @@ place — re-running the download is a no-op.
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +59,85 @@ _TARGETS: tuple[tuple[str, str, str], ...] = (
         "split_files/vae/qwen_image_vae.safetensors",
     ),
 )
+
+_DOWNLOAD_LOCK = threading.Lock()
+
+
+def _is_link_like(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
+
+
+def _prepare_models_root(root: Path) -> None:
+    """Create download destinations without traversing links or junctions."""
+    if _is_link_like(root):
+        raise OSError(f"models root cannot be a link: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise OSError(f"models root is not a directory: {root}")
+    for sub, _, _ in _TARGETS:
+        directory = root / sub
+        if _is_link_like(directory):
+            raise OSError(f"model destination cannot be a link: {directory}")
+        directory.mkdir(parents=True, exist_ok=True)
+        if not directory.is_dir():
+            raise OSError(f"model destination is not a directory: {directory}")
+
+
+def _publish_downloaded_file(cached_path: Path, dest: Path) -> None:
+    """Publish one downloaded checkpoint without exposing a partial file."""
+    if _is_link_like(dest):
+        raise OSError(f"model destination cannot be a link: {dest}")
+    if dest.exists():
+        if not dest.is_file():
+            raise OSError(f"model destination is not a regular file: {dest}")
+        if dest.stat().st_size > 0:
+            return
+    if not cached_path.is_file() or cached_path.stat().st_size <= 0:
+        raise OSError(f"download completed without a valid checkpoint: {cached_path}")
+
+    # Hugging Face may materialize local_dir entries as cache links. Never move
+    # such a link into the canonical models tree; copy its bytes to a temporary
+    # regular file and atomically publish that file instead.
+    if _is_link_like(cached_path):
+        fd, raw_temp = tempfile.mkstemp(
+            dir=dest.parent,
+            prefix=f".{dest.name}.",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        temp_path = Path(raw_temp)
+        try:
+            shutil.copyfile(cached_path, temp_path)
+            if temp_path.stat().st_size <= 0:
+                raise OSError(f"downloaded checkpoint is empty: {cached_path}")
+            temp_path.replace(dest)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        cached_path.unlink(missing_ok=True)
+        return
+
+    cached_path.replace(dest)
+
+
+def _remove_empty_download_dirs(root: Path) -> None:
+    """Remove only now-empty directories created by the known repo paths."""
+    split_root = root / "split_files"
+    for sub, _, _ in _TARGETS:
+        directory = split_root / sub
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        split_root.rmdir()
+    except OSError:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +212,17 @@ def _link_anima_models_dir() -> None:
             "`--user` runs and read-only repos cannot create the "
             "junction/symlink)."
         )
+    unavailable = [
+        f"{sub}/{name}"
+        for sub, name, _ in _TARGETS
+        if not (link / sub / name).is_file()
+        or (link / sub / name).stat().st_size <= 0
+    ]
+    if unavailable:
+        raise OSError(
+            f"{link} does not expose the downloaded Anima checkpoints: "
+            + ", ".join(unavailable)
+        )
 
 
 def download_models(
@@ -140,6 +234,7 @@ def download_models(
     proxy: str | None = None,
     threads: int = 3,
     progress: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     """Download every missing anima model file into ``<root>/models/``.
 
@@ -147,10 +242,32 @@ def download_models(
     same per-file event shape as the existing ``models/download``
     endpoint so the front end can render a uniform progress UI.
     """
+    with _DOWNLOAD_LOCK:
+        _download_models_locked(
+            source=source,
+            huggingface_endpoint=huggingface_endpoint,
+            huggingface_token=huggingface_token,
+            modelscope_token=modelscope_token,
+            proxy=proxy,
+            threads=threads,
+            progress=progress,
+            cancel_event=cancel_event,
+        )
+
+
+def _download_models_locked(
+    *,
+    source: Source,
+    huggingface_endpoint: str | None,
+    huggingface_token: str | None,
+    modelscope_token: str | None,
+    proxy: str | None,
+    threads: int,
+    progress: ProgressCallback | None,
+    cancel_event: threading.Event | None,
+) -> None:
     root = models_root()
-    root.mkdir(parents=True, exist_ok=True)
-    for sub, _, _ in _TARGETS:
-        (root / sub).mkdir(parents=True, exist_ok=True)
+    _prepare_models_root(root)
 
     # Filter to files that aren't already present.
     pending: list[tuple[str, str, str]] = []
@@ -202,6 +319,7 @@ def download_models(
             threads=threads,
             proxy=proxy,
             paths=paths,
+            cancel_event=cancel_event,
         ),
         forward,
     )
@@ -209,17 +327,12 @@ def download_models(
     for sub, name, repo_path in pending:
         cached_path = root / repo_path
         dest = root / sub / name
-        if cached_path.is_file() and cached_path.resolve() != dest.resolve():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
-                dest.unlink()
-            cached_path.replace(dest)
+        if cached_path.absolute() != dest.absolute():
+            _publish_downloaded_file(cached_path, dest)
 
-    leftover = root / "split_files"
-    if leftover.is_dir():
-        import shutil  # noqa: PLC0415
-
-        shutil.rmtree(leftover, ignore_errors=True)
+    # Never recursively delete models/split_files: it may contain assets the
+    # user placed there. Only remove known generated directories when empty.
+    _remove_empty_download_dirs(root)
 
     _link_anima_models_dir()
     if progress:

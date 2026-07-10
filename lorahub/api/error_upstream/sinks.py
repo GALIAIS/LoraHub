@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from lorahub.api.error_reports import ErrorReport
+from lorahub.core.redaction import redact_command_text, redact_data
 from .fingerprint import compute_fingerprint
 from .redaction import redact_dict, redact_report
 
@@ -33,6 +34,9 @@ log = logging.getLogger(__name__)
 
 
 SinkChannel = Literal["off", "gitlab", "gitea", "webhook"]
+
+_MAX_HTTP_RESPONSE_BYTES = 256 * 1024
+_TRUNCATED_RESPONSE_MARKER = b"\n...[response truncated]"
 
 
 @dataclass
@@ -96,6 +100,70 @@ class UpstreamSink(Protocol):
 # ---------------------------------------------------------------------- #
 
 
+def _normalise_http_url(
+    value: str,
+    *,
+    allow_query: bool = True,
+) -> tuple[str, str | None]:
+    """Validate a configured or upstream-provided HTTP URL."""
+    candidate = value.strip()
+    if not candidate:
+        return "", "URL is empty"
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+        # Accessing ``port`` validates malformed values such as ``:abc``.
+        _ = parsed.port
+    except ValueError:
+        return "", "URL is invalid"
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return "", "URL must use http or https"
+    if parsed.username is not None or parsed.password is not None:
+        return "", "URL must not contain embedded credentials"
+    if not allow_query and (parsed.query or parsed.fragment):
+        return "", "base URL must not contain a query or fragment"
+    return candidate, None
+
+
+def _repo_path_error(value: str, *, exact_parts: int | None = None) -> str | None:
+    candidate = value.strip().strip("/")
+    parts = candidate.split("/") if candidate else []
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return "repository path is invalid"
+    if exact_parts is not None and len(parts) != exact_parts:
+        return f"repository path must contain exactly {exact_parts} segments"
+    if any(any(ord(char) < 32 for char in part) for part in parts):
+        return "repository path contains control characters"
+    if any(any(char in "\\?#" for char in part) for part in parts):
+        return "repository path contains reserved characters"
+    return None
+
+
+def _read_limited(stream: Any) -> bytes:
+    raw = stream.read(_MAX_HTTP_RESPONSE_BYTES + 1)
+    if len(raw) <= _MAX_HTTP_RESPONSE_BYTES:
+        return raw
+    return raw[:_MAX_HTTP_RESPONSE_BYTES] + _TRUNCATED_RESPONSE_MARKER
+
+
+def _decode_response(raw: bytes, content_type: str) -> Any:
+    text = raw.decode("utf-8", errors="replace")
+    if "json" in content_type.lower():
+        try:
+            return redact_data(json.loads(text))
+        except ValueError:
+            pass
+    return redact_command_text(text)
+
+
+def _error_detail(prefix: str, status: int, payload: Any, limit: int) -> str:
+    return redact_command_text(f"{prefix} ({status}): {payload!r}")[:limit]
+
+
+def _safe_result_url(value: Any) -> str:
+    candidate, error = _normalise_http_url(str(value or ""))
+    return "" if error else candidate
+
+
 def _http(
     url: str,
     *,
@@ -103,35 +171,41 @@ def _http(
     headers: dict[str, str] | None = None,
     body: bytes | None = None,
     timeout_s: float = 12.0,
-) -> tuple[int, dict[str, Any] | str]:
+) -> tuple[int, Any]:
     """Tiny urllib wrapper used by both sinks. Returns (status, decoded body).
 
     Decoded body is parsed as JSON when content-type permits, else
     raw text. Network failures surface as (-1, error string) so the
     sinks have a uniform branch shape.
     """
-    req = urllib.request.Request(  # noqa: S310 — user-configured URL
-        url, method=method, headers=headers or {}, data=body,
-    )
+    target, url_error = _normalise_http_url(url)
+    if url_error:
+        return 0, url_error
+    timeout = max(1.0, min(float(timeout_s), 120.0))
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
-            raw = resp.read()
+        req = urllib.request.Request(  # noqa: S310 — validated HTTP(S) URL
+            target, method=method, headers=headers or {}, data=body,
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            raw = _read_limited(resp)
             ctype = resp.headers.get("content-type", "")
-            if "json" in ctype:
-                try:
-                    return resp.status, json.loads(raw.decode("utf-8"))
-                except (ValueError, UnicodeDecodeError):
-                    return resp.status, raw.decode("utf-8", errors="replace")
-            return resp.status, raw.decode("utf-8", errors="replace")
+            return resp.status, _decode_response(raw, ctype)
     except urllib.error.HTTPError as exc:
         # Surface the body so 4xx debugging is possible without curl.
         try:
-            err_body = exc.read().decode("utf-8", errors="replace")
+            raw = _read_limited(exc)
+            content_type = exc.headers.get("content-type", "") if exc.headers else ""
+            err_body = _decode_response(raw, content_type)
         except Exception:  # noqa: BLE001
             err_body = ""
-        return exc.code, err_body or exc.reason
+        reason = redact_command_text(str(exc.reason or "HTTP request failed"))
+        return exc.code, err_body or reason
     except (urllib.error.URLError, OSError) as exc:
-        return -1, repr(exc)
+        detail = redact_command_text(f"{type(exc).__name__}: {exc}")
+        return -1, detail[:500]
+    except (TypeError, ValueError) as exc:
+        detail = redact_command_text(f"{type(exc).__name__}: {exc}")
+        return 0, detail[:500]
 
 
 # ---------------------------------------------------------------------- #
@@ -166,6 +240,14 @@ class GitLabIssueSink:
     def send(self, report: ErrorReport) -> SendResult:
         if not self.base_url or not self.repo_path or not self.token:
             return SendResult(ok=False, error="gitlab sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.base_url, allow_query=False)
+        repo_error = _repo_path_error(self.repo_path)
+        if url_error or repo_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid GitLab configuration: {url_error or repo_error}",
+                retryable=False,
+            )
         redacted = redact_report(report)
         fp = compute_fingerprint(redacted)
 
@@ -191,6 +273,14 @@ class GitLabIssueSink:
     def health_check(self) -> SendResult:
         if not self.base_url or not self.repo_path or not self.token:
             return SendResult(ok=False, error="gitlab sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.base_url, allow_query=False)
+        repo_error = _repo_path_error(self.repo_path)
+        if url_error or repo_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid GitLab configuration: {url_error or repo_error}",
+                retryable=False,
+            )
         url = f"{self._project_url()}"
         status, body = _http(
             url,
@@ -200,13 +290,13 @@ class GitLabIssueSink:
         if status == 200 and isinstance(body, dict) and "id" in body:
             return SendResult(
                 ok=True,
-                url=str(body.get("web_url") or url),
+                url=_safe_result_url(body.get("web_url") or url),
                 upstream_id=str(body.get("id") or ""),
             )
         retryable = status >= 500 or status == -1
         return SendResult(
             ok=False,
-            error=f"GitLab health probe failed ({status}): {body!r}"[:300],
+            error=_error_detail("GitLab health probe failed", status, body, 300),
             retryable=retryable,
         )
 
@@ -216,7 +306,7 @@ class GitLabIssueSink:
 
     def _project_url(self) -> str:
         encoded = urllib.parse.quote(self.repo_path, safe="")
-        return f"{self.base_url.rstrip('/')}/api/v4/projects/{encoded}"
+        return f"{self.base_url.strip().rstrip('/')}/api/v4/projects/{encoded}"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -263,15 +353,22 @@ class GitLabIssueSink:
             body=body, timeout_s=self.timeout_s,
         )
         if status in (200, 201) and isinstance(payload, dict):
+            result_url = _safe_result_url(payload.get("web_url"))
+            if not result_url:
+                return SendResult(
+                    ok=False,
+                    error="GitLab returned an invalid issue URL",
+                    retryable=False,
+                )
             return SendResult(
                 ok=True,
                 upstream_id=str(payload.get("iid") or ""),
-                url=str(payload.get("web_url") or ""),
+                url=result_url,
             )
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(
             ok=False,
-            error=f"GitLab create issue failed ({status}): {payload!r}"[:500],
+            error=_error_detail("GitLab create issue failed", status, payload, 500),
             retryable=retryable,
         )
 
@@ -289,12 +386,12 @@ class GitLabIssueSink:
             return SendResult(
                 ok=True,
                 upstream_id=str(iid),
-                url=issue_url,
+                url=_safe_result_url(issue_url),
             )
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(
             ok=False,
-            error=f"GitLab append comment failed ({status}): {payload!r}"[:500],
+            error=_error_detail("GitLab append comment failed", status, payload, 500),
             retryable=retryable,
         )
 
@@ -394,6 +491,14 @@ class GiteaIssueSink:
     def send(self, report: ErrorReport) -> SendResult:
         if not self.base_url or not self.repo_path or not self.token:
             return SendResult(ok=False, error="gitea sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.base_url, allow_query=False)
+        repo_error = _repo_path_error(self.repo_path, exact_parts=2)
+        if url_error or repo_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid Gitea configuration: {url_error or repo_error}",
+                retryable=False,
+            )
         redacted = redact_report(report)
         fp = compute_fingerprint(redacted)
         existing = self._find_issue_by_fingerprint(fp)
@@ -410,6 +515,14 @@ class GiteaIssueSink:
     def health_check(self) -> SendResult:
         if not self.base_url or not self.repo_path or not self.token:
             return SendResult(ok=False, error="gitea sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.base_url, allow_query=False)
+        repo_error = _repo_path_error(self.repo_path, exact_parts=2)
+        if url_error or repo_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid Gitea configuration: {url_error or repo_error}",
+                retryable=False,
+            )
         # Probe the issues endpoint, not the repo metadata endpoint —
         # the repo metadata route requires ``read:repository`` scope
         # while users only need to grant ``read:issue`` + ``write:issue``
@@ -424,7 +537,7 @@ class GiteaIssueSink:
             retryable = status >= 500 or status == -1
             return SendResult(
                 ok=False,
-                error=f"Gitea health probe failed ({status}): {body!r}"[:300],
+                error=_error_detail("Gitea health probe failed", status, body, 300),
                 retryable=retryable,
             )
         # Bonus check: ``git.galiais.com`` was observed running on a
@@ -438,8 +551,8 @@ class GiteaIssueSink:
         # connectivity result is still ``ok`` — only the encoding hint
         # is dropped.
         encoding_hint = self._probe_unicode_round_trip()
-        repo_html_url = (
-            f"{self.base_url.rstrip('/')}/{self.repo_path.strip().strip('/')}"
+        repo_html_url = _safe_result_url(
+            f"{self.base_url.strip().rstrip('/')}/{self.repo_path.strip().strip('/')}"
         )
         if encoding_hint:
             return SendResult(
@@ -507,11 +620,14 @@ class GiteaIssueSink:
     # ------------------------------------------------------------ #
 
     def _repo_url(self) -> str:
-        # Gitea expects the slash to remain literal — quoting the
-        # whole ``owner/repo`` returns 404. We do strip leading /
-        # trailing whitespace defensively because users paste from
-        # the address bar.
-        return f"{self.base_url.rstrip('/')}/api/v1/repos/{self.repo_path.strip().strip('/')}"
+        # Gitea expects the separator slash to remain literal. Quote
+        # each segment independently so whitespace and URL metacharacters
+        # cannot alter the route.
+        encoded_repo = "/".join(
+            urllib.parse.quote(part, safe="")
+            for part in self.repo_path.strip().strip("/").split("/")
+        )
+        return f"{self.base_url.strip().rstrip('/')}/api/v1/repos/{encoded_repo}"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -610,10 +726,13 @@ class GiteaIssueSink:
                 self._label_cache[name] = int(create_body_resp["id"])
                 result.append(self._label_cache[name])
             else:
-                log.warning(
-                    "could not create gitea label %r (%s): %r",
-                    name, create_status, create_body_resp,
+                detail = _error_detail(
+                    "could not create gitea label",
+                    create_status,
+                    create_body_resp,
+                    500,
                 )
+                log.warning("%s: %r", detail, name)
         return result
 
     def _open_new_issue(self, report: ErrorReport, fp: str) -> SendResult:
@@ -651,22 +770,29 @@ class GiteaIssueSink:
             if number is None or not html_url:
                 return SendResult(
                     ok=False,
-                    error=(
+                    error=redact_command_text((
                         f"Gitea accepted POST but did not echo a usable "
                         f"issue body — token may lack ``read:issue`` "
                         f"scope. Response: {payload!r}"
-                    )[:500],
+                    ))[:500],
+                    retryable=False,
+                )
+            result_url = _safe_result_url(html_url)
+            if not result_url:
+                return SendResult(
+                    ok=False,
+                    error="Gitea returned an invalid issue URL",
                     retryable=False,
                 )
             return SendResult(
                 ok=True,
                 upstream_id=str(number),
-                url=str(html_url),
+                url=result_url,
             )
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(
             ok=False,
-            error=f"Gitea create issue failed ({status}): {payload!r}"[:500],
+            error=_error_detail("Gitea create issue failed", status, payload, 500),
             retryable=retryable,
         )
 
@@ -685,12 +811,12 @@ class GiteaIssueSink:
             return SendResult(
                 ok=True,
                 upstream_id=str(number),
-                url=issue_url,
+                url=_safe_result_url(issue_url),
             )
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(
             ok=False,
-            error=f"Gitea append comment failed ({status}): {payload!r}"[:500],
+            error=_error_detail("Gitea append comment failed", status, payload, 500),
             retryable=retryable,
         )
 
@@ -790,6 +916,13 @@ class WebhookSink:
     def send(self, report: ErrorReport) -> SendResult:
         if not self.url:
             return SendResult(ok=False, error="webhook sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.url)
+        if url_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid webhook configuration: {url_error}",
+                retryable=False,
+            )
         redacted = redact_report(report)
         payload = redact_dict(redacted.to_dict())
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
@@ -807,17 +940,26 @@ class WebhookSink:
             timeout_s=self.timeout_s,
         )
         if 200 <= status < 300:
-            return SendResult(ok=True, upstream_id="", url=self.url)
+            # Webhook endpoints commonly carry signing secrets in their
+            # path or query. They are delivery targets, not user-facing links.
+            return SendResult(ok=True)
         retryable = status >= 500 or status == -1 or status == 429
         return SendResult(
             ok=False,
-            error=f"webhook POST failed ({status}): {response!r}"[:500],
+            error=_error_detail("webhook POST failed", status, response, 500),
             retryable=retryable,
         )
 
     def health_check(self) -> SendResult:
         if not self.url:
             return SendResult(ok=False, error="webhook sink not configured", retryable=False)
+        _, url_error = _normalise_http_url(self.url)
+        if url_error:
+            return SendResult(
+                ok=False,
+                error=f"invalid webhook configuration: {url_error}",
+                retryable=False,
+            )
         # We can't safely probe an arbitrary webhook with GET — many
         # collectors return 405 / route only POSTs. So health_check
         # does the cheapest possible POST: a single ``ping`` event.
@@ -838,11 +980,11 @@ class WebhookSink:
             timeout_s=self.timeout_s,
         )
         if 200 <= status < 300:
-            return SendResult(ok=True, url=self.url)
+            return SendResult(ok=True)
         retryable = status >= 500 or status == -1
         return SendResult(
             ok=False,
-            error=f"webhook ping failed ({status}): {response!r}"[:300],
+            error=_error_detail("webhook ping failed", status, response, 300),
             retryable=retryable,
         )
 

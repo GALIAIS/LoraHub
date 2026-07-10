@@ -108,6 +108,26 @@ def test_scheduler_can_cancel_pending_job_before_worker_picks_it() -> None:
     sched.stop(timeout=2.0)
 
 
+def test_scheduler_stop_does_not_launch_pending_work() -> None:
+    sched = JobScheduler(concurrency=1)
+    started = threading.Event()
+    release = threading.Event()
+    queued_ran = threading.Event()
+
+    def block(_slot: int) -> None:
+        started.set()
+        release.wait(timeout=2.0)
+
+    sched.submit("running", block)
+    assert started.wait(timeout=2.0)
+    sched.submit("queued", lambda _slot: queued_ran.set())
+
+    sched.stop(timeout=0.05)
+    release.set()
+    sched.stop(timeout=2.0)
+    assert not queued_ran.is_set()
+
+
 def test_scheduler_exposes_available_slots_for_multi_gpu() -> None:
     sched = JobScheduler(concurrency=2, available_slots=[3, 5])
     slots_seen: list[int] = []
@@ -217,3 +237,25 @@ def test_scheduler_rejects_invalid_concurrency() -> None:
 def test_scheduler_rejects_mismatched_slot_list() -> None:
     with pytest.raises(ValueError, match="available_slots"):
         JobScheduler(concurrency=2, available_slots=[0])
+
+
+def test_scheduler_rejects_duplicate_slot_ids() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        JobScheduler(concurrency=2, available_slots=[0, 0])
+
+
+def test_scheduler_rejects_unknown_capacity_slot() -> None:
+    with pytest.raises(ValueError, match="unavailable GPU id"):
+        JobScheduler(
+            concurrency=1,
+            available_slots=[0],
+            slot_capacities={1: 24.0},
+        )
+
+
+def test_scheduler_does_not_accept_work_after_stop() -> None:
+    sched = JobScheduler(concurrency=1)
+    sched.stop(timeout=0.1)
+
+    with pytest.raises(RuntimeError, match="cannot accept"):
+        sched.submit("late", lambda _slot: None)

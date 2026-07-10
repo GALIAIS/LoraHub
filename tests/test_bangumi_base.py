@@ -113,6 +113,48 @@ def test_fetch_character_respects_limit(
     assert pngs == ["000.png", "001.png", "002.png", "003.png"]
 
 
+def test_fetch_character_preserves_existing_and_duplicate_basenames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_zip = _make_zip(tmp_path, ["set-a/image.png", "set-b/image.png"])
+    monkeypatch.setattr(bangumi_base, "hf_download", lambda **_: str(fake_zip))
+    monkeypatch.setattr(bangumi_base, "_read_dataset_license", lambda _r: None)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = out / "image.png"
+    existing.write_bytes(b"user-owned")
+
+    result = bangumi_base.fetch_character("x", "0", out, seed_captions=False)
+
+    assert result.image_count == 2
+    assert existing.read_bytes() == b"user-owned"
+    assert (out / "image_1.png").exists()
+    assert (out / "image_2.png").exists()
+
+
+def test_fetch_character_rejects_oversized_archive_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_zip = _make_zip(tmp_path, ["large.png"])
+    monkeypatch.setattr(bangumi_base, "hf_download", lambda **_: str(fake_zip))
+    monkeypatch.setenv("LORAHUB_BANGUMI_MAX_EXPANDED_BYTES", "4")
+
+    out = tmp_path / "out"
+    with pytest.raises(bangumi_base.BangumiBaseError, match="expands beyond"):
+        bangumi_base.fetch_character("x", "0", out)
+
+    assert not list(out.glob("*.png"))
+
+
+@pytest.mark.parametrize("character_id", ["../1", "1/2", "１２", ""])
+def test_fetch_character_rejects_invalid_character_id(
+    tmp_path: Path, character_id: str
+) -> None:
+    with pytest.raises(bangumi_base.BangumiBaseError, match="ASCII digits"):
+        bangumi_base.fetch_character("x", character_id, tmp_path / "out")
+
+
 def test_fetch_character_progress_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

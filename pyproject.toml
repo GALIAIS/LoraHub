@@ -31,13 +31,16 @@ dependencies = [
     "platformdirs>=4.2",
     "ulid-py>=1.1",
     "huggingface_hub>=0.24",
-    "onnxruntime>=1.18",
     "pillow>=10.0",
     "numpy>=1.26",
     "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
+# The two ONNX Runtime distributions install the same ``onnxruntime`` module
+# and must not coexist. Installers and CI request ``cpu`` explicitly; GPU
+# images request only ``gpu``.
+cpu = ["onnxruntime>=1.18"]
 gpu = ["onnxruntime-gpu>=1.18"]
 tagging = [
     # JoyTag inference: needs PyTorch + safetensors. Torch is intentionally
@@ -52,6 +55,7 @@ api = [
     "websockets>=12.0",
     "psutil>=5.9",
     "python-multipart>=0.0.9",
+    "py7zr>=0.22,<1",
     # API-side LoRA spectral analysis reads saved adapter checkpoints.
     "safetensors>=0.4",
 ]

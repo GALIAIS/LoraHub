@@ -140,6 +140,95 @@ def runs_dir() -> Path:
     return d
 
 
+def models_dir() -> Path:
+    """Return the default writable model root under the project."""
+    directory = project_root() / "models"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def model_roots() -> tuple[Path, ...]:
+    """Return model roots writable through the API.
+
+    ``LORAHUB_MODELS_ROOT`` is an explicit opt-in for installations that keep
+    large weights on a separate disk. The project model directory remains
+    valid so backend links and existing relative configs continue to work.
+    """
+    roots = [models_dir().resolve()]
+    configured = os.environ.get("LORAHUB_MODELS_ROOT", "").strip()
+    if configured:
+        custom = Path(configured).expanduser().resolve()
+        custom.mkdir(parents=True, exist_ok=True)
+        if custom not in roots:
+            roots.append(custom)
+    return tuple(roots)
+
+
+def resolve_model_path(raw: str | Path, *, allow_root: bool = False) -> Path:
+    """Resolve a model path while preventing writes or scans outside model roots."""
+    value = Path(raw).expanduser()
+    if value.is_absolute():
+        target = value.resolve()
+    else:
+        parts = value.parts
+        if parts and parts[0].lower() == "models":
+            target = (project_root() / value).resolve()
+        else:
+            target = (models_dir() / value).resolve()
+
+    for root in model_roots():
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        if target == root and not allow_root:
+            raise ValueError("model path must be a child of a configured model root")
+        return target
+    raise ValueError("model path is outside configured model roots")
+
+
+def resolve_run_path(raw: str | Path, *, allow_root: bool = False) -> Path:
+    """Resolve a user-supplied run path without permitting tree escape."""
+    target = Path(raw).expanduser().resolve()
+    root = runs_dir().resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"workspace must be under {root}") from exc
+    if target == root and not allow_root:
+        raise ValueError("workspace must be a child of the runs directory")
+    return target
+
+
+def resolve_sweep_variant_path(workspace_root: str | Path, variant_name: str) -> Path:
+    """Resolve one sweep workspace as a direct child of its sweep root.
+
+    Variant names are generated from user-controlled templates and axis values.
+    Keeping them to one path component prevents a sweep from colliding with an
+    unrelated run through ``../`` or an absolute path while still allowing the
+    punctuation used by existing generated names.
+    """
+    root = resolve_run_path(workspace_root, allow_root=True)
+    name = variant_name.strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or Path(name).is_absolute()
+    ):
+        raise ValueError("sweep variant name must be a single path component")
+
+    target = (root / name).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("sweep variant workspace escapes the sweep root") from exc
+    if target == root:
+        raise ValueError("sweep variant workspace must be below the sweep root")
+    return resolve_run_path(target)
+
+
 @lru_cache(maxsize=1)
 def is_windows() -> bool:
     return sys.platform == "win32"
@@ -148,6 +237,11 @@ def is_windows() -> bool:
 __all__ = [
     "ensure_initialised",
     "is_windows",
+    "model_roots",
+    "models_dir",
     "project_root",
+    "resolve_model_path",
+    "resolve_run_path",
+    "resolve_sweep_variant_path",
     "runs_dir",
 ]

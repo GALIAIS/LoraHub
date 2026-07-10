@@ -17,6 +17,7 @@ import pytest
 from lorahub.api import jobs_helpers
 from lorahub.api import state
 from lorahub.api.jobs_helpers import _attempt_auto_resume
+from lorahub.api.jobs_helpers.resume_dispatch import _find_latest_safetensors
 
 
 def _kohya_snapshot(tmp_path: Path) -> dict[str, Any]:
@@ -39,6 +40,24 @@ def _seed_kohya_artifacts(workspace: Path) -> None:
     out.mkdir(parents=True)
     (out / "lora-state").mkdir()
     (out / "lora.safetensors").write_bytes(b"")
+
+
+def test_resume_weight_discovery_skips_symlinks_outside_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    real = workspace / "real.safetensors"
+    real.write_bytes(b"real")
+    outside = tmp_path / "outside.safetensors"
+    outside.write_bytes(b"outside")
+    linked = workspace / "newer.safetensors"
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    assert _find_latest_safetensors(workspace) == real
 
 
 @pytest.fixture(autouse=True)

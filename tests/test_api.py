@@ -64,6 +64,7 @@ def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistr
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api import app as app_mod
+    from lorahub.api import paths as api_paths
     from lorahub.api.settings import SettingsStore
     from lorahub.api.task_sessions import TaskSessionStore
 
@@ -77,6 +78,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # those env vars are valid in production but confuse settings tests.
     monkeypatch.delenv("LORAHUB_KOHYA_SD_SCRIPTS", raising=False)
     monkeypatch.delenv("LORAHUB_KOHYA_PYTHON", raising=False)
+    monkeypatch.delenv("LORAHUB_API_TOKEN", raising=False)
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LORAHUB_MODELS_ROOT", str(tmp_path))
+    monkeypatch.setattr(api_paths, "runs_dir", lambda: tmp_path)
     # Reset the singleton bootstrap session so tests can't leak state into
     # one another (each test starts from "idle").
     monkeypatch.setattr(app_mod, "_bootstrap_session", None)
@@ -130,6 +135,28 @@ def test_health_returns_version(client: TestClient) -> None:
     assert "version" in body
     assert "backend" in body
     assert "sd_scripts_path" in body["backend"]
+    assert set(body["backends"]) == {
+        "kohya",
+        "diffusion-pipe",
+        "anima_lora",
+        "ai_toolkit",
+    }
+
+
+def test_health_confirms_service_token_without_returning_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LORAHUB_SERVICE_TOKEN", "service-secret")
+
+    unmatched = client.get("/api/health").json()
+    matched = client.get(
+        "/api/health",
+        headers={"X-LoraHub-Service-Token": "service-secret"},
+    ).json()
+
+    assert "service-secret" not in str(unmatched)
+    assert unmatched["service_token_match"] is False
+    assert matched["service_token_match"] is True
 
 
 def test_health_does_not_run_full_backend_probe(
@@ -164,6 +191,46 @@ def test_system_update_rejects_concurrent_run(client: TestClient) -> None:
 
     assert r.status_code == 409
     assert "already running" in r.text
+
+
+def test_system_update_rejects_active_training_job(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    job = state.registry.create(workspace=tmp_path / "active-run", config_snapshot={})
+    job.state = state.JobState.running
+    state.registry.update(job)
+
+    response = client.post(
+        "/api/system/update",
+        json={"channel": "dev", "build": False, "restart": False},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["jobs"] == [{"id": job.id, "state": "running"}]
+
+
+def test_system_update_rejects_active_background_task(
+    client: TestClient,
+) -> None:
+    from lorahub.api import app as app_module
+
+    task = app_module._task_session_store.create(  # type: ignore[union-attr]
+        kind="model_download",
+        title="download",
+        metadata={},
+    )
+
+    response = client.post(
+        "/api/system/update",
+        json={"channel": "tag", "build": False, "restart": False},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["tasks"] == [
+        {"id": task.id, "kind": "model_download", "status": "queued"}
+    ]
 
 
 def test_system_update_writes_task_session(
@@ -297,6 +364,32 @@ def test_create_and_complete_job(client: TestClient, tmp_path: Path) -> None:
     final = client.get(f"/api/jobs/{job_id}").json()
     assert final["state"] == "succeeded", final
     assert final["returncode"] == 0
+
+
+def test_create_job_rejects_workspace_outside_runs(
+    client: TestClient, tmp_path: Path
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    payload = {"config": _config_payload(tmp_path), "workspace": str(outside)}
+
+    response = client.post("/api/jobs", json=payload)
+
+    assert response.status_code == 422
+    assert "must be under" in response.json()["detail"]
+
+
+def test_create_job_rejects_unsafe_output_name(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    config = _config_payload(tmp_path)
+    config["output"] = {"name": "../other-run"}
+
+    response = client.post("/api/jobs", json={"config": config})
+
+    assert response.status_code == 422
+    assert "output name" in response.json()["detail"]
+    assert state.registry.list() == []
 
 
 def test_recent_events_returned_after_completion(
@@ -967,6 +1060,48 @@ def test_failed_job_reports_once_for_noisy_error_logs(
     assert reports[0].context["returncode"] == 1
 
 
+def test_wait_failure_force_stops_handle_and_terminalizes_job(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import jobs_helpers
+    from lorahub.core.backends.base import TrainingHandle
+
+    stopped = {"value": False}
+
+    class FakeBackend:
+        def launch(
+            self,
+            cfg: Any,
+            workspace: Path,
+            on_event: Any,
+            **_kwargs: Any,
+        ) -> TrainingHandle:
+            def stop(_graceful: bool) -> None:
+                stopped["value"] = True
+
+            def wait(_timeout: float | None) -> int:
+                raise OSError("wait channel failed")
+
+            return TrainingHandle(
+                job_id="fake",
+                pid=0,
+                _stop_fn=stop,
+                _wait_fn=wait,
+            )
+
+    monkeypatch.setattr(jobs_helpers, "_select_backend", lambda _cfg: FakeBackend())
+
+    payload = {"config": _config_payload(tmp_path), "workspace": str(tmp_path / "ws")}
+    job_id = client.post("/api/jobs", json=payload).json()["id"]
+    final = _wait_terminal(client, job_id, timeout=5.0)
+
+    assert stopped["value"] is True
+    assert final["state"] == "failed"
+    assert final["returncode"] == -1
+
+
 def test_job_event_stream_normalizes_payloads(
     client: TestClient,
     tmp_path: Path,
@@ -1559,7 +1694,7 @@ def test_thumb_generates_and_caches_webp(
     assert body1[:4] == b"RIFF"  # WEBP magic prefix
 
     # Cache file should now exist on disk.
-    cache_dir = tmp_path / "runs" / ".thumbs"
+    cache_dir = tmp_path / ".thumbs"
     assert cache_dir.is_dir()
     cached = list(cache_dir.glob("*.webp"))
     assert len(cached) == 1
@@ -1961,6 +2096,57 @@ def test_kill_dead_pid_still_flips_state_to_interrupted(
             r.category == "force_kill" and r.job_id == job.id
             for r in reports
         )
+
+
+def test_kill_reused_pid_never_signals_replacement_process(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import jobs as jobs_router
+
+    ws = tmp_path / "ws-reused-pid"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    job.pid = 4321
+    job.pid_create_time = 100.0
+    state.registry.update(job)
+
+    monkeypatch.setattr(jobs_router, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(jobs_router, "_pid_is_ours", lambda _pid, _stamp: False)
+    monkeypatch.setattr(jobs_router, "_pid_create_time", lambda _pid: 200.0)
+
+    response = client.post(f"/api/jobs/{job.id}/kill")
+
+    assert response.status_code == 200
+    assert response.json()["pid_reused"] is True
+    refreshed = state.registry.get(job.id)
+    assert refreshed is not None
+    assert refreshed.state is state.JobState.interrupted
+    assert refreshed.pid is None
+
+
+def test_kill_unverifiable_live_pid_is_refused(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lorahub.api.routers import jobs as jobs_router
+
+    ws = tmp_path / "ws-unverified-pid"
+    ws.mkdir()
+    job = state.registry.create(workspace=ws, config_snapshot={})
+    job.state = state.JobState.running
+    job.pid = 4322
+    job.pid_create_time = None
+    state.registry.update(job)
+
+    monkeypatch.setattr(jobs_router, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(jobs_router, "_pid_is_ours", lambda _pid, _stamp: False)
+    monkeypatch.setattr(jobs_router, "_pid_create_time", lambda _pid: None)
+
+    response = client.post(f"/api/jobs/{job.id}/kill")
+
+    assert response.status_code == 409
+    assert "no process was terminated" in response.json()["detail"]
+    assert state.registry.get(job.id).state is state.JobState.running
 
 
 def test_archive_running_job_returns_409(client: TestClient, tmp_path: Path) -> None:
@@ -2949,11 +3135,16 @@ def test_settings_persists_network_fields(client: TestClient) -> None:
     assert body["settings"]["github_proxy"] == "https://gh-proxy.org"
     assert body["settings"]["huggingface_endpoint"] == "https://hf-mirror.com"
     assert body["settings"]["modelscope_enabled"] is True
-    assert body["settings"]["modelscope_token"] == "secret"
+    assert body["settings"]["modelscope_token"] != "secret"
+    assert body["settings"]["has_modelscope_token"] is True
 
     # GET round-trips them.
     r2 = client.get("/api/settings")
     assert r2.json()["settings"]["github_proxy"] == "https://gh-proxy.org"
+
+    cleared = client.put("/api/settings", json={"modelscope_token": ""})
+    assert cleared.status_code == 200
+    assert cleared.json()["settings"]["has_modelscope_token"] is False
 
 
 def test_settings_persists_max_concurrent_jobs(client: TestClient) -> None:
@@ -2985,6 +3176,9 @@ def test_settings_persists_error_upstream_block(client: TestClient) -> None:
         "error_upstream_gitlab_base_url": "https://git.galiais.com",
         "error_upstream_gitlab_repo": "Shiro/LoraHubReport",
         "error_upstream_gitlab_token": "tok-1234567890abcdef",
+        "error_upstream_webhook_url": "https://hooks.example.test/report-secret",
+        "error_upstream_webhook_auth_header": "Bearer webhook-secret",
+        "download_proxy": "socks5h://proxy-user:proxy-secret@127.0.0.1:7890",
         "error_upstream_auto_severity": "all",
     }
     r = client.put("/api/settings", json=payload)
@@ -2996,6 +3190,12 @@ def test_settings_persists_error_upstream_block(client: TestClient) -> None:
     # Token is masked in the GET-shaped response, but the boolean
     # mirror confirms it landed.
     assert body["has_error_upstream_gitlab_token"] is True
+    assert body["error_upstream_webhook_auth_header"] != "Bearer webhook-secret"
+    assert body["has_error_upstream_webhook_auth_header"] is True
+    assert "report-secret" not in (body["error_upstream_webhook_url"] or "")
+    assert body["has_error_upstream_webhook_url"] is True
+    assert "proxy-secret" not in (body["download_proxy"] or "")
+    assert body["has_download_proxy"] is True
     assert body["error_upstream_auto_severity"] == "all"
 
     # Sending the masked echo back keeps the prior token (no clobber).
@@ -3065,6 +3265,19 @@ def test_models_download_rejects_bad_repo_id(client: TestClient) -> None:
     )
     assert r.status_code == 400
     assert "owner/name" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "repo_id",
+    ["owner/../name", "owner/..\\configs", "owner/name/extra", "/name"],
+)
+def test_models_download_rejects_path_shaped_repo_id(
+    client: TestClient, repo_id: str
+) -> None:
+    response = client.post("/api/models/download", json={"repo_id": repo_id})
+
+    assert response.status_code == 400
+    assert "safe 'owner/name'" in response.json()["detail"]
 
 
 def test_models_download_rejects_unsafe_selected_path(
@@ -3196,6 +3409,95 @@ def test_models_download_starts_session_and_reports_progress(
     task = client.get(f"/api/tasks/{body['session_id']}").json()
     assert task["metadata"]["allow_patterns"] == ["*.bin"]
     assert task["metadata"]["ignore_patterns"] == ["README*"]
+
+
+def test_models_download_can_be_canceled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadCanceledError
+
+    entered = threading.Event()
+
+    def fake_download(req: Any, _progress: Any = None) -> Any:
+        entered.set()
+        assert req.cancel_event is not None
+        assert req.cancel_event.wait(5)
+        raise DownloadCanceledError("download canceled by user")
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    response = client.post(
+        "/api/models/download",
+        json={
+            "repo_id": "owner/name",
+            "target_dir": str(tmp_path / "download-cancel"),
+            "paths": ["weights.safetensors"],
+        },
+    )
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stopped = client.post(f"/api/models/download/{session_id}/stop")
+    assert stopped.status_code == 200
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/models/download/{session_id}").json()
+        if final["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert final["status"] == "canceled"
+
+
+def test_models_download_rejects_concurrent_writer_for_same_target(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import models as models_router
+    from lorahub.core.models.downloader import DownloadResult
+
+    entered = threading.Event()
+    release = threading.Event()
+    target = tmp_path / "shared-download"
+
+    def fake_download(req: Any, _progress: Any = None) -> DownloadResult:
+        entered.set()
+        assert release.wait(5)
+        return DownloadResult(target=target, files=1, total_bytes=1)
+
+    monkeypatch.setattr(models_router, "download", fake_download)
+    first = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(target)},
+    )
+    assert first.status_code == 202
+    assert entered.wait(5)
+
+    second = client.post(
+        "/api/models/download",
+        json={"repo_id": "owner/name", "target_dir": str(target)},
+    )
+    assert second.status_code == 409
+    assert "already writing" in second.json()["detail"]
+
+    release.set()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        status = client.get(
+            f"/api/models/download/{first.json()['session_id']}"
+        ).json()["status"]
+        if status == "succeeded":
+            break
+        time.sleep(0.02)
+    assert status == "succeeded"
 
 
 def test_models_download_uses_saved_huggingface_endpoint(
@@ -3398,14 +3700,63 @@ def test_anima_model_download_defaults_to_modelscope(
         seen.append((kwargs["source"], kwargs.get("modelscope_token")))
 
     monkeypatch.setattr(backends_router, "_download_anima_models", fake_download_anima_models)
+    monkeypatch.setattr(
+        backends_router,
+        "_anima_missing_models",
+        lambda: ["diffusion_models/anima-base-v1.0.safetensors"],
+    )
 
     r = client.post("/api/backends/anima_lora/download-models")
 
     assert r.status_code == 202
+    assert r.json()["missing_files"] == [
+        "diffusion_models/anima-base-v1.0.safetensors"
+    ]
     deadline = time.time() + 3
     while time.time() < deadline and not seen:
         time.sleep(0.01)
     assert seen and seen[0][0] == "modelscope"
+
+
+def test_anima_model_download_can_be_canceled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import backends as backends_router
+    from lorahub.core.models.downloader import DownloadCanceledError
+
+    entered = threading.Event()
+
+    def fake_download_anima_models(**kwargs: Any) -> None:
+        entered.set()
+        cancel_event = kwargs["cancel_event"]
+        assert cancel_event.wait(5)
+        raise DownloadCanceledError("download canceled by user")
+
+    monkeypatch.setattr(
+        backends_router,
+        "_download_anima_models",
+        fake_download_anima_models,
+    )
+    response = client.post("/api/backends/anima_lora/download-models")
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stopped = client.post(
+        f"/api/backends/anima_lora/download-models/{session_id}/stop"
+    )
+    assert stopped.status_code == 200
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get("/api/backends/anima_lora/download-models/status").json()
+        if final["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert final["status"] == "canceled"
 
 
 def test_anima_model_download_uses_saved_huggingface_endpoint(
@@ -3659,7 +4010,7 @@ def test_tagging_runs_session_with_progress_and_writes_captions(
         def __init__(self) -> None:
             self.active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             captured["loaded"] = True
 
         def tag_directory(
@@ -3742,7 +4093,7 @@ def test_tagging_writes_task_session(
     class FakeTagger:
         active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             pass
 
         def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
@@ -3796,7 +4147,7 @@ def test_tagging_stop_marks_session_canceled(
     class FakeTagger:
         active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             pass
 
         def tag_directory(
@@ -3842,6 +4193,52 @@ def test_tagging_stop_marks_session_canceled(
     assert latest["status"] == "canceled"
 
 
+def test_anima_caption_stop_marks_session_canceled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import tagging as tagging_router
+
+    data = tmp_path / "anima-stop"
+    data.mkdir()
+    (data / "a.txt").write_text("old", encoding="utf-8")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowTransformer:
+        def transform_directory(self, *_args: Any, **_kwargs: Any) -> int:
+            entered.set()
+            assert release.wait(5)
+            return 0
+
+    monkeypatch.setattr(
+        tagging_router,
+        "_build_anima_transformer",
+        lambda _req: SlowTransformer(),
+    )
+    response = client.post(
+        "/api/anima/caption",
+        json={"path": str(data), "overwrite": True},
+    )
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stopped = client.post(f"/api/anima/caption/{session_id}/stop")
+    assert stopped.status_code == 200
+    release.set()
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/anima/caption/{session_id}").json()
+        if final["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert final["status"] == "canceled"
+
+
 def test_tagging_status_reads_task_session_after_memory_clear(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3856,7 +4253,7 @@ def test_tagging_status_reads_task_session_after_memory_clear(
     class FakeTagger:
         active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             pass
 
         def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
@@ -3952,7 +4349,7 @@ def test_tagging_dispatches_to_joytag_when_requested(
             captured["init"] = {"predict_threshold": predict_threshold, "device": device}
             self.active_provider = "cpu"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             captured["loaded"] = True
 
         def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
@@ -4029,6 +4426,7 @@ def test_anima_caption_writes_task_session(
             recursive: bool,
             overwrite: bool,
             progress: Any,
+            should_stop: Any = None,
         ) -> int:
             target = directory / "a.txt"
             target.write_text("new", encoding="utf-8")
@@ -4062,6 +4460,45 @@ def test_anima_caption_writes_task_session(
     assert latest["result"]["written"] == 1
     assert latest["events"][-1]["message"].startswith("done")
     assert caption.read_text(encoding="utf-8") == "new"
+
+
+def test_captions_normalize_can_stop_before_completion(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from lorahub.api.routers import captions as captions_router
+
+    data = tmp_path / "captions-stop"
+    data.mkdir()
+    (data / "a.txt").write_text("old", encoding="utf-8")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowPipeline:
+        def transform_directory(self, *_args: Any, **_kwargs: Any) -> int:
+            entered.set()
+            assert release.wait(5)
+            return 0
+
+    monkeypatch.setattr(captions_router, "_build_pipeline", lambda _req: SlowPipeline())
+    response = client.post("/api/captions/normalize", json={"path": str(data)})
+    session_id = response.json()["session_id"]
+    assert entered.wait(5)
+
+    stopped = client.post(f"/api/captions/normalize/{session_id}/stop")
+    assert stopped.status_code == 200
+    release.set()
+
+    deadline = time.time() + 5
+    final: dict[str, Any] = {}
+    while time.time() < deadline:
+        final = client.get(f"/api/captions/normalize/{session_id}").json()
+        if final["status"] == "canceled":
+            break
+        time.sleep(0.02)
+    assert final["status"] == "canceled"
 
 
 def test_anima_caption_status_recovers_interrupted_task(
@@ -4211,6 +4648,7 @@ def test_captions_normalize_runs_session_and_rewrites_files(
             recursive: bool,
             overwrite: bool,
             progress: Any,
+            should_stop: Any = None,
         ) -> int:
             captured["params"] = {
                 "directory": str(directory),
@@ -4289,6 +4727,7 @@ def test_captions_normalize_writes_task_session(
             recursive: bool,
             overwrite: bool,
             progress: Any,
+            should_stop: Any = None,
         ) -> int:
             target = directory / "a.txt"
             target.write_text("new", encoding="utf-8")
@@ -4724,6 +5163,41 @@ def test_apply_placeholders_creates_intermediate_dicts() -> None:
 # --------------------------------------------------------------------------- #
 # /api/sweeps
 # --------------------------------------------------------------------------- #
+
+
+def test_create_sweep_rejects_workspace_outside_runs(
+    client: TestClient, tmp_path: Path
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-sweep-outside"
+    payload = {
+        "base_config": _config_payload(tmp_path)
+        | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "values": [16]}],
+        "workspace_root": str(outside),
+    }
+
+    response = client.post("/api/sweeps", json=payload)
+
+    assert response.status_code == 422
+    assert "must be under" in response.json()["detail"]
+
+
+def test_create_sweep_rejects_variant_name_that_escapes_sweep_root(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "base_config": _config_payload(tmp_path)
+        | {"network": {"rank": 32, "alpha": 16}},
+        "axes": [{"path": "network.rank", "values": [16]}],
+        "name_template": "../{base}-{i:03d}",
+        "workspace_root": str(tmp_path / "runs" / "sweep"),
+    }
+
+    response = client.post("/api/sweeps", json=payload)
+
+    assert response.status_code == 400
+    assert "single path component" in response.json()["detail"]
 
 
 def test_create_sweep_enqueues_one_job_per_variant(

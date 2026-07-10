@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -416,8 +417,8 @@ def test_service_health_requires_matching_token(monkeypatch: pytest.MonkeyPatch)
     class FakeResponse:
         status = 200
 
-        def __init__(self, token: str) -> None:
-            self.token = token
+        def __init__(self, matches: bool) -> None:
+            self.matches = matches
 
         def __enter__(self) -> "FakeResponse":
             return self
@@ -426,13 +427,20 @@ def test_service_health_requires_matching_token(monkeypatch: pytest.MonkeyPatch)
             return None
 
         def read(self) -> bytes:
-            return f'{{"service_token": "{self.token}"}}'.encode()
+            return json.dumps({"service_token_match": self.matches}).encode()
 
-    responses = [FakeResponse("old"), FakeResponse("new")]
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: responses.pop(0))
+    responses = [FakeResponse(False), FakeResponse(True)]
+    requests: list[object] = []
+
+    def fake_urlopen(request: object, **_kwargs: object) -> FakeResponse:
+        requests.append(request)
+        return responses.pop(0)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(service_mod.time, "sleep", lambda _seconds: None)
 
     assert service_mod._wait_for_health(19090, timeout_s=10, service_token="new") is True
+    assert requests[0].get_header("X-lorahub-service-token") == "new"  # type: ignore[attr-defined]
 
 
 def test_service_daemon_uses_pythonw_on_windows(

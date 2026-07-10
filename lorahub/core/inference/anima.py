@@ -32,6 +32,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -239,10 +240,9 @@ class AnimaInferenceBackend:
         # save_path directory then names the file deterministically; we
         # render into a temporary scratch dir and move the produced PNG
         # into out_path so naming stays under our control.
-        scratch_dir = out_path.parent / f"_scratch_{out_path.stem}"
-        if scratch_dir.exists():
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-        scratch_dir.mkdir(parents=True, exist_ok=True)
+        scratch_dir = Path(
+            tempfile.mkdtemp(dir=out_path.parent, prefix=".lorahub-anima-preview-")
+        )
 
         cmd = [
             str(cfg.sd_scripts_python),
@@ -276,43 +276,44 @@ class AnimaInferenceBackend:
         # Disable tqdm spam — the subprocess output is captured anyway.
         env.setdefault("TQDM_DISABLE", "1")
         try:
-            res = subprocess.run(
-                cmd,
-                cwd=str(cfg.sd_scripts_repo),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=cfg.timeout_per_image_s,
-                check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                if sys.platform == "win32"
-                else 0,
-            )
-        except subprocess.TimeoutExpired:
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-            raise InferenceFailed(
-                f"anima_minimal_inference.py timed out after "
-                f"{cfg.timeout_per_image_s:.0f}s"
-            ) from None
+            try:
+                res = subprocess.run(
+                    cmd,
+                    cwd=str(cfg.sd_scripts_repo),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=cfg.timeout_per_image_s,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if sys.platform == "win32"
+                    else 0,
+                )
+            except subprocess.TimeoutExpired:
+                raise InferenceFailed(
+                    f"anima_minimal_inference.py timed out after "
+                    f"{cfg.timeout_per_image_s:.0f}s"
+                ) from None
 
-        if res.returncode != 0:
-            tail = (res.stderr or res.stdout or "").splitlines()[-12:]
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-            raise InferenceFailed(
-                f"anima_minimal_inference.py exited {res.returncode}: "
-                + "\n".join(tail)
-            )
+            if res.returncode != 0:
+                tail = (res.stderr or res.stdout or "").splitlines()[-12:]
+                raise InferenceFailed(
+                    f"anima_minimal_inference.py exited {res.returncode}: "
+                    + "\n".join(tail)
+                )
 
-        # Pick the only PNG the script wrote and atomically rename it
-        # to our canonical out_path.
-        produced = sorted(scratch_dir.glob("*.png"))
-        if not produced:
+            # Pick the only PNG the script wrote and atomically rename it
+            # to our canonical out_path.
+            produced = sorted(scratch_dir.glob("*.png"))
+            if not produced:
+                raise InferenceFailed(
+                    "anima_minimal_inference.py succeeded but produced no PNG"
+                )
+            produced[0].replace(out_path)
+        finally:
+            # The directory name is allocated exclusively by tempfile, so this
+            # cleanup can never remove a pre-existing user directory.
             shutil.rmtree(scratch_dir, ignore_errors=True)
-            raise InferenceFailed(
-                "anima_minimal_inference.py succeeded but produced no PNG"
-            )
-        produced[0].replace(out_path)
-        shutil.rmtree(scratch_dir, ignore_errors=True)
 
         log.info(
             "[anima-inference] rendered %s in %.1fs",

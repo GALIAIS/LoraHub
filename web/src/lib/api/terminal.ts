@@ -57,17 +57,20 @@ export async function terminalExec(
     signal: opts.signal,
   })
   if (!res.ok) {
-    let errBody: unknown = ""
+    const raw = await res.text().catch(() => "")
+    let errBody: unknown = raw
     try {
-      errBody = await res.json()
+      errBody = JSON.parse(raw)
     } catch {
-      try {
-        errBody = await res.text()
-      } catch {
-        /* empty */
-      }
+      // Keep a plain-text reverse-proxy or server error.
     }
-    throw new ApiError(res.status, res.statusText, errBody, "/terminal/exec")
+    throw new ApiError(
+      res.status,
+      res.statusText,
+      errBody,
+      "/terminal/exec",
+      res.headers.get("x-request-id"),
+    )
   }
   await readSseEvents<TerminalEvent>(res, opts.onEvent)
 }

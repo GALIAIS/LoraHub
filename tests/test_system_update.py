@@ -17,6 +17,7 @@ import subprocess
 import tarfile
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -221,6 +222,29 @@ def test_pre_check_refreshes_remote_ref_before_detached_reachability(tmp_path: P
     ), events
 
 
+@pytest.mark.parametrize(
+    ("relation", "expected"),
+    [
+        ("remote_ahead", True),
+        ("local_ahead", False),
+        ("diverged", True),
+        ("unknown", True),
+    ],
+)
+def test_branch_update_available_respects_commit_direction(
+    monkeypatch: pytest.MonkeyPatch,
+    relation: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(su, "_commit_relation", lambda *_args, **_kwargs: relation)
+
+    assert su._branch_update_available(
+        latest_commit="remote",
+        current_commit="local",
+        cwd=Path("repo"),
+    ) is expected
+
+
 # --------------------------------------------------------------------- #
 # _snapshot_configs / _restore_configs
 # --------------------------------------------------------------------- #
@@ -240,6 +264,24 @@ def test_snapshot_returns_none_when_configs_empty(tmp_path: Path) -> None:
     (repo / "configs" / "anima.yaml").unlink()
     events, emit = _capturing_emit()
     assert su._snapshot_configs(repo, emit) is None
+
+
+def test_snapshot_refuses_configs_junction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _make_repo(tmp_path)
+    config_root = repo / "configs"
+    original = su._is_link_path
+    monkeypatch.setattr(
+        su,
+        "_is_link_path",
+        lambda path: path == config_root or original(path),
+    )
+    _events, emit = _capturing_emit()
+
+    with pytest.raises(RuntimeError, match="configs/ is a link"):
+        su._snapshot_configs(repo, emit)
 
 
 def test_snapshot_returns_none_when_only_tracked_present(tmp_path: Path) -> None:
@@ -296,6 +338,31 @@ def test_snapshot_round_trip_preserves_user_configs_and_local_edits(tmp_path: Pa
     snap.unlink(missing_ok=True)
 
 
+def test_snapshot_preserves_non_ascii_config_names(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    config = repo / "configs" / "角色 配置.yaml"
+    config.write_text("name: local\n", encoding="utf-8")
+    _events, emit = _capturing_emit()
+
+    snapshot = su._snapshot_configs(repo, emit)
+
+    assert snapshot is not None
+    with tarfile.open(snapshot, "r") as archive:
+        assert "configs/角色 配置.yaml" in archive.getnames()
+    snapshot.unlink()
+
+
+def test_commit_for_tag_requires_matching_tag_and_commit_sha() -> None:
+    payload = [
+        {"name": "v1.1.1", "commit": {"sha": "abcdef1234567890"}},
+        {"name": "v1.1.0", "commit": {"sha": "main"}},
+    ]
+
+    assert su._commit_for_tag(payload, "v1.1.1") == "abcdef1234567890"
+    assert su._commit_for_tag(payload, "v1.1.0") is None
+    assert su._commit_for_tag(payload, "v1.0.9") is None
+
+
 def test_restore_skips_when_snapshot_none(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     events, emit = _capturing_emit()
@@ -322,6 +389,76 @@ def test_restore_rejects_path_traversal(tmp_path: Path) -> None:
     # Nothing should have been written outside the repo.
     assert not (tmp_path / "escape.yaml").exists()
     assert any("suspicious archive entry" in m for _, _, m in events), events
+
+
+def test_restore_replaces_configs_symlink_without_writing_through_it(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "configs" / "user.yaml").write_text("name: local\n")
+    events, emit = _capturing_emit()
+    snapshot = su._snapshot_configs(repo, emit)
+    assert snapshot is not None
+
+    for path in (repo / "configs").iterdir():
+        path.unlink()
+    (repo / "configs").rmdir()
+    outside = tmp_path / "outside-configs"
+    outside.mkdir()
+    try:
+        (repo / "configs").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        snapshot.unlink(missing_ok=True)
+        pytest.skip("directory symlinks are unavailable")
+
+    su._restore_configs(repo, snapshot, emit)
+
+    assert not (repo / "configs").is_symlink()
+    assert (repo / "configs" / "user.yaml").read_text() == "name: local\n"
+    assert not (outside / "user.yaml").exists()
+    snapshot.unlink(missing_ok=True)
+
+
+def test_restore_reports_blocked_config_and_keeps_snapshot(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    nested = repo / "configs" / "nested"
+    nested.mkdir()
+    (nested / "user.yaml").write_text("name: local\n")
+    events, emit = _capturing_emit()
+    snapshot = su._snapshot_configs(repo, emit)
+    assert snapshot is not None
+    (nested / "user.yaml").unlink()
+    nested.rmdir()
+    nested.write_text("blocks directory\n")
+
+    with pytest.raises(RuntimeError, match="could not restore all config files"):
+        su._restore_configs(repo, snapshot, emit)
+
+    assert snapshot.is_file()
+    snapshot.unlink()
+
+
+def test_update_context_preserves_snapshot_when_rollback_restore_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _make_repo(tmp_path)
+    snapshot = tmp_path / "configs-snapshot.tar"
+    snapshot.write_bytes(b"snapshot")
+    events, emit = _capturing_emit()
+    context = su._UpdateContext(repo, emit, snapshot_path=snapshot)
+    monkeypatch.setattr(
+        su,
+        "_restore_configs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("disk full")),
+    )
+
+    context.__exit__(RuntimeError, RuntimeError("update failed"), None)
+
+    assert snapshot.is_file()
+    assert any("snapshot preserved" in message for _phase, _level, message in events)
+    snapshot.unlink()
 
 
 # --------------------------------------------------------------------- #
@@ -363,6 +500,43 @@ def test_update_context_consumes_snapshot_on_success(tmp_path: Path) -> None:
         ctx.snapshot_path = snap
         ctx.snapshot_consumed = True
     assert not snap.exists()
+
+
+def test_update_context_restores_original_git_ref_on_error(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    original = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    events, emit = _capturing_emit()
+
+    with pytest.raises(RuntimeError, match="build failed"):
+        with su._UpdateContext(repo, emit):
+            (repo / "README.md").write_text("new source\n")
+            _run_git(["add", "README.md"], cwd=repo)
+            _run_git(["commit", "-q", "-m", "new source"], cwd=repo)
+            raise RuntimeError("build failed")
+
+    restored = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    branch = subprocess.run(  # noqa: S603, S607
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert restored == original
+    assert branch == "main"
+    assert any("restoring source" in message for _phase, _level, message in events)
 
 
 # --------------------------------------------------------------------- #
@@ -410,7 +584,16 @@ def _stub_apply(
 
     monkeypatch.setattr(su, "_stream_subprocess", fake_stream)
     monkeypatch.setattr(su, "_resolve_latest_tag", lambda _cwd: "v9.9.9")
-    monkeypatch.setattr(su, "_build_pip_command", lambda _cwd: ["python", "-m", "pip", "install"])
+    monkeypatch.setattr(
+        su,
+        "_build_pip_command",
+        lambda _cwd, **_kwargs: ["python", "-m", "pip", "install"],
+    )
+    monkeypatch.setattr(
+        su,
+        "_remove_legacy_onnx_conflict",
+        lambda _cwd, _emit: None,
+    )
     monkeypatch.setattr(su, "_find_npm", lambda _cwd: None)  # skip npm by default
     return calls
 
@@ -427,7 +610,9 @@ def test_apply_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         and "+refs/heads/dev:refs/remotes/origin/dev" in c
         for c in calls
     )
-    checked_out_dev = any(c == ["git", "checkout", "origin/dev"] for c in calls)
+    checked_out_dev = any(
+        c == ["git", "checkout", "-b", "dev", "origin/dev"] for c in calls
+    )
     assert fetched and checked_out_dev, calls
     assert any(p == "done" for p, _, _ in events)
 
@@ -442,7 +627,8 @@ def test_apply_tag_updates_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert any(
         "+refs/heads/main:refs/remotes/origin/main" in call for call in calls
     ), calls
-    assert any(c == ["git", "checkout", "origin/main"] for c in calls), calls
+    assert ["git", "checkout", "main"] in calls, calls
+    assert ["git", "merge", "--ff-only", "origin/main"] in calls, calls
 
 
 def test_apply_tag_can_restore_verified_release(
@@ -500,7 +686,10 @@ def test_apply_with_force_passes_through_detached_head(
 
     # Should warn (not raise) and reach the checkout step.
     su.apply(channel="main", build=False, force=True, progress=emit)
-    assert any(c == ["git", "checkout", "--force", "origin/dev"] for c in calls), calls
+    assert any(
+        c == ["git", "checkout", "--force", "-B", "dev", "origin/dev"]
+        for c in calls
+    ), calls
 
 
 def test_apply_force_clean_excludes_user_owned_paths(
@@ -529,7 +718,7 @@ def test_apply_force_clean_excludes_user_owned_paths(
         if tok == "-e"
     }
     expected = {
-        prefix.rstrip("/").replace("\\", "/")
+        ".env*" if prefix == ".env" else prefix.rstrip("/").replace("\\", "/")
         for prefix in su._USER_OWNED_PREFIXES
     }
     missing = expected - excludes
@@ -541,6 +730,7 @@ def test_apply_failure_pops_stash_before_restoring_config_snapshot(
 ) -> None:
     repo = _make_repo(tmp_path)
     (repo / "configs" / "anima.yaml").write_text("name: local\n")
+    (repo / "README.md").write_text("local source edit\n")
     calls = _stub_apply(monkeypatch, repo, fetch_rc=128)
     events, emit = _capturing_emit()
 
@@ -551,6 +741,47 @@ def test_apply_failure_pops_stash_before_restoring_config_snapshot(
     restore = next(i for i, event in enumerate(events) if "restoring configs/" in event[2])
     stash_event = next(i for i, event in enumerate(events) if "popping stash" in event[2])
     assert stash_event < restore
+
+
+def test_stash_update_changes_excludes_user_runtime_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "README.md").write_text("source edit\n")
+    (repo / "configs" / "user.yaml").write_text("user: true\n")
+    (repo / "models").mkdir()
+    (repo / "models" / "weights.safetensors").write_bytes(b"model")
+    events, emit = _capturing_emit()
+    calls: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], **_kwargs: Any) -> int:
+        calls.append(cmd)
+        return 0
+
+    monkeypatch.setattr(su, "_stream_subprocess", fake_stream)
+
+    assert su._stash_update_changes(repo, emit) is True
+    stash = calls[0]
+    assert ":(exclude)models/**" in stash
+    assert ":(exclude)runs/**" in stash
+    assert ":(exclude)datasets/**" in stash
+    assert not any("configs" in arg and arg.startswith(":(exclude)") for arg in stash)
+
+
+def test_stash_update_changes_ignores_model_only_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "models").mkdir()
+    (repo / "models" / "weights.safetensors").write_bytes(b"model")
+    events, emit = _capturing_emit()
+
+    def fail_stream(*_args: Any, **_kwargs: Any) -> int:
+        pytest.fail("model-only changes must not be stashed")
+
+    monkeypatch.setattr(su, "_stream_subprocess", fail_stream)
+
+    assert su._stash_update_changes(repo, emit) is False
 
 
 def test_apply_restores_configs_when_pip_fails(
@@ -598,7 +829,7 @@ def test_build_pip_command_uses_configured_index_and_copy_mode(
     monkeypatch.setenv("UV_DEFAULT_INDEX", "https://mirror.example/simple")
     monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
 
-    cmd = su._build_pip_command(Path("repo"))
+    cmd = su._build_pip_command(Path("repo"), onnx_extra="cpu")
 
     assert cmd[:3] == ["uv", "pip", "install"]
     assert cmd[cmd.index("--index-url") + 1] == "https://mirror.example/simple"
@@ -611,9 +842,9 @@ def test_build_pip_command_uses_regular_install_on_windows(
     monkeypatch.setattr(su.sys, "platform", "win32")
     monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
 
-    cmd = su._build_pip_command(Path("repo"))
+    cmd = su._build_pip_command(Path("repo"), onnx_extra="cpu")
 
-    assert ".[api,dev]" in cmd
+    assert ".[api,dev,cpu]" in cmd
     assert "-e" not in cmd
 
 
@@ -623,10 +854,10 @@ def test_build_pip_command_keeps_editable_install_off_windows(
     monkeypatch.setattr(su.sys, "platform", "linux")
     monkeypatch.setattr("lorahub.core.toolchain.uv.find_uv", lambda: "uv")
 
-    cmd = su._build_pip_command(Path("repo"))
+    cmd = su._build_pip_command(Path("repo"), onnx_extra="gpu")
 
     assert "-e" in cmd
-    assert cmd[cmd.index("-e") + 1] == ".[api,dev]"
+    assert cmd[cmd.index("-e") + 1] == ".[api,dev,gpu]"
 
 
 # --------------------------------------------------------------------- #
@@ -828,6 +1059,69 @@ def test_check_marks_docker_install_as_non_updatable(
     assert info.update_available is True
 
 
+def test_check_docker_uses_tag_commit_instead_of_unbuilt_main_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setenv("LORAHUB_DOCKER", "1")
+    monkeypatch.setattr(
+        su,
+        "_resolve_version",
+        lambda: ("1.1.1-main-gabcdef12", "env"),
+    )
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.1.1",
+            "version_str": "1.1.1",
+            "commit": "abcdef1234567890",
+            "branch_commit": "fedcba9876543210",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda _blob: None)
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.current_commit == "abcdef12"
+    assert info.latest_commit == "abcdef1234567890"
+    assert info.update_available is False
+
+
+def test_check_docker_detects_same_version_retag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(su, "_git_root", lambda: None)
+    monkeypatch.setenv("LORAHUB_DOCKER", "1")
+    monkeypatch.setattr(
+        su,
+        "_resolve_version",
+        lambda: ("1.1.1-main-gabcdef12", "env"),
+    )
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: {
+            "tag_name": "v1.1.1",
+            "version_str": "1.1.1",
+            "commit": "1234567890abcdef",
+            "branch_commit": "fedcba9876543210",
+            "release_notes": "",
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(su, "_read_cache", lambda: su._CacheBlob())
+    monkeypatch.setattr(su, "_write_cache", lambda _blob: None)
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.latest_commit == "1234567890abcdef"
+    assert info.update_available is True
+
+
 def test_check_tag_detects_retagged_same_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -950,6 +1244,89 @@ def test_tag_update_detects_remote_main_ahead(tmp_path: Path) -> None:
     )
 
 
+def test_tag_update_uses_version_direction_before_commit_ancestry(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+    older = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (repo / "README.md").write_text("hello\nnewer commit\n")
+    _run_git(["add", "README.md"], cwd=repo)
+    _run_git(["commit", "-q", "-m", "newer commit"], cwd=repo)
+    newer = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert su._tag_update_available(
+        latest="1.0.0",
+        current="9.0.0",
+        latest_commit=newer,
+        current_commit=older,
+        cwd=repo,
+    ) is False
+    assert su._tag_update_available(
+        latest="9.0.0",
+        current="1.0.0",
+        latest_commit=older,
+        current_commit=newer,
+        cwd=repo,
+    ) is True
+
+
+def test_pre_check_does_not_reset_existing_branch_from_detached_head(
+    tmp_path: Path,
+) -> None:
+    upstream_root = tmp_path / "upstream-existing"
+    upstream_root.mkdir()
+    upstream = _make_repo(upstream_root)
+    clone_root = tmp_path / "clone-existing"
+    clone_root.mkdir()
+    repo = clone_root / "repo"
+    _run_git(["clone", "-q", str(upstream), str(repo)], cwd=clone_root)
+    original = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _run_git(["config", "user.email", "test@example.com"], cwd=repo)
+    _run_git(["config", "user.name", "Test"], cwd=repo)
+    (repo / "README.md").write_text("hello\nlocal branch commit\n")
+    _run_git(["add", "README.md"], cwd=repo)
+    _run_git(["commit", "-q", "-m", "local branch commit"], cwd=repo)
+    local_branch = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _run_git(["checkout", "-q", "--detach", original], cwd=repo)
+    events, emit = _capturing_emit()
+
+    su._pre_check(repo, channel="tag", force=False, emit=emit)
+
+    after = subprocess.run(  # noqa: S603, S607
+        ["git", "rev-parse", "main"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert after == local_branch
+    assert su._detect_detached_head(repo) is not None
+
+
 def test_check_tag_adds_git_notes_when_release_body_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -957,7 +1334,11 @@ def test_check_tag_adds_git_notes_when_release_body_missing(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.6", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
-    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda *_args, **_kwargs: "newsha",
+    )
     monkeypatch.setattr(
         su,
         "_refresh_tag",
@@ -989,7 +1370,11 @@ def test_check_tag_uses_tag_commit_message_for_release_notes(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.6", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
-    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda *_args, **_kwargs: "newsha",
+    )
     monkeypatch.setattr(
         su,
         "_refresh_tag",
@@ -1023,7 +1408,11 @@ def test_check_tag_refreshes_cached_payload_without_sha(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.7", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
-    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda *_args, **_kwargs: "newsha",
+    )
     monkeypatch.setattr(
         su,
         "_refresh_tag",
@@ -1066,7 +1455,11 @@ def test_check_tag_cached_payload_recomputes_dirty_same_version(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: True)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.7-dirty", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "oldsha")
-    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "newsha")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda *_args, **_kwargs: "newsha",
+    )
     cached = UpdateInfo(
         channel="tag",
         current="1.0.7",
@@ -1088,7 +1481,7 @@ def test_check_tag_cached_payload_recomputes_dirty_same_version(
     assert info.update_available is True
 
 
-def test_check_tag_cached_payload_refreshes_existing_sha(
+def test_check_tag_cached_payload_keeps_remote_main_sha(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from lorahub.api.system_update_types import CacheBlob, UpdateInfo
@@ -1097,7 +1490,11 @@ def test_check_tag_cached_payload_refreshes_existing_sha(
     monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
     monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.8", "git-describe"))
     monkeypatch.setattr(su, "_current_commit", lambda _cwd: "49633851")
-    monkeypatch.setattr(su, "_remote_tag_commit", lambda _cwd, _tag: "49633851")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda _cwd, _tag, cached=None: cached,
+    )
     cached = UpdateInfo(
         channel="tag",
         current="1.0.8",
@@ -1116,8 +1513,166 @@ def test_check_tag_cached_payload_refreshes_existing_sha(
 
     info = su.check(channel="tag")
 
-    assert info.latest_commit == "49633851"
-    assert info.update_available is False
+    assert info.latest_commit == "97682880"
+    assert info.update_available is True
+
+
+def test_check_tag_cached_tag_sha_is_replaced_by_main_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.system_update_types import CacheBlob, UpdateInfo
+
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.8", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "tagsha")
+
+    def release_head(_cwd, _tag, cached=None):  # type: ignore[no-untyped-def]
+        assert cached == "tagsha"
+        return "mainsha"
+
+    monkeypatch.setattr(su, "_release_channel_commit", release_head)
+    cached = UpdateInfo(
+        channel="tag",
+        current="1.0.8",
+        latest="1.0.8",
+        update_available=False,
+        release_url=su.WEB_RELEASES_URL,
+        tag_name="v1.0.8",
+        current_commit="tagsha",
+        latest_commit="tagsha",
+    ).to_dict()
+    monkeypatch.setattr(
+        su,
+        "_read_cache",
+        lambda: CacheBlob(data={"tag": cached}, updated_at=time.time()),
+    )
+
+    info = su.check(channel="tag")
+
+    assert info.latest_commit == "mainsha"
+    assert info.update_available is True
+
+
+def test_check_tag_refresh_failure_returns_resolved_main_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.system_update_types import CacheBlob, UpdateInfo
+
+    monkeypatch.setattr(su, "_git_root", lambda: Path("repo"))
+    monkeypatch.setattr(su, "_detect_dirty", lambda _cwd: False)
+    monkeypatch.setattr(su, "_resolve_version", lambda: ("1.0.8", "git-describe"))
+    monkeypatch.setattr(su, "_current_commit", lambda _cwd: "tagsha")
+    monkeypatch.setattr(
+        su,
+        "_release_channel_commit",
+        lambda *_args, **_kwargs: "mainsha",
+    )
+    monkeypatch.setattr(
+        su,
+        "_refresh_tag",
+        lambda: (_ for _ in ()).throw(OSError("offline")),
+    )
+    cached = UpdateInfo(
+        channel="tag",
+        current="1.0.8",
+        latest="1.0.8",
+        update_available=False,
+        release_url=su.WEB_RELEASES_URL,
+        tag_name="v1.0.8",
+        current_commit="tagsha",
+        latest_commit="tagsha",
+    ).to_dict()
+    monkeypatch.setattr(
+        su,
+        "_read_cache",
+        lambda: CacheBlob(data={"tag": cached}, updated_at=0),
+    )
+
+    info = su.check(channel="tag", force=True)
+
+    assert info.latest_commit == "mainsha"
+    assert info.update_available is True
+    assert info.error == "refresh failed: offline"
+
+
+def test_update_cache_freshness_is_scoped_to_each_channel() -> None:
+    now = time.time()
+    stale_tag = {
+        "checked_at": datetime.fromtimestamp(
+            now - su.CACHE_TTL_SECONDS - 1,
+            tz=UTC,
+        ).isoformat(),
+    }
+    fresh_dev = {
+        "checked_at": datetime.fromtimestamp(now - 1, tz=UTC).isoformat(),
+    }
+
+    # The shared blob timestamp may have just been advanced by the other
+    # channel; it must not make this stale tag entry fresh again.
+    assert su._cache_entry_is_fresh(stale_tag, now, now=now) is False
+    assert su._cache_entry_is_fresh(fresh_dev, 0, now=now) is True
+
+
+def test_update_cache_freshness_supports_legacy_blob_timestamp() -> None:
+    now = time.time()
+
+    assert su._cache_entry_is_fresh({}, now, now=now) is False
+    assert su._cache_entry_is_fresh(
+        {"latest": "1.0.0"},
+        now - 1,
+        now=now,
+    ) is True
+
+
+def test_update_cache_reader_ignores_invalid_channel_payloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = tmp_path / "update-cache.json"
+    cache.write_text(
+        '{"data":{"tag":[],"dev":{"latest":"abc"}},"updated_at":1}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(su, "_cache_file", lambda: cache)
+
+    blob = su._read_cache()
+
+    assert "tag" not in blob.data
+    assert blob.data["dev"] == {"latest": "abc"}
+
+
+def test_update_cache_compatibility_ignores_unknown_fields() -> None:
+    info = su._update_info_from_cache(
+        {
+            "channel": "main",
+            "latest": "1.2.3",
+            "future_field": "newer-version-only",
+        },
+        channel="tag",
+        current="1.2.2",
+    )
+
+    assert info.channel == "tag"
+    assert info.current == "1.2.2"
+    assert info.latest == "1.2.3"
+    assert info.release_url == su.WEB_RELEASES_URL
+
+
+def test_update_cache_channel_write_preserves_peer_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = su._CacheBlob(data={"dev": {"latest": "devsha"}}, updated_at=1)
+    written: list[su._CacheBlob] = []
+    monkeypatch.setattr(su, "_read_cache", lambda: existing)
+    monkeypatch.setattr(su, "_write_cache", lambda blob: written.append(blob))
+
+    su._write_channel_cache("tag", {"latest": "1.2.3"})
+
+    assert written[0].data == {
+        "dev": {"latest": "devsha"},
+        "tag": {"latest": "1.2.3"},
+    }
 
 
 # --------------------------------------------------------------------- #
@@ -1334,6 +1889,30 @@ def test_update_restart_args_leave_non_uvicorn_commands_untouched(
         ["-m", "lorahub", "serve", "--port", "8123"],
     )
     assert args == ["/opt/venv/bin/python", "-m", "lorahub", "serve", "--port", "8123"]
+
+
+def test_update_restart_fallback_rebuilds_uvicorn_module_command(
+) -> None:
+    from lorahub.api import runtime_bind
+    from lorahub.api.routers import system
+
+    bind = runtime_bind.RuntimeBind(host="0.0.0.0", port=18765, pid=42)
+    args = system._restart_fallback_args(
+        bind,
+        "C:/Python/python.exe",
+        ["C:/Python/Scripts/uvicorn.exe", "lorahub.api.app:app"],
+    )
+
+    assert args == [
+        "C:/Python/python.exe",
+        "-m",
+        "uvicorn",
+        "lorahub.api.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "18765",
+    ]
 
 
 def test_refresh_current_uvicorn_bind_records_exec_pid(

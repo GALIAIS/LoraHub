@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import IO, Any, TextIO
 
 from lorahub.core.events import EventType, TrainingEvent
+from lorahub.core.redaction import redact_argv, redact_command_text
 
 EventListener = Callable[[TrainingEvent], None]
 LineParser = Callable[..., TrainingEvent | None]
@@ -64,6 +65,7 @@ class SubprocessRunner:
         thread_label: str = "trainer",
     ) -> None:
         self._argv = list(argv)
+        self._display_argv = redact_argv(self._argv)
         self._workspace = workspace
         self._on_event = on_event
         self._parse_line = parse_line
@@ -182,7 +184,7 @@ class SubprocessRunner:
                     payload={
                         "level": "info",
                         "source": "runner",
-                        "message": "spawn: " + " ".join(self._argv),
+                        "message": "spawn: " + " ".join(self._display_argv),
                     },
                     job_id=self._job_id,
                 )
@@ -245,16 +247,17 @@ class SubprocessRunner:
     def _pump(self, stream: IO[str], source: str) -> None:
         try:
             for raw in stream:
+                safe_raw = redact_command_text(raw)
                 # Mirror the *raw* line (newline preserved when present)
                 # to training.log first so a crash in the parser or
                 # watcher can't lose user-visible trainer output.
-                self._write_training_log(raw, source=source)
+                self._write_training_log(safe_raw, source=source)
                 # Hand every raw line to the diagnostic watcher *next*
                 # so that even lines the backend's parser would discard
                 # (Python tracebacks, library warnings) still get a
                 # shot at matching a failure-mode regex.
-                self._diag_watcher.feed(raw, source=source)
-                event = self._parse_line(raw, job_id=self._job_id)
+                self._diag_watcher.feed(safe_raw, source=source)
+                event = self._parse_line(safe_raw, job_id=self._job_id)
                 if event is None:
                     continue
                 if source == "stderr" and event.type is EventType.log:
@@ -273,14 +276,17 @@ class SubprocessRunner:
             # the first failure if the listener can still accept events,
             # but never let a broken UI/terminal sink kill the pipe pump.
             self._write_training_log(
-                f"lorahub listener error: {exc!r}",
+                redact_command_text(f"lorahub listener error: {exc!r}"),
                 source="runner",
             )
             with contextlib.suppress(Exception):
                 self._on_event(
                     TrainingEvent(
                         type=EventType.error,
-                        payload={"source": "listener", "error": repr(exc)},
+                        payload={
+                            "source": "listener",
+                            "error": redact_command_text(repr(exc)),
+                        },
                         job_id=self._job_id,
                     )
                 )
@@ -335,7 +341,7 @@ class SubprocessRunner:
         # tail-N look at the *current* run rather than blending in
         # stale output from an earlier attempt.
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        argv_line = " ".join(self._argv)
+        argv_line = " ".join(self._display_argv)
         with self._log_lock:
             assert self._log_handle is not None
             self._log_handle.write(

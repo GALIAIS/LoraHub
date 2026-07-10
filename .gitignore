@@ -66,6 +66,8 @@ desktop-tauri/src-tauri/gen/schemas/
 # LoraHub runtime artifacts
 workspaces/
 runs/
+models/
+output/
 checkpoints/
 samples/
 _smoke/

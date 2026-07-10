@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,27 +12,34 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.paths import models_dir, resolve_model_path
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSession,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
 from lorahub.core.models.downloader import (
     DEFAULT_ALLOW_PATTERNS,
     DEFAULT_IGNORE_PATTERNS,
+    DownloadCanceledError,
     DownloadProgress,
     DownloadRequest,
     DownloadResult,
     download,
     list_remote_files,
     select_files,
+    validate_repo_id,
 )
+from lorahub.core.redaction import redact_command_text
 
 router = APIRouter(prefix="/api")
 _KIND_MODEL_DOWNLOAD = "model_download"
 _DownloadStatus = Literal[
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
@@ -79,6 +86,7 @@ class _DownloadSession:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def add_progress(self, event: DownloadProgress) -> None:
         payload = asdict(event)
@@ -123,6 +131,23 @@ class _DownloadSession:
                 "finished_at": self.finished_at,
             }
 
+    def request_stop(self) -> bool:
+        with self.lock:
+            if self.status != "running":
+                return False
+            percent = self.percent
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
+            self.cancel_event.set()
+            self.status = "stop_requested"
+        self.add_progress(DownloadProgress(message="cancel requested", percent=self.percent))
+        return True
+
 
 _sessions: dict[str, _DownloadSession] = {}
 _sessions_lock = threading.Lock()
@@ -146,13 +171,6 @@ def _result_payload(req: DownloadModelRequest, result: DownloadResult) -> dict[s
         "files": result.files,
         "total_bytes": result.total_bytes,
     }
-
-
-def _store_session(session: _DownloadSession) -> None:
-    global _latest_session_id
-    with _sessions_lock:
-        _sessions[session.session_id] = session
-        _latest_session_id = session.session_id
 
 
 def _get_session(session_id: str) -> _DownloadSession:
@@ -185,7 +203,8 @@ def _session_from_task(task: TaskSession) -> _DownloadSession:
     metadata = task.metadata
     status: _DownloadStatus = (
         task.status
-        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        if task.status
+        in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"
     )
 
@@ -214,8 +233,10 @@ def _session_from_task(task: TaskSession) -> _DownloadSession:
 
 
 def _validate_repo_id(repo_id: str) -> None:
-    if not repo_id or "/" not in repo_id:
-        raise HTTPException(status_code=400, detail="repo_id must be 'owner/name'")
+    try:
+        validate_repo_id(repo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _validate_selected_paths(paths: list[str]) -> None:
@@ -230,15 +251,23 @@ def _validate_selected_paths(paths: list[str]) -> None:
 def _resolve_target_dir(target_dir: str | None) -> Path | None:
     if not target_dir:
         return None
-    target = Path(target_dir).expanduser().resolve()
-    cwd = Path.cwd().resolve()
-    home = Path.home().resolve()
-    if target.parent == target or target in {cwd, home}:
-        raise HTTPException(
-            status_code=400,
-            detail="target_dir must be a model subdirectory, not root, home, or project root",
-        )
-    return target
+    try:
+        return resolve_model_path(target_dir)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid target_dir: {exc}") from exc
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    try:
+        first.relative_to(second)
+        return True
+    except ValueError:
+        pass
+    try:
+        second.relative_to(first)
+        return True
+    except ValueError:
+        return False
 
 
 def _download_request_from_api(
@@ -300,54 +329,78 @@ def list_model_files(req: ListModelFilesRequest) -> dict[str, Any]:
 
 @router.post("/models/download", status_code=202)
 def download_model(req: DownloadModelRequest) -> dict[str, Any]:
+    global _latest_session_id
+
     _validate_repo_id(req.repo_id)
     _validate_selected_paths(req.paths)
 
-    target = _resolve_target_dir(req.target_dir)
+    target = _resolve_target_dir(req.target_dir) or resolve_model_path(
+        req.repo_id.replace("/", "__")
+    )
     download_req = _download_request_from_api(req, target=target, threads=req.threads)
-    task = _task_store().create(
-        kind=_KIND_MODEL_DOWNLOAD,
-        title=f"{req.source}:{req.repo_id}",
-        metadata={
-            "source": req.source,
-            "repo_id": req.repo_id,
-            "revision": req.revision,
-            "target_dir": str(target) if target else None,
-            "threads": req.threads,
-            "paths": list(req.paths),
-            "allow_patterns": list(download_req.allow_patterns),
-            "ignore_patterns": list(download_req.ignore_patterns),
-        },
-    )
-    session = _DownloadSession(
-        session_id=task.id,
-        source=req.source,
-        repo_id=req.repo_id,
-        revision=req.revision,
-        target_dir=str(target) if target else None,
-        threads=req.threads,
-        paths=list(req.paths),
-        allow_patterns=list(download_req.allow_patterns),
-        ignore_patterns=list(download_req.ignore_patterns),
-    )
+    target_key = target.resolve()
+    with _sessions_lock:
+        for active in _sessions.values():
+            if (
+                active.status in {"running", "stop_requested"}
+                and active.target_dir is not None
+                and _paths_overlap(Path(active.target_dir).resolve(), target_key)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"another download is already writing to {target_key}",
+                )
+        task = _task_store().create(
+            kind=_KIND_MODEL_DOWNLOAD,
+            title=f"{req.source}:{req.repo_id}",
+            metadata={
+                "source": req.source,
+                "repo_id": req.repo_id,
+                "revision": req.revision,
+                "target_dir": str(target),
+                "threads": req.threads,
+                "paths": list(req.paths),
+                "allow_patterns": list(download_req.allow_patterns),
+                "ignore_patterns": list(download_req.ignore_patterns),
+            },
+        )
+        session = _DownloadSession(
+            session_id=task.id,
+            source=req.source,
+            repo_id=req.repo_id,
+            revision=req.revision,
+            target_dir=str(target),
+            threads=req.threads,
+            paths=list(req.paths),
+            allow_patterns=list(download_req.allow_patterns),
+            ignore_patterns=list(download_req.ignore_patterns),
+        )
+        _sessions[session.session_id] = session
+        prune_terminal_session_cache(_sessions)
+        _latest_session_id = session.session_id
     session.add_progress(DownloadProgress(message="download queued", percent=0))
-    _store_session(session)
+    download_req = replace(download_req, cancel_event=session.cancel_event)
 
     def run() -> None:
         try:
-            _task_store().update(
-                session.session_id,
-                status="running",
-                percent=session.percent,
-            )
+            with session.lock:
+                if session.cancel_event.is_set():
+                    raise DownloadCanceledError("download canceled by user")
+                _task_store().update(
+                    session.session_id,
+                    status="running",
+                    percent=session.percent,
+                )
             result = download(download_req, session.add_progress)
             result_payload = _result_payload(req, result)
-            session.add_progress(DownloadProgress(message="download complete", percent=100))
             with session.lock:
+                if session.cancel_event.is_set():
+                    raise DownloadCanceledError("download canceled by user")
                 session.status = "succeeded"
                 session.percent = 100
                 session.result = result_payload
                 session.finished_at = time.time()
+            session.add_progress(DownloadProgress(message="download complete", percent=100))
             _task_store().update(
                 session.session_id,
                 status="succeeded",
@@ -355,18 +408,32 @@ def download_model(req: DownloadModelRequest) -> dict[str, Any]:
                 result=result_payload,
                 finished=True,
             )
+        except DownloadCanceledError as exc:
+            with session.lock:
+                session.status = "canceled"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.add_progress(DownloadProgress(message=str(exc), percent=session.percent))
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error=str(exc),
+                result=session.snapshot(),
+                finished=True,
+            )
         except Exception as exc:  # noqa: BLE001
+            error = redact_command_text(str(exc))
             with session.lock:
                 session.status = "failed"
-                session.error = str(exc)
+                session.error = error
                 session.finished_at = time.time()
             _task_store().update(
                 session.session_id,
                 status="failed",
-                error=str(exc),
+                error=error,
                 finished=True,
             )
-            session.add_progress(DownloadProgress(message=f"download failed: {exc}"))
+            session.add_progress(DownloadProgress(message=f"download failed: {error}"))
 
     thread = threading.Thread(target=run, name=f"model-download-{session.session_id[:8]}", daemon=True)
     thread.start()
@@ -391,6 +458,22 @@ def latest_model_download_status() -> dict[str, Any]:
 @router.get("/models/download/{session_id}")
 def download_model_status(session_id: str) -> dict[str, Any]:
     return _get_session(session_id).snapshot()
+
+
+@router.post("/models/download/{session_id}/stop")
+def stop_model_download(session_id: str) -> dict[str, Any]:
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+    if session is None:
+        task = _task_store().get(session_id)
+        if task is None or task.kind != _KIND_MODEL_DOWNLOAD:
+            raise HTTPException(status_code=404, detail="download session not found")
+        raise HTTPException(status_code=409, detail=f"download is {task.status}")
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(status_code=409, detail=f"download is {status}")
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # ---- model scan -----------------------------------------------------
@@ -460,8 +543,10 @@ def scan_models(root: str | None = None) -> ScannedModelsResponse:
     of < 1k files the walk completes in < 100ms even on Windows.
     """
     started = time.monotonic()
-    base = Path(root).expanduser() if root else (Path.cwd() / "models")
-    base = base.resolve()
+    try:
+        base = resolve_model_path(root, allow_root=True) if root else models_dir().resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid model root: {exc}") from exc
     files = _scan_models_dir(base)
     return ScannedModelsResponse(
         root=str(base),

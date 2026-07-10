@@ -84,7 +84,7 @@ class JoyTagger:
         """e.g. ``"cuda"`` or ``"cpu"``. Empty until `load()` ran."""
         return self._active_provider
 
-    def load(self) -> None:
+    def load(self, *, should_stop: Callable[[], bool] | None = None) -> None:
         """Download weights + tag list and build the inference module.
 
         Resolves the torch device first so ``active_provider`` is populated
@@ -95,6 +95,8 @@ class JoyTagger:
         """
         if self._model is not None:
             return
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
 
         # Resolve torch first so a missing-torch env fails before downloading
         # several hundred MB of weights.
@@ -113,12 +115,16 @@ class JoyTagger:
         # Mirror WD14's progress reporting so the floating download
         # toast shows JoyTag bytes too.
         def _dl(filename: str) -> str:
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
             try:
                 return hf_download(
                     repo_id=self.model_id,
                     filename=filename,
                     tqdm_class=download_status.tqdm_class_for(
-                        self.model_id, filename
+                        self.model_id,
+                        filename,
+                        should_stop,
                     ),
                 )
             except BaseException as exc:
@@ -128,6 +134,8 @@ class JoyTagger:
         weights_path = _dl("model.safetensors")
         tags_path = _dl("top_tags.txt")
         config_path = _dl("config.json")
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
 
         with Path(tags_path).open(encoding="utf-8") as fh:
             self._tag_names = [line.strip() for line in fh if line.strip()]

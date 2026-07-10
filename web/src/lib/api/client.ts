@@ -279,6 +279,11 @@ export const api = {
     http<AnimaModelDownloadStatus>(
       "/backends/anima_lora/download-models/status",
     ),
+  stopAnimaModelDownload: (sessionId: string) =>
+    http<{ session_id: string; status: "stop_requested" }>(
+      `/backends/anima_lora/download-models/${encodeURIComponent(sessionId)}/stop`,
+      { method: "POST" },
+    ),
   startMsvcInstall: () =>
     http<MsvcInstallStatus>("/backends/anima_lora/install-msvc", {
       method: "POST",
@@ -391,6 +396,11 @@ export const api = {
     }),
   getModelDownload: (sessionId: string) =>
     http<ModelDownloadSession>(`/models/download/${sessionId}`),
+  stopModelDownload: (sessionId: string) =>
+    http<{ session_id: string; status: "stop_requested" }>(
+      `/models/download/${encodeURIComponent(sessionId)}/stop`,
+      { method: "POST" },
+    ),
   getLatestModelDownload: () =>
     http<LatestModelDownloadSession>("/models/download/latest"),
   scanModels: (root?: string) => {
@@ -527,7 +537,8 @@ export const api = {
    * Run a self-update via the SSE stream endpoint. ``onEvent`` fires
    * for every progress line; the returned promise resolves when the
    * stream closes (terminal ``done`` / ``error`` event delivered).
-   * Cancel mid-stream by aborting the passed signal.
+   * Aborting the signal only disconnects this browser stream; the durable
+   * server-side update task continues to completion.
    */
   applySystemUpdate: async (
     body: {
@@ -548,11 +559,19 @@ export const api = {
       signal,
     })
     if (!resp.ok) {
+      const raw = await resp.text().catch(() => "")
+      let body: unknown = raw
+      try {
+        body = JSON.parse(raw)
+      } catch {
+        // Keep plain-text reverse-proxy and server errors intact.
+      }
       throw new ApiError(
         resp.status,
         resp.statusText,
-        await resp.text().catch(() => ""),
+        body,
         "/system/update",
+        resp.headers.get("x-request-id"),
       )
     }
     await readSseEvents<UpdateEvent>(resp, onEvent)
@@ -670,14 +689,13 @@ export const api = {
     fd.append("file", file)
     fd.append("name", name)
     fd.append("overwrite", overwrite ? "true" : "false")
-    const res = await fetch(`${API_BASE}/configs/import`, {
+    return http<{ name: string; filename: string; path: string }>(
+      "/configs/import",
+      {
       method: "POST",
       body: fd,
-    })
-    if (!res.ok) {
-      throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`)
-    }
-    return res.json() as Promise<{ name: string; filename: string; path: string }>
+      },
+    )
   },
   listSweeps: () => http<{ sweeps: SweepSummary[] }>("/sweeps"),
   getSweep: (sweep_id: string) =>

@@ -7,7 +7,6 @@ import {
   Loader2,
   Play,
   RefreshCw,
-  Square,
   Wand2,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -24,7 +23,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Progress } from "@/components/ui/progress"
 import {
   Select,
   SelectContent,
@@ -41,6 +39,7 @@ import {
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { QueuePanel } from "./queue-panel"
 
 const SIZE_PRESETS = [
   { label: "896 x 1632", width: 896, height: 1632 },
@@ -143,7 +142,11 @@ export function LoraTestPage() {
     enabled: Boolean(sessionId),
     refetchInterval: (q) => {
       const status = q.state.data?.status
-      return status === "queued" || status === "running" ? 1500 : false
+      return status === "queued" ||
+        status === "running" ||
+        status === "stop_requested"
+        ? 1500
+        : false
     },
   })
   const resultImages = getResultImages(session.data)
@@ -207,6 +210,10 @@ export function LoraTestPage() {
       qc.invalidateQueries({ queryKey: ["lora-test-session", sessionId] })
       toast.info("已请求停止")
     },
+    onError: (error) =>
+      toast.error("停止失败", {
+        description: error instanceof Error ? error.message : String(error),
+      }),
   })
 
   function updateJob(nextJobId: string) {
@@ -655,82 +662,6 @@ function ModelPanel({
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">没有可测试的 LoRA 产物。</p>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function QueuePanel({
-  session,
-  loading,
-  onCancel,
-  canceling,
-}: {
-  session: TaskSessionRecord | null
-  loading: boolean
-  onCancel: () => void
-  canceling: boolean
-}) {
-  const active = session?.status === "queued" || session?.status === "running"
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>队列</CardTitle>
-        <CardDescription>刷新后仍可恢复最近任务。</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {!session && (
-          <p className="text-xs text-muted-foreground">
-            暂无生成任务。填写 prompt 后点击生成。
-          </p>
-        )}
-        {session && (
-          <>
-            <div className="flex items-center justify-between gap-2">
-              <Badge variant={session.status === "failed" ? "destructive" : "outline"}>
-                {session.status}
-              </Badge>
-              {loading && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
-            </div>
-            <Progress value={session.percent} />
-            <div className="text-xs tabular-nums text-muted-foreground">
-              {Math.round(session.percent)}%
-            </div>
-            {session.error && (
-              <div className="rounded-[6px] border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
-                {session.error}
-              </div>
-            )}
-            {active && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={onCancel}
-                disabled={canceling}
-              >
-                {canceling ? <Loader2 className="animate-spin" /> : <Square />}
-                停止
-              </Button>
-            )}
-            <div className="flex flex-col gap-2">
-              {session.events.slice(-8).map((event, index) => (
-                <div
-                  key={`${event.ts}-${index}`}
-                  className="rounded-[6px] bg-muted/35 px-2 py-1.5 text-[11px]"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate">{event.message}</span>
-                    {event.percent != null && (
-                      <span className="tabular-nums text-muted-foreground">
-                        {Math.round(event.percent)}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
         )}
       </CardContent>
     </Card>

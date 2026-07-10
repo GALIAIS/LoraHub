@@ -49,9 +49,8 @@ export interface UseEventStreamOptions<TState, TPayload> {
    */
   shouldDrop?: (parsed: TPayload) => boolean
   /**
-   * Whether the WS branch should reconnect aggressively on tab
-   * focus / network online. The system telemetry hook needs this;
-   * the per-job stream doesn't (the SSE branch is the hot path).
+   * Whether the WS branch should reconnect aggressively on tab focus.
+   * Network-online recovery is always enabled for both transports.
    */
   reconnectOnVisibility?: boolean
 }
@@ -113,7 +112,11 @@ export function useEventStream<TState, TPayload = unknown>(
   initialRef.current = initialState
 
   useEffect(() => {
-    if (!ssePath && !wsPath) return
+    if (!ssePath && !wsPath) {
+      setState(initialRef.current)
+      setStatus("idle")
+      return
+    }
     let cancelled = false
     const useSse = !!ssePath && typeof EventSource !== "undefined"
 
@@ -139,20 +142,33 @@ export function useEventStream<TState, TPayload = unknown>(
       let es: EventSource | null = null
       let backoff = 0
       let retryTimer: ReturnType<typeof setTimeout> | null = null
+      let lastEventId = ""
+
+      function resumePath(): string {
+        if (!lastEventId) return path
+        const url = new URL(path, window.location.href)
+        url.searchParams.set("lastEventId", lastEventId)
+        return url.toString()
+      }
 
       function open() {
         if (cancelled) return
-        es = new EventSource(path)
-        sourceRef.current = es
-        es.onopen = () => {
+        const source = new EventSource(resumePath())
+        es = source
+        sourceRef.current = source
+        source.onopen = () => {
+          if (cancelled || es !== source) return
           backoff = 0
           setStatus("open")
         }
-        es.onmessage = (msg) => {
+        source.onmessage = (msg) => {
+          if (cancelled || es !== source) return
+          if (msg.lastEventId) lastEventId = msg.lastEventId
           const parsed = safeParse(msg.data)
           if (parsed !== undefined) applyFrame(parsed)
         }
-        es.onerror = () => {
+        source.onerror = () => {
+          if (cancelled || es !== source) return
           // ``readyState`` distinguishes:
           //   CONNECTING (0) — browser is already retrying for us
           //   OPEN       (1) — transient blip, browser handles it
@@ -161,11 +177,13 @@ export function useEventStream<TState, TPayload = unknown>(
           // We only step in for the CLOSED case so well-behaved
           // hiccups don't double-reconnect.
           setStatus("closed")
-          if (es?.readyState !== EventSource.CLOSED) return
-          if (cancelled) return
-          es.close()
+          if (source.readyState !== EventSource.CLOSED) return
+          source.onopen = null
+          source.onmessage = null
+          source.onerror = null
+          source.close()
           es = null
-          sourceRef.current = null
+          if (sourceRef.current === source) sourceRef.current = null
           if (retryTimer !== null) clearTimeout(retryTimer)
           retryTimer = setTimeout(open, backoff)
           backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 8000)
@@ -215,22 +233,35 @@ export function useEventStream<TState, TPayload = unknown>(
       function open() {
         if (cancelled) return
         if (typeof navigator !== "undefined" && !navigator.onLine) return
+        if (
+          ws &&
+          (ws.readyState === WebSocket.OPEN ||
+            ws.readyState === WebSocket.CONNECTING)
+        ) {
+          return
+        }
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
         const host = window.location.host || "127.0.0.1:18765"
-        ws = new WebSocket(`${protocol}//${host}${path}`)
-        sourceRef.current = ws
-        ws.onopen = () => {
+        const socket = new WebSocket(`${protocol}//${host}${path}`)
+        ws = socket
+        sourceRef.current = socket
+        socket.onopen = () => {
+          if (cancelled || ws !== socket) return
           backoff = 0
           setStatus("open")
         }
-        ws.onclose = () => {
+        socket.onclose = () => {
+          if (cancelled || ws !== socket) return
+          ws = null
+          if (sourceRef.current === socket) sourceRef.current = null
           setStatus("closed")
-          if (cancelled) return
+          if (retryTimer !== null) clearTimeout(retryTimer)
           retryTimer = setTimeout(open, backoff)
           backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000)
         }
-        ws.onerror = () => {}
-        ws.onmessage = (msg) => {
+        socket.onerror = () => {}
+        socket.onmessage = (msg) => {
+          if (cancelled || ws !== socket) return
           const parsed = safeParse(msg.data)
           if (parsed !== undefined) applyFrame(parsed)
         }
@@ -238,7 +269,13 @@ export function useEventStream<TState, TPayload = unknown>(
 
       function reconnectNow() {
         if (cancelled) return
-        if (ws && ws.readyState === WebSocket.OPEN) return
+        if (
+          ws &&
+          (ws.readyState === WebSocket.OPEN ||
+            ws.readyState === WebSocket.CONNECTING)
+        ) {
+          return
+        }
         if (retryTimer !== null) clearTimeout(retryTimer)
         retryTimer = null
         backoff = 0
@@ -251,19 +288,19 @@ export function useEventStream<TState, TPayload = unknown>(
 
       if (reconnectOnVisibility) {
         document.addEventListener("visibilitychange", onVis)
-        window.addEventListener("online", reconnectNow)
         // Slight stagger so `cancelled` has a chance to flip if the
         // effect's cleanup runs synchronously.
         retryTimer = setTimeout(open, 30)
       } else {
         open()
       }
+      window.addEventListener("online", reconnectNow)
 
       return () => {
         if (reconnectOnVisibility) {
           document.removeEventListener("visibilitychange", onVis)
-          window.removeEventListener("online", reconnectNow)
         }
+        window.removeEventListener("online", reconnectNow)
         if (retryTimer !== null) clearTimeout(retryTimer)
       }
     }
@@ -280,9 +317,16 @@ export function useEventStream<TState, TPayload = unknown>(
         if (s instanceof WebSocket) {
           // Detach handlers first so close events don't trigger a
           // reconnect schedule against a tearing-down hook.
+          s.onopen = null
           s.onclose = null
           s.onerror = null
-          if (s.readyState === WebSocket.OPEN) s.close()
+          s.onmessage = null
+          if (
+            s.readyState === WebSocket.OPEN ||
+            s.readyState === WebSocket.CONNECTING
+          ) {
+            s.close()
+          }
         } else {
           s.close()
         }

@@ -7,6 +7,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -19,9 +20,15 @@ from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
 from lorahub.api import state
+from lorahub.api.dataset_files import is_link_like
 from lorahub.api.jobs_helpers import _list_workspace_files, _resolve_workspace_file
 from lorahub.api.paths import runs_dir
-from lorahub.api.task_sessions import TaskEvent, TaskSessionStore, default_task_store_path
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    default_task_store_path,
+    persist_stop_request,
+)
 from lorahub.core.backends.anima_lora import bootstrap as anima_bootstrap
 from lorahub.core.config.schema import TrainingConfig
 
@@ -243,24 +250,36 @@ def get_generation_session(session_id: str) -> dict[str, Any]:
 
 @router.post("/lora-test/sessions/{session_id}/cancel")
 def cancel_generation_session(session_id: str) -> dict[str, Any]:
-    session = _store().get(session_id)
+    store = _store()
+    session = store.get(session_id)
     if session is None or session.kind != _KIND:
         raise HTTPException(status_code=404, detail="lora test session not found")
+    if session.status not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail=f"generation is {session.status}")
+    if not persist_stop_request(store, session_id, percent=session.percent):
+        current = store.get(session_id)
+        status = current.status if current is not None else "unavailable"
+        raise HTTPException(status_code=409, detail=f"generation is {status}")
     with _cancel_lock:
         evt = _cancel_events.get(session_id)
     if evt is not None:
         evt.set()
-    if session.status in {"queued", "running"}:
-        _store().update(session_id, status="canceled", error="canceled by user", finished=True)
-        _store().append_event(
-            session_id,
-            TaskEvent(level="warn", message="canceled by user", percent=session.percent),
-        )
+    store.append_event(
+        session_id,
+        TaskEvent(
+            level="warn",
+            message="cancellation requested",
+            percent=session.percent,
+        ),
+    )
     return {"canceled": True}
 
 
 @router.get("/lora-test/results/{session_id}/file")
 def get_result_file(session_id: str, path: str) -> FileResponse:
+    session = _store().get(session_id)
+    if session is None or session.kind != _KIND:
+        raise HTTPException(status_code=404, detail="generation session not found")
     root = _session_output_dir(session_id)
     try:
         target = (root / path).resolve()
@@ -280,7 +299,22 @@ def get_result_file(session_id: str, path: str) -> FileResponse:
 
 
 def _session_output_dir(session_id: str) -> Path:
-    return (runs_dir() / "lora-test" / session_id).resolve()
+    if len(session_id) != 32 or any(char not in "0123456789abcdef" for char in session_id):
+        raise ValueError("invalid generation session id")
+    runs = runs_dir().resolve()
+    parent = runs / "lora-test"
+    if is_link_like(parent):
+        raise ValueError("LoRA test output directory cannot be a link")
+    parent.mkdir(exist_ok=True)
+    target = parent / session_id
+    if is_link_like(target):
+        raise ValueError("generation output directory cannot be a link")
+    resolved = target.resolve()
+    try:
+        resolved.relative_to(parent.resolve())
+    except ValueError as exc:
+        raise ValueError("generation output escapes the runs directory") from exc
+    return resolved
 
 
 def _run_generation_session(
@@ -291,9 +325,27 @@ def _run_generation_session(
     store = _store()
     results: list[dict[str, Any]] = []
     try:
+        if cancel_evt.is_set():
+            store.update(
+                session_id,
+                status="canceled",
+                error="canceled by user",
+                result={"images": results},
+                finished=True,
+            )
+            return
         resolved = _resolve_model(req.job_id, req.checkpoint_path)
         loras, weights = _resolve_loras(req, resolved)
         cases = _build_cases(req, resolved, loras, weights)
+        if cancel_evt.is_set():
+            store.update(
+                session_id,
+                status="canceled",
+                error="canceled by user",
+                result={"images": results},
+                finished=True,
+            )
+            return
         out_dir = _session_output_dir(session_id)
         out_dir.mkdir(parents=True, exist_ok=True)
         store.update(session_id, status="running", percent=1)
@@ -349,6 +401,16 @@ def _run_generation_session(
             }
             sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             results.append(meta)
+        if cancel_evt.is_set():
+            store.update(
+                session_id,
+                status="canceled",
+                percent=100,
+                result={"images": results, "output_dir": str(out_dir)},
+                error="canceled by user",
+                finished=True,
+            )
+            return
         grid_path = _maybe_write_xy_grid(out_dir, results, req)
         store.update(
             session_id,
@@ -580,81 +642,83 @@ def _run_anima_inference(
         config_path=cfg.backend.repo_path,
         config_python=cfg.backend.python_executable,
     )
-    inference_dir = out_path.with_suffix("")
-    if inference_dir.exists():
-        shutil.rmtree(inference_dir)
-    inference_dir.mkdir(parents=True, exist_ok=True)
-    argv = [
-        str(env.python_executable),
-        str(env.script("inference.py")),
-        "--dit",
-        str(bm.checkpoint),
-        "--vae",
-        str(paths.ae),
-        "--text_encoder",
-        str(paths.qwen3),
-        "--prompt",
-        case.prompt,
-        "--image_size",
-        str(case.height),
-        str(case.width),
-        "--infer_steps",
-        str(case.steps),
-        "--guidance_scale",
-        repr(float(case.cfg)),
-        "--sampler",
-        case.sampler,
-        "--save_path",
-        str(inference_dir),
-        "--seed",
-        str(case.seed),
-    ]
-    if case.loras:
-        argv += [
-            "--lora_weight",
-            *[str(lora.checkpoint) for lora in case.loras],
-            "--lora_multiplier",
-            *[repr(float(weight)) for weight in case.multipliers],
-        ]
-    if case.negative_prompt.strip():
-        argv += ["--negative_prompt", case.negative_prompt.strip()]
-    log_path = out_path.with_suffix(".log")
-    with log_path.open("w", encoding="utf-8", errors="replace") as log:
-        proc = subprocess.Popen(
-            argv,
-            cwd=env.repo_path,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            if sys.platform == "win32"
-            else 0,
-        )
-        while proc.poll() is None:
-            if cancel_evt.is_set():
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                raise RuntimeError("canceled by user")
-            time.sleep(0.5)
-    if proc.returncode != 0:
-        tail = _tail_text(log_path, lines=20)
-        raise RuntimeError(f"anima_lora inference failed ({proc.returncode}): {tail}")
-    generated = sorted(
-        inference_dir.glob("*.png"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    inference_dir = Path(
+        tempfile.mkdtemp(dir=out_path.parent, prefix=".lorahub-lora-test-")
     )
-    if generated:
-        if out_path.exists():
-            out_path.unlink()
-        generated[0].replace(out_path)
-    if not out_path.is_file():
-        tail = _tail_text(log_path, lines=20)
-        raise RuntimeError(f"anima_lora inference finished but did not write an image: {tail}")
-    shutil.rmtree(inference_dir, ignore_errors=True)
+    log_path = out_path.with_suffix(".log")
+    try:
+        argv = [
+            str(env.python_executable),
+            str(env.script("inference.py")),
+            "--dit",
+            str(bm.checkpoint),
+            "--vae",
+            str(paths.ae),
+            "--text_encoder",
+            str(paths.qwen3),
+            "--prompt",
+            case.prompt,
+            "--image_size",
+            str(case.height),
+            str(case.width),
+            "--infer_steps",
+            str(case.steps),
+            "--guidance_scale",
+            repr(float(case.cfg)),
+            "--sampler",
+            case.sampler,
+            "--save_path",
+            str(inference_dir),
+            "--seed",
+            str(case.seed),
+        ]
+        if case.loras:
+            argv += [
+                "--lora_weight",
+                *[str(lora.checkpoint) for lora in case.loras],
+                "--lora_multiplier",
+                *[repr(float(weight)) for weight in case.multipliers],
+            ]
+        if case.negative_prompt.strip():
+            argv += ["--negative_prompt", case.negative_prompt.strip()]
+        with log_path.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.Popen(
+                argv,
+                cwd=env.repo_path,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0,
+            )
+            while proc.poll() is None:
+                if cancel_evt.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise RuntimeError("canceled by user")
+                time.sleep(0.5)
+        if proc.returncode != 0:
+            tail = _tail_text(log_path, lines=20)
+            raise RuntimeError(f"anima_lora inference failed ({proc.returncode}): {tail}")
+        generated = sorted(
+            inference_dir.glob("*.png"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if generated:
+            generated[0].replace(out_path)
+        if not out_path.is_file():
+            tail = _tail_text(log_path, lines=20)
+            raise RuntimeError(
+                f"anima_lora inference finished but did not write an image: {tail}"
+            )
+    finally:
+        shutil.rmtree(inference_dir, ignore_errors=True)
 
 
 def _tail_text(path: Path, *, lines: int) -> str:

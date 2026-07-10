@@ -303,10 +303,7 @@ def cleanup_partial(plan: BootstrapPlan) -> None:
     user re-runs ``force=true`` install the link could otherwise still
     point at a stale tree from a previous install run.
     """
-    import shutil
-
-    if plan.venv_dir.is_dir():
-        shutil.rmtree(plan.venv_dir, ignore_errors=True)
+    _common.cleanup_managed_venvs(plan.target)
 
     # ``<repo>/models`` is the link that ``_link_anima_models_dir``
     # creates pointing at the unified ``<lorahub_root>/models/``. We

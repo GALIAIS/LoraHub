@@ -11,7 +11,7 @@ from dataclasses import fields, replace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
 from lorahub.api.settings import (
@@ -30,11 +30,14 @@ _SECRET_FIELDS: tuple[str, ...] = (
     "huggingface_token",
     "wandb_api_key",
     "modelscope_token",
+    "download_proxy",
     # GitLab / Gitea / Webhook PAT for the error report fan-out.
     # Same masking + "echo == keep prior" round-trip rules so an
     # unchanged token survives the form even though we never expose
     # it to the UI in plaintext after first save.
     "error_upstream_gitlab_token",
+    "error_upstream_webhook_url",
+    "error_upstream_webhook_auth_header",
 )
 
 # Path-shaped fields use ``_norm`` (empty string == clear).
@@ -54,7 +57,6 @@ _PATH_FIELDS: tuple[str, ...] = (
     "huggingface_endpoint",
     "pypi_index_url",
     "torch_index_url",
-    "download_proxy",
     "wandb_base_url",
 )
 
@@ -65,8 +67,14 @@ _PATH_FIELDS: tuple[str, ...] = (
 _FREEFORM_TEXT_FIELDS: tuple[str, ...] = (
     "error_upstream_gitlab_base_url",
     "error_upstream_gitlab_repo",
-    "error_upstream_webhook_url",
-    "error_upstream_webhook_auth_header",
+)
+
+_BOOL_FIELDS: frozenset[str] = frozenset(
+    {
+        "auto_resume_interrupted",
+        "modelscope_enabled",
+        "terminal_unrestricted",
+    }
 )
 
 
@@ -84,7 +92,7 @@ class SettingsResponse(BaseModel):
     backend: dict[str, Any]
     backends: dict[str, dict[str, Any]]
     path: str
-    runtime: dict[str, Any] = {}
+    runtime: dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -294,11 +302,11 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             continue
         if key == "max_concurrent_jobs":
             value = raw if raw is not None else current.max_concurrent_jobs
-            if not isinstance(value, int) or value < 1:
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 16:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "max_concurrent_jobs must be a positive integer; "
+                        "max_concurrent_jobs must be an integer from 1 to 16; "
                         f"got {value!r}"
                     ),
                 )
@@ -316,11 +324,11 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             if raw is None:
                 updates[key] = None
                 continue
-            if not isinstance(raw, int) or raw < 1:
+            if not isinstance(raw, int) or isinstance(raw, bool) or not 1 <= raw <= 16:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "gpu_dispatch_num_gpus must be null or a positive integer; "
+                        "gpu_dispatch_num_gpus must be null or an integer from 1 to 16; "
                         f"got {raw!r}"
                     ),
                 )
@@ -328,11 +336,11 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             continue
         if key == "auto_resume_max_attempts":
             value = raw if raw is not None else current.auto_resume_max_attempts
-            if not isinstance(value, int) or value < 1:
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 100:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "auto_resume_max_attempts must be a positive integer; "
+                        "auto_resume_max_attempts must be an integer from 1 to 100; "
                         f"got {value!r}"
                     ),
                 )
@@ -340,15 +348,23 @@ def update_settings(req: UpdateSettingsRequest) -> SettingsResponse:
             continue
         if key == "terminal_command_timeout_s":
             value = raw if raw is not None else current.terminal_command_timeout_s
-            if not isinstance(value, int) or value < 1:
+            if not isinstance(value, int) or isinstance(value, bool) or not 5 <= value <= 86400:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "terminal_command_timeout_s must be a positive integer; "
+                        "terminal_command_timeout_s must be an integer from 5 to 86400; "
                         f"got {value!r}"
                     ),
                 )
             updates[key] = value
+            continue
+        if key in _BOOL_FIELDS:
+            if not isinstance(raw, bool):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{key} must be true or false; got {raw!r}",
+                )
+            updates[key] = raw
             continue
         # Bools and the rest pass through as-is.
         updates[key] = raw

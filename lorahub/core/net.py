@@ -8,11 +8,17 @@ side-effect leakage.
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
 from lorahub.core.paths import project_root
+
+_PROXY_ENV_LOCK = threading.RLock()
+_PROXY_STATE_LOCK = threading.Lock()
+_PROXY_NAMES = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
+_PROXY_BASELINE: dict[str, str | None] | None = None
 
 
 def _clean_endpoint(value: str | None) -> str | None:
@@ -131,6 +137,17 @@ def subprocess_env(
     environ plus any overrides from Settings.
     """
     env = dict(os.environ)
+    # A library download may temporarily expose its proxy through the process
+    # environment. Child processes must inherit the environment that existed
+    # before that scoped mutation, without waiting for a multi-hour download.
+    with _PROXY_STATE_LOCK:
+        baseline = dict(_PROXY_BASELINE) if _PROXY_BASELINE is not None else None
+    if baseline is not None:
+        for name, value in baseline.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
     endpoint = hf_endpoint()
     hf_home = hf_cache_home()
     if endpoint:
@@ -153,20 +170,26 @@ def subprocess_env(
 @contextmanager
 def proxy_env(proxy: str | None) -> Iterator[None]:
     """Temporarily expose proxy vars for libraries that only read os.environ."""
-    value = (proxy or "").strip()
-    if not value:
-        yield
-        return
+    global _PROXY_BASELINE
 
-    names = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
-    previous = {name: os.environ.get(name) for name in names}
-    try:
-        for name in names:
-            os.environ[name] = value
-        yield
-    finally:
-        for name, old in previous.items():
-            if old is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = old
+    with _PROXY_ENV_LOCK:
+        value = (proxy or "").strip()
+        if not value:
+            yield
+            return
+
+        previous = {name: os.environ.get(name) for name in _PROXY_NAMES}
+        with _PROXY_STATE_LOCK:
+            _PROXY_BASELINE = dict(previous)
+        try:
+            for name in _PROXY_NAMES:
+                os.environ[name] = value
+            yield
+        finally:
+            for name, old in previous.items():
+                if old is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = old
+            with _PROXY_STATE_LOCK:
+                _PROXY_BASELINE = None

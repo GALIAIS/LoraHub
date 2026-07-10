@@ -12,7 +12,7 @@ set -euo pipefail
 #   1. uv -> .lorahub/uv/
 #   2. Python 3.12 -> .lorahub/python/
 #   3. Virtual environment -> .venv/
-#   4. Python dependencies (lorahub[api,dev])
+#   4. Python dependencies (lorahub[api,dev,cpu])
 #   5. Node.js portable -> .node/
 #   6. Frontend dependencies (npm install)
 #
@@ -246,15 +246,32 @@ echo ""
 # ---- [4/6] Install Python dependencies ------------------------------
 echo "[4/6] Installing Python dependencies ..."
 PY_DEPS_LOG="$ROOT/_uv_python_deps.log"
+ORT_CPU_INSTALLED=0
+ORT_GPU_INSTALLED=0
+if "$VENV_PY" -c "from importlib.metadata import version; version('onnxruntime')" >/dev/null 2>&1; then
+    ORT_CPU_INSTALLED=1
+fi
+if "$VENV_PY" -c "from importlib.metadata import version; version('onnxruntime-gpu')" >/dev/null 2>&1; then
+    ORT_GPU_INSTALLED=1
+fi
+ORT_EXTRA="cpu"
+if [ "$ORT_GPU_INSTALLED" = "1" ]; then
+    ORT_EXTRA="gpu"
+fi
+if [ "$ORT_CPU_INSTALLED" = "1" ] && [ "$ORT_GPU_INSTALLED" = "1" ]; then
+    echo "  removing conflicting onnxruntime packages ..."
+    "$UV" pip uninstall onnxruntime onnxruntime-gpu --python "$VENV_PY"
+fi
 PY_DEPS_ARGS=(pip install)
 if [ "${LORAHUB_INSTALL_VERBOSE:-}" = "1" ]; then
     PY_DEPS_ARGS+=(-v)
 fi
-PY_DEPS_ARGS+=(-e ".[api,dev]" --python "$VENV_PY" --link-mode=copy)
+PY_DEPS_ARGS+=(-e ".[api,dev,$ORT_EXTRA]" --python "$VENV_PY" --link-mode=copy)
 if [ -n "${UV_DEFAULT_INDEX:-}" ]; then
     PY_DEPS_ARGS+=(--index-url "$UV_DEFAULT_INDEX")
 fi
 echo "  uv default index: ${UV_DEFAULT_INDEX:-default}"
+echo "  ONNX Runtime: $ORT_EXTRA"
 echo "  running uv ${PY_DEPS_ARGS[*]} (log: _uv_python_deps.log) ..."
 "$UV" "${PY_DEPS_ARGS[@]}" 2>&1 | tee "$PY_DEPS_LOG"
 echo "  OK Python dependencies installed"

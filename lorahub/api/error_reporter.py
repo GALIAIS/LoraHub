@@ -18,7 +18,17 @@ import logging
 import traceback
 from typing import Any
 
-from lorahub.api.error_reports import ErrorReport, ErrorReportStore, Severity
+from lorahub.api.error_reports import (
+    MAX_ERROR_MESSAGE_CHARS,
+    MAX_ERROR_STACK_CHARS,
+    MAX_ERROR_TITLE_CHARS,
+    ErrorReport,
+    ErrorReportStore,
+    Severity,
+    normalise_error_context,
+    truncate_error_text,
+)
+from lorahub.core.redaction import redact_command_text, redact_data
 
 log = logging.getLogger(__name__)
 
@@ -93,17 +103,28 @@ def capture(
     Pass ``store=None`` to skip persistence entirely (still returns
     the constructed report so logging / tests can introspect it).
     """
+    bounded_context = normalise_error_context(context)
+    safe_context = redact_data(bounded_context)
+    safe_title = truncate_error_text(
+        title, MAX_ERROR_TITLE_CHARS, preserve_tail=False
+    )
+    safe_message = truncate_error_text(message, MAX_ERROR_MESSAGE_CHARS)
+    safe_stack = truncate_error_text(stack, MAX_ERROR_STACK_CHARS)
     report = ErrorReport.create(
         severity=severity,
-        source=source,
-        category=category,
-        title=title,
-        message=message,
-        stack=stack,
-        context=context,
-        job_id=job_id,
-        request_id=request_id,
-        request_path=request_path,
+        source=redact_command_text(source),
+        category=redact_command_text(category),
+        title=redact_command_text(safe_title or "Untitled error"),
+        message=redact_command_text(safe_message or "Unknown error"),
+        stack=redact_command_text(safe_stack) if safe_stack is not None else None,
+        context=safe_context,
+        job_id=redact_command_text(job_id) if job_id is not None else None,
+        request_id=(
+            redact_command_text(request_id) if request_id is not None else None
+        ),
+        request_path=(
+            redact_command_text(request_path) if request_path is not None else None
+        ),
     )
     # Stamp the fingerprint up-front so both the local row and any
     # outbound copy share the same hash. Cheap and pure — see
@@ -123,21 +144,35 @@ def capture(
         assert isinstance(store, ErrorReportStore)
         target = store
     if target is not None:
-        target.insert(report)
-        # Auto-fan-out: only if the user has opted in via settings AND
-        # the severity meets their threshold. Manual ``send_now`` from
-        # the UI bypasses this gate so users can always force a single
-        # report through even when auto is off.
-        dispatcher, threshold = _active_dispatcher_and_threshold()
-        if dispatcher is not None and _meets_threshold(severity, threshold):
-            try:
-                target.update_upstream(report.id, status="queued")
-                report.upstream_status = "queued"
-                dispatcher.enqueue(report)
-            except Exception:  # noqa: BLE001
-                # Reporter must never raise back into the caller —
-                # store-only is still better than not logging at all.
-                log.exception("could not enqueue report %s for upstream", report.id)
+        try:
+            target.insert(report)
+        except Exception as exc:  # noqa: BLE001
+            # Error reporting is a secondary path. A locked/corrupt report DB
+            # must never replace the original application failure.
+            log.error(
+                "could not persist error report %s: %s",
+                report.id,
+                redact_command_text(str(exc)),
+            )
+        else:
+            # Auto-fan-out: only if the user has opted in via settings AND
+            # the severity meets their threshold. Manual ``send_now`` from
+            # the UI bypasses this gate so users can always force a single
+            # report through even when auto is off.
+            dispatcher, threshold = _active_dispatcher_and_threshold()
+            if dispatcher is not None and _meets_threshold(severity, threshold):
+                try:
+                    target.update_upstream(report.id, status="queued")
+                    report.upstream_status = "queued"
+                    dispatcher.enqueue(report)
+                except Exception as exc:  # noqa: BLE001
+                    # Reporter must never raise back into the caller —
+                    # store-only is still better than not logging at all.
+                    log.error(
+                        "could not enqueue report %s for upstream: %s",
+                        report.id,
+                        redact_command_text(str(exc)),
+                    )
     # Always also tee into stderr/log: even if persistence raced a boot
     # window or was disabled, the operator's terminal still surfaces the
     # signal. Severity → log level: fatal/error => error, warn => warn,
@@ -148,7 +183,13 @@ def capture(
         "warn": logging.WARNING,
         "info": logging.INFO,
     }.get(severity, logging.ERROR)
-    log.log(log_level, "[error-report:%s] %s — %s", source, title, message)
+    log.log(
+        log_level,
+        "[error-report:%s] %s — %s",
+        report.source,
+        report.title,
+        truncate_error_text(report.message, 4_000),
+    )
     return report
 
 
@@ -166,7 +207,7 @@ def capture_exception(
 ) -> ErrorReport | None:
     """Convenience wrapper: pull message + traceback off ``exc``."""
     stack = "".join(
-        traceback.format_exception(type(exc), exc, exc.__traceback__)
+        traceback.format_exception(type(exc), exc, exc.__traceback__, limit=100)
     ).rstrip()
     return capture(
         severity=severity,

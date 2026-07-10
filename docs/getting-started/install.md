@@ -50,7 +50,7 @@ git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
 python -m venv .venv
 .venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
-pip install -e ".[api,dev]"
+pip install -e ".[api,dev,cpu]"
 cd web && npm install && cd ..
 ```
 
@@ -93,10 +93,14 @@ LoraHub 自身不会 import anima_lora 的代码，只把它作为子进程拉�
 | Extra     | 何时安装                                       | 命令                            |
 | --------- | ---------------------------------------------- | ------------------------------- |
 | `api`     | FastAPI 服务（`lorahub serve`）                | `pip install -e ".[api]"`       |
+| `cpu`     | WD14 标注通过 CPU 版 `onnxruntime`             | `pip install -e ".[cpu]"`       |
 | `gpu`     | WD14 标注通过 `onnxruntime-gpu` 走 CUDA        | `pip install -e ".[gpu]"`       |
 | `tagging` | JoyTag（PyTorch）标注后端                      | `pip install -e ".[tagging]"`   |
 | `dev`     | 测试、lint、mypy、httpx                        | `pip install -e ".[dev]"`       |
 | `docs`    | 构建本站文档                                   | `pip install -e ".[docs]"`      |
+
+`cpu` 与 `gpu` 提供同名模块，不可共存。切换到 GPU 版前先执行
+`pip uninstall onnxruntime`，再安装 `.[gpu]`。
 
 ## 下一步
 

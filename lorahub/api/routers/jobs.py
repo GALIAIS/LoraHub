@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,13 +27,15 @@ from lorahub.api.jobs_helpers import (
     _read_metrics,
     _relaunch_job_in_place,
     _resolve_workspace_file,
+    _resume_source_roots,
     _validate_resume_target,
     ResumeNotReady,
 )
 from lorahub.api.jobs_helpers.resume_dispatch import ResumeTargetInvalid
 from lorahub.api.preflight import PreflightFinding, run_preflight
+from lorahub.api.paths import resolve_run_path
 from lorahub.api.state import JobState
-from lorahub.api.store import _pid_alive
+from lorahub.api.store import _pid_alive, _pid_create_time, _pid_is_ours
 from lorahub.core.config.schema import TrainingConfig
 
 router = APIRouter(prefix="/api")
@@ -42,6 +45,20 @@ _RESUMABLE_STATES = (
     JobState.failed,
     JobState.canceled,
 )
+
+
+def _job_process_may_still_own_pid(job: Any) -> bool:
+    """Conservatively decide whether moving its workspace could hurt a process."""
+    pid = job.pid
+    if pid is None or pid <= 0 or not _pid_alive(pid):
+        return False
+    expected = job.pid_create_time
+    actual = _pid_create_time(pid)
+    if expected is not None and actual is not None:
+        return abs(actual - expected) < 1.0
+    # Missing identity data cannot justify killing the process, but it must
+    # still block an archive that would move files out from under it.
+    return True
 
 
 def _raise_if_preflight_blocks(
@@ -112,7 +129,10 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     if req.workspace:
-        workspace = Path(req.workspace).resolve()
+        try:
+            workspace = resolve_run_path(req.workspace)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     else:
         # Without an explicit workspace, derive one under runs/ keyed by
         # output.name. We previously returned that path verbatim, which
@@ -130,8 +150,9 @@ def create_job(req: CreateJobRequest) -> dict[str, Any]:
         # double-clicked button) from racing onto the same path.
         from datetime import datetime, UTC  # noqa: PLC0415
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
-        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        nonce = secrets.token_hex(3)
+        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}-{nonce}").resolve()
     findings = _raise_if_preflight_blocks(cfg, workspace)
     result = _launch_job(cfg, workspace)
     if findings:
@@ -388,6 +409,13 @@ def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="job not found")
 
     snapshot = source.config_snapshot or {}
+    try:
+        source_cfg = TrainingConfig.model_validate(snapshot)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422,
+            detail=f"source job config is no longer valid: {exc}",
+        ) from exc
     if req.config is not None:
         diffs = _diff_locked_fields(snapshot, req.config)
         if diffs:
@@ -403,10 +431,7 @@ def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     else:
-        try:
-            cfg = TrainingConfig.model_validate(snapshot)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        cfg = source_cfg
 
     state_path = Path(req.statePath).expanduser().resolve()
     cfg.resume.resume_from = state_path
@@ -420,17 +445,24 @@ def clone_with_state(job_id: str, req: CloneWithStateRequest) -> dict[str, Any]:
         cfg.output.output_dir = state_path.parent
 
     try:
-        _validate_resume_target(cfg)
+        _validate_resume_target(
+            cfg,
+            source_roots=_resume_source_roots(source_cfg, source.workspace),
+        )
     except ResumeTargetInvalid as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if req.workspace:
-        workspace = Path(req.workspace).resolve()
+        try:
+            workspace = resolve_run_path(req.workspace)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     else:
         from lorahub.api.paths import runs_dir  # noqa: PLC0415
 
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
-        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}").resolve()
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        nonce = secrets.token_hex(3)
+        workspace = (runs_dir() / f"{cfg.output.name}-{stamp}-{nonce}").resolve()
 
     findings = _raise_if_preflight_blocks(cfg, workspace)
 
@@ -873,6 +905,34 @@ def kill_job(job_id: str) -> dict[str, Any]:
         )
 
     pid = job.pid
+    if _pid_alive(pid) and not _pid_is_ours(pid, job.pid_create_time):
+        actual_create_time = _pid_create_time(pid)
+        if job.pid_create_time is not None and actual_create_time is not None:
+            # The original trainer is gone and the OS reused its PID. Mark
+            # the job stale without signalling the unrelated replacement.
+            job.state = JobState.interrupted
+            job.finished_at = datetime.now(UTC)
+            job.error = "recorded training process exited; PID was reused"
+            job.pid = None
+            job.pid_create_time = None
+            job.handle = None
+            state.registry.update(job)
+            return {
+                "job_id": job_id,
+                "pid": pid,
+                "killed_process_group": False,
+                "killed_pid_only": False,
+                "pid_reused": True,
+                "warning": None,
+            }
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "cannot verify that the recorded PID still belongs to this "
+                "training job; no process was terminated"
+            ),
+        )
+
     killed_group = False
     killed_pid = False
     error: str | None = None
@@ -1065,8 +1125,7 @@ def cancel_job(
         # irrelevant even if reused. Only probe for `interrupted`.
         if (
             job.state is JobState.interrupted
-            and job.pid is not None
-            and _pid_alive(job.pid)
+            and _job_process_may_still_own_pid(job)
         ):
             raise HTTPException(
                 status_code=409,
@@ -1176,8 +1235,7 @@ def bulk_archive_jobs(req: _BulkArchiveRequest) -> dict[str, Any]:
             continue
         if (
             job.state is JobState.interrupted
-            and job.pid is not None
-            and _pid_alive(job.pid)
+            and _job_process_may_still_own_pid(job)
         ):
             skipped.append(
                 {

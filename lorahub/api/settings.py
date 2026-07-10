@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,26 @@ from typing import Any
 from platformdirs import user_data_path
 
 from lorahub.core.backends.registry import known_ids
+
+
+_SETTINGS_BACKEND_IDS: frozenset[str] = frozenset(known_ids())
+_SETTINGS_BOOL_FIELDS = frozenset(
+    {"auto_resume_interrupted", "modelscope_enabled", "terminal_unrestricted"}
+)
+_SETTINGS_INT_RANGES: dict[str, tuple[int, int]] = {
+    "max_concurrent_jobs": (1, 16),
+    "gpu_dispatch_num_gpus": (1, 16),
+    "auto_resume_max_attempts": (1, 100),
+    "terminal_command_timeout_s": (5, 86_400),
+}
+_SETTINGS_CHOICES: dict[str, frozenset[str]] = {
+    "default_backend": _SETTINGS_BACKEND_IDS,
+    "tagger_device": frozenset({"auto", "cpu", "cuda"}),
+    "default_tagger": frozenset({"wd14", "joytag"}),
+    "gpu_dispatch_mode": frozenset({"one-job-per-gpu", "distributed"}),
+    "error_upstream_channel": frozenset({"off", "gitlab", "gitea", "webhook"}),
+    "error_upstream_auto_severity": frozenset({"off", "error", "all"}),
+}
 
 
 @dataclass
@@ -162,10 +184,40 @@ class Settings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
-        known = {f.name for f in fields(cls)}
-        kwargs = {k: v for k, v in data.items() if k in known}
-        kwargs["extra"] = {k: v for k, v in data.items() if k not in known}
+        defaults = cls()
+        known = {item.name for item in fields(cls)}
+        kwargs: dict[str, Any] = {}
+        for name in known - {"extra"}:
+            default = getattr(defaults, name)
+            value = data.get(name, default)
+            kwargs[name] = _validated_setting_value(name, value, default)
+
+        nested_extra = data.get("extra")
+        extra = dict(nested_extra) if isinstance(nested_extra, dict) else {}
+        extra.update({key: value for key, value in data.items() if key not in known})
+        kwargs["extra"] = extra
         return cls(**kwargs)
+
+
+def _validated_setting_value(name: str, value: Any, default: Any) -> Any:
+    """Accept only the persisted types and bounds understood by the runtime."""
+    if name in _SETTINGS_BOOL_FIELDS:
+        return value if isinstance(value, bool) else default
+    if name in _SETTINGS_INT_RANGES:
+        if name == "gpu_dispatch_num_gpus" and value is None:
+            return None
+        lower, upper = _SETTINGS_INT_RANGES[name]
+        if isinstance(value, int) and not isinstance(value, bool) and lower <= value <= upper:
+            return value
+        return default
+    choices = _SETTINGS_CHOICES.get(name)
+    if choices is not None:
+        return value if isinstance(value, str) and value in choices else default
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
+    if default is None:
+        return value if value is None or isinstance(value, str) else default
+    return value if isinstance(value, type(default)) else default
 
 
 def default_settings_path() -> Path:
@@ -178,26 +230,53 @@ class SettingsStore:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = (path or default_settings_path()).resolve()
+        self._lock = threading.RLock()
 
     def load(self) -> Settings:
-        if not self.path.is_file():
-            return _apply_process_env(Settings())
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return _apply_process_env(Settings())
-        if not isinstance(data, dict):
-            return _apply_process_env(Settings())
-        return _apply_process_env(Settings.from_dict(data))
+        with self._lock:
+            if not self.path.is_file():
+                return _apply_process_env(Settings())
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return _apply_process_env(Settings())
+            if not isinstance(data, dict):
+                return _apply_process_env(Settings())
+            return _apply_process_env(Settings.from_dict(data))
 
     def save(self, settings: Settings) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(settings.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        tmp.replace(self.path)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, raw_temp = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+            )
+            temp_path = Path(raw_temp)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    fd = -1
+                    json.dump(
+                        settings.to_dict(),
+                        handle,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    temp_path.chmod(0o600)
+                except OSError:
+                    pass
+                os.replace(temp_path, self.path)
+                try:
+                    self.path.chmod(0o600)
+                except OSError:
+                    pass
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+                temp_path.unlink(missing_ok=True)
 
 
 def _first_env(*names: str) -> str | None:
@@ -254,6 +333,19 @@ def _site_package_exists(site_pkgs: Path, package: str) -> bool:
     )
 
 
+def _probe_python_startup(python: Path | None) -> tuple[bool, str | None]:
+    if python is None or not python.is_file():
+        return False, None
+    from lorahub.core.backends._common.bootstrap import check_python  # noqa: PLC0415
+    from lorahub.core.backends.errors import BootstrapError  # noqa: PLC0415
+
+    try:
+        check_python(python)
+    except BootstrapError as exc:
+        return False, str(exc)
+    return True, None
+
+
 def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the configured kohya checkout looks usable."""
     from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
@@ -287,7 +379,7 @@ def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
         or (str(_venv_python(sd_path)) if _venv_python(sd_path) else None)
     )
     py_path = Path(py_raw).expanduser() if py_raw else None
-    py_ok = bool(py_path and py_path.is_file())
+    py_ok, python_error = _probe_python_startup(py_path)
 
     # Check requirements.txt completeness when repo and python are both OK.
     requirements_ok = True
@@ -311,6 +403,7 @@ def probe_kohya_backend(settings: Settings) -> dict[str, Any]:
         "missing_scripts": missing,
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
+        "python_error": python_error,
         "venv_detected": _venv_python(sd_path) is not None if sd_ok else False,
         "requirements_ok": requirements_ok,
         "missing_requirements": missing_requirements,
@@ -352,7 +445,7 @@ def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
         or (str(_venv_python(repo_path)) if _venv_python(repo_path) else None)
     )
     py_path = Path(py_raw).expanduser() if py_raw else None
-    py_ok = bool(py_path and py_path.is_file())
+    py_ok, python_error = _probe_python_startup(py_path)
 
     # Check requirements.txt completeness when repo and python are both OK.
     requirements_ok = True
@@ -378,6 +471,7 @@ def probe_diffusion_pipe_backend(settings: Settings) -> dict[str, Any]:
         "missing_files": missing,
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
+        "python_error": python_error,
         "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
         "requirements_ok": requirements_ok,
         "missing_requirements": missing_requirements,
@@ -436,7 +530,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
     # don't try sys.executable here — a misleading "ready=true" would
     # let the UI hide the install prompt even though anima_lora cannot
     # actually run on the LoraHub main interpreter.
-    py_ok = bool(py_path and py_path.is_file())
+    py_ok, python_error = _probe_python_startup(py_path)
 
     if os.environ.get(_ENV_REPO):
         source = "env"
@@ -494,6 +588,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
         "missing_files": missing,
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
+        "python_error": python_error,
         "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
         # Vendored: no LoraHub-managed requirements.txt to diff against.
         # We sniff site-packages for the four import-entry packages anima
@@ -528,9 +623,7 @@ def probe_anima_lora_backend(settings: Settings) -> dict[str, Any]:
 
 def probe_ai_toolkit_backend(settings: Settings) -> dict[str, Any]:
     """Inspect whether the vendored ai_toolkit copy is usable."""
-    from lorahub.core.backends._common.bootstrap import (  # noqa: PLC0415
-        check_requirements,
-    )
+    from lorahub.core.backends._common.bootstrap import check_requirements  # noqa: PLC0415
     from lorahub.core.backends.ai_toolkit.bootstrap import (  # noqa: PLC0415
         _ENV_PYTHON,
         _ENV_REPO,
@@ -559,7 +652,7 @@ def probe_ai_toolkit_backend(settings: Settings) -> dict[str, Any]:
         or (str(_venv_python(repo_path)) if _venv_python(repo_path) else None)
     )
     py_path = Path(py_raw).expanduser() if py_raw else None
-    py_ok = bool(py_path and py_path.is_file())
+    py_ok, python_error = _probe_python_startup(py_path)
 
     requirements_ok = True
     missing_requirements: list[str] = []
@@ -585,6 +678,7 @@ def probe_ai_toolkit_backend(settings: Settings) -> dict[str, Any]:
         "missing_files": missing,
         "python": str(py_path) if py_path else None,
         "python_ok": py_ok,
+        "python_error": python_error,
         "venv_detected": _venv_python(repo_path) is not None if repo_ok else False,
         "requirements_ok": requirements_ok,
         "missing_requirements": missing_requirements,
@@ -612,7 +706,7 @@ def probe_backend(settings: Settings) -> dict[str, Any]:
     return probe_kohya_backend(settings)
 
 
-VALID_BACKEND_IDS: frozenset[str] = frozenset(known_ids())
+VALID_BACKEND_IDS: frozenset[str] = _SETTINGS_BACKEND_IDS
 
 
 # --------------------------------------------------------------------------- #

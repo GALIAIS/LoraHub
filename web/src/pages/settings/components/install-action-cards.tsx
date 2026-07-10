@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Download, Loader2 } from "lucide-react"
+import { AlertTriangle, Check, Download, Loader2, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type {
@@ -12,15 +12,21 @@ export function AnimaModelDownloadCard({
   status,
   isPending,
   onDownload,
+  onStop,
+  isStopping,
   error,
 }: {
   missing: string[]
   status: AnimaModelDownloadStatus | undefined
   isPending: boolean
   onDownload: () => void
+  onStop: () => void
+  isStopping: boolean
   error: string | null
 }) {
-  const isRunning = status?.status === "running"
+  const isRunning =
+    status?.status === "running" || status?.status === "stop_requested"
+  const stopping = status?.status === "stop_requested" || isStopping
   const failed = status?.status === "failed"
   const succeeded = status?.status === "succeeded" && missing.length === 0
   const percent = status?.percent ?? 0
@@ -52,27 +58,37 @@ export function AnimaModelDownloadCard({
             </ul>
           )}
         </div>
-        <Button
-          size="sm"
-          variant={succeeded ? "outline" : "default"}
-          disabled={isRunning || isPending || succeeded}
-          onClick={onDownload}
-        >
-          {isRunning || isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : succeeded ? (
-            <Check className="size-3" />
-          ) : (
-            <Download className="size-3" />
-          )}
-          {isRunning
-            ? "下载中…"
-            : succeeded
-              ? "已完成"
-              : failed
-                ? "重试"
-                : "下载模型"}
-        </Button>
+        {isRunning && status?.session_id ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={stopping}
+            onClick={onStop}
+          >
+            {stopping ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Square className="size-3" />
+            )}
+            {stopping ? "正在停止" : "停止"}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant={succeeded ? "outline" : "default"}
+            disabled={isPending || succeeded}
+            onClick={onDownload}
+          >
+            {isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : succeeded ? (
+              <Check className="size-3" />
+            ) : (
+              <Download className="size-3" />
+            )}
+            {succeeded ? "已完成" : failed ? "重试" : "下载模型"}
+          </Button>
+        )}
       </div>
 
       {(isRunning || filesDone > 0) && filesTotal > 0 && (

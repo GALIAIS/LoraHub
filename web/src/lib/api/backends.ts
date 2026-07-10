@@ -15,6 +15,7 @@ export interface KohyaBackendStatus {
   missing_scripts: string[]
   python: string | null
   python_ok: boolean
+  python_error: string | null
   venv_detected: boolean
   requirements_ok: boolean
   missing_requirements: string[]
@@ -29,6 +30,7 @@ export interface DiffusionPipeBackendStatus {
   missing_files: string[]
   python: string | null
   python_ok: boolean
+  python_error: string | null
   venv_detected: boolean
   requirements_ok: boolean
   missing_requirements: string[]
@@ -43,6 +45,7 @@ export interface AnimaLoraBackendStatus {
   missing_files: string[]
   python: string | null
   python_ok: boolean
+  python_error: string | null
   venv_detected: boolean
   // Vendored — no LoraHub-managed requirements, always true. Kept on
   // the type for shape parity with the other two probes.
@@ -84,6 +87,7 @@ export interface AIToolkitBackendStatus {
   missing_files: string[]
   python: string | null
   python_ok: boolean
+  python_error: string | null
   venv_detected: boolean
   requirements_ok: boolean
   missing_requirements: string[]
@@ -137,7 +141,7 @@ export interface AnimaModelDownloadStatus {
   // ``"idle"`` only appears from the GET endpoint when no session has
   // ever started; POST always returns ``"running"`` (or 409 if another
   // download is in flight).
-  status: "idle" | "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+  status: "idle" | "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   session_id?: string
   source?: "modelscope" | "huggingface"
   percent?: number

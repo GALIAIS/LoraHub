@@ -12,7 +12,7 @@ pip install lorahub[api]
 lorahub serve --port 18765
 ```
 
-默认绑 `127.0.0.1`，无内置鉴权——仅用于本机。Job 元数据持久化到 `runs/jobs.sqlite`，事件 ring 保持在进程内。同级别的 store：
+默认绑定 `127.0.0.1`。绑定到非回环地址时，服务会启用 API 令牌认证；公网访问还必须使用 TLS。Job 元数据持久化到 `runs/jobs.sqlite`，事件 ring 保持在进程内。同级别的 store：
 
 | 文件                       | 内容                                     |
 | -------------------------- | ---------------------------------------- |
@@ -55,4 +55,3 @@ lorahub serve --port 18765
 ## 读 OpenAPI
 
 服务器在线时 FastAPI 在 `/openapi.json` 提供 OpenAPI 描述，Swagger UI 在 `/docs`。这两个是权威源——[端点](endpoints.md) 页是接口面的速查。
-

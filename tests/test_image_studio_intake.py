@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from lorahub.api import app as _app_module  # noqa: F401
-
+from lorahub.api.routers.image_studio import intake as intake_module
 from lorahub.api.routers.image_studio.intake import (
     FromDatasetRequest,
     LocalPathRequest,
@@ -16,6 +17,11 @@ from lorahub.api.routers.image_studio.intake import (
     intake_local_path,
     intake_preflight,
 )
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
 
 
 def _make_dataset(tmp_path: Path, name: str = "ds") -> Path:
@@ -122,6 +128,27 @@ def test_local_path_disambiguates_collisions(tmp_path: Path) -> None:
     assert (dst / "a-2.png").is_file()
 
 
+def test_local_path_preserves_orphan_caption_on_name_collision(tmp_path: Path) -> None:
+    src = _make_dataset(tmp_path, "src")
+    _save_img(src, "a.png", color=(10, 20, 30))
+    (src / "a.txt").write_text("incoming", encoding="utf-8")
+    dst = _make_dataset(tmp_path, "dst")
+    (dst / "a.txt").write_text("keep", encoding="utf-8")
+
+    result = intake_local_path(
+        LocalPathRequest(
+            dataset_path=str(dst),
+            source_path=str(src),
+            skip_duplicates=False,
+        ),
+    )
+
+    assert result["imported_count"] == 1
+    assert Path(result["imported"][0]["imported_path"]).name == "a-2.png"
+    assert (dst / "a.txt").read_text(encoding="utf-8") == "keep"
+    assert (dst / "a-2.txt").read_text(encoding="utf-8") == "incoming"
+
+
 def test_local_path_skips_duplicates(tmp_path: Path) -> None:
     src = _make_dataset(tmp_path, "src")
     img_src = _save_img(src, "a.png", color=(50, 60, 70))
@@ -161,6 +188,40 @@ def test_local_path_move_semantics(tmp_path: Path) -> None:
     assert not (src / "a.txt").exists()
 
 
+def test_local_path_copy_failure_leaves_source_and_destination_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = _make_dataset(tmp_path, "src")
+    image = _save_img(src, "a.png", color=(11, 22, 33))
+    caption = src / "a.txt"
+    caption.write_text("caption", encoding="utf-8")
+    dst = _make_dataset(tmp_path, "dst")
+    real_copy = intake_module.shutil.copy2
+
+    def fail_caption(source: Path, target: Path):
+        if Path(source) == caption:
+            raise OSError("simulated caption copy failure")
+        return real_copy(source, target)
+
+    monkeypatch.setattr(intake_module.shutil, "copy2", fail_caption)
+
+    result = intake_local_path(
+        LocalPathRequest(
+            dataset_path=str(dst),
+            source_path=str(src),
+            move=True,
+            skip_duplicates=False,
+        ),
+    )
+
+    assert result["failed_count"] == 1
+    assert image.is_file()
+    assert caption.is_file()
+    assert not (dst / "a.png").exists()
+    assert not list(dst.glob(".intake-*"))
+
+
 def test_local_path_rejects_importing_dataset_into_itself(tmp_path: Path) -> None:
     import pytest
     from fastapi import HTTPException
@@ -179,6 +240,45 @@ def test_local_path_rejects_importing_dataset_into_itself(tmp_path: Path) -> Non
 
     assert exc.value.status_code == 400
     assert not (dst / "a-2.png").exists()
+
+
+def test_local_path_rejects_source_containing_destination(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    src = _make_dataset(tmp_path, "src")
+    _save_img(src, "a.png")
+    dst = src / "dst"
+    dst.mkdir()
+
+    with pytest.raises(HTTPException) as exc:
+        intake_local_path(
+            LocalPathRequest(
+                dataset_path=str(dst),
+                source_path=str(src),
+                skip_duplicates=False,
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert not (dst / "a.png").exists()
+
+
+def test_local_path_rejects_source_file_inside_destination(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    dst = _make_dataset(tmp_path, "dst")
+    image = _save_img(dst, "a.png")
+
+    with pytest.raises(HTTPException) as exc:
+        intake_local_path(
+            LocalPathRequest(
+                dataset_path=str(dst),
+                source_path=str(image),
+                skip_duplicates=False,
+            ),
+        )
+
+    assert exc.value.status_code == 400
 
 
 # --------------------------------------------------------------------------- #

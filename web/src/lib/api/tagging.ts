@@ -18,7 +18,7 @@ export interface TaggingSession {
   recursive: boolean
   include_character: boolean
   underscores: boolean
-  status: "running" | "succeeded" | "failed" | "canceled" | "interrupted"
+  status: "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   percent: number
   events: TaggingEvent[]
   written: number

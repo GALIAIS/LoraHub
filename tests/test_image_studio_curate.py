@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 # Bootstrap app namespace before touching sub-routers.
 from lorahub.api import app as _app_module  # noqa: F401
-
+from lorahub.api.routers.image_studio import curate as curate_module
 from lorahub.api.routers.image_studio.curate import (
     AutoRotateRequest,
     BatchByIssueRequest,
@@ -25,6 +26,11 @@ from lorahub.api.routers.image_studio.curate import (
     curate_restore_backup,
     curate_restore_quarantine,
 )
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
 
 
 def _seed_dataset(tmp_path: Path) -> Path:
@@ -135,6 +141,117 @@ def test_quarantine_disambiguates_repeated_names(tmp_path: Path) -> None:
     assert p2.is_file()
 
 
+def test_quarantine_rolls_back_when_caption_move_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    d = _seed_dataset(tmp_path)
+    image = d / "img1.png"
+    caption = d / "img1.txt"
+    real_move = curate_module.shutil.move
+
+    def fail_caption(source: str, target: str):
+        if Path(source) == caption:
+            raise OSError("simulated caption move failure")
+        return real_move(source, target)
+
+    monkeypatch.setattr(curate_module.shutil, "move", fail_caption)
+
+    result = curate_quarantine(
+        QuarantineRequest(dataset_path=str(d), paths=[str(image)]),
+    )
+
+    assert result["moved_count"] == 0
+    assert result["failed"]
+    assert image.is_file()
+    assert caption.is_file()
+    assert curate_quarantine_list(str(d))["entries"] == []
+
+
+def test_quarantine_rolls_back_when_final_index_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    d = _seed_dataset(tmp_path)
+    image = d / "img1.png"
+    real_write = curate_module._write_quarantine_index
+    calls = 0
+
+    def fail_second_write(index_path: Path, entries: list[dict]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated index write failure")
+        real_write(index_path, entries)
+
+    monkeypatch.setattr(
+        curate_module,
+        "_write_quarantine_index",
+        fail_second_write,
+    )
+
+    result = curate_quarantine(
+        QuarantineRequest(dataset_path=str(d), paths=[str(image)]),
+    )
+
+    assert result["moved_count"] == 0
+    assert image.is_file()
+    assert (d / "img1.txt").is_file()
+    assert curate_quarantine_list(str(d))["entries"] == []
+
+
+def test_restore_preserves_existing_caption(tmp_path: Path) -> None:
+    d = _seed_dataset(tmp_path)
+    image = d / "img2.png"
+    quarantined = curate_quarantine(
+        QuarantineRequest(dataset_path=str(d), paths=[str(image)]),
+    )
+    qpath = quarantined["moved"][0]["quarantine_path"]
+    existing_caption = d / "img2.txt"
+    existing_caption.write_text("new caption", encoding="utf-8")
+
+    result = curate_restore_quarantine(
+        RestoreRequest(dataset_path=str(d), quarantine_paths=[qpath]),
+    )
+
+    restored_image = Path(result["restored"][0]["restored_path"])
+    assert restored_image.name == "img2-2.png"
+    assert restored_image.with_suffix(".txt").read_text(encoding="utf-8") == "caption 2"
+    assert existing_caption.read_text(encoding="utf-8") == "new caption"
+
+
+def test_quarantine_index_ignores_invalid_records(tmp_path: Path) -> None:
+    d = _seed_dataset(tmp_path)
+    qroot = d / ".workbench" / "quarantine"
+    qroot.mkdir(parents=True)
+    (qroot / "index.jsonl").write_text(
+        "not-json\n[]\n{}\n{\"quarantine_path\": 42}\n",
+        encoding="utf-8",
+    )
+
+    assert curate_quarantine_list(str(d))["entries"] == []
+
+
+def test_quarantine_rejects_linked_workbench(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    d = _seed_dataset(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (d / ".workbench").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(HTTPException) as exc:
+        curate_quarantine(
+            QuarantineRequest(dataset_path=str(d), paths=[str(d / "img0.png")]),
+        )
+
+    assert exc.value.status_code == 400
+    assert not any(outside.iterdir())
+
+
 # --------------------------------------------------------------------------- #
 # Batch resize
 # --------------------------------------------------------------------------- #
@@ -216,6 +333,37 @@ def test_restore_backup_reverts_resize(tmp_path: Path) -> None:
     assert Image.open(d / "img0.png").size == original_size
 
 
+def test_restore_backup_does_not_follow_destination_link(tmp_path: Path) -> None:
+    d = _seed_dataset(tmp_path)
+    curate_batch_resize(
+        BatchResizeRequest(
+            dataset_path=str(d),
+            paths=[str(d / "img0.png")],
+            target_short_edge=512,
+        ),
+    )
+    backup = next(
+        Path(entry["backup_path"])
+        for entry in curate_backups_list(str(d))["entries"]
+        if Path(entry["backup_path"]).name == "img0.png"
+    )
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"private")
+    (d / "img0.png").unlink()
+    try:
+        (d / "img0.png").symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    result = curate_restore_backup(
+        RestoreBackupRequest(dataset_path=str(d), backup_paths=[str(backup)]),
+    )
+
+    assert result["restored_count"] == 0
+    assert result["failed"]
+    assert outside.read_bytes() == b"private"
+
+
 # --------------------------------------------------------------------------- #
 # Auto-rotate
 # --------------------------------------------------------------------------- #
@@ -236,7 +384,7 @@ def test_auto_rotate_no_exif_is_skip(tmp_path: Path) -> None:
 
 def test_batch_by_issue_quarantines_audit_findings(tmp_path: Path) -> None:
     """Audit flags two ``tiny`` images → batch-by-issue moves them."""
-    from lorahub.api.routers.image_studio.audit import audit_scan, ScanRequest
+    from lorahub.api.routers.image_studio.audit import ScanRequest, audit_scan
 
     # Setup: 1 tiny + 2 normal
     d = tmp_path / "ds"

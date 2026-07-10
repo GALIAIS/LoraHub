@@ -132,6 +132,13 @@ def test_diagnose_unknown_failure_path(tmp_path: Path) -> None:
     assert out["findings"][0]["category"] == "unknown"
 
 
+def test_diagnose_windows_dll_initialization_failure(tmp_path: Path) -> None:
+    out = diagnose_failure(tmp_path, returncode=0xC0000142)
+
+    assert out["findings"][0]["category"] == "windows_dll_init"
+    assert out["findings"][0]["severity"] == "error"
+
+
 def test_diagnose_reads_events_jsonl(tmp_path: Path) -> None:
     events = tmp_path / "events.jsonl"
     events.write_text(

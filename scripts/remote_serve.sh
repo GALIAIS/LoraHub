@@ -31,6 +31,19 @@ fi
 
 cd "${LORAHUB_DIR}"
 
+if [[ "${HOST}" != "127.0.0.1" && "${HOST}" != "localhost" && "${HOST}" != "::1" ]]; then
+  if [[ -z "${LORAHUB_API_TOKEN:-}" ]]; then
+    LORAHUB_API_TOKEN=$("${LORAHUB_DIR}/.venv/bin/python" -c \
+      'from lorahub.api.auth import ensure_api_token; print(ensure_api_token())')
+    TOKEN_PATH=$("${LORAHUB_DIR}/.venv/bin/python" -c \
+      'from lorahub.api.auth import api_token_path; print(api_token_path())')
+    log "Remote access authentication enabled. Token file: ${TOKEN_PATH}"
+  else
+    log "Remote access authentication enabled by LORAHUB_API_TOKEN."
+  fi
+  export LORAHUB_API_TOKEN
+fi
+
 # 1. Stop any prior uvicorn pinned to the same port.
 log "Stopping any prior uvicorn on :${PORT}"
 existing_pids=$(ps -ef | grep "uvicorn lorahub.api.app" | grep -v grep | awk '{print $2}')

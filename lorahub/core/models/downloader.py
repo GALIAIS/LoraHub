@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
-from collections.abc import Callable
+import os
+import re
+import threading
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
@@ -13,6 +16,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from lorahub.core.net import hf_api, hf_download, hf_endpoint, proxy_env
+from lorahub.core.redaction import redact_command_text
 
 ProgressCallback = Callable[["DownloadProgress"], None]
 Source = Literal["huggingface", "modelscope"]
@@ -48,6 +52,9 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "*.tar.gz",
 )
 
+_MAX_REMOTE_MANIFEST_BYTES = 64 * 1024 * 1024
+_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(?:\d+|\*)$", re.IGNORECASE)
+
 
 @dataclass(frozen=True, slots=True)
 class DownloadRequest:
@@ -63,6 +70,10 @@ class DownloadRequest:
     paths: tuple[str, ...] = ()
     allow_patterns: tuple[str, ...] = DEFAULT_ALLOW_PATTERNS
     ignore_patterns: tuple[str, ...] = DEFAULT_IGNORE_PATTERNS
+    cancel_event: threading.Event | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        validate_repo_id(self.repo_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +101,81 @@ class RemoteFile:
     reason: str
 
 
+class DownloadCanceledError(InterruptedError):
+    """Raised when a caller cancels an in-flight model download."""
+
+
+@dataclass(slots=True)
+class _PathLockState:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    users: int = 0
+
+
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[Path, _PathLockState] = {}
+
+
+@contextmanager
+def _download_path_lock(path: Path) -> Iterator[None]:
+    """Serialize writes to one checkpoint across concurrent API sessions."""
+    key = path.expanduser().absolute()
+    with _PATH_LOCKS_GUARD:
+        state = _PATH_LOCKS.setdefault(key, _PathLockState())
+        state.users += 1
+    state.lock.acquire()
+    try:
+        yield
+    finally:
+        state.lock.release()
+        with _PATH_LOCKS_GUARD:
+            state.users -= 1
+            if state.users == 0 and _PATH_LOCKS.get(key) is state:
+                _PATH_LOCKS.pop(key, None)
+
+
+_REPO_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def validate_repo_id(repo_id: str) -> str:
+    """Validate the two-segment repository id used in URLs and local paths."""
+    parts = repo_id.strip().split("/")
+    if (
+        len(parts) != 2
+        or any(part in {".", ".."} for part in parts)
+        or any(_REPO_SEGMENT_RE.fullmatch(part) is None for part in parts)
+    ):
+        raise ValueError("repo_id must be a safe 'owner/name' identifier")
+    return "/".join(parts)
+
+
+def _raise_if_canceled(req: DownloadRequest) -> None:
+    if req.cancel_event is not None and req.cancel_event.is_set():
+        raise DownloadCanceledError("download canceled by user")
+
+
+def _safe_error(exc: BaseException) -> str:
+    """Return an actionable error without persisting credentials from URLs."""
+    return redact_command_text(str(exc))
+
+
+def _cancel_tqdm_class(cancel_event: threading.Event) -> type[Any]:
+    """Make Hugging Face's streaming loop observe the session cancel event."""
+    from tqdm.auto import tqdm  # noqa: PLC0415
+
+    class _CancelAwareTqdm(tqdm):  # type: ignore[misc]
+        def update(self, n: int | float = 1) -> bool | None:
+            if cancel_event.is_set():
+                raise DownloadCanceledError("download canceled by user")
+            return super().update(n)
+
+    return _CancelAwareTqdm
+
+
 def _emit(progress: ProgressCallback | None, event: DownloadProgress) -> None:
     if progress:
         progress(event)
@@ -110,7 +196,45 @@ def _normalise_path(path: str) -> str | None:
     parts = [part for part in normalised.split("/") if part not in ("", ".")]
     if not parts or any(part == ".." for part in parts):
         return None
+    for part in parts:
+        stem = part.split(".", 1)[0].upper()
+        if (
+            part[-1] in {" ", "."}
+            or any(char in '<>"|?*\0' for char in part)
+            or stem in _WINDOWS_RESERVED_NAMES
+            or len(part.encode("utf-8")) > 240
+        ):
+            return None
     return "/".join(parts)
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
+
+
+def _safe_download_target(root: Path, relative_path: str) -> Path:
+    """Resolve one selected file without traversing pre-existing links."""
+    if _is_link(root):
+        raise ValueError("download target root must not be a symlink or junction")
+    candidate = root.joinpath(*relative_path.split("/"))
+    current = root
+    for part in relative_path.split("/")[:-1]:
+        current = current / part
+        if current.exists() and _is_link(current):
+            raise ValueError(f"download path traverses a linked directory: {relative_path}")
+    if candidate.exists() and _is_link(candidate):
+        raise ValueError(f"download target is a linked file: {relative_path}")
+    try:
+        candidate.parent.resolve().relative_to(root.resolve())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"download path escapes target root: {relative_path}") from exc
+    return candidate
 
 
 def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
@@ -196,10 +320,13 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     listing; for repos with many small files it pays for itself within a
     second.
     """
+    _raise_if_canceled(req)
     endpoint = hf_endpoint(req.huggingface_endpoint)
     token = (req.huggingface_token or "").strip() or None
     revision = "main" if req.revision == "master" else req.revision
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
+    if _is_link(target):
+        raise ValueError("download target root must not be a symlink or junction")
     target.mkdir(parents=True, exist_ok=True)
 
     _emit(
@@ -216,9 +343,15 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             allow_patterns=req.allow_patterns,
             ignore_patterns=req.ignore_patterns,
         )
+    _raise_if_canceled(req)
     files = [(f.path, f.size) for f in remote_files if f.selected]
     bytes_total = sum(size for _, size in files)
-    if remote_files and not files:
+    if not remote_files:
+        raise RuntimeError(
+            "remote repository returned no downloadable files; verify the repository, "
+            "revision, access token, and mirror"
+        )
+    if not files:
         msg = (
             "no files selected for download; list the remote files and select "
             "the required weights/config/tokenizer files explicitly"
@@ -237,6 +370,8 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     )
 
     def fetch(name: str, size: int) -> tuple[str, int]:
+        _raise_if_canceled(req)
+        _safe_download_target(target, name)
         kw: dict[str, Any] = {
             "repo_id": req.repo_id,
             "filename": name,
@@ -247,44 +382,51 @@ def _hf_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
             kw["endpoint"] = endpoint
         if token:
             kw["token"] = token
-        with proxy_env(req.proxy):
-            hf_download(**kw)
+        if req.cancel_event is not None:
+            kw["tqdm_class"] = _cancel_tqdm_class(req.cancel_event)
+        hf_download(**kw)
+        _raise_if_canceled(req)
         # If size metadata is missing (rare), fall back to the on-disk size.
         if size <= 0:
             size = (target / name).stat().st_size
         return name, size
 
-    workers = max(1, min(req.threads, len(files) or 1))
+    workers = max(1, min(req.threads, len(files) or 1, 16))
     completed = 0
     bytes_done = 0
     failures: list[tuple[str, str]] = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(fetch, name, size): name
-            for name, size in files
-        }
-        for future in as_completed(futures):
-            completed += 1
-            try:
-                name, size = future.result()
-                bytes_done += size
-                message = f"hf: [{completed}/{len(files)}] {name}"
-            except Exception as exc:  # noqa: BLE001
-                name = futures[future]
-                failures.append((name, str(exc)))
-                message = f"hf: [{completed}/{len(files)}] failed {name}: {exc}"
-            percent = 5 + (completed / len(files) * 95) if files else 100
-            _emit(
-                progress,
-                DownloadProgress(
-                    message=message,
-                    percent=percent,
-                    files_done=completed,
-                    files_total=len(files),
-                    bytes_done=bytes_done,
-                    bytes_total=bytes_total,
-                ),
-            )
+    with proxy_env(req.proxy):
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(fetch, name, size): name
+                for name, size in files
+            }
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    name, size = future.result()
+                    bytes_done += size
+                    message = f"hf: [{completed}/{len(files)}] {name}"
+                except DownloadCanceledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    name = futures[future]
+                    error = _safe_error(exc)
+                    failures.append((name, error))
+                    message = f"hf: [{completed}/{len(files)}] failed {name}: {error}"
+                percent = 5 + (completed / len(files) * 95) if files else 100
+                _emit(
+                    progress,
+                    DownloadProgress(
+                        message=message,
+                        percent=percent,
+                        files_done=completed,
+                        files_total=len(files),
+                        bytes_done=bytes_done,
+                        bytes_total=bytes_total,
+                    ),
+                )
+    _raise_if_canceled(req)
     if failures:
         detail = "; ".join(f"{name}: {error}" for name, error in failures[:5])
         if len(failures) > 5:
@@ -324,19 +466,25 @@ def _ms_list_files(repo_id: str, revision: str, token: str | None) -> list[dict[
         headers["Authorization"] = f"Bearer {token}"
     req = Request(url, headers=headers)
     with urlopen(req, timeout=30) as resp:  # noqa: S310
-        body = json.loads(resp.read().decode("utf-8"))
+        raw = resp.read(_MAX_REMOTE_MANIFEST_BYTES + 1)
+    if len(raw) > _MAX_REMOTE_MANIFEST_BYTES:
+        raise RuntimeError("ModelScope file manifest exceeds the safety limit")
+    body = json.loads(raw.decode("utf-8"))
     items = body.get("Data", {}).get("Files") or body.get("Data", {}).get("Files", [])
     if isinstance(items, dict):
         items = items.get("Files", []) or []
     return [it for it in items if it.get("Type") != "tree"]
 
 
-def _ms_download_file(
+def _ms_download_file_unlocked(
     repo_id: str,
     revision: str,
     file_path: str,
     target: Path,
     token: str | None,
+    cancel_event: threading.Event | None = None,
+    *,
+    expected_size: int = 0,
 ) -> int:
     url = (
         f"{_MS_BASE}/{repo_id}/repo?Revision={quote(revision)}"
@@ -345,29 +493,92 @@ def _ms_download_file(
     headers: dict[str, str] = {"User-Agent": "lorahub/0.2"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = Request(url, headers=headers)
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(f"{target.name}.part")
-    if partial.exists():
-        partial.unlink()
-    bytes_written = 0
-    try:
-        with urlopen(req, timeout=120) as resp, partial.open("wb") as fh:  # noqa: S310
+    if _is_link(target):
+        raise ValueError(f"download target is a linked file: {target.name}")
+    if expected_size > 0 and target.is_file() and target.stat().st_size == expected_size:
+        return expected_size
+
+    partial = target.with_name(f".{target.name}.lorahub.part")
+    if _is_link(partial):
+        raise ValueError(f"download partial file cannot be a link: {partial.name}")
+    if partial.exists() and not partial.is_file():
+        raise ValueError(f"download partial path is not a regular file: {partial.name}")
+    offset = partial.stat().st_size if partial.is_file() and not _is_link(partial) else 0
+    if expected_size > 0 and offset > expected_size:
+        partial.unlink(missing_ok=True)
+        offset = 0
+    if expected_size > 0 and offset == expected_size and offset > 0:
+        partial.replace(target)
+        return expected_size
+    if offset > 0:
+        headers["Range"] = f"bytes={offset}-"
+
+    req = Request(url, headers=headers)
+    with urlopen(req, timeout=30) as resp:  # noqa: S310
+        status = int(getattr(resp, "status", 0) or 0)
+        if not status:
+            getcode = getattr(resp, "getcode", None)
+            status = int(getcode() or 200) if getcode is not None else 200
+        append = offset > 0 and status == 206
+        if append:
+            content_range = str(resp.headers.get("Content-Range") or "").strip()
+            match = _CONTENT_RANGE_RE.fullmatch(content_range)
+            if match is None or int(match.group(1)) != offset:
+                raise RuntimeError(
+                    f"invalid ranged response for {file_path}; "
+                    f"expected byte {offset}, got {content_range or 'no Content-Range'}"
+                )
+        mode = "ab" if append else "wb"
+        bytes_written = offset if append else 0
+        with partial.open(mode) as fh:
             while True:
-                chunk = resp.read(64 * 1024)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise DownloadCanceledError("download canceled by user")
+                chunk = resp.read(1024 * 1024)
                 if not chunk:
                     break
                 fh.write(chunk)
                 bytes_written += len(chunk)
-        partial.replace(target)
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    if expected_size > 0 and bytes_written != expected_size:
+        raise RuntimeError(
+            f"downloaded size mismatch for {file_path}: "
+            f"expected {expected_size}, got {bytes_written}"
+        )
+    partial.replace(target)
     return bytes_written
 
 
+def _ms_download_file(
+    repo_id: str,
+    revision: str,
+    file_path: str,
+    target: Path,
+    token: str | None,
+    cancel_event: threading.Event | None = None,
+    *,
+    expected_size: int = 0,
+) -> int:
+    with _download_path_lock(target):
+        return _ms_download_file_unlocked(
+            repo_id,
+            revision,
+            file_path,
+            target,
+            token,
+            cancel_event,
+            expected_size=expected_size,
+        )
+
+
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:
+    _raise_if_canceled(req)
     target = req.target_dir or (Path.cwd() / "models" / req.repo_id.replace("/", "__"))
+    if _is_link(target):
+        raise ValueError("download target root must not be a symlink or junction")
     target.mkdir(parents=True, exist_ok=True)
     _emit(
         progress,
@@ -378,6 +589,7 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     )
     with proxy_env(req.proxy):
         listed = _ms_list_files(req.repo_id, req.revision, req.modelscope_token)
+    _raise_if_canceled(req)
     by_path: dict[str, dict[str, Any]] = {}
     for it in listed:
         path = _normalise_path(str(it.get("Path") or it.get("FilePath") or ""))
@@ -389,9 +601,14 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
         allow_patterns=req.allow_patterns,
         ignore_patterns=req.ignore_patterns,
     )
-    files = [by_path[f.path] for f in remote_files if f.selected]
-    bytes_total = sum(_file_size(it) for it in files)
-    if remote_files and not files:
+    files = [(f.path, by_path[f.path]) for f in remote_files if f.selected]
+    bytes_total = sum(_file_size(item) for _path, item in files)
+    if not remote_files:
+        raise RuntimeError(
+            "remote repository returned no downloadable files; verify the repository, "
+            "revision, access token, and mirror"
+        )
+    if not files:
         msg = (
             "no files selected for download; list the remote files and select "
             "the required weights/config/tokenizer files explicitly"
@@ -410,44 +627,64 @@ def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> Dow
     )
     total = 0
     completed = 0
-    workers = max(1, min(req.threads, len(files) or 1))
+    workers = max(1, min(req.threads, len(files) or 1, 16))
     failures: list[tuple[str, str]] = []
 
-    def submit_file(it: dict[str, Any]) -> tuple[str, int]:
-        path = str(it.get("Path") or it.get("FilePath") or "")
-        if not path:
-            return "", 0
-        out = target / path
-        with proxy_env(req.proxy):
-            return path, _ms_download_file(req.repo_id, req.revision, path, out, req.modelscope_token)
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(submit_file, it): str(it.get("Path") or it.get("FilePath") or "")
-            for it in files
-        }
-        for future in as_completed(futures):
-            completed += 1
-            try:
-                path, n = future.result()
-                total += n
-                message = f"ms: [{completed}/{len(files)}] {path}"
-            except Exception as exc:  # noqa: BLE001
-                path = futures[future]
-                failures.append((path, str(exc)))
-                message = f"ms: [{completed}/{len(files)}] failed {path}: {exc}"
-            percent = 5 + (completed / len(files) * 95) if files else 100
-            _emit(
-                progress,
-                DownloadProgress(
-                    message=message,
-                    percent=percent,
-                    files_done=completed,
-                    files_total=len(files),
-                    bytes_done=total,
-                    bytes_total=bytes_total,
-                ),
+    def submit_file(path: str) -> tuple[str, int]:
+        _raise_if_canceled(req)
+        out = _safe_download_target(target, path)
+        expected_size = _file_size(by_path[path])
+        if req.cancel_event is None:
+            return path, _ms_download_file(
+                req.repo_id,
+                req.revision,
+                path,
+                out,
+                req.modelscope_token,
+                expected_size=expected_size,
             )
+        return path, _ms_download_file(
+            req.repo_id,
+            req.revision,
+            path,
+            out,
+            req.modelscope_token,
+            req.cancel_event,
+            expected_size=expected_size,
+        )
+
+    with proxy_env(req.proxy):
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(submit_file, path): path
+                for path, _item in files
+            }
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    path, n = future.result()
+                    total += n
+                    message = f"ms: [{completed}/{len(files)}] {path}"
+                except DownloadCanceledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    path = futures[future]
+                    error = _safe_error(exc)
+                    failures.append((path, error))
+                    message = f"ms: [{completed}/{len(files)}] failed {path}: {error}"
+                percent = 5 + (completed / len(files) * 95) if files else 100
+                _emit(
+                    progress,
+                    DownloadProgress(
+                        message=message,
+                        percent=percent,
+                        files_done=completed,
+                        files_total=len(files),
+                        bytes_done=total,
+                        bytes_total=bytes_total,
+                    ),
+                )
+    _raise_if_canceled(req)
     if failures:
         detail = "; ".join(f"{path}: {error}" for path, error in failures[:5])
         if len(failures) > 5:
@@ -511,18 +748,38 @@ def list_remote_files(req: DownloadRequest) -> list[RemoteFile]:
 
 
 def cleanup_partial(target: Path) -> None:
-    """Best-effort cleanup of a half-finished download directory."""
-    if target.is_dir():
-        shutil.rmtree(target, ignore_errors=True)
+    """Remove download-owned partial files without deleting completed assets."""
+    if _is_link(target) or not target.is_dir():
+        return
+    stack = [target]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            path = Path(entry.path)
+            if _is_link(path):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                stack.append(path)
+            elif entry.is_file(follow_symlinks=False) and entry.name.endswith(".part"):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    continue
 
 
 __all__ = [
     "DownloadProgress",
     "DownloadRequest",
     "DownloadResult",
+    "DownloadCanceledError",
     "RemoteFile",
     "Source",
     "cleanup_partial",
     "download",
     "list_remote_files",
+    "validate_repo_id",
 ]

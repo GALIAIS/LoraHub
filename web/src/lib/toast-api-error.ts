@@ -8,10 +8,8 @@
  * back to the plain error message — same as a `toast.error(label, {
  * description: err.message })` would have done.
  *
- * The same ApiError also flows into the persistent error registry via
- * ``reportError`` so users can find a record of the failure later from
- * Settings → 错误上报 — preflight 422s and silent toast dismissals both
- * leave a trail behind.
+ * Backend-captured failures carry a report id and are not submitted again.
+ * Expected 4xx validation responses remain toasts rather than error records.
  */
 import { toast } from "sonner"
 import { ApiError, type PreflightFinding } from "@/lib/api"
@@ -35,28 +33,19 @@ export function toastApiError(
         description: renderFindingsDescription(findings),
         duration: 14_000,
       })
-      void reportError({
-        severity: "warn",
-        source: "frontend.api",
-        category: "preflight",
-        title,
-        message: error.message,
-        context: {
-          findings,
-          status: error.status,
-          path: error.path,
-        },
-        requestPath: error.path,
-      })
       return
     }
   }
   toast.error(title, {
     description: error instanceof Error ? error.message : String(error),
   })
-  // Persist non-preflight errors too so the registry covers every UI
-  // failure path. We tag the API status when available — that's enough
-  // for the registry's filter chips to differentiate 4xx from 5xx.
+  if (
+    error instanceof ApiError &&
+    (error.backendReportId !== null || error.status < 500)
+  ) {
+    return
+  }
+  // Persist transport/proxy failures that the backend could not capture.
   void reportError({
     severity:
       error instanceof ApiError && error.status >= 500 ? "error" : "warn",
@@ -70,6 +59,7 @@ export function toastApiError(
       error instanceof ApiError
         ? { status: error.status, path: error.path, body: error.body }
         : {},
+    requestId: error instanceof ApiError ? error.requestId : null,
     requestPath: error instanceof ApiError ? error.path : null,
   })
 }

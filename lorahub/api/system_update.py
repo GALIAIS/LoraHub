@@ -51,7 +51,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -83,7 +83,9 @@ WEB_MAIN_COMMITS_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commits
 
 CACHE_TTL_SECONDS = 5 * 60
 HTTP_TIMEOUT_S = 12.0
+_MAX_GITHUB_API_BYTES = 8 * 1024 * 1024
 _RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+_CACHE_WRITE_LOCK = threading.Lock()
 
 
 def _state_dir() -> Path:
@@ -336,6 +338,27 @@ def _compare_versions(left: str, right: str) -> int:
         return (left > right) - (left < right)
 
 
+def _commit_from_version(raw: str) -> str | None:
+    """Extract a build commit from LoraHub or hatch-vcs version strings."""
+    match = re.search(r"(?:^|[-+])g([0-9a-f]{7,40})(?:$|[.+-])", raw, re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
+def _commits_match(left: str | None, right: str | None) -> bool:
+    """Compare full and abbreviated git object ids without false mismatches."""
+    if not left or not right:
+        return False
+    first = left.strip().lower()
+    second = right.strip().lower()
+    if first == second:
+        return True
+    if not re.fullmatch(r"[0-9a-f]{7,40}", first) or not re.fullmatch(
+        r"[0-9a-f]{7,40}", second
+    ):
+        return False
+    return first.startswith(second) or second.startswith(first)
+
+
 def _tag_update_available(
     *,
     latest: str | None,
@@ -346,21 +369,53 @@ def _tag_update_available(
 ) -> bool:
     if not latest:
         return False
+    # A locally newer semantic version must never be presented as older just
+    # because its commit diverges from the release branch. Commit ancestry is
+    # only meaningful once both builds identify as the same release.
     version_cmp = _compare_versions(latest, current)
     if version_cmp > 0:
         return True
     if version_cmp < 0:
         return False
-    if not latest_commit or not current_commit or latest_commit == current_commit:
+    if latest_commit and current_commit:
+        if _commits_match(latest_commit, current_commit):
+            return False
+        relation = _commit_relation(cwd, current_commit, latest_commit)
+        if relation == "remote_ahead":
+            return True
+        if relation == "local_ahead":
+            return False
+        if relation == "diverged":
+            return True
+
+    if (
+        not latest_commit
+        or not current_commit
+        or _commits_match(latest_commit, current_commit)
+    ):
+        return False
+    # If git cannot prove ancestry, keep the older same-version retag
+    # behavior so users can still recover from a moved release ref.
+    return True
+
+
+def _branch_update_available(
+    *,
+    latest_commit: str | None,
+    current_commit: str | None,
+    cwd: Path | None = None,
+) -> bool:
+    """Return true only when the remote branch can advance the current commit."""
+    if (
+        not latest_commit
+        or not current_commit
+        or _commits_match(latest_commit, current_commit)
+    ):
         return False
     relation = _commit_relation(cwd, current_commit, latest_commit)
     if relation == "local_ahead":
         return False
-    if relation in {"remote_ahead", "diverged"}:
-        return True
-    # If git cannot prove ancestry, keep the older same-version retag
-    # behavior so users can still recover from a moved release ref.
-    return True
+    return relation in {"remote_ahead", "diverged", "unknown"}
 
 
 def _commit_relation(
@@ -417,8 +472,11 @@ def _release_notes_from_commit(commit_sha: str | None) -> str:
     if not commit_sha:
         return ""
     try:
-        info = _fetch_json(
-            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{commit_sha}"
+        info = _api_object(
+            _fetch_json(
+                f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{commit_sha}"
+            ),
+            "commit",
         )
     except (OSError, ValueError):
         return ""
@@ -434,23 +492,115 @@ def _read_cache() -> _CacheBlob:
         raw = json.loads(f.read_text("utf-8"))
         if not isinstance(raw, dict):
             return _CacheBlob()
-        return _CacheBlob(
-            data=raw.get("data", {}) or {},
-            updated_at=float(raw.get("updated_at") or 0.0),
+        raw_data = raw.get("data", {})
+        data = (
+            {
+                str(channel): payload
+                for channel, payload in raw_data.items()
+                if isinstance(payload, dict)
+            }
+            if isinstance(raw_data, dict)
+            else {}
         )
+        return _CacheBlob(data=data, updated_at=float(raw.get("updated_at") or 0.0))
     except (OSError, json.JSONDecodeError, ValueError):
         return _CacheBlob()
 
 
 def _write_cache(blob: _CacheBlob) -> None:
+    target = _cache_file()
+    if target.is_symlink():
+        return
+    temp_path: Path | None = None
     try:
-        _cache_file().write_text(
-            json.dumps({"data": blob.data, "updated_at": blob.updated_at}, indent=2),
-            "utf-8",
+        fd, raw_temp = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=".update-cache-",
+            suffix=".tmp",
         )
+        os.close(fd)
+        temp_path = Path(raw_temp)
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(
+                {"data": blob.data, "updated_at": blob.updated_at},
+                handle,
+                indent=2,
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(target)
     except OSError:
         # Cache is best-effort; failure to write is not a hard error.
         pass
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _write_channel_cache(channel: ChannelName, payload: dict[str, Any]) -> None:
+    """Merge one channel under a process lock instead of replacing its peer."""
+    with _CACHE_WRITE_LOCK:
+        latest = _read_cache()
+        latest.data[channel] = payload
+        latest.updated_at = time.time()
+        _write_cache(latest)
+
+
+def _cache_entry_is_fresh(
+    cached: dict[str, Any] | None,
+    legacy_updated_at: float,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Evaluate cache age per channel, with compatibility for old blobs.
+
+    ``CacheBlob.updated_at`` predates the two-channel update UI and is shared
+    by the whole file. Using it directly lets a refresh of one channel make a
+    stale entry for the other channel appear fresh. New entries already carry
+    their own ISO ``checked_at`` value, so prefer that and only fall back to
+    the blob timestamp for caches written by older releases.
+    """
+    if not cached:
+        return False
+    checked_ts = legacy_updated_at
+    raw_checked_at = cached.get("checked_at")
+    if isinstance(raw_checked_at, str) and raw_checked_at.strip():
+        try:
+            checked = datetime.fromisoformat(raw_checked_at.strip())
+            if checked.tzinfo is None:
+                checked = checked.replace(tzinfo=UTC)
+            checked_ts = checked.timestamp()
+        except ValueError:
+            pass
+    age = (time.time() if now is None else now) - checked_ts
+    return 0 <= age < CACHE_TTL_SECONDS
+
+
+_UPDATE_INFO_FIELD_NAMES = frozenset(item.name for item in fields(UpdateInfo))
+
+
+def _update_info_from_cache(
+    cached: dict[str, Any],
+    *,
+    channel: ChannelName,
+    **overrides: Any,
+) -> UpdateInfo:
+    """Read old/new cache payloads without trusting their exact schema."""
+    payload = {
+        key: value
+        for key, value in cached.items()
+        if key in _UPDATE_INFO_FIELD_NAMES
+    }
+    payload.update(overrides)
+    payload["channel"] = channel
+    payload.setdefault("current", "0.0.0+unknown")
+    payload.setdefault("latest", None)
+    payload.setdefault("update_available", False)
+    payload.setdefault(
+        "release_url",
+        WEB_RELEASES_URL if channel == "tag" else WEB_COMMITS_URL,
+    )
+    return UpdateInfo(**payload)
 
 
 def last_check() -> dict[str, dict[str, Any]] | None:
@@ -464,7 +614,7 @@ def last_check() -> dict[str, dict[str, Any]] | None:
     return blob.data if blob.data else None
 
 
-def _fetch_json(url: str) -> dict[str, Any]:
+def _fetch_json(url: str) -> Any:
     """Tiny urllib wrapper (we don't pull in requests for one call).
 
     Bypasses any system-level HTTP_PROXY env vars: we only want the
@@ -485,7 +635,16 @@ def _fetch_json(url: str) -> dict[str, Any]:
         if resp.status >= 400:
             msg = f"HTTP {resp.status}: {resp.reason}"
             raise OSError(msg)
-        return json.loads(resp.read().decode("utf-8"))
+        raw = resp.read(_MAX_GITHUB_API_BYTES + 1)
+    if len(raw) > _MAX_GITHUB_API_BYTES:
+        raise OSError("GitHub API response exceeds the safety limit")
+    return json.loads(raw.decode("utf-8"))
+
+
+def _api_object(payload: Any, resource: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError(f"GitHub {resource} response is not an object")
+    return payload
 
 
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -625,7 +784,7 @@ def _detect_detached_head(cwd: Path) -> str | None:
 
 def _refresh_dev(cwd: Path) -> dict[str, Any]:
     """Probe origin/dev via the GitHub commits API (no auth, 60/hr)."""
-    info = _fetch_json(COMMITS_API)
+    info = _api_object(_fetch_json(COMMITS_API), "dev commit")
     sha = str(info.get("sha") or "")
     short_sha = sha[:7] if sha else ""
     msg = (info.get("commit") or {}).get("message") or ""
@@ -640,7 +799,7 @@ def _refresh_dev(cwd: Path) -> dict[str, Any]:
 
 def _refresh_main() -> dict[str, Any]:
     """Probe origin/main via the GitHub commits API."""
-    info = _fetch_json(MAIN_COMMITS_API)
+    info = _api_object(_fetch_json(MAIN_COMMITS_API), "main commit")
     sha = str(info.get("sha") or "")
     msg = (info.get("commit") or {}).get("message") or ""
     return {
@@ -660,14 +819,25 @@ def _refresh_tag() -> dict[str, Any]:
     than a network error.
     """
     try:
-        info = _fetch_json(RELEASES_API)
+        info = _api_object(_fetch_json(RELEASES_API), "release")
     except OSError as exc:
         if not _is_not_found(exc):
             raise
         return _refresh_tag_via_tags_api()
 
     tag = str(info.get("tag_name") or "")
-    commit = str(info.get("target_commitish") or "").strip() or None
+    target_commitish = str(info.get("target_commitish") or "").strip()
+    # GitHub permits ``target_commitish`` to be a branch name (commonly
+    # ``main``), not the immutable commit behind the release tag. Treating
+    # that label as a SHA makes Docker builds compare unequal forever.
+    commit = (
+        target_commitish
+        if re.fullmatch(r"[0-9a-fA-F]{7,40}", target_commitish)
+        else None
+    )
+    if tag and commit is None:
+        with contextlib.suppress(OSError, ValueError):
+            commit = _commit_for_tag(_fetch_json(TAGS_API), tag)
     main: dict[str, Any] = {}
     with contextlib.suppress(OSError, ValueError):
         main = _refresh_main()
@@ -743,6 +913,18 @@ def _stable_tag_candidates(raw: Any) -> list[tuple[Version, str, str]]:
         candidates.append((version, name, sha))
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates
+
+
+def _commit_for_tag(raw: Any, tag_name: str) -> str | None:
+    """Resolve one release tag from GitHub's tags payload."""
+    if not isinstance(raw, list):
+        return None
+    for entry in raw:
+        if not isinstance(entry, dict) or str(entry.get("name") or "") != tag_name:
+            continue
+        sha = str(entry.get("commit", {}).get("sha") or "").strip()
+        return sha if re.fullmatch(r"[0-9a-fA-F]{7,40}", sha) else None
+    return None
 
 
 def list_release_history(limit: int = 6) -> list[dict[str, str | None]]:
@@ -830,6 +1012,29 @@ def _release_channel_commit(
     """
     return (
         _remote_branch_commit(cwd, "main")
+        or cached_commit
+        or _remote_tag_commit(cwd, tag_name)
+    )
+
+
+def _formal_target_commit(
+    cwd: Path | None,
+    install_kind: str,
+    tag_name: str | None,
+    *,
+    cached_commit: str | None = None,
+    advertised_tag_commit: str | None = None,
+) -> str | None:
+    """Resolve the artifact that the current installation can actually use.
+
+    Git checkouts update from ``main`` and therefore track its head after the
+    latest release tag. Docker/archive builds are immutable release artifacts;
+    they only exist for a tag and must compare against that tag's commit.
+    """
+    if install_kind == "git":
+        return _release_channel_commit(cwd, tag_name, cached_commit)
+    return (
+        advertised_tag_commit
         or _remote_tag_commit(cwd, tag_name)
         or cached_commit
     )
@@ -851,49 +1056,49 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     current, version_source = _resolve_version()
     install_kind = _install_kind(cwd)
     is_git_checkout = cwd is not None and install_kind == "git"
-    current_commit = _current_commit(cwd)
+    current_commit = _current_commit(cwd) or _commit_from_version(current)
 
     blob = _read_cache()
     cached = blob.data.get(channel)
-    fresh_enough = (
-        cached
-        and not force
-        and (time.time() - blob.updated_at) < CACHE_TTL_SECONDS
-    )
+    fresh_enough = not force and _cache_entry_is_fresh(cached, blob.updated_at)
     if fresh_enough and channel == "tag" and cached.get("tag_name") and not cached.get("latest_commit"):
         fresh_enough = False
 
     if fresh_enough:
         cached_latest = cached.get("latest")
-        cached_latest_commit = (
-            _release_channel_commit(cwd, cached.get("tag_name"), cached.get("latest_commit"))
-            if channel == "tag"
-            else cached.get("latest_commit")
-        )
-        if cached_latest_commit is None:
-            cached_latest_commit = cached.get("latest_commit")
-        info = UpdateInfo(
-            **{
-                **cached,
-                "current": current,
-                "is_dirty": is_dirty,
-                "version_source": version_source,
-                "git_checkout": is_git_checkout,
-                "install_kind": install_kind,
-                "current_commit": current_commit,
-                "latest_commit": cached_latest_commit,
-                "update_available": (
-                    _tag_update_available(
-                        latest=cached_latest,
-                        current=current,
-                        latest_commit=cached_latest_commit,
-                        current_commit=current_commit,
-                        cwd=cwd,
-                    )
-                    if channel == "tag"
-                    else cached.get("update_available", False)
-                ),
-            }
+        cached_latest_commit = cached.get("latest_commit")
+        if channel == "tag":
+            cached_latest_commit = _formal_target_commit(
+                cwd,
+                install_kind,
+                cached.get("tag_name"),
+                cached_commit=cached_latest_commit,
+            )
+        info = _update_info_from_cache(
+            cached,
+            channel=channel,
+            current=current,
+            is_dirty=is_dirty,
+            version_source=version_source,
+            git_checkout=is_git_checkout,
+            install_kind=install_kind,
+            current_commit=current_commit,
+            latest_commit=cached_latest_commit,
+            update_available=(
+                _tag_update_available(
+                    latest=cached_latest,
+                    current=current,
+                    latest_commit=cached_latest_commit,
+                    current_commit=current_commit,
+                    cwd=cwd,
+                )
+                if channel == "tag"
+                else _branch_update_available(
+                    latest_commit=cached_latest_commit,
+                    current_commit=current_commit,
+                    cwd=cwd,
+                )
+            ),
         )
         return info
 
@@ -905,16 +1110,41 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     except (OSError, ValueError) as exc:
         # Network failure — degrade gracefully to the cached payload.
         if cached:
-            info = UpdateInfo(
-                **{
-                    **cached,
-                    "current": current,
-                    "is_dirty": is_dirty,
-                    "version_source": version_source,
-                    "git_checkout": is_git_checkout,
-                    "install_kind": install_kind,
-                    "current_commit": current_commit,
-                }
+            cached_latest = cached.get("latest")
+            cached_latest_commit = cached.get("latest_commit")
+            if channel == "tag":
+                cached_latest_commit = _formal_target_commit(
+                    cwd,
+                    install_kind,
+                    cached.get("tag_name"),
+                    cached_commit=cached_latest_commit,
+                )
+            cached_available = (
+                _tag_update_available(
+                    latest=cached_latest,
+                    current=current,
+                    latest_commit=cached_latest_commit,
+                    current_commit=current_commit,
+                    cwd=cwd,
+                )
+                if channel == "tag"
+                else _branch_update_available(
+                    latest_commit=cached_latest_commit,
+                    current_commit=current_commit,
+                    cwd=cwd,
+                )
+            )
+            info = _update_info_from_cache(
+                cached,
+                channel=channel,
+                current=current,
+                is_dirty=is_dirty,
+                version_source=version_source,
+                git_checkout=is_git_checkout,
+                install_kind=install_kind,
+                current_commit=current_commit,
+                latest_commit=cached_latest_commit,
+                update_available=cached_available,
             )
             info.error = f"refresh failed: {exc}"
             return info
@@ -935,9 +1165,12 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
 
     latest = remote["version_str"] or None
     if channel == "tag":
-        latest_commit = remote.get("branch_commit") or _release_channel_commit(
+        latest_commit = _formal_target_commit(
             cwd,
+            install_kind,
             remote.get("tag_name"),
+            cached_commit=remote.get("branch_commit"),
+            advertised_tag_commit=remote.get("commit"),
         )
     else:
         latest_commit = remote.get("commit")
@@ -949,9 +1182,9 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             _release_notes_from_commit(latest_commit)
             or release_notes
             or _release_notes_from_git(
-            cwd,
-            remote.get("tag_name"),
-            current_commit,
+                cwd,
+                remote.get("tag_name"),
+                current_commit,
             )
         )
     if channel == "tag" and latest:
@@ -962,12 +1195,12 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
             current_commit=current_commit,
             cwd=cwd,
         )
-    elif channel == "dev" and latest and cwd:
-        # For dev, "update available" means HEAD is not on the
-        # remote sha. We compare short SHA prefixes via git
-        # rev-parse so a forced reset still counts as up-to-date.
-        head = current_commit or ""
-        update_available = bool(head) and not head.startswith(latest)
+    elif channel == "dev":
+        update_available = _branch_update_available(
+            latest_commit=latest_commit,
+            current_commit=current_commit,
+            cwd=cwd,
+        )
     else:
         update_available = False
 
@@ -989,9 +1222,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
         install_kind=install_kind,
     )
 
-    blob.data[channel] = info.to_dict()
-    blob.updated_at = time.time()
-    _write_cache(blob)
+    _write_channel_cache(channel, info.to_dict())
     return info
 
 
@@ -1024,10 +1255,10 @@ def apply(
 
     Steps:
       1. ``git fetch --tags origin``
-      2. ``git checkout origin/dev`` (channel=dev),
-         ``git checkout origin/main`` (channel=tag), or a verified stable
-         release tag when ``target_tag`` is provided
-      3. reinstall ``.[api,dev]`` into the running venv. Windows uses
+      2. attach and fast-forward the local ``dev`` / ``main`` branch, or
+         checkout a verified stable release tag when ``target_tag`` is
+         provided. Only ``force=True`` resets a local branch.
+      3. reinstall ``.[api,dev,cpu|gpu]`` into the running venv. Windows uses
          a regular local install to avoid PEP 660 editable launcher
          edge cases; POSIX keeps editable installs for developer trees.
       4. ``npm run build`` if ``build`` is True
@@ -1099,9 +1330,11 @@ def apply(
                 ".env*, external/anima_lora/{output,post_image_dataset}) are "
                 "preserved via -e excludes",
             )
-            _stream_subprocess(
+            reset_rc = _stream_subprocess(
                 ["git", "reset", "--hard", "HEAD"], cwd=cwd, phase="git", emit=emit,
             )
+            if reset_rc != 0:
+                raise RuntimeError(f"git reset --hard failed (exit {reset_rc})")
             # ``git clean -fd`` only deletes *untracked* files, so a tracked
             # path that lives behind a user-owned prefix (e.g. configs/*.yaml)
             # is already safe — we still pass it as an exclude so a future
@@ -1116,23 +1349,14 @@ def apply(
                 # Pathspec form: drop the trailing slash, use forward slashes.
                 spec = prefix.rstrip("/").replace("\\", "/")
                 if spec:
-                    clean_cmd.extend(["-e", spec])
-            _stream_subprocess(
+                    clean_cmd.extend(["-e", ".env*" if spec == ".env" else spec])
+            clean_rc = _stream_subprocess(
                 clean_cmd, cwd=cwd, phase="git", emit=emit,
             )
-        elif _has_any_local_changes(cwd):
-            # Stash + pop to preserve local edits across checkout.
-            # Cheap no-op when the tree is already clean. Conflicts on
-            # pop fall through to a clear warning so the user can
-            # resolve them rather than silently lose the change.
-            emit("git", "info", "git stash --include-untracked (preserving local edits)")
-            rc = _stream_subprocess(
-                ["git", "stash", "push", "--include-untracked",
-                 "-m", "lorahub-self-update"],
-                cwd=cwd, phase="git", emit=emit,
-            )
-            if rc == 0:
-                ctx.stash_active = True
+            if clean_rc != 0:
+                raise RuntimeError(f"git clean failed (exit {clean_rc})")
+        else:
+            ctx.stash_active = _stash_update_changes(cwd, emit)
 
         _fetch(cwd, channel=channel, emit=emit)
         _apply_ref(
@@ -1143,7 +1367,19 @@ def apply(
             target_tag=target_tag,
         )
 
-        _install_deps(cwd, build=build, emit=emit)
+        # From this point a failed pip/npm step may have partially changed the
+        # installed package or SPA. The rollback context will restore the old
+        # source ref and best-effort reinstall that source before returning the
+        # original update error.
+        ctx.runtime_may_be_changed = True
+        ctx.repair_build = build
+        ctx.onnx_extra = _preferred_onnx_extra()
+        _install_deps(
+            cwd,
+            build=build,
+            emit=emit,
+            onnx_extra=ctx.onnx_extra,
+        )
 
         if ctx.stash_active:
             emit("git", "info", "git stash pop (restoring local edits)")
@@ -1151,10 +1387,9 @@ def apply(
                 ["git", "stash", "pop"], cwd=cwd, phase="git", emit=emit,
             )
             if rc != 0:
-                emit(
-                    "git", "warn",
-                    "stash pop reported conflicts — your local edits are still "
-                    "in `git stash list`; resolve manually after this update.",
+                raise RuntimeError(
+                    "stash restore conflicted with the updated source; "
+                    "rolling back so the service is not restarted from a conflicted tree"
                 )
             ctx.stash_active = False
 
@@ -1194,35 +1429,141 @@ class _UpdateContext:
     snapshot_path: Path | None = None
     snapshot_consumed: bool = False
     stash_active: bool = False
+    runtime_may_be_changed: bool = False
+    repair_build: bool = False
+    onnx_extra: str = "cpu"
+    original_commit: str | None = field(default=None, init=False)
+    original_branch: str | None = field(default=None, init=False)
 
     def __enter__(self) -> _UpdateContext:
+        head = _git(["rev-parse", "HEAD"], cwd=self.cwd)
+        if head.returncode == 0:
+            self.original_commit = head.stdout.strip() or None
+        branch = _git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=self.cwd)
+        if branch.returncode == 0:
+            self.original_branch = branch.stdout.strip() or None
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        preserve_snapshot = False
+        source_restored = True
         if exc_type is not None:
             # Best-effort rollback. We don't re-raise from here; the
             # original exception propagates out of the ``with`` block.
+            try:
+                source_restored = self._restore_source_ref()
+            except Exception as rollback_exc:  # noqa: BLE001
+                source_restored = False
+                self.emit("git", "error", f"automatic source rollback failed: {rollback_exc}")
             if self.stash_active:
-                with contextlib.suppress(Exception):
+                try:
                     self.emit(
                         "git", "warn",
                         "upgrade failed; popping stash to restore local edits",
                     )
-                    _stream_subprocess(
+                    rc = _stream_subprocess(
                         ["git", "stash", "pop"], cwd=self.cwd, phase="git", emit=self.emit,
                     )
+                    if rc != 0:
+                        self.emit(
+                            "git",
+                            "error",
+                            "could not restore all stashed edits; the stash entry was kept",
+                        )
+                except Exception as stash_exc:  # noqa: BLE001
+                    self.emit("git", "error", f"could not restore stash: {stash_exc}")
+                self.stash_active = False
             if self.snapshot_path is not None and not self.snapshot_consumed:
-                with contextlib.suppress(Exception):
+                try:
                     self.emit(
                         "git", "warn",
                         "upgrade failed; restoring configs/ from pre-flight snapshot",
                     )
                     _restore_configs(self.cwd, self.snapshot_path, self.emit)
+                except Exception as restore_exc:  # noqa: BLE001
+                    preserve_snapshot = True
+                    self.emit(
+                        "git",
+                        "error",
+                        f"automatic config restore failed: {restore_exc}; "
+                        f"snapshot preserved at {self.snapshot_path}",
+                    )
+            if source_restored and self.runtime_may_be_changed:
+                self._repair_runtime()
         # Always remove the temp archive — it's only useful as a
-        # rollback bridge and would otherwise accumulate in TMPDIR.
-        if self.snapshot_path is not None:
+        # rollback bridge and would otherwise accumulate in TMPDIR. Keep it
+        # when automatic restoration failed so recovery remains possible.
+        if self.snapshot_path is not None and not preserve_snapshot:
             with contextlib.suppress(Exception):
                 self.snapshot_path.unlink(missing_ok=True)
+
+    def _restore_source_ref(self) -> bool:
+        """Return the working tree to the branch/commit captured on entry."""
+        if self.original_commit is None:
+            return False
+        head = _git(["rev-parse", "HEAD"], cwd=self.cwd)
+        branch = _git(
+            ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd=self.cwd,
+        )
+        current_commit = head.stdout.strip() if head.returncode == 0 else None
+        current_branch = branch.stdout.strip() if branch.returncode == 0 else None
+        if _commits_match(current_commit, self.original_commit) and (
+            current_branch == self.original_branch
+        ):
+            return True
+
+        target = self.original_branch or self.original_commit
+        self.emit(
+            "git",
+            "warn",
+            f"upgrade failed; restoring source to {target} at {self.original_commit[:8]}",
+        )
+        if self.original_branch:
+            checkout = ["git", "checkout", "--force", self.original_branch]
+        else:
+            checkout = ["git", "checkout", "--force", "--detach", self.original_commit]
+        if _stream_subprocess(
+            checkout,
+            cwd=self.cwd,
+            phase="git",
+            emit=self.emit,
+        ) != 0:
+            self.emit("git", "error", f"source rollback checkout failed: {target}")
+            return False
+        if _stream_subprocess(
+            ["git", "reset", "--hard", self.original_commit],
+            cwd=self.cwd,
+            phase="git",
+            emit=self.emit,
+        ) != 0:
+            self.emit(
+                "git",
+                "error",
+                f"source rollback reset failed: {self.original_commit[:8]}",
+            )
+            return False
+        return True
+
+    def _repair_runtime(self) -> None:
+        self.emit(
+            "deps",
+            "warn",
+            "repairing dependencies and frontend from the restored source",
+        )
+        try:
+            _install_deps(
+                self.cwd,
+                build=self.repair_build,
+                emit=self.emit,
+                onnx_extra=self.onnx_extra,
+            )
+        except Exception as repair_exc:  # noqa: BLE001
+            self.emit(
+                "deps",
+                "error",
+                f"automatic runtime repair failed: {repair_exc}; run `lorahub manage install`",
+            )
 
 
 # --------------------------------------------------------------------- #
@@ -1298,27 +1639,45 @@ def _pre_check(
         cwd=cwd,
     )
     if reachable.returncode == 0:
-        # Detached SHA is on the remote channel's first-parent line —
-        # safe to attach without losing anything.
+        local_exists = _git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{target_branch}"],
+            cwd=cwd,
+        )
+        head = _git(["rev-parse", "HEAD"], cwd=cwd)
+        if local_exists.returncode == 0 and head.returncode == 0:
+            local_ref = _git(["rev-parse", f"refs/heads/{target_branch}"], cwd=cwd)
+            if local_ref.returncode != 0:
+                raise RuntimeError(
+                    f"could not inspect local branch {target_branch}: "
+                    f"{local_ref.stderr.strip() or local_ref.returncode}"
+                )
+            if local_ref.stdout.strip() != head.stdout.strip():
+                emit(
+                    "git",
+                    "info",
+                    f"detached at {head_sha} (reachable from {target_remote}); "
+                    f"local `{target_branch}` points elsewhere and will be "
+                    "checked out after local edits are preserved",
+                )
+                return
+            switch_cmd = ["checkout", target_branch]
+        elif local_exists.returncode == 1:
+            switch_cmd = ["checkout", "-b", target_branch, "HEAD"]
+        else:
+            raise RuntimeError(
+                f"could not inspect local branch {target_branch}: "
+                f"{local_exists.stderr.strip() or local_exists.returncode}"
+            )
         emit(
             "git", "info",
             f"detached at {head_sha} (reachable from {target_remote}); "
             f"auto-attaching to local branch `{target_branch}`",
         )
-        # Create or fast-forward the local branch to whatever HEAD is
-        # pointing at. ``git checkout -B`` resets the branch ref if it
-        # exists and creates it otherwise; using ``HEAD`` as the
-        # explicit start-point avoids accidentally fast-forwarding
-        # past our current SHA when the remote moved on between the
-        # fetch above and this checkout.
-        switch = _git(
-            ["checkout", "-B", target_branch, "HEAD"],
-            cwd=cwd,
-        )
+        switch = _git(switch_cmd, cwd=cwd)
         if switch.returncode != 0:
             msg = (
                 f"detected reachable detached HEAD at {head_sha} but "
-                f"`git checkout -B {target_branch}` failed: "
+                f"`git {' '.join(switch_cmd)}` failed: "
                 f"{switch.stderr.strip() or 'unknown'}"
             )
             raise RuntimeError(msg)
@@ -1338,6 +1697,37 @@ def _pre_check(
 # --------------------------------------------------------------------- #
 
 
+def _is_link_path(path: Path) -> bool:
+    """Return True for symbolic links and Windows directory junctions."""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction and is_junction())
+    except OSError:
+        return True
+
+
+def _remove_link_path(path: Path) -> None:
+    """Remove a link itself without touching the directory it targets."""
+    if path.is_symlink():
+        path.unlink()
+    else:
+        os.rmdir(path)
+
+
+def _path_uses_link(path: Path, root: Path) -> bool:
+    current = path
+    while True:
+        if _is_link_path(current):
+            return True
+        if current == root:
+            return False
+        if current.parent == current:
+            return True
+        current = current.parent
+
+
 def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
     """Capture user-authored and locally edited files under ``configs/``.
 
@@ -1349,9 +1739,8 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
 
     The archive lives in ``tempfile.gettempdir()`` so a multi-megabyte
     yaml collection doesn't have to be held in memory while the upgrade
-    runs. Failure to add a single file logs a warning and skips that
-    file rather than aborting the upgrade — partial coverage beats
-    refusing to update.
+    runs. Snapshot failures abort the update: proceeding with partial
+    coverage could destroy the one file that failed to archive.
 
     Returns ``None`` when ``configs/`` is missing, empty, or contains no
     user-created or locally edited files to protect.
@@ -1359,23 +1748,32 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
     root = cwd / "configs"
     if not root.is_dir():
         return None
+    if _is_link_path(root):
+        raise RuntimeError("configs/ is a link and cannot be snapshotted safely")
 
     rels: set[str] = set()
     git_failed: list[str] = []
     commands = (
-        ["ls-files", "--others", "--exclude-standard", "--", "configs"],
-        ["diff", "--name-only", "--", "configs"],
-        ["diff", "--name-only", "--cached", "--", "configs"],
+        ["ls-files", "-z", "--others", "--exclude-standard", "--", "configs"],
+        ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", "configs"],
+        ["diff", "--name-only", "-z", "--", "configs"],
+        ["diff", "--name-only", "--cached", "-z", "--", "configs"],
     )
     for command in commands:
         result = _git(command, cwd=cwd)
         if result.returncode == 0:
-            rels.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+            # NUL framing preserves non-ASCII, whitespace and newline-bearing
+            # filenames exactly; Git's default quoted output is not a path.
+            rels.update(path for path in result.stdout.split("\0") if path)
         else:
             git_failed.append(result.stderr.strip() or "unknown")
 
     if not git_failed:
-        files = [cwd / rel for rel in sorted(rels) if (cwd / rel).is_file()]
+        files = [
+            cwd / rel
+            for rel in sorted(rels)
+            if (cwd / rel).is_file() or (cwd / rel).is_symlink()
+        ]
     else:
         # Defensive fallback: corrupted index or non-git layout. Warn so
         # the "save everything" behaviour is observable and preserve the
@@ -1387,7 +1785,7 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
             "falling back to full configs/ snapshot — tracked-preset edits "
             "will override upstream changes this run.",
         )
-        files = [p for p in root.rglob("*") if p.is_file()]
+        files = [p for p in root.rglob("*") if p.is_file() or p.is_symlink()]
     if not files:
         return None
 
@@ -1398,23 +1796,27 @@ def _snapshot_configs(cwd: Path, emit: ProgressCallback) -> Path | None:
     _os.close(fd)
 
     written = 0
+    failures: list[str] = []
     try:
         with tarfile.open(archive, "w") as tar:
             for full in files:
                 try:
+                    if _path_uses_link(full, root):
+                        raise OSError("linked configs cannot be restored safely")
+                    full.resolve(strict=True).relative_to(root.resolve())
                     arcname = full.relative_to(cwd).as_posix()
                     tar.add(full, arcname=arcname, recursive=False)
                     written += 1
-                except OSError as exc:
-                    emit("git", "warn", f"could not snapshot {full}: {exc}")
-    except OSError as exc:
-        # Tar creation itself failed (disk full, perms). Discard the
-        # half-written archive and bail out without a snapshot — the
-        # caller's ``_UpdateContext`` will see ``snapshot_path is
-        # None`` and skip the restore branch.
-        emit("git", "warn", f"snapshot tar failed: {exc}; configs/ will not be protected")
+                except (OSError, ValueError, tarfile.TarError) as exc:
+                    failures.append(f"{full}: {exc}")
+    except (OSError, tarfile.TarError) as exc:
         archive.unlink(missing_ok=True)
-        return None
+        raise RuntimeError(f"could not snapshot configs/: {exc}") from exc
+
+    if failures:
+        archive.unlink(missing_ok=True)
+        detail = "; ".join(failures[:3])
+        raise RuntimeError(f"could not safely snapshot configs/: {detail}")
 
     if written == 0:
         archive.unlink(missing_ok=True)
@@ -1428,14 +1830,24 @@ def _restore_configs(
 ) -> None:
     """Unpack the configs/ tar back over the working tree.
 
-    Idempotent and safe when ``snapshot`` is None. Members extracted
-    by name within ``cwd`` only — ``tarfile.extract`` resolves the
-    path so this is the same risk surface as ``tar xf`` (we trust
-    our own snapshot output).
+    Idempotent and safe when ``snapshot`` is None. Every destination is
+    checked again immediately before writing so a replaced directory or
+    symbolic link cannot redirect restoration outside ``configs/``.
     """
     if snapshot is None or not snapshot.is_file():
         return
     extracted = 0
+    failures: list[str] = []
+    expected_root = cwd.resolve() / "configs"
+    config_dir = cwd / "configs"
+    if _is_link_path(config_dir):
+        _remove_link_path(config_dir)
+    elif config_dir.exists() and not config_dir.is_dir():
+        raise RuntimeError("cannot restore configs/: path is not a directory")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_root = config_dir.resolve()
+    if config_root != expected_root:
+        raise RuntimeError("cannot restore configs/: directory escapes project root")
     try:
         with tarfile.open(snapshot, "r") as tar:
             for member in tar.getmembers():
@@ -1445,22 +1857,73 @@ def _restore_configs(
                 # Our own snapshot writer never emits these, but a
                 # tampered file shouldn't escape cwd either.
                 arcname = member.name.replace("\\", "/")
-                if arcname.startswith("/") or ".." in arcname.split("/"):
+                parts = tuple(arcname.split("/"))
+                if (
+                    arcname.startswith("/")
+                    or len(parts) < 2
+                    or parts[0] != "configs"
+                    or any(part in {"", ".", ".."} for part in parts)
+                ):
                     emit("git", "warn", f"skipping suspicious archive entry {arcname}")
                     continue
-                target = cwd / arcname
-                target.parent.mkdir(parents=True, exist_ok=True)
-                source = tar.extractfile(member)
-                if source is None:
+                relative = Path(*parts[1:])
+                parent = config_root
+                unsafe_parent = False
+                for component in relative.parent.parts:
+                    parent /= component
+                    if _is_link_path(parent):
+                        _remove_link_path(parent)
+                    elif parent.exists() and not parent.is_dir():
+                        failures.append(f"{arcname}: parent is not a directory")
+                        emit(
+                            "git",
+                            "warn",
+                            f"skipping config blocked by non-directory: {arcname}",
+                        )
+                        unsafe_parent = True
+                        break
+                    parent.mkdir(exist_ok=True)
+                if unsafe_parent:
                     continue
+                target = config_root / relative
+                if _is_link_path(target):
+                    _remove_link_path(target)
+                elif target.exists() and not target.is_file():
+                    failures.append(f"{arcname}: target is not a file")
+                    emit("git", "warn", f"skipping non-file config target: {arcname}")
+                    continue
+                tmp: Path | None = None
+                fd: int | None = None
                 try:
-                    target.write_bytes(source.read())
+                    source = tar.extractfile(member)
+                    if source is None:
+                        raise OSError("archive member has no readable content")
+                    fd, tmp_raw = tempfile.mkstemp(
+                        dir=target.parent,
+                        prefix=f".{target.name}.",
+                        suffix=".restore",
+                    )
+                    tmp = Path(tmp_raw)
+                    with source, os.fdopen(fd, "wb") as destination:
+                        fd = None
+                        while chunk := source.read(1024 * 1024):
+                            destination.write(chunk)
+                    tmp.replace(target)
                     extracted += 1
-                except OSError as exc:
+                except (OSError, tarfile.TarError) as exc:
+                    failures.append(f"{arcname}: {exc}")
                     emit("git", "warn", f"could not restore {arcname}: {exc}")
+                finally:
+                    if fd is not None:
+                        with contextlib.suppress(OSError):
+                            os.close(fd)
+                    if tmp is not None:
+                        tmp.unlink(missing_ok=True)
     except (OSError, tarfile.TarError) as exc:
-        emit("git", "warn", f"restore from snapshot failed: {exc}")
-        return
+        raise RuntimeError(f"restore from config snapshot failed: {exc}") from exc
+    if failures:
+        detail = "; ".join(failures[:3])
+        raise RuntimeError(f"could not restore all config files: {detail}")
     if extracted:
         emit("git", "info", f"restored {extracted} file(s) under configs/")
 
@@ -1522,17 +1985,70 @@ def _apply_ref(
         if not remote_sha or local.returncode != 0 or local.stdout.strip() != remote_sha:
             raise RuntimeError(f"release tag is not available from origin: {target_tag}")
         target_ref = f"refs/tags/{target_tag}"
-    else:
-        target_ref = "origin/main" if channel == "tag" else "origin/dev"
-    emit("git", "info", f"git checkout {target_ref}")
-    checkout_cmd = ["git", "checkout"]
+        emit("git", "info", f"git checkout {target_ref}")
+        checkout_cmd = ["git", "checkout"]
+        if force:
+            checkout_cmd.append("--force")
+        checkout_cmd.append(target_ref)
+        rc = _stream_subprocess(checkout_cmd, cwd=cwd, phase="git", emit=emit)
+        if rc != 0:
+            raise RuntimeError(f"git checkout {target_ref} failed (exit {rc})")
+        return
+
+    branch = "main" if channel == "tag" else "dev"
+    target_ref = f"origin/{branch}"
     if force:
-        checkout_cmd.append("--force")
-    checkout_cmd.append(target_ref)
-    rc = _stream_subprocess(checkout_cmd, cwd=cwd, phase="git", emit=emit)
-    if rc != 0:
-        msg = f"git checkout {target_ref} failed (exit {rc})"
-        raise RuntimeError(msg)
+        emit("git", "info", f"git checkout --force -B {branch} {target_ref}")
+        checkout_cmd = ["git", "checkout", "--force", "-B", branch, target_ref]
+        rc = _stream_subprocess(checkout_cmd, cwd=cwd, phase="git", emit=emit)
+        if rc != 0:
+            raise RuntimeError(f"git checkout {target_ref} failed (exit {rc})")
+    else:
+        local_ref = f"refs/heads/{branch}"
+        local = _git(["show-ref", "--verify", "--quiet", local_ref], cwd=cwd)
+        if local.returncode == 0:
+            emit("git", "info", f"git checkout {branch}")
+            rc = _stream_subprocess(
+                ["git", "checkout", branch], cwd=cwd, phase="git", emit=emit,
+            )
+            if rc != 0:
+                raise RuntimeError(f"git checkout {branch} failed (exit {rc})")
+            emit("git", "info", f"git merge --ff-only {target_ref}")
+            rc = _stream_subprocess(
+                ["git", "merge", "--ff-only", target_ref],
+                cwd=cwd,
+                phase="git",
+                emit=emit,
+            )
+            if rc != 0:
+                raise RuntimeError(
+                    f"local {branch} has diverged from {target_ref}; "
+                    "merge or rebase it manually, or retry with --force"
+                )
+        elif local.returncode == 1:
+            emit("git", "info", f"git checkout -b {branch} {target_ref}")
+            rc = _stream_subprocess(
+                ["git", "checkout", "-b", branch, target_ref],
+                cwd=cwd,
+                phase="git",
+                emit=emit,
+            )
+            if rc != 0:
+                raise RuntimeError(f"git checkout {target_ref} failed (exit {rc})")
+        else:
+            raise RuntimeError(
+                f"could not inspect local branch {branch}: "
+                f"{local.stderr.strip() or local.returncode}"
+            )
+
+    upstream = _stream_subprocess(
+        ["git", "branch", f"--set-upstream-to={target_ref}", branch],
+        cwd=cwd,
+        phase="git",
+        emit=emit,
+    )
+    if upstream != 0:
+        emit("git", "warn", f"could not set {branch} upstream to {target_ref}")
 
 
 # --------------------------------------------------------------------- #
@@ -1540,9 +2056,17 @@ def _apply_ref(
 # --------------------------------------------------------------------- #
 
 
-def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
+def _install_deps(
+    cwd: Path,
+    *,
+    build: bool,
+    emit: ProgressCallback,
+    onnx_extra: str | None = None,
+) -> None:
     emit("deps", "info", "reinstalling Python dependencies")
-    py_cmd = _build_pip_command(cwd)
+    selected_onnx = onnx_extra or _preferred_onnx_extra()
+    _remove_legacy_onnx_conflict(cwd, emit)
+    py_cmd = _build_pip_command(cwd, onnx_extra=selected_onnx)
     emit("deps", "info", "running " + _format_cmd(py_cmd))
     rc = _stream_subprocess(py_cmd, cwd=cwd, phase="deps", emit=emit)
     if rc != 0:
@@ -1553,8 +2077,10 @@ def _install_deps(cwd: Path, *, build: bool, emit: ProgressCallback) -> None:
     emit("build", "info", f"npm run build (web/, v{_current_version()})")
     npm = _find_npm(cwd)
     if npm is None:
-        emit("build", "warn", "npm not found; skipping SPA rebuild.")
-        return
+        raise RuntimeError(
+            "npm not found; cannot rebuild the frontend. Run the environment "
+            "installer or retry with frontend build disabled."
+        )
     web = cwd / "web"
     _ensure_frontend_deps(web, npm=Path(npm), emit=emit)
     rc = _stream_subprocess(
@@ -1604,11 +2130,53 @@ def _ensure_frontend_deps(web: Path, *, npm: Path, emit: ProgressCallback) -> No
         raise RuntimeError(msg)
 
 
-def _has_any_local_changes(cwd: Path) -> bool:
-    """Raw ``git status --porcelain`` check — no filter. Used by the
-    stash gate where we want to preserve *every* modified path."""
-    out = _git(["status", "--porcelain"], cwd=cwd)
-    return out.returncode == 0 and bool(out.stdout.strip())
+def _stash_pathspecs() -> list[str]:
+    """Pathspecs for source/config edits without runtime or user data."""
+    specs = ["."]
+    for prefix in _USER_OWNED_PREFIXES:
+        if prefix == "configs/":
+            continue
+        spec = prefix.rstrip("/").replace("\\", "/")
+        if spec == ".env":
+            specs.append(":(exclude).env*")
+        elif prefix.endswith("/"):
+            specs.append(f":(exclude){spec}/**")
+        else:
+            specs.append(f":(exclude){spec}")
+    return specs
+
+
+def _stash_update_changes(cwd: Path, emit: ProgressCallback) -> bool:
+    """Stash code and configs while leaving user-owned runtime data in place."""
+    pathspecs = _stash_pathspecs()
+    status = _git(
+        ["status", "--porcelain", "--untracked-files=all", "--", *pathspecs],
+        cwd=cwd,
+    )
+    if status.returncode != 0:
+        raise RuntimeError(f"git status failed: {status.stderr.strip() or status.returncode}")
+    if not status.stdout.strip():
+        return False
+
+    emit("git", "info", "stashing source and config edits; user data stays in place")
+    rc = _stream_subprocess(
+        [
+            "git",
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "lorahub-self-update",
+            "--",
+            *pathspecs,
+        ],
+        cwd=cwd,
+        phase="git",
+        emit=emit,
+    )
+    if rc != 0:
+        raise RuntimeError(f"git stash failed (exit {rc})")
+    return True
 
 
 def _resolve_latest_tag(cwd: Path) -> str | None:
@@ -1622,13 +2190,75 @@ def _resolve_latest_tag(cwd: Path) -> str | None:
     return None
 
 
-def _build_pip_command(cwd: Path) -> list[str]:
+def _installed_onnx_distributions() -> set[str]:
+    from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
+
+    installed: set[str] = set()
+    for distribution in ("onnxruntime", "onnxruntime-gpu"):
+        try:
+            version(distribution)
+        except PackageNotFoundError:
+            continue
+        installed.add(distribution)
+    return installed
+
+
+def _preferred_onnx_extra() -> str:
+    installed = _installed_onnx_distributions()
+    return "gpu" if "onnxruntime-gpu" in installed else "cpu"
+
+
+def _remove_legacy_onnx_conflict(cwd: Path, emit: ProgressCallback) -> None:
+    """Remove legacy dual ORT installs before reinstalling one selected extra."""
+    if _installed_onnx_distributions() != {"onnxruntime", "onnxruntime-gpu"}:
+        return
+    emit(
+        "deps",
+        "warn",
+        "removing conflicting onnxruntime and onnxruntime-gpu installations",
+    )
+    try:
+        from lorahub.core.toolchain.uv import find_uv  # noqa: PLC0415
+
+        uv = find_uv()
+    except Exception:  # noqa: BLE001
+        uv = None
+    if uv:
+        cmd = [
+            uv,
+            "pip",
+            "uninstall",
+            "onnxruntime",
+            "onnxruntime-gpu",
+            "--python",
+            sys.executable,
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "uninstall",
+            "-y",
+            "onnxruntime",
+            "onnxruntime-gpu",
+        ]
+    rc = _stream_subprocess(cmd, cwd=cwd, phase="deps", emit=emit)
+    if rc != 0:
+        raise RuntimeError(f"could not remove conflicting ONNX Runtime packages (exit {rc})")
+
+
+def _build_pip_command(cwd: Path, *, onnx_extra: str | None = None) -> list[str]:
     """Pick uv when available; otherwise fall back to plain pip."""
     import sys as _sys  # noqa: PLC0415
 
     py = _sys.executable
     pypi_index = _configured_pypi_index()
-    project_spec = [".[api,dev]"] if _sys.platform == "win32" else ["-e", ".[api,dev]"]
+    selected_onnx = onnx_extra or _preferred_onnx_extra()
+    if selected_onnx not in {"cpu", "gpu"}:
+        raise ValueError(f"unsupported ONNX Runtime extra: {selected_onnx}")
+    package = f".[api,dev,{selected_onnx}]"
+    project_spec = [package] if _sys.platform == "win32" else ["-e", package]
     try:
         from lorahub.core.toolchain.uv import find_uv  # noqa: PLC0415
 

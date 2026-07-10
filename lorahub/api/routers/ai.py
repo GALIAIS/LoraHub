@@ -22,9 +22,9 @@ Plus a couple of LoraHub-specific extras kept out of the panel UI:
 from __future__ import annotations
 
 import base64
-import mimetypes
+import binascii
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -39,6 +39,11 @@ from lorahub.api.ai_store import (
     AIStore,
     default_ai_store_path,
 )
+from lorahub.api.dataset_files import (
+    ImageInputTooLarge,
+    encode_image_data_url,
+    max_ai_image_bytes,
+)
 from lorahub.core.ai import client as ai_client
 
 router = APIRouter(prefix="/api")
@@ -52,15 +57,33 @@ router = APIRouter(prefix="/api")
 def _resolve_image_url(img: "InvokeImageInput") -> str:
     """Convert an image input to a data URL for the OpenAI vision API."""
     if img.kind == "data_url":
-        return img.value
-    # file_path: read from disk and base64-encode
-    p = Path(img.value)
-    if not p.is_file():
-        raise HTTPException(400, f"image file not found: {img.value}")
-    mime = mimetypes.guess_type(str(p))[0] or "image/png"
-    data = p.read_bytes()
-    b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+        header, separator, payload = img.value.partition(",")
+        allowed_headers = {
+            "data:image/bmp;base64",
+            "data:image/gif;base64",
+            "data:image/jpeg;base64",
+            "data:image/png;base64",
+            "data:image/webp;base64",
+        }
+        if separator != "," or header.lower() not in allowed_headers:
+            raise HTTPException(400, "invalid image data URL")
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(400, "invalid base64 image data") from exc
+        limit = max_ai_image_bytes()
+        if len(decoded) > limit:
+            raise HTTPException(
+                413,
+                f"image exceeds AI input limit of {limit} bytes",
+            )
+        return f"{header.lower()},{base64.b64encode(decoded).decode('ascii')}"
+    try:
+        return encode_image_data_url(Path(img.value))
+    except ImageInputTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _store() -> AIStore:
@@ -504,27 +527,27 @@ def test_connection(req: TestRequest) -> dict[str, Any]:
 
 
 class InvokeImageInput(BaseModel):
-    kind: str = "data_url"  # "data_url" | "file_path"
-    value: str
+    kind: Literal["data_url", "file_path"] = "data_url"
+    value: str = Field(min_length=1, max_length=40 * 1024**2)
 
 
 class InvokeRequest(BaseModel):
-    taskId: str
-    prompt: str
-    systemPrompt: str | None = None
-    images: list[InvokeImageInput] | None = None
+    taskId: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(max_length=200_000)
+    systemPrompt: str | None = Field(default=None, max_length=100_000)
+    images: list[InvokeImageInput] | None = Field(default=None, max_length=8)
     stream: bool | None = None
-    temperature: float | None = None
-    topP: float | None = None
-    frequencyPenalty: float | None = None
-    presencePenalty: float | None = None
-    maxOutputTokens: int | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    topP: float | None = Field(default=None, ge=0.0, le=1.0)
+    frequencyPenalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    presencePenalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    maxOutputTokens: int | None = Field(default=None, ge=1, le=1_000_000)
     seed: int | None = None
-    reasoningEffort: str | None = None
-    thinkingBudgetTokens: int | None = None
+    reasoningEffort: str | None = Field(default=None, max_length=32)
+    thinkingBudgetTokens: int | None = Field(default=None, ge=1, le=1_000_000)
     includeReasoning: bool | None = None
-    stopSequences: list[str] | None = None
-    extraBodyJson: str | None = None
+    stopSequences: list[str] | None = Field(default=None, max_length=32)
+    extraBodyJson: str | None = Field(default=None, max_length=1_000_000)
 
 
 @router.post("/ai/invoke")

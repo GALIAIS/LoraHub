@@ -24,7 +24,10 @@ import type { JobSummary, SystemGpu } from "@/lib/api"
 import { useJobsList } from "@/lib/queries/jobs"
 import { useSystemVersion } from "@/hooks/use-system-version"
 import { useStudioTasks } from "@/hooks/use-studio-tasks"
-import type { StudioTaskRecord } from "@/lib/studio-task-store"
+import {
+  isStudioTaskActive,
+  type StudioTaskRecord,
+} from "@/lib/studio-task-store"
 import { useSystemTelemetry } from "@/lib/system-telemetry"
 import { cn } from "@/lib/utils"
 
@@ -32,7 +35,7 @@ export function GlobalStatusBar() {
   const telemetry = useSystemTelemetry()
   const jobsQuery = useJobsList()
   const studioTasks = useStudioTasks()
-  const studioRunning = studioTasks.filter((t) => t.status === "running")
+  const studioRunning = studioTasks.filter((t) => isStudioTaskActive(t.status))
 
   const snapshot: SystemSnapshot | null = telemetry.snapshot
   const runningJobs = (jobsQuery.data?.jobs ?? []).filter(

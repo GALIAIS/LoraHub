@@ -26,6 +26,8 @@ from lorahub.api.task_sessions import (
     TaskSession,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
 from lorahub.core.backends.anima_lora import msvc as _anima_msvc
 from lorahub.core.backends.anima_lora.models import (
@@ -44,12 +46,15 @@ from lorahub.core.backends.kohya.bootstrap import (
     default_sd_scripts_path as _kohya_default_path,
 )
 from lorahub.core.backends.registry import list_backends
+from lorahub.core.models.downloader import DownloadCanceledError
+from lorahub.core.redaction import redact_command_text
 
 router = APIRouter(prefix="/api")
 _KIND_ANIMA_MODEL_DOWNLOAD = "anima_model_download"
 _KIND_MSVC_INSTALL = "msvc_install"
 _ToolTaskStatus = Literal[
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
@@ -177,6 +182,7 @@ class _AnimaModelSession:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def add_event(self, event: DownloadEvent) -> None:
         payload = asdict(event)
@@ -216,6 +222,30 @@ class _AnimaModelSession:
                 "finished_at": self.finished_at,
             }
 
+    def request_stop(self) -> bool:
+        with self.lock:
+            if self.status != "running":
+                return False
+            percent = self.percent
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
+            self.cancel_event.set()
+            self.status = "stop_requested"
+        self.add_event(
+            DownloadEvent(
+                "cancel requested",
+                self.percent,
+                self.files_done,
+                self.files_total,
+            )
+        )
+        return True
+
 
 _anima_sessions: dict[str, _AnimaModelSession] = {}
 _anima_sessions_lock = threading.Lock()
@@ -225,7 +255,8 @@ _anima_active_session: str | None = None
 def _anima_session_from_task(task: TaskSession) -> _AnimaModelSession:
     status: _ToolTaskStatus = (
         task.status
-        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        if task.status
+        in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"
     )
 
@@ -267,7 +298,7 @@ def start_anima_model_download() -> dict[str, Any]:
     with _anima_sessions_lock:
         if _anima_active_session is not None:
             existing = _anima_sessions.get(_anima_active_session)
-            if existing and existing.status == "running":
+            if existing and existing.status in {"running", "stop_requested"}:
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -290,16 +321,20 @@ def start_anima_model_download() -> dict[str, Any]:
 
     with _anima_sessions_lock:
         _anima_sessions[session.session_id] = session
+        prune_terminal_session_cache(_anima_sessions)
         _anima_active_session = session.session_id
 
     def run() -> None:
         global _anima_active_session
         try:
-            _task_store().update(
-                session.session_id,
-                status="running",
-                percent=session.percent,
-            )
+            with session.lock:
+                if session.cancel_event.is_set():
+                    raise DownloadCanceledError("download canceled by user")
+                _task_store().update(
+                    session.session_id,
+                    status="running",
+                    percent=session.percent,
+                )
             _download_anima_models(
                 source=session.source,
                 huggingface_endpoint=settings.huggingface_endpoint,
@@ -308,8 +343,11 @@ def start_anima_model_download() -> dict[str, Any]:
                 proxy=settings.download_proxy,
                 threads=3,
                 progress=session.add_event,
+                cancel_event=session.cancel_event,
             )
             with session.lock:
+                if session.cancel_event.is_set():
+                    raise DownloadCanceledError("download canceled by user")
                 session.status = "succeeded"
                 session.percent = 100
                 session.finished_at = time.time()
@@ -319,18 +357,41 @@ def start_anima_model_download() -> dict[str, Any]:
                 percent=100,
                 finished=True,
             )
-        except Exception as exc:  # noqa: BLE001
+        except DownloadCanceledError as exc:
             with session.lock:
-                session.status = "failed"
+                session.status = "canceled"
                 session.error = str(exc)
                 session.finished_at = time.time()
             _task_store().update(
                 session.session_id,
-                status="failed",
+                status="canceled",
                 error=str(exc),
+                result=session.snapshot(),
                 finished=True,
             )
-            session.add_event(DownloadEvent(f"failed: {exc}", session.percent, session.files_done, session.files_total))
+            session.add_event(
+                DownloadEvent(str(exc), session.percent, session.files_done, session.files_total)
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = redact_command_text(str(exc))
+            with session.lock:
+                session.status = "failed"
+                session.error = error
+                session.finished_at = time.time()
+            _task_store().update(
+                session.session_id,
+                status="failed",
+                error=error,
+                finished=True,
+            )
+            session.add_event(
+                DownloadEvent(
+                    f"failed: {error}",
+                    session.percent,
+                    session.files_done,
+                    session.files_total,
+                )
+            )
         finally:
             with _anima_sessions_lock:
                 if _anima_active_session == session.session_id:
@@ -342,7 +403,7 @@ def start_anima_model_download() -> dict[str, Any]:
         daemon=True,
     )
     thread.start()
-    return session.snapshot()
+    return session.snapshot() | {"missing_files": _anima_missing_models()}
 
 
 @router.get("/backends/anima_lora/download-models/status")
@@ -373,6 +434,22 @@ def anima_model_download_status() -> dict[str, Any]:
     if session is None:
         return {"status": "idle", "missing_files": _anima_missing_models()}
     return session.snapshot() | {"missing_files": _anima_missing_models()}
+
+
+@router.post("/backends/anima_lora/download-models/{session_id}/stop")
+def stop_anima_model_download(session_id: str) -> dict[str, Any]:
+    with _anima_sessions_lock:
+        session = _anima_sessions.get(session_id)
+    if session is None:
+        task = _task_store().get(session_id)
+        if task is None or task.kind != _KIND_ANIMA_MODEL_DOWNLOAD:
+            raise HTTPException(status_code=404, detail="anima model download not found")
+        raise HTTPException(status_code=409, detail=f"download is {task.status}")
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(status_code=409, detail=f"download is {status}")
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 # --------------------------------------------------------------------------- #
@@ -504,6 +581,7 @@ def start_msvc_install() -> dict[str, Any]:
     session.append_log("queued: " + " ".join(cmd))
     with _msvc_sessions_lock:
         _msvc_sessions[session.session_id] = session
+        prune_terminal_session_cache(_msvc_sessions)
         _msvc_active_session = session.session_id
 
     def run() -> None:

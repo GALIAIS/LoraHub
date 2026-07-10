@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -145,7 +146,11 @@ def reset() -> None:
         _jobs.clear()
 
 
-def tqdm_class_for(repo_id: str, filename: str) -> type:
+def tqdm_class_for(
+    repo_id: str,
+    filename: str,
+    should_stop: Callable[[], bool] | None = None,
+) -> type:
     """Return a tqdm-shaped class that reports into this module's state.
 
     huggingface_hub accepts ``tqdm_class`` on ``hf_hub_download``. The
@@ -159,6 +164,8 @@ def tqdm_class_for(repo_id: str, filename: str) -> type:
 
     class _ReportingTqdm:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
             self._total = kwargs.get("total")
             self._n = 0
             mark_start(captured_repo, captured_filename, total=self._total)
@@ -171,6 +178,8 @@ def tqdm_class_for(repo_id: str, filename: str) -> type:
             mark_done(captured_repo, captured_filename)
 
         def update(self, n: int | float = 1) -> None:
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
             n_int = int(n) if n is not None else 0
             self._n += n_int
             mark_chunk(captured_repo, captured_filename, n_int)

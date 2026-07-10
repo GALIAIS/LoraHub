@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from lorahub.api import app as app_module
@@ -67,6 +68,28 @@ def test_build_endpoint_url_rejects_empty() -> None:
 def test_build_endpoint_url_rejects_malformed() -> None:
     with pytest.raises(ValueError):
         build_endpoint_url("not-a-url", "/v1/models")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://api.example.com/v1",
+        "https://user:secret@api.example.com/v1",
+    ],
+)
+def test_build_endpoint_url_rejects_unsafe_urls(base_url: str) -> None:
+    with pytest.raises(ValueError):
+        build_endpoint_url(base_url, "/v1/models")
+
+
+def test_extra_body_cannot_replace_core_request_fields() -> None:
+    from lorahub.core.ai.client import AIError, _apply_extra_body
+
+    with pytest.raises(AIError):
+        _apply_extra_body(
+            {"model": "safe", "messages": []},
+            '{"messages":[{"role":"user","content":"replaced"}]}',
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -371,6 +394,46 @@ def test_invoke_without_route_returns_409(client: TestClient) -> None:
     )
     assert r.status_code == 409
     assert "no AI route" in r.json()["detail"]
+
+
+def test_ai_image_input_rejects_non_data_url() -> None:
+    from lorahub.api.routers.ai import InvokeImageInput, _resolve_image_url
+
+    with pytest.raises(HTTPException) as captured:
+        _resolve_image_url(
+            InvokeImageInput(kind="data_url", value="https://example.com/image.png")
+        )
+
+    assert captured.value.status_code == 400
+
+
+def test_ai_image_input_rejects_file_outside_allowed_roots(tmp_path: Path) -> None:
+    from lorahub.api.routers.ai import InvokeImageInput, _resolve_image_url
+
+    image = tmp_path / "private.png"
+    image.write_bytes(b"not-an-image")
+
+    with pytest.raises(HTTPException) as captured:
+        _resolve_image_url(InvokeImageInput(kind="file_path", value=str(image)))
+
+    assert captured.value.status_code == 400
+
+
+def test_ai_image_input_enforces_byte_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers.ai import InvokeImageInput, _resolve_image_url
+
+    image = tmp_path / "large.png"
+    image.write_bytes(b"12345")
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+    monkeypatch.setenv("LORAHUB_MAX_AI_IMAGE_BYTES", "4")
+
+    with pytest.raises(HTTPException) as captured:
+        _resolve_image_url(InvokeImageInput(kind="file_path", value=str(image)))
+
+    assert captured.value.status_code == 413
 
 
 def test_invoke_proxies_to_client(

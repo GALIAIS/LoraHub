@@ -52,6 +52,7 @@ class _BootstrapSession:
     _STATUS_RUNNING = "running"
     _STATUS_SUCCEEDED = "succeeded"
     _STATUS_FAILED = "failed"
+    _MAX_EVENTS = 200
 
     def __init__(
         self,
@@ -65,16 +66,19 @@ class _BootstrapSession:
         self.task_kind = task_kind
         self.status: str = self._STATUS_RUNNING
         self.events: list[dict[str, Any]] = []
+        self._event_offset = 0
         self._listeners: list[asyncio.Queue[dict[str, Any]]] = []
         self._lock = threading.RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
-    def attach(self, queue: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Register a listener and return the buffered backlog atomically."""
+    def attach(
+        self, queue: asyncio.Queue[dict[str, Any]]
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Register a listener and return backlog offset + events atomically."""
         with self._lock:
             self._listeners.append(queue)
-            return list(self.events)
+            return self._event_offset, list(self.events)
 
     def detach(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         with self._lock:
@@ -126,6 +130,10 @@ class _BootstrapSession:
         }
         with self._lock:
             self.events.append(event)
+            overflow = len(self.events) - self._MAX_EVENTS
+            if overflow > 0:
+                del self.events[:overflow]
+                self._event_offset += overflow
             listeners = list(self._listeners)
         for queue in listeners:
             self._dispatch(queue, event)
@@ -158,7 +166,19 @@ class _BootstrapSession:
             return
         # Loop already torn down — listener is gone, drop the event.
         with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(queue.put_nowait, event)
+            loop.call_soon_threadsafe(self._put_latest, queue, event)
+
+    @staticmethod
+    def _put_latest(
+        queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]
+    ) -> None:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            with contextlib.suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(event)
 
     def _mark_task_running(self) -> None:
         if not self.task_kind:
@@ -263,6 +283,97 @@ def _resolve_base_python(version: str | None = None) -> Path | None:
     return python_runtime.runtime_python(version or python_runtime.DEFAULT_VERSION)
 
 
+def _validate_backend_target(target: Path) -> None:
+    from lorahub.core.backends._common import installer as common  # noqa: PLC0415
+
+    try:
+        common.validate_backend_source_target(target)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _prepare_cloned_backend_target(
+    plan: Any,
+    req: BootstrapRequest,
+    installer: Any,
+    *,
+    repo_url: str,
+) -> None:
+    from lorahub.core.backends._common import installer as common  # noqa: PLC0415
+
+    target = plan.target
+    if not target.exists() or not any(target.iterdir()):
+        return
+    if common.is_complete_git_repo(target):
+        if not req.force:
+            return
+        try:
+            installer.cleanup_environment(plan)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        remaining = [target / name for name in (".venv", "venv") if (target / name).exists()]
+        if remaining:
+            raise HTTPException(
+                status_code=409,
+                detail=f"failed to clear backend environment: {remaining[0]}",
+            )
+        return
+    if not req.force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"target {target} is not an installed backend repository; "
+                "move its contents or explicitly retry the failed installation"
+            ),
+        )
+    if not common.is_managed_partial_install(target, repo_url):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"target {target} is not a LoRaHub-managed interrupted clone; "
+                "its files were preserved. Move or remove that directory manually."
+            ),
+        )
+    try:
+        installer.cleanup_partial(plan)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if target.exists() and any(target.iterdir()):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"failed to clear incomplete install at {target}; "
+                "some files may be locked"
+            ),
+        )
+
+
+def _prepare_vendored_backend_environment(
+    target: Path,
+    req: BootstrapRequest,
+    cleanup: Callable[[], None],
+) -> None:
+    venvs = [target / ".venv", target / "venv"]
+    existing = [path for path in venvs if path.exists() or path.is_symlink()]
+    if not existing:
+        return
+    if not req.force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"venv {existing[0]} already exists; choose reinstall to rebuild it",
+        )
+    try:
+        cleanup()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    remaining = [path for path in venvs if path.exists() or path.is_symlink()]
+    if remaining:
+        raise HTTPException(
+            status_code=409,
+            detail=f"failed to clear backend environment: {remaining[0]}",
+        )
+
+
 def _build_kohya_runner(
     req: BootstrapRequest,
 ) -> Callable[[Callable[[str], None]], None]:
@@ -278,6 +389,7 @@ def _build_kohya_runner(
         if req.target
         else (Path.cwd() / "sd-scripts").resolve()
     )
+    _validate_backend_target(target_path)
     settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
@@ -290,28 +402,12 @@ def _build_kohya_runner(
         pypi_index=settings.pypi_index_url,
         torch_index_base=_torch_index_url(settings),
     )
-    if plan.target.exists() and any(plan.target.iterdir()):
-        if not req.force:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"target {plan.target} is not empty; "
-                    "pass force=true to wipe it first."
-                ),
-            )
-        installer.cleanup_partial(plan)
-        # cleanup_partial swallows individual file errors (e.g. Windows file
-        # locks); double-check the directory is actually gone before we tell
-        # the runner to clone into it.
-        if plan.target.exists() and any(plan.target.iterdir()):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"failed to clear {plan.target}; some files may be locked. "
-                    "Close any tools using the directory and retry, or delete "
-                    "it manually."
-                ),
-            )
+    _prepare_cloned_backend_target(
+        plan,
+        req,
+        installer,
+        repo_url=installer.KOHYA_REPO_URL,
+    )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)
@@ -334,6 +430,7 @@ def _build_diffusion_pipe_runner(
         if req.target
         else (Path.cwd() / "diffusion-pipe").resolve()
     )
+    _validate_backend_target(target_path)
     settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
@@ -346,28 +443,12 @@ def _build_diffusion_pipe_runner(
         pypi_index=settings.pypi_index_url,
         torch_index_base=_torch_index_url(settings),
     )
-    if plan.target.exists() and any(plan.target.iterdir()):
-        if not req.force:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"target {plan.target} is not empty; "
-                    "pass force=true to wipe it first."
-                ),
-            )
-        installer.cleanup_partial(plan)
-        # cleanup_partial swallows individual file errors (e.g. Windows file
-        # locks); double-check the directory is actually gone before we tell
-        # the runner to clone into it.
-        if plan.target.exists() and any(plan.target.iterdir()):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"failed to clear {plan.target}; some files may be locked. "
-                    "Close any tools using the directory and retry, or delete "
-                    "it manually."
-                ),
-            )
+    _prepare_cloned_backend_target(
+        plan,
+        req,
+        installer,
+        repo_url=installer.DIFFUSION_PIPE_REPO_URL,
+    )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)
@@ -413,6 +494,7 @@ def _build_anima_lora_runner(
         if req.target
         else al_bootstrap.default_repo_path()
     )
+    _validate_backend_target(target_path)
     settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
@@ -440,24 +522,11 @@ def _build_anima_lora_runner(
                 "pyproject.toml — the source tree may be corrupted."
             ),
         )
-    if plan.venv_dir.exists() and any(plan.venv_dir.iterdir()):
-        if not req.force:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"venv {plan.venv_dir} already exists; "
-                    "pass force=true to wipe and rebuild it."
-                ),
-            )
-        installer.cleanup_partial(plan)
-        if plan.venv_dir.exists() and any(plan.venv_dir.iterdir()):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"failed to clear {plan.venv_dir}; some files may be "
-                    "locked. Close any tools using the venv and retry."
-                ),
-            )
+    _prepare_vendored_backend_environment(
+        plan.target,
+        req,
+        lambda: installer.cleanup_partial(plan),
+    )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)
@@ -482,6 +551,7 @@ def _build_ai_toolkit_runner(
         if req.target
         else at_bootstrap.default_repo_path()
     )
+    _validate_backend_target(target_path)
     settings = app_module._settings_store.load()
     plan = installer.BootstrapPlan(
         target=target_path,
@@ -500,24 +570,11 @@ def _build_ai_toolkit_runner(
                 "the source tree may be corrupted."
             ),
         )
-    if plan.venv_python.parent.parent.exists() and any(plan.venv_python.parent.parent.iterdir()):
-        if not req.force:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"venv {plan.venv_python.parent.parent} already exists; "
-                    "pass force=true to wipe and rebuild it."
-                ),
-            )
-        installer.cleanup_partial(plan)
-        if plan.venv_python.parent.parent.exists() and any(plan.venv_python.parent.parent.iterdir()):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"failed to clear {plan.venv_python.parent.parent}; some files "
-                    "may be locked. Close tools using the venv and retry."
-                ),
-            )
+    _prepare_vendored_backend_environment(
+        plan.target,
+        req,
+        lambda: installer.cleanup_partial(plan),
+    )
 
     def runner(progress: Callable[[str], None]) -> None:
         installer.bootstrap(plan, progress=progress)

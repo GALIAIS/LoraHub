@@ -675,7 +675,22 @@ def serve(
         raise typer.Exit(code=1) from exc
 
     from lorahub.api.runtime_bind import record_current_process_bind  # noqa: PLC0415
+    from lorahub.api.auth import (  # noqa: PLC0415
+        api_token_path,
+        configured_api_token,
+        ensure_api_token,
+        is_loopback_host,
+    )
 
+    if not is_loopback_host(host):
+        token_from_env = configured_api_token() is not None
+        ensure_api_token()
+        token_path = api_token_path()
+        console.print(
+            t("service.remote_auth_env")
+            if token_from_env
+            else t("service.remote_auth", path=token_path)
+        )
     console.print(t("serve.banner", host=host, port=port))
     record_current_process_bind(host, port)
     uvicorn.run(
@@ -794,11 +809,31 @@ def bootstrap_kohya(
         install_xformers=not no_xformers,
     )
 
+    from lorahub.core.backends._common import installer as common_installer  # noqa: PLC0415
+
+    try:
+        common_installer.validate_backend_source_target(plan.target)
+    except ValueError as exc:
+        err_console.print(str(exc))
+        raise typer.Exit(code=1) from exc
     if plan.target.exists() and any(plan.target.iterdir()):
-        if not force:
-            err_console.print(t("bootstrap.target_busy", target=plan.target))
-            raise typer.Exit(code=1)
-        installer.cleanup_partial(plan)
+        if common_installer.is_complete_git_repo(plan.target):
+            if force:
+                installer.cleanup_environment(plan)
+        else:
+            if not force:
+                err_console.print(t("bootstrap.target_busy", target=plan.target))
+                raise typer.Exit(code=1)
+            if not common_installer.is_managed_partial_install(
+                plan.target,
+                installer.KOHYA_REPO_URL,
+            ):
+                err_console.print(
+                    "Target is not a LoRaHub-managed interrupted clone; "
+                    "its files were preserved."
+                )
+                raise typer.Exit(code=1)
+            installer.cleanup_partial(plan)
 
     console.print(
         t(

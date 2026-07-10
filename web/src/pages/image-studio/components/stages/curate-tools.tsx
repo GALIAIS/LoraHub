@@ -73,11 +73,15 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
     queryFn: () => getImageStudioAutoRotateSession(sessionId!),
     enabled: sessionId != null,
     refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 1000 : false,
+      query.state.data?.status === "running" ||
+      query.state.data?.status === "stop_requested"
+        ? 1000
+        : false,
   })
 
   const session = sessionQuery.data
-  const running = session?.status === "running"
+  const running =
+    session?.status === "running" || session?.status === "stop_requested"
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -109,6 +113,7 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
         description: err instanceof Error ? err.message : String(err),
       }),
   })
+  const stopping = session?.status === "stop_requested" || stopMutation.isPending
 
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
@@ -147,7 +152,11 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
                     ? "自动旋转完成"
                     : session.status === "failed"
                       ? "自动旋转失败"
-                      : "自动旋转进行中"}
+                      : session.status === "stop_requested"
+                        ? "正在停止自动旋转"
+                        : session.status === "canceled"
+                          ? "自动旋转已停止"
+                          : "自动旋转进行中"}
                 </span>
                 <span className="font-mono text-muted-foreground">
                   {session.processed} / {session.total}
@@ -173,15 +182,15 @@ export function CurateAutoRotateTool({ datasetPath }: { datasetPath: string }) {
               {session.error && (
                 <div className="mt-1 text-destructive">{session.error}</div>
               )}
-              {session.status === "running" ? (
+              {session.status === "running" || session.status === "stop_requested" ? (
                 <Button
                   size="sm"
                   variant="outline"
                   className="mt-2 h-7 text-[11px] text-destructive"
                   onClick={() => stopMutation.mutate()}
-                  disabled={stopMutation.isPending}
+                  disabled={stopping}
                 >
-                  {stopMutation.isPending ? "停止中..." : "停止"}
+                  {stopping ? "停止中..." : "停止"}
                 </Button>
               ) : (
                 <Button
@@ -244,11 +253,15 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
     queryFn: () => getImageStudioBatchResizeSession(sessionId!),
     enabled: sessionId != null,
     refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 1000 : false,
+      query.state.data?.status === "running" ||
+      query.state.data?.status === "stop_requested"
+        ? 1000
+        : false,
   })
 
   const session = sessionQuery.data
-  const running = session?.status === "running"
+  const running =
+    session?.status === "running" || session?.status === "stop_requested"
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -285,6 +298,7 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
         description: err instanceof Error ? err.message : String(err),
       }),
   })
+  const stopping = session?.status === "stop_requested" || stopMutation.isPending
 
   return (
     <div className="h-full overflow-y-auto p-4 max-w-xl">
@@ -363,7 +377,11 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
                     ? "批量缩放完成"
                     : session.status === "failed"
                       ? "批量缩放失败"
-                      : "批量缩放进行中"}
+                      : session.status === "stop_requested"
+                        ? "正在停止批量缩放"
+                        : session.status === "canceled"
+                          ? "批量缩放已停止"
+                          : "批量缩放进行中"}
                 </span>
                 <span className="font-mono text-muted-foreground">
                   {session.processed} / {session.total}
@@ -389,15 +407,15 @@ export function CurateBatchResizeTool({ datasetPath }: { datasetPath: string }) 
               {session.error && (
                 <div className="mt-1 text-destructive">{session.error}</div>
               )}
-              {session.status === "running" ? (
+              {session.status === "running" || session.status === "stop_requested" ? (
                 <Button
                   size="sm"
                   variant="outline"
                   className="mt-2 h-7 text-[11px] text-destructive"
                   onClick={() => stopMutation.mutate()}
-                  disabled={stopMutation.isPending}
+                  disabled={stopping}
                 >
-                  {stopMutation.isPending ? "停止中..." : "停止"}
+                  {stopping ? "停止中..." : "停止"}
                 </Button>
               ) : (
                 <Button

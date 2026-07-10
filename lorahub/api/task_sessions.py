@@ -8,25 +8,71 @@ can survive browser refreshes and API restarts.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from platformdirs import user_state_path
-
 
 TaskStatus = Literal[
     "queued",
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
     "interrupted",
 ]
+_SessionValue = TypeVar("_SessionValue")
+_ACTIVE_CACHE_STATUSES = frozenset(
+    {"queued", "starting", "running", "stopping", "stop_requested"}
+)
+_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "canceled", "interrupted"})
+log = logging.getLogger(__name__)
+
+
+def _clamp_percent(value: float) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("task percent must be finite")
+    return max(0.0, min(100.0, number))
+
+
+def prune_terminal_session_cache(
+    sessions: MutableMapping[str, _SessionValue],
+    *,
+    keep: int = 32,
+) -> None:
+    """Release old live session objects while preserving every active task.
+
+    Callers hold the lock protecting ``sessions``. Durable status remains in
+    ``TaskSessionStore``; this only bounds process memory used by snapshots.
+    """
+    keep = max(0, int(keep))
+    terminal = [
+        (session_id, session)
+        for session_id, session in sessions.items()
+        if str(getattr(session, "status", "running")) not in _ACTIVE_CACHE_STATUSES
+    ]
+    if len(terminal) <= keep:
+        return
+    terminal.sort(
+        key=lambda item: float(
+            getattr(item[1], "finished_at", None)
+            or getattr(item[1], "started_at", 0.0)
+            or 0.0
+        ),
+        reverse=True,
+    )
+    for session_id, _session in terminal[keep:]:
+        sessions.pop(session_id, None)
 
 
 def default_task_store_path() -> Path:
@@ -185,24 +231,43 @@ class TaskSessionStore:
         error: str | None = None,
         finished: bool = False,
     ) -> None:
-        loaded = self.get(session_id)
-        if loaded is None:
-            return
-        next_status = status or loaded.status
-        next_percent = (
-            loaded.percent if percent is None else max(0.0, min(100.0, float(percent)))
-        )
-        now = time.time()
-        finished_at = now if finished else loaded.finished_at
-        result_json = (
-            json.dumps(result)
-            if result is not None
-            else json.dumps(loaded.result)
-            if loaded.result is not None
-            else None
-        )
-        next_error = error if error is not None else loaded.error
         with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM task_sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return
+            current_status = str(row["status"])
+            if current_status in _TERMINAL_STATUSES:
+                return
+            next_status = status or current_status
+            # Once cancellation is accepted it wins the race with a worker's
+            # final success write. Otherwise a task can visibly jump from
+            # "stopping" to "completed" after the user canceled it.
+            if current_status == "stop_requested":
+                if next_status == "succeeded":
+                    next_status = "canceled"
+                elif next_status in {"queued", "running"}:
+                    next_status = "stop_requested"
+            current_percent = float(row["percent"])
+            next_percent = (
+                current_percent
+                if percent is None
+                else max(current_percent, _clamp_percent(percent))
+            )
+            now = time.time()
+            finished_at = (
+                now
+                if finished or next_status in _TERMINAL_STATUSES
+                else row["finished_at"]
+            )
+            result_json = (
+                json.dumps(result)
+                if result is not None
+                else row["result_json"]
+            )
+            next_error = error if error is not None else row["error"]
             conn.execute(
                 """
                 UPDATE task_sessions
@@ -220,7 +285,35 @@ class TaskSessionStore:
                 ),
             )
 
+    def request_stop(self, session_id: str, *, percent: float | None = None) -> bool:
+        """Atomically persist stop intent for a queued or running task."""
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            if percent is None:
+                cursor = conn.execute(
+                    """
+                    UPDATE task_sessions
+                    SET status='stop_requested', updated_at=?
+                    WHERE id=? AND status IN ('queued', 'running')
+                    """,
+                    (now, session_id),
+                )
+            else:
+                value = _clamp_percent(percent)
+                cursor = conn.execute(
+                    """
+                    UPDATE task_sessions
+                    SET status='stop_requested', percent=MAX(percent, ?), updated_at=?
+                    WHERE id=? AND status IN ('queued', 'running')
+                    """,
+                    (value, now, session_id),
+                )
+            return cursor.rowcount == 1
+
     def append_event(self, session_id: str, event: TaskEvent) -> None:
+        event_percent = (
+            None if event.percent is None else _clamp_percent(event.percent)
+        )
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
@@ -231,7 +324,7 @@ class TaskSessionStore:
                     session_id,
                     event.level,
                     event.message,
-                    event.percent,
+                    event_percent,
                     json.dumps(event.payload),
                     event.ts,
                 ),
@@ -239,10 +332,10 @@ class TaskSessionStore:
             conn.execute(
                 """
                 UPDATE task_sessions
-                SET updated_at=?, percent=COALESCE(?, percent)
+                SET updated_at=?, percent=MAX(percent, COALESCE(?, percent))
                 WHERE id=?
                 """,
-                (event.ts, event.percent, session_id),
+                (event.ts, event_percent, session_id),
             )
             rows = conn.execute(
                 """
@@ -314,13 +407,14 @@ class TaskSessionStore:
                 ).fetchall()
             return [self._row_to_session(conn, row) for row in rows]
 
-    def _list_active(self) -> list[TaskSession]:
+    def list_active(self) -> list[TaskSession]:
+        """Return durable queued/running tasks across every task kind."""
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT *
                 FROM task_sessions
-                WHERE status IN ('queued', 'running')
+                WHERE status IN ('queued', 'running', 'stop_requested')
                 ORDER BY updated_at DESC
                 """,
             ).fetchall()
@@ -328,7 +422,7 @@ class TaskSessionStore:
 
     def mark_stale_interrupted(self) -> int:
         count = 0
-        for session in self._list_active():
+        for session in self.list_active():
             self.update(
                 session.id,
                 status="interrupted",
@@ -386,3 +480,17 @@ class TaskSessionStore:
             ),
             events=events,
         )
+
+
+def persist_stop_request(
+    store: TaskSessionStore,
+    session_id: str,
+    *,
+    percent: float | None = None,
+) -> bool:
+    """Persist stop intent without making database health block cancellation."""
+    try:
+        return store.request_stop(session_id, percent=percent)
+    except (OSError, sqlite3.Error) as exc:
+        log.warning("could not persist stop request for task %s: %s", session_id, exc)
+        return True

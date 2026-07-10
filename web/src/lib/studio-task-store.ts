@@ -35,6 +35,7 @@ import {
   getTaggingSession,
   getTriggerWordsSession,
   http,
+  ApiError,
   type TaggingSession,
 } from "@/lib/api"
 
@@ -47,9 +48,14 @@ export type StudioTaskKind =
 
 export type StudioTaskStatus =
   | "running"
+  | "stopping"
   | "completed"
   | "failed"
   | "cancelled"
+
+export function isStudioTaskActive(status: StudioTaskStatus): boolean {
+  return status === "running" || status === "stopping"
+}
 
 export interface StudioTaskRecord {
   /** Stable id. Server-issued session_id when available, otherwise a synthetic uuid for in-flight kinds. */
@@ -70,7 +76,7 @@ export interface StudioTaskRecord {
   errorMsg?: string
   /** True for kinds where the server gives us a session_id we can poll/persist. */
   sessioned: boolean
-  /** Consecutive poll error counter — three strikes and we mark the task failed. */
+  /** Consecutive poll error counter used to surface reconnect state. */
   pollErrors?: number
 }
 
@@ -81,12 +87,14 @@ const TTL_MS = 24 * 60 * 60 * 1000
 const POLL_INTERVAL_MS = 2000
 /** How many consecutive failed polls before we declare the task dead. */
 const POLL_ERROR_LIMIT = 3
+const MAX_PERSISTED_TASKS = 100
 
 type Listener = () => void
 
 const listeners = new Set<Listener>()
 let tasks: StudioTaskRecord[] = []
 let pollTimer: ReturnType<typeof setInterval> | null = null
+const pollsInFlight = new Set<string>()
 
 // --------------------------------------------------------------------------- //
 // Persistence
@@ -105,17 +113,47 @@ interface PersistedRecord {
   errorMsg?: string
 }
 
+const TASK_KINDS = new Set<StudioTaskKind>([
+  "caption",
+  "smart-caption",
+  "wd14",
+  "trigger-words",
+  "quality-score",
+])
+const TASK_STATUSES = new Set<StudioTaskStatus>([
+  "running",
+  "stopping",
+  "completed",
+  "failed",
+  "cancelled",
+])
+
+function isPersistedRecord(value: unknown): value is PersistedRecord {
+  if (!value || typeof value !== "object") return false
+  const record = value as Partial<PersistedRecord>
+  return (
+    typeof record.id === "string" &&
+    TASK_KINDS.has(record.kind as StudioTaskKind) &&
+    typeof record.datasetPath === "string" &&
+    typeof record.label === "string" &&
+    typeof record.startedAt === "number" &&
+    Number.isFinite(record.startedAt) &&
+    TASK_STATUSES.has(record.status as StudioTaskStatus)
+  )
+}
+
 function load(): StudioTaskRecord[] {
   if (typeof window === "undefined") return []
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    const parsed: PersistedRecord[] = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
     const now = Date.now()
     return parsed
-      .filter((r) => r && typeof r.id === "string")
-      .filter((r) => now - (r.startedAt ?? 0) <= TTL_MS)
+      .filter(isPersistedRecord)
+      .filter((r) => now - r.startedAt <= TTL_MS && r.startedAt <= now + 60_000)
+      .slice(-MAX_PERSISTED_TASKS)
       .map((r) => ({ ...r, sessioned: true, pollErrors: 0 }))
   } catch {
     return []
@@ -131,6 +169,7 @@ function persist(): void {
     const persistable = tasks
       .filter((t) => t.sessioned)
       .map(({ pollErrors: _ignored, sessioned: _ignored2, ...rest }) => rest)
+      .slice(-MAX_PERSISTED_TASKS)
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable))
   } catch {
     // localStorage can be full / disabled in private mode — non-fatal.
@@ -153,26 +192,32 @@ function commit(next: StudioTaskRecord[]): void {
 // --------------------------------------------------------------------------- //
 
 function ensurePolling(): void {
-  const hasRunning = tasks.some((t) => t.status === "running" && t.sessioned)
+  const hasRunning = tasks.some((t) => isStudioTaskActive(t.status) && t.sessioned)
   if (hasRunning && pollTimer == null) {
-    pollTimer = setInterval(() => void tick(), POLL_INTERVAL_MS)
+    pollTimer = setInterval(tick, POLL_INTERVAL_MS)
+    tick()
   } else if (!hasRunning && pollTimer != null) {
     clearInterval(pollTimer)
     pollTimer = null
   }
 }
 
-async function tick(): Promise<void> {
-  const targets = tasks.filter((t) => t.status === "running" && t.sessioned)
-  if (targets.length === 0) return
-  await Promise.all(targets.map((t) => pollOne(t)))
+function tick(): void {
+  const targets = tasks.filter((t) => isStudioTaskActive(t.status) && t.sessioned)
+  for (const task of targets) {
+    if (pollsInFlight.has(task.id)) continue
+    pollsInFlight.add(task.id)
+    void pollOne(task).finally(() => {
+      pollsInFlight.delete(task.id)
+    })
+  }
 }
 
 async function pollOne(task: StudioTaskRecord): Promise<void> {
   try {
     if (task.kind === "caption") {
       const snap = await getCaptionSession(task.id)
-      const status = mapSmartCaptionStatus(snap.status)
+      const status = reconcileRemoteStatus(task.id, mapSmartCaptionStatus(snap.status))
       updateTask(task.id, {
         processed: snap.processed,
         total: snap.total,
@@ -192,7 +237,7 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
       }>(
         `/image-studio/ai/smart-caption/status/${encodeURIComponent(task.id)}`,
       )
-      const status = mapSmartCaptionStatus(snap.status)
+      const status = reconcileRemoteStatus(task.id, mapSmartCaptionStatus(snap.status))
       updateTask(task.id, {
         processed: snap.processed,
         total: snap.total,
@@ -203,7 +248,7 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
       })
     } else if (task.kind === "quality-score") {
       const snap = await getQualitySession(task.id)
-      const status = mapSmartCaptionStatus(snap.status)
+      const status = reconcileRemoteStatus(task.id, mapSmartCaptionStatus(snap.status))
       updateTask(task.id, {
         processed: snap.processed,
         total: snap.total,
@@ -214,7 +259,7 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
       })
     } else if (task.kind === "trigger-words") {
       const snap = await getTriggerWordsSession(task.id)
-      const status = mapSmartCaptionStatus(snap.status)
+      const status = reconcileRemoteStatus(task.id, mapSmartCaptionStatus(snap.status))
       updateTask(task.id, {
         processed: snap.processed,
         total: snap.total,
@@ -225,7 +270,7 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
       })
     } else if (task.kind === "wd14") {
       const snap: TaggingSession = await getTaggingSession(task.id)
-      const status = mapWd14Status(snap.status)
+      const status = reconcileRemoteStatus(task.id, mapWd14Status(snap.status))
       updateTask(task.id, {
         processed: snap.written,
         total: snap.total ?? undefined,
@@ -236,19 +281,38 @@ async function pollOne(task: StudioTaskRecord): Promise<void> {
     }
   } catch (err) {
     const next = (task.pollErrors ?? 0) + 1
-    if (next >= POLL_ERROR_LIMIT) {
-      // Three strikes: assume the session is gone (server restart, expired,
-      // or 404). Mark failed so the banner stops claiming "running" forever.
+    if (err instanceof ApiError && err.status === 404) {
       updateTask(task.id, {
         status: "failed",
-        errorMsg:
-          err instanceof Error ? err.message : "状态轮询连续失败 3 次",
+        errorMsg: "服务端已无此任务记录，任务可能在重启前中断。",
         pollErrors: next,
       })
     } else {
-      updateTask(task.id, { pollErrors: next })
+      // A temporary network outage or maintenance restart must not turn a
+      // still-running server task into a false terminal state. Keep polling;
+      // surface a bounded warning after repeated failures and clear it on the
+      // next successful snapshot.
+      updateTask(task.id, {
+        pollErrors: Math.min(next, POLL_ERROR_LIMIT),
+        errorMsg:
+          next >= POLL_ERROR_LIMIT
+            ? "状态暂时不可用，正在继续重连。"
+            : task.errorMsg,
+      })
     }
   }
+}
+
+function reconcileRemoteStatus(
+  taskId: string,
+  remote: StudioTaskStatus,
+): StudioTaskStatus {
+  const current = tasks.find((task) => task.id === taskId)
+  // A poll that started just before the stop request can still return the
+  // previous running snapshot. Keep the local stop intent until the backend
+  // acknowledges it with stopping or a terminal state.
+  if (current?.status === "stopping" && remote === "running") return "stopping"
+  return remote
 }
 
 function mapSmartCaptionStatus(s: string): StudioTaskStatus {
@@ -256,6 +320,9 @@ function mapSmartCaptionStatus(s: string): StudioTaskStatus {
     case "running":
     case "pending":
       return "running"
+    case "stop_requested":
+    case "stopping":
+      return "stopping"
     case "succeeded":
       return "completed"
     case "canceled":
@@ -273,6 +340,9 @@ function mapWd14Status(s: string): StudioTaskStatus {
   switch (s) {
     case "running":
       return "running"
+    case "stop_requested":
+    case "stopping":
+      return "stopping"
     case "succeeded":
       return "completed"
     case "canceled":
@@ -356,14 +426,25 @@ export async function cancelTask(task: Pick<StudioTaskRecord, "id" | "kind">): P
           : task.kind === "trigger-words"
             ? `/image-studio/ai/trigger-words/cancel/${encodeURIComponent(task.id)}`
             : `/tagging/tag/${encodeURIComponent(task.id)}/stop`
-  await http(path, { method: "POST" })
-  updateTask(task.id, { errorMsg: "正在停止..." })
+  updateTask(task.id, { status: "stopping", errorMsg: undefined })
+  try {
+    await http(path, { method: "POST" })
+  } catch (error) {
+    const current = tasks.find((candidate) => candidate.id === task.id)
+    if (current?.status === "stopping") {
+      updateTask(task.id, {
+        status: "running",
+        errorMsg: error instanceof Error ? error.message : "停止请求失败",
+      })
+    }
+    throw error
+  }
 }
 
 /** Mark all terminal tasks (completed/failed/cancelled) for a dataset as dismissed. */
 export function dismissTerminalFor(datasetPath: string): void {
   const next = tasks.filter(
-    (t) => !(t.datasetPath === datasetPath && t.status !== "running"),
+    (t) => !(t.datasetPath === datasetPath && !isStudioTaskActive(t.status)),
   )
   if (next.length !== tasks.length) commit(next)
 }

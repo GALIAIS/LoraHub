@@ -12,10 +12,12 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import threading
 from pathlib import Path
 from typing import Any
 
 from lorahub.api import state
+from lorahub.api.dataset_files import is_link_like, iter_safe_files
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 _CHECKPOINT_SUFFIXES = {".safetensors", ".ckpt"}
@@ -42,9 +44,9 @@ _DERIVED_SAMPLE_KINDS = {"grid", "animation"}
 # Cap on the number of loss points returned by /metrics. Anything beyond this
 # gets uniformly downsampled so the response stays bounded for very long runs.
 _METRICS_MAX_POINTS = 5000
-# Threshold above which we trigger downsampling. Below this we just return
-# every point — keeps the common case lossless.
-_METRICS_DOWNSAMPLE_THRESHOLD = 50_000
+# Rendering tens of thousands of points adds no visible detail but can block
+# the browser main thread. Keep the common case lossless up to the response cap.
+_METRICS_DOWNSAMPLE_THRESHOLD = _METRICS_MAX_POINTS
 
 # Slope thresholds (loss units per index) used to bucket the heuristic.
 # A series whose absolute slope falls below this is considered "flat".
@@ -53,6 +55,7 @@ _OVERFIT_FLAT_EPS = 1e-4
 _MetricsCacheKey = tuple[str, int, int]
 _METRICS_CACHE: dict[_MetricsCacheKey, dict[str, Any]] = {}
 _METRICS_CACHE_MAX = 128
+_METRICS_CACHE_LOCK = threading.Lock()
 
 
 def _classify_artifact(rel: Path) -> str:
@@ -112,16 +115,17 @@ def _list_workspace_files(workspace: Path) -> dict[str, list[dict[str, Any]]]:
         "logs": [],
         "other": [],
     }
-    if not workspace.is_dir():
+    if not workspace.is_dir() or is_link_like(workspace):
         return buckets
 
-    for path in workspace.rglob("*"):
-        if not path.is_file():
-            continue
+    root = workspace.resolve()
+    for path in iter_safe_files(
+        root,
+        recursive=True,
+        skip_dirs=frozenset(_SKIP_DIR_NAMES),
+    ):
         # Skip files anywhere under a skipped directory or with a scratch suffix.
-        rel = path.relative_to(workspace)
-        if any(part in _SKIP_DIR_NAMES for part in rel.parts[:-1]):
-            continue
+        rel = path.relative_to(root)
         if path.suffix.lower() in _SKIP_SUFFIXES:
             continue
 
@@ -157,7 +161,10 @@ def _resolve_workspace_file(workspace: Path, rel: str) -> Path:
         raise ValueError("path must be workspace-relative")
 
     workspace_resolved = workspace.resolve()
-    target = (workspace_resolved / candidate).resolve()
+    lexical = workspace_resolved / candidate
+    if is_link_like(lexical):
+        raise ValueError("path cannot be a link")
+    target = lexical.resolve()
     try:
         target.relative_to(workspace_resolved)
     except ValueError as exc:
@@ -219,7 +226,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     except OSError:
         return empty
     cache_key = (str(log_path.resolve()), stat.st_size, stat.st_mtime_ns)
-    cached = _METRICS_CACHE.get(cache_key)
+    with _METRICS_CACHE_LOCK:
+        cached = _METRICS_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
@@ -375,6 +383,8 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
 
     if len(loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
         loss = _downsample(loss, _METRICS_MAX_POINTS)
+    if len(val_loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
+        val_loss = _downsample(val_loss, _METRICS_MAX_POINTS)
     if len(gpu_samples) > _METRICS_DOWNSAMPLE_THRESHOLD:
         gpu_samples = _downsample(gpu_samples, _METRICS_MAX_POINTS)
 
@@ -398,9 +408,16 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "total_steps": total_steps,
         "overfit_signal": overfit_signal,
     }
-    _METRICS_CACHE[cache_key] = result
-    if len(_METRICS_CACHE) > _METRICS_CACHE_MAX:
-        for old_key in list(_METRICS_CACHE)[: len(_METRICS_CACHE) - _METRICS_CACHE_MAX]:
+    # A running job changes size/mtime on every poll. Keeping every prior key
+    # retained up to 128 complete payloads per job and caused steady memory
+    # growth on long runs. Only the newest snapshot for a log is useful.
+    with _METRICS_CACHE_LOCK:
+        old_keys = [key for key in _METRICS_CACHE if key[0] == cache_key[0]]
+        for old_key in old_keys:
+            _METRICS_CACHE.pop(old_key, None)
+        _METRICS_CACHE[cache_key] = result
+        overflow = len(_METRICS_CACHE) - _METRICS_CACHE_MAX
+        for old_key in list(_METRICS_CACHE)[: max(0, overflow)]:
             _METRICS_CACHE.pop(old_key, None)
     return result
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +36,22 @@ def load_config(path: Path) -> TrainingConfig:
 def dump_config(config: TrainingConfig, path: Path) -> None:
     """Serialize a TrainingConfig back to YAML using camelCase aliases."""
     data = config.model_dump(mode="json", exclude_none=True, by_alias=True)
-    path.write_text(
-        yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+    text = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    fd, raw = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
     )
+    temp_path = Path(raw)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def export_json_schema(path: Path | None = None) -> str:

@@ -401,6 +401,7 @@ def _check_backend_repo(cfg: TrainingConfig) -> list[PreflightFinding]:
         "kohya": ["train_network.py", "sdxl_train_network.py", "flux_train_network.py"],
         "diffusion-pipe": ["train.py"],
         "anima_lora": ["train.py"],
+        "ai_toolkit": ["run.py"],
     }
     expected = canonical.get(cfg.backend.type, [])
     if expected and not any((p / s).is_file() for s in expected):
@@ -424,46 +425,60 @@ def _check_backend_repo(cfg: TrainingConfig) -> list[PreflightFinding]:
 
 
 def _check_python_executable(cfg: TrainingConfig) -> list[PreflightFinding]:
-    """If the config pins a Python executable, ensure it exists & is callable."""
+    """Ensure the backend's resolved Python environment can start."""
+    from lorahub.core.backends._common import bootstrap as common  # noqa: PLC0415
+
     out: list[PreflightFinding] = []
-    py = cfg.backend.python_executable
-    if py is None:
-        return out
-    p = Path(str(py))
-    if not p.is_file():
+    if cfg.backend.type == "kohya":
+        from lorahub.core.backends.kohya import bootstrap  # noqa: PLC0415
+
+        repo = (
+            cfg.backend.repo_path
+            or common.path_from_env(bootstrap._ENV_SD_SCRIPTS)
+            or bootstrap.default_sd_scripts_path()
+        )
+    elif cfg.backend.type == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe import bootstrap  # noqa: PLC0415
+
+        repo = (
+            cfg.backend.repo_path
+            or common.path_from_env(bootstrap._ENV_REPO)
+            or bootstrap.default_repo_path()
+        )
+    elif cfg.backend.type == "anima_lora":
+        from lorahub.core.backends.anima_lora import bootstrap  # noqa: PLC0415
+
+        repo = (
+            cfg.backend.repo_path
+            or common.path_from_env(bootstrap._ENV_REPO)
+            or bootstrap.default_repo_path()
+        )
+    else:
+        from lorahub.core.backends.ai_toolkit import bootstrap  # noqa: PLC0415
+
+        repo = (
+            cfg.backend.repo_path
+            or common.path_from_env(bootstrap._ENV_REPO)
+            or bootstrap.default_repo_path()
+        )
+
+    try:
+        python = common.resolve_python(
+            repo,
+            config_python=cfg.backend.python_executable,
+            env_var=bootstrap._ENV_PYTHON,
+        )
+        common.check_python(python)
+    except common.BootstrapError as exc:
         out.append(
             PreflightFinding(
                 category="venv_missing",
                 severity="error",
                 field="backend.pythonExecutable",
-                message=f"Pinned Python executable not found: {p!s}",
-                remediation=(
-                    "Either install / fix the venv that backend.pythonExecutable "
-                    "points at, or clear the field to fall back to the "
-                    "system Python on PATH."
-                ),
+                message=f"{cfg.backend.type} Python environment is not usable.",
+                remediation=str(exc),
             )
         )
-        return out
-    # Best-effort access check — Windows reports True for is_file even
-    # when ACL denies execution, so we don't promote this to error.
-    try:
-        if not os.access(p, os.X_OK):
-            out.append(
-                PreflightFinding(
-                    category="venv_missing",
-                    severity="warn",
-                    field="backend.pythonExecutable",
-                    message=f"Python executable is not marked executable: {p!s}",
-                    remediation=(
-                        "On POSIX, run `chmod +x` on the path. On Windows "
-                        "this warning is harmless if the .exe runs from a "
-                        "regular shell."
-                    ),
-                )
-            )
-    except OSError:
-        pass
     return out
 
 

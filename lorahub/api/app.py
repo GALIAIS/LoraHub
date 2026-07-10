@@ -1,8 +1,8 @@
 """LoraHub HTTP API.
 
 Run with `lorahub serve` (preferred) or `uvicorn lorahub.api.app:app`.
-The API surface is intentionally small for v0.2 — list/create/cancel jobs,
-read config schema, stream events. Auth is out of scope; bind to localhost.
+Loopback access is trusted; non-loopback HTTP and WebSocket requests require
+the configured API token and receive an HttpOnly browser session after login.
 
 All API routes live under `/api`. The site root and `/{spa-path}` are reserved
 for the React frontend (mounted from `web/dist` when present).
@@ -27,6 +27,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
+from collections import Counter
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -35,17 +37,20 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from lorahub.api.paths import ensure_initialised, project_root
 
 # Pick up the project-root .env *before* any module-level code that
 # reads os.environ. Without this, ``lorahub serve`` / direct uvicorn
 # launches miss the .env that ``lorahub`` CLI loads in its own entry,
 # so token / proxy env vars never take effect for the API process.
-# Existing env vars win, matching dotenv defaults.
-load_dotenv()
+# Existing env vars win, matching dotenv defaults. Resolving the root here
+# also makes direct uvicorn launches behave like the CLI entry point.
+load_dotenv(project_root() / ".env")
 
 from lorahub import __version__
 from lorahub.api import scheduler as sched
 from lorahub.api import state
+from lorahub.api.auth import RemoteAccessMiddleware
 from lorahub.api.bootstrap_session import (
     _BootstrapSession,
     default_build_bootstrap_runner,
@@ -117,7 +122,6 @@ _error_upstream_dispatcher: UpstreamDispatcher | None = None
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
-    from lorahub.api.paths import ensure_initialised, project_root
     from lorahub.api.runtime_bind import refresh_current_uvicorn_bind
     from lorahub.api.store import JobStore, default_store_path
 
@@ -132,7 +136,32 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     log.info("project root: %s", project_root())
     if pre_chdir != str(root):
         log.info("cwd was %s, chdir'd to project root", pre_chdir)
-    refresh_current_uvicorn_bind()
+    bind = refresh_current_uvicorn_bind()
+    if bind is not None:
+        from lorahub.api.auth import (  # noqa: PLC0415
+            api_token_path,
+            configured_api_token,
+            ensure_api_token,
+            is_loopback_host,
+        )
+
+        if not is_loopback_host(bind.host):
+            token_from_env = configured_api_token() is not None
+            ensure_api_token()
+            if token_from_env:
+                log.info(
+                    "remote API authentication enabled for %s:%d from %s",
+                    bind.host,
+                    bind.port,
+                    "LORAHUB_API_TOKEN",
+                )
+            else:
+                log.info(
+                    "remote API authentication enabled for %s:%d; token file: %s",
+                    bind.host,
+                    bind.port,
+                    api_token_path(),
+                )
 
     # One-time migration: older versions of ``scripts/install.{sh,bat}``
     # dropped portable Python + uv into ``<repo>/.tools/``; the toolchain
@@ -276,6 +305,27 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         # library write can't interfere with annotations/phash/embeddings.
         _image_studio_library = ImageStudioLibrary(default_image_studio_store_path())
 
+    # Configure the process-wide scheduler before any recovery hook can
+    # submit work. submit() starts workers lazily, so doing this afterward
+    # leaves an old scheduler running beside the replacement.
+    try:
+        desired = max(1, int(_settings_store.load().max_concurrent_jobs))
+    except Exception:  # noqa: BLE001
+        desired = 1
+    desired = _clamp_scheduler_concurrency_to_gpus(desired)
+    if desired != sched.scheduler.concurrency:
+        log.info(
+            "scheduler concurrency: %d -> %d (from settings.max_concurrent_jobs)",
+            sched.scheduler.concurrency,
+            desired,
+        )
+        sched.scheduler.stop(timeout=2.0)
+        sched.scheduler = sched.JobScheduler(
+            concurrency=desired,
+            available_slots=list(range(desired)),
+            slot_groups=_scheduler_slot_groups(desired),
+        )
+
     # Auto-resume: replay interrupted jobs that have a usable checkpoint.
     # Done before scheduler.start() so resumed work lands at the head of
     # the queue. Per-job `metadata.auto_resume` overrides the global
@@ -337,28 +387,6 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
             title="sweep rebuild hook failed during startup",
         )
 
-    # Resize the module-level scheduler from persisted Settings before
-    # workers start. We reach for the *current* `_settings_store` symbol
-    # rather than a captured reference so test monkeypatches still apply.
-    try:
-        desired = max(1, int(_settings_store.load().max_concurrent_jobs))
-    except Exception:  # noqa: BLE001
-        desired = 1
-    desired = _clamp_scheduler_concurrency_to_gpus(desired)
-    if desired != sched.scheduler.concurrency:
-        log.info(
-            "scheduler concurrency: %d -> %d (from settings.max_concurrent_jobs)",
-            sched.scheduler.concurrency,
-            desired,
-        )
-        # The default scheduler hasn't been start()-ed yet, but stop() is a
-        # safe no-op when no workers exist, so it's harmless to call here.
-        sched.scheduler.stop(timeout=2.0)
-        sched.scheduler = sched.JobScheduler(
-            concurrency=desired,
-            available_slots=list(range(desired)),
-            slot_groups=_scheduler_slot_groups(desired),
-        )
     sched.scheduler.start()
 
     # Background self-update polling. Two cadences:
@@ -369,11 +397,17 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     #     unauthenticated rate limit is irrelevant, short enough that
     #     a release tagged in the morning is visible by lunch.
     _update_check_task = asyncio.create_task(_update_check_loop())
-    yield
-    _update_check_task.cancel()
-    if _error_upstream_dispatcher is not None:
-        _error_upstream_dispatcher.stop(timeout=2.0)
-    sched.scheduler.stop(timeout=2.0)
+    try:
+        yield
+    finally:
+        _update_check_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await _update_check_task
+        # Stop producers before the outbound error dispatcher so shutdown
+        # failures from scheduler workers can still be recorded and queued.
+        sched.scheduler.stop(timeout=2.0)
+        if _error_upstream_dispatcher is not None:
+            _error_upstream_dispatcher.stop(timeout=2.0)
 
 
 def _sink_config_from_settings(settings: Any) -> SinkConfig:
@@ -488,15 +522,10 @@ app = FastAPI(
 )
 
 # --- CORS ----------------------------------------------------------------
-# LoraHub is a single-user local tool: the API binds to 127.0.0.1 in dev
-# and to the AutoDL container interface in prod. Either way it has no
-# auth layer. ``allow_origins=["*"]`` would let any website the user
-# visits issue cross-origin requests against this API (DNS rebinding,
-# malicious browser extensions, etc.) — they could trigger trainings,
-# delete workspaces, or read secrets out of /api/settings. We restrict
-# the default to common local-dev origins and leave a single env hook
-# (``LORAHUB_ALLOWED_ORIGINS``, comma-separated) for users running the
-# UI from a different host (Tailscale, internal LAN, …).
+# LoraHub is local-first and requires a token on non-loopback requests.
+# CORS remains a separate browser boundary: ``allow_origins=["*"]`` would
+# let arbitrary sites send credentialed requests to a locally running API.
+# Keep common development origins and one explicit deployment override.
 _DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
     "http://localhost:6006",
     "http://127.0.0.1:6006",
@@ -504,18 +533,26 @@ _DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
     "http://127.0.0.1:5173",
     "http://localhost:1420",  # Tauri dev
     "http://127.0.0.1:1420",
+    "tauri://localhost",  # Tauri production custom protocol
+    "http://tauri.localhost",  # Windows WebView2 custom-protocol mapping
+    "https://tauri.localhost",
 )
 
 
 def _resolve_allowed_origins() -> list[str]:
     raw = os.environ.get("LORAHUB_ALLOWED_ORIGINS", "").strip()
-    if raw == "*":
-        # Explicit opt-out only — kept so packaged demos / containerised
-        # deployments can fall back to the legacy permissive shape.
-        return ["*"]
     extras: list[str] = []
     if raw:
-        extras = [piece.strip() for piece in raw.split(",") if piece.strip()]
+        extras = [
+            piece.strip()
+            for piece in raw.split(",")
+            if piece.strip() and piece.strip() != "*"
+        ]
+        if "*" in {piece.strip() for piece in raw.split(",")}:
+            log.warning(
+                "ignoring wildcard LORAHUB_ALLOWED_ORIGINS; "
+                "credentialed remote access requires explicit origins"
+            )
     out = list(_DEFAULT_ALLOWED_ORIGINS)
     for o in extras:
         if o not in out:
@@ -529,6 +566,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    RemoteAccessMiddleware,
+    allowed_origins=_resolve_allowed_origins(),
 )
 
 
@@ -545,7 +586,12 @@ app.add_middleware(
 async def _request_id_middleware(request: Request, call_next: Any) -> Any:
     import uuid as _uuid  # noqa: PLC0415
 
-    rid = request.headers.get("x-request-id") or _uuid.uuid4().hex[:12]
+    supplied = request.headers.get("x-request-id", "")
+    rid = (
+        supplied
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", supplied)
+        else _uuid.uuid4().hex[:12]
+    )
     request.state.request_id = rid
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
@@ -602,6 +648,12 @@ _WS_PING_INTERVAL = 25.0
 # Same idea for SSE — a `: comment` line counts as activity but is
 # discarded by EventSource so it never reaches the client's onmessage.
 _SSE_PING_INTERVAL = 25.0
+_TERMINAL_JOB_STATES = {
+    JobState.succeeded,
+    JobState.failed,
+    JobState.canceled,
+    JobState.interrupted,
+}
 
 
 def _sse_format(*, data: str | None = None, event: str | None = None,
@@ -629,19 +681,34 @@ def _sse_format(*, data: str | None = None, event: str | None = None,
 
 
 def _resume_index_from_header(request: Request) -> int:
-    """Pick the resume offset from the SSE Last-Event-ID header.
+    """Pick the resume offset from the SSE header or reconnect query.
 
     Returns the index of the *next* event to send; 0 means "send everything
     from the beginning". Bad input falls back to 0 so a corrupt cookie
     can't deadlock the stream.
     """
-    raw = request.headers.get("last-event-id")
+    query_params = getattr(request, "query_params", {})
+    raw = request.headers.get("last-event-id") or query_params.get("lastEventId")
     if not raw:
         return 0
     try:
         return max(0, int(raw) + 1)
     except (TypeError, ValueError):
         return 0
+
+
+def _replay_has_current_done(
+    job: state.JobRecord,
+    replay_events: list[TrainingEvent],
+) -> bool:
+    """Distinguish this run's terminal event from retained resume history."""
+    if not replay_events or replay_events[-1].type is not EventType.done:
+        return False
+    if job.state in _TERMINAL_JOB_STATES:
+        return True
+    if job.started_at is None:
+        return False
+    return replay_events[-1].timestamp >= job.started_at.timestamp()
 
 
 @app.get("/api/jobs/{job_id}/sse")
@@ -671,38 +738,28 @@ async def stream_events_sse(job_id: str, request: Request) -> StreamingResponse:
         # queue for live events. Anything queued mid-replay is guaranteed
         # to have an index >= replay_until, so there's no overlap and no
         # duplicate emission.
-        replay_until = state.registry.attach_listener(job_id, queue)
-        sent = 0
+        state.registry.attach_listener(job_id, queue)
         try:
-            replayed_terminal = False
             replay_events = _job_events(job)
-            # ``attach_listener`` returns ``len(job.events)`` — the in-memory
-            # ring buffer's length at attach time. After a server restart
-            # (or for any terminal job loaded from SQLite), the ring is
-            # empty even though events.jsonl is fully populated, so
-            # ``_job_events`` falls back to the disk log and returns N>0
-            # while ``replay_until`` is still 0. Without this guard we'd
-            # slice ``[:0]`` and emit nothing for replays of historic runs.
-            # Active jobs with a live tailer always have ``replay_until``
-            # match the deque, so this branch is a no-op for them.
-            if replay_until == 0:
-                replay_until = len(replay_events)
-            replay_events = replay_events[:replay_until]
-            for ev in replay_events:
-                if sent >= resume_from:
+            # The listener is attached before the snapshot. Events that land
+            # during disk replay can therefore appear in both the snapshot
+            # and the live queue. Count the newest queue-sized tail so repeated
+            # identical events are removed with the correct multiplicity.
+            replay_overlap = Counter(ev.to_json() for ev in replay_events[-512:])
+            start_index = (
+                resume_from if resume_from <= len(replay_events) else 0
+            )
+            for index, ev in enumerate(replay_events):
+                if index >= start_index:
                     yield _sse_format(
-                        event_id=str(sent),
+                        event_id=str(index),
                         data=ev.to_json(),
                     )
-                replayed_terminal = ev.type is EventType.done
-                sent += 1
 
-            terminal_state = job.state in {
-                JobState.succeeded,
-                JobState.failed,
-                JobState.canceled,
-                JobState.interrupted,
-            }
+            sent = len(replay_events)
+
+            replayed_terminal = _replay_has_current_done(job, replay_events)
+            terminal_state = job.state in _TERMINAL_JOB_STATES
             while not replayed_terminal and not terminal_state:
                 if await request.is_disconnected():
                     return
@@ -710,6 +767,12 @@ async def stream_events_sse(job_id: str, request: Request) -> StreamingResponse:
                     ev = await asyncio.wait_for(queue.get(), timeout=_SSE_PING_INTERVAL)
                 except asyncio.TimeoutError:
                     yield _sse_format(comment="ping")
+                    continue
+                key = ev.to_json()
+                if replay_overlap[key] > 0:
+                    replay_overlap[key] -= 1
+                    if replay_overlap[key] == 0:
+                        del replay_overlap[key]
                     continue
                 yield _sse_format(event_id=str(sent), data=ev.to_json())
                 sent += 1
@@ -745,8 +808,7 @@ async def stream_bootstrap_sse(request: Request) -> StreamingResponse:
         yield _sse_format(retry_ms=2000, comment="lorahub bootstrap stream")
 
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
-        backlog = sess.attach(queue)
-        sent = 0
+        sent, backlog = sess.attach(queue)
         try:
             for event in backlog:
                 if sent >= resume_from:
@@ -841,30 +903,26 @@ async def stream_events(ws: WebSocket, job_id: str) -> None:
     await ws.accept()
 
     queue: asyncio.Queue[TrainingEvent] = asyncio.Queue(maxsize=512)
-    replay_until = state.registry.attach_listener(job_id, queue)
+    state.registry.attach_listener(job_id, queue)
     try:
-        replayed_terminal = False
         replay_events = _job_events(job)
-        # See SSE handler for the rationale: replay_until is the
-        # in-memory ring's length, but the disk log can have a longer
-        # history after a server restart.
-        if replay_until == 0:
-            replay_until = len(replay_events)
-        for ev in replay_events[:replay_until]:  # replay only up to attach time
+        replay_overlap = Counter(ev.to_json() for ev in replay_events[-512:])
+        for ev in replay_events:
             await ws.send_json(ev.to_dict())
-            replayed_terminal = ev.type is EventType.done
-        terminal_state = job.state in {
-            JobState.succeeded,
-            JobState.failed,
-            JobState.canceled,
-            JobState.interrupted,
-        }
+        replayed_terminal = _replay_has_current_done(job, replay_events)
+        terminal_state = job.state in _TERMINAL_JOB_STATES
         while not replayed_terminal and not terminal_state:
             try:
                 ev = await asyncio.wait_for(queue.get(), timeout=_WS_PING_INTERVAL)
             except asyncio.TimeoutError:
                 # Heartbeat: keep the proxy from cutting the idle channel.
                 await ws.send_json({"type": "ping"})
+                continue
+            key = ev.to_json()
+            if replay_overlap[key] > 0:
+                replay_overlap[key] -= 1
+                if replay_overlap[key] == 0:
+                    del replay_overlap[key]
                 continue
             await ws.send_json(ev.to_dict())
             if ev.type is EventType.done:
@@ -886,7 +944,7 @@ async def stream_bootstrap(ws: WebSocket) -> None:
     await ws.accept()
 
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
-    backlog = sess.attach(queue)
+    _, backlog = sess.attach(queue)
     try:
         for event in backlog:
             await ws.send_json(event)

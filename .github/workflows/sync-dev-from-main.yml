@@ -45,7 +45,7 @@ jobs:
               echo "$output"
               if grep -q "Repository rule violations" <<<"$output"; then
                 echo "Repository rules rejected direct pushes to dev; add a ruleset bypass for GitHub Actions or sync dev through a PR."
-                exit 0
+                exit 1
               fi
               exit 1
             fi

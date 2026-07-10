@@ -30,7 +30,7 @@ export async function imageStudioAutoRotate(body: {
 export interface ImageStudioAutoRotateSession {
   session_id: string
   dataset_path: string
-  status: string
+  status: "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   processed: number
   total: number
   percent: number
@@ -134,7 +134,7 @@ export async function imageStudioBatchResize(body: {
 export interface ImageStudioBatchResizeSession {
   session_id: string
   dataset_path: string
-  status: string
+  status: "running" | "stop_requested" | "succeeded" | "failed" | "canceled" | "interrupted"
   processed: number
   total: number
   percent: number

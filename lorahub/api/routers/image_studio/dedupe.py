@@ -10,7 +10,13 @@ from pydantic import BaseModel
 
 from lorahub.api.dataset_files import _resolve_under_roots
 
-from ._shared import _scan_images, _soft_delete, _store
+from ._shared import (
+    _scan_images,
+    _soft_delete,
+    _store,
+    _stored_path_is_within,
+    _writable_dataset_file,
+)
 
 if TYPE_CHECKING:
     from lorahub.api.image_studio_store import ImagePhash
@@ -70,8 +76,9 @@ def dedupe_clusters(
     algo = "phash64" if kind == "phash" else "dhash64"
     all_hashes = store.list_phashes(algo)
 
-    dir_str = str(directory)
-    hashes = [h for h in all_hashes if h.image_path.startswith(dir_str)]
+    hashes = [
+        h for h in all_hashes if _stored_path_is_within(h.image_path, directory)
+    ]
 
     clusters = _compute_clusters(hashes, threshold)
 
@@ -151,10 +158,7 @@ def batch_delete(body: BatchDeleteSelectInput) -> dict[str, Any]:
     store = _store()
     for p in body.paths:
         try:
-            file_path = _resolve_under_roots(p)
-            if not file_path.is_file():
-                errors.append({"path": p, "error": "file not found"})
-                continue
+            file_path = _writable_dataset_file(p)
             if not body.forceFavorites:
                 ann = store.get_annotation(str(file_path))
                 if ann and ann.favorite:

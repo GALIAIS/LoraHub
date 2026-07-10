@@ -277,24 +277,18 @@ def _pid_create_time(pid: int) -> float | None:
 def _pid_is_ours(pid: int, expected_create_time: float | None) -> bool:
     """Verify ``pid`` still refers to the process we originally spawned.
 
-    Returns True only when:
-      * ``_pid_alive(pid)`` agrees the kernel knows about it, AND
-      * either we have no recorded create-time (legacy rows / psutil
-        unavailable — fall back to the historic alive-only check), OR
-        the recorded create-time matches what /proc reports within a
-        small tolerance (sub-second clock drift between kernel ticks).
+    Returns True only when the PID is alive, a recorded create-time exists,
+    and that timestamp matches what the OS currently reports. This helper
+    gates destructive process-tree termination, so leaking an unverifiable
+    legacy orphan is safer than killing an unrelated process after PID reuse.
     """
     if not _pid_alive(pid):
         return False
     if expected_create_time is None:
-        return True
+        return False
     actual = _pid_create_time(pid)
     if actual is None:
-        # Can't read /proc but PID is alive. Better safe than sorry —
-        # treat as "ours" so we don't accidentally kill an unrelated
-        # process. The orphan reaper will surface this as a survivor
-        # rather than a reaped pid.
-        return True
+        return False
     # Allow up to 1s of drift. boot-time timestamps from /proc/<pid>/stat
     # are jiffy-quantised and can disagree with psutil's Linux
     # implementation by less than a tick.
@@ -313,12 +307,10 @@ def _reap_orphan(pid: int, expected_create_time: float | None = None) -> bool:
     ``expected_create_time`` lets us refuse to kill a PID that's
     almost-certainly been reused — without that guard, a long-uptime
     box where the kernel cycled through PIDs would risk the orphan
-    reaper murdering an unrelated user process. Passing None disables
-    the check (used by tests / callers that don't have the stamp).
+    reaper murdering an unrelated user process. A missing or unreadable
+    timestamp is never accepted for destructive cleanup.
     """
-    if expected_create_time is not None and not _pid_is_ours(
-        pid, expected_create_time
-    ):
+    if not _pid_is_ours(pid, expected_create_time):
         # PID belongs to a different process now; do not kill.
         return False
     import signal  # noqa: PLC0415

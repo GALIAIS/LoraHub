@@ -10,6 +10,7 @@ whole exchange is bounded.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,11 @@ from fastapi.testclient import TestClient
 from lorahub.api import app as app_mod
 from lorahub.api import state
 from lorahub.api.ai_store import AIRoute
-from lorahub.api.app import _resume_index_from_header, _sse_format
+from lorahub.api.app import (
+    _replay_has_current_done,
+    _resume_index_from_header,
+    _sse_format,
+)
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent
 
 
@@ -58,11 +63,18 @@ def test_sse_format_retry_emits_retry_field() -> None:
 
 
 class _FakeRequest:
-    """Tiny stand-in for `fastapi.Request` exposing only `headers`."""
+    """Tiny stand-in for a request carrying SSE resume metadata."""
 
-    def __init__(self, last_event_id: str | None = None) -> None:
+    def __init__(
+        self,
+        last_event_id: str | None = None,
+        query_event_id: str | None = None,
+    ) -> None:
         self.headers = (
             {"last-event-id": last_event_id} if last_event_id is not None else {}
+        )
+        self.query_params = (
+            {"lastEventId": query_event_id} if query_event_id is not None else {}
         )
 
 
@@ -74,6 +86,15 @@ def test_resume_index_returns_n_plus_one() -> None:
     assert (
         _resume_index_from_header(_FakeRequest("3"))  # type: ignore[arg-type]
         == 4
+    )
+
+
+def test_resume_index_accepts_manual_reconnect_query() -> None:
+    assert (
+        _resume_index_from_header(  # type: ignore[arg-type]
+            _FakeRequest(query_event_id="7")
+        )
+        == 8
     )
 
 
@@ -91,6 +112,32 @@ def test_resume_index_falls_back_on_garbage() -> None:
         _resume_index_from_header(_FakeRequest("not-a-number"))  # type: ignore[arg-type]
         == 0
     )
+
+
+def test_resume_history_done_does_not_close_active_run(tmp_path: Path) -> None:
+    job = state.registry.create(workspace=tmp_path / "resume", config_snapshot={})
+    job.state = state.JobState.running
+    job.started_at = datetime.fromtimestamp(200, tz=UTC)
+    old_done = TrainingEvent(
+        type=EventType.done,
+        payload={"returncode": 0},
+        timestamp=100,
+    )
+
+    assert not _replay_has_current_done(job, [old_done])
+
+
+def test_current_run_done_closes_active_stream(tmp_path: Path) -> None:
+    job = state.registry.create(workspace=tmp_path / "current", config_snapshot={})
+    job.state = state.JobState.running
+    job.started_at = datetime.fromtimestamp(200, tz=UTC)
+    current_done = TrainingEvent(
+        type=EventType.done,
+        payload={"returncode": 0},
+        timestamp=201,
+    )
+
+    assert _replay_has_current_done(job, [current_done])
 
 
 # --------------------------------------------------------------------------- #

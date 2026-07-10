@@ -15,9 +15,8 @@ monkeypatch. The endpoints are deliberately small:
 * ``GET /api/error-reports/export`` — return the full store as
   newline-delimited JSON for download.
 
-No auth: this is a single-user local tool (same as the rest of the
-LoraHub API). Egress to a remote service is an opt-in user action,
-not a server feature.
+The application-wide API authentication middleware protects these
+routes when LoraHub binds beyond loopback. Egress remains opt-in.
 """
 
 from __future__ import annotations
@@ -29,14 +28,25 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.api.error_reports import ErrorReport, ResolutionStatus, Severity
+from lorahub.api.error_reports import (
+    MAX_ERROR_CATEGORY_CHARS,
+    MAX_ERROR_ID_CHARS,
+    MAX_ERROR_MESSAGE_CHARS,
+    MAX_ERROR_PATH_CHARS,
+    MAX_ERROR_SOURCE_CHARS,
+    MAX_ERROR_STACK_CHARS,
+    MAX_ERROR_TITLE_CHARS,
+    ErrorReport,
+    ResolutionStatus,
+    Severity,
+)
 
 router = APIRouter(prefix="/api")
 _LIMIT_QUERY = Query(default=100, ge=1, le=1000)
 _OFFSET_QUERY = Query(default=0, ge=0)
 _SEVERITY_QUERY = Query(default=None)
-_SOURCE_QUERY = Query(default=None, max_length=64)
-_JOB_ID_QUERY = Query(default=None)
+_SOURCE_QUERY = Query(default=None, max_length=MAX_ERROR_SOURCE_CHARS)
+_JOB_ID_QUERY = Query(default=None, max_length=MAX_ERROR_ID_CHARS)
 _FINGERPRINT_QUERY = Query(default=None, max_length=128)
 _RESOLUTION_QUERY = Query(default=None)
 _SEARCH_QUERY = Query(default=None, max_length=200)
@@ -98,18 +108,18 @@ class _SummaryOut(BaseModel):
 
 class _CreateBody(BaseModel):
     severity: Severity = "error"
-    source: str = Field(min_length=1, max_length=64)
-    category: str = Field(min_length=1, max_length=64)
-    title: str = Field(min_length=1, max_length=300)
-    message: str = Field(min_length=1, max_length=20_000)
-    stack: str | None = Field(default=None, max_length=200_000)
+    source: str = Field(min_length=1, max_length=MAX_ERROR_SOURCE_CHARS)
+    category: str = Field(min_length=1, max_length=MAX_ERROR_CATEGORY_CHARS)
+    title: str = Field(min_length=1, max_length=MAX_ERROR_TITLE_CHARS)
+    message: str = Field(min_length=1, max_length=MAX_ERROR_MESSAGE_CHARS)
+    stack: str | None = Field(default=None, max_length=MAX_ERROR_STACK_CHARS)
     context: dict[str, Any] | None = None
-    job_id: str | None = None
+    job_id: str | None = Field(default=None, max_length=MAX_ERROR_ID_CHARS)
     # Frontend-supplied request id / path so the report links back to
     # the API call that triggered it (e.g. the 500 response carries an
     # X-Request-ID header that the toast plumbs into here).
-    request_id: str | None = None
-    request_path: str | None = None
+    request_id: str | None = Field(default=None, max_length=MAX_ERROR_ID_CHARS)
+    request_path: str | None = Field(default=None, max_length=MAX_ERROR_PATH_CHARS)
 
 
 class _CreateResponse(BaseModel):
@@ -193,10 +203,8 @@ def export_reports() -> StreamingResponse:
     import json
 
     store = _store()
-    rows = store.list(limit=1000, offset=0)
-
     def _gen():  # type: ignore[no-untyped-def]
-        for r in rows:
+        for r in store.iter_all():
             yield json.dumps(r.to_dict(), ensure_ascii=False, default=str) + "\n"
 
     return StreamingResponse(

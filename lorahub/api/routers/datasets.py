@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from pydantic import BaseModel, Field
 from lorahub.api.dataset_files import (
     get_or_build_thumbnail,
     resolve_caption_path,
+    resolve_dataset_source_directory,
     resolve_image_path,
 )
 from lorahub.api.helpers import _clear_dataset_scan_cache, _scan_dataset_path
@@ -26,9 +29,11 @@ def scan_dataset(
     limit: int = 40,
     offset: int = 0,
 ) -> dict[str, Any]:
-    return _scan_dataset_path(
-        Path(path), recursive=recursive, limit=limit, offset=offset
-    )
+    try:
+        root = resolve_dataset_source_directory(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _scan_dataset_path(root, recursive=recursive, limit=limit, offset=offset)
 
 
 @router.get("/datasets/thumb")
@@ -97,17 +102,35 @@ def put_caption(body: CaptionUpdate) -> dict[str, Any]:
     regardless of the platform that produced it.
     """
     try:
-        caption_path = resolve_caption_path(body.path)
+        caption_path = resolve_caption_path(body.path, writable=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     text = body.caption.replace("\r\n", "\n").replace("\r", "\n")
+    temp_path: Path | None = None
+    fd: int | None = None
     try:
         caption_path.parent.mkdir(parents=True, exist_ok=True)
-        caption_path.write_text(text, encoding="utf-8", newline="\n")
+        fd, raw_temp = tempfile.mkstemp(
+            dir=caption_path.parent,
+            prefix=f".{caption_path.name}.",
+            suffix=".tmp",
+        )
+        temp_path = Path(raw_temp)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = None
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(caption_path)
         _clear_dataset_scan_cache(caption_path.parent)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return {
         "path": str(caption_path),
         "caption": text,

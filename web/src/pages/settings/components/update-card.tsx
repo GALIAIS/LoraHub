@@ -66,6 +66,7 @@ const PHASE_LABEL: Record<UpdateEvent["phase"], string> = {
 }
 
 const ACTIVE_UPDATE_TASK_STATUSES = new Set(["pending", "running"])
+const MAX_VISIBLE_UPDATE_EVENTS = 2000
 
 interface RequestedUpdate {
   channel: UpdateChannel
@@ -100,7 +101,7 @@ function isUpdateEvent(value: unknown): value is UpdateEvent {
 function taskEventsToUpdateEvents(
   events: Array<{ message: string; level: string; payload?: unknown }>,
 ): UpdateEvent[] {
-  return events.map((event) => {
+  return events.slice(-MAX_VISIBLE_UPDATE_EVENTS).map((event) => {
     if (isUpdateEvent(event.payload)) return event.payload
     return {
       phase: event.level === "error" ? "error" : "git",
@@ -111,6 +112,10 @@ function taskEventsToUpdateEvents(
       message: event.message,
     }
   })
+}
+
+function appendUpdateEvent(events: UpdateEvent[], event: UpdateEvent): UpdateEvent[] {
+  return [...events, event].slice(-MAX_VISIBLE_UPDATE_EVENTS)
 }
 
 function channelVersionLabel(
@@ -228,13 +233,24 @@ export function UpdateCard() {
   const abortRef = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
 
+  useEffect(
+    () => () => {
+      // Disconnecting the browser stream does not cancel the transactional
+      // updater. Its durable task record lets this page reconnect later.
+      abortRef.current?.abort()
+    },
+    [],
+  )
+
   const latestUpdateTask = useQuery({
     queryKey: ["tasks", "latest", "system_update"],
     queryFn: () => api.getLatestTask("system_update"),
     retry: false,
     staleTime: 10_000,
-    refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 3000 : false,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status && ACTIVE_UPDATE_TASK_STATUSES.has(status) ? 3000 : false
+    },
     throwOnError: false,
   })
 
@@ -259,13 +275,26 @@ export function UpdateCard() {
   }, [events.length])
 
   useEffect(() => {
-    if (events.length > 0 || running) return
+    // The active page-owned SSE resolves through runUpdate.finally. This
+    // effect only reconciles a durable task recovered after navigation or a
+    // full page reload.
+    if (abortRef.current) return
     const task = latestUpdateTask.data
     if (!task) return
-    if (!ACTIVE_UPDATE_TASK_STATUSES.has(task.status)) return
-    if (task.events.length === 0) return
-    setEvents(taskEventsToUpdateEvents(task.events))
-    setRunning(task.status === "running" || task.status === "pending")
+    const active = ACTIVE_UPDATE_TASK_STATUSES.has(task.status)
+    if (active) {
+      if (task.events.length > 0) {
+        setEvents(taskEventsToUpdateEvents(task.events))
+      }
+      if (!running) setRunning(true)
+      return
+    }
+    if (running) {
+      if (task.events.length > 0) {
+        setEvents(taskEventsToUpdateEvents(task.events))
+      }
+      setRunning(false)
+    }
   }, [events.length, latestUpdateTask.data, running])
 
   const recheck = useMutation({
@@ -299,15 +328,20 @@ export function UpdateCard() {
           force,
           target_tag: target.targetTag,
         },
-        (ev) => setEvents((prev) => [...prev, ev]),
+        (ev) => setEvents((prev) => appendUpdateEvent(prev, ev)),
         ac.signal,
       )
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc)
-      setEvents((prev) => [
-        ...prev,
-        { phase: "error", level: "error", message },
-      ])
+      if (!(exc instanceof DOMException && exc.name === "AbortError")) {
+        setEvents((prev) =>
+          appendUpdateEvent(prev, {
+            phase: "error",
+            level: "error",
+            message,
+          }),
+        )
+      }
     } finally {
       setRunning(false)
       setRequestedUpdate(null)
@@ -325,10 +359,6 @@ export function UpdateCard() {
       return
     }
     void runUpdate(target)
-  }
-
-  const cancel = () => {
-    abortRef.current?.abort()
   }
 
   const info = version.data
@@ -609,11 +639,6 @@ export function UpdateCard() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {running && (
-            <Button size="sm" variant="outline" onClick={cancel}>
-              取消
-            </Button>
-          )}
           <Button
             size="sm"
             variant="outline"

@@ -28,6 +28,7 @@ from typing import Any
 from lorahub.api import scheduler as sched
 from lorahub.api import state
 from lorahub.api.state import JobRecord, JobState
+from lorahub.api.paths import resolve_run_path
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.anima_lora.backend import AnimaLoraBackend
 from lorahub.core.backends.diffusion_pipe.backend import DiffusionPipeBackend
@@ -36,6 +37,7 @@ from lorahub.core.backends.base import TrainingHandle
 from lorahub.core.config.loader import dump_config
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, JsonlEventSink, TrainingEvent, normalize_event
+from lorahub.core.redaction import redact_command_text, redact_data
 
 from .paths_norm import _normalize_config_paths
 from .preview import _gpu_sampler_loop, _maybe_start_preview_worker
@@ -85,6 +87,7 @@ def _launch_job(
     `metadata` is stamped onto the JobRecord so callers like the sweep
     router can later filter / aggregate jobs by their orchestrator id.
     """
+    workspace = resolve_run_path(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
 
     _apply_settings_gpu_dispatch_default(cfg)
@@ -202,31 +205,48 @@ def _enqueue_launch(
     # events after the subprocess exits; without this flag those calls
     # would hit a closed sink and raise RuntimeError.
     _sink_closed = False
+    sink_lock = threading.RLock()
 
     def close_sink() -> None:
         nonlocal _sink_closed
-        if _sink_closed:
-            return
-        _sink_closed = True
-        sink.__exit__(None, None, None)
+        with sink_lock:
+            if _sink_closed:
+                return
+            _sink_closed = True
+            sink.__exit__(None, None, None)
 
     def on_event(ev: TrainingEvent) -> None:
         nonlocal _sink_closed
-        if _sink_closed and ev.type is not EventType.done:
-            return
         ev = normalize_event(ev, job_id=job.id)
-        try:
-            sink(ev)
-        except ValueError as exc:
+        safe_payload = redact_data(ev.payload)
+        if safe_payload != ev.payload:
             ev = TrainingEvent(
-                type=EventType.error,
-                payload={
-                    "source": "event_sink",
-                    "error": f"event payload is not JSON-compliant: {exc}",
-                },
-                job_id=job.id,
+                type=ev.type,
+                payload=safe_payload,
+                timestamp=ev.timestamp,
+                job_id=ev.job_id,
             )
-            sink(ev)
+        with sink_lock:
+            if _sink_closed:
+                return
+            try:
+                sink(ev)
+            except ValueError as exc:
+                ev = TrainingEvent(
+                    type=EventType.error,
+                    payload={
+                        "source": "event_sink",
+                        "error": f"event payload is not JSON-compliant: {exc}",
+                    },
+                    job_id=job.id,
+                )
+                sink(ev)
+            if ev.type is EventType.done:
+                # Close under the same lock as the write. Late sampler,
+                # preview, or spectrum events then observe a closed sink
+                # instead of racing a RuntimeError against this terminal event.
+                _sink_closed = True
+                sink.__exit__(None, None, None)
         state.registry.record_event(job.id, ev)
         if ev.type is EventType.log:
             _capture_wandb_run_url(job.id, ev)
@@ -282,12 +302,17 @@ def _enqueue_launch(
             j = state.registry.get(job.id)
             if j is not None:
                 rc = ev.payload.get("returncode")
-                j.returncode = rc
-                if j.state is JobState.canceling:
-                    j.state = JobState.canceled
-                else:
-                    j.state = JobState.succeeded if rc == 0 else JobState.failed
-                j.finished_at = datetime.now(UTC)
+                was_terminal = j.state in _TERMINAL_STATES
+                if j.returncode is None:
+                    j.returncode = rc
+                if not was_terminal:
+                    if j.state is JobState.canceling:
+                        j.state = JobState.canceled
+                    else:
+                        j.state = JobState.succeeded if rc == 0 else JobState.failed
+                if j.finished_at is None:
+                    j.finished_at = datetime.now(UTC)
+                j.handle = None
                 state.registry.update(j)
                 # Persist a structured failure report so the user can
                 # find this run in Settings → 错误上报 even after the
@@ -296,17 +321,18 @@ def _enqueue_launch(
                 # the streaming watcher's diagnostic_warning events
                 # (matched on the regex catalogue) are still the
                 # primary signal during the run.
-                if j.state is JobState.failed:
+                if not was_terminal and j.state is JobState.failed:
                     _report_job_failure(j, returncode=rc)
                 # Sweep feedback: pull the final loss/val_loss out of the
                 # workspace and push it into the parent sweep's sampler.
                 # No-op for non-sweep jobs and for sweeps that aren't
                 # registered as active (restart, already exhausted).
-                from lorahub.api.sweep_runtime import (  # noqa: PLC0415
-                    report_terminal_job,
-                )
-                with contextlib.suppress(Exception):
-                    report_terminal_job(j)
+                if not was_terminal:
+                    from lorahub.api.sweep_runtime import (  # noqa: PLC0415
+                        report_terminal_job,
+                    )
+                    with contextlib.suppress(Exception):
+                        report_terminal_job(j)
             close_sink()
 
     def task(slot: int | list[int]) -> None:
@@ -341,8 +367,8 @@ def _enqueue_launch(
             _stop_fn=lambda _graceful: launch_cancel.set(),
         )
         state.registry.update(current)
-        sink.__enter__()
         try:
+            sink.__enter__()
             kwargs = {
                 "extra_argv": extra_argv,
                 "env": slot_env,
@@ -365,7 +391,7 @@ def _enqueue_launch(
                     j.error = None
                 else:
                     j.state = JobState.failed
-                    j.error = repr(exc)
+                    j.error = redact_command_text(repr(exc))
                 j.finished_at = datetime.now(UTC)
                 j.handle = None
                 state.registry.update(j)
@@ -445,21 +471,67 @@ def _enqueue_launch(
             preview_thread = None
 
         try:
-            handle.wait(timeout=None)
-        except Exception:  # noqa: BLE001
+            returncode = handle.wait(timeout=None)
+        except Exception as exc:  # noqa: BLE001
             log.exception("worker wait() failed for job %s", job.id)
+            with contextlib.suppress(Exception):
+                handle.stop(graceful=False)
+            with contextlib.suppress(Exception):
+                handle.wait(timeout=10.0)
+            on_event(
+                TrainingEvent(
+                    type=EventType.error,
+                    payload={
+                        "source": "runner",
+                        "error": redact_command_text(repr(exc)),
+                    },
+                    job_id=job.id,
+                )
+            )
+            on_event(
+                TrainingEvent(
+                    type=EventType.done,
+                    payload={"returncode": -1},
+                    job_id=job.id,
+                )
+            )
+        else:
+            # Every bundled runner has a reaper that emits ``done``. Keep
+            # lifecycle state deterministic for third-party/custom handles
+            # that only return a code from wait(). The sink lock deduplicates
+            # this against a concurrent reaper event.
+            current = state.registry.get(job.id)
+            if current is not None and current.state not in _TERMINAL_STATES:
+                on_event(
+                    TrainingEvent(
+                        type=EventType.done,
+                        payload={"returncode": returncode},
+                        job_id=job.id,
+                    )
+                )
         finally:
             sampler_stop.set()
             preview_stop.set()
+            sampler.join(timeout=2.0)
             if preview_thread is not None:
                 preview_thread.join(timeout=5.0)
 
-    sched.scheduler.submit(
-        job.id,
-        task,
-        vram_required=_vram_required(backend, cfg),
-        slots_required=_slots_required(cfg),
-    )
+    try:
+        sched.scheduler.submit(
+            job.id,
+            task,
+            vram_required=_vram_required(backend, cfg),
+            slots_required=_slots_required(cfg),
+        )
+    except Exception as exc:
+        current = state.registry.get(job.id)
+        if current is not None and current.state is JobState.queued:
+            current.state = JobState.failed
+            current.error = redact_command_text(repr(exc))
+            current.finished_at = datetime.now(UTC)
+            state.registry.update(current)
+        close_sink()
+        raise
 
 
 def _gpu_dispatch_mode(cfg: TrainingConfig) -> str:
@@ -615,6 +687,11 @@ def _archive_workspace(workspace: Path, job_id: str) -> tuple[Path | None, list[
     record and the warnings explain what happened.
     """
     warnings: list[str] = []
+    try:
+        workspace = resolve_run_path(workspace)
+    except ValueError as exc:
+        warnings.append(str(exc))
+        return None, warnings
     if not workspace.exists():
         warnings.append(f"workspace did not exist: {workspace}")
         return None, warnings

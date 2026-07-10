@@ -28,6 +28,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
     importedFiles: 0,
   })
   const processingRef = useRef(false)
+  const sequenceRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -40,14 +41,21 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
     }, 300)
   }, [onComplete])
 
+  useEffect(
+    () => () => {
+      if (completeTimerRef.current) clearTimeout(completeTimerRef.current)
+    },
+    [],
+  )
+
   const isArchive = (name: string) =>
-    /\.(zip|tar|tar\.gz|tgz|7z|rar|gz)$/i.test(name)
+    /\.(zip|tar|tar\.gz|tgz|7z|gz)$/i.test(name)
 
   const enqueueFiles = (fileList: FileList | File[]) => {
     const files = Array.from(fileList)
     if (files.length === 0) return
-    const newTasks: UploadTask[] = files.map((f, i) => ({
-      id: `${Date.now()}-${i}`,
+    const newTasks: UploadTask[] = files.map((f) => ({
+      id: `${Date.now()}-${sequenceRef.current++}`,
       file: f,
       status: "pending",
       percent: 0,
@@ -106,6 +114,7 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
         if (xhr.readyState === XMLHttpRequest.DONE) {
           if (xhr.status >= 200 && xhr.status < 300) {
             let extracted = 0
+            let streamError = ""
             const text = xhr.responseText
             for (const line of text.split("\n")) {
               if (line.startsWith("data: ")) {
@@ -113,16 +122,21 @@ export function UploadDropZone({ datasetName, onComplete }: UploadDropZoneProps)
                   const d = JSON.parse(line.slice(6))
                   if (d.totalExtracted !== undefined) extracted = d.totalExtracted
                   else if (d.count !== undefined) extracted += d.count
+                  if (d.fatal === true) streamError = d.message || "导入失败"
                 } catch {
                   /* skip */
                 }
               }
             }
-            updateTask(task.id, { status: "done", percent: 100, extracted })
-            setSummary((prev) => ({
-              doneTasks: prev.doneTasks + 1,
-              importedFiles: prev.importedFiles + extracted,
-            }))
+            if (streamError) {
+              updateTask(task.id, { status: "error", error: streamError, extracted })
+            } else {
+              updateTask(task.id, { status: "done", percent: 100, extracted })
+              setSummary((prev) => ({
+                doneTasks: prev.doneTasks + 1,
+                importedFiles: prev.importedFiles + extracted,
+              }))
+            }
           } else {
             updateTask(task.id, { status: "error", error: `HTTP ${xhr.status}` })
           }

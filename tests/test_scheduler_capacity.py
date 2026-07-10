@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from lorahub.api.scheduler import JobScheduler
 
 
@@ -174,5 +176,40 @@ def test_no_priority_inversion() -> None:
     assert seen == ["a", "b"], seen
     sched.stop(timeout=2.0)
 
+
+def test_distributed_task_rejected_when_no_group_has_enough_capacity() -> None:
+    """Two cards fit individually but live in separate topology groups."""
+    rejected = threading.Event()
+    ran_next = threading.Event()
+
+    def on_reject(_job_id: str, _required: float, _max_avail: float) -> None:
+        rejected.set()
+
+    sched = JobScheduler(
+        concurrency=3,
+        available_slots=[0, 1, 2],
+        slot_capacities={0: 24.0, 1: 12.0, 2: 24.0},
+        slot_groups=[[0, 1], [2]],
+        capacity_reject_callback=on_reject,
+    )
+    sched.submit(
+        "impossible-distributed",
+        lambda _slots: None,
+        vram_required=16.0,
+        slots_required=2,
+    )
+    sched.submit("next", lambda _slot: ran_next.set(), vram_required=4.0)
+
+    assert rejected.wait(timeout=2.0)
+    assert ran_next.wait(timeout=2.0)
+    sched.stop(timeout=2.0)
+
+
+@pytest.mark.parametrize("required", [-1.0, float("nan"), float("inf")])
+def test_scheduler_rejects_invalid_vram_requirement(required: float) -> None:
+    sched = JobScheduler(concurrency=1)
+    with pytest.raises(ValueError, match="vram_required"):
+        sched.submit("bad", lambda _slot: None, vram_required=required)
+    sched.stop(timeout=0.1)
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lorahub.core.dataset.anima import (
     AnimaCaptionFormatter,
     AnimaDatasetTransformer,
@@ -213,3 +215,27 @@ def test_transform_directory_progress_callback(tmp_path: Path) -> None:
         tmp_path, overwrite=True, progress=lambda p: seen.append(p.name)
     )
     assert sorted(seen) == ["a.txt", "b.txt"]
+
+
+def test_transform_directory_stops_before_next_caption(tmp_path: Path) -> None:
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("1girl, blue_hair", encoding="utf-8")
+    second.write_text("1boy, red_hair", encoding="utf-8")
+    stop = False
+
+    def progress(_path: Path) -> None:
+        nonlocal stop
+        stop = True
+
+    tx = AnimaDatasetTransformer(default_safety="safe")
+    with pytest.raises(InterruptedError, match="canceled by user"):
+        tx.transform_directory(
+            tmp_path,
+            overwrite=True,
+            progress=progress,
+            should_stop=lambda: stop,
+        )
+
+    assert "blue hair" in first.read_text(encoding="utf-8")
+    assert second.read_text(encoding="utf-8") == "1boy, red_hair"

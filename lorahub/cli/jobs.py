@@ -37,6 +37,7 @@ from rich.table import Table
 
 from lorahub.api.state import JobState
 from lorahub.api.store import JobStore, default_store_path
+from lorahub.api.auth import api_auth_headers
 from lorahub.cli._i18n import t
 
 console = Console()
@@ -64,7 +65,7 @@ def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **api_auth_headers()},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310

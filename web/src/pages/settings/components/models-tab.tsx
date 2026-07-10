@@ -6,6 +6,7 @@ import {
   Loader2,
   Rows3,
   ServerCog,
+  Square,
 } from "lucide-react"
 import type { RemoteModelFile } from "@/lib/api/models"
 import { Button } from "@/components/ui/button"
@@ -80,6 +81,7 @@ export function ModelsTab() {
     selectedPaths,
     setSelectedPaths,
     startDownload,
+    stopDownload,
     fileList,
     current,
     error,
@@ -96,6 +98,15 @@ export function ModelsTab() {
     result,
     summary,
   } = useModelDownloadPanel()
+  const activeSessionId =
+    current?.status === "running" || current?.status === "stop_requested"
+      ? current.session_id
+      : null
+  const stopping = current?.status === "stop_requested" || stopDownload.isPending
+
+  const stopCurrentDownload = () => {
+    if (activeSessionId) stopDownload.mutate(activeSessionId)
+  }
 
   return (
     <div className="space-y-5 w-full">
@@ -209,6 +220,21 @@ export function ModelsTab() {
               )}
               {running ? "下载中" : "开始下载"}
             </Button>
+            {activeSessionId && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={stopCurrentDownload}
+                disabled={stopping}
+              >
+                {stopping ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Square className="size-3" />
+                )}
+                {stopping ? "正在停止" : "停止"}
+              </Button>
+            )}
             <div className="text-xs text-muted-foreground">
               已选 {selectedPaths.size} 个文件 · {formatBytes(selectedBytes)}
               {staleList && listed.length > 0 ? " · 清单需刷新" : ""}

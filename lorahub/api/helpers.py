@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from lorahub.api.dataset_files import is_link_like, iter_safe_files, resolve_file_under
 from lorahub.core.backends.registry import get_backend
 from lorahub.core.config.schema import TrainingConfig
 
@@ -66,13 +67,15 @@ def _config_path(name: str) -> Path:
     # Accept "foo" or "foo.yaml"
     candidates = [base / name, base / f"{name}.yaml", base / f"{name}.yml"]
     for c in candidates:
-        c_resolved = c.resolve()
+        if is_link_like(c):
+            raise HTTPException(status_code=400, detail="config path cannot be a link")
+        c_absolute = Path(os.path.abspath(c))
         try:
-            c_resolved.relative_to(base)
+            c_absolute.relative_to(base)
         except ValueError:
             continue
-        if c_resolved.is_file():
-            return c_resolved
+        if c_absolute.is_file():
+            return c_absolute
     raise HTTPException(status_code=404, detail="config not found")
 
 
@@ -132,7 +135,7 @@ def _scan_dataset_path(
     caption_files = 0
     missing_caption_files: list[str] = []
     samples: list[dict[str, Any]] = []
-    capped_limit = max(int(limit), 0)
+    capped_limit = min(max(int(limit), 0), 500)
     capped_offset = max(int(offset), 0)
 
     if exists:
@@ -146,9 +149,10 @@ def _scan_dataset_path(
             caption: str | None = None
             in_page = capped_offset <= index < capped_offset + capped_limit
             if in_page:
-                if has_caption:
+                caption_path = resolve_file_under(root, image.with_suffix(".txt"))
+                if has_caption and caption_path is not None:
                     with contextlib.suppress(Exception):
-                        caption = image.with_suffix(".txt").read_text(
+                        caption = caption_path.read_text(
                             encoding="utf-8"
                         ).strip()
                 samples.append(
@@ -186,15 +190,16 @@ def _dataset_scan_index(
         if now - built_at <= _DATASET_SCAN_TTL_S:
             return images, caption_exists, missing, caption_count
 
-    iterator = root.rglob("*") if recursive else root.iterdir()
     images = sorted(
-        p for p in iterator if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+        p
+        for p in iter_safe_files(root, recursive=recursive)
+        if p.suffix.lower() in _IMAGE_SUFFIXES
     )
     caption_exists = []
     missing = []
     caption_count = 0
     for image in images:
-        has_caption = image.with_suffix(".txt").is_file()
+        has_caption = resolve_file_under(root, image.with_suffix(".txt")) is not None
         caption_exists.append(has_caption)
         if has_caption:
             caption_count += 1

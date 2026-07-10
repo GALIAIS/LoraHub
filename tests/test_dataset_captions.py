@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lorahub.core.dataset.captions import (
     CaptionPipeline,
     META_TAGS,
@@ -247,6 +249,28 @@ def test_transform_directory_recursive_picks_up_subdirs(tmp_path: Path) -> None:
     deep = pipeline.transform_directory(tmp_path, recursive=True)
     assert deep == 1  # only the nested file changed; top.txt was already done.
     assert (sub / "deep.txt").read_text(encoding="utf-8") == "blue hair"
+
+
+def test_transform_directory_stops_before_next_caption(tmp_path: Path) -> None:
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("BLUE_HAIR", encoding="utf-8")
+    second.write_text("RED_HAIR", encoding="utf-8")
+    stop = False
+
+    def progress(_path: Path, _done: int, _total: int) -> None:
+        nonlocal stop
+        stop = True
+
+    with pytest.raises(InterruptedError, match="canceled by user"):
+        CaptionPipeline().transform_directory(
+            tmp_path,
+            progress=progress,
+            should_stop=lambda: stop,
+        )
+
+    assert first.read_text(encoding="utf-8") == "blue hair"
+    assert second.read_text(encoding="utf-8") == "RED_HAIR"
 
 
 # --------------------------------------------------------------------------- #

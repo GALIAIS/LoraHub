@@ -16,6 +16,7 @@ import { useMemo, useSyncExternalStore } from "react"
 
 import {
   getSnapshot,
+  isStudioTaskActive,
   subscribe,
   type StudioTaskRecord,
 } from "@/lib/studio-task-store"
@@ -38,5 +39,5 @@ export function useStudioTasksFor(
 
 export function useStudioRunningCount(): number {
   const all = useStudioTasks()
-  return all.reduce((n, t) => (t.status === "running" ? n + 1 : n), 0)
+  return all.reduce((n, t) => (isStudioTaskActive(t.status) ? n + 1 : n), 0)
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -162,6 +163,56 @@ def test_lora_test_generate_session_completes_with_fake_inference(
     assert len(status["result"]["images"]) == 2
     assert status["result"]["images"][0]["seed"] == 42
     assert status["result"]["images"][1]["seed"] == 43
+
+
+def test_lora_test_cancel_before_worker_start_never_returns_to_running(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers import lora_test
+
+    workspace = tmp_path / "ws"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    (output / "style.safetensors").write_bytes(b"lora")
+    job = state.registry.create(
+        workspace=workspace,
+        config_snapshot=_anima_snapshot(tmp_path),
+    )
+
+    release = threading.Event()
+    original_resolve = lora_test._resolve_model
+
+    def delayed_resolve(*args, **kwargs):  # type: ignore[no-untyped-def]
+        release.wait(timeout=2)
+        return original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(lora_test, "_resolve_model", delayed_resolve)
+    response = client.post(
+        "/api/lora-test/generate",
+        json={
+            "job_id": job.id,
+            "checkpoint_path": "output/style.safetensors",
+            "prompt": "1girl",
+        },
+    )
+    session_id = response.json()["session_id"]
+
+    canceled = client.post(f"/api/lora-test/sessions/{session_id}/cancel")
+    assert canceled.status_code == 200
+    assert client.get(f"/api/lora-test/sessions/{session_id}").json()["status"] == (
+        "stop_requested"
+    )
+
+    release.set()
+    for _ in range(40):
+        status = client.get(f"/api/lora-test/sessions/{session_id}").json()
+        if status["status"] == "canceled":
+            break
+        time.sleep(0.025)
+
+    assert status["status"] == "canceled"
 
 
 def test_lora_test_dedupes_loras_and_collects_anima_directory_output(

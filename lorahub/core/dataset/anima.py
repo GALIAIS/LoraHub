@@ -281,6 +281,7 @@ def parse_caption(text: str) -> AnimaCaptionFormatter:
 # --------------------------------------------------------------------------- #
 
 ProgressFn = Callable[[Path], None]
+StopFn = Callable[[], bool]
 
 
 def _iter_caption_files(directory: Path, *, recursive: bool) -> list[Path]:
@@ -370,6 +371,7 @@ class AnimaDatasetTransformer:
         recursive: bool = False,
         overwrite: bool = False,
         progress: ProgressFn | None = None,
+        should_stop: StopFn | None = None,
     ) -> int:
         """Walk ``path`` and rewrite each ``*.txt`` caption in place.
 
@@ -382,6 +384,8 @@ class AnimaDatasetTransformer:
 
         written = 0
         for caption_path in _iter_caption_files(path, recursive=recursive):
+            if should_stop is not None and should_stop():
+                raise InterruptedError("caption rewrite canceled by user")
             if not overwrite:
                 continue
             new_text = self.transform_file(caption_path)

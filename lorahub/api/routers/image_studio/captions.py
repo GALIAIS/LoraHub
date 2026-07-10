@@ -20,7 +20,6 @@ Tag normalisation here matches what audit.py uses (lowercase + comma split
 
 from __future__ import annotations
 
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -30,8 +29,15 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.dataset_files import (
+    IMAGE_SUFFIXES,
+    iter_safe_files,
+    resolve_dataset_directory,
+    resolve_file_under,
+)
 from lorahub.api.routers.image_studio.curate import _backup_file
+
+from ._shared import _atomic_write_text, _file_mutation
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
@@ -43,24 +49,16 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 def _walk_caption_files(root: Path, recursive: bool):
     """Yield (image_path, caption_path) for every captioned image."""
-    if recursive:
-        for cur, dirs, files in os.walk(root):
-            # Don't descend into our own staging tree.
-            dirs[:] = [d for d in dirs if d != ".workbench"]
-            for f in files:
-                p = Path(cur) / f
-                if p.suffix.lower() not in IMAGE_SUFFIXES:
-                    continue
-                cap = p.with_suffix(".txt")
-                if cap.is_file():
-                    yield p, cap
-    else:
-        for p in root.iterdir():
-            if not (p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES):
-                continue
-            cap = p.with_suffix(".txt")
-            if cap.is_file():
-                yield p, cap
+    for image in iter_safe_files(
+        root,
+        recursive=recursive,
+        skip_dirs=frozenset({".workbench"}),
+    ):
+        if image.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        caption = resolve_file_under(root, image.with_suffix(".txt"))
+        if caption is not None:
+            yield image, caption
 
 
 def _split_tags(caption: str) -> list[str]:
@@ -73,10 +71,10 @@ def _join_tags(tags: list[str]) -> str:
 
 
 def _ensure_dataset(dataset_path: str) -> Path:
-    p = Path(dataset_path).resolve()
-    if not p.is_dir():
-        raise HTTPException(404, f"dataset not found: {p}")
-    return p
+    try:
+        return resolve_dataset_directory(dataset_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -127,7 +125,7 @@ def captions_vocab(
 
 class FindReplaceRequest(BaseModel):
     dataset_path: str
-    pattern: str = Field(..., description="Substring or regex to find")
+    pattern: str = Field(..., min_length=1, description="Substring or regex to find")
     replacement: str = Field(default="", description="Replacement text (empty = delete)")
     is_regex: bool = False
     case_sensitive: bool = False
@@ -166,11 +164,14 @@ def captions_find_replace(req: FindReplaceRequest) -> dict:
     """
     root = _ensure_dataset(req.dataset_path)
     flags = 0 if req.case_sensitive else re.IGNORECASE
-    pattern_re = (
-        re.compile(req.pattern, flags)
-        if req.is_regex
-        else re.compile(re.escape(req.pattern), flags)
-    )
+    try:
+        pattern_re = (
+            re.compile(req.pattern, flags)
+            if req.is_regex
+            else re.compile(re.escape(req.pattern), flags)
+        )
+    except re.error as exc:
+        raise HTTPException(400, f"invalid regular expression: {exc}") from exc
     only: set[str] | None = (
         {str(Path(p).resolve()) for p in req.paths} if req.paths else None
     )
@@ -182,57 +183,58 @@ def captions_find_replace(req: FindReplaceRequest) -> dict:
     for img, cap_path in _walk_caption_files(root, req.recursive):
         if only is not None and str(img.resolve()) not in only:
             continue
-        try:
-            text = cap_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
+        with _file_mutation(img):
+            try:
+                text = cap_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
 
-        if req.whole_caption:
-            new_text, n = pattern_re.subn(req.replacement, text)
-        else:
-            tags = _split_tags(text)
-            n = 0
-            new_tags: list[str] = []
-            for tag in tags:
-                if pattern_re.fullmatch(tag) is not None:
-                    n += 1
-                    if req.replacement:
-                        replaced = pattern_re.sub(req.replacement, tag)
-                        if replaced.strip():
-                            new_tags.append(replaced.strip())
-                    # If replacement is empty, the tag is dropped.
-                elif pattern_re.search(tag) is not None and req.is_regex:
-                    # Regex partial-match within a tag still counts.
-                    replaced = pattern_re.sub(req.replacement, tag)
-                    if replaced != tag:
+            if req.whole_caption:
+                new_text, n = pattern_re.subn(req.replacement, text)
+            else:
+                tags = _split_tags(text)
+                n = 0
+                new_tags: list[str] = []
+                for tag in tags:
+                    if pattern_re.fullmatch(tag) is not None:
                         n += 1
-                        if replaced.strip():
-                            new_tags.append(replaced.strip())
-                else:
-                    new_tags.append(tag)
-            new_text = _join_tags(new_tags)
-            # Preserve trailing newline on disk if the original had one.
-            if text.endswith("\n") and not new_text.endswith("\n"):
-                new_text += "\n"
+                        if req.replacement:
+                            replaced = pattern_re.sub(req.replacement, tag)
+                            if replaced.strip():
+                                new_tags.append(replaced.strip())
+                        # If replacement is empty, the tag is dropped.
+                    elif pattern_re.search(tag) is not None and req.is_regex:
+                        # Regex partial-match within a tag still counts.
+                        replaced = pattern_re.sub(req.replacement, tag)
+                        if replaced != tag:
+                            n += 1
+                            if replaced.strip():
+                                new_tags.append(replaced.strip())
+                    else:
+                        new_tags.append(tag)
+                new_text = _join_tags(new_tags)
+                # Preserve trailing newline on disk if the original had one.
+                if text.endswith("\n") and not new_text.endswith("\n"):
+                    new_text += "\n"
 
-        if n == 0 or new_text == text:
-            continue
+            if n == 0 or new_text == text:
+                continue
 
-        matched_files += 1
-        matched_count += n
-        diffs.append(
-            {
-                "path": str(img),
-                "caption_path": str(cap_path),
-                "before": text.strip(),
-                "after": new_text.strip(),
-                "matches": n,
-            },
-        )
-        if not req.dry_run:
-            _backup_file(req.dataset_path, img)
-            cap_path.write_text(new_text, encoding="utf-8")
-            written.append(str(cap_path))
+            matched_files += 1
+            matched_count += n
+            diffs.append(
+                {
+                    "path": str(img),
+                    "caption_path": str(cap_path),
+                    "before": text.strip(),
+                    "after": new_text.strip(),
+                    "matches": n,
+                },
+            )
+            if not req.dry_run:
+                _backup_file(req.dataset_path, img)
+                _atomic_write_text(cap_path, new_text)
+                written.append(str(cap_path))
 
     return {
         "dry_run": req.dry_run,
@@ -278,29 +280,34 @@ def captions_inject_trigger(req: InjectTriggerRequest) -> dict:
     for img, cap_path in _walk_caption_files(root, req.recursive):
         if only is not None and str(img.resolve()) not in only:
             continue
-        try:
-            text = cap_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        stripped = text.strip()
-        already = trigger.lower() in stripped.lower()
-        if req.skip_existing and already:
-            skipped += 1
-            continue
-        tags = _split_tags(stripped)
-        if req.position == "prepend":
-            new_tags = [trigger] + [t for t in tags if t.lower() != trigger.lower()]
-        else:
-            new_tags = [t for t in tags if t.lower() != trigger.lower()] + [trigger]
-        new_text = _join_tags(new_tags)
-        if text.endswith("\n"):
-            new_text += "\n"
-        if new_text == text:
-            skipped += 1
-            continue
-        _backup_file(req.dataset_path, img)
-        cap_path.write_text(new_text, encoding="utf-8")
-        injected.append(str(cap_path))
+        with _file_mutation(img):
+            try:
+                text = cap_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            stripped = text.strip()
+            already = trigger.lower() in stripped.lower()
+            if req.skip_existing and already:
+                skipped += 1
+                continue
+            tags = _split_tags(stripped)
+            if req.position == "prepend":
+                new_tags = [trigger] + [
+                    t for t in tags if t.lower() != trigger.lower()
+                ]
+            else:
+                new_tags = [
+                    t for t in tags if t.lower() != trigger.lower()
+                ] + [trigger]
+            new_text = _join_tags(new_tags)
+            if text.endswith("\n"):
+                new_text += "\n"
+            if new_text == text:
+                skipped += 1
+                continue
+            _backup_file(req.dataset_path, img)
+            _atomic_write_text(cap_path, new_text)
+            injected.append(str(cap_path))
 
     return {
         "trigger": trigger,
@@ -346,28 +353,29 @@ def captions_blacklist(req: BlacklistRequest) -> dict:
     for img, cap_path in _walk_caption_files(root, req.recursive):
         if only is not None and str(img.resolve()) not in only:
             continue
-        try:
-            text = cap_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        tags = _split_tags(text)
-        kept: list[str] = []
-        removed = 0
-        for tag in tags:
-            key = tag if req.case_sensitive else tag.lower()
-            if key in blacklist:
-                removed += 1
-            else:
-                kept.append(tag)
-        if removed == 0:
-            continue
-        new_text = _join_tags(kept)
-        if text.endswith("\n"):
-            new_text += "\n"
-        _backup_file(req.dataset_path, img)
-        cap_path.write_text(new_text, encoding="utf-8")
-        edited.append(str(cap_path))
-        removed_total += removed
+        with _file_mutation(img):
+            try:
+                text = cap_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            tags = _split_tags(text)
+            kept: list[str] = []
+            removed = 0
+            for tag in tags:
+                key = tag if req.case_sensitive else tag.lower()
+                if key in blacklist:
+                    removed += 1
+                else:
+                    kept.append(tag)
+            if removed == 0:
+                continue
+            new_text = _join_tags(kept)
+            if text.endswith("\n"):
+                new_text += "\n"
+            _backup_file(req.dataset_path, img)
+            _atomic_write_text(cap_path, new_text)
+            edited.append(str(cap_path))
+            removed_total += removed
 
     return {
         "edited_count": len(edited),

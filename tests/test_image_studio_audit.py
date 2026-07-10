@@ -22,6 +22,11 @@ from lorahub.api.routers.image_studio.audit import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _allow_test_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
+
+
 def _make_dataset(tmp_path: Path) -> Path:
     d = tmp_path / "ds"
     d.mkdir()

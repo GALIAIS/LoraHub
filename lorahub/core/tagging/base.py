@@ -52,7 +52,7 @@ class BaseTagger(Protocol):
         """
         ...
 
-    def load(self) -> None:
+    def load(self, *, should_stop: StopCallback | None = None) -> None:
         """Eagerly download weights and warm up the runtime."""
         ...
 

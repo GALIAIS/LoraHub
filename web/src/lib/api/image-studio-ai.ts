@@ -63,7 +63,7 @@ export async function imageStudioSmartCaption(params: {
         status: snap.status,
       })
     }
-    if (snap.status !== "running") {
+    if (snap.status !== "running" && snap.status !== "stop_requested") {
       if (snap.status === "failed") {
         throw new Error(snap.error ?? "smart-caption batch failed")
       }

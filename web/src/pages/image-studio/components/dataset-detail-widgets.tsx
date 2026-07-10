@@ -1,7 +1,11 @@
 import type { ReactNode } from "react"
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 
-import { cancelTask, type StudioTaskRecord } from "@/lib/studio-task-store"
+import {
+  cancelTask,
+  isStudioTaskActive,
+  type StudioTaskRecord,
+} from "@/lib/studio-task-store"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -11,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import { toastApiError } from "@/lib/toast-api-error"
 
 export function ViewChip({
   active,
@@ -124,7 +129,8 @@ export function StudioTaskBanner({
   task: StudioTaskRecord
   onDismiss: () => void
 }) {
-  const running = task.status === "running"
+  const active = isStudioTaskActive(task.status)
+  const stopping = task.status === "stopping"
   const lastImageName = task.lastImage
     ? task.lastImage.split(/[/\\]/).pop() ?? ""
     : ""
@@ -133,17 +139,20 @@ export function StudioTaskBanner({
     task.kind === "smart-caption" ||
     task.kind === "quality-score" ||
     task.kind === "trigger-words"
-  const label = running
-    ? showsLastImage
+  const runningLabel = showsLastImage
       ? `${task.label}中…${lastImageName ? ` · ${lastImageName}` : ""}`
       : task.kind === "wd14"
         ? `${task.label}中… ${task.processed ?? 0}/${task.total ?? "?"}`
         : `${task.label}中…`
-    : task.label
+  const label = stopping
+    ? `正在停止${task.label}…`
+    : active
+      ? runningLabel
+      : task.label
 
   return (
     <div className="flex items-center gap-3 border-b px-4 py-2 bg-muted/30">
-      {running && <Loader2 className="size-4 animate-spin text-primary" />}
+      {active && <Loader2 className="size-4 animate-spin text-primary" />}
       <span className="text-xs font-medium">{label}</span>
       {task.processed != null && task.kind !== "wd14" && (
         <span className="text-xs text-muted-foreground">
@@ -156,13 +165,18 @@ export function StudioTaskBanner({
           {task.errorMsg}
         </span>
       )}
-      {running ? (
+      {active ? (
         <button
           type="button"
-          onClick={() => void cancelTask(task)}
+          onClick={() => {
+            void cancelTask(task).catch((error) => {
+              toastApiError(error, { title: "停止任务失败" })
+            })
+          }}
+          disabled={stopping}
           className="ml-auto text-xs text-muted-foreground hover:text-destructive"
         >
-          停止
+          {stopping ? "正在停止" : "停止"}
         </button>
       ) : (
         <button

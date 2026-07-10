@@ -28,6 +28,16 @@ def _subprocess_no_window() -> int:
     return 0
 
 
+def _is_link_like(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
+
+
 def path_from_env(name: str) -> Path | None:
     """Read ``$name`` from the environment and return it as a Path, or None."""
     raw = os.environ.get(name)
@@ -94,6 +104,11 @@ def ensure_models_link(repo: Path, target: Path | None = None) -> Path:
                     return link
             except OSError:
                 pass
+            if _is_link_like(link):
+                # A populated link to a different tree may contain user-owned
+                # checkpoints. Leave it untouched and report that the shared
+                # link was not established.
+                return target
             if link.is_dir() and not link.is_symlink():
                 try:
                     next(link.iterdir())
@@ -121,13 +136,34 @@ def ensure_models_link(repo: Path, target: Path | None = None) -> Path:
 
 
 def check_python(python: Path) -> None:
-    """Raise BootstrapError if ``python`` does not point at a real file."""
+    """Raise BootstrapError unless ``python`` is a usable interpreter."""
     if not python.exists():
         msg = f"Python executable not found: {python}"
         raise BootstrapError(msg)
     if not python.is_file():
         msg = f"Python executable is not a file: {python}"
         raise BootstrapError(msg)
+    try:
+        result = subprocess.run(
+            [str(python), "-c", "import sys"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+            check=False,
+            creationflags=_subprocess_no_window(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BootstrapError(f"Python executable could not start: {python}: {exc}") from exc
+    if result.returncode != 0:
+        code = result.returncode & 0xFFFFFFFF
+        detail = (result.stderr or result.stdout or "").strip()[-500:]
+        message = f"Python executable failed startup: {python} (exit 0x{code:08X})"
+        if code == 0xC0000142:
+            message += "; DLL initialization failed; reinstall the backend environment"
+        if detail:
+            message += f": {detail}"
+        raise BootstrapError(message)
 
 
 def check_repo(

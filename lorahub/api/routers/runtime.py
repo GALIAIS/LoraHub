@@ -30,6 +30,8 @@ def install_runtime(req: InstallRuntimeRequest) -> dict[str, Any]:
     version = (req.version or python_runtime.DEFAULT_VERSION).strip()
     try:
         info = python_runtime.install_runtime(version)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"installed": info, "status": python_runtime.status()}

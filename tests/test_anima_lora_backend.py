@@ -55,6 +55,16 @@ def test_bootstrap_default_repo_resolves_to_vendored() -> None:
     assert (p / "train.py").is_file()
 
 
+def test_bootstrap_default_repo_uses_project_root(monkeypatch, tmp_path: Path) -> None:
+    repo = tmp_path / "external" / "anima_lora"
+    repo.mkdir(parents=True)
+    (repo / "pyproject.toml").write_text("", encoding="utf-8")
+    monkeypatch.delenv("LORAHUB_ANIMA_LORA_REPO", raising=False)
+    monkeypatch.setattr(al_bootstrap, "project_root", lambda: tmp_path)
+
+    assert al_bootstrap.default_repo_path() == repo
+
+
 def test_bootstrap_resolve_returns_env_with_required_files() -> None:
     """Resolving against the vendored copy succeeds without override."""
     env = al_bootstrap.resolve()

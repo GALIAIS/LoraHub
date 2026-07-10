@@ -12,10 +12,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.dataset_files import resolve_dataset_directory
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
 from lorahub.core.dataset.anima import AnimaDatasetTransformer
 from lorahub.core.tagging.base import BaseTagger
@@ -33,6 +36,7 @@ _KIND_TAGGING = "tagging"
 _KIND_ANIMA_CAPTION = "anima_caption"
 _TaggingStatus = Literal[
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
@@ -47,6 +51,13 @@ def _task_store() -> TaskSessionStore:
         store = TaskSessionStore(default_task_store_path())
         app_module._task_session_store = store
     return store
+
+
+def _dataset_path(raw: str) -> Path:
+    try:
+        return resolve_dataset_directory(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class TagDatasetRequest(BaseModel):
@@ -140,10 +151,22 @@ class _TaggingSession:
                 "finished_at": self.finished_at,
             }
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self.lock:
+            if self.status != "running":
+                return False
+            if self.task_kind:
+                persisted = persist_stop_request(
+                    _task_store(),
+                    self.session_id,
+                    percent=self.percent,
+                )
+                if not persisted:
+                    return False
             self.stop_requested = True
+            self.status = "stop_requested"
         self.push("stop requested")
+        return True
 
     def should_stop(self) -> bool:
         with self.lock:
@@ -157,6 +180,7 @@ _sessions_lock = threading.Lock()
 def _store(session: _TaggingSession) -> None:
     with _sessions_lock:
         _sessions[session.session_id] = session
+        prune_terminal_session_cache(_sessions)
 
 
 def _get(session_id: str) -> _TaggingSession:
@@ -201,7 +225,8 @@ def _tagging_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
     metadata = task.metadata
     status: _TaggingStatus = (
         task.status
-        if task.status in {"succeeded", "failed", "interrupted", "canceled"}
+        if task.status
+        in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"
     )
     return {
@@ -304,9 +329,7 @@ def tagger_download_status() -> dict[str, Any]:
 
 @router.post("/tagging/tag", status_code=202)
 def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
-    target = Path(req.path).expanduser()
-    if not target.is_dir():
-        raise HTTPException(status_code=400, detail=f"not a directory: {target}")
+    target = _dataset_path(req.path)
 
     task = _task_store().create(
         kind=_KIND_TAGGING,
@@ -343,7 +366,7 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             _task_store().update(session.session_id, status="running", percent=0)
             tagger = _build_tagger(req)
             session.push(f"loading {req.tagger}")
-            tagger.load()
+            tagger.load(should_stop=session.should_stop)
             if session.should_stop():
                 raise InterruptedError("stopped by user")
             with session.lock:
@@ -362,6 +385,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             if not all_images:
                 session.push("no images found", percent=100)
                 with session.lock:
+                    if session.stop_requested:
+                        raise InterruptedError("stopped by user")
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
@@ -397,6 +422,8 @@ def tag_dataset(req: TagDatasetRequest) -> dict[str, Any]:
             if session.should_stop():
                 raise InterruptedError("stopped by user")
             with session.lock:
+                if session.stop_requested:
+                    raise InterruptedError("stopped by user")
                 session.status = "succeeded"
                 session.percent = 100
                 session.finished_at = time.time()
@@ -474,7 +501,10 @@ def tag_dataset_status(session_id: str) -> dict[str, Any]:
 @router.post("/tagging/tag/{session_id}/stop")
 def stop_tag_dataset(session_id: str) -> dict[str, Any]:
     session = _get(session_id)
-    session.request_stop()
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(status_code=409, detail=f"tagging is {status}")
     return {"session_id": session_id, "status": "stop_requested"}
 
 
@@ -541,6 +571,7 @@ class _AnimaSession:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def push(self, message: str, *, percent: float | None = None, file: str | None = None) -> None:
         ts = time.time()
@@ -587,6 +618,26 @@ class _AnimaSession:
                 "finished_at": self.finished_at,
             }
 
+    def request_stop(self) -> bool:
+        with self.lock:
+            if self.status != "running":
+                return False
+            if self.task_kind:
+                persisted = persist_stop_request(
+                    _task_store(),
+                    self.session_id,
+                    percent=self.percent,
+                )
+                if not persisted:
+                    return False
+            self.cancel_event.set()
+            self.status = "stop_requested"
+        self.push("cancel requested")
+        return True
+
+    def should_stop(self) -> bool:
+        return self.cancel_event.is_set()
+
 
 _anima_sessions: dict[str, _AnimaSession] = {}
 _anima_sessions_lock = threading.Lock()
@@ -595,6 +646,7 @@ _anima_sessions_lock = threading.Lock()
 def _store_anima(session: _AnimaSession) -> None:
     with _anima_sessions_lock:
         _anima_sessions[session.session_id] = session
+        prune_terminal_session_cache(_anima_sessions)
 
 
 def _get_anima(session_id: str) -> _AnimaSession:
@@ -616,7 +668,14 @@ def _anima_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
         result = dict(task.result)
         result.setdefault("events", [event.to_dict() for event in task.events])
         return result
-    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+    if task.status not in {
+        "queued",
+        "running",
+        "stop_requested",
+        "interrupted",
+        "failed",
+        "canceled",
+    }:
         return None
     metadata = task.metadata
     return {
@@ -631,7 +690,7 @@ def _anima_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
         "recursive": bool(metadata.get("recursive") or False),
         "status": (
             task.status
-            if task.status in {"interrupted", "failed", "canceled"}
+            if task.status in {"stop_requested", "interrupted", "failed", "canceled"}
             else "running"
         ),
         "percent": task.percent,
@@ -666,9 +725,7 @@ def _build_anima_transformer(req: AnimaCaptionRequest) -> AnimaDatasetTransforme
 
 @router.post("/anima/caption", status_code=202)
 def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
-    target = Path(req.path).expanduser()
-    if not target.is_dir():
-        raise HTTPException(status_code=400, detail=f"not a directory: {target}")
+    target = _dataset_path(req.path)
 
     task = _task_store().create(
         kind=_KIND_ANIMA_CAPTION,
@@ -698,6 +755,8 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
     def run() -> None:
         try:
             _task_store().update(session.session_id, status="running", percent=0)
+            if session.should_stop():
+                raise InterruptedError("caption rewrite canceled by user")
             transformer = _build_anima_transformer(req)
 
             # Pre-count for percent display.
@@ -709,6 +768,8 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
             if not captions:
                 session.push("no caption files found", percent=100)
                 with session.lock:
+                    if session.cancel_event.is_set():
+                        raise InterruptedError("caption rewrite canceled by user")
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = time.time()
@@ -724,6 +785,8 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
             total = len(captions)
 
             def on_progress(path: Path) -> None:
+                if session.should_stop():
+                    raise InterruptedError("caption rewrite canceled by user")
                 with session.lock:
                     session.written += 1
                     pct = min(100.0, 2 + 98 * session.written / max(total, 1))
@@ -734,8 +797,13 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                 recursive=req.recursive,
                 overwrite=req.overwrite,
                 progress=on_progress,
+                should_stop=session.should_stop,
             )
+            if session.should_stop():
+                raise InterruptedError("caption rewrite canceled by user")
             with session.lock:
+                if session.cancel_event.is_set():
+                    raise InterruptedError("caption rewrite canceled by user")
                 session.written = written
                 session.status = "succeeded"
                 session.percent = 100
@@ -745,6 +813,19 @@ def anima_caption(req: AnimaCaptionRequest) -> dict[str, Any]:
                 session.session_id,
                 status="succeeded",
                 percent=100,
+                result=session.snapshot(),
+                finished=True,
+            )
+        except InterruptedError as exc:
+            with session.lock:
+                session.status = "canceled"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.push(str(exc))
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error=str(exc),
                 result=session.snapshot(),
                 finished=True,
             )
@@ -783,3 +864,13 @@ def anima_caption_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(status_code=404, detail="anima caption session not found")
+
+
+@router.post("/anima/caption/{session_id}/stop")
+def stop_anima_caption(session_id: str) -> dict[str, Any]:
+    session = _get_anima(session_id)
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(status_code=409, detail=f"caption rewrite is {status}")
+    return {"session_id": session_id, "status": "stop_requested"}

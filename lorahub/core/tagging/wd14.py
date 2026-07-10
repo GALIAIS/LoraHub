@@ -140,10 +140,12 @@ class WD14Tagger:
         """Which ExecutionProvider the loaded session is actually using."""
         return self._active_provider
 
-    def load(self) -> None:
+    def load(self, *, should_stop: Callable[[], bool] | None = None) -> None:
         """Eagerly download and warm up the model. Called automatically on first tag."""
         if self._session is not None:
             return
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         import onnxruntime as ort  # noqa: PLC0415
 
         from lorahub.core.tagging import download_status  # noqa: PLC0415
@@ -157,22 +159,33 @@ class WD14Tagger:
             model_path = hf_download(
                 repo_id=self.model_id,
                 filename="model.onnx",
-                tqdm_class=download_status.tqdm_class_for(self.model_id, "model.onnx"),
+                tqdm_class=download_status.tqdm_class_for(
+                    self.model_id,
+                    "model.onnx",
+                    should_stop,
+                ),
             )
         except BaseException as exc:
             download_status.mark_error(self.model_id, "model.onnx", exc)
             raise
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
         try:
             labels_path = hf_download(
                 repo_id=self.model_id,
                 filename="selected_tags.csv",
                 tqdm_class=download_status.tqdm_class_for(
-                    self.model_id, "selected_tags.csv"
+                    self.model_id,
+                    "selected_tags.csv",
+                    should_stop,
                 ),
             )
         except BaseException as exc:
             download_status.mark_error(self.model_id, "selected_tags.csv", exc)
             raise
+
+        if should_stop is not None and should_stop():
+            raise InterruptedError("stopped by user")
 
         providers = _resolve_providers(self.device, ort.get_available_providers())
         self._session = ort.InferenceSession(model_path, providers=providers)

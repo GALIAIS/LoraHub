@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ._shared import _CAMEL_CONFIG
 
@@ -146,3 +146,28 @@ class OutputConfig(BaseModel):
     training_comment: str | None = None
     no_metadata: bool = False
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_output_name(cls, value: str) -> str:
+        name = value.strip()
+        invalid_chars = set('<>:"/\\|?*')
+        reserved = {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            *(f"COM{i}" for i in range(1, 10)),
+            *(f"LPT{i}" for i in range(1, 10)),
+        }
+        if not name or name in {".", ".."}:
+            raise ValueError("output name is required")
+        if len(name) > 96:
+            raise ValueError("output name must be at most 96 characters")
+        if name[-1] in {" ", "."}:
+            raise ValueError("output name cannot end with a space or dot")
+        if any(char in invalid_chars or ord(char) < 32 for char in name):
+            raise ValueError("output name contains an invalid path character")
+        if name.split(".", 1)[0].upper() in reserved:
+            raise ValueError("output name is reserved by Windows")
+        return name

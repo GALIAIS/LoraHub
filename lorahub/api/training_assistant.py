@@ -296,6 +296,22 @@ def diagnose_failure(
             summary = "Job finished cleanly (no diagnostic signal needed)."
         elif returncode == 0:
             summary = "Job exited with status 0; no failure to diagnose."
+        elif (returncode & 0xFFFFFFFF) == 0xC0000142:
+            summary = "Python process failed DLL initialization (0xC0000142)."
+            findings.append(
+                DiagnosisFinding(
+                    category="windows_dll_init",
+                    severity="error",
+                    message=summary,
+                    remediation=(
+                        "The selected backend Python environment is stale, moved, or corrupt. "
+                        "Clear Python overrides that point under .venv/Lib/site-packages/external, "
+                        "reinstall the backend environment, and restart LoraHub. If it still "
+                        "fails, repair the Microsoft Visual C++ 2015-2022 x64 runtime."
+                    ),
+                    evidence=log_excerpt[-400:],
+                )
+            )
         else:
             summary = (
                 f"Job exited with non-zero status {returncode} but no known "

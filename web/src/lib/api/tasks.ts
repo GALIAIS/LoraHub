@@ -15,6 +15,7 @@ export interface TaskSessionRecord {
   status:
     | "queued"
     | "running"
+    | "stop_requested"
     | "succeeded"
     | "failed"
     | "canceled"

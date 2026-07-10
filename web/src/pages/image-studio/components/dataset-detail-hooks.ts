@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { getTriggerWordsSession, imageStudioListOps } from "@/lib/api"
-import { type StudioTaskRecord } from "@/lib/studio-task-store"
+import {
+  isStudioTaskActive,
+  type StudioTaskRecord,
+} from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 
 export function useDatasetPendingOpsCount(path: string) {
@@ -29,9 +32,12 @@ export function useDatasetTaskState(path: string) {
       : [...studioTasks].sort((a, b) => b.startedAt - a.startedAt)[0]
 
   const terminalSig = studioTasks
-    .filter((t) => t.status !== "running")
+    .filter((t) => !isStudioTaskActive(t.status))
     .map((t) => `${t.id}:${t.status}`)
     .join(",")
+  const completedTriggerId = [...studioTasks]
+    .filter((t) => t.kind === "trigger-words" && t.status === "completed")
+    .sort((a, b) => b.startedAt - a.startedAt)[0]?.id
 
   useEffect(() => {
     if (terminalSig) {
@@ -41,13 +47,10 @@ export function useDatasetTaskState(path: string) {
   }, [terminalSig, queryClient])
 
   useEffect(() => {
-    const completedTrigger = [...studioTasks]
-      .filter((t) => t.kind === "trigger-words" && t.status === "completed")
-      .sort((a, b) => b.startedAt - a.startedAt)[0]
-    if (!completedTrigger) return
+    if (!completedTriggerId) return
 
     let cancelled = false
-    getTriggerWordsSession(completedTrigger.id)
+    getTriggerWordsSession(completedTriggerId)
       .then((snap) => {
         if (!cancelled) setTriggerWordTop(snap.dataset_top)
       })
@@ -59,7 +62,7 @@ export function useDatasetTaskState(path: string) {
     return () => {
       cancelled = true
     }
-  }, [terminalSig, studioTasks])
+  }, [completedTriggerId])
 
   return {
     activeStudioTask,

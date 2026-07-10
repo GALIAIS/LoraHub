@@ -151,6 +151,7 @@ class SessionStore:
 
     def list_recent(self, kind: SessionKind, limit: int = 50) -> list[dict[str, Any]]:
         table = _TABLES[kind]
+        limit = max(1, min(100, int(limit)))
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 f"SELECT * FROM {table} ORDER BY started_at DESC LIMIT ?",  # noqa: S608

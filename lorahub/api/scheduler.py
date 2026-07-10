@@ -11,11 +11,9 @@ When `slot_capacities` (a `{slot_id: vram_gb}` mapping) is provided and a
 the VRAM headroom to run. Tasks that exceed every declared capacity are
 evicted via `capacity_reject_callback` so they don't deadlock the queue.
 
-Stopping the scheduler is cooperative: workers finish whatever job they
-are currently waiting on, then drain the queue and exit. Pending jobs
-that never start are left in the registry as `queued` so the next
-process can resume them (orphan recovery already handles non-terminal
-states on reboot).
+Stopping the scheduler is cooperative: workers finish their current job and,
+by default, leave pending records queued for the next process to re-enqueue.
+Callers can explicitly request a drain when they need queued tasks to finish.
 """
 
 from __future__ import annotations
@@ -80,6 +78,8 @@ class JobScheduler:
                 f"got {len(self._available_slots)}"
             )
             raise ValueError(msg)
+        if len(set(self._available_slots)) != len(self._available_slots):
+            raise ValueError("available_slots must not contain duplicate GPU ids")
 
         # Capacity defaults to +inf for any slot not explicitly declared,
         # so legacy `submit(job_id, fn)` callers (vram_required=None)
@@ -89,12 +89,32 @@ class JobScheduler:
         }
         if slot_capacities:
             for slot, cap in slot_capacities.items():
-                self._slot_capacities[slot] = float(cap)
-        self._slot_groups = [
-            [slot for slot in group if slot in self._available_slots]
-            for group in (slot_groups or [self._available_slots])
-        ]
-        self._slot_groups = [group for group in self._slot_groups if group]
+                if slot not in self._slot_capacities:
+                    raise ValueError(
+                        f"slot_capacities contains unavailable GPU id {slot}"
+                    )
+                value = float(cap)
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError(
+                        f"slot capacity for GPU {slot} must be finite and >= 0"
+                    )
+                self._slot_capacities[slot] = value
+
+        raw_groups = slot_groups or [self._available_slots]
+        self._slot_groups: list[list[int]] = []
+        available = set(self._available_slots)
+        for group in raw_groups:
+            if len(set(group)) != len(group):
+                raise ValueError("slot_groups must not contain duplicate GPU ids")
+            unknown = [slot for slot in group if slot not in available]
+            if unknown:
+                raise ValueError(
+                    f"slot_groups contains unavailable GPU ids: {unknown}"
+                )
+            if group:
+                self._slot_groups.append(list(group))
+        if not self._slot_groups:
+            raise ValueError("slot_groups must contain at least one available GPU")
         self._reject_cb = capacity_reject_callback
 
         self._queue: deque[_PendingTask] = deque()
@@ -142,6 +162,8 @@ class JobScheduler:
     def start(self) -> None:
         """Spawn worker threads. Idempotent."""
         with self._cv:
+            if self._stopping:
+                raise RuntimeError("scheduler has been stopped and cannot be restarted")
             if self._started:
                 return
             self._started = True
@@ -174,6 +196,10 @@ class JobScheduler:
                 f"got {slots_required}"
             )
             raise ValueError(msg)
+        if vram_required is not None and (
+            not math.isfinite(float(vram_required)) or float(vram_required) < 0
+        ):
+            raise ValueError("vram_required must be finite and >= 0")
         if not any(len(group) >= slots_required for group in self._slot_groups):
             msg = (
                 f"slots_required={slots_required} cannot be satisfied by slot_groups="
@@ -181,6 +207,8 @@ class JobScheduler:
             )
             raise ValueError(msg)
         with self._cv:
+            if self._stopping:
+                raise RuntimeError("scheduler is stopping and cannot accept new jobs")
             self._queue.append(
                 _PendingTask(
                     job_id=job_id,
@@ -197,10 +225,12 @@ class JobScheduler:
         if needs_start:
             self.start()
 
-    def stop(self, *, timeout: float | None = 5.0) -> None:
-        """Signal workers to drain and exit. Joins with `timeout` per worker."""
+    def stop(self, *, timeout: float | None = 5.0, drain: bool = False) -> None:
+        """Stop workers without launching queued work unless explicitly drained."""
         with self._cv:
             self._stopping = True
+            if not drain:
+                self._queue.clear()
             self._cv.notify_all()
         for t in self._workers:
             t.join(timeout=timeout)
@@ -215,6 +245,22 @@ class JobScheduler:
             return True
         cap = self._slot_capacities.get(slot, math.inf)
         return task.vram_required <= cap
+
+    def _can_ever_run(self, task: _PendingTask) -> bool:
+        """Return whether one declared slot group can satisfy ``task``.
+
+        Looking only at the largest single-GPU capacity is insufficient for
+        distributed jobs: a two-GPU task may fit one card in each heterogeneous
+        group while no group contains two compatible cards. Such a task would
+        otherwise remain at the head of the queue forever.
+        """
+        if task.slots_required == 1:
+            return any(self._fits_capacity(slot, task) for slot in self._available_slots)
+        for group in self._slot_groups:
+            fitting = sum(self._fits_capacity(slot, task) for slot in group)
+            if fitting >= task.slots_required:
+                return True
+        return False
 
     def _free_slots(self) -> list[int]:
         return [s for s in self._available_slots if s not in self._busy_slots]
@@ -261,9 +307,9 @@ class JobScheduler:
             # Evict head if no slot can ever serve it. This is the only
             # scenario where strict FIFO is broken, and it has to be —
             # otherwise the whole queue stalls behind an impossible job.
-            if head_req is not None and head_req > max_cap:
+            if not self._can_ever_run(head):
                 self._queue.popleft()
-                rejects.append((head.job_id, head_req, max_cap))
+                rejects.append((head.job_id, head_req or 0.0, max_cap))
                 continue
 
             # Head is feasible somewhere. If *we* can run it, take it —
@@ -301,8 +347,8 @@ class JobScheduler:
             with self._cv:
                 while True:
                     if self._stopping and not self._queue:
-                        # Final drain: nothing to do, exit after firing
-                        # any rejects we already collected.
+                        # Nothing remains after a normal stop, or an explicit
+                        # drain has completed.
                         break
                     picked, new_rejects = self._pick_next(slot)
                     if new_rejects:

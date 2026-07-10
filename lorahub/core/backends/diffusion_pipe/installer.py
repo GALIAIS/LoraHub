@@ -160,7 +160,12 @@ def bootstrap(plan: BootstrapPlan, *, progress: ProgressCallback | None = None) 
 
 def cleanup_partial(plan: BootstrapPlan) -> None:
     """Remove a half-installed target so the user can retry."""
-    _common.cleanup_partial(plan.target)
+    _common.cleanup_partial(plan.target, DIFFUSION_PIPE_REPO_URL)
+
+
+def cleanup_environment(plan: BootstrapPlan) -> None:
+    """Rebuild dependencies while preserving the backend checkout."""
+    _common.cleanup_managed_venvs(plan.target)
 
 
 __all__ = [
@@ -175,6 +180,7 @@ __all__ = [
     "ProgressCallback",
     "bootstrap",
     "cleanup_partial",
+    "cleanup_environment",
     "clone",
     "create_venv",
     "install_deepspeed",

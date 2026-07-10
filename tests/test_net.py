@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -110,6 +112,71 @@ def test_proxy_env_restores_previous_values(monkeypatch: pytest.MonkeyPatch) -> 
     assert net.os.environ["HTTPS_PROXY"] == "http://old"
     assert "HTTP_PROXY" not in net.os.environ
     assert "ALL_PROXY" not in net.os.environ
+
+
+def test_proxy_env_serializes_process_environment_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://original")
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    observed: list[str] = []
+
+    def first() -> None:
+        with net.proxy_env("http://first"):
+            observed.append(net.os.environ["HTTPS_PROXY"])
+            first_entered.set()
+            assert release_first.wait(2)
+
+    def second() -> None:
+        assert first_entered.wait(2)
+        with net.proxy_env("http://second"):
+            observed.append(net.os.environ["HTTPS_PROXY"])
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first)
+    second_thread = threading.Thread(target=second)
+    first_thread.start()
+    assert first_entered.wait(2)
+    second_thread.start()
+    assert not second_entered.wait(0.1)
+    release_first.set()
+    first_thread.join(2)
+    second_thread.join(2)
+
+    assert observed == ["http://first", "http://second"]
+    assert net.os.environ["HTTPS_PROXY"] == "http://original"
+
+
+def test_subprocess_env_does_not_wait_for_or_inherit_scoped_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://original")
+    monkeypatch.setenv("HTTP_PROXY", "http://original")
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def download_scope() -> None:
+        with net.proxy_env("http://download-secret:password@proxy.invalid"):
+            entered.set()
+            assert release.wait(2)
+
+    worker = threading.Thread(target=download_scope)
+    worker.start()
+    assert entered.wait(2)
+
+    started = time.monotonic()
+    env = net.subprocess_env()
+    elapsed = time.monotonic() - started
+    release.set()
+    worker.join(2)
+
+    assert elapsed < 0.5
+    assert env["HTTPS_PROXY"] == "http://original"
+    assert env["HTTP_PROXY"] == "http://original"
+    assert "ALL_PROXY" not in env
 
 
 def test_subprocess_env_overrides_bad_hf_cache_vars(

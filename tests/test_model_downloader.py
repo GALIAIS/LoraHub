@@ -334,6 +334,21 @@ def test_download_refuses_when_selection_is_empty(
         )
 
 
+def test_download_refuses_empty_remote_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(downloader, "_hf_list_files", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(RuntimeError, match="returned no downloadable files"):
+        downloader.download(
+            DownloadRequest(
+                source="huggingface",
+                repo_id="owner/name",
+                target_dir=tmp_path / "hf",
+            )
+        )
+
+
 def test_select_files_rejects_unsafe_remote_paths() -> None:
     listed = downloader.select_files(
         [
@@ -342,6 +357,8 @@ def test_select_files_rejects_unsafe_remote_paths() -> None:
             ("/absolute.safetensors", 3),
             ("C:/tmp/drive.safetensors", 4),
             ("nested/../escape.safetensors", 5),
+            ("nested/CON.safetensors", 6),
+            ("nested/trailing. ", 7),
         ]
     )
 
@@ -364,6 +381,7 @@ def test_modelscope_download_uses_parallel_workers_and_progress(
         {"Path": "preview.png", "Size": 200},
         {"Path": "a.bin", "Size": 3},
         {"Path": "nested/b.bin", "Size": 4},
+        {"Path": "windows\\c.bin", "Size": 5},
     ]
     worker_names: set[str] = set()
 
@@ -379,9 +397,12 @@ def test_modelscope_download_uses_parallel_workers_and_progress(
         file_path: str,
         target: Path,
         token: str | None,
+        *,
+        expected_size: int = 0,
     ) -> int:
         worker_names.add(threading.current_thread().name)
         assert file_path not in {"README.md", "preview.png"}
+        assert expected_size > 0
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = file_path.encode("utf-8")
         target.write_bytes(payload)
@@ -403,11 +424,12 @@ def test_modelscope_download_uses_parallel_workers_and_progress(
         events.append,
     )
 
-    assert result.files == 2
-    assert result.total_bytes == len("a.bin") + len("nested/b.bin")
+    assert result.files == 3
+    assert result.total_bytes == len("a.bin") + len("nested/b.bin") + len("windows/c.bin")
     assert (tmp_path / "ms" / "a.bin").is_file()
     assert (tmp_path / "ms" / "nested" / "b.bin").is_file()
-    assert any(event.files_done == 2 and event.percent == 100 for event in events)
+    assert (tmp_path / "ms" / "windows" / "c.bin").is_file()
+    assert any(event.files_done == 3 and event.percent == 100 for event in events)
     assert worker_names
 
 
@@ -428,7 +450,10 @@ def test_modelscope_download_fails_when_any_selected_file_fails(
         file_path: str,
         target: Path,
         _token: str | None,
+        *,
+        expected_size: int = 0,
     ) -> int:
+        assert expected_size > 0
         if file_path == "broken.bin":
             raise RuntimeError("connection closed")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -453,7 +478,7 @@ def test_modelscope_download_fails_when_any_selected_file_fails(
     assert any("failed" in event.message for event in events)
 
 
-def test_modelscope_file_download_does_not_leave_partial_target(
+def test_modelscope_file_download_keeps_resumable_partial_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = tmp_path / "model.safetensors"
@@ -486,4 +511,255 @@ def test_modelscope_file_download_does_not_leave_partial_target(
         )
 
     assert not target.exists()
-    assert not target.with_name("model.safetensors.part").exists()
+    partial = target.with_name(".model.safetensors.lorahub.part")
+    assert partial.read_bytes() == b"partial"
+
+
+def test_modelscope_file_download_cancels_and_keeps_resumable_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    cancel = threading.Event()
+    target = tmp_path / "model.safetensors"
+
+    class CancelResponse:
+        def __enter__(self) -> CancelResponse:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            cancel.set()
+            return b"partial"
+
+    monkeypatch.setattr(downloader, "urlopen", lambda *_args, **_kwargs: CancelResponse())
+
+    with pytest.raises(downloader.DownloadCanceledError, match="canceled by user"):
+        downloader._ms_download_file(
+            "owner/name",
+            "master",
+            "model.safetensors",
+            target,
+            None,
+            cancel,
+        )
+
+    assert not target.exists()
+    partial = target.with_name(".model.safetensors.lorahub.part")
+    assert partial.read_bytes() == b"partial"
+
+
+def test_modelscope_file_download_resumes_with_http_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "model.safetensors"
+    partial = target.with_name(".model.safetensors.lorahub.part")
+    partial.write_bytes(b"abc")
+    requests: list[Any] = []
+
+    class RangeResponse:
+        status = 206
+        headers = {"Content-Range": "bytes 3-5/6"}
+
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def __enter__(self) -> RangeResponse:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            self.reads += 1
+            return b"def" if self.reads == 1 else b""
+
+    def open_range(request: Any, **_kwargs: Any) -> RangeResponse:
+        requests.append(request)
+        return RangeResponse()
+
+    monkeypatch.setattr(downloader, "urlopen", open_range)
+
+    downloaded = downloader._ms_download_file(
+        "owner/name",
+        "master",
+        "model.safetensors",
+        target,
+        None,
+        expected_size=6,
+    )
+
+    assert downloaded == 6
+    assert target.read_bytes() == b"abcdef"
+    assert requests[0].get_header("Range") == "bytes=3-"
+    assert not partial.exists()
+
+
+def test_modelscope_resume_rejects_mismatched_content_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "model.safetensors"
+    partial = target.with_name(".model.safetensors.lorahub.part")
+    partial.write_bytes(b"abc")
+
+    class WrongRangeResponse:
+        status = 206
+        headers = {"Content-Range": "bytes 0-2/6"}
+
+        def __enter__(self) -> WrongRangeResponse:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self, _size: int) -> bytes:
+            return b"def"
+
+    monkeypatch.setattr(
+        downloader,
+        "urlopen",
+        lambda *_args, **_kwargs: WrongRangeResponse(),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid ranged response"):
+        downloader._ms_download_file(
+            "owner/name",
+            "master",
+            "model.safetensors",
+            target,
+            None,
+            expected_size=6,
+        )
+
+    assert partial.read_bytes() == b"abc"
+    assert not target.exists()
+
+
+def test_modelscope_file_download_skips_complete_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "model.safetensors"
+    target.write_bytes(b"complete")
+    monkeypatch.setattr(
+        downloader,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("complete file must not be fetched"),
+    )
+
+    size = downloader._ms_download_file(
+        "owner/name",
+        "master",
+        "model.safetensors",
+        target,
+        None,
+        expected_size=len(b"complete"),
+    )
+
+    assert size == len(b"complete")
+
+
+def test_modelscope_download_rejects_linked_partial_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "model.safetensors"
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"must survive")
+    partial = target.with_name(".model.safetensors.lorahub.part")
+    try:
+        partial.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    monkeypatch.setattr(
+        downloader,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("linked partial must fail before HTTP"),
+    )
+
+    with pytest.raises(ValueError, match="partial file cannot be a link"):
+        downloader._ms_download_file(
+            "owner/name",
+            "master",
+            "model.safetensors",
+            target,
+            None,
+        )
+
+    assert outside.read_bytes() == b"must survive"
+
+
+def test_cleanup_partial_preserves_completed_model_files(tmp_path: Path) -> None:
+    target = tmp_path / "model"
+    nested = target / "nested"
+    nested.mkdir(parents=True)
+    completed = target / "weights.safetensors"
+    completed.write_bytes(b"complete")
+    partial = nested / ".weights.1.2.part"
+    partial.write_bytes(b"partial")
+
+    downloader.cleanup_partial(target)
+
+    assert completed.read_bytes() == b"complete"
+    assert not partial.exists()
+
+
+def test_cleanup_partial_does_not_follow_linked_directory(tmp_path: Path) -> None:
+    target = tmp_path / "model"
+    target.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external_partial = outside / "keep.part"
+    external_partial.write_bytes(b"keep")
+    try:
+        (target / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    downloader.cleanup_partial(target)
+
+    assert external_partial.read_bytes() == b"keep"
+
+
+def test_download_failure_message_redacts_proxy_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "proxy-password"
+    monkeypatch.setattr(
+        downloader,
+        "_hf_list_files",
+        lambda *_args, **_kwargs: [("weights.safetensors", 1)],
+    )
+
+    def fail_download(**_kwargs: Any) -> None:
+        raise RuntimeError(f"connect https://user:{secret}@proxy.invalid failed")
+
+    monkeypatch.setattr(downloader, "hf_download", fail_download)
+    events: list[downloader.DownloadProgress] = []
+
+    with pytest.raises(RuntimeError) as captured:
+        downloader.download(
+            downloader.DownloadRequest(
+                source="huggingface",
+                repo_id="owner/name",
+                target_dir=tmp_path / "model",
+            ),
+            events.append,
+        )
+
+    assert secret not in str(captured.value)
+    assert all(secret not in event.message for event in events)
+    assert any("***REDACTED***" in event.message for event in events)
+
+
+@pytest.mark.parametrize(
+    "repo_id",
+    ["owner/../name", "owner/..\\configs", "owner/name/extra", "owner"],
+)
+def test_download_request_rejects_path_shaped_repo_id(repo_id: str) -> None:
+    with pytest.raises(ValueError, match="safe 'owner/name'"):
+        downloader.DownloadRequest(source="modelscope", repo_id=repo_id)

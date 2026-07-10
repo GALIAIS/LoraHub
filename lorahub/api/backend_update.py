@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from lorahub.core.redaction import redact_command_text
+
 _log = logging.getLogger(__name__)
 
 
@@ -61,6 +63,10 @@ def _git(repo: Path, *args: str, timeout: float = 30) -> subprocess.CompletedPro
     )
 
 
+def _git_error(value: str) -> str:
+    return redact_command_text(value.strip())
+
+
 def check_update(repo: Path) -> UpdateCheckResult:
     """Fetch from origin and compare HEAD against the tracking branch.
 
@@ -74,17 +80,23 @@ def check_update(repo: Path) -> UpdateCheckResult:
     # Determine current branch
     r = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     if r.returncode != 0:
-        return UpdateCheckResult(error=f"cannot determine branch: {r.stderr.strip()}")
+        return UpdateCheckResult(error=f"cannot determine branch: {_git_error(r.stderr)}")
     branch = r.stdout.strip()
     if not branch or branch == "HEAD":
-        branch = "main"
+        return UpdateCheckResult(
+            branch="HEAD",
+            error=(
+                "backend update check refused: repository is on a detached HEAD; "
+                "check out the intended branch first"
+            ),
+        )
 
     # Fetch from origin (quiet, no tags to keep it fast)
     r = _git(repo, "fetch", "origin", branch, "--quiet", timeout=60)
     if r.returncode != 0:
         return UpdateCheckResult(
             branch=branch,
-            error=f"git fetch failed: {r.stderr.strip()}",
+            error=f"git fetch failed: {_git_error(r.stderr)}",
         )
 
     # Current local HEAD
@@ -112,7 +124,12 @@ def check_update(repo: Path) -> UpdateCheckResult:
 
     # Count commits behind
     r = _git(repo, "rev-list", "--count", f"HEAD..origin/{branch}")
-    behind = int(r.stdout.strip()) if r.returncode == 0 else 0
+    count_error = r.returncode != 0
+    try:
+        behind = int(r.stdout.strip()) if r.returncode == 0 else 0
+    except ValueError:
+        behind = 0
+        count_error = True
 
     return UpdateCheckResult(
         update_available=behind > 0,
@@ -120,14 +137,19 @@ def check_update(repo: Path) -> UpdateCheckResult:
         remote_sha=remote_sha,
         commits_behind=behind,
         branch=branch,
+        error=(
+            "cannot determine how many remote commits are pending"
+            if count_error
+            else None
+        ),
     )
 
 
 def apply_update(repo: Path) -> UpdateCheckResult:
-    """Pull (fast-forward only) the repo to match origin.
+    """Fast-forward a clean backend checkout without discarding local work.
 
-    Returns the post-pull state. If the pull fails (e.g. local
-    modifications), the error field is populated.
+    Local modifications, detached HEADs, and diverged histories are reported
+    to the caller. They are never resolved with an implicit hard reset.
     """
     if not repo.is_dir() or not (repo / ".git").exists():
         return UpdateCheckResult(error=f"not a git repo: {repo}")
@@ -136,20 +158,40 @@ def apply_update(repo: Path) -> UpdateCheckResult:
     r = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     branch = r.stdout.strip() if r.returncode == 0 else "main"
     if not branch or branch == "HEAD":
-        branch = "main"
+        return UpdateCheckResult(
+            branch="HEAD",
+            error=(
+                "backend update refused: repository is on a detached HEAD; "
+                "check out the intended branch first"
+            ),
+        )
+
+    status = _git(repo, "status", "--porcelain", "--untracked-files=normal")
+    if status.returncode != 0:
+        return UpdateCheckResult(
+            branch=branch,
+            error=f"cannot inspect backend working tree: {_git_error(status.stderr)}",
+        )
+    if status.stdout.strip():
+        return UpdateCheckResult(
+            branch=branch,
+            error=(
+                "backend update refused: working tree contains local changes; "
+                "commit or stash them before updating"
+            ),
+        )
 
     # Pull with ff-only to avoid merge commits
     r = _git(repo, "pull", "--ff-only", "origin", branch, timeout=120)
     if r.returncode != 0:
-        stderr = r.stderr.strip()
-        # If ff-only fails, try a regular pull (handles diverged histories
-        # from force-pushes upstream — common for these training repos).
-        r2 = _git(repo, "reset", "--hard", f"origin/{branch}", timeout=30)
-        if r2.returncode != 0:
-            return UpdateCheckResult(
-                branch=branch,
-                error=f"pull failed: {stderr}; reset also failed: {r2.stderr.strip()}",
-            )
+        detail = _git_error(r.stderr or r.stdout) or "git pull --ff-only failed"
+        return UpdateCheckResult(
+            branch=branch,
+            error=(
+                f"backend update could not fast-forward: {detail}. "
+                "Resolve or back up the local branch manually; no files were reset"
+            ),
+        )
 
     # Read final state
     r = _git(repo, "rev-parse", "HEAD")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -13,6 +12,12 @@ from fastapi.testclient import TestClient
 from lorahub.api import app as app_module
 from lorahub.api import scheduler as sched_module
 from lorahub.api import state as state_module
+from lorahub.api.image_studio_library import (
+    ImageStudioLibrary,
+    PromptTemplate,
+    TagEntry,
+    TriggerWordEntry,
+)
 from lorahub.api.image_studio_store import (
     ImageAnnotation,
     ImageEmbedding,
@@ -20,14 +25,7 @@ from lorahub.api.image_studio_store import (
     ImageStudioStore,
     PendingOp,
 )
-from lorahub.api.image_studio_library import (
-    ImageStudioLibrary,
-    PromptTemplate,
-    TagEntry,
-    TriggerWordEntry,
-)
 from lorahub.api.task_sessions import TaskSessionStore
-
 
 # --------------------------------------------------------------------------- #
 # Store unit tests
@@ -257,6 +255,136 @@ def test_dataset_name_endpoints_reject_dot_paths(
     assert (tmp_path / "outside.txt").is_file()
 
 
+def test_dataset_delete_preserves_prior_trash_entry(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers.image_studio import datasets
+
+    monkeypatch.setattr(datasets.api_paths, "runs_dir", lambda: tmp_path)
+    dataset = tmp_path / "repeat"
+    dataset.mkdir()
+    (dataset / "first.png").write_bytes(b"first")
+    assert client.delete("/api/image-studio/datasets/repeat").status_code == 200
+
+    dataset.mkdir()
+    (dataset / "second.png").write_bytes(b"second")
+    assert client.delete("/api/image-studio/datasets/repeat").status_code == 200
+
+    trash_root = tmp_path / "_dataset_trash"
+    trashed = sorted(trash_root.glob("*/*"))
+    assert len(trashed) == 2
+    assert {path.name for path in trashed} == {"repeat", "repeat-2"}
+    by_name = {path.name: path for path in trashed}
+    assert (by_name["repeat"] / "first.png").exists()
+    assert (by_name["repeat-2"] / "second.png").exists()
+
+
+def test_dataset_registry_ignores_link_alias_and_corrupt_metadata(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "actual"
+    dataset.mkdir()
+    (dataset / "dataset.json").write_text("{invalid", encoding="utf-8")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(dataset, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    response = client.get("/api/image-studio/datasets")
+
+    assert response.status_code == 200, response.text
+    rows = {row["name"]: row for row in response.json()["datasets"]}
+    assert "alias" not in rows
+    assert rows["actual"]["meta"] == {}
+
+
+def test_dataset_delete_rejects_link_alias(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "actual"
+    dataset.mkdir()
+    marker = dataset / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(dataset, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    response = client.delete("/api/image-studio/datasets/alias")
+
+    assert response.status_code == 400
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_dataset_delete_rejects_active_upload(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    from lorahub.api.routers.image_studio import datasets
+
+    dataset = tmp_path / "busy-upload"
+    dataset.mkdir()
+    assert datasets._claim_dataset_upload(dataset)
+    try:
+        response = client.delete("/api/image-studio/datasets/busy-upload")
+    finally:
+        datasets._release_dataset_upload(dataset)
+
+    assert response.status_code == 409
+    assert dataset.is_dir()
+
+
+def test_dataset_delete_rejects_active_training_job(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import state
+
+    dataset = tmp_path / "busy-training"
+    dataset.mkdir()
+    registry = state.JobRegistry()
+    job = registry.create(
+        tmp_path / "run",
+        {"dataset": {"source": str(dataset)}},
+    )
+    job.state = state.JobState.running
+    monkeypatch.setattr(state, "registry", registry)
+
+    response = client.delete("/api/image-studio/datasets/busy-training")
+
+    assert response.status_code == 409
+    assert dataset.is_dir()
+
+
+def test_image_soft_delete_preserves_prior_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api.routers.image_studio import _shared
+
+    runs = tmp_path / "runs"
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    image = dataset / "same.png"
+    monkeypatch.setattr(_shared.api_paths, "runs_dir", lambda: runs)
+
+    image.write_bytes(b"first")
+    _shared._soft_delete(image)
+    image.write_bytes(b"second")
+    _shared._soft_delete(image)
+
+    trashed = sorted((runs / "_image_studio_trash").glob("*/*.png"))
+    assert [path.name for path in trashed] == ["same-2.png", "same.png"]
+    assert {path.read_bytes() for path in trashed} == {b"first", b"second"}
+
+
 def test_dataset_upload_normalizes_plain_file_names(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -271,6 +399,111 @@ def test_dataset_upload_normalizes_plain_file_names(
     assert r.status_code == 200, r.text
     assert not (tmp_path / "escape.png").exists()
     assert (dataset / "escape.png").read_bytes() == b"not-image"
+
+
+@pytest.mark.parametrize("filename", ["CON.png", "image:stream.png", "bad?.png"])
+def test_dataset_upload_rejects_cross_platform_unsafe_names(
+    client: TestClient,
+    filename: str,
+) -> None:
+    dataset = Path.cwd() / "dataset"
+    dataset.mkdir(exist_ok=True)
+
+    response = client.post(
+        "/api/image-studio/datasets/dataset/upload",
+        files={"files": (filename, b"not-image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert "skipped unsafe filename" in response.text
+    assert not any(dataset.iterdir())
+
+
+def test_dataset_upload_rejects_oversized_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "dataset").mkdir()
+    monkeypatch.setenv("LORAHUB_MAX_UPLOAD_BYTES", "4")
+
+    response = client.post(
+        "/api/image-studio/datasets/dataset/upload",
+        files={"files": ("large.png", b"12345", "image/png")},
+    )
+
+    assert response.status_code == 413
+    assert not (tmp_path / "dataset" / "large.png").exists()
+
+
+def test_dataset_upload_rejects_oversized_request(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "dataset").mkdir()
+    monkeypatch.setenv("LORAHUB_MAX_UPLOAD_BYTES", "8")
+    monkeypatch.setenv("LORAHUB_MAX_UPLOAD_REQUEST_BYTES", "6")
+
+    response = client.post(
+        "/api/image-studio/datasets/dataset/upload",
+        files=[
+            ("files", ("one.png", b"1234", "image/png")),
+            ("files", ("two.png", b"5678", "image/png")),
+        ],
+    )
+
+    assert response.status_code == 413
+    assert not (tmp_path / "dataset" / "one.png").exists()
+    assert not (tmp_path / "dataset" / "two.png").exists()
+
+
+def test_archive_staging_preserves_nested_paths_and_rejects_escape(tmp_path: Path) -> None:
+    from lorahub.api.routers.image_studio.datasets import _safe_staged_member
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    assert _safe_staged_member(stage, "nested/image.png") == (
+        stage / "nested" / "image.png"
+    ).resolve()
+    assert _safe_staged_member(stage, "../escape.png") is None
+    assert _safe_staged_member(stage, "C:\\escape.png") is None
+
+
+def test_archive_overwrite_failure_preserves_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import zipfile
+
+    from lorahub.api.routers.image_studio.datasets import _extract_archive
+
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    existing = dataset / "image.png"
+    existing.write_bytes(b"original")
+    archive = tmp_path / "images.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("image.png", b"replacement")
+
+    class BrokenReader(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            if self.tell() > 0:
+                raise OSError("broken archive stream")
+            return super().read(4 if size < 0 else min(size, 4))
+
+    original_open = zipfile.ZipFile.open
+
+    def broken_open(self, name, mode="r", pwd=None, *, force_zip64=False):
+        if mode == "r":
+            return BrokenReader(b"replacement")
+        return original_open(self, name, mode, pwd, force_zip64=force_zip64)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", broken_open)
+
+    count, errors = _extract_archive(archive, dataset, True, "overwrite")
+
+    assert count == 0
+    assert errors
+    assert existing.read_bytes() == b"original"
 
 
 def test_get_image(client: TestClient, sample_dir: Path) -> None:
@@ -740,7 +973,7 @@ def test_image_studio_tagging_writes_task_session(
     class FakeTagger:
         active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             pass
 
         def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
@@ -799,7 +1032,7 @@ def test_image_studio_tagging_status_reads_persisted_result_after_memory_clear(
     class FakeTagger:
         active_provider = "CPUExecutionProvider"
 
-        def load(self) -> None:
+        def load(self, **_kwargs: Any) -> None:
             pass
 
         def tag_directory(self, directory: Path, **kwargs: Any) -> list[Any]:
@@ -909,15 +1142,56 @@ def test_apply_ops_rotate(client: TestClient, sample_dir: Path) -> None:
     assert r.json()["errors"] == []
 
 
+def test_mutating_image_studio_routes_reject_read_only_sources(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "writable"
+    allowed.mkdir()
+    outside = tmp_path / "read-only"
+    outside.mkdir()
+    image = outside / "image.png"
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), color="blue").save(image)
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(allowed))
+
+    queued = client.post(
+        "/api/image-studio/ops",
+        json={"path": str(image), "op": "rotate", "payload": {"degrees": 90}},
+    )
+    caption = client.post(
+        "/api/image-studio/ai/caption",
+        json={"path": str(outside)},
+    )
+    tagging = client.post(
+        "/api/image-studio/tagging/start",
+        json={"path": str(outside), "device": "cpu"},
+    )
+    deleted = client.post(
+        "/api/image-studio/dedupe/batch-delete",
+        json={"paths": [str(image)]},
+    )
+
+    assert queued.status_code == 400
+    assert caption.status_code == 400
+    assert tagging.status_code == 400
+    assert deleted.status_code == 200
+    assert deleted.json()["deletedCount"] == 0
+    assert deleted.json()["errors"]
+    assert image.is_file()
+
+
 # --------------------------------------------------------------------------- #
 # Phash unit tests
 # --------------------------------------------------------------------------- #
 
 
 def test_phash64_deterministic(tmp_path: Path) -> None:
-    from lorahub.core.phash import phash64
-
     from PIL import Image
+
+    from lorahub.core.phash import phash64
     img = Image.new("RGB", (64, 64), color="blue")
     p = tmp_path / "blue.png"
     img.save(p)
@@ -928,9 +1202,9 @@ def test_phash64_deterministic(tmp_path: Path) -> None:
 
 
 def test_dhash64_deterministic(tmp_path: Path) -> None:
-    from lorahub.core.phash import dhash64
-
     from PIL import Image
+
+    from lorahub.core.phash import dhash64
     img = Image.new("RGB", (64, 64), color="green")
     p = tmp_path / "green.png"
     img.save(p)
@@ -948,9 +1222,9 @@ def test_hamming_distance() -> None:
 
 
 def test_similar_images_low_distance(tmp_path: Path) -> None:
-    from lorahub.core.phash import hamming_distance, phash64
-
     from PIL import Image
+
+    from lorahub.core.phash import hamming_distance, phash64
     img1 = Image.new("RGB", (128, 128), color=(100, 150, 200))
     img2 = img1.copy()
     # Slightly modify one pixel

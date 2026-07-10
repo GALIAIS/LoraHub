@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -21,19 +21,39 @@ class ListQuery(BaseModel):
     recursive: bool = False
     page: int = 1
     limit: int = 48
-    sort: str = "name"
-    filter_caption: str | None = Field(None, alias="filter.caption")
+    sort: Literal["name", "mtime", "size"] = "name"
+    filter_caption: Literal["with", "missing"] | None = Field(
+        None,
+        alias="filter.caption",
+    )
     filter_quality: str | None = Field(None, alias="filter.quality")
-    filter_aspect: str | None = Field(None, alias="filter.aspect")
+    filter_aspect: Literal["landscape", "portrait", "square"] | None = Field(
+        None,
+        alias="filter.aspect",
+    )
 
     model_config = {"populate_by_name": True}
 
 
 def _sort_images(images: list[Path], sort: str) -> list[Path]:
+    def stat_value(path: Path, attr: str) -> float:
+        try:
+            return float(getattr(path.stat(), attr))
+        except OSError:
+            return -1.0
+
     if sort == "mtime":
-        return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
+        return sorted(
+            images,
+            key=lambda path: stat_value(path, "st_mtime"),
+            reverse=True,
+        )
     if sort == "size":
-        return sorted(images, key=lambda p: p.stat().st_size, reverse=True)
+        return sorted(
+            images,
+            key=lambda path: stat_value(path, "st_size"),
+            reverse=True,
+        )
     return sorted(images, key=lambda p: p.name.lower())
 
 
@@ -43,15 +63,15 @@ def list_images(
     recursive: bool = False,
     page: int = 1,
     limit: int = 48,
-    sort: str = "name",
-    filter_caption: str | None = None,
+    sort: Literal["name", "mtime", "size"] = "name",
+    filter_caption: Literal["with", "missing"] | None = None,
     filter_quality: str | None = None,
-    filter_aspect: str | None = None,
+    filter_aspect: Literal["landscape", "portrait", "square"] | None = None,
 ) -> dict[str, Any]:
     directory = _resolve_under_roots(path)
     if not directory.is_dir():
         raise HTTPException(400, f"not a directory: {path}")
-    images = _scan_images(directory, recursive)
+    images = [image for image in _scan_images(directory, recursive) if image.is_file()]
     images = _sort_images(images, sort)
 
     store = _store()
@@ -70,7 +90,14 @@ def list_images(
     total = len(images)
     start = (page - 1) * limit
     page_items = images[start : start + limit]
-    items = [_image_item(p, directory, store) for p in page_items]
+    items: list[dict[str, Any]] = []
+    for image in page_items:
+        try:
+            items.append(_image_item(image, directory, store))
+        except OSError:
+            # A concurrent curation operation can move a cached entry after
+            # the page was sliced. Return the rest of the page, not a 500.
+            continue
     return {"path": str(directory), "total": total, "page": page, "limit": limit, "items": items}
 
 

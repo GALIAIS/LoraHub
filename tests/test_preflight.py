@@ -158,6 +158,35 @@ def test_preflight_allows_ai_toolkit_krea2_repo_id(tmp_path: Path) -> None:
     ]
 
 
+def test_preflight_blocks_unusable_ai_toolkit_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lorahub.core.backends._common import bootstrap
+    from lorahub.core.backends.errors import BootstrapError
+
+    def fail_startup(_python: Path) -> None:
+        raise BootstrapError("Python executable failed startup (exit 0xC0000142)")
+
+    monkeypatch.setattr(bootstrap, "check_python", fail_startup)
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "krea2",
+            "base_model.checkpoint": "krea/Krea-2-Raw",
+            "backend.type": "ai_toolkit",
+        },
+    )
+
+    findings = run_preflight(
+        cfg,
+        tmp_path / "ws",
+        skip=("disk_low", "path_encoding", "optional_dependencies"),
+    )
+
+    matches = [f for f in findings if f.category == "venv_missing"]
+    assert any("0xC0000142" in f.remediation for f in matches), findings
+
+
 def test_preflight_missing_dataset_blocks(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, **{"dataset.source": str(tmp_path / "ghost-data")})
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
@@ -191,6 +220,27 @@ def test_preflight_python_executable_missing_blocks(tmp_path: Path) -> None:
     findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
     cats = {f.category for f in findings if f.severity == "error"}
     assert "venv_missing" in cats, findings
+
+
+def test_preflight_python_executable_startup_failure_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lorahub.core.backends._common import bootstrap as common_bootstrap
+    from lorahub.core.backends.errors import BootstrapError
+
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"")
+
+    def fail_startup(_python: Path) -> None:
+        raise BootstrapError("DLL initialization failed (0xC0000142)")
+
+    monkeypatch.setattr(common_bootstrap, "check_python", fail_startup)
+    cfg = _cfg(tmp_path, **{"backend.python_executable": str(python)})
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    matches = [f for f in findings if f.category == "venv_missing"]
+    assert any("0xC0000142" in f.remediation for f in matches), findings
 
 
 def test_preflight_collects_all_blockers_in_one_pass(tmp_path: Path) -> None:

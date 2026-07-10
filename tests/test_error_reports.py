@@ -9,6 +9,7 @@ Three layers under test:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,9 @@ from fastapi.testclient import TestClient
 from lorahub.api import app as app_module
 from lorahub.api.error_reporter import capture, capture_exception
 from lorahub.api.error_reports import (
+    MAX_ERROR_CONTEXT_BYTES,
+    MAX_ERROR_MESSAGE_CHARS,
+    MAX_ERROR_STACK_CHARS,
     ErrorReport,
     ErrorReportStore,
     default_error_report_store_path,
@@ -85,6 +89,30 @@ def test_store_bounds_at_max_rows(store: ErrorReportStore) -> None:
     assert store.count() == 10
 
 
+def test_store_export_uses_full_iterator(
+    store: ErrorReportStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = [
+        ErrorReport.create(
+            severity="info",
+            source="user.report",
+            category="probe",
+            title=f"item-{index}",
+            message="x",
+        )
+        for index in range(3)
+    ]
+    monkeypatch.setattr(store, "iter_all", lambda: iter(reports))
+    dest = tmp_path / "export.ndjson"
+
+    count = store.export_ndjson(dest)
+
+    assert count == 3
+    assert len(dest.read_text(encoding="utf-8").splitlines()) == 3
+
+
 def test_capture_persists_via_module_singleton(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -122,6 +150,76 @@ def test_capture_exception_attaches_stack(
     assert persisted is not None
     assert "ValueError" in (persisted.stack or "")
     assert "boom" in persisted.message
+
+
+def test_capture_redacts_secrets_before_local_persistence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    fresh = ErrorReportStore(tmp_path / "redacted.sqlite")
+    monkeypatch.setattr(app_module, "_error_report_store", fresh, raising=False)
+    secret = "hf_abcdefghijklmnop"
+
+    rep = capture(
+        severity="error",
+        source="backend.test",
+        category="probe",
+        title="download failed",
+        message=f"HF_TOKEN={secret}",
+        stack=f"Authorization: Bearer {secret}",
+        context={"headers": {"cookie": f"session={secret}"}},
+    )
+
+    assert rep is not None
+    persisted = fresh.get(rep.id)
+    assert persisted is not None
+    assert secret not in persisted.message
+    assert secret not in (persisted.stack or "")
+    assert secret not in repr(persisted.context)
+
+
+def test_capture_bounds_circular_and_oversized_context() -> None:
+    context: dict[str, Any] = {
+        "job": "job-1",
+        "log_excerpt": "\x00" * 100_000,
+        "events": list(range(500)),
+    }
+    context["self"] = context
+
+    rep = capture(
+        severity="error",
+        source="backend.test",
+        category="probe",
+        title="bounded context",
+        message="failed",
+        context=context,
+        store=None,
+    )
+
+    assert rep is not None
+    encoded = json.dumps(rep.context, ensure_ascii=False).encode("utf-8")
+    assert len(encoded) <= MAX_ERROR_CONTEXT_BYTES
+    assert rep.context["job"] == "job-1"
+    assert rep.context["self"] == "[circular reference]"
+    assert rep.context["events"][-1] == "[truncated by LoRaHub]"
+
+
+def test_error_report_create_bounds_message_and_stack() -> None:
+    message = "message-start\n" + ("x" * MAX_ERROR_MESSAGE_CHARS) + "\nmessage-end"
+    stack = "stack-start\n" + ("y" * MAX_ERROR_STACK_CHARS) + "\nstack-end"
+
+    rep = ErrorReport.create(
+        severity="error",
+        source="backend.test",
+        category="probe",
+        title="bounded text",
+        message=message,
+        stack=stack,
+    )
+
+    assert len(rep.message) == MAX_ERROR_MESSAGE_CHARS
+    assert rep.stack is not None and len(rep.stack) == MAX_ERROR_STACK_CHARS
+    assert "message-start" in rep.message and "message-end" in rep.message
+    assert "stack-start" in rep.stack and "stack-end" in rep.stack
 
 
 def test_capture_falls_back_when_store_missing(

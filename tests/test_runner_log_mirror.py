@@ -87,6 +87,39 @@ def test_training_log_records_stdout_and_stderr(tmp_path: Path) -> None:
     assert "returncode=0" in body
 
 
+def test_training_log_and_spawn_event_redact_command_secrets(tmp_path: Path) -> None:
+    events, on_event = _capture_listener()
+    secret = "hf_abcdefghijklmnop"
+    runner = SubprocessRunner(
+        argv=[
+            *_stub_argv(f"print('HF_TOKEN={secret}', flush=True)"),
+            "--token",
+            secret,
+        ],
+        workspace=tmp_path,
+        on_event=on_event,
+        parse_line=_identity_parser,
+        job_id="secret-test",
+    )
+
+    runner.start()
+    result = runner.wait(timeout=10)
+
+    assert result.returncode == 0
+    body = (tmp_path / _TRAINING_LOG_FILENAME).read_text(encoding="utf-8")
+    spawn_messages = [
+        str(event.payload.get("message", ""))
+        for event in events
+        if event.type is EventType.log and event.payload.get("source") == "runner"
+    ]
+    assert secret not in body
+    assert "***REDACTED***" in body
+    assert spawn_messages
+    assert all(secret not in message for message in spawn_messages)
+    assert any("***REDACTED***" in message for message in spawn_messages)
+    assert all(secret not in repr(event.payload) for event in events)
+
+
 def test_training_log_appends_across_spawns(tmp_path: Path) -> None:
     """Resume / rerun-in-place must not nuke the prior run's log."""
     for marker in ("first-spawn", "second-spawn"):

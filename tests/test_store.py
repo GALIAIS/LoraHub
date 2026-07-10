@@ -101,6 +101,7 @@ def test_reap_orphan_hides_windows_taskkill_console(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(store.sys, "platform", "win32")
     monkeypatch.setattr(store.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(store, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(store, "_pid_is_ours", lambda pid, stamp: True)
 
     def fake_run(*_args: object, **kwargs: object) -> SimpleNamespace:
         calls.append(kwargs)
@@ -108,8 +109,21 @@ def test_reap_orphan_hides_windows_taskkill_console(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(store.subprocess, "run", fake_run)
 
-    assert store._reap_orphan(123) is True
+    assert store._reap_orphan(123, 100.0) is True
     assert calls[0]["creationflags"] == 0x08000000
+
+
+def test_pid_identity_requires_a_verifiable_create_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import store
+
+    monkeypatch.setattr(store, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(store, "_pid_create_time", lambda _pid: None)
+
+    assert store._pid_is_ours(123, None) is False
+    assert store._pid_is_ours(123, 100.0) is False
+    assert store._reap_orphan(123, None) is False
 
 
 def test_registry_persists_creates(tmp_path: Path) -> None:

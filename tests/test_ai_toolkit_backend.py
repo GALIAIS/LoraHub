@@ -8,7 +8,9 @@ import yaml
 from lorahub.api.jobs_helpers import _select_backend
 from lorahub.api.settings import Settings, probe_ai_toolkit_backend
 from lorahub.api.terminal_runner import resolve_backend_session
+from lorahub.core.backends._common import bootstrap as common_bootstrap
 from lorahub.core.backends.ai_toolkit import backend as ai_backend
+from lorahub.core.backends.ai_toolkit import bootstrap as ai_bootstrap
 from lorahub.core.backends.ai_toolkit import installer
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.ai_toolkit.compiler import compile_config
@@ -328,6 +330,35 @@ def test_select_backend_returns_ai_toolkit_backend() -> None:
     assert backend.name == "ai_toolkit"
 
 
+def test_ai_toolkit_default_repo_uses_project_root(monkeypatch, tmp_path: Path) -> None:
+    repo = tmp_path / "external" / "ai_toolkit"
+    repo.mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    monkeypatch.delenv("LORAHUB_AI_TOOLKIT_REPO", raising=False)
+    monkeypatch.setattr(ai_bootstrap, "project_root", lambda: tmp_path)
+
+    assert ai_bootstrap.default_repo_path() == repo
+
+
+def test_backend_python_probe_rejects_dll_init_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"")
+    monkeypatch.setattr(
+        common_bootstrap.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0xC0000142,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(common_bootstrap.BootstrapError, match="0xC0000142"):
+        common_bootstrap.check_python(python)
+
+
 def test_probe_ai_toolkit_backend_reports_vendored_ready(tmp_path: Path) -> None:
     repo = tmp_path / "ai_toolkit"
     (repo / "toolkit").mkdir(parents=True)
@@ -351,6 +382,36 @@ def test_probe_ai_toolkit_backend_reports_vendored_ready(tmp_path: Path) -> None
     assert status["python_ok"] is True
     assert status["venv_detected"] is True
     assert status["ready"] is True
+
+
+def test_probe_ai_toolkit_backend_rejects_python_that_cannot_start(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "ai_toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "extensions_built_in" / "sd_trainer").mkdir(parents=True)
+    for name in ("run.py", "toolkit/job.py", "extensions_built_in/sd_trainer/__init__.py"):
+        (repo / name).write_text("", encoding="utf-8")
+    python = repo / "venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"")
+    monkeypatch.setattr(
+        common_bootstrap.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0xC0000142,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    status = probe_ai_toolkit_backend(
+        Settings(ai_toolkit_repo_path=str(repo), ai_toolkit_python=str(python))
+    )
+
+    assert status["python_ok"] is False
+    assert "0xC0000142" in status["python_error"]
+    assert status["ready"] is False
 
 
 def test_terminal_resolves_ai_toolkit_session(tmp_path: Path) -> None:

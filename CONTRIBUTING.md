@@ -19,7 +19,7 @@
 ```powershell
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-pip install -e ".[api,dev]"
+pip install -e ".[api,dev,cpu]"
 pytest tests/ -q
 ```
 

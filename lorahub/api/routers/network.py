@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from lorahub.core.redaction import redact_command_text
 
 router = APIRouter(prefix="/api")
 
@@ -64,8 +67,8 @@ PRESETS: dict[str, list[dict[str, str]]] = {
 
 class ProbeRequest(BaseModel):
     category: str | None = None  # one of the keys in PRESETS, optional
-    urls: list[str] | None = None  # extra ad-hoc URLs to probe
-    timeout_ms: int = 4000
+    urls: list[str] | None = Field(default=None, max_length=32)
+    timeout_ms: int = Field(default=4000, ge=500, le=15_000)
 
 
 class ProbeResult(BaseModel):
@@ -99,9 +102,23 @@ def _probe_one(url: str, timeout: float) -> tuple[int | None, float | None, str 
                 elapsed = (time.monotonic() - started) * 1000.0
                 return resp.status, elapsed, None
         except Exception as inner:  # noqa: BLE001
-            return None, None, str(inner)[:200]
+            return None, None, redact_command_text(str(inner))[:200]
     except Exception as exc:  # noqa: BLE001
-        return None, None, str(exc)[:200]
+        return None, None, redact_command_text(str(exc))[:200]
+
+
+def _validate_probe_url(raw: str) -> str:
+    value = raw.strip()
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        _ = parsed.port
+    except ValueError as exc:
+        raise HTTPException(422, "invalid probe URL") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(422, "probe URL must use http or https")
+    if parsed.username is not None or parsed.password is not None:
+        raise HTTPException(422, "probe URL must not contain credentials")
+    return value
 
 
 @router.get("/network/presets")
@@ -122,12 +139,21 @@ def probe(req: ProbeRequest) -> list[ProbeResult]:
         targets.extend(PRESETS[req.category])
     if req.urls:
         for u in req.urls:
-            targets.append({"label": u, "value": u, "probe": u})
+            value = _validate_probe_url(u)
+            targets.append({"label": value, "value": value, "probe": value})
 
     if not targets:
         raise HTTPException(status_code=400, detail="no targets to probe")
 
-    timeout = max(0.5, req.timeout_ms / 1000.0)
+    deduplicated: dict[str, dict[str, str]] = {}
+    for target in targets:
+        probe_url = _validate_probe_url(target["probe"])
+        deduplicated.setdefault(probe_url, {**target, "probe": probe_url})
+    targets = list(deduplicated.values())
+    if len(targets) > 40:
+        raise HTTPException(413, "too many probe targets")
+
+    timeout = req.timeout_ms / 1000.0
     results: list[ProbeResult] = []
     with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
         futs = {

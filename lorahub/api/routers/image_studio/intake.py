@@ -28,17 +28,26 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.dataset_files import (
+    IMAGE_SUFFIXES,
+    is_link_like,
+    iter_safe_files,
+    resolve_dataset_directory,
+    resolve_file_under,
+)
 
 from ._shared import _clear_dataset_view_caches
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
+_intake_publish_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -47,10 +56,10 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 
 def _ensure_dataset(dataset_path: str) -> Path:
-    p = Path(dataset_path).resolve()
-    if not p.is_dir():
-        raise HTTPException(404, f"dataset not found: {p}")
-    return p
+    try:
+        return resolve_dataset_directory(dataset_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _resolve_external(p: str) -> Path:
@@ -63,27 +72,27 @@ def _resolve_external(p: str) -> Path:
 
 
 def _walk_images(root: Path, recursive: bool):
-    if recursive:
-        for cur, dirs, files in os.walk(root):
-            dirs[:] = [d for d in dirs if d != ".workbench"]
-            for f in files:
-                p = Path(cur) / f
-                if p.suffix.lower() in IMAGE_SUFFIXES:
-                    yield p
-    else:
-        for p in root.iterdir():
-            if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
-                yield p
+    for path in iter_safe_files(
+        root,
+        recursive=recursive,
+        skip_dirs=frozenset({".workbench"}),
+    ):
+        if path.suffix.lower() in IMAGE_SUFFIXES:
+            yield path
 
 
-def _disambiguate(p: Path) -> Path:
-    """Return ``p`` if free, else ``p`` with ``-2 / -3 / ...``."""
-    if not p.exists():
-        return p
-    i = 2
+def _path_occupied(path: Path) -> bool:
+    return path.exists() or is_link_like(path)
+
+
+def _disambiguate(p: Path, *, with_caption: bool) -> Path:
+    """Return a free image/caption pair without overwriting either file."""
+    i = 1
     while True:
-        cand = p.with_name(f"{p.stem}-{i}{p.suffix}")
-        if not cand.exists():
+        cand = p if i == 1 else p.with_name(f"{p.stem}-{i}{p.suffix}")
+        if not _path_occupied(cand) and not (
+            with_caption and _path_occupied(cand.with_suffix(".txt"))
+        ):
             return cand
         i += 1
 
@@ -145,14 +154,60 @@ def _is_near_duplicate(h: str, others: set[str], threshold: int) -> bool:
     return False
 
 
-def _copy_with_sidecar(src: Path, dst: Path) -> None:
-    """Copy ``src`` to ``dst`` preserving mtime; bring its .txt
-    caption sidecar if one exists."""
+def _reserve_targets(paths: list[Path]) -> None:
+    reserved: list[Path] = []
+    try:
+        for path in paths:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+            reserved.append(path)
+    except Exception:
+        for path in reserved:
+            path.unlink(missing_ok=True)
+        raise
+
+
+def _copy_with_sidecar(src: Path, dst: Path, *, move: bool = False) -> list[str]:
+    """Publish an image/caption pair without exposing partial copies.
+
+    ``move`` uses copy-then-delete so an interrupted cross-device move cannot
+    lose the source. Source cleanup failures are returned as warnings after the
+    destination pair is safely published.
+    """
+    side = resolve_file_under(src.parent, src.with_suffix(".txt"))
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-    side = src.with_suffix(".txt")
-    if side.is_file():
-        shutil.copy2(side, dst.with_suffix(".txt"))
+    stage = Path(tempfile.mkdtemp(dir=dst.parent, prefix=".intake-"))
+    staged_image = stage / dst.name
+    staged_caption = stage / dst.with_suffix(".txt").name if side is not None else None
+    targets = [dst]
+    if staged_caption is not None:
+        targets.append(dst.with_suffix(".txt"))
+    try:
+        shutil.copy2(src, staged_image)
+        if side is not None and staged_caption is not None:
+            shutil.copy2(side, staged_caption)
+        _reserve_targets(targets)
+        try:
+            if staged_caption is not None:
+                staged_caption.replace(dst.with_suffix(".txt"))
+            staged_image.replace(dst)
+        except Exception:
+            for path in targets:
+                path.unlink(missing_ok=True)
+            raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+    warnings: list[str] = []
+    if move:
+        for source in (src, side):
+            if source is None:
+                continue
+            try:
+                source.unlink()
+            except OSError as exc:
+                warnings.append(f"could not remove source {source}: {exc}")
+    return warnings
 
 
 # --------------------------------------------------------------------------- #
@@ -267,13 +322,19 @@ def intake_local_path(req: LocalPathRequest) -> dict[str, Any]:
     src = _resolve_external(req.source_path)
     if src.resolve() == dst.resolve():
         raise HTTPException(400, "source and destination are the same dataset")
+    try:
+        src.resolve().relative_to(dst.resolve())
+    except ValueError:
+        pass
+    else:
+        raise HTTPException(400, "source is inside destination dataset")
     if src.is_dir():
         try:
-            src.resolve().relative_to(dst.resolve())
+            dst.resolve().relative_to(src.resolve())
         except ValueError:
             pass
         else:
-            raise HTTPException(400, "source is inside destination dataset")
+            raise HTTPException(400, "source contains destination dataset")
 
     candidates: list[Path] = []
     if src.is_file():
@@ -293,35 +354,33 @@ def intake_local_path(req: LocalPathRequest) -> dict[str, Any]:
 
     for f in candidates:
         try:
+            candidate_hash: str | None = None
             if req.skip_duplicates:
-                h = _phash(f)
-                if h is not None and _is_near_duplicate(
-                    h, existing, req.phash_threshold,
+                candidate_hash = _phash(f)
+                if candidate_hash is not None and _is_near_duplicate(
+                    candidate_hash, existing, req.phash_threshold,
                 ):
                     skipped.append({"source_path": str(f), "reason": "exists"})
                     continue
-                if h is not None and _is_near_duplicate(
-                    h, seen_in_batch, req.phash_threshold,
+                if candidate_hash is not None and _is_near_duplicate(
+                    candidate_hash, seen_in_batch, req.phash_threshold,
                 ):
                     skipped.append(
                         {"source_path": str(f), "reason": "in-batch-duplicate"},
                     )
                     continue
-                if h is not None:
-                    seen_in_batch.add(h)
-                    existing.add(h)
 
-            target = _disambiguate(dst / f.name)
-            if req.move:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(f), str(target))
-                # Sidecar moves too if it lives next to the source.
-                side_src = f.with_suffix(".txt")
-                if side_src.is_file():
-                    shutil.move(str(side_src), str(target.with_suffix(".txt")))
-            else:
-                _copy_with_sidecar(f, target)
-            imported.append({"source_path": str(f), "imported_path": str(target)})
+            side = resolve_file_under(f.parent, f.with_suffix(".txt"))
+            with _intake_publish_lock:
+                target = _disambiguate(dst / f.name, with_caption=side is not None)
+                warnings = _copy_with_sidecar(f, target, move=req.move)
+            row = {"source_path": str(f), "imported_path": str(target)}
+            if warnings:
+                row["warning"] = "; ".join(warnings)
+            imported.append(row)
+            if candidate_hash is not None:
+                seen_in_batch.add(candidate_hash)
+                existing.add(candidate_hash)
         except (OSError, shutil.Error) as exc:
             failed.append({"source_path": str(f), "error": str(exc)})
 
@@ -382,26 +441,28 @@ def intake_from_dataset(req: FromDatasetRequest) -> dict[str, Any]:
 
     for img, rel in candidates:
         try:
+            candidate_hash: str | None = None
             if req.skip_duplicates:
-                h = _phash(img)
-                if h is not None and _is_near_duplicate(
-                    h, existing, req.phash_threshold,
+                candidate_hash = _phash(img)
+                if candidate_hash is not None and _is_near_duplicate(
+                    candidate_hash, existing, req.phash_threshold,
                 ):
                     skipped.append({"source_path": str(img), "reason": "exists"})
                     continue
-                if h is not None and _is_near_duplicate(
-                    h, seen_in_batch, req.phash_threshold,
+                if candidate_hash is not None and _is_near_duplicate(
+                    candidate_hash, seen_in_batch, req.phash_threshold,
                 ):
                     skipped.append(
                         {"source_path": str(img), "reason": "in-batch-duplicate"},
                     )
                     continue
-                if h is not None:
-                    seen_in_batch.add(h)
-                    existing.add(h)
-
-            target = _disambiguate(dst / Path(rel).name)
-            _copy_with_sidecar(img, target)
+            side = resolve_file_under(img.parent, img.with_suffix(".txt"))
+            with _intake_publish_lock:
+                target = _disambiguate(
+                    dst / Path(rel).name,
+                    with_caption=side is not None,
+                )
+                _copy_with_sidecar(img, target)
             imported.append(
                 {
                     "source_path": str(img),
@@ -409,6 +470,9 @@ def intake_from_dataset(req: FromDatasetRequest) -> dict[str, Any]:
                     "source_relative": rel,
                 },
             )
+            if candidate_hash is not None:
+                seen_in_batch.add(candidate_hash)
+                existing.add(candidate_hash)
         except OSError as exc:
             failed.append({"source_path": str(img), "error": str(exc)})
 

@@ -109,6 +109,27 @@ def test_archive_clear_all(client: TestClient, tmp_path: Path) -> None:
     assert not (archive / "a").exists()
 
 
+def test_archive_delete_link_removes_only_link(
+    client: TestClient, tmp_path: Path
+) -> None:
+    archive = tmp_path / "runs" / "_archive"
+    target = archive / "real-job"
+    target.mkdir(parents=True)
+    keep = target / "events.jsonl"
+    keep.write_text("keep\n", encoding="utf-8")
+    link = archive / "linked-job"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    response = client.delete("/api/storage/archive/linked-job")
+
+    assert response.status_code == 200
+    assert not link.exists()
+    assert keep.read_text(encoding="utf-8") == "keep\n"
+
+
 def test_hf_cache_clear_returns_404_when_missing(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -144,3 +165,77 @@ def test_hf_cache_clear_succeeds_when_path_exists(
     body = r.json()
     assert body["bytes_freed"] >= 4096
     assert not fake_cache.exists()
+
+
+def test_hf_cache_clear_refuses_ambiguous_directory(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "ordinary-data"
+    protected.mkdir()
+    keep = protected / "keep.txt"
+    keep.write_text("keep\n")
+    monkeypatch.setattr(
+        "lorahub.api.routers.storage._hf_cache_root",
+        lambda: protected,
+    )
+
+    response = client.delete("/api/storage/hf-cache")
+
+    assert response.status_code == 400
+    assert keep.read_text() == "keep\n"
+
+
+def test_hf_cache_clear_refuses_project_cache_symlink_to_protected_data(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    protected = project / "configs"
+    protected.mkdir(parents=True)
+    keep = protected / "keep.yaml"
+    keep.write_text("keep: true\n", encoding="utf-8")
+    cache_link = project / "models" / "huggingface" / "hub"
+    cache_link.parent.mkdir(parents=True)
+    try:
+        cache_link.symlink_to(protected, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    monkeypatch.setattr("lorahub.api.paths.project_root", lambda: project)
+    monkeypatch.setattr(
+        "lorahub.api.routers.storage._hf_cache_root",
+        lambda: cache_link,
+    )
+
+    response = client.delete("/api/storage/hf-cache")
+
+    assert response.status_code == 400
+    assert keep.read_text(encoding="utf-8") == "keep: true\n"
+
+
+def test_hf_cache_clear_refuses_symlink_to_unprotected_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "hub-cache"
+    target.mkdir()
+    keep = target / "keep.bin"
+    keep.write_bytes(b"keep")
+    cache_link = tmp_path / "cache-link"
+    try:
+        cache_link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    monkeypatch.setattr(
+        "lorahub.api.routers.storage._hf_cache_root",
+        lambda: cache_link,
+    )
+
+    response = client.delete("/api/storage/hf-cache")
+
+    assert response.status_code == 400
+    assert keep.read_bytes() == b"keep"

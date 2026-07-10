@@ -18,9 +18,11 @@ No GPU required. Pillow + numpy already in the project.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import tempfile
 import threading
 import time as _time
 from collections.abc import Callable
@@ -34,19 +36,38 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.dataset_files import (
+    IMAGE_SUFFIXES,
+    is_link_like,
+    iter_safe_files,
+    resolve_dataset_directory,
+    resolve_file_under,
+)
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSession,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
 
-from ._shared import _clear_dataset_view_caches
+from ._shared import (
+    _atomic_save_image,
+    _clear_dataset_view_caches,
+    _file_mutation,
+)
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 _KIND_AUTO_ROTATE = "image_studio_auto_rotate"
 _KIND_BATCH_RESIZE = "image_studio_batch_resize"
+
+
+def _ensure_dataset(raw: str) -> Path:
+    try:
+        return resolve_dataset_directory(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _task_store() -> TaskSessionStore:
@@ -72,7 +93,14 @@ def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
         result = dict(task.result)
         result.setdefault("events", [event.to_dict() for event in task.events])
         return result
-    if task.status in {"queued", "running", "interrupted", "failed", "canceled"}:
+    if task.status in {
+        "queued",
+        "running",
+        "stop_requested",
+        "interrupted",
+        "failed",
+        "canceled",
+    }:
         metadata = task.metadata
         return {
             "session_id": task.id,
@@ -101,16 +129,49 @@ def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 
 
-def _workbench_root(dataset_path: str) -> Path:
-    return Path(dataset_path).resolve() / ".workbench"
+def _managed_directory(root: Path, relative: Path, *, create: bool) -> Path:
+    """Resolve a managed directory without traversing links or junctions."""
+    current = root.resolve()
+    for part in relative.parts:
+        current = current / part
+        if is_link_like(current):
+            raise HTTPException(400, f"managed path cannot be a link: {current}")
+        if current.exists():
+            if not current.is_dir():
+                raise HTTPException(400, f"managed path is not a directory: {current}")
+        elif create:
+            current.mkdir()
+        else:
+            continue
+        try:
+            current.resolve().relative_to(root.resolve())
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(400, "managed path escaped the dataset") from exc
+    return current.resolve() if current.exists() else current
 
 
-def _quarantine_root(dataset_path: str) -> Path:
-    return _workbench_root(dataset_path) / "quarantine"
+def _workbench_root(dataset_path: str, *, create: bool = False) -> Path:
+    return _managed_directory(
+        _ensure_dataset(dataset_path),
+        Path(".workbench"),
+        create=create,
+    )
 
 
-def _backups_root(dataset_path: str) -> Path:
-    return _workbench_root(dataset_path) / "backups"
+def _quarantine_root(dataset_path: str, *, create: bool = False) -> Path:
+    return _managed_directory(
+        _ensure_dataset(dataset_path),
+        Path(".workbench") / "quarantine",
+        create=create,
+    )
+
+
+def _backups_root(dataset_path: str, *, create: bool = False) -> Path:
+    return _managed_directory(
+        _ensure_dataset(dataset_path),
+        Path(".workbench") / "backups",
+        create=create,
+    )
 
 
 def _audit_cache_path(dataset_path: str) -> Path:
@@ -125,13 +186,28 @@ def _resolve_under(dataset_path: str, candidate: str) -> Path:
     that originated in our own listings response, so we know they're
     inside the dataset; this is belt-and-suspenders.
     """
-    root = Path(dataset_path).resolve()
-    p = Path(candidate).resolve()
+    root = _ensure_dataset(dataset_path).resolve()
+    raw = Path(candidate).expanduser()
+    if not raw.is_absolute():
+        raw = root / raw
+    lexical = Path(os.path.abspath(raw))
     try:
-        p.relative_to(root)
+        relative = lexical.relative_to(root)
     except ValueError as exc:
         raise HTTPException(400, f"path is outside dataset: {candidate}") from exc
-    return p
+    if not relative.parts or relative.parts[0] == ".workbench":
+        raise HTTPException(400, f"path is not a dataset source file: {candidate}")
+    current = root
+    for part in relative.parts:
+        current /= part
+        if is_link_like(current):
+            raise HTTPException(400, f"path cannot traverse a link: {candidate}")
+    try:
+        resolved = lexical.resolve()
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, f"path is outside dataset: {candidate}") from exc
+    return resolved
 
 
 def _relative_under(root: Path, p: Path) -> Path:
@@ -148,6 +224,23 @@ class _BackupResult:
     backup_path: Path
 
 
+def _copy2_atomic(src: Path, dst: Path) -> None:
+    """Copy a file into place without exposing a partially written backup."""
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        dir=dst.parent,
+        prefix=f".{dst.name}.",
+        suffix=".tmp",
+    ) as handle:
+        temp_path = Path(handle.name)
+    try:
+        shutil.copy2(src, temp_path)
+        temp_path.replace(dst)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def _backup_file(dataset_path: str, src: Path) -> _BackupResult | None:
     """Copy ``src`` (and its .txt sidecar) to .workbench/backups/<rel>.
 
@@ -157,18 +250,19 @@ def _backup_file(dataset_path: str, src: Path) -> _BackupResult | None:
     """
     if not src.is_file():
         return None
-    root = Path(dataset_path).resolve()
+    root = _ensure_dataset(dataset_path)
     rel = _relative_under(root, src)
-    dst = _backups_root(dataset_path) / rel
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    backups = _backups_root(dataset_path, create=True)
+    dst_parent = _managed_directory(backups, rel.parent, create=True)
+    dst = dst_parent / rel.name
     # Don't overwrite — keep the *first* backup before any chain of
     # edits. ``restore-backup`` rolls back to that pristine version.
     if not dst.exists():
-        shutil.copy2(src, dst)
-        cap_src = src.with_suffix(".txt")
-        if cap_src.is_file():
-            cap_dst = dst.with_suffix(".txt")
-            shutil.copy2(cap_src, cap_dst)
+        _copy2_atomic(src, dst)
+    cap_src = resolve_file_under(root, src.with_suffix(".txt"))
+    cap_dst = dst.with_suffix(".txt")
+    if cap_src is not None and not cap_dst.exists():
+        _copy2_atomic(cap_src, cap_dst)
     return _BackupResult(backup_path=dst)
 
 
@@ -280,6 +374,8 @@ class _AutoRotateSession:
 
     def finish(self, status: str) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_flag:
+                status = "canceled"
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
@@ -302,11 +398,22 @@ class _AutoRotateSession:
         except Exception:
             pass
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
-            self._stop_flag = True
+            if self.status != "running":
+                return False
             percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
+            self._stop_flag = True
+            self.status = "stop_requested"
         self._append_task_event("stop requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -395,7 +502,7 @@ def _auto_rotate_images(
     Idempotent: a file whose orientation is already 1 (or missing)
     is left untouched.
     """
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
 
@@ -407,27 +514,32 @@ def _auto_rotate_images(
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
         try:
-            with Image.open(src) as img:
-                exif = img.getexif()
-                orientation = exif.get(0x0112) if exif else None
-                if not orientation or orientation == 1:
-                    skipped.append(str(src))
-                    if on_skipped is not None:
-                        on_skipped(src.name)
-                    continue
-                # ``exif_transpose`` reads the orientation tag and
-                # returns a pixel-rotated copy with the tag dropped.
-                rotated_img = ImageOps.exif_transpose(img)
-                if rotated_img is None:
-                    skipped.append(str(src))
-                    if on_skipped is not None:
-                        on_skipped(src.name)
-                    continue
-                rotated_img.load()
-            _backup_file(req.dataset_path, src)
-            # Pillow's save infers format from the file path. Drop EXIF
-            # so the next reader doesn't double-rotate.
-            rotated_img.save(src, exif=b"")
+            with _file_mutation(src):
+                with Image.open(src) as img:
+                    image_format = img.format
+                    exif = img.getexif()
+                    orientation = exif.get(0x0112) if exif else None
+                    if not orientation or orientation == 1:
+                        skipped.append(str(src))
+                        if on_skipped is not None:
+                            on_skipped(src.name)
+                        continue
+                    # ``exif_transpose`` reads the orientation tag and
+                    # returns a pixel-rotated copy with the tag dropped.
+                    rotated_img = ImageOps.exif_transpose(img)
+                    if rotated_img is None:
+                        skipped.append(str(src))
+                        if on_skipped is not None:
+                            on_skipped(src.name)
+                        continue
+                    rotated_img.load()
+                _backup_file(req.dataset_path, src)
+                _atomic_save_image(
+                    rotated_img,
+                    src,
+                    image_format=image_format,
+                    exif=b"",
+                )
             path = str(src)
             rotated.append(path)
             if on_rotated is not None:
@@ -448,7 +560,7 @@ def _auto_rotate_images(
 @router.post("/curate/auto-rotate")
 def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
     """Apply EXIF orientation synchronously for legacy callers."""
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
     result = _auto_rotate_images(req, _auto_rotate_targets(req, root))
@@ -460,7 +572,7 @@ def curate_auto_rotate(req: AutoRotateRequest) -> dict[str, Any]:
 @router.post("/curate/auto-rotate/start", status_code=202)
 def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
     """Start a persistent background auto-rotate session."""
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
     targets = _auto_rotate_targets(req, root)
@@ -481,6 +593,7 @@ def curate_auto_rotate_start(req: AutoRotateRequest) -> dict[str, Any]:
     session._append_task_event("auto rotate queued", percent=0)
     with _auto_rotate_lock:
         _auto_rotate_sessions[session.session_id] = session
+        prune_terminal_session_cache(_auto_rotate_sessions)
 
     def run() -> None:
         try:
@@ -532,7 +645,8 @@ def curate_auto_rotate_stop(session_id: str) -> dict[str, Any]:
         session = _auto_rotate_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "auto-rotate session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"auto-rotate session is {session.status}")
     return {"session_id": session_id, "status": "stop_requested"}
 
 
@@ -550,6 +664,114 @@ class QuarantineRequest(BaseModel):
     reason: str | None = None
 
 
+_quarantine_index_lock = threading.RLock()
+
+
+def _path_occupied(path: Path) -> bool:
+    return path.exists() or is_link_like(path)
+
+
+def _available_destination(path: Path, *, with_caption: bool) -> Path:
+    """Choose a free image name without overwriting its caption pair."""
+    index = 1
+    while True:
+        candidate = (
+            path
+            if index == 1
+            else path.with_name(f"{path.stem}-{index}{path.suffix}")
+        )
+        if not _path_occupied(candidate) and not (
+            with_caption and _path_occupied(candidate.with_suffix(".txt"))
+        ):
+            return candidate
+        index += 1
+
+
+def _load_quarantine_index(index_path: Path) -> list[dict[str, Any]]:
+    if is_link_like(index_path):
+        raise HTTPException(400, "quarantine index cannot be a link")
+    if not index_path.is_file():
+        return []
+    entries: list[dict[str, Any]] = []
+    with index_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            if not all(
+                isinstance(value.get(key), str) and value[key]
+                for key in ("original_path", "quarantine_path")
+            ):
+                continue
+            caption_path = value.get("caption_quarantine_path")
+            if caption_path is not None and not isinstance(caption_path, str):
+                continue
+            entries.append(value)
+    return entries
+
+
+def _write_quarantine_index(
+    index_path: Path,
+    entries: list[dict[str, Any]],
+) -> None:
+    if is_link_like(index_path):
+        raise OSError("quarantine index cannot be a link")
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=index_path.parent,
+        prefix=".quarantine-index-",
+        suffix=".tmp",
+    ) as handle:
+        temp_path = Path(handle.name)
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        temp_path.replace(index_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _rollback_moves(moves: list[tuple[Path, Path]]) -> list[str]:
+    errors: list[str] = []
+    for current, original in reversed(moves):
+        try:
+            if not _path_occupied(current):
+                continue
+            if _path_occupied(original):
+                raise OSError(f"rollback target already exists: {original}")
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(current), str(original))
+        except OSError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def _restore_target(root: Path, raw: str) -> Path:
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    lexical = Path(os.path.abspath(candidate))
+    try:
+        relative = lexical.relative_to(root.resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "restore target is outside dataset") from exc
+    if not relative.parts or relative.parts[0] == ".workbench":
+        raise HTTPException(400, "restore target is not a dataset path")
+    parent = _managed_directory(root, relative.parent, create=True)
+    target = parent / relative.name
+    if is_link_like(target):
+        raise HTTPException(400, "restore target cannot be a link")
+    return target
+
+
 @router.post("/curate/quarantine")
 def curate_quarantine(req: QuarantineRequest) -> dict[str, Any]:
     """Move files (and their .txt sidecars) to ``.workbench/quarantine/``.
@@ -559,49 +781,79 @@ def curate_quarantine(req: QuarantineRequest) -> dict[str, Any]:
     ``.workbench/quarantine/index.jsonl`` so the restore endpoint
     knows the original location.
     """
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
 
-    qroot = _quarantine_root(req.dataset_path)
-    qroot.mkdir(parents=True, exist_ok=True)
+    qroot = _quarantine_root(req.dataset_path, create=True)
     index_path = qroot / "index.jsonl"
 
-    moved: list[dict[str, str]] = []
+    moved: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     timestamp = datetime.now(UTC).replace(microsecond=0).isoformat()
-    for raw in req.paths:
-        try:
-            src = _resolve_under(req.dataset_path, raw)
-            if not src.is_file():
-                failed.append({"path": str(raw), "error": "not a file"})
-                continue
-            rel = _relative_under(root, src)
-            dst = qroot / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            # Don't clobber: if the same name was quarantined before,
-            # suffix with a counter so both rounds remain restorable.
-            if dst.exists():
-                dst = _disambiguate(dst)
-            shutil.move(str(src), str(dst))
-            cap_src = src.with_suffix(".txt")
-            cap_dst = dst.with_suffix(".txt") if cap_src.is_file() else None
-            if cap_src.is_file():
-                shutil.move(str(cap_src), str(cap_dst))
-            entry = {
-                "moved_at": timestamp,
-                "original_path": str(src),
-                "quarantine_path": str(dst),
-                "caption_quarantine_path": str(cap_dst) if cap_dst else None,
-                "reason": req.reason,
-            }
-            with open(index_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            moved.append(entry)
-        except HTTPException:
-            raise
-        except OSError as exc:
-            failed.append({"path": raw, "error": str(exc)})
+    with _quarantine_index_lock:
+        entries = _load_quarantine_index(index_path)
+        for raw in req.paths:
+            entry: dict[str, Any] | None = None
+            completed_moves: list[tuple[Path, Path]] = []
+            try:
+                resolved = _resolve_under(req.dataset_path, raw)
+                with _file_mutation(resolved):
+                    src = resolve_file_under(root, resolved)
+                    if src is None:
+                        failed.append(
+                            {"path": str(raw), "error": "not a regular file"}
+                        )
+                        continue
+                    rel = _relative_under(root, src)
+                    destination_parent = _managed_directory(
+                        qroot,
+                        rel.parent,
+                        create=True,
+                    )
+                    cap_src = resolve_file_under(root, src.with_suffix(".txt"))
+                    dst = _available_destination(
+                        destination_parent / rel.name,
+                        with_caption=cap_src is not None,
+                    )
+                    cap_dst = dst.with_suffix(".txt") if cap_src is not None else None
+                    entry = {
+                        "moved_at": timestamp,
+                        "original_path": str(src),
+                        "quarantine_path": str(dst),
+                        "caption_quarantine_path": str(cap_dst) if cap_dst else None,
+                        "reason": req.reason,
+                        "state": "moving",
+                    }
+                    entries.append(entry)
+                    _write_quarantine_index(index_path, entries)
+
+                    shutil.move(str(src), str(dst))
+                    completed_moves.append((dst, src))
+                    if cap_src is not None and cap_dst is not None:
+                        shutil.move(str(cap_src), str(cap_dst))
+                        completed_moves.append((cap_dst, cap_src))
+
+                    entry["state"] = "quarantined"
+                    _write_quarantine_index(index_path, entries)
+                    moved.append(dict(entry))
+            except HTTPException:
+                raise
+            except OSError as exc:
+                rollback_errors = _rollback_moves(completed_moves)
+                if entry is not None:
+                    if rollback_errors:
+                        entry["state"] = "recovery_required"
+                        entry["error"] = "; ".join(rollback_errors)
+                    else:
+                        with contextlib.suppress(ValueError):
+                            entries.remove(entry)
+                    with contextlib.suppress(OSError):
+                        _write_quarantine_index(index_path, entries)
+                message = str(exc)
+                if rollback_errors:
+                    message += f"; rollback failed: {'; '.join(rollback_errors)}"
+                failed.append({"path": raw, "error": message})
 
     if moved:
         _clear_dataset_view_caches(root)
@@ -612,33 +864,13 @@ def curate_quarantine(req: QuarantineRequest) -> dict[str, Any]:
     }
 
 
-def _disambiguate(p: Path) -> Path:
-    """Append ``-2 / -3 / ...`` until the path is free."""
-    i = 2
-    while True:
-        cand = p.with_name(f"{p.stem}-{i}{p.suffix}")
-        if not cand.exists():
-            return cand
-        i += 1
-
-
 @router.get("/curate/quarantine")
 def curate_quarantine_list(dataset_path: str) -> dict[str, Any]:
     """Return the quarantine index — what was moved, when, why."""
     qroot = _quarantine_root(dataset_path)
     index_path = qroot / "index.jsonl"
-    if not index_path.is_file():
-        return {"entries": []}
-    entries: list[dict[str, Any]] = []
-    with open(index_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    with _quarantine_index_lock:
+        entries = _load_quarantine_index(index_path)
     return {"entries": entries}
 
 
@@ -656,82 +888,87 @@ def curate_restore_quarantine(req: RestoreRequest) -> dict[str, Any]:
     the audit trail survives but the entry stops counting as "still
     quarantined".
     """
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     qroot = _quarantine_root(req.dataset_path)
     index_path = qroot / "index.jsonl"
     if not index_path.is_file():
         raise HTTPException(404, "no quarantine index found for this dataset")
 
-    # Load + rewrite the whole index to mark restorations.
-    entries: list[dict[str, Any]] = []
-    with open(index_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-    restored: list[dict[str, str]] = []
+    restored: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     timestamp = datetime.now(UTC).replace(microsecond=0).isoformat()
     target_set = set(req.quarantine_paths)
 
-    for entry in entries:
-        if entry.get("restored_at"):
-            continue
-        if entry["quarantine_path"] not in target_set:
-            continue
-        try:
-            src = Path(entry["quarantine_path"]).resolve()
+    with _quarantine_index_lock:
+        entries = _load_quarantine_index(index_path)
+        for entry in entries:
+            quarantine_path = str(entry.get("quarantine_path") or "")
+            if entry.get("restored_at") or quarantine_path not in target_set:
+                continue
+            completed_moves: list[tuple[Path, Path]] = []
             try:
-                src.relative_to(qroot.resolve())
-            except ValueError:
-                failed.append({"path": str(src), "error": "path is outside quarantine"})
-                continue
-            dst = Path(entry["original_path"]).resolve()
-            try:
-                dst.relative_to(root)
-            except ValueError:
-                failed.append({"path": str(dst), "error": "path is outside dataset"})
-                continue
-            if not src.is_file():
-                failed.append(
-                    {"path": str(src), "error": "quarantined file missing"},
-                )
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if dst.exists():
-                # Original location now occupied — rename incoming file
-                # so we don't clobber whatever is there now.
-                dst = _disambiguate(dst)
-            cap_q = entry.get("caption_quarantine_path")
-            cap_q_path: Path | None = None
-            if cap_q and Path(cap_q).is_file():
-                cap_q_path = Path(cap_q).resolve()
-                try:
-                    cap_q_path.relative_to(qroot.resolve())
-                except ValueError:
+                src = resolve_file_under(qroot, Path(quarantine_path))
+                if src is None:
                     failed.append(
-                        {"path": str(cap_q_path), "error": "caption is outside quarantine"}
+                        {"path": quarantine_path, "error": "quarantined file missing"},
                     )
                     continue
-            shutil.move(str(src), str(dst))
-            if cap_q_path is not None:
-                cap_dst = dst.with_suffix(".txt")
-                shutil.move(str(cap_q_path), str(cap_dst))
-            entry["restored_at"] = timestamp
-            entry["restored_path"] = str(dst)
-            restored.append(entry)
-        except OSError as exc:
-            failed.append({"path": entry["quarantine_path"], "error": str(exc)})
+                original_path = str(entry.get("original_path") or "")
+                dst_base = _restore_target(root, original_path)
+                with _file_mutation(dst_base):
+                    caption_value = entry.get("caption_quarantine_path")
+                    cap_q_path = (
+                        resolve_file_under(qroot, Path(caption_value))
+                        if isinstance(caption_value, str) and caption_value
+                        else None
+                    )
+                    if caption_value and cap_q_path is None:
+                        failed.append(
+                            {
+                                "path": str(caption_value),
+                                "error": "caption is outside quarantine or missing",
+                            },
+                        )
+                        continue
+                    dst = _available_destination(
+                        dst_base,
+                        with_caption=cap_q_path is not None,
+                    )
+                    cap_dst = (
+                        dst.with_suffix(".txt") if cap_q_path is not None else None
+                    )
+                    entry["state"] = "restoring"
+                    entry["restore_target"] = str(dst)
+                    _write_quarantine_index(index_path, entries)
 
-    # Rewrite the index — keeps successful restore entries marked.
-    with open(index_path, "w", encoding="utf-8") as f:
-        for entry in entries:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    shutil.move(str(src), str(dst))
+                    completed_moves.append((dst, src))
+                    if cap_q_path is not None and cap_dst is not None:
+                        shutil.move(str(cap_q_path), str(cap_dst))
+                        completed_moves.append((cap_dst, cap_q_path))
+
+                    entry["state"] = "restored"
+                    entry["restored_at"] = timestamp
+                    entry["restored_path"] = str(dst)
+                    entry.pop("restore_target", None)
+                    _write_quarantine_index(index_path, entries)
+                    restored.append(dict(entry))
+            except HTTPException as exc:
+                failed.append({"path": quarantine_path, "error": str(exc.detail)})
+            except OSError as exc:
+                rollback_errors = _rollback_moves(completed_moves)
+                entry["state"] = (
+                    "recovery_required" if rollback_errors else "quarantined"
+                )
+                entry.pop("restore_target", None)
+                if rollback_errors:
+                    entry["error"] = "; ".join(rollback_errors)
+                with contextlib.suppress(OSError):
+                    _write_quarantine_index(index_path, entries)
+                message = str(exc)
+                if rollback_errors:
+                    message += f"; rollback failed: {'; '.join(rollback_errors)}"
+                failed.append({"path": quarantine_path, "error": message})
 
     if restored:
         _clear_dataset_view_caches(root)
@@ -864,6 +1101,8 @@ class _BatchResizeSession:
 
     def finish(self, status: str) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_flag:
+                status = "canceled"
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
@@ -886,11 +1125,22 @@ class _BatchResizeSession:
         except Exception:
             pass
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
-            self._stop_flag = True
+            if self.status != "running":
+                return False
             percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
+            self._stop_flag = True
+            self.status = "stop_requested"
         self._append_task_event("stop requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -974,7 +1224,7 @@ def _resize_images(
     on_failed: Callable[[str, str, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
 
@@ -987,31 +1237,33 @@ def _resize_images(
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
         try:
-            with Image.open(src) as img:
-                w, h = img.size
-                short = min(w, h)
-                if short == req.target_short_edge:
-                    skipped.append(str(src))
-                    if on_skipped is not None:
-                        on_skipped(src.name)
-                    continue
-                if short > req.target_short_edge:
-                    # Downscale — always allowed.
-                    pass
-                else:
-                    # Upscale — gated by the flag.
-                    if not req.upscale:
+            with _file_mutation(src):
+                with Image.open(src) as img:
+                    image_format = img.format
+                    w, h = img.size
+                    short = min(w, h)
+                    if short == req.target_short_edge:
                         skipped.append(str(src))
                         if on_skipped is not None:
                             on_skipped(src.name)
                         continue
-                scale = req.target_short_edge / short
-                new_w = max(1, round(w * scale))
-                new_h = max(1, round(h * scale))
-                new_img = img.resize((new_w, new_h), resample=resample)
-                new_img.load()
-            _backup_file(req.dataset_path, src)
-            new_img.save(src)
+                    if short > req.target_short_edge:
+                        # Downscale — always allowed.
+                        pass
+                    else:
+                        # Upscale — gated by the flag.
+                        if not req.upscale:
+                            skipped.append(str(src))
+                            if on_skipped is not None:
+                                on_skipped(src.name)
+                            continue
+                    scale = req.target_short_edge / short
+                    new_w = max(1, round(w * scale))
+                    new_h = max(1, round(h * scale))
+                    new_img = img.resize((new_w, new_h), resample=resample)
+                    new_img.load()
+                _backup_file(req.dataset_path, src)
+                _atomic_save_image(new_img, src, image_format=image_format)
             item = {
                 "path": str(src),
                 "from": [w, h],
@@ -1040,7 +1292,7 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
     Aspect ratio is preserved; long edge scales by the same factor.
     Backups land in .workbench/backups/.
     """
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
     result = _resize_images(req, _batch_resize_targets(req, root))
@@ -1052,7 +1304,7 @@ def curate_batch_resize(req: BatchResizeRequest) -> dict[str, Any]:
 @router.post("/curate/batch-resize/start", status_code=202)
 def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
     """Start a persistent background batch-resize session."""
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     if not root.is_dir():
         raise HTTPException(404, f"dataset not found: {root}")
     targets = _batch_resize_targets(req, root)
@@ -1076,6 +1328,7 @@ def curate_batch_resize_start(req: BatchResizeRequest) -> dict[str, Any]:
     session._append_task_event("batch resize queued", percent=0)
     with _batch_resize_lock:
         _batch_resize_sessions[session.session_id] = session
+        prune_terminal_session_cache(_batch_resize_sessions)
 
     def run() -> None:
         try:
@@ -1127,7 +1380,8 @@ def curate_batch_resize_stop(session_id: str) -> dict[str, Any]:
         session = _batch_resize_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "batch-resize session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"batch-resize session is {session.status}")
     return {"session_id": session_id, "status": "stop_requested"}
 
 
@@ -1248,7 +1502,7 @@ def curate_restore_backup(req: RestoreBackupRequest) -> dict[str, Any]:
     """Copy a backup back to its original location, overwriting the
     current file. The backup itself is preserved — repeated restores
     are idempotent."""
-    root = Path(req.dataset_path).resolve()
+    root = _ensure_dataset(req.dataset_path)
     backups = _backups_root(req.dataset_path)
     if not backups.is_dir():
         raise HTTPException(404, "no backups directory")
@@ -1257,17 +1511,24 @@ def curate_restore_backup(req: RestoreBackupRequest) -> dict[str, Any]:
     failed: list[dict[str, str]] = []
     for raw in req.backup_paths:
         try:
-            src = Path(raw)
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = backups / candidate
+            src = resolve_file_under(backups, candidate)
+            if src is None:
+                raise ValueError("backup is outside the backup root or is a link")
             rel = _relative_under(backups, src)
-            dst = root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            cap_src = src.with_suffix(".txt")
-            if cap_src.is_file():
-                shutil.copy2(cap_src, dst.with_suffix(".txt"))
+            dst = _restore_target(root, str(root / rel))
+            with _file_mutation(dst):
+                _copy2_atomic(src, dst)
+                cap_src = resolve_file_under(backups, src.with_suffix(".txt"))
+                if cap_src is not None:
+                    cap_dst = _restore_target(root, str(dst.with_suffix(".txt")))
+                    _copy2_atomic(cap_src, cap_dst)
             restored.append(str(dst))
-        except (OSError, ValueError) as exc:
-            failed.append({"path": raw, "error": str(exc)})
+        except (HTTPException, OSError, ValueError) as exc:
+            message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+            failed.append({"path": raw, "error": message})
     if restored:
         _clear_dataset_view_caches(root)
     return {
@@ -1284,15 +1545,10 @@ def curate_restore_backup(req: RestoreBackupRequest) -> dict[str, Any]:
 
 def _walk_images(root: Path, recursive: bool):
     """Yield image files inside root, skipping the .workbench tree."""
-    if recursive:
-        for cur, dirs, files in os.walk(root):
-            # Don't descend into our own staging directories.
-            dirs[:] = [d for d in dirs if d != ".workbench"]
-            for f in files:
-                p = Path(cur) / f
-                if p.suffix.lower() in IMAGE_SUFFIXES:
-                    yield p
-    else:
-        for p in root.iterdir():
-            if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
-                yield p
+    for path in iter_safe_files(
+        root,
+        recursive=recursive,
+        skip_dirs=frozenset({".workbench"}),
+    ):
+        if path.suffix.lower() in IMAGE_SUFFIXES:
+            yield path

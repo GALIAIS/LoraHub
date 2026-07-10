@@ -223,6 +223,48 @@ def test_clone_repo_raises_when_non_empty_not_git(
     called.assert_not_called()
 
 
+def test_failed_clone_marks_target_as_managed_for_safe_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_url = "https://example.invalid/managed.git"
+    plan = MagicMock()
+    plan.target = tmp_path / "repo"
+    plan.git_depth = 1
+    plan.github_proxy = None
+
+    def fail_clone(*_args: Any, **_kwargs: Any) -> None:
+        plan.target.mkdir()
+        (plan.target / ".git").mkdir()
+        raise BootstrapError("clone", 1)
+
+    monkeypatch.setattr(common, "run_step", fail_clone)
+
+    with pytest.raises(BootstrapError):
+        common.clone_repo(plan, repo_url=repo_url, label="managed")
+
+    assert common.is_managed_partial_install(plan.target, repo_url) is True
+
+
+def test_successful_clone_clears_interrupted_install_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_url = "https://example.invalid/managed.git"
+    plan = MagicMock()
+    plan.target = tmp_path / "repo"
+    plan.git_depth = 1
+    plan.github_proxy = None
+
+    def successful_clone(*_args: Any, **_kwargs: Any) -> None:
+        plan.target.mkdir()
+        (plan.target / ".git").mkdir()
+
+    monkeypatch.setattr(common, "run_step", successful_clone)
+
+    common.clone_repo(plan, repo_url=repo_url, label="managed")
+
+    assert common.is_managed_partial_install(plan.target, repo_url) is False
+
+
 def test_torch_index_candidates_put_user_source_first() -> None:
     indexes = common.torch_index_candidates(
         "https://example.invalid/pytorch/whl",

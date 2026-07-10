@@ -57,6 +57,7 @@ from .resume_dispatch import (
     _kohya_resume_spec,
     _migrate_snapshots_to_camel,
     _requeue_pending_jobs,
+    _resume_source_roots,
     _should_auto_resume,
     _validate_resume_target,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "_kohya_resume_spec",
     "_migrate_snapshots_to_camel",
     "_requeue_pending_jobs",
+    "_resume_source_roots",
     "_should_auto_resume",
     "_validate_resume_target",
 ]

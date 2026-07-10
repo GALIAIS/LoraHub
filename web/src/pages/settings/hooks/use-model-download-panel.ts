@@ -72,7 +72,10 @@ export function useModelDownloadPanel() {
     queryKey: ["model-download-latest"],
     queryFn: api.getLatestModelDownload,
     refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 800 : false,
+      query.state.data?.status === "running" ||
+      query.state.data?.status === "stop_requested"
+        ? 800
+        : false,
     staleTime: 400,
   })
 
@@ -84,7 +87,11 @@ export function useModelDownloadPanel() {
   useEffect(() => {
     const latest = latestDownload.data
     if (!latest?.session_id) return
-    if (latest.status === "running" || !sessionId) {
+    if (
+      latest.status === "running" ||
+      latest.status === "stop_requested" ||
+      !sessionId
+    ) {
       setSessionId(latest.session_id)
       window.localStorage.setItem(MODEL_DOWNLOAD_SESSION_KEY, latest.session_id)
     }
@@ -139,7 +146,11 @@ export function useModelDownloadPanel() {
     queryFn: () => api.getModelDownload(sessionId!),
     enabled: !!sessionId,
     refetchInterval: (query) =>
-      query.state.data?.status === "running" || !query.state.data ? 800 : false,
+      query.state.data?.status === "running" ||
+      query.state.data?.status === "stop_requested" ||
+      !query.state.data
+        ? 800
+        : false,
     staleTime: 400,
   })
 
@@ -150,7 +161,7 @@ export function useModelDownloadPanel() {
     setSessionId(null)
     window.localStorage.removeItem(MODEL_DOWNLOAD_SESSION_KEY)
     void latestDownload.refetch()
-  }, [latestDownload, session.error])
+  }, [latestDownload.refetch, session.error])
 
   const latestCurrent =
     latestDownload.data?.session_id &&
@@ -159,9 +170,22 @@ export function useModelDownloadPanel() {
       ? latestDownload.data
       : null
   const current = session.data ?? startDownload.data ?? latestCurrent ?? null
+  const stopDownload = useMutation({
+    mutationFn: (id: string) => api.stopModelDownload(id),
+    onSuccess: async (_result, id) => {
+      await Promise.all([
+        session.refetch(),
+        latestDownload.refetch(),
+      ])
+      if (sessionId !== id) setSessionId(id)
+    },
+  })
   const error = (startDownload.error as Error | undefined) ?? (session.error as Error | undefined)
   const ready = repoId.includes("/") && repoId.trim().length > 2
-  const running = current?.status === "running" || startDownload.isPending
+  const running =
+    current?.status === "running" ||
+    current?.status === "stop_requested" ||
+    startDownload.isPending
   const listing = fileList.isPending
   const latest = current?.events.at(-1)
   const percent = Math.max(0, Math.min(100, current?.percent ?? 0))
@@ -177,6 +201,7 @@ export function useModelDownloadPanel() {
   const summary = useMemo(() => {
     if (!current) return "尚未开始下载"
     if (current.status === "running") return latest?.message ?? "下载进行中"
+    if (current.status === "stop_requested") return "正在停止下载"
     if (current.status === "failed") return current.error ?? "下载失败"
     if (current.status === "canceled") return current.error ?? "下载已取消"
     if (current.status === "interrupted") return current.error ?? "下载已中断"
@@ -201,6 +226,7 @@ export function useModelDownloadPanel() {
     selectedPaths,
     setSelectedPaths,
     startDownload,
+    stopDownload,
     fileList,
     current,
     error,

@@ -46,6 +46,12 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from lorahub.api.auth import (
+    api_token_path,
+    configured_api_token,
+    ensure_api_token,
+    is_loopback_host,
+)
 from lorahub.api.runtime_bind import (
     clear_runtime_bind,
     log_file,
@@ -261,13 +267,19 @@ def _wait_for_health(
     url = f"http://127.0.0.1:{port}/api/health"
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
+            headers = (
+                {"X-LoraHub-Service-Token": service_token}
+                if service_token is not None
+                else {}
+            )
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=2) as resp:
                 if resp.status != 200:
                     continue
                 if service_token is None:
                     return True
                 body = json.loads(resp.read().decode("utf-8"))
-                if body.get("service_token") == service_token:
+                if body.get("service_token_match") is True:
                     return True
         except (
             json.JSONDecodeError,
@@ -317,6 +329,16 @@ def start(
 
     if port == 0:
         port = _free_port()
+
+    if not is_loopback_host(host):
+        token_from_env = configured_api_token() is not None
+        ensure_api_token()
+        token_path = api_token_path()
+        console.print(
+            t("service.remote_auth_env")
+            if token_from_env
+            else t("service.remote_auth", path=token_path)
+        )
 
     if foreground:
         # In-process uvicorn — we're already inside the venv's Python,
@@ -659,7 +681,18 @@ def install_unit(
         text = _render_launchd_plist(py=py, repo=repo_root, host=host, port=port)
     elif sys.platform == "win32":
         task_cmd = subprocess.list2cmdline(
-            [py, "-m", "uvicorn", "lorahub.api.app:app", "--host", host, "--port", str(port)]
+            [
+                py,
+                "-m",
+                "lorahub",
+                "service",
+                "start",
+                "--foreground",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ]
         )
         task_tr = subprocess.list2cmdline(
             [
@@ -705,7 +738,7 @@ def _render_systemd_unit(*, py: str, repo: Path, host: str, port: int) -> str:
         "Type=simple\n"
         f"WorkingDirectory={repo_q}\n"
         f"Environment={pythonpath_q}\n"
-        f"ExecStart={py_q} -m uvicorn lorahub.api.app:app --host {host} --port {port}\n"
+        f"ExecStart={py_q} -m lorahub service start --foreground --host {host} --port {port}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n\n"
         "[Install]\n"
@@ -722,8 +755,9 @@ def _render_launchd_plist(*, py: str, repo: Path, host: str, port: int) -> str:
         "  <key>Label</key><string>com.lorahub</string>\n"
         "  <key>ProgramArguments</key><array>\n"
         f"    <string>{py}</string>\n"
-        "    <string>-m</string><string>uvicorn</string>\n"
-        "    <string>lorahub.api.app:app</string>\n"
+        "    <string>-m</string><string>lorahub</string>\n"
+        "    <string>service</string><string>start</string>\n"
+        "    <string>--foreground</string>\n"
         f"    <string>--host</string><string>{host}</string>\n"
         f"    <string>--port</string><string>{port}</string>\n"
         "  </array>\n"

@@ -71,7 +71,7 @@ def save_annotation(body: AnnotationInput) -> dict[str, Any]:
 
 @router.delete("/annotations")
 def delete_annotation(path: str) -> dict[str, bool]:
-    _resolve_under_roots(path)
+    file_path = _resolve_under_roots(path)
     store = _store()
-    store.delete_annotation(path)
+    store.delete_annotation(str(file_path))
     return {"ok": True}

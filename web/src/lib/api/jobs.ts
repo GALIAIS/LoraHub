@@ -1,5 +1,4 @@
 import { useEventStream } from "../use-event-stream"
-import { reportError } from "../error-reporter"
 import type { BackendId } from "./backends"
 
 export interface JobSummary {
@@ -213,51 +212,6 @@ export interface ArtifactRow {
   sample_count: number
 }
 
-function _reportTrainingEvent(ev: TrainingEvent, jobId: string | null): void {
-  const p = ev.payload ?? {}
-  const isOom = ev.type === "oom"
-  const isDiag = ev.type === "diagnostic_warning"
-  const isLog = ev.type === "log"
-  const logLevel = isLog ? String(p.level ?? "").toLowerCase() : ""
-  const category = isOom
-    ? "oom"
-    : isDiag
-      ? String(p.category ?? "diagnostic")
-      : isLog
-        ? "trainer_stderr"
-        : "runtime_error"
-  const title = isOom
-    ? "CUDA OOM"
-    : isDiag
-      ? String(p.message ?? "diagnostic warning")
-      : isLog
-        ? `${logLevel || "error"}: ${String(p.message ?? "").slice(0, 160)}`
-        : String(p.error ?? p.message ?? "training error")
-  const message = isOom
-    ? String(p.message ?? "CUDA out of memory")
-    : isDiag
-      ? String(p.remediation ?? "")
-      : isLog
-        ? String(p.message ?? "")
-        : String(p.error ?? p.message ?? p.traceback ?? "")
-  const severity =
-    isDiag
-      ? ((p.severity as "warn") ?? "warn")
-      : isLog && (logLevel === "warning" || logLevel === "warn")
-        ? "warn"
-        : "error"
-  void reportError({
-    severity,
-    source: "backend.job.stream",
-    category,
-    title: title.slice(0, 200),
-    message: message.slice(0, 5000),
-    stack: typeof p.traceback === "string" ? p.traceback : null,
-    jobId,
-    context: { event_type: ev.type, log_source: p.source, level: logLevel },
-  })
-}
-
 /**
  * Live event stream. Prefers SSE (browser-native reconnect + Last-Event-ID
  * resume) and falls back to WebSocket if EventSource isn't available or
@@ -287,14 +241,6 @@ export function useJobStream(jobId: string | null) {
     // events.jsonl file on disk.
     reduce: (prev, parsed) => {
       const ev = parsed as TrainingEvent
-      if (ev.type === "error" || ev.type === "oom" || ev.type === "diagnostic_warning") {
-        _reportTrainingEvent(ev, jobId)
-      } else if (ev.type === "log") {
-        const lvl = String((ev.payload as { level?: string })?.level ?? "").toLowerCase()
-        if (lvl === "error" || lvl === "critical" || lvl === "fatal" || lvl === "warning" || lvl === "warn") {
-          _reportTrainingEvent(ev, jobId)
-        }
-      }
       return [...prev, ev].slice(-500)
     },
     shouldDrop: (parsed) =>

@@ -12,13 +12,16 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
-from lorahub.api.dataset_files import _resolve_under_roots
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSession,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
+
+from ._shared import _writable_dataset_directory
 
 if TYPE_CHECKING:
     from lorahub.core.tagging.base import BaseTagger
@@ -27,6 +30,7 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 _KIND_IMAGE_STUDIO_TAGGING = "image_studio_tagging"
 _ISTaggingStatus = Literal[
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
@@ -57,7 +61,14 @@ def _persisted_task_result(session_id: str) -> dict[str, Any] | None:
 
 
 def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
-    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+    if task.status not in {
+        "queued",
+        "running",
+        "stop_requested",
+        "interrupted",
+        "failed",
+        "canceled",
+    }:
         return None
     metadata = task.metadata
     return {
@@ -75,7 +86,7 @@ def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
         "underscores": False,
         "status": (
             task.status
-            if task.status in {"interrupted", "failed", "canceled"}
+            if task.status in {"stop_requested", "interrupted", "failed", "canceled"}
             else "running"
         ),
         "percent": task.percent,
@@ -192,10 +203,24 @@ class _ISTaggingSession:
 
     @property
     def should_stop(self) -> bool:
-        return self._stop_flag
+        with self.lock:
+            return self._stop_flag
 
-    def request_stop(self) -> None:
-        self._stop_flag = True
+    def request_stop(self) -> bool:
+        with self.lock:
+            if self.status != "running":
+                return False
+            if self.task_kind:
+                persisted = persist_stop_request(
+                    _task_store(),
+                    self.session_id,
+                    percent=self.percent,
+                )
+                if not persisted:
+                    return False
+            self._stop_flag = True
+            self.status = "stop_requested"
+            percent = self.percent
         if self.task_kind:
             try:
                 _task_store().append_event(
@@ -203,12 +228,13 @@ class _ISTaggingSession:
                     TaskEvent(
                         level="warn",
                         message="stop requested",
-                        percent=self.percent,
+                        percent=percent,
                         ts=_time.time(),
                     ),
                 )
             except Exception:
                 pass
+        return True
 
 
 # Module-level registry for active tagging sessions. Stays at module scope so
@@ -240,9 +266,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
     """Start a background tagging session from Image Studio."""
     from lorahub.core.tagging.wd14 import DEFAULT_MODEL  # noqa: PLC0415
 
-    target = _resolve_under_roots(req.path)
-    if not target.is_dir():
-        raise HTTPException(400, f"not a directory: {target}")
+    target = _writable_dataset_directory(req.path)
 
     task = _task_store().create(
         kind=_KIND_IMAGE_STUDIO_TAGGING,
@@ -274,6 +298,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
     session.push("tagging queued", percent=0)
     with _is_tagging_lock:
         _is_tagging_sessions[session.session_id] = session
+        prune_terminal_session_cache(_is_tagging_sessions)
 
 
     def run() -> None:
@@ -286,7 +311,7 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
 
             tagger = _build_is_tagger(req)
             session.push(f"loading {req.tagger}")
-            tagger.load()
+            tagger.load(should_stop=lambda: session.should_stop)
             if session.should_stop:
                 raise InterruptedError("stopped by user")
             with session.lock:
@@ -301,6 +326,8 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
             if not all_images:
                 session.push("no images found", percent=100)
                 with session.lock:
+                    if session._stop_flag:
+                        raise InterruptedError("stopped by user")
                     session.status = "succeeded"
                     session.percent = 100
                     session.finished_at = _time.time()
@@ -336,6 +363,8 @@ def is_tagging_start(req: ISTaggingStartInput) -> dict[str, Any]:
             if session.should_stop:
                 raise InterruptedError("stopped by user")
             with session.lock:
+                if session._stop_flag:
+                    raise InterruptedError("stopped by user")
                 session.status = "succeeded"
                 session.percent = 100
                 session.finished_at = _time.time()
@@ -415,5 +444,8 @@ def is_tagging_stop(session_id: str) -> dict[str, Any]:
         session = _is_tagging_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "tagging session not found")
-    session.request_stop()
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(409, f"tagging is {status}")
     return {"session_id": session_id, "status": "stop_requested"}

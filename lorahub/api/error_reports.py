@@ -27,14 +27,18 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+
+from lorahub.core.redaction import redact_command_text
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +48,202 @@ ResolutionStatus = Literal["open", "resolved", "ignored"]
 """``fatal`` is reserved for unrecoverable boot / lifespan failures.
 Everything routine (job died, preflight blocked, 500 reply) is ``error``.
 """
+
+MAX_ERROR_SOURCE_CHARS = 64
+MAX_ERROR_CATEGORY_CHARS = 64
+MAX_ERROR_TITLE_CHARS = 300
+MAX_ERROR_MESSAGE_CHARS = 20_000
+MAX_ERROR_STACK_CHARS = 200_000
+MAX_ERROR_ID_CHARS = 256
+MAX_ERROR_PATH_CHARS = 2_048
+MAX_ERROR_CONTEXT_BYTES = 256 * 1024
+
+_CONTEXT_VALUE_BUDGET = 192 * 1024
+_CONTEXT_MAX_DEPTH = 12
+_CONTEXT_MAX_NODES = 2_000
+_CONTEXT_MAX_COLLECTION_ITEMS = 200
+_CONTEXT_MAX_STRING_BYTES = 32 * 1024
+_CONTEXT_TRUNCATED = "[truncated by LoRaHub]"
+
+
+def truncate_error_text(
+    value: str | None,
+    limit: int,
+    *,
+    preserve_tail: bool = True,
+) -> str | None:
+    """Bound diagnostic text while retaining the root-cause tail."""
+    if value is None or len(value) <= limit:
+        return value
+    marker = f"\n...[truncated; original chars={len(value)}]...\n"
+    if len(marker) >= limit:
+        return marker[:limit]
+    available = max(0, limit - len(marker))
+    if not preserve_tail:
+        return (value[:available] + marker)[:limit]
+    head = available // 2
+    tail = available - head
+    return value[:head] + marker + (value[-tail:] if tail else "")
+
+
+def _clip_utf8(value: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    raw = value.encode("utf-8", errors="replace")
+    if len(raw) <= limit:
+        return value
+    marker = b"...[truncated]..."
+    if limit <= len(marker):
+        return marker[:limit].decode("ascii")
+    available = max(0, limit - len(marker))
+    head = available // 2
+    tail = available - head
+    clipped = raw[:head] + marker + (raw[-tail:] if tail else b"")
+    return clipped.decode("utf-8", errors="ignore")
+
+
+@dataclass(slots=True)
+class _ContextBudget:
+    remaining: int = _CONTEXT_VALUE_BUDGET
+    nodes: int = 0
+    seen: set[int] = field(default_factory=set)
+
+    def text(self, value: str, *, per_value: int = _CONTEXT_MAX_STRING_BYTES) -> str:
+        allowance = max(0, min(per_value, self.remaining))
+        if allowance == 0:
+            return _CONTEXT_TRUNCATED
+        clipped = _clip_utf8(value, allowance)
+        self.remaining -= len(clipped.encode("utf-8", errors="replace"))
+        return clipped
+
+
+def _normalise_context_value(value: Any, state: _ContextBudget, depth: int) -> Any:
+    state.nodes += 1
+    if state.nodes > _CONTEXT_MAX_NODES or state.remaining <= 0:
+        return _CONTEXT_TRUNCATED
+    state.remaining = max(0, state.remaining - 4)
+
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return (
+            value
+            if value.bit_length() <= 4_096
+            else f"<int {value.bit_length()} bits>"
+        )
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, str):
+        return state.text(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"<{type(value).__name__} {len(value)} bytes>"
+    if depth >= _CONTEXT_MAX_DEPTH:
+        return f"{_CONTEXT_TRUNCATED}: maximum depth {_CONTEXT_MAX_DEPTH}"
+
+    if isinstance(value, dict):
+        identity = id(value)
+        if identity in state.seen:
+            return "[circular reference]"
+        state.seen.add(identity)
+        output: dict[str, Any] = {}
+        try:
+            iterator = iter(value.items())
+        except Exception:  # noqa: BLE001
+            return {"_lorahub_truncated": "could not iterate mapping"}
+        for index in range(_CONTEXT_MAX_COLLECTION_ITEMS + 1):
+            if state.remaining <= 0:
+                output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
+                break
+            try:
+                key, item = next(iterator)
+            except StopIteration:
+                break
+            except Exception:  # noqa: BLE001
+                output["_lorahub_truncated"] = "mapping changed during capture"
+                break
+            if index == _CONTEXT_MAX_COLLECTION_ITEMS:
+                output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
+                break
+            try:
+                key_text = str(key)
+            except Exception:  # noqa: BLE001
+                key_text = f"<{type(key).__name__}>"
+            safe_key = state.text(key_text, per_value=512)
+            output[safe_key] = _normalise_context_value(item, state, depth + 1)
+        return output
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        identity = id(value)
+        if identity in state.seen:
+            return "[circular reference]"
+        state.seen.add(identity)
+        output: list[Any] = []
+        try:
+            iterator = iter(value)
+        except Exception:  # noqa: BLE001
+            return ["could not iterate collection"]
+        for index in range(_CONTEXT_MAX_COLLECTION_ITEMS + 1):
+            if state.remaining <= 0:
+                output.append(_CONTEXT_TRUNCATED)
+                break
+            try:
+                item = next(iterator)
+            except StopIteration:
+                break
+            except Exception:  # noqa: BLE001
+                output.append("collection changed during capture")
+                break
+            if index == _CONTEXT_MAX_COLLECTION_ITEMS:
+                output.append(_CONTEXT_TRUNCATED)
+                break
+            output.append(_normalise_context_value(item, state, depth + 1))
+        return output
+
+    try:
+        rendered = repr(value)
+    except Exception:  # noqa: BLE001
+        rendered = f"<{type(value).__name__}>"
+    return state.text(rendered)
+
+
+def normalise_error_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a JSON-safe, cycle-safe and disk-bounded context object."""
+    if not context:
+        return {}
+    normalised = _normalise_context_value(context, _ContextBudget(), 0)
+    if not isinstance(normalised, dict):
+        normalised = {"value": normalised}
+    encoded = json.dumps(normalised, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= MAX_ERROR_CONTEXT_BYTES:
+        return normalised
+
+    # JSON escaping can expand control-heavy strings beyond the raw budget.
+    # Preserve small top-level fields and replace oversized values explicitly.
+    reduced: dict[str, Any] = {
+        "_lorahub_truncated": {
+            "reason": "serialized context exceeded storage limit",
+            "limit_bytes": MAX_ERROR_CONTEXT_BYTES,
+        }
+    }
+    for key, value in normalised.items():
+        candidate = dict(reduced)
+        candidate[key] = value
+        payload = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+        if len(payload.encode("utf-8")) <= MAX_ERROR_CONTEXT_BYTES:
+            reduced[key] = value
+            continue
+        summary: Any
+        if isinstance(value, str):
+            summary = _clip_utf8(value, 4_096)
+        elif isinstance(value, (dict, list)):
+            summary = f"{_CONTEXT_TRUNCATED}: {type(value).__name__} value omitted"
+        else:
+            summary = value
+        candidate[key] = summary
+        payload = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+        if len(payload.encode("utf-8")) <= MAX_ERROR_CONTEXT_BYTES:
+            reduced[key] = summary
+    return reduced
 
 # Bump together with a real ALTER path. v3 adds local resolution tracking.
 _SCHEMA_VERSION = 3
@@ -186,17 +386,40 @@ class ErrorReport:
             id=uuid.uuid4().hex,
             timestamp=timestamp or datetime.now(),
             severity=severity,
-            source=source,
-            category=category,
-            title=title,
-            message=message,
-            stack=stack,
-            context=dict(context or {}),
-            job_id=job_id,
-            request_id=request_id,
-            request_path=request_path,
-            version=version or _resolve_version(),
-            platform=platform or _resolve_platform(),
+            source=truncate_error_text(
+                source, MAX_ERROR_SOURCE_CHARS, preserve_tail=False
+            ) or "unknown",
+            category=truncate_error_text(
+                category, MAX_ERROR_CATEGORY_CHARS, preserve_tail=False
+            ) or "unknown",
+            title=truncate_error_text(
+                title, MAX_ERROR_TITLE_CHARS, preserve_tail=False
+            ) or "Untitled error",
+            message=(
+                truncate_error_text(message, MAX_ERROR_MESSAGE_CHARS)
+                or "Unknown error"
+            ),
+            stack=truncate_error_text(stack, MAX_ERROR_STACK_CHARS),
+            context=normalise_error_context(context),
+            job_id=truncate_error_text(
+                job_id, MAX_ERROR_ID_CHARS, preserve_tail=False
+            ),
+            request_id=truncate_error_text(
+                request_id, MAX_ERROR_ID_CHARS, preserve_tail=False
+            ),
+            request_path=truncate_error_text(
+                request_path, MAX_ERROR_PATH_CHARS, preserve_tail=False
+            ),
+            version=truncate_error_text(
+                version or _resolve_version(),
+                MAX_ERROR_ID_CHARS,
+                preserve_tail=False,
+            ) or "unknown",
+            platform=truncate_error_text(
+                platform or _resolve_platform(),
+                MAX_ERROR_PATH_CHARS,
+                preserve_tail=False,
+            ) or "unknown",
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -272,12 +495,17 @@ class ErrorReportStore:
     def path(self) -> Path:
         return self._path
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Generator[sqlite3.Connection, None, None]:
+        """Yield one short-lived connection and always close it."""
         conn = sqlite3.connect(str(self._path), isolation_level=None, timeout=10.0)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------ #
     # CRUD
@@ -288,6 +516,7 @@ class ErrorReportStore:
         logged — losing one error log row must never raise from the
         reporter (we'd recursively try to log the failure-to-log)."""
         try:
+            safe_context = normalise_error_context(report.context)
             payload = (
                 report.id,
                 report.timestamp.isoformat(),
@@ -297,7 +526,7 @@ class ErrorReportStore:
                 report.title,
                 report.message,
                 report.stack,
-                json.dumps(report.context, ensure_ascii=False, default=str),
+                json.dumps(safe_context, ensure_ascii=False, separators=(",", ":")),
                 report.job_id,
                 report.request_id,
                 report.request_path,
@@ -338,8 +567,12 @@ class ErrorReportStore:
                     (self._max_rows,),
                 )
                 conn.commit()
-        except (sqlite3.Error, OSError, json.JSONDecodeError) as exc:
-            log.warning("could not persist error report %s: %r", report.id, exc)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "could not persist error report %s: %s",
+                report.id,
+                redact_command_text(str(exc)),
+            )
 
     def update_upstream(
         self,
@@ -374,7 +607,9 @@ class ErrorReportStore:
                 conn.commit()
         except (sqlite3.Error, OSError) as exc:
             log.warning(
-                "could not update upstream state for %s: %r", report_id, exc,
+                "could not update upstream state for %s: %s",
+                report_id,
+                redact_command_text(str(exc)),
             )
 
     def update_resolution(
@@ -399,7 +634,11 @@ class ErrorReportStore:
                 if cur.rowcount == 0:
                     return None
         except (sqlite3.Error, OSError) as exc:
-            log.warning("could not update resolution state for %s: %r", report_id, exc)
+            log.warning(
+                "could not update resolution state for %s: %s",
+                report_id,
+                redact_command_text(str(exc)),
+            )
             return None
         return self.get(report_id)
 
@@ -434,11 +673,55 @@ class ErrorReportStore:
         sql = "SELECT * FROM error_reports"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        sql += " ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([max(1, min(1000, limit)), max(0, offset)])
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_report(r) for r in rows]
+
+    def iter_all(self, *, batch_size: int = 250) -> Iterable[ErrorReport]:
+        """Iterate a stable export snapshot without loading it all into memory."""
+        size = max(1, min(1000, int(batch_size)))
+        with self._lock, self._connect() as conn:
+            watermark = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) AS n FROM error_reports"
+                ).fetchone()["n"]
+            )
+
+        last_timestamp: str | None = None
+        last_id: str | None = None
+        while True:
+            params: list[Any] = [watermark]
+            where = "rowid <= ?"
+            if last_timestamp is not None and last_id is not None:
+                where += " AND (timestamp < ? OR (timestamp = ? AND id < ?))"
+                params.extend([last_timestamp, last_timestamp, last_id])
+            params.append(size)
+            with self._lock, self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM error_reports "
+                    f"WHERE {where} "
+                    "ORDER BY timestamp DESC, id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+            if not rows:
+                return
+            for row in rows:
+                yield _row_to_report(row)
+            last_timestamp = str(rows[-1]["timestamp"])
+            last_id = str(rows[-1]["id"])
+
+    def list_pending_upstream(self) -> list[ErrorReport]:
+        """Return durable outbound work left queued by an earlier process."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM error_reports "
+                "WHERE upstream_status IN ('queued', 'retrying') "
+                "ORDER BY timestamp ASC, id ASC LIMIT ?",
+                (self._max_rows,),
+            ).fetchall()
+        return [_row_to_report(row) for row in rows]
 
     def count(
         self,
@@ -638,7 +921,7 @@ class ErrorReportStore:
         ``items`` lets callers pre-filter the export (e.g. last 7 days).
         Returns the number of rows written.
         """
-        rows = list(items) if items is not None else self.list(limit=1000)
+        rows = items if items is not None else self.iter_all()
         dest.parent.mkdir(parents=True, exist_ok=True)
         n = 0
         with dest.open("w", encoding="utf-8") as fh:

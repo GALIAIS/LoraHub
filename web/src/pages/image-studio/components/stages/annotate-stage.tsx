@@ -24,7 +24,11 @@ import {
   type CaptionDiff,
   type CaptionVocabRow,
 } from "@/lib/api"
-import { addTask } from "@/lib/studio-task-store"
+import {
+  addTask,
+  isStudioTaskActive,
+  type StudioTaskRecord,
+} from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -339,7 +343,10 @@ function AnnotateMainPanel({ datasetPath }: Props) {
                 ) : null}
                 <Button
                   type="button"
-                  disabled={startMutation.isPending || latestTask?.status === "running"}
+                  disabled={
+                    startMutation.isPending ||
+                    Boolean(latestTask && isStudioTaskActive(latestTask.status))
+                  }
                   onClick={() => startMutation.mutate()}
                   className="ml-auto h-8 gap-1.5"
                 >
@@ -515,28 +522,23 @@ function Segment({
 function TaskCard({
   task,
 }: {
-  task:
-        | {
-        kind?: string
-        label: string
-        status: string
-        processed?: number
-        total?: number
-        lastImage?: string
-        errorMsg?: string
-      }
-    | undefined
+  task: StudioTaskRecord | undefined
 }) {
   const download = useTaggerDownloadDisplay(
-    task?.status === "running" && (task.kind === "wd14" || task.kind === "smart-caption"),
+    Boolean(
+      task &&
+      isStudioTaskActive(task.status) &&
+      (task.kind === "wd14" || task.kind === "smart-caption"),
+    ),
   )
+  const active = Boolean(task && isStudioTaskActive(task.status))
   const total = task?.total ?? 0
   const processed = task?.processed ?? 0
   const percent = download?.percent ?? (total > 0 ? Math.round((processed / total) * 100) : 0)
   return (
     <section className="rounded-md border border-border/60 bg-card p-4">
       <div className="flex items-center gap-2">
-        {task?.status === "running" ? (
+        {active ? (
           <Loader2 className="size-4 animate-spin" />
         ) : (
           <CheckCircle2 className="size-4 text-muted-foreground" />

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from lorahub.core.backends._common import bootstrap as _common
 from lorahub.core.backends.errors import BootstrapError
+from lorahub.core.paths import project_root
 
 _ENV_REPO = "LORAHUB_ANIMA_LORA_REPO"
 _ENV_PYTHON = "LORAHUB_ANIMA_LORA_PYTHON"
@@ -72,17 +73,8 @@ def default_repo_path() -> Path:
     if env:
         return Path(env).expanduser()
 
-    here = Path(__file__).resolve()
-    # lorahub/core/backends/anima_lora/bootstrap.py → up 5 = project root
-    try:
-        project_root = here.parents[4]
-    except IndexError:
-        project_root = None
-
-    candidate = (
-        project_root / "external" / "anima_lora" if project_root else None
-    )
-    if candidate is not None and (candidate / "pyproject.toml").is_file():
+    candidate = project_root() / "external" / "anima_lora"
+    if (candidate / "pyproject.toml").is_file():
         return candidate
 
     # Wheel install fallback. Same convention kohya / dp use for their

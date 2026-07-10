@@ -14,6 +14,7 @@ mirror the bootstrap-session log shape users already know.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
 import time
@@ -25,8 +26,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from lorahub.api import app as app_module
+from lorahub.api import state
 from lorahub.api import system_update
+from lorahub.api.state import JobState
 from lorahub.api.runtime_bind import (
+    RuntimeBind,
     clear_runtime_bind,
     read_runtime_bind,
     restart_args,
@@ -230,6 +234,41 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
         req.channel != "tag" or not system_update.is_release_tag(req.target_tag)
     ):
         raise HTTPException(422, "target_tag requires channel=tag and format vX.Y.Z")
+
+    active_jobs = [
+        job
+        for job in state.registry.list()
+        if job.state
+        in {
+            JobState.queued,
+            JobState.preparing,
+            JobState.running,
+            JobState.canceling,
+        }
+    ]
+    active_tasks = [
+        task
+        for task in _task_store().list_active()
+        if task.kind != _KIND_SYSTEM_UPDATE
+    ]
+    if active_jobs or active_tasks:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "cannot update while training or background tasks are active; "
+                    "stop them before updating"
+                ),
+                "jobs": [
+                    {"id": job.id, "state": job.state.value}
+                    for job in active_jobs[:20]
+                ],
+                "tasks": [
+                    {"id": task.id, "kind": task.kind, "status": task.status}
+                    for task in active_tasks[:20]
+                ],
+            },
+        )
     if not _UPDATE_LOCK.acquire(blocking=False):
         raise HTTPException(409, "system update is already running")
 
@@ -244,8 +283,21 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
             "force": req.force,
         },
     )
-    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=512)
+    loop = asyncio.get_running_loop()
+
+    def enqueue(event: dict[str, Any] | None) -> None:
+        def put_latest() -> None:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+                with contextlib.suppress(asyncio.QueueFull):
+                    queue.put_nowait(event)
+
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(put_latest)
 
     def emit(phase: str, level: str, message: str) -> None:
         event = {"phase": phase, "level": level, "message": message}
@@ -262,7 +314,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
         except Exception:  # noqa: BLE001
             pass
         # Cross-thread put_nowait via the running event loop.
-        loop.call_soon_threadsafe(queue.put_nowait, event)
+        enqueue(event)
 
     def runner() -> None:
         try:
@@ -287,7 +339,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 },
                 finished=True,
             )
-            loop.call_soon_threadsafe(queue.put_nowait, None)
+            enqueue(None)
             _UPDATE_LOCK.release()
             return
         try:
@@ -316,7 +368,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
                 # because the executor that ran apply() has already gone.
                 threading.Timer(1.5, _trigger_restart).start()
         finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
+            enqueue(None)
             _UPDATE_LOCK.release()
 
     threading.Thread(
@@ -368,7 +420,7 @@ def _trigger_restart() -> None:
 
     _preserve_restart_bind()
 
-    args = restart_args(sys.executable, sys.argv)
+    args = _restart_fallback_args(bind, sys.executable, sys.argv)
     if sys.platform == "win32":
         # Spawn detached child running same argv, then bail.
         import subprocess
@@ -381,6 +433,28 @@ def _trigger_restart() -> None:
         os._exit(0)  # noqa: SLF001 — needed: skip atexit / running tasks
         return
     os.execv(sys.executable, args)
+
+
+def _restart_fallback_args(
+    bind: RuntimeBind | None,
+    executable: str,
+    argv: list[str],
+) -> list[str]:
+    if bind is None:
+        return restart_args(executable, argv)
+    # ``argv[0]`` may be the Windows ``uvicorn.exe`` launcher. Passing that
+    # PE file back to python (``python uvicorn.exe``) cannot work, so rebuild
+    # a portable module invocation from the persisted bind.
+    return [
+        executable,
+        "-m",
+        "uvicorn",
+        "lorahub.api.app:app",
+        "--host",
+        bind.host,
+        "--port",
+        str(bind.port),
+    ]
 
 
 def _preserve_restart_bind() -> None:

@@ -12,18 +12,32 @@ import time as _time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from lorahub.api import app as app_module
-from lorahub.api.dataset_files import _resolve_under_roots
+from lorahub.api.dataset_files import _resolve_under_roots, encode_image_data_url
 from lorahub.api.image_studio_store import ImageAnnotation, ImageStudioStore
-from lorahub.api.task_sessions import TaskEvent, TaskSessionStore
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    persist_stop_request,
+    prune_terminal_session_cache,
+)
+from lorahub.core.redaction import redact_command_text
 
-from ._shared import _file_sha256, _scan_images, _store
+from ._shared import (
+    _atomic_write_text,
+    _file_mutation,
+    _file_sha256,
+    _scan_images,
+    _store,
+    _writable_dataset_directory,
+    _writable_dataset_file,
+)
 from .ai_tasks import get_task_store, persisted_task_result
+from .curate import _backup_file
 
 if TYPE_CHECKING:
     from lorahub.core.tagging.wd14 import WD14Tagger
@@ -33,6 +47,10 @@ _KIND_CAPTION = "image_studio_caption"
 _KIND_SMART_CAPTION = "image_studio_smart_caption"
 _KIND_QUALITY = "image_studio_quality"
 _KIND_TRIGGER_WORDS = "image_studio_trigger_words"
+
+
+def _safe_error(exc: BaseException) -> str:
+    return redact_command_text(f"{type(exc).__name__}: {exc}")[:2000]
 
 
 def _task_store() -> TaskSessionStore:
@@ -73,8 +91,11 @@ class _SmartCaptionSession:
     last_image: str = ""
     started_at: float = field(default_factory=_time.time)
     finished_at: float | None = None
-    _stop_flag: bool = field(default=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _stop_event: threading.Event = field(
+        default_factory=threading.Event,
+        repr=False,
+    )
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def add_result(self, item: dict[str, Any], image_name: str) -> None:
         with self._lock:
@@ -113,19 +134,34 @@ class _SmartCaptionSession:
 
     def finish(self, status: str) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_event.is_set():
+                status = "canceled"
             self.status = status
             self.finished_at = _time.time()
-        self._append_task_event(f"finished: {status}", percent=self.percent)
-        self._finalize_task(status)
+            # Keep the live and persisted views atomic for status polling.
+            self._append_task_event(f"finished: {status}", percent=self.percent)
+            self._finalize_task(status)
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
-            self._stop_flag = True
-        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+            if self.status != "running":
+                return False
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 0.0
+            if self.task_kind:
+                persisted = persist_stop_request(
+                    _task_store(),
+                    self.session_id,
+                    percent=percent,
+                )
+                if not persisted:
+                    return False
+            self._stop_event.set()
+            self.status = "stop_requested"
+        self._append_task_event("cancel requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
-        with self._lock:
-            return self._stop_flag
+        return self._stop_event.is_set()
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -216,7 +252,7 @@ class AIBatchCaptionInput(BaseModel):
     path: str
     recursive: bool = False
     task: str = "tagging.assist"
-    mergeStrategy: str = "replace"
+    mergeStrategy: Literal["replace", "rewrite", "append", "prepend"] = "replace"
     # Skip images that already have a non-empty .txt sidecar. Empty /
     # zero-byte sidecars are NOT skipped (they're usually crash-leftover
     # half-writes that should be reprocessed).
@@ -301,6 +337,8 @@ class _CaptionSession:
 
     def finish(self, status: str) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_flag:
+                status = "canceled"
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
@@ -316,10 +354,22 @@ class _CaptionSession:
         except Exception:
             pass
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
+            if self.status != "running":
+                return False
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
             self._stop_flag = True
-        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+            self.status = "stop_requested"
+        self._append_task_event("cancel requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -370,6 +420,14 @@ _caption_sessions: dict[str, _CaptionSession] = {}
 _caption_lock = threading.Lock()
 
 
+def _has_nonempty_caption(image_path: Path) -> bool:
+    caption = image_path.with_suffix(".txt")
+    try:
+        return caption.is_file() and caption.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _caption_images_for_request(
     body: AIBatchCaptionInput,
     directory: Path,
@@ -380,10 +438,7 @@ def _caption_images_for_request(
         before = len(images)
         images = [
             p for p in images
-            if not (
-                p.with_suffix(".txt").is_file()
-                and p.with_suffix(".txt").stat().st_size > 0
-            )
+            if not _has_nonempty_caption(p)
         ]
         skipped = before - len(images)
     return images, skipped
@@ -421,13 +476,7 @@ def _caption_images(
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
         try:
-            import base64  # noqa: PLC0415
-            import mimetypes  # noqa: PLC0415
-
-            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
-            data = img_path.read_bytes()
-            b64 = base64.b64encode(data).decode("ascii")
-            data_url = f"data:{mime};base64,{b64}"
+            data_url = encode_image_data_url(img_path)
 
             messages: list[dict[str, Any]] = []
             if route.system_prompt:
@@ -448,16 +497,24 @@ def _caption_images(
             )
 
             caption_path = img_path.with_suffix(".txt")
-            existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
-
-            if body.mergeStrategy == "append":
-                new_caption = (existing.strip() + ", " + result.content).strip(", ")
-            elif body.mergeStrategy == "rewrite":
-                new_caption = result.content
-            else:
-                new_caption = result.content
-
-            caption_path.write_text(new_caption, encoding="utf-8")
+            with _file_mutation(img_path):
+                existing = (
+                    caption_path.read_text(encoding="utf-8")
+                    if caption_path.is_file()
+                    else ""
+                )
+                if body.mergeStrategy == "append":
+                    new_caption = (
+                        existing.strip() + ", " + result.content
+                    ).strip(", ")
+                elif body.mergeStrategy == "prepend":
+                    new_caption = (
+                        result.content + ", " + existing.strip()
+                    ).strip(", ")
+                else:
+                    new_caption = result.content
+                _backup_file(str(directory), img_path)
+                _atomic_write_text(caption_path, new_caption)
 
             ann = store.get_annotation(str(img_path))
             if ann is None:
@@ -475,9 +532,10 @@ def _caption_images(
             if on_result is not None:
                 on_result(item, img_path.name)
         except Exception as exc:  # noqa: BLE001
-            errors.append({"path": str(img_path), "error": str(exc)})
+            error = _safe_error(exc)
+            errors.append({"path": str(img_path), "error": error})
             if on_error is not None:
-                on_error(str(img_path), str(exc), img_path.name)
+                on_error(str(img_path), error, img_path.name)
 
     return results, errors
 
@@ -485,9 +543,7 @@ def _caption_images(
 @router.post("/ai/caption")
 def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
     """Caption all images in a directory synchronously, preserving legacy API."""
-    directory = _resolve_under_roots(body.path)
-    if not directory.is_dir():
-        raise HTTPException(400, "not a directory")
+    directory = _writable_dataset_directory(body.path)
     images, skipped = _caption_images_for_request(body, directory)
     results, errors = _caption_images(body, directory, images)
 
@@ -502,9 +558,7 @@ def ai_batch_caption(body: AIBatchCaptionInput) -> dict[str, Any]:
 @router.post("/ai/caption/start", status_code=202)
 def ai_batch_caption_start(body: AIBatchCaptionInput) -> dict[str, Any]:
     """Start a persistent background captioning session."""
-    directory = _resolve_under_roots(body.path)
-    if not directory.is_dir():
-        raise HTTPException(400, "not a directory")
+    directory = _writable_dataset_directory(body.path)
     # Validate route before returning 202 so configuration errors are immediate.
     from lorahub.api import app as app_mod  # noqa: PLC0415
 
@@ -539,6 +593,7 @@ def ai_batch_caption_start(body: AIBatchCaptionInput) -> dict[str, Any]:
     session._append_task_event("captioning queued", percent=0)
     with _caption_lock:
         _caption_sessions[session.session_id] = session
+        prune_terminal_session_cache(_caption_sessions)
 
     def run() -> None:
         try:
@@ -555,7 +610,7 @@ def ai_batch_caption_start(body: AIBatchCaptionInput) -> dict[str, Any]:
         except InterruptedError:
             session.finish("canceled")
         except Exception as exc:  # noqa: BLE001
-            session.fail(str(exc))
+            session.fail(_safe_error(exc))
 
     threading.Thread(
         target=run,
@@ -588,7 +643,8 @@ def ai_batch_caption_cancel(session_id: str) -> dict[str, Any]:
         session = _caption_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "caption session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"caption session is {session.status}")
     return {"session_id": session_id, "status": "stop_requested"}
 
 
@@ -680,6 +736,8 @@ class _QualitySession:
 
     def finish(self, status: str) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_flag:
+                status = "canceled"
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
@@ -695,10 +753,22 @@ class _QualitySession:
         except Exception:
             pass
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
+            if self.status != "running":
+                return False
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
             self._stop_flag = True
-        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+            self.status = "stop_requested"
+        self._append_task_event("cancel requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -781,14 +851,9 @@ def _score_quality_images(
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
         try:
-            import base64  # noqa: PLC0415
             import json as json_mod  # noqa: PLC0415
-            import mimetypes  # noqa: PLC0415
 
-            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
-            data = img_path.read_bytes()
-            b64 = base64.b64encode(data).decode("ascii")
-            data_url = f"data:{mime};base64,{b64}"
+            data_url = encode_image_data_url(img_path)
 
             system_prompt = route.system_prompt or (
                 'Rate this training image on a 0-100 scale. '
@@ -843,10 +908,11 @@ def _score_quality_images(
             if on_result is not None:
                 on_result(item, img_path.name)
         except Exception as exc:  # noqa: BLE001
-            error = {"path": str(img_path), "error": str(exc)}
+            error_text = _safe_error(exc)
+            error = {"path": str(img_path), "error": error_text}
             errors.append(error)
             if on_error is not None:
-                on_error(str(img_path), str(exc), img_path.name)
+                on_error(str(img_path), error_text, img_path.name)
     return results, errors
 
 
@@ -926,6 +992,7 @@ def ai_batch_quality_start(body: AIBatchQualityInput) -> dict[str, Any]:
     session._append_task_event("quality scoring queued", percent=0)
     with _quality_lock:
         _quality_sessions[session.session_id] = session
+        prune_terminal_session_cache(_quality_sessions)
 
     def run() -> None:
         try:
@@ -942,7 +1009,7 @@ def ai_batch_quality_start(body: AIBatchQualityInput) -> dict[str, Any]:
         except InterruptedError:
             session.finish("canceled")
         except Exception as exc:  # noqa: BLE001
-            session.fail(str(exc))
+            session.fail(_safe_error(exc))
 
     threading.Thread(
         target=run,
@@ -975,7 +1042,8 @@ def ai_batch_quality_cancel(session_id: str) -> dict[str, Any]:
         session = _quality_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "quality session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"quality session is {session.status}")
     return {"session_id": session_id, "status": "stop_requested"}
 
 
@@ -1161,6 +1229,7 @@ def _get_tagger(
     general_threshold: float,
     character_threshold: float,
     device: str,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Any:
     """Return a WD14Tagger that's loaded once per process per config."""
     from lorahub.core.tagging.wd14 import WD14Tagger  # noqa: PLC0415
@@ -1176,7 +1245,7 @@ def _get_tagger(
             character_threshold=character_threshold,
             device=device,
         )
-        tagger.load()
+        tagger.load(should_stop=should_stop)
         _TAGGER_CACHE[key] = tagger
         return tagger
 
@@ -1529,11 +1598,11 @@ class SmartCaptionBatchInput(BaseModel):
     recursive: bool = False
     taggerModel: str = "SmilingWolf/wd-eva02-large-tagger-v3"
     visionTask: str = "tagging.assist"
-    mergeStrategy: str = "replace"
-    device: str = "auto"
-    generalThreshold: float = 0.35
-    characterThreshold: float = 0.85
-    captionMode: str = "style"  # general | style | character
+    mergeStrategy: Literal["replace", "append", "prepend"] = "replace"
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+    generalThreshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    characterThreshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    captionMode: Literal["general", "style", "character"] = "style"
     promptTemplate: str | None = None
     # "vlm" — multimodal LLM sees the image directly (default behaviour
     #         since the feature shipped). Best caption quality but
@@ -1542,7 +1611,7 @@ class SmartCaptionBatchInput(BaseModel):
     #          and works against text-only models; useful when the
     #          configured VLM is rate-limited / quota-exhausted, or the
     #          user wants a faster cheaper pass.
-    captionSource: str = "vlm"
+    captionSource: Literal["vlm", "tags", "toriigate"] = "vlm"
     triggerWord: str | None = None
     # Style/medium descriptors (anime, illustration, lineart, monochrome, ...)
     # are stripped from both the WD14 reference list shown to the LLM and
@@ -1577,10 +1646,10 @@ class SmartCaptionBatchInput(BaseModel):
     # Per-image timeout protects the VLM stage; WD14 is fast enough we
     # don't bother timing it (a hung WD14 means the GPU is wedged and
     # the user needs to restart anyway).
-    concurrency: int = 8
-    taggerConcurrency: int = 2
-    perImageTimeoutSec: float = 90.0
-    maxRetries: int = 2
+    concurrency: int = Field(default=8, ge=1, le=64)
+    taggerConcurrency: int = Field(default=2, ge=1, le=4)
+    perImageTimeoutSec: float = Field(default=90.0, ge=5.0, le=600.0)
+    maxRetries: int = Field(default=2, ge=0, le=5)
     # Skip images that already have a non-empty .txt sidecar. Useful
     # for re-running a batch that hit upstream rate-limits — the
     # second run only retries the images that failed the first time.
@@ -1646,9 +1715,6 @@ def _smart_caption_stage_one(
     style-words leak in. Only ``use_wd14=False`` AND ``mode==style``
     skips the LLM entirely (the trigger word alone is the caption).
     """
-    import base64  # noqa: PLC0415
-    import mimetypes  # noqa: PLC0415
-
     if use_wd14 and tagger is not None:
         tag_result = tagger.tag_image(img_path)
         general_tags_underscore = [t.name for t in tag_result.general]
@@ -1714,10 +1780,7 @@ def _smart_caption_stage_one(
         else:
             prompt_template = _TAGS_ONLY_PROMPT_GENERAL
     else:
-        mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
-        data = img_path.read_bytes()
-        b64 = base64.b64encode(data).decode("ascii")
-        data_url = f"data:{mime};base64,{b64}"
+        data_url = encode_image_data_url(img_path)
         if caption_mode == "style":
             prompt_template = _SMART_CAPTION_PROMPT_STYLE
         elif caption_mode == "character":
@@ -1763,6 +1826,7 @@ def _smart_caption_stage_two(
     store: ImageStudioStore,
     caption_mode: str,
     trigger_word: str | None,
+    backup_dataset_path: str | None = None,
 ) -> dict[str, Any]:
     """Network-bound VLM (or text-only LLM) call + caption assembly + disk + store write."""
     from datetime import UTC, datetime  # noqa: PLC0415
@@ -1785,12 +1849,19 @@ def _smart_caption_stage_two(
         )
 
         caption_path = s1.img_path.with_suffix(".txt")
-        existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
-        if merge_strategy == "append":
-            new_caption = (existing.strip() + "\n" + new_caption).strip()
-        elif merge_strategy == "prepend":
-            new_caption = (new_caption + "\n" + existing.strip()).strip()
-        caption_path.write_text(new_caption, encoding="utf-8")
+        with _file_mutation(s1.img_path):
+            existing = (
+                caption_path.read_text(encoding="utf-8")
+                if caption_path.is_file()
+                else ""
+            )
+            if merge_strategy == "append":
+                new_caption = (existing.strip() + "\n" + new_caption).strip()
+            elif merge_strategy == "prepend":
+                new_caption = (new_caption + "\n" + existing.strip()).strip()
+            if backup_dataset_path is not None:
+                _backup_file(backup_dataset_path, s1.img_path)
+            _atomic_write_text(caption_path, new_caption)
 
         ann = store.get_annotation(str(s1.img_path))
         if ann is None:
@@ -1852,14 +1923,20 @@ def _smart_caption_stage_two(
     )
 
     caption_path = s1.img_path.with_suffix(".txt")
-    existing = caption_path.read_text(encoding="utf-8") if caption_path.is_file() else ""
-    if merge_strategy == "append":
-        new_caption = (existing.strip() + "\n" + new_caption).strip()
-    elif merge_strategy == "prepend":
-        new_caption = (new_caption + "\n" + existing.strip()).strip()
-    # else replace — keep as-is.
-
-    caption_path.write_text(new_caption, encoding="utf-8")
+    with _file_mutation(s1.img_path):
+        existing = (
+            caption_path.read_text(encoding="utf-8")
+            if caption_path.is_file()
+            else ""
+        )
+        if merge_strategy == "append":
+            new_caption = (existing.strip() + "\n" + new_caption).strip()
+        elif merge_strategy == "prepend":
+            new_caption = (new_caption + "\n" + existing.strip()).strip()
+        # else replace — keep as-is.
+        if backup_dataset_path is not None:
+            _backup_file(backup_dataset_path, s1.img_path)
+        _atomic_write_text(caption_path, new_caption)
 
     ann = store.get_annotation(str(s1.img_path))
     if ann is None:
@@ -1912,7 +1989,14 @@ def _smart_caption_single_image(
         trigger_word=trigger_word,
     )
     return _smart_caption_stage_two(
-        s1, ai_store, route, merge_strategy, store, caption_mode, trigger_word,
+        s1,
+        ai_store,
+        route,
+        merge_strategy,
+        store,
+        caption_mode,
+        trigger_word,
+        str(img_path.parent),
     )
 
 
@@ -1933,9 +2017,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     """
     from lorahub.api import app as app_mod  # noqa: PLC0415
 
-    directory = _resolve_under_roots(body.path)
-    if not directory.is_dir():
-        raise HTTPException(400, "not a directory")
+    directory = _writable_dataset_directory(body.path)
 
     ai_store = app_mod._ai_store
     if ai_store is None:
@@ -1956,8 +2038,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         before = len(images)
         images = [
             p for p in images
-            if not (p.with_suffix(".txt").is_file()
-                    and p.with_suffix(".txt").stat().st_size > 0)
+            if not _has_nonempty_caption(p)
         ]
         skipped = before - len(images)
     else:
@@ -1995,6 +2076,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
     )
     with _smart_caption_lock:
         _smart_caption_sessions[session.session_id] = session
+        prune_terminal_session_cache(_smart_caption_sessions)
 
     def run() -> None:
         # Two-stage pipeline:
@@ -2007,8 +2089,9 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
         # stages: that bottlenecks the VLM stage to the GPU pool's
         # worker count and was the throughput floor we hit during
         # smoke testing on the qing0ying0 dataset.
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout  # noqa: PLC0415
         import queue as _queue  # noqa: PLC0415
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+        from concurrent.futures import TimeoutError as _Timeout
 
         vlm_workers = max(1, min(int(body.concurrency or 1), 64))
         wd14_workers = max(1, min(int(body.taggerConcurrency or 1), 4))
@@ -2043,7 +2126,9 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     trigger_word=body.triggerWord,
                 )
             except Exception as exc:  # noqa: BLE001
-                err_msg = f"WD14: {type(exc).__name__}: {exc}"
+                if session.should_stop():
+                    return
+                err_msg = f"WD14: {_safe_error(exc)}"
                 session.add_error(str(img_path), err_msg, img_path.name)
                 return
             # block-put so we honour back-pressure when stage 2 is
@@ -2080,12 +2165,18 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     try:
                         item = _smart_caption_stage_two(
                             s1, ai_store, route, body.mergeStrategy, store,
-                            body.captionMode, body.triggerWord,
+                            body.captionMode, body.triggerWord, str(directory),
                         )
+                        if session.should_stop():
+                            last_err = None
+                            break
                         session.add_result(item, s1.img_path.name)
                         last_err = None
                         break
                     except Exception as exc:  # noqa: BLE001
+                        if session.should_stop():
+                            last_err = None
+                            break
                         last_err = exc
                         if attempt < max_retries:
                             # 429 / quota errors need much longer backoff —
@@ -2095,20 +2186,24 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                             # in the message and step up to 30s+30s*attempt
                             # (capped at 120s). Other errors keep the fast
                             # 2-4s exponential backoff.
-                            msg_l = str(exc).lower()
+                            msg_l = _safe_error(exc).lower()
                             is_rate_limit = (
                                 "429" in msg_l
                                 or "rate" in msg_l
                                 or "exhausted" in msg_l
                                 or "quota" in msg_l
                             )
-                            if is_rate_limit:
-                                _time.sleep(min(30.0 + 30.0 * attempt, 120.0))
-                            else:
-                                _time.sleep(min(2.0 ** attempt, 4.0))
+                            delay = (
+                                min(30.0 + 30.0 * attempt, 120.0)
+                                if is_rate_limit
+                                else min(2.0 ** attempt, 4.0)
+                            )
+                            if session._stop_event.wait(delay):
+                                last_err = None
+                                break
                             continue
                 if last_err is not None:
-                    err_msg = f"VLM: {type(last_err).__name__}: {last_err}"
+                    err_msg = f"VLM: {_safe_error(last_err)}"
                     session.add_error(str(s1.img_path), err_msg, s1.img_path.name)
                 s1_queue.task_done()
 
@@ -2128,6 +2223,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                     body.generalThreshold,
                     body.characterThreshold,
                     body.device,
+                    session.should_stop,
                 )
             else:
                 # WD14 disabled — caption is trigger + LLM nl_text only.
@@ -2170,7 +2266,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
                         # Stage-one worker swallows errors; reaching
                         # here means the executor itself failed.
                         p = wd14_futures[fut]
-                        session.add_error(str(p), str(exc), p.name)
+                        session.add_error(str(p), _safe_error(exc), p.name)
 
                 # Producers done — drop a sentinel so each consumer
                 # eventually exits. We push exactly one None and rely
@@ -2195,7 +2291,7 @@ def ai_smart_caption_batch(body: SmartCaptionBatchInput) -> dict[str, Any]:
             # Catastrophic failure (e.g. AI route token revoked mid-run).
             # Mark the session failed instead of leaking the traceback into
             # the request thread (which has long since returned 202).
-            session.set_error(str(exc))
+            session.set_error(_safe_error(exc))
             session.finish("failed")
 
     threading.Thread(
@@ -2234,7 +2330,8 @@ def ai_smart_caption_cancel(session_id: str) -> dict[str, Any]:
         session = _smart_caption_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"smart-caption session is {session.status}")
     return {"session_id": session_id, "stop_requested": True}
 
 
@@ -2242,13 +2339,13 @@ class SmartCaptionSingleInput(BaseModel):
     path: str
     taggerModel: str = "SmilingWolf/wd-eva02-large-tagger-v3"
     visionTask: str = "tagging.assist"
-    mergeStrategy: str = "replace"
-    device: str = "auto"
-    generalThreshold: float = 0.35
-    characterThreshold: float = 0.85
-    captionMode: str = "style"
+    mergeStrategy: Literal["replace", "append", "prepend"] = "replace"
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+    generalThreshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    characterThreshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    captionMode: Literal["general", "style", "character"] = "style"
     promptTemplate: str | None = None
-    captionSource: str = "vlm"
+    captionSource: Literal["vlm", "tags", "toriigate"] = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
     useWd14: bool = True
@@ -2259,9 +2356,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
     """Run WD14 tagging + vision LLM captioning for a single image."""
     from lorahub.api import app as app_mod  # noqa: PLC0415
 
-    file_path = _resolve_under_roots(body.path)
-    if not file_path.is_file():
-        raise HTTPException(404, "image not found")
+    file_path = _writable_dataset_file(body.path)
 
     ai_store = app_mod._ai_store
     if ai_store is None:
@@ -2296,7 +2391,7 @@ def ai_smart_caption_single(body: SmartCaptionSingleInput) -> dict[str, Any]:
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"smart caption failed: {exc}") from exc
+        raise HTTPException(500, f"smart caption failed: {_safe_error(exc)}") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -2381,17 +2476,17 @@ class VlmAnimaRewriteInput(BaseModel):
 
     path: str
     visionTask: str = "tagging.assist"
-    mergeStrategy: str = "replace"
-    captionMode: str = "general"
-    captionSource: str = "vlm"
+    mergeStrategy: Literal["replace", "append", "prepend"] = "replace"
+    captionMode: Literal["general", "style", "character"] = "general"
+    captionSource: Literal["vlm", "tags", "toriigate"] = "vlm"
     triggerWord: str | None = None
     stripStyleTags: bool = True
     # Stage-one outputs the caller is forwarding. ``promptText`` is the
     # one field the LLM actually sees. ``dataUrl`` is required for vlm
     # source, empty for tags source.
     ratingName: str | None = None
-    generalTags: list[str] = []
-    characterTags: list[str] = []
+    generalTags: list[str] = Field(default_factory=list)
+    characterTags: list[str] = Field(default_factory=list)
     promptText: str = ""
     dataUrl: str = ""
     skipLlm: bool = False
@@ -2410,9 +2505,7 @@ def ai_vlm_anima_rewrite(body: VlmAnimaRewriteInput) -> dict[str, Any]:
     """
     from lorahub.api import app as app_mod  # noqa: PLC0415
 
-    file_path = _resolve_under_roots(body.path)
-    if not file_path.is_file():
-        raise HTTPException(404, "image not found")
+    file_path = _writable_dataset_file(body.path)
 
     ai_store = app_mod._ai_store
     if ai_store is None:
@@ -2445,10 +2538,11 @@ def ai_vlm_anima_rewrite(body: VlmAnimaRewriteInput) -> dict[str, Any]:
             store,
             body.captionMode,
             body.triggerWord,
+            str(file_path.parent),
         )
         return {"ok": True, **item}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"vlm rewrite failed: {exc}") from exc
+        raise HTTPException(500, f"vlm rewrite failed: {_safe_error(exc)}") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -2624,6 +2718,8 @@ class _TriggerWordsSession:
 
     def finish(self, status: str, dataset_top: list[dict[str, Any]]) -> None:
         with self._lock:
+            if status == "succeeded" and self._stop_flag:
+                status = "canceled"
             self.status = status
             self.dataset_top = list(dataset_top)
             self.finished_at = _time.time()
@@ -2640,10 +2736,22 @@ class _TriggerWordsSession:
         except Exception:
             pass
 
-    def request_stop(self) -> None:
+    def request_stop(self) -> bool:
         with self._lock:
+            if self.status != "running":
+                return False
+            percent = 100.0 * self.processed / self.total if self.total > 0 else 100.0
+            persisted = persist_stop_request(
+                _task_store(),
+                self.session_id,
+                percent=percent,
+            )
+            if not persisted:
+                return False
             self._stop_flag = True
-        self._append_task_event("cancel requested", level="warn", percent=self.percent)
+            self.status = "stop_requested"
+        self._append_task_event("cancel requested", level="warn", percent=percent)
+        return True
 
     def should_stop(self) -> bool:
         with self._lock:
@@ -2756,13 +2864,7 @@ def _analyze_trigger_words_images(
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
         try:
-            import base64  # noqa: PLC0415
-            import mimetypes  # noqa: PLC0415
-
-            mime = mimetypes.guess_type(str(img_path))[0] or "image/png"
-            data = img_path.read_bytes()
-            b64 = base64.b64encode(data).decode("ascii")
-            data_url = f"data:{mime};base64,{b64}"
+            data_url = encode_image_data_url(img_path)
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": route.system_prompt or _TRIGGER_WORD_PROMPT},
@@ -2813,9 +2915,10 @@ def _analyze_trigger_words_images(
             if on_result is not None:
                 on_result(item, img_path.name)
         except Exception as exc:  # noqa: BLE001
-            errors.append({"path": str(img_path), "error": str(exc)})
+            error = _safe_error(exc)
+            errors.append({"path": str(img_path), "error": error})
             if on_error is not None:
-                on_error(str(img_path), str(exc), img_path.name)
+                on_error(str(img_path), error, img_path.name)
 
     # Top-N most common across the dataset. 8 is a sensible upper bound
     # for a "pick your trigger word" picker — beyond that the tail is
@@ -2888,6 +2991,7 @@ def ai_batch_trigger_words_start(body: TriggerWordsBatchInput) -> dict[str, Any]
     session._append_task_event("trigger-word analysis queued", percent=0)
     with _trigger_words_lock:
         _trigger_words_sessions[session.session_id] = session
+        prune_terminal_session_cache(_trigger_words_sessions)
 
     def run() -> None:
         try:
@@ -2907,7 +3011,7 @@ def ai_batch_trigger_words_start(body: TriggerWordsBatchInput) -> dict[str, Any]
         except InterruptedError:
             session.finish("canceled", [])
         except Exception as exc:  # noqa: BLE001
-            session.fail(str(exc))
+            session.fail(_safe_error(exc))
 
     threading.Thread(
         target=run,
@@ -2940,5 +3044,6 @@ def ai_batch_trigger_words_cancel(session_id: str) -> dict[str, Any]:
         session = _trigger_words_sessions.get(session_id)
     if session is None:
         raise HTTPException(404, "trigger-words session not found")
-    session.request_stop()
+    if not session.request_stop():
+        raise HTTPException(409, f"trigger-words session is {session.status}")
     return {"session_id": session_id, "status": "stop_requested"}

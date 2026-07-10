@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import ipaddress
 import json
 import os
 import platform
@@ -1660,7 +1661,7 @@ def _fetch_public_ip_once(url: str) -> str | None:
             headers={"User-Agent": "lorahub-system-stats/1.0"},
         )
         with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310
-            raw = resp.read()
+            raw = resp.read(257)
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
     except Exception:  # noqa: BLE001
@@ -1672,12 +1673,12 @@ def _fetch_public_ip_once(url: str) -> str | None:
     line = text.strip().splitlines()[0].strip() if text.strip() else ""
     if not line:
         return None
-    # Loose sanity: strip anything that obviously isn't an IP. We keep it
-    # forgiving because IPv6 contains colons and ipinfo plain endpoint is
-    # text/plain anyway.
-    if len(line) > 64:
+    if len(raw) > 256:
         return None
-    return line
+    try:
+        return ipaddress.ip_address(line).compressed
+    except ValueError:
+        return None
 
 
 def _collect_public_ip() -> PublicIpInfo | None:

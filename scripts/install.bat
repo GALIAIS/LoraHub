@@ -13,7 +13,7 @@ rem Installs EVERYTHING into the project directory:
 rem   1. uv -> .lorahub\uv\
 rem   2. Python 3.12 -> .lorahub\python\
 rem   3. Virtual environment -> .venv\
-rem   4. Python dependencies (lorahub[api,dev])
+rem   4. Python dependencies (lorahub[api,dev,cpu])
 rem   5. Node.js portable -> .node\
 rem   6. Frontend dependencies (npm install)
 rem
@@ -201,16 +201,33 @@ echo [4/6] Installing Python dependencies ...
 set "PY_DEPS_LOG=%CD%\_uv_python_deps.log"
 set "PY_DEPS_VERBOSE="
 if /I "%LORAHUB_INSTALL_VERBOSE%"=="1" set "PY_DEPS_VERBOSE=-v"
+set "ORT_CPU_INSTALLED=0"
+set "ORT_GPU_INSTALLED=0"
+"%VENV_PY%" -c "from importlib.metadata import version; version('onnxruntime')" >nul 2>&1
+if not errorlevel 1 set "ORT_CPU_INSTALLED=1"
+"%VENV_PY%" -c "from importlib.metadata import version; version('onnxruntime-gpu')" >nul 2>&1
+if not errorlevel 1 set "ORT_GPU_INSTALLED=1"
+set "ORT_EXTRA=cpu"
+if "%ORT_GPU_INSTALLED%"=="1" set "ORT_EXTRA=gpu"
+if "%ORT_CPU_INSTALLED%%ORT_GPU_INSTALLED%"=="11" (
+  echo   removing conflicting onnxruntime packages ...
+  "%UV%" pip uninstall onnxruntime onnxruntime-gpu --python "%VENV_PY%"
+  if errorlevel 1 (
+    echo   [ERROR] Failed to remove conflicting ONNX Runtime packages.
+    goto :fail
+  )
+)
 echo   uv default index: %UV_DEFAULT_INDEX%
+echo   ONNX Runtime: %ORT_EXTRA%
 rem Windows uses a regular local install instead of editable mode.
 rem This avoids PEP 660 launcher/path edge cases that can leave an
 rem apparently installed .venv unable to import ``lorahub``.
 if defined UV_DEFAULT_INDEX (
-  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev] --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" ^(log: _uv_python_deps.log^)
-  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev]" --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" > "%PY_DEPS_LOG%" 2>&1
+  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev,%ORT_EXTRA%] --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev,%ORT_EXTRA%]" --python "%VENV_PY%" --link-mode=copy --index-url "%UV_DEFAULT_INDEX%" > "%PY_DEPS_LOG%" 2>&1
 ) else (
-  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev] --python "%VENV_PY%" --link-mode=copy ^(log: _uv_python_deps.log^)
-  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev]" --python "%VENV_PY%" --link-mode=copy > "%PY_DEPS_LOG%" 2>&1
+  echo   running uv pip install %PY_DEPS_VERBOSE% .[api,dev,%ORT_EXTRA%] --python "%VENV_PY%" --link-mode=copy ^(log: _uv_python_deps.log^)
+  "%UV%" pip install %PY_DEPS_VERBOSE% ".[api,dev,%ORT_EXTRA%]" --python "%VENV_PY%" --link-mode=copy > "%PY_DEPS_LOG%" 2>&1
 )
 set "PY_DEPS_RC=%ERRORLEVEL%"
 type "%PY_DEPS_LOG%"

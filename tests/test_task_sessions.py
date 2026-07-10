@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lorahub.api.task_sessions import TaskEvent, TaskSessionStore
+from lorahub.api.task_sessions import (
+    TaskEvent,
+    TaskSessionStore,
+    prune_terminal_session_cache,
+)
 
 
 def test_task_session_store_create_update_and_latest(tmp_path: Path) -> None:
@@ -51,6 +55,82 @@ def test_task_session_store_marks_stale_running_interrupted(tmp_path: Path) -> N
     )
 
 
+def test_task_session_store_lists_only_active_sessions(tmp_path: Path) -> None:
+    store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    queued = store.create(kind="queued", title="queued", metadata={})
+    running = store.create(kind="running", title="running", metadata={})
+    stopping = store.create(kind="stopping", title="stopping", metadata={})
+    finished = store.create(kind="finished", title="finished", metadata={})
+    store.update(running.id, status="running")
+    store.update(stopping.id, status="stop_requested")
+    store.update(finished.id, status="succeeded", finished=True)
+
+    assert {session.id for session in store.list_active()} == {
+        queued.id,
+        running.id,
+        stopping.id,
+    }
+
+
+def test_stop_request_cannot_be_reopened_or_overwrite_terminal_state(
+    tmp_path: Path,
+) -> None:
+    store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    task = store.create(kind="download", title="download", metadata={})
+    store.update(task.id, status="running", percent=12)
+
+    assert store.request_stop(task.id, percent=15) is True
+    store.update(task.id, status="running", percent=10)
+    stopping = store.get(task.id)
+    assert stopping is not None
+    assert stopping.status == "stop_requested"
+    assert stopping.percent == 15
+
+    store.update(task.id, status="canceled", finished=True)
+    store.update(task.id, status="succeeded", percent=100, finished=True)
+    terminal = store.get(task.id)
+    assert terminal is not None
+    assert terminal.status == "canceled"
+    assert terminal.percent == 15
+    assert store.request_stop(task.id) is False
+
+
+def test_stop_request_wins_race_with_worker_success(tmp_path: Path) -> None:
+    store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    task = store.create(kind="download", title="download", metadata={})
+    store.update(task.id, status="running", percent=80)
+
+    assert store.request_stop(task.id) is True
+    store.update(
+        task.id,
+        status="succeeded",
+        percent=100,
+        result={"files": 1},
+        finished=True,
+    )
+
+    loaded = store.get(task.id)
+    assert loaded is not None
+    assert loaded.status == "canceled"
+    assert loaded.percent == 100
+    assert loaded.finished_at is not None
+
+
+def test_task_events_cannot_regress_persisted_progress(tmp_path: Path) -> None:
+    store = TaskSessionStore(tmp_path / "tasks.sqlite3")
+    task = store.create(kind="download", title="download", metadata={})
+    store.update(task.id, status="running", percent=60)
+
+    store.append_event(
+        task.id,
+        TaskEvent(level="info", message="late event", percent=25),
+    )
+
+    loaded = store.get(task.id)
+    assert loaded is not None
+    assert loaded.percent == 60
+
+
 def test_task_session_store_marks_all_stale_running_interrupted(tmp_path: Path) -> None:
     store = TaskSessionStore(tmp_path / "tasks.sqlite3")
     ids: list[str] = []
@@ -70,3 +150,18 @@ def test_default_task_store_path_is_named_tasks_db() -> None:
     from lorahub.api.task_sessions import default_task_store_path
 
     assert default_task_store_path().name == "tasks.sqlite3"
+
+
+def test_prune_terminal_session_cache_keeps_active_and_recent() -> None:
+    from types import SimpleNamespace
+
+    sessions = {
+        "old": SimpleNamespace(status="succeeded", finished_at=1.0),
+        "recent": SimpleNamespace(status="failed", finished_at=3.0),
+        "middle": SimpleNamespace(status="canceled", finished_at=2.0),
+        "active": SimpleNamespace(status="running", started_at=0.0),
+    }
+
+    prune_terminal_session_cache(sessions, keep=2)
+
+    assert set(sessions) == {"recent", "middle", "active"}

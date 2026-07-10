@@ -337,7 +337,7 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "bootstrap.torch_help": {"zh": "要安装的 PyTorch 版本。", "en": "PyTorch version to install."},
     "bootstrap.torchvision_help": {"zh": "要安装的 torchvision 版本。", "en": "torchvision version to install."},
     "bootstrap.no_xformers_help": {"zh": "跳过可选的 xformers 安装。", "en": "Skip the optional xformers install."},
-    "bootstrap.force_help": {"zh": "若目标目录已存在则先清空。", "en": "Wipe target if it already exists."},
+    "bootstrap.force_help": {"zh": "重建受管环境；仅清理上次失败的克隆目录。", "en": "Rebuild the managed environment; clean only an interrupted clone."},
     "bootstrap.target_busy": {
         "zh": "[red]目标目录 {target} 非空。[/red] 加 --force 先清空,或用 --target 换路径。",
         "en": "[red]target {target} is not empty.[/red] Pass --force to wipe it first, or pick another path with --target.",
@@ -457,6 +457,14 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "service.started": {"zh": "已启动 pid={pid} port={port}", "en": "started pid={pid} port={port}"},
     "service.log_path": {"zh": "日志: {path}", "en": "log: {path}"},
     "service.healthy": {"zh": "[green]健康[/] http://{host}:{port}", "en": "[green]healthy[/] http://{host}:{port}"},
+    "service.remote_auth": {
+        "zh": "远程访问认证已启用。令牌文件: {path}",
+        "en": "remote access authentication enabled. Token file: {path}",
+    },
+    "service.remote_auth_env": {
+        "zh": "远程访问认证已启用。令牌来自 LORAHUB_API_TOKEN。",
+        "en": "remote access authentication enabled by LORAHUB_API_TOKEN.",
+    },
     "service.health_timeout": {"zh": "[yellow]守护进程已启动,但 30 秒内 /api/health 未响应。请查看 {log}[/]", "en": "[yellow]daemon launched but /api/health did not answer within 30s. Check {log}[/]"},
     "service.stop.timeout_help": {"zh": "优雅关闭超时(秒),超过则发送 SIGKILL。", "en": "Seconds to wait for graceful shutdown before SIGKILL."},
     "service.stop.not_running": {"zh": "未在运行", "en": "not running"},
@@ -468,8 +476,8 @@ MESSAGES: dict[str, dict[Lang, str]] = {
     "service.status.unhealthy": {"zh": "[yellow]启动中/不健康[/]", "en": "[yellow]starting/unhealthy[/]"},
     "service.logs.empty": {"zh": "[dim]还没有日志:[/dim] {path}", "en": "[dim]no log yet:[/dim] {path}"},
     "service.enable.windows": {
-        "zh": "[red]Windows 不支持 `service enable`。[/]\n请使用 任务计划程序。示例命令:\n  schtasks /Create /SC ONLOGON /TN LoraHub /TR \"{exe} -m uvicorn lorahub.api.app:app --host {host} --port {port}\"",
-        "en": "[red]Windows isn't supported by `service enable`.[/]\nUse Task Scheduler. Sample invocation:\n  schtasks /Create /SC ONLOGON /TN LoraHub /TR \"{exe} -m uvicorn lorahub.api.app:app --host {host} --port {port}\"",
+        "zh": "[red]Windows 不支持 `service enable`。[/]\n请使用任务计划程序。示例命令:\n  schtasks /Create /SC ONLOGON /TN LoraHub /TR \"{exe} -m lorahub service start --foreground --host {host} --port {port}\"",
+        "en": "[red]Windows isn't supported by `service enable`.[/]\nUse Task Scheduler. Sample invocation:\n  schtasks /Create /SC ONLOGON /TN LoraHub /TR \"{exe} -m lorahub service start --foreground --host {host} --port {port}\"",
     },
     "service.enable.perm": {
         "zh": "[red]写入 {path} 权限不足。[/]\n请加 sudo 重试: sudo lorahub service enable",

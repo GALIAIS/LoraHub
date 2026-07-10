@@ -7,10 +7,11 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from lorahub.api import app as _app_module  # noqa: F401
-
+from lorahub.api.routers.image_studio import ship as ship_module
 from lorahub.api.routers.image_studio.audit import ScanRequest, audit_scan
 from lorahub.api.routers.image_studio.ship import (
     ExportRequest,
@@ -19,6 +20,11 @@ from lorahub.api.routers.image_studio.ship import (
     ship_lint,
     ship_save_as,
 )
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path))
 
 
 def _drain_streaming(resp) -> bytes:
@@ -40,6 +46,13 @@ def _seed(tmp_path: Path) -> Path:
         Image.new("RGB", size).save(d / f"img{i}.png")
         (d / f"img{i}.txt").write_text(f"caption {i}", encoding="utf-8")
     return d
+
+
+def _symlink_or_skip(target: Path, link: Path, *, directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -134,26 +147,56 @@ def test_export_include_backups_flag(tmp_path: Path) -> None:
     assert any("backups/img0.png" in n.replace("\\", "/") for n in names)
 
 
+def test_export_excludes_metadata_when_requested(tmp_path: Path) -> None:
+    d = _seed(tmp_path)
+    (d / "dataset.json").write_text('{"name":"ds"}', encoding="utf-8")
+
+    resp = ship_export(ExportRequest(dataset_path=str(d), include_meta=False))
+    blob = _drain_streaming(resp)
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        assert "dataset.json" not in zf.namelist()
+
+
+def test_export_skips_linked_files(tmp_path: Path) -> None:
+    d = _seed(tmp_path)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"private")
+    _symlink_or_skip(outside, d / "linked.png")
+
+    resp = ship_export(ExportRequest(dataset_path=str(d)))
+    blob = _drain_streaming(resp)
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        assert "linked.png" not in zf.namelist()
+
+
 # --------------------------------------------------------------------------- #
 # Save-as
 # --------------------------------------------------------------------------- #
 
 
 def test_save_as_copies_dataset(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path / "registry"))
-    d = _seed(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(registry))
+    d = _seed(registry)
     res = ship_save_as(
         SaveAsRequest(source_path=str(d), new_name="my-copy"),
     )
     assert res["images_copied"] == 3
     assert (Path(res["path"]) / "img0.png").is_file()
     assert (Path(res["path"]) / "img0.txt").is_file()
-    assert (Path(res["path"]) / ".dataset_meta.json").is_file()
+    assert (Path(res["path"]) / "dataset.json").is_file()
 
 
 def test_save_as_rejects_existing_name(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path / "registry"))
-    d = _seed(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(registry))
+    d = _seed(registry)
     ship_save_as(SaveAsRequest(source_path=str(d), new_name="dup"))
     import pytest
     from fastapi import HTTPException
@@ -164,8 +207,11 @@ def test_save_as_rejects_existing_name(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_save_as_filters_by_paths(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(tmp_path / "registry"))
-    d = _seed(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(registry))
+    d = _seed(registry)
     res = ship_save_as(
         SaveAsRequest(
             source_path=str(d),
@@ -179,3 +225,56 @@ def test_save_as_filters_by_paths(tmp_path: Path, monkeypatch) -> None:
     assert not (Path(res["path"]) / "img1.png").exists()
     # Sidecars came along with the matched images.
     assert (Path(res["path"]) / "img0.txt").is_file()
+
+
+def test_save_as_preserves_canonical_metadata(tmp_path: Path, monkeypatch) -> None:
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(registry))
+    d = _seed(registry)
+    (d / "dataset.json").write_text(
+        '{"name":"ds","description":"source","triggerWord":"hero"}',
+        encoding="utf-8",
+    )
+
+    result = ship_save_as(SaveAsRequest(source_path=str(d), new_name="copy"))
+
+    metadata = (Path(result["path"]) / "dataset.json").read_text(encoding="utf-8")
+    assert '"description": "source (copied from ds)"' in metadata
+    assert '"triggerWord": "hero"' in metadata
+
+
+def test_save_as_rolls_back_partial_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("LORAHUB_DATASETS_ROOT", str(registry))
+    d = _seed(registry)
+    real_copy = ship_module.shutil.copy2
+    calls = 0
+
+    def fail_second_copy(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated copy failure")
+        return real_copy(source, target)
+
+    monkeypatch.setattr(ship_module.shutil, "copy2", fail_second_copy)
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        ship_save_as(SaveAsRequest(source_path=str(d), new_name="incomplete"))
+
+    assert not (registry / "incomplete").exists()
+    assert not list(registry.glob(".dataset-importing-*"))
+
+
+def test_save_as_rejects_cross_platform_reserved_name(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+
+    d = _seed(tmp_path)
+    with pytest.raises(HTTPException) as exc:
+        ship_save_as(SaveAsRequest(source_path=str(d), new_name="CON"))
+    assert exc.value.status_code == 400

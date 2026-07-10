@@ -59,6 +59,17 @@ _RESUME_SCAN_EXCLUDE_DIRS = frozenset(
 )
 
 
+def _is_link(path: Path) -> bool:
+    """Detect symlinks and Windows directory junctions without following them."""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
+
+
 def _iter_state_dirs(workspace: Path) -> Iterator[Path]:
     """Yield every ``*-state*`` directory under ``workspace``, pruning
     ``_RESUME_SCAN_EXCLUDE_DIRS`` whole-subtree.
@@ -68,7 +79,7 @@ def _iter_state_dirs(workspace: Path) -> Iterator[Path]:
     ``post_image_dataset`` cache that's a multi-second hit per scan.
     Using ``os.scandir`` keeps the prune at the directory level.
     """
-    if not workspace.is_dir():
+    if _is_link(workspace) or not workspace.is_dir():
         return
     stack: list[Path] = [workspace]
     while stack:
@@ -98,10 +109,15 @@ def _find_latest_state_dir(workspace: Path) -> Path | None:
     ``post_image_dataset`` / ``captions_sanitized`` so cache artifacts
     can't poison the most-recent-mtime pick.
     """
-    candidates = list(_iter_state_dirs(workspace))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    latest: tuple[float, Path] | None = None
+    for candidate in _iter_state_dirs(workspace):
+        try:
+            modified = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if latest is None or modified > latest[0]:
+            latest = (modified, candidate)
+    return latest[1] if latest is not None else None
 
 
 def _find_latest_safetensors(workspace: Path) -> Path | None:
@@ -115,17 +131,34 @@ def _find_latest_safetensors(workspace: Path) -> Path | None:
     fed ``--network_weights=<te_cache>`` into the trainer and
     effectively started training from random init.
     """
-    if not workspace.is_dir():
+    if _is_link(workspace) or not workspace.is_dir():
         return None
-    candidates: list[Path] = []
-    for p in workspace.rglob("*.safetensors"):
-        if any(part in _RESUME_SCAN_EXCLUDE_DIRS for part in p.parts):
+    latest: tuple[float, Path] | None = None
+    stack = [workspace]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except (OSError, PermissionError):
             continue
-        if p.is_file():
-            candidates.append(p)
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+        for entry in entries:
+            path = Path(entry.path)
+            if entry.name in _RESUME_SCAN_EXCLUDE_DIRS or _is_link(path):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                stack.append(path)
+                continue
+            if not entry.is_file(follow_symlinks=False) or not entry.name.endswith(
+                ".safetensors"
+            ):
+                continue
+            try:
+                modified = entry.stat(follow_symlinks=False).st_mtime
+            except OSError:
+                continue
+            if latest is None or modified > latest[0]:
+                latest = (modified, path)
+    return latest[1] if latest is not None else None
 
 
 # --------------------------------------------------------------------------- #
@@ -210,11 +243,17 @@ def _find_latest_dp_run_dir(workspace: Path, cfg: TrainingConfig) -> Path | None
         return None
     candidates: list[Path] = []
     for child in out_dir.iterdir():
-        if not child.is_dir():
+        if _is_link(child) or not child.is_dir():
             continue
-        if not (child / "latest").is_file():
+        latest_marker = child / "latest"
+        if _is_link(latest_marker) or not latest_marker.is_file():
             continue
-        if not any(p.is_dir() and p.name.startswith("global_step") for p in child.iterdir()):
+        if not any(
+            not _is_link(p)
+            and p.is_dir()
+            and p.name.startswith("global_step")
+            for p in child.iterdir()
+        ):
             continue
         candidates.append(child)
     if not candidates:
@@ -322,7 +361,21 @@ class ResumeTargetInvalid(Exception):
     """
 
 
-def _validate_resume_target(cfg: TrainingConfig) -> None:
+def _resume_source_roots(cfg: TrainingConfig, workspace: Path) -> tuple[Path, ...]:
+    """Return directories that may own resumable state for a source job."""
+    roots = [workspace.expanduser().resolve()]
+    if cfg.backend.type == "diffusion-pipe":
+        roots.append(_dp_output_dir(workspace, cfg))
+    elif cfg.backend.type == "kohya" and cfg.output.output_dir is not None:
+        roots.append(Path(str(cfg.output.output_dir)).expanduser().resolve())
+    return tuple(dict.fromkeys(roots))
+
+
+def _validate_resume_target(
+    cfg: TrainingConfig,
+    *,
+    source_roots: tuple[Path, ...] | None = None,
+) -> None:
     """Verify ``cfg.resume.resume_from`` points at a real, backend-shaped artifact.
 
     Each backend has a different on-disk shape:
@@ -347,6 +400,22 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
     if not path.exists():
         msg = f"resume.resume_from does not exist: {path}"
         raise ResumeTargetInvalid(msg)
+    path = path.resolve()
+    if source_roots:
+        allowed = False
+        for root in source_roots:
+            try:
+                path.relative_to(root.expanduser().resolve())
+            except ValueError:
+                continue
+            allowed = True
+            break
+        if not allowed:
+            roots = ", ".join(str(root) for root in source_roots)
+            raise ResumeTargetInvalid(
+                f"resume.resume_from is not owned by the source job; "
+                f"expected a path under: {roots}"
+            )
 
     backend_type = cfg.backend.type
     if backend_type in ("kohya", "anima_lora"):
@@ -364,7 +433,10 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
             raise ResumeTargetInvalid(msg)
         # Cheap sanity check: at least one of the canonical state files exists.
         markers = ("optimizer.bin", "model.safetensors", "train_state.json")
-        if not any((path / m).exists() for m in markers):
+        if not any(
+            not _is_link(path / marker) and (path / marker).is_file()
+            for marker in markers
+        ):
             msg = (
                 f"resume.resume_from {path} looks empty — none of "
                 f"{markers} found inside. Pick a real state save."
@@ -379,7 +451,8 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
                 f"diffusion-pipe, got file: {path}"
             )
             raise ResumeTargetInvalid(msg)
-        if not (path / "latest").is_file():
+        latest_marker = path / "latest"
+        if _is_link(latest_marker) or not latest_marker.is_file():
             msg = (
                 f"resume.resume_from {path} is not a diffusion-pipe run dir "
                 "(missing `latest` marker file). Pick a timestamped run dir."
@@ -391,7 +464,9 @@ def _validate_resume_target(cfg: TrainingConfig) -> None:
             msg = f"cannot enumerate resume.resume_from {path}: {exc}"
             raise ResumeTargetInvalid(msg) from exc
         if not any(
-            child.is_dir() and child.name.startswith("global_step")
+            not _is_link(child)
+            and child.is_dir()
+            and child.name.startswith("global_step")
             for child in children
         ):
             msg = (
@@ -644,6 +719,7 @@ __all__ = [
     "_attempt_auto_resume",
     "_dispatch_resume_spec",
     "_dp_output_dir",
+    "_resume_source_roots",
     "_dp_resume_spec",
     "_find_latest_dp_run_dir",
     "_find_latest_safetensors",

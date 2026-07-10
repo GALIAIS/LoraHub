@@ -44,9 +44,14 @@ from lorahub.core.config.schema import TrainingConfig
 
 
 @pytest.fixture(autouse=True)
-def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistry]:
+def fresh_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[state.JobRegistry]:
+    from lorahub.api import paths as api_paths
+
     fresh = state.JobRegistry()
     monkeypatch.setattr(state, "registry", fresh)
+    monkeypatch.setattr(api_paths, "runs_dir", lambda: tmp_path)
     yield fresh
 
 
@@ -210,6 +215,22 @@ def test_validate_rejects_empty_state_dir(tmp_path: Path) -> None:
     empty = tmp_path / "lora_output-state"
     empty.mkdir()
     cfg.resume.resume_from = empty
+    with pytest.raises(ResumeTargetInvalid, match="empty"):
+        _validate_resume_target(cfg)
+
+
+def test_validate_rejects_state_with_only_linked_marker(tmp_path: Path) -> None:
+    cfg = _kohya_cfg(tmp_path)
+    state_dir = tmp_path / "lora_output-state"
+    state_dir.mkdir()
+    outside = tmp_path / "outside-optimizer.bin"
+    outside.write_bytes(b"state")
+    try:
+        (state_dir / "optimizer.bin").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    cfg.resume.resume_from = state_dir
+
     with pytest.raises(ResumeTargetInvalid, match="empty"):
         _validate_resume_target(cfg)
 
@@ -431,6 +452,29 @@ def test_clone_with_state_rejects_invalid_state_path(
     )
     assert resp.status_code == 400
     assert "does not exist" in resp.json()["detail"]
+
+
+def test_clone_with_state_rejects_state_owned_by_another_workspace(
+    tmp_path: Path, client: TestClient
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    state_dir = _drop_state_dir(unrelated, "lora_output-state-step100")
+    cfg = _kohya_cfg(workspace)
+    source = state.registry.create(
+        workspace=workspace,
+        config_snapshot=cfg.model_dump(mode="json", by_alias=True),
+    )
+
+    response = client.post(
+        f"/api/jobs/{source.id}/clone-with-state",
+        json={"statePath": str(state_dir)},
+    )
+
+    assert response.status_code == 400
+    assert "not owned by the source job" in response.json()["detail"]
 
 
 def test_clone_with_state_rejects_locked_field_change(

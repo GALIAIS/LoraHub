@@ -31,7 +31,9 @@ import logging
 import os
 import shutil
 import tarfile
+import tempfile
 import threading
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,16 +41,21 @@ from typing import Any, Iterable
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
+from lorahub.api import paths as api_paths
 from lorahub.api import state
+from lorahub.api.dataset_files import is_link_like
 from lorahub.api.jobs_helpers import (
     _list_workspace_files,
     _resolve_workspace_file,
 )
 from lorahub.api.jobs_helpers.resume_dispatch import (
     _dp_output_dir,
+    _is_link,
     _iter_state_dirs,
 )
+from lorahub.api.paths import resolve_run_path
 from lorahub.api.state import JobState
 from lorahub.core.config.schema import TrainingConfig
 
@@ -84,30 +91,26 @@ _TAR_MODES: dict[str, str] = {
     "tar.bz2": "w:bz2",
     "tar.xz": "w:xz",
 }
-
-
-def _is_same_or_parent(target: Path, child: Path) -> bool:
-    try:
-        child.relative_to(target)
-    except ValueError:
-        return False
-    return True
+_ARCHIVE_CACHE_MAX_BYTES = 50 * 1024**3
+_ARCHIVE_CACHE_MAX_FILES = 32
+_ARCHIVE_CACHE_MAX_AGE_S = 7 * 24 * 60 * 60
+_ARCHIVE_CACHE_LOCK = threading.RLock()
+_ACTIVE_ARCHIVES: dict[Path, int] = {}
 
 
 def _validate_workspace_delete_target(workspace: Path) -> Path:
-    target = workspace.expanduser().resolve()
-    cwd = Path.cwd().resolve()
-    home = Path.home().resolve()
-    if (
-        target.parent == target
-        or _is_same_or_parent(target, cwd)
-        or _is_same_or_parent(target, home)
-    ):
+    if is_link_like(workspace):
+        raise HTTPException(
+            status_code=400,
+            detail="refusing to delete a linked workspace",
+        )
+    try:
+        return resolve_run_path(workspace)
+    except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="refusing to delete unsafe workspace path",
-        )
-    return target
+        ) from exc
 
 
 def _job_artifact_summary(job_id: str, workspace: Path) -> dict[str, Any]:
@@ -162,9 +165,109 @@ def list_artifacts() -> dict[str, Any]:
 
 def _zip_cache_root() -> Path:
     """Project-local cache for resumable artifact ZIP downloads."""
-    root = Path.cwd() / "runs" / "_download_cache" / "artifacts"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    runs = api_paths.runs_dir().resolve()
+    runs.mkdir(parents=True, exist_ok=True)
+    cache_parent = runs / "_download_cache"
+    root = cache_parent / "artifacts"
+    for directory in (cache_parent, root):
+        if is_link_like(directory):
+            raise RuntimeError(f"artifact cache directory cannot be a link: {directory}")
+        directory.mkdir(exist_ok=True)
+    resolved = root.resolve()
+    try:
+        resolved.relative_to(runs)
+    except ValueError as exc:
+        raise RuntimeError("artifact cache escapes the runs directory") from exc
+    return resolved
+
+
+def _cache_limit(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _unlink_cache_file(path: Path) -> bool:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def _prune_artifact_archive_cache(
+    root: Path,
+    *,
+    keep: set[Path] | None = None,
+    max_bytes: int | None = None,
+    max_files: int | None = None,
+    max_age_s: int | None = None,
+) -> None:
+    """Bound resumable archives without deleting the file serving this request."""
+    with _ARCHIVE_CACHE_LOCK:
+        protected = {path.resolve() for path in (keep or set())}
+        protected.update(_ACTIVE_ARCHIVES)
+        byte_limit = max_bytes or _cache_limit(
+            "LORAHUB_ARTIFACT_CACHE_MAX_BYTES", _ARCHIVE_CACHE_MAX_BYTES,
+        )
+        file_limit = max_files or _cache_limit(
+            "LORAHUB_ARTIFACT_CACHE_MAX_FILES", _ARCHIVE_CACHE_MAX_FILES,
+        )
+        age_limit = max_age_s or _cache_limit(
+            "LORAHUB_ARTIFACT_CACHE_MAX_AGE_S", _ARCHIVE_CACHE_MAX_AGE_S,
+        )
+        now = time.time()
+        entries: list[tuple[Path, int, float]] = []
+        for path in root.iterdir():
+            if is_link_like(path):
+                _unlink_cache_file(path)
+                continue
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if path.name.endswith(".tmp"):
+                if resolved not in protected and now - stat.st_mtime > 3600:
+                    _unlink_cache_file(path)
+                continue
+            if resolved not in protected and now - stat.st_mtime > age_limit:
+                _unlink_cache_file(path)
+                continue
+            entries.append((path, stat.st_size, stat.st_mtime))
+
+        total = sum(size for _path, size, _mtime in entries)
+        count = len(entries)
+        for path, size, _mtime in sorted(entries, key=lambda item: item[2]):
+            if count <= file_limit and total <= byte_limit:
+                break
+            try:
+                is_protected = path.resolve() in protected
+            except OSError:
+                continue
+            if is_protected or not _unlink_cache_file(path):
+                continue
+            total -= size
+            count -= 1
+
+
+def _acquire_archive(path: Path) -> None:
+    resolved = path.resolve()
+    with _ARCHIVE_CACHE_LOCK:
+        _ACTIVE_ARCHIVES[resolved] = _ACTIVE_ARCHIVES.get(resolved, 0) + 1
+
+
+def _release_archive(path: Path) -> None:
+    resolved = path.resolve()
+    with _ARCHIVE_CACHE_LOCK:
+        count = _ACTIVE_ARCHIVES.get(resolved, 0)
+        if count <= 1:
+            _ACTIVE_ARCHIVES.pop(resolved, None)
+        else:
+            _ACTIVE_ARCHIVES[resolved] = count - 1
 
 
 def _artifact_zip_cache_key(
@@ -215,6 +318,7 @@ def _materialise_artifact_zip(
     archive_format: str,
     workspace: Path,
     relpaths: Iterable[Path],
+    lease: bool = False,
 ) -> Path:
     """Build or reuse a stable archive file for a job artifact selection."""
     key = _artifact_zip_cache_key(
@@ -225,13 +329,25 @@ def _materialise_artifact_zip(
         relpaths=relpaths,
     )
     dest = _zip_cache_root() / f"{job_id}-{key}.{archive_format}"
-    if dest.is_file() and dest.stat().st_size > 0:
-        return dest
-
-    root = workspace.resolve()
-    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.unlink(missing_ok=True)
+    if is_link_like(dest):
+        raise RuntimeError(f"artifact cache file cannot be a link: {dest}")
+    leased = False
+    if lease:
+        _acquire_archive(dest)
+        leased = True
     try:
+        _prune_artifact_archive_cache(dest.parent, keep={dest})
+        if dest.is_file() and dest.stat().st_size > 0:
+            return dest
+
+        root = workspace.resolve()
+        fd, raw_tmp = tempfile.mkstemp(
+            dir=dest.parent,
+            prefix=f".{dest.name}.",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        tmp = Path(raw_tmp)
         relnames = sorted({r.as_posix() for r in relpaths})
         if archive_format == "zip":
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
@@ -265,10 +381,14 @@ def _materialise_artifact_zip(
                         log.warning("artifacts archive: skipping %s — %s", full, exc)
                         continue
         tmp.replace(dest)
+        _prune_artifact_archive_cache(dest.parent, keep={dest})
+        return dest
     except Exception:
-        tmp.unlink(missing_ok=True)
+        if "tmp" in locals():
+            tmp.unlink(missing_ok=True)
+        if leased:
+            _release_archive(dest)
         raise
-    return dest
 
 
 def _validate_archive_format(raw: str) -> str:
@@ -341,14 +461,16 @@ def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConf
         if not out_dir.is_dir():
             return candidates
         for child in out_dir.iterdir():
-            if not child.is_dir():
+            if _is_link(child) or not child.is_dir():
                 continue
             latest = child / "latest"
-            if not latest.is_file():
+            if _is_link(latest) or not latest.is_file():
                 continue
             global_steps = [
                 p for p in child.iterdir()
-                if p.is_dir() and p.name.startswith("global_step")
+                if not _is_link(p)
+                and p.is_dir()
+                and p.name.startswith("global_step")
             ]
             if not global_steps:
                 continue
@@ -481,18 +603,24 @@ def download_zip(
         archive_format=archive_format,
         workspace=job.workspace,
         relpaths=rels,
+        lease=True,
     )
-    timestamp = datetime.fromtimestamp(zip_path.stat().st_mtime, UTC).strftime(
-        "%Y%m%d_%H%M%S"
-    )
-    filename = f"{output_name}_{job_id[-8:]}_{timestamp}.{archive_format}"
+    try:
+        timestamp = datetime.fromtimestamp(zip_path.stat().st_mtime, UTC).strftime(
+            "%Y%m%d_%H%M%S"
+        )
+        filename = f"{output_name}_{job_id[-8:]}_{timestamp}.{archive_format}"
 
-    return FileResponse(
-        zip_path,
-        media_type=_ARCHIVE_MEDIA_TYPES[archive_format],
-        filename=filename,
-        content_disposition_type="attachment",
-    )
+        return FileResponse(
+            zip_path,
+            media_type=_ARCHIVE_MEDIA_TYPES[archive_format],
+            filename=filename,
+            content_disposition_type="attachment",
+            background=BackgroundTask(_release_archive, zip_path),
+        )
+    except Exception:
+        _release_archive(zip_path)
+        raise
 
 
 @router.delete("/artifacts/{job_id}/file")
@@ -506,6 +634,11 @@ def delete_file(job_id: str, path: str) -> dict[str, Any]:
     job = state.registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if job.state not in _TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job is {job.state.value}; stop it before deleting artifacts",
+        )
 
     try:
         target = _resolve_workspace_file(job.workspace, path)

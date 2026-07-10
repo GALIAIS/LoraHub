@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from lorahub.api.auth import router as auth_router
+
 from .ai import router as ai_router
 from .artifacts import router as artifacts_router
 from .backends import router as backends_router
@@ -36,6 +38,7 @@ from .terminal import router as terminal_router
 from .wandb_routes import router as wandb_router
 
 all_routers: list[APIRouter] = [
+    auth_router,
     health_router,
     settings_router,
     configs_router,

@@ -32,8 +32,10 @@ import sys
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from lorahub.core.paths import lorahub_dir
+from lorahub.core.redaction import redact_command_text
 
 ProgressCallback = Callable[[str], None]
 
@@ -110,7 +112,11 @@ def _bootstrap_uv(progress: ProgressCallback | None) -> str:
 
         pypi_index = (_app._settings_store.load().pypi_index_url or "").strip()
         if pypi_index:
-            cmd[5:5] = ["--index-url", pypi_index, "--trusted-host", pypi_index.split("//")[-1].split("/")[0]]
+            index_args = ["--index-url", pypi_index]
+            hostname = urlsplit(pypi_index).hostname
+            if hostname:
+                index_args += ["--trusted-host", hostname]
+            cmd[5:5] = index_args
     except Exception:  # noqa: BLE001
         pass
     result = subprocess.run(
@@ -121,7 +127,7 @@ def _bootstrap_uv(progress: ProgressCallback | None) -> str:
         creationflags=_subprocess_no_window(),
     )
     if result.returncode != 0:
-        tail_text = (result.stderr or "").strip()
+        tail_text = redact_command_text((result.stderr or "").strip())
         tail = "\n".join(tail_text.splitlines()[-10:])
         # Linux distros following PEP 668 (Debian 12+, Ubuntu 23.04+, recent
         # Fedora) refuse to `pip install` against the system interpreter even
@@ -214,7 +220,7 @@ def _capture(
     tail: deque[str] = deque(maxlen=12)
     assert proc.stdout is not None  # noqa: S101
     for raw in proc.stdout:
-        line = raw.rstrip()
+        line = redact_command_text(raw.rstrip())
         if not line:
             continue
         tail.append(line)

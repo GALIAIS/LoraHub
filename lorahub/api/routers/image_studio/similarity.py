@@ -8,9 +8,15 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lorahub.api.dataset_files import _resolve_under_roots
+from lorahub.api.dataset_files import _resolve_under_roots, encode_image_data_url
 
-from ._shared import _scan_images, _soft_delete, _store
+from ._shared import (
+    _scan_images,
+    _soft_delete,
+    _store,
+    _stored_path_is_within,
+    _writable_dataset_file,
+)
 from .dedupe import _compute_clusters, _pick_best_keep, dedupe_clusters
 
 if TYPE_CHECKING:
@@ -62,7 +68,7 @@ def similarity_scan(body: SimilarityScanInput) -> dict[str, Any]:
 
     if body.mode == "embedding":
         return _similarity_embedding_scan(
-            images, store, ai_store, ai_client, route, body.threshold
+            images, store, ai_store, ai_client, route, directory, body.threshold
         )
     if body.mode == "pairwise":
         return _similarity_pairwise_scan(
@@ -77,6 +83,7 @@ def _similarity_embedding_scan(
     ai_store: Any,
     ai_client: Any,
     route: Any,
+    directory: Path,
     threshold: float,
 ) -> dict[str, Any]:
     """Generate text embeddings from AI captions and cluster by cosine similarity."""
@@ -141,8 +148,11 @@ def _similarity_embedding_scan(
 
     # Cluster by cosine similarity
     all_embeddings = store.list_embeddings(route.model_id)
-    dir_str = str(images[0].parent) if images else ""
-    dir_embs = [e for e in all_embeddings if e.image_path.startswith(dir_str)]
+    dir_embs = [
+        e
+        for e in all_embeddings
+        if _stored_path_is_within(e.image_path, directory)
+    ]
     clusters = _cluster_embeddings(dir_embs, threshold)
 
     return {
@@ -188,8 +198,9 @@ def _similarity_pairwise_scan(
     """Use VLM to compare pairs from existing phash clusters."""
     algo = "phash64"
     all_hashes = store.list_phashes(algo)
-    dir_str = str(directory)
-    hashes = [h for h in all_hashes if h.image_path.startswith(dir_str)]
+    hashes = [
+        h for h in all_hashes if _stored_path_is_within(h.image_path, directory)
+    ]
 
     # Get phash clusters (threshold=10 for seed candidates)
     phash_clusters = _compute_clusters(hashes, threshold=10)
@@ -203,18 +214,12 @@ def _similarity_pairwise_scan(
         # Compare first pair in each cluster via VLM
         pair = cluster[:2]
         try:
-            import base64  # noqa: PLC0415
-            import mimetypes  # noqa: PLC0415
-
             contents: list[dict[str, Any]] = []
             for ph in pair:
                 p = Path(ph.image_path)
                 if not p.is_file():
                     continue
-                mime = mimetypes.guess_type(str(p))[0] or "image/png"
-                data = p.read_bytes()
-                b64 = base64.b64encode(data).decode("ascii")
-                data_url = f"data:{mime};base64,{b64}"
+                data_url = encode_image_data_url(p)
                 contents.append({"type": "image_url", "image_url": {"url": data_url}})
 
 
@@ -294,8 +299,11 @@ def similarity_clusters(
                 model_id = route.model_id
 
         all_embeddings = store.list_embeddings(model_id)
-        dir_str = str(directory)
-        dir_embs = [e for e in all_embeddings if e.image_path.startswith(dir_str)]
+        dir_embs = [
+            e
+            for e in all_embeddings
+            if _stored_path_is_within(e.image_path, directory)
+        ]
         clusters = _cluster_embeddings(dir_embs, threshold)
 
         result_clusters: list[dict[str, Any]] = []
@@ -347,10 +355,7 @@ def similarity_batch_delete(body: SimilarityBatchDeleteInput) -> dict[str, Any]:
     store = _store()
     for p in body.paths:
         try:
-            file_path = _resolve_under_roots(p)
-            if not file_path.is_file():
-                errors.append({"path": p, "error": "file not found"})
-                continue
+            file_path = _writable_dataset_file(p)
             if not body.forceFavorites:
                 ann = store.get_annotation(str(file_path))
                 if ann and ann.favorite:

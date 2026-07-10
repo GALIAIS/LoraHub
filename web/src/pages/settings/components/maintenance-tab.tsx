@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Archive, Database, HardDrive, Loader2, ShieldAlert, Terminal as TerminalIcon, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
@@ -375,7 +375,7 @@ function TerminalSettingsCard() {
 
   // Re-hydrate the local draft when the upstream value lands or
   // changes (e.g. another browser tab edited it).
-  useMemo(() => {
+  useEffect(() => {
     setTimeoutDraft(String(initialTimeout))
   }, [initialTimeout])
 
@@ -418,10 +418,9 @@ function TerminalSettingsCard() {
               )}
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              关闭时(默认):允许 <code className="font-mono">pip / uv / python / lorahub</code>
-              {" "}和常见诊断命令(<code className="font-mono">which / ls / cat / head / git / nvidia-smi</code> 等),
+              关闭时(默认):允许包管理、诊断命令及只读的 <code className="font-mono">git / lorahub</code> 查询，
               <code className="font-mono">pip</code> 自动改写为 <code className="font-mono">python -m pip</code>
-              {" "}以确保命中所选后端的 venv。argv 模式,不解析 shell 语法。
+              {" "}以确保命中所选后端的 venv。脚本执行、仓库修改、服务控制和 shell 语法均会拒绝。
               <br />
               开启时:任何命令都能执行 + 走 shell(Linux <code className="font-mono">bash -lc</code> /
               {" "}Windows <code className="font-mono">cmd /c</code>),支持

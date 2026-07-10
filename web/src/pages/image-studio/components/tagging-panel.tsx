@@ -187,7 +187,11 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
       <button
         type="button"
         onClick={() => startMutation.mutate()}
-        disabled={startMutation.isPending || (session?.status === "running")}
+        disabled={
+          startMutation.isPending ||
+          session?.status === "running" ||
+          session?.status === "stop_requested"
+        }
         className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
       >
         {startMutation.isPending ? "启动中…" : "开始标注"}
@@ -198,8 +202,11 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
           <div className="flex items-center justify-between mb-1">
             <span className="font-medium">
               {session.status === "running" && "标注进行中…"}
+              {session.status === "stop_requested" && "正在停止标注…"}
               {session.status === "succeeded" && "标注完成"}
               {session.status === "failed" && "标注失败"}
+              {session.status === "canceled" && "标注已停止"}
+              {session.status === "interrupted" && "标注已中断"}
             </span>
             <span className="text-muted-foreground">{session.percent}%</span>
           </div>
@@ -219,14 +226,16 @@ export function TaggingPanel({ datasetPath }: TaggingPanelProps) {
           {session.error && (
             <p className="mt-1 text-destructive">{session.error}</p>
           )}
-          {session.status === "running" ? (
+          {session.status === "running" || session.status === "stop_requested" ? (
             <button
               type="button"
               className="mt-2 rounded border border-destructive/40 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10 disabled:opacity-50"
               onClick={() => stopMutation.mutate()}
-              disabled={stopMutation.isPending}
+              disabled={stopMutation.isPending || session.status === "stop_requested"}
             >
-              {stopMutation.isPending ? "停止中..." : "停止"}
+              {stopMutation.isPending || session.status === "stop_requested"
+                ? "停止中..."
+                : "停止"}
             </button>
           ) : (
             <button

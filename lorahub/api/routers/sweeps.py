@@ -69,6 +69,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from lorahub.api import state
 from lorahub.api.jobs_helpers import _TERMINAL_STATES, _launch_job
+from lorahub.api.paths import resolve_sweep_variant_path
 from lorahub.api.state import JobRecord, JobState
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
@@ -220,12 +221,15 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     sweep_id = str(ulid.new())
-    from lorahub.api.paths import runs_dir  # noqa: PLC0415
-    workspace_root = (
-        Path(req.workspace_root).resolve()
-        if req.workspace_root
-        else runs_dir().resolve()
-    )
+    from lorahub.api.paths import resolve_run_path, runs_dir  # noqa: PLC0415
+    try:
+        workspace_root = (
+            resolve_run_path(req.workspace_root, allow_root=True)
+            if req.workspace_root
+            else runs_dir().resolve()
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # For TPE, point the study at a per-sweep sqlite file under the
     # workspace root. Reopening the same path on a future restart
@@ -290,7 +294,10 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                 ),
             ) from exc
 
-        workspace_v = (workspace_root / variant_name).resolve()
+        try:
+            workspace_v = resolve_sweep_variant_path(workspace_root, variant_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         metadata = {
             "sweep_id": sweep_id,
             "variant_name": variant_name,

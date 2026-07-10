@@ -112,13 +112,14 @@ ENV VIRTUAL_ENV="/opt/venv"
 
 WORKDIR /app
 
-# Copy only the metadata first so dependency resolution caches on its
-# own layer — source changes don't bust the pip cache.
+# Copy project metadata before the source tree. The following full-context
+# copy currently invalidates this layer on source changes, but keeping the
+# manifest explicit documents the dependency input and avoids relying on a
+# generated file from a developer checkout.
 COPY pyproject.toml ./
-# hatch-vcs needs .git to derive a version; without it the editable
-# install falls back to 0.0.0. Copy .git for the version probe, then
-# the editable install picks up the source tree below.
-# (We .dockerignore node_modules / runs / datasets etc., so COPY is lean.)
+# ``.git`` is deliberately excluded from the image. Release builds pass
+# SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LORAHUB below, while the runtime/UI
+# identity comes from LORAHUB_APP_VERSION.
 COPY . ./
 
 # Install the app with the api/gpu/tagging extras. `--link-mode=copy`
@@ -146,8 +147,8 @@ ENV LORAHUB_DOCKER=1
 ARG LORAHUB_APP_VERSION=""
 ENV LORAHUB_APP_VERSION="${LORAHUB_APP_VERSION}"
 ENV LORAHUB_WEB_DIST=/app/web/dist
-# Container-internal bind is 0.0.0.0; the compose port mapping keeps
-# the host side at 127.0.0.1 by default (no built-in auth — see README).
+# Container-internal bind is 0.0.0.0. The entrypoint enables token
+# authentication and persists its generated token in the data volume.
 ENV LORAHUB_BIND_HOST=0.0.0.0
 ENV LORAHUB_PORT=18765
 # Default zh UI; override via -e LORAHUB_LANG=en.

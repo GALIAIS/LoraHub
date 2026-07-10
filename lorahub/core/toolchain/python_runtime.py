@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from lorahub.core.paths import lorahub_dir
+from lorahub.core.redaction import redact_command_text
 from lorahub.core.toolchain import uv as _uv
 
 # Anchor for runtimes uv installs into. Lives under the project's
@@ -47,6 +49,7 @@ PYTHON_ROOT = lorahub_dir() / "python"
 # stall on a separate runtime download mid-install.
 DEFAULT_VERSION = "3.11"
 RECOMMENDED_VERSIONS: tuple[str, ...] = ("3.11", "3.12", "3.13")
+_SUPPORTED_VERSION_RE = re.compile(r"^3\.(?:11|12|13)(?:\.\d+)?$")
 
 
 _PB_PROGRESS = _uv.ProgressCallback
@@ -60,6 +63,13 @@ def _subprocess_no_window() -> int:
 
 def default_version() -> str:
     return DEFAULT_VERSION
+
+
+def validate_version(version: str) -> str:
+    value = version.strip()
+    if _SUPPORTED_VERSION_RE.fullmatch(value) is None:
+        raise ValueError("Python version must be 3.11, 3.12, 3.13, or an exact patch release")
+    return value
 
 
 def detected_platform() -> dict[str, str]:
@@ -251,6 +261,7 @@ def install_runtime(
     one place and `lorahub uninstall` can clean it without touching the
     user's other uv runtimes.
     """
+    version = validate_version(version)
     PYTHON_ROOT.mkdir(parents=True, exist_ok=True)
     cmd = [
         *_uv_python_command(),
@@ -270,7 +281,9 @@ def install_runtime(
         creationflags=_subprocess_no_window(),
     )
     if result.returncode != 0:
-        tail = "\n".join((result.stderr or "").strip().splitlines()[-12:])
+        tail = redact_command_text(
+            "\n".join((result.stderr or "").strip().splitlines()[-12:])
+        )
         msg = f"uv python install failed (exit {result.returncode}):\n{tail}"
         raise RuntimeError(msg)
     if progress is not None:
@@ -323,4 +336,5 @@ __all__ = [
     "runtime_info",
     "runtime_python",
     "status",
+    "validate_version",
 ]

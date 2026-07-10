@@ -19,11 +19,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lorahub.api import app as app_module
+from lorahub.api.dataset_files import resolve_dataset_directory
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSession,
     TaskSessionStore,
     default_task_store_path,
+    persist_stop_request,
+    prune_terminal_session_cache,
 )
 from lorahub.core.dataset.captions import CaptionPipeline
 
@@ -31,6 +34,7 @@ router = APIRouter(prefix="/api")
 _KIND_CAPTIONS_NORMALIZE = "captions_normalize"
 _CaptionsStatus = Literal[
     "running",
+    "stop_requested",
     "succeeded",
     "failed",
     "canceled",
@@ -83,6 +87,7 @@ class _CaptionsSession:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def push(
         self,
@@ -133,6 +138,26 @@ class _CaptionsSession:
                 "finished_at": self.finished_at,
             }
 
+    def request_stop(self) -> bool:
+        with self.lock:
+            if self.status != "running":
+                return False
+            if self.task_kind:
+                persisted = persist_stop_request(
+                    _task_store(),
+                    self.session_id,
+                    percent=self.percent,
+                )
+                if not persisted:
+                    return False
+            self.cancel_event.set()
+            self.status = "stop_requested"
+        self.push("cancel requested")
+        return True
+
+    def should_stop(self) -> bool:
+        return self.cancel_event.is_set()
+
 
 _sessions: dict[str, _CaptionsSession] = {}
 _sessions_lock = threading.Lock()
@@ -141,6 +166,7 @@ _sessions_lock = threading.Lock()
 def _store(session: _CaptionsSession) -> None:
     with _sessions_lock:
         _sessions[session.session_id] = session
+        prune_terminal_session_cache(_sessions)
 
 
 def _get(session_id: str) -> _CaptionsSession:
@@ -189,7 +215,14 @@ def _task_snapshot(session_id: str) -> dict[str, Any] | None:
 
 
 def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
-    if task.status not in {"queued", "running", "interrupted", "failed", "canceled"}:
+    if task.status not in {
+        "queued",
+        "running",
+        "stop_requested",
+        "interrupted",
+        "failed",
+        "canceled",
+    }:
         return None
     metadata = task.metadata
     return {
@@ -197,7 +230,7 @@ def _task_to_status_snapshot(task: TaskSession) -> dict[str, Any] | None:
         "path": str(metadata.get("path") or ""),
         "status": (
             task.status
-            if task.status in {"interrupted", "failed", "canceled"}
+            if task.status in {"stop_requested", "interrupted", "failed", "canceled"}
             else "running"
         ),
         "percent": task.percent,
@@ -250,9 +283,10 @@ def _build_pipeline(req: NormalizeCaptionsRequest) -> CaptionPipeline:
 
 @router.post("/captions/normalize", status_code=202)
 def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
-    target = Path(req.path).expanduser()
-    if not target.is_dir():
-        raise HTTPException(status_code=400, detail=f"not a directory: {target}")
+    try:
+        target = resolve_dataset_directory(req.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     task = _task_store().create(
         kind=_KIND_CAPTIONS_NORMALIZE,
@@ -274,10 +308,14 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
     def run() -> None:
         try:
             _task_store().update(session.session_id, status="running", percent=0)
+            if session.should_stop():
+                raise InterruptedError("normalization canceled by user")
             pipeline = _build_pipeline(req)
             session.push("scanning captions", percent=2)
 
             def on_progress(file: Path, done: int, total: int) -> None:
+                if session.should_stop():
+                    raise InterruptedError("normalization canceled by user")
                 with session.lock:
                     session.total = total
                     session.written = done
@@ -289,8 +327,13 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
                 recursive=req.recursive,
                 overwrite=req.overwrite,
                 progress=on_progress,
+                should_stop=session.should_stop,
             )
+            if session.should_stop():
+                raise InterruptedError("normalization canceled by user")
             with session.lock:
+                if session.cancel_event.is_set():
+                    raise InterruptedError("normalization canceled by user")
                 # `written` from the pipeline is the count of *changed* files;
                 # `session.written` tracks files *visited* via the progress
                 # callback. Expose the changed count under a dedicated field
@@ -304,6 +347,19 @@ def normalize_captions(req: NormalizeCaptionsRequest) -> dict[str, Any]:
                 status="succeeded",
                 percent=100,
                 result=session.snapshot() | {"changed": written},
+                finished=True,
+            )
+        except InterruptedError as exc:
+            with session.lock:
+                session.status = "canceled"
+                session.error = str(exc)
+                session.finished_at = time.time()
+            session.push(str(exc))
+            _task_store().update(
+                session.session_id,
+                status="canceled",
+                error=str(exc),
+                result=session.snapshot(),
                 finished=True,
             )
         except Exception as exc:  # noqa: BLE001
@@ -343,6 +399,16 @@ def normalize_captions_status(session_id: str) -> dict[str, Any]:
     if persisted is not None:
         return persisted
     raise HTTPException(status_code=404, detail="captions session not found")
+
+
+@router.post("/captions/normalize/{session_id}/stop")
+def stop_captions_normalize(session_id: str) -> dict[str, Any]:
+    session = _get(session_id)
+    if not session.request_stop():
+        with session.lock:
+            status = session.status
+        raise HTTPException(status_code=409, detail=f"normalization is {status}")
+    return {"session_id": session_id, "status": "stop_requested"}
 
 
 @router.get("/captions/normalize")

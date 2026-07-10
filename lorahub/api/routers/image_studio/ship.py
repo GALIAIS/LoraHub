@@ -29,16 +29,25 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api import paths as api_paths
+from lorahub.api.dataset_files import (
+    DATASET_META_FILENAME,
+    IMAGE_SUFFIXES,
+    is_link_like,
+    resolve_dataset_source_directory,
+    resolve_file_under,
+)
 from lorahub.api.zip_stream import ZipStream
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
@@ -50,14 +59,14 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 
 def _ensure_dataset(dataset_path: str) -> Path:
-    p = Path(dataset_path).resolve()
-    if not p.is_dir():
-        raise HTTPException(404, f"dataset not found: {p}")
-    return p
+    try:
+        return resolve_dataset_source_directory(dataset_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _audit_cache_path(dataset_path: str) -> Path:
-    return Path(dataset_path).resolve() / ".workbench" / "audit.json"
+    return _ensure_dataset(dataset_path) / ".workbench" / "audit.json"
 
 
 def _datasets_root() -> Path:
@@ -66,7 +75,7 @@ def _datasets_root() -> Path:
     if extra:
         root = Path(extra.split(os.pathsep)[0].strip())
     else:
-        root = Path.cwd() / "datasets"
+        root = api_paths.project_root() / "datasets"
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
@@ -85,6 +94,8 @@ def _walk_dataset_files(
     and the quarantine tree.
     """
     for cur, dirs, files in os.walk(root):
+        current = Path(cur)
+        dirs[:] = [name for name in dirs if not is_link_like(current / name)]
         rel_cur = Path(cur).relative_to(root)
         if rel_cur.parts and rel_cur.parts[0] == ".workbench":
             # Decide whether to descend based on which sub-tree we're in.
@@ -107,8 +118,11 @@ def _walk_dataset_files(
                 dirs[:] = []
                 continue
         for f in files:
-            full = Path(cur) / f
-            arc = full.relative_to(root)
+            lexical = Path(cur) / f
+            full = resolve_file_under(root, lexical)
+            if full is None:
+                continue
+            arc = lexical.relative_to(root)
             yield full, arc
 
 
@@ -272,7 +286,7 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
     written chunk to the client as soon as it's available.
     """
     root = _ensure_dataset(req.dataset_path)
-    archive_name = root.name + ".zip"
+    archive_name = quote(root.name + ".zip", safe="")
 
     only: set[str] | None = None
     if req.paths:
@@ -297,7 +311,7 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
                                 break
                     if not keep:
                         continue
-                if not req.include_meta and full.name == ".dataset_meta.json":
+                if not req.include_meta and full.name == DATASET_META_FILENAME:
                     continue
                 try:
                     zf.write(full, arcname=str(arc))
@@ -318,7 +332,7 @@ def ship_export(req: ExportRequest) -> StreamingResponse:
         gen(),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="{archive_name}"',
+            "Content-Disposition": f"attachment; filename*=UTF-8''{archive_name}",
         },
     )
 
@@ -341,69 +355,78 @@ def ship_save_as(req: SaveAsRequest) -> dict[str, Any]:
     """Copy a dataset (or a subset) into datasets/<new_name>/.
 
     Same path-filter semantics as /ship/export. The new dataset gets
-    a fresh ``.dataset_meta.json`` derived from the source's meta
+    a fresh ``dataset.json`` derived from the source's meta
     (description suffixed with "(copied from <source>)").
     """
+    from .datasets import _validate_dataset_name  # noqa: PLC0415
+
     src = _ensure_dataset(req.source_path)
-    name = req.new_name.strip()
-    if "/" in name or "\\" in name or ".." in name:
-        raise HTTPException(400, "invalid dataset name")
-    dst = _datasets_root() / name
+    name = _validate_dataset_name(req.new_name)
+    datasets_root = _datasets_root()
+    dst = datasets_root / name
     if dst.exists():
         raise HTTPException(409, f"dataset '{name}' already exists")
-    dst.mkdir(parents=True)
 
     only: set[str] | None = None
     if req.paths:
         only = {str(Path(p).resolve()) for p in req.paths}
 
-    files_copied = 0
-    images_copied = 0
-    for full, arc in _walk_dataset_files(
-        src,
-        include_backups=req.include_backups,
-        include_quarantine=req.include_quarantine,
-    ):
-        if only is not None:
-            abs_full = str(full.resolve())
-            keep = abs_full in only
-            if not keep and full.suffix.lower() == ".txt":
-                # Match the txt to its image counterpart.
-                for ext in (".png", ".jpg", ".jpeg", ".webp"):
-                    if str(full.with_suffix(ext).resolve()) in only:
-                        keep = True
-                        break
-            if not keep:
-                continue
-        out = dst / arc
-        out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(full, out)
-        files_copied += 1
-        if full.suffix.lower() in IMAGE_SUFFIXES:
-            images_copied += 1
+    stage = Path(tempfile.mkdtemp(dir=datasets_root, prefix=".dataset-importing-"))
+    try:
+        files_copied = 0
+        images_copied = 0
+        for full, arc in _walk_dataset_files(
+            src,
+            include_backups=req.include_backups,
+            include_quarantine=req.include_quarantine,
+        ):
+            if only is not None:
+                abs_full = str(full.resolve())
+                keep = abs_full in only
+                if not keep and full.suffix.lower() == ".txt":
+                    # Match the txt to its image counterpart.
+                    for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                        if str(full.with_suffix(ext).resolve()) in only:
+                            keep = True
+                            break
+                if not keep:
+                    continue
+            out = stage / arc
+            out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(full, out)
+            files_copied += 1
+            if full.suffix.lower() in IMAGE_SUFFIXES:
+                images_copied += 1
 
-    # Write fresh metadata.
-    src_meta_file = src / ".dataset_meta.json"
-    new_meta: dict[str, Any] = {"name": name}
-    if src_meta_file.is_file():
-        try:
-            src_meta = json.loads(src_meta_file.read_text(encoding="utf-8"))
-            new_meta.update(
-                {
-                    "description": (
-                        (src_meta.get("description") or "")
-                        + f" (copied from {src.name})"
-                    ).strip(),
-                    "targetResolution": src_meta.get("targetResolution"),
-                    "triggerWord": src_meta.get("triggerWord"),
-                },
-            )
-        except (OSError, json.JSONDecodeError):
-            pass
-    new_meta["name"] = name
-    (dst / ".dataset_meta.json").write_text(
-        json.dumps(new_meta, ensure_ascii=False, indent=2), encoding="utf-8",
-    )
+        # Finish metadata before making the new dataset visible.
+        src_meta_file = resolve_file_under(src, src / DATASET_META_FILENAME)
+        new_meta: dict[str, Any] = {"name": name}
+        if src_meta_file is not None:
+            try:
+                src_meta = json.loads(src_meta_file.read_text(encoding="utf-8"))
+                new_meta.update(
+                    {
+                        "description": (
+                            (src_meta.get("description") or "")
+                            + f" (copied from {src.name})"
+                        ).strip(),
+                        "targetResolution": src_meta.get("targetResolution"),
+                        "triggerWord": src_meta.get("triggerWord"),
+                    },
+                )
+            except (OSError, json.JSONDecodeError):
+                pass
+        new_meta["name"] = name
+        (stage / DATASET_META_FILENAME).write_text(
+            json.dumps(new_meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if dst.exists():
+            raise HTTPException(409, f"dataset '{name}' already exists")
+        stage.replace(dst)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
 
     return {
         "ok": True,

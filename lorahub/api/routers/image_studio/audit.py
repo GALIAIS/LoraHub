@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,27 +54,24 @@ from fastapi import APIRouter, HTTPException
 from PIL import ExifTags, Image, UnidentifiedImageError
 from pydantic import BaseModel
 
-from lorahub.api.dataset_files import IMAGE_SUFFIXES
+from lorahub.api.dataset_files import (
+    IMAGE_SUFFIXES,
+    iter_safe_files,
+    resolve_dataset_directory,
+)
+
+from ._shared import _atomic_write_text
 
 router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 
 def _scan_images(directory: Path, recursive: bool) -> list[Path]:
-    """Inlined copy of _shared._scan_images to avoid importing app_module
-    at audit-router load time (circular: app imports routers, routers'
-    _shared imports app)."""
-    results: list[Path] = []
-    if recursive:
-        for root, _dirs, files in os.walk(directory):
-            for f in files:
-                p = Path(root) / f
-                if p.suffix.lower() in IMAGE_SUFFIXES:
-                    results.append(p)
-    else:
-        for p in directory.iterdir():
-            if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
-                results.append(p)
-    return results
+    """Uncached scan so each audit reflects the current filesystem."""
+    return [
+        path
+        for path in iter_safe_files(directory, recursive=recursive)
+        if path.suffix.lower() in IMAGE_SUFFIXES
+    ]
 
 # Anti-DDoS: avoid auditing absurdly-large image globs in one go. The
 # UI can re-trigger if it really needs a 100k-image pass.
@@ -271,8 +267,11 @@ def _split_caption_tags(caption: str) -> list[str]:
 
 
 def _audit_cache_path(dataset_path: str) -> Path:
-    p = Path(dataset_path).resolve() / ".workbench" / "audit.json"
-    return p
+    try:
+        root = resolve_dataset_directory(dataset_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return root / ".workbench" / "audit.json"
 
 
 @router.post("/audit/scan")
@@ -285,9 +284,10 @@ def audit_scan(req: ScanRequest) -> dict[str, Any]:
     import time  # noqa: PLC0415
 
     started = time.time()
-    root = Path(req.dataset_path).resolve()
-    if not root.is_dir():
-        raise HTTPException(404, f"dataset path not found: {root}")
+    try:
+        root = resolve_dataset_directory(req.dataset_path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     paths = _scan_images(root, req.recursive)
     cap = req.max_images or _MAX_IMAGES
@@ -423,9 +423,9 @@ def audit_scan(req: ScanRequest) -> dict[str, Any]:
     # Cache.
     cache_path = _audit_cache_path(req.dataset_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
+    _atomic_write_text(
+        cache_path,
         json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
     return report.to_dict()
 

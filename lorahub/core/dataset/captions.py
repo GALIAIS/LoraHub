@@ -402,6 +402,7 @@ class CaptionPipeline:
         recursive: bool = False,
         overwrite: bool = False,
         progress: Callable[[Path, int, int], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> int:
         """Apply ``transform_text`` to every ``.txt`` caption under ``path``.
 
@@ -420,6 +421,8 @@ class CaptionPipeline:
         total = len(files)
         written = 0
         for idx, caption_file in enumerate(files, start=1):
+            if should_stop is not None and should_stop():
+                raise InterruptedError("normalization canceled by user")
             old = caption_file.read_text(encoding="utf-8")
             new = self.transform_text(old)
             if new != old:

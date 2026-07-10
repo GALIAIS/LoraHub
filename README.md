@@ -68,7 +68,7 @@ lorahub --lang en --help      # 切换为英文 help / 输出
 ```bash
 git clone https://github.com/GALIAIS/LoraHub
 cd LoraHub
-pip install -e ".[api,dev]"
+pip install -e ".[api,dev,cpu]"
 cd web && npm ci && cd ..
 ```
 
@@ -85,7 +85,7 @@ docker compose -f docker/docker-compose.yml --profile gpu up -d --build
 docker compose -f docker/docker-compose.yml --profile cpu up -d --build
 ```
 
-访问 `http://127.0.0.1:18765`。镜像只携带应用本体，训练后端(kohya / diffusion-pipe / anima_lora / ai-toolkit)启动后在挂载卷里通过 Web UI 或 `lorahub bootstrap-kohya` 安装，与本地哲学一致。完整说明见 [docs/getting-started/docker.md](docs/getting-started/docker.md)。
+访问 `http://127.0.0.1:18765`。Docker 首次启动会在持久化卷生成访问令牌，读取命令见 [Docker 说明](docker/README.md)。镜像只携带应用本体，训练后端(kohya / diffusion-pipe / anima_lora / ai-toolkit)启动后在挂载卷里通过 Web UI 或 `lorahub bootstrap-kohya` 安装，与本地哲学一致。完整说明见 [docs/getting-started/docker.md](docs/getting-started/docker.md)。
 
 ### 训练后端
 
@@ -111,10 +111,13 @@ export LORAHUB_AI_TOOLKIT_REPO=/path/to/ai-toolkit
 | Extra     | 用途                                       |
 | --------- | ------------------------------------------ |
 | `api`     | FastAPI 服务（`lorahub serve`）            |
+| `cpu`     | WD14 标注通过 CPU 版 `onnxruntime`         |
 | `gpu`     | WD14 标注通过 `onnxruntime-gpu` 走 CUDA    |
 | `tagging` | JoyTag（PyTorch）标注后端                  |
 | `dev`     | 测试、lint、mypy、httpx                    |
 | `docs`    | mkdocs 文档站                              |
+
+`cpu` 与 `gpu` 不可同时安装；切换到 CUDA 版前先执行 `pip uninstall onnxruntime`。
 
 ---
 
@@ -194,7 +197,7 @@ lorahub system gpu                      # CUDA 设备快照
 lorahub system info                     # python / torch / 后端探测
 ```
 
-REST 端点全部挂在 `/api`：`/api/configs`、`/api/jobs`、`/api/jobs/{id}/sse`、`/api/sweeps`、`/api/image-studio/*`、`/api/system/sse`、`/api/models/download` 等。默认绑定 `127.0.0.1`，无内置鉴权——请勿直接暴露到公网；如需远程访问请加反向代理与认证。
+REST 端点全部挂在 `/api`：`/api/configs`、`/api/jobs`、`/api/jobs/{id}/sse`、`/api/sweeps`、`/api/image-studio/*`、`/api/system/sse`、`/api/models/download` 等。默认绑定 `127.0.0.1`；非回环访问必须提供 `LORAHUB_API_TOKEN` 或使用自动生成的令牌。公网部署仍需 TLS。
 
 ---
 
