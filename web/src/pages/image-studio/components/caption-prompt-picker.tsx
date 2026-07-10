@@ -6,6 +6,15 @@ import {
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -22,11 +31,20 @@ export interface CaptionPromptSelection {
   promptTemplate?: string
 }
 
-const DEFAULTS: { value: CaptionPromptMode; label: string }[] = [
-  { value: "style", label: "风格 LoRA（描述 + 修正后的标签，禁画风词）" },
-  { value: "character", label: "角色 LoRA（描述 + 修正后的标签，禁外貌词）" },
-  { value: "general", label: "通用（描述全部内容）" },
+const CAPTION_TYPES: {
+  value: CaptionPromptMode
+  label: string
+  description: string
+}[] = [
+  { value: "style", label: "风格", description: "描述 + 修正后的标签，禁画风词" },
+  { value: "character", label: "角色", description: "描述 + 修正后的标签，禁外貌词" },
+  { value: "general", label: "通用", description: "描述全部内容" },
 ]
+
+const PROMPT_CATEGORY_OPTIONS = CAPTION_TYPES.map((type) => ({
+  value: `caption:${type.value}`,
+  label: type.label,
+}))
 
 function modeFromCategory(category: string): CaptionPromptMode | null {
   if (!category.startsWith("caption:")) return null
@@ -58,6 +76,18 @@ export function CaptionPromptPicker({
       ),
     [promptsQuery.data?.prompts],
   )
+  const promptsByMode = useMemo(
+    () =>
+      Object.fromEntries(
+        CAPTION_TYPES.map((type) => [
+          type.value,
+          prompts.filter(
+            (prompt) => modeFromCategory(prompt.category) === type.value,
+          ),
+        ]),
+      ) as Record<CaptionPromptMode, typeof prompts>,
+    [prompts],
+  )
 
   useEffect(() => {
     if (!value.startsWith("custom:") || promptsQuery.isLoading) return
@@ -84,23 +114,44 @@ export function CaptionPromptPicker({
 
   return (
     <>
-      <div className={["flex gap-2", className].filter(Boolean).join(" ")}>
-        <select
+      <div
+        className={[
+          "grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2",
+          className,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <Select
           value={value}
-          onChange={(e) => selectValue(e.target.value)}
-          className="h-8 min-w-0 flex-1 rounded border bg-background px-2 text-xs"
+          onValueChange={(next) => next && selectValue(next)}
         >
-          {DEFAULTS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-          {prompts.map((p) => (
-            <option key={p.id} value={`custom:${p.id}`}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger size="sm" className="w-full min-w-0 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel>内置</SelectLabel>
+              {CAPTION_TYPES.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label} LoRA（{item.description}）
+                </SelectItem>
+              ))}
+            </SelectGroup>
+            {CAPTION_TYPES.map((item) => (
+              promptsByMode[item.value].length > 0 ? (
+                <SelectGroup key={`custom:${item.value}`}>
+                  <SelectLabel>{item.label}提示词</SelectLabel>
+                  {promptsByMode[item.value].map((prompt) => (
+                    <SelectItem key={prompt.id} value={`custom:${prompt.id}`}>
+                      {prompt.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : null
+            ))}
+          </SelectContent>
+        </Select>
         <Button
           type="button"
           variant="outline"
@@ -120,6 +171,7 @@ export function CaptionPromptPicker({
           <div className="min-h-0 flex-1">
             <PromptLibraryPanel
               categoryPrefix="caption:"
+              categoryOptions={PROMPT_CATEGORY_OPTIONS}
               defaultDraft={{
                 category: "caption:style",
                 vars: "tags, wd14_tags, trigger",

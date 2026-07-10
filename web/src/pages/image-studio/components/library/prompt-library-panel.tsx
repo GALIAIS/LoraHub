@@ -16,6 +16,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 interface DraftState {
@@ -40,6 +47,7 @@ const EMPTY_DRAFT: DraftState = {
 
 interface PromptLibraryPanelProps {
   categoryPrefix?: string
+  categoryOptions?: readonly { value: string; label: string }[]
   defaultDraft?: Partial<DraftState>
 }
 
@@ -57,10 +65,13 @@ function entryToDraft(e: LibraryPromptEntry): DraftState {
 
 export function PromptLibraryPanel({
   categoryPrefix,
+  categoryOptions,
   defaultDraft,
 }: PromptLibraryPanelProps = {}) {
   const qc = useQueryClient()
-  const [category, setCategory] = useState(categoryPrefix ?? "")
+  const [category, setCategory] = useState(
+    categoryOptions?.[0]?.value ?? categoryPrefix ?? "",
+  )
   const [draft, setDraft] = useState<DraftState | null>(null)
 
   const promptsQuery = useQuery({
@@ -139,16 +150,56 @@ export function PromptLibraryPanel({
     }
   }
 
-  const prompts = (promptsQuery.data?.prompts ?? []).filter((p) =>
-    categoryPrefix ? p.category.startsWith(categoryPrefix) : true,
+  const allPrompts = promptsQuery.data?.prompts ?? []
+  const prompts = allPrompts.filter((p) =>
+    categoryOptions
+      ? p.category === category
+      : categoryPrefix
+        ? p.category.startsWith(categoryPrefix)
+        : true,
   )
+  const categoryLabel = (value: string) =>
+    categoryOptions?.find((option) => option.value === value)?.label ?? value
   const editing = draft?.id !== null && draft?.id !== undefined
   const submitting = create.isPending || upsert.isPending
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-6 py-2.5">
-        {categoryPrefix ? (
+        {categoryOptions ? (
+          <div
+            role="tablist"
+            aria-label="Caption 类型"
+            className="flex min-w-0 gap-1 overflow-x-auto rounded-md border bg-muted/30 p-0.5"
+          >
+            {categoryOptions.map((option) => {
+              const active = category === option.value
+              const count = allPrompts.filter(
+                (prompt) => prompt.category === option.value,
+              ).length
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  size="sm"
+                  variant={active ? "secondary" : "ghost"}
+                  className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
+                  onClick={() => {
+                    setCategory(option.value)
+                    setDraft(null)
+                  }}
+                >
+                  {option.label}
+                  <span className="tabular-nums text-[10px] text-muted-foreground">
+                    {count}
+                  </span>
+                </Button>
+              )
+            })}
+          </div>
+        ) : categoryPrefix ? (
           <div className="rounded border bg-muted/25 px-2 py-1 text-xs text-muted-foreground">
             {categoryPrefix}*
           </div>
@@ -169,7 +220,11 @@ export function PromptLibraryPanel({
                 ...EMPTY_DRAFT,
                 ...defaultDraft,
                 category:
-                  defaultDraft?.category ?? categoryPrefix ?? EMPTY_DRAFT.category,
+                  categoryOptions
+                    ? category
+                    : defaultDraft?.category ??
+                      categoryPrefix ??
+                      EMPTY_DRAFT.category,
               })
             }
             className="h-8 gap-1"
@@ -216,14 +271,34 @@ export function PromptLibraryPanel({
               />
             </Field>
             <Field label="分类">
-              <Input
-                value={draft.category}
-                onChange={(e) =>
-                  setDraft({ ...draft, category: e.target.value })
-                }
-                placeholder="caption / audit / trigger"
-                className="h-8 text-xs"
-              />
+              {categoryOptions ? (
+                <Select
+                  value={draft.category}
+                  onValueChange={(value) =>
+                    value && setDraft({ ...draft, category: value })
+                  }
+                >
+                  <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categoryOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={draft.category}
+                  onChange={(e) =>
+                    setDraft({ ...draft, category: e.target.value })
+                  }
+                  placeholder="caption / audit / trigger"
+                  className="h-8 text-xs"
+                />
+              )}
             </Field>
             <Field label="变量名（逗号分隔，仅备注）">
               <Input
@@ -272,7 +347,9 @@ export function PromptLibraryPanel({
           </p>
         ) : prompts.length === 0 ? (
           <p className="px-6 py-12 text-center text-xs text-muted-foreground">
-            暂无 Prompt 模板。
+            {categoryOptions
+              ? `${categoryLabel(category)}暂无提示词模板。`
+              : "暂无 Prompt 模板。"}
           </p>
         ) : (
           <ul className="divide-y">
@@ -285,7 +362,7 @@ export function PromptLibraryPanel({
                         {p.name}
                       </span>
                       <Badge variant="outline" className="text-[10px]">
-                        {p.category}
+                        {categoryLabel(p.category)}
                       </Badge>
                       {p.isDefault && (
                         <Badge

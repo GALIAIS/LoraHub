@@ -28,6 +28,13 @@ import { addTask } from "@/lib/studio-task-store"
 import { useStudioTasksFor } from "@/hooks/use-studio-tasks"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import {
@@ -237,33 +244,43 @@ function AnnotateMainPanel({ datasetPath }: Props) {
 
             <div className="space-y-4 p-4">
               <Field label="模式">
-                <select
+                <Select
                   value={mode}
-                  onChange={(e) => setMode(e.target.value as AnnotationMode)}
-                  className="h-9 w-full rounded border bg-background px-2 text-sm"
+                  onValueChange={(value) =>
+                    value && setMode(value as AnnotationMode)
+                  }
                 >
-                  <option value="tag">TAG 模式</option>
-                  <option value="nl">NL 模式</option>
-                  <option value="tag-llm">TAG+LLM 模式</option>
-                  <option value="tag-vlm">TAG+VLM 模式</option>
-                  <option value="toriigate">ToriiGate 模式</option>
-                </select>
+                  <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tag">TAG 模式</SelectItem>
+                    <SelectItem value="nl">NL 模式</SelectItem>
+                    <SelectItem value="tag-llm">TAG+LLM 模式</SelectItem>
+                    <SelectItem value="tag-vlm">TAG+VLM 模式</SelectItem>
+                    <SelectItem value="toriigate">ToriiGate 模式</SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
 
               {mode === "tag" ? (
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="模型">
-                    <select
+                    <Select
                       value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      className="h-8 w-full rounded border bg-background px-2 text-xs"
+                      onValueChange={(value) => value && setModel(value)}
                     >
-                      {modelOptions.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger size="sm" className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelOptions.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </Field>
                   <DeviceSelect value={device} onChange={setDevice} />
                   <NumberField label="通用阈值" value={general} onChange={setGeneral} />
@@ -413,15 +430,21 @@ function DeviceSelect({
 }) {
   return (
     <Field label="设备">
-      <select
+      <Select
         value={value}
-        onChange={(e) => onChange(e.target.value as "auto" | "cuda" | "cpu")}
-        className="h-8 w-full rounded border bg-background px-2 text-xs"
+        onValueChange={(next) =>
+          next && onChange(next as "auto" | "cuda" | "cpu")
+        }
       >
-        <option value="auto">自动</option>
-        <option value="cuda">CUDA</option>
-        <option value="cpu">CPU</option>
-      </select>
+        <SelectTrigger size="sm" className="w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="auto">自动</SelectItem>
+          <SelectItem value="cuda">CUDA</SelectItem>
+          <SelectItem value="cpu">CPU</SelectItem>
+        </SelectContent>
+      </Select>
     </Field>
   )
 }

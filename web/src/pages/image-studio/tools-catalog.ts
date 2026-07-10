@@ -12,7 +12,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
   AlertTriangle,
-  BookText,
   Boxes,
   ClipboardList,
   Copy,
@@ -65,7 +64,7 @@ export const TOOL_CATEGORIES: readonly ToolCategoryInfo[] = [
   { id: "tagging", label: "打标",   description: "WD14 / JoyTag 自动打标 + 标签词频与批量编辑",            icon: Tags          },
   { id: "ai",      label: "AI",     description: "VLM 直出 caption / 质量分 / 触发词 / Anima 重写",         icon: Sparkles      },
   { id: "ship",    label: "出口",   description: "训练就绪门禁、导出复制、另存数据集",                      icon: PackageCheck  },
-  { id: "library", label: "工具库", description: "跨数据集的标签词典、触发词索引、Prompt 模板",              icon: Library       },
+  { id: "library", label: "工具库", description: "跨数据集的标签词典、触发词索引",                            icon: Library       },
 ] as const
 
 export interface ToolInfo {
@@ -375,15 +374,6 @@ export const TOOLS: readonly ToolInfo[] = [
     label: "触发词索引",
     description: "trigger word ↔ 角色 / 概念 ↔ 数据集映射",
     icon: Wand2,
-    requiresDataset: false,
-  },
-  {
-    id: "library-prompts",
-    category: "library",
-    stage: "library",
-    label: "Prompt 模板",
-    description: "VLM caption / 质量审计 / 触发词抽取的 prompt 库",
-    icon: BookText,
     requiresDataset: false,
   },
 ] as const

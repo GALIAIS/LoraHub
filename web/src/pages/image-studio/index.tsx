@@ -28,7 +28,7 @@ export { ImageStudioPage }
 
 // stage 参数允许的取值；除了 5 个核心 stage，还有两个虚拟 stage：
 //  - "tools"   — 全部工具广场
-//  - "library" — 跨数据集的工具库（标签词典 / 触发词 / Prompt 模板）
+//  - "library" — 跨数据集的工具库（标签词典 / 触发词）
 type StageOrTools = StageId | "tools" | "library"
 type StageRoute = StageOrTools | "lora-test"
 
