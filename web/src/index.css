@@ -307,7 +307,7 @@ code {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: 'Geist Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -424,159 +424,159 @@ code {
   --chart-label: oklch(0.75 0.01 260);
 }
 
-:root[data-ui-style="polar"] {
-  --polar-blue: oklch(0.52 0.165 258);
-  --polar-green: oklch(0.57 0.115 164);
-  --polar-amber: oklch(0.64 0.13 78);
-  --polar-violet: oklch(0.55 0.14 298);
-  --polar-cyan: oklch(0.56 0.105 215);
-  --polar-red: oklch(0.56 0.17 27);
+:root[data-ui-style="linear"] {
+  --linear-blue: oklch(0.57 0.18 278);
+  --linear-green: oklch(0.55 0.13 158);
+  --linear-amber: oklch(0.62 0.14 76);
+  --linear-violet: oklch(0.56 0.15 306);
+  --linear-cyan: oklch(0.56 0.12 208);
+  --linear-red: oklch(0.56 0.2 27);
   color-scheme: light;
-  --background: oklch(0.985 0.002 248);
-  --foreground: oklch(0.21 0.034 264.665);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.034 264.665);
+  --background: oklch(0.972 0.003 285);
+  --foreground: oklch(0.205 0.008 285);
+  --card: oklch(0.995 0.002 285);
+  --card-foreground: var(--foreground);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.034 264.665);
-  --primary: var(--polar-blue);
-  --primary-foreground: oklch(0.985 0.002 248);
-  --secondary: oklch(0.967 0.003 264.542);
-  --secondary-foreground: oklch(0.278 0.033 256.848);
-  --muted: oklch(0.967 0.003 264.542);
-  --muted-foreground: oklch(0.446 0.03 256.802);
-  --accent: var(--polar-blue);
-  --accent-foreground: oklch(0.985 0.002 248);
-  --destructive: var(--polar-red);
-  --destructive-foreground: oklch(0.985 0.002 248);
-  --border: oklch(0.928 0.006 264.531);
-  --input: oklch(0.928 0.006 264.531);
-  --ring: oklch(0.707 0.022 261.325);
-  --chart-1: var(--polar-blue);
-  --chart-2: var(--polar-green);
-  --chart-3: var(--polar-violet);
-  --chart-4: var(--polar-amber);
-  --chart-5: var(--polar-red);
-  --radius: 0.6rem;
-  --sidebar: oklch(0.967 0.003 264.542);
-  --sidebar-foreground: oklch(0.21 0.034 264.665);
-  --sidebar-primary: var(--polar-blue);
-  --sidebar-primary-foreground: oklch(0.985 0.002 248);
-  --sidebar-accent: oklch(0.948 0.018 256);
-  --sidebar-accent-foreground: oklch(0.278 0.033 256.848);
-  --sidebar-border: oklch(0.872 0.01 258.338);
-  --sidebar-ring: oklch(0.707 0.022 261.325);
-  --shell-grid: oklch(0.52 0.165 258 / 0.026);
-  --shell-grid-strong: oklch(0.373 0.034 259.733 / 0.055);
-  --shell-glow: oklch(0.52 0.165 258 / 0.055);
-  --shell-dot: oklch(0.52 0.165 258 / 0.032);
-  --panel-line: oklch(0.373 0.034 259.733 / 0.08);
-  --panel-line-strong: oklch(0.373 0.034 259.733 / 0.16);
-  --panel-fill: color-mix(in oklab, var(--card) 99%, transparent);
-  --panel-fill-strong: color-mix(in oklab, var(--card) 98%, var(--background) 2%);
-  --surface-border: color-mix(in oklab, var(--border) 96%, transparent);
-  --surface-border-hover: color-mix(in oklab, var(--primary) 16%, var(--border) 84%);
-  --surface-hover: color-mix(in oklab, var(--card) 96%, var(--muted) 4%);
-  --control-fill: color-mix(in oklab, var(--card) 84%, var(--muted) 16%);
-  --control-fill-hover: color-mix(in oklab, var(--muted) 78%, var(--card) 22%);
-  --control-border: color-mix(in oklab, var(--border) 96%, transparent);
-  --control-border-hover: color-mix(in oklab, var(--primary) 18%, var(--border) 82%);
-  --state-hover: color-mix(in oklab, var(--muted) 74%, transparent);
-  --state-selected: color-mix(in oklab, var(--primary) 8%, var(--muted) 92%);
-  --shell-shadow: 0 0 30px rgb(15 23 42 / 0.035), 0 0 3px rgb(15 23 42 / 0.06);
-  --panel-shadow: 0 0 18px rgb(15 23 42 / 0.032), 0 0 4px rgb(15 23 42 / 0.05);
-  --panel-shadow-strong: 0 0 28px rgb(15 23 42 / 0.045), 0 0 8px rgb(15 23 42 / 0.06);
-  --surface-shadow-hover: 0 0 28px rgb(15 23 42 / 0.045), 0 0 6px rgb(15 23 42 / 0.06);
-  --chart-background: oklch(1 0 0);
-  --chart-foreground: oklch(0.21 0.034 264.665);
-  --chart-foreground-muted: oklch(0.446 0.03 256.802);
-  --chart-crosshair: var(--polar-blue);
-  --chart-grid: oklch(0.928 0.006 264.531);
+  --popover-foreground: var(--foreground);
+  --primary: var(--linear-blue);
+  --primary-foreground: oklch(0.985 0.003 285);
+  --secondary: oklch(0.952 0.004 285);
+  --secondary-foreground: oklch(0.26 0.008 285);
+  --muted: oklch(0.955 0.003 285);
+  --muted-foreground: oklch(0.49 0.01 285);
+  --accent: oklch(0.925 0.008 285);
+  --accent-foreground: oklch(0.24 0.008 285);
+  --destructive: var(--linear-red);
+  --destructive-foreground: oklch(0.985 0.003 285);
+  --border: oklch(0.885 0.005 285);
+  --input: oklch(0.86 0.006 285);
+  --ring: oklch(0.61 0.17 278);
+  --chart-1: var(--linear-blue);
+  --chart-2: var(--linear-cyan);
+  --chart-3: var(--linear-violet);
+  --chart-4: var(--linear-green);
+  --chart-5: var(--linear-amber);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.952 0.003 285);
+  --sidebar-foreground: oklch(0.32 0.008 285);
+  --sidebar-primary: var(--linear-blue);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.895 0.005 285);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: oklch(0.86 0.005 285);
+  --sidebar-ring: var(--ring);
+  --shell-grid: transparent;
+  --shell-grid-strong: transparent;
+  --shell-glow: transparent;
+  --shell-dot: transparent;
+  --panel-line: color-mix(in oklab, var(--border) 72%, transparent);
+  --panel-line-strong: var(--border);
+  --panel-fill: var(--card);
+  --panel-fill-strong: var(--card);
+  --surface-border: color-mix(in oklab, var(--border) 82%, transparent);
+  --surface-border-hover: color-mix(in oklab, var(--foreground) 14%, var(--border) 86%);
+  --surface-hover: color-mix(in oklab, var(--card) 82%, var(--accent) 18%);
+  --control-fill: color-mix(in oklab, var(--card) 58%, var(--secondary) 42%);
+  --control-fill-hover: color-mix(in oklab, var(--card) 35%, var(--accent) 65%);
+  --control-border: var(--border);
+  --control-border-hover: color-mix(in oklab, var(--foreground) 18%, var(--border) 82%);
+  --state-hover: color-mix(in oklab, var(--accent) 76%, transparent);
+  --state-selected: var(--accent);
+  --shell-shadow: 0 1px 2px rgb(20 20 24 / 0.04);
+  --panel-shadow: 0 8px 24px -14px rgb(20 20 24 / 0.22), 0 1px 3px rgb(20 20 24 / 0.06);
+  --panel-shadow-strong: 0 18px 48px -24px rgb(20 20 24 / 0.28), 0 1px 3px rgb(20 20 24 / 0.08);
+  --surface-shadow-hover: none;
+  --chart-background: var(--card);
+  --chart-foreground: var(--foreground);
+  --chart-foreground-muted: var(--muted-foreground);
+  --chart-crosshair: var(--linear-blue);
+  --chart-grid: oklch(0.91 0.004 285);
   --chart-brush-border: var(--chart-grid);
-  --chart-tooltip-background: oklch(0.21 0.034 264.665 / 0.94);
-  --chart-tooltip-foreground: oklch(0.985 0.002 248);
-  --chart-tooltip-muted: oklch(0.707 0.022 261.325);
-  --chart-marker-background: oklch(0.967 0.003 264.542);
-  --chart-marker-border: oklch(0.872 0.01 258.338);
-  --chart-marker-foreground: oklch(0.373 0.034 259.733);
-  --chart-ring-background: oklch(0.52 0.165 258 / 0.14);
-  --chart-label: oklch(0.446 0.03 256.802);
+  --chart-tooltip-background: oklch(0.205 0.008 285 / 0.96);
+  --chart-tooltip-foreground: oklch(0.985 0.003 285);
+  --chart-tooltip-muted: oklch(0.72 0.008 285);
+  --chart-marker-background: oklch(0.97 0.003 285);
+  --chart-marker-border: var(--border);
+  --chart-marker-foreground: oklch(0.32 0.008 285);
+  --chart-ring-background: oklch(0.57 0.18 278 / 0.12);
+  --chart-label: var(--muted-foreground);
 }
 
-.dark[data-ui-style="polar"] {
+.dark[data-ui-style="linear"] {
   color-scheme: dark;
-  --polar-blue: oklch(0.68 0.14 258);
-  --polar-green: oklch(0.73 0.105 164);
-  --polar-amber: oklch(0.77 0.12 78);
-  --polar-violet: oklch(0.73 0.13 298);
-  --polar-cyan: oklch(0.74 0.1 215);
-  --polar-red: oklch(0.69 0.15 27);
-  --background: hsl(233 4% 8%);
-  --foreground: hsl(233 5% 88%);
-  --card: hsl(233 4% 11%);
-  --card-foreground: hsl(233 5% 90%);
-  --popover: hsl(233 4% 6%);
-  --popover-foreground: hsl(233 5% 90%);
-  --primary: var(--polar-blue);
-  --primary-foreground: hsl(233 5% 6%);
-  --secondary: hsl(233 4% 14%);
-  --secondary-foreground: hsl(233 5% 88%);
-  --muted: hsl(233 4% 15%);
-  --muted-foreground: hsl(233 4% 66%);
-  --accent: var(--polar-blue);
-  --accent-foreground: hsl(233 5% 6%);
-  --destructive: var(--polar-red);
-  --destructive-foreground: hsl(233 5% 6%);
-  --border: hsl(233 4% 18%);
-  --input: hsl(233 4% 18%);
-  --ring: hsl(233 4% 31%);
-  --chart-1: var(--polar-blue);
-  --chart-2: var(--polar-green);
-  --chart-3: var(--polar-violet);
-  --chart-4: var(--polar-amber);
-  --chart-5: var(--polar-red);
-  --sidebar: hsl(233 4% 5%);
-  --sidebar-foreground: hsl(233 5% 88%);
-  --sidebar-primary: var(--polar-blue);
-  --sidebar-primary-foreground: hsl(233 5% 6%);
-  --sidebar-accent: hsl(233 4% 14%);
-  --sidebar-accent-foreground: hsl(233 5% 90%);
-  --sidebar-border: hsl(233 4% 17%);
-  --sidebar-ring: hsl(233 4% 31%);
-  --shell-grid: hsl(233 5% 88% / 0.024);
-  --shell-grid-strong: hsl(233 5% 88% / 0.045);
-  --shell-glow: oklch(0.68 0.14 258 / 0.065);
-  --shell-dot: hsl(233 5% 88% / 0.032);
-  --panel-line: hsl(233 5% 88% / 0.062);
-  --panel-line-strong: hsl(233 5% 88% / 0.12);
-  --panel-fill: color-mix(in oklab, var(--card) 97%, transparent);
-  --panel-fill-strong: color-mix(in oklab, var(--card) 94%, white 2%);
-  --surface-border: color-mix(in oklab, var(--border) 94%, transparent);
-  --surface-border-hover: color-mix(in oklab, var(--primary) 22%, var(--border) 78%);
-  --surface-hover: color-mix(in oklab, var(--card) 90%, white 3%);
-  --control-fill: color-mix(in oklab, var(--input) 58%, transparent);
-  --control-fill-hover: color-mix(in oklab, var(--input) 78%, transparent);
-  --control-border: color-mix(in oklab, var(--input) 90%, transparent);
-  --control-border-hover: color-mix(in oklab, var(--primary) 20%, var(--input) 80%);
-  --state-hover: color-mix(in oklab, var(--muted) 72%, transparent);
-  --state-selected: color-mix(in oklab, var(--primary) 12%, var(--muted) 88%);
-  --shell-shadow: 0 0 34px rgb(0 0 0 / 0.32), 0 0 6px rgb(0 0 0 / 0.24);
-  --panel-shadow: 0 0 22px rgb(0 0 0 / 0.22), 0 0 5px rgb(0 0 0 / 0.2);
-  --panel-shadow-strong: 0 0 34px rgb(0 0 0 / 0.3), 0 0 8px rgb(0 0 0 / 0.24);
-  --surface-shadow-hover: 0 0 36px rgb(0 0 0 / 0.3), 0 0 8px rgb(0 0 0 / 0.22);
-  --chart-background: hsl(233 4% 11%);
-  --chart-foreground: hsl(233 5% 88%);
-  --chart-foreground-muted: hsl(233 4% 66%);
-  --chart-crosshair: var(--polar-blue);
-  --chart-grid: hsl(233 4% 20%);
+  --linear-blue: oklch(0.72 0.14 278);
+  --linear-green: oklch(0.74 0.11 158);
+  --linear-amber: oklch(0.77 0.12 76);
+  --linear-violet: oklch(0.74 0.12 306);
+  --linear-cyan: oklch(0.75 0.1 208);
+  --linear-red: oklch(0.7 0.16 27);
+  --background: oklch(0.135 0.004 285);
+  --foreground: oklch(0.94 0.004 285);
+  --card: oklch(0.162 0.004 285);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.205 0.006 285);
+  --popover-foreground: var(--foreground);
+  --primary: var(--linear-blue);
+  --primary-foreground: oklch(0.145 0.01 285);
+  --secondary: oklch(0.205 0.005 285);
+  --secondary-foreground: oklch(0.9 0.004 285);
+  --muted: oklch(0.19 0.005 285);
+  --muted-foreground: oklch(0.68 0.008 285);
+  --accent: oklch(0.235 0.006 285);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--linear-red);
+  --destructive-foreground: oklch(0.145 0.01 285);
+  --border: oklch(0.265 0.006 285);
+  --input: oklch(0.29 0.007 285);
+  --ring: var(--linear-blue);
+  --chart-1: var(--linear-blue);
+  --chart-2: var(--linear-cyan);
+  --chart-3: var(--linear-violet);
+  --chart-4: var(--linear-green);
+  --chart-5: var(--linear-amber);
+  --sidebar: oklch(0.115 0.003 285);
+  --sidebar-foreground: oklch(0.72 0.006 285);
+  --sidebar-primary: var(--linear-blue);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.225 0.006 285);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: oklch(0.235 0.005 285);
+  --sidebar-ring: var(--ring);
+  --shell-grid: transparent;
+  --shell-grid-strong: transparent;
+  --shell-glow: transparent;
+  --shell-dot: transparent;
+  --panel-line: color-mix(in oklab, var(--border) 68%, transparent);
+  --panel-line-strong: var(--border);
+  --panel-fill: var(--card);
+  --panel-fill-strong: var(--card);
+  --surface-border: color-mix(in oklab, var(--border) 78%, transparent);
+  --surface-border-hover: color-mix(in oklab, var(--foreground) 13%, var(--border) 87%);
+  --surface-hover: color-mix(in oklab, var(--card) 68%, var(--accent) 32%);
+  --control-fill: color-mix(in oklab, var(--card) 45%, var(--secondary) 55%);
+  --control-fill-hover: color-mix(in oklab, var(--secondary) 42%, var(--accent) 58%);
+  --control-border: var(--border);
+  --control-border-hover: color-mix(in oklab, var(--foreground) 16%, var(--border) 84%);
+  --state-hover: color-mix(in oklab, var(--accent) 78%, transparent);
+  --state-selected: var(--accent);
+  --shell-shadow: 0 1px 2px rgb(0 0 0 / 0.28);
+  --panel-shadow: 0 10px 28px -14px rgb(0 0 0 / 0.58), 0 1px 3px rgb(0 0 0 / 0.4);
+  --panel-shadow-strong: 0 20px 52px -24px rgb(0 0 0 / 0.72), 0 1px 3px rgb(0 0 0 / 0.48);
+  --surface-shadow-hover: none;
+  --chart-background: var(--card);
+  --chart-foreground: var(--foreground);
+  --chart-foreground-muted: var(--muted-foreground);
+  --chart-crosshair: var(--linear-blue);
+  --chart-grid: oklch(0.245 0.005 285);
   --chart-brush-border: var(--chart-grid);
-  --chart-tooltip-background: hsl(233 4% 5% / 0.95);
-  --chart-tooltip-foreground: hsl(233 5% 92%);
-  --chart-tooltip-muted: hsl(233 4% 66%);
-  --chart-marker-background: hsl(233 4% 16%);
-  --chart-marker-border: hsl(233 4% 23%);
-  --chart-marker-foreground: hsl(233 5% 90%);
-  --chart-ring-background: oklch(0.68 0.14 258 / 0.16);
-  --chart-label: hsl(233 4% 70%);
+  --chart-tooltip-background: oklch(0.185 0.006 285 / 0.98);
+  --chart-tooltip-foreground: var(--foreground);
+  --chart-tooltip-muted: var(--muted-foreground);
+  --chart-marker-background: var(--muted);
+  --chart-marker-border: var(--border);
+  --chart-marker-foreground: var(--foreground);
+  --chart-ring-background: oklch(0.72 0.14 278 / 0.14);
+  --chart-label: var(--muted-foreground);
 }
 
 @layer base {
@@ -1230,8 +1230,8 @@ code {
   }
 }
 
-/* Flat industrial mode: hard edges, no raised controls. */
-:root:not([data-ui-style="polar"]) {
+/* Shiro keeps the existing flat industrial treatment. */
+:root:not([data-ui-style="linear"]) {
   --radius: 0rem;
   --shell-shadow: none;
   --panel-shadow: none;
@@ -1239,96 +1239,354 @@ code {
   --surface-shadow-hover: none;
 }
 
-:root:not([data-ui-style="polar"]) *,
-:root:not([data-ui-style="polar"]) *::before,
-:root:not([data-ui-style="polar"]) *::after {
+:root:not([data-ui-style="linear"]) *,
+:root:not([data-ui-style="linear"]) *::before,
+:root:not([data-ui-style="linear"]) *::after {
   border-radius: 0 !important;
 }
 
-:root:not([data-ui-style="polar"]) [data-slot="button"],
-:root:not([data-ui-style="polar"]) [data-slot="input"],
-:root:not([data-ui-style="polar"]) [data-slot="card"],
-:root:not([data-ui-style="polar"]) [data-slot="select-trigger"],
-:root:not([data-ui-style="polar"]) [data-slot="sidebar-menu-button"],
-:root:not([data-ui-style="polar"]) .shiro-surface,
-:root:not([data-ui-style="polar"]) .shiro-hero-panel,
-:root:not([data-ui-style="polar"]) .shiro-modal-surface,
-:root:not([data-ui-style="polar"]) .shiro-stat-block,
-:root:not([data-ui-style="polar"]) .shiro-data-cell,
-:root:not([data-ui-style="polar"]) .shiro-table-shell,
-:root:not([data-ui-style="polar"]) .shiro-scroll-shell,
-:root:not([data-ui-style="polar"]) .shiro-code-shell,
-:root:not([data-ui-style="polar"]) .shiro-progress-track {
+:root:not([data-ui-style="linear"]) [data-slot="button"],
+:root:not([data-ui-style="linear"]) [data-slot="input"],
+:root:not([data-ui-style="linear"]) [data-slot="card"],
+:root:not([data-ui-style="linear"]) [data-slot="select-trigger"],
+:root:not([data-ui-style="linear"]) [data-slot="sidebar-menu-button"],
+:root:not([data-ui-style="linear"]) .shiro-surface,
+:root:not([data-ui-style="linear"]) .shiro-hero-panel,
+:root:not([data-ui-style="linear"]) .shiro-modal-surface,
+:root:not([data-ui-style="linear"]) .shiro-stat-block,
+:root:not([data-ui-style="linear"]) .shiro-data-cell,
+:root:not([data-ui-style="linear"]) .shiro-table-shell,
+:root:not([data-ui-style="linear"]) .shiro-scroll-shell,
+:root:not([data-ui-style="linear"]) .shiro-code-shell,
+:root:not([data-ui-style="linear"]) .shiro-progress-track {
   box-shadow: none !important;
 }
 
-:root:not([data-ui-style="polar"]) [data-slot="button"]:active {
+:root:not([data-ui-style="linear"]) [data-slot="button"]:active {
   transform: none !important;
 }
 
-:root[data-ui-style="polar"] body {
-  font-weight: 450;
+:root[data-ui-style="linear"] body {
+  font-weight: 400;
   letter-spacing: 0;
-  background-image:
-    radial-gradient(circle at 78% -12%, color-mix(in oklab, var(--primary) 6%, transparent), transparent 24rem),
-    linear-gradient(180deg, var(--background), color-mix(in oklab, var(--background) 94%, var(--muted) 6%));
+  background: var(--background);
 }
 
-:root[data-ui-style="polar"] body::before {
-  opacity: 0;
+:root[data-ui-style="linear"] * {
+  letter-spacing: 0 !important;
 }
 
-:root[data-ui-style="polar"] .shiro-toolbar {
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--card) 96%, transparent), color-mix(in oklab, var(--card) 90%, var(--background) 10%));
-  box-shadow: var(--panel-shadow);
+:root[data-ui-style="linear"] body::before,
+:root[data-ui-style="linear"] .shiro-shell-grid::before {
+  display: none;
 }
 
-:root[data-ui-style="polar"] .shiro-page-canvas {
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--background) 96%, var(--card) 4%), var(--background));
-}
-
-:root[data-ui-style="polar"] .shiro-sidebar-surface::before,
-:root[data-ui-style="polar"] .shiro-page-aside {
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--sidebar) 98%, transparent), color-mix(in oklab, var(--sidebar) 86%, var(--background) 14%));
-}
-
-:root[data-ui-style="polar"] .shiro-surface,
-:root[data-ui-style="polar"] .shiro-hero-panel,
-:root[data-ui-style="polar"] .shiro-modal-surface,
-:root[data-ui-style="polar"] .shiro-stat-block,
-:root[data-ui-style="polar"] .shiro-data-cell,
-:root[data-ui-style="polar"] .shiro-table-shell,
-:root[data-ui-style="polar"] .shiro-scroll-shell,
-:root[data-ui-style="polar"] .shiro-code-shell {
-  border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--card) 98%, transparent), color-mix(in oklab, var(--card) 92%, var(--background) 8%));
-  box-shadow: var(--panel-shadow);
-}
-
-:root[data-ui-style="polar"] .shiro-surface:is(:hover, :focus-within),
-:root[data-ui-style="polar"] .shiro-stat-block:is(:hover, :focus-within),
-:root[data-ui-style="polar"] .shiro-data-cell:is(:hover, :focus-within) {
-  border-color: var(--surface-border-hover);
-  box-shadow: var(--surface-shadow-hover);
-}
-
-:root[data-ui-style="polar"] .shiro-progress-track {
-  border-radius: 999px;
-  box-shadow: inset 0 1px 2px color-mix(in oklab, var(--foreground) 10%, transparent);
-}
-
-:root[data-ui-style="polar"] [data-slot="sidebar-menu-button"]::before {
-  left: 4px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--sidebar-primary);
-}
-
-:root[data-ui-style="polar"] [data-slot="sidebar-menu-button"][data-active="true"] {
-  border-color: color-mix(in oklab, var(--sidebar-primary) 18%, var(--sidebar-border) 82%);
+:root[data-ui-style="linear"] [data-slot="sidebar-inner"] {
+  border: 0;
+  background: var(--sidebar);
   box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-sidebar-surface::before {
+  background: var(--sidebar);
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-inset"] {
+  height: calc(100dvh - 16px) !important;
+  margin: 8px 8px 8px 0;
+  overflow: hidden;
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shell-shadow);
+}
+
+:root[data-ui-style="linear"] .shiro-toolbar {
+  border-color: var(--surface-border);
+  background: var(--card);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-page-canvas {
+  background: var(--card);
+}
+
+:root[data-ui-style="linear"] .shiro-page-aside {
+  border-right: 1px solid var(--surface-border);
+  background: color-mix(in oklab, var(--sidebar) 62%, var(--card) 38%);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-panel-muted,
+:root[data-ui-style="linear"] .shiro-scroll-shell,
+:root[data-ui-style="linear"] .shiro-code-shell,
+:root[data-ui-style="linear"] .shiro-empty-state {
+  background: color-mix(in oklab, var(--card) 72%, var(--muted) 28%);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-surface,
+:root[data-ui-style="linear"] .shiro-hero-panel,
+:root[data-ui-style="linear"] .shiro-stat-block,
+:root[data-ui-style="linear"] .shiro-data-cell,
+:root[data-ui-style="linear"] .shiro-table-shell {
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-surface:is(:hover, :focus-within),
+:root[data-ui-style="linear"] .shiro-stat-block:is(:hover, :focus-within),
+:root[data-ui-style="linear"] .shiro-data-cell:is(:hover, :focus-within) {
+  border-color: var(--surface-border-hover);
+  background: var(--surface-hover);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] .shiro-modal-surface,
+:root[data-ui-style="linear"] [data-slot="select-content"],
+:root[data-ui-style="linear"] [data-slot="tooltip-content"] {
+  border-radius: 8px;
+  border-color: var(--surface-border-hover);
+  background: var(--popover);
+  box-shadow: var(--panel-shadow-strong);
+}
+
+:root[data-ui-style="linear"] [data-slot="tooltip-content"] {
+  border-radius: 6px;
+  background: var(--foreground);
+  color: var(--background);
+  box-shadow: var(--panel-shadow);
+}
+
+:root[data-ui-style="linear"] [data-slot="dialog-content"],
+:root[data-ui-style="linear"] [data-slot="alert-dialog-content"] {
+  border-radius: 12px;
+}
+
+:root[data-ui-style="linear"] [data-slot="dialog-overlay"],
+:root[data-ui-style="linear"] [data-slot="alert-dialog-overlay"],
+:root[data-ui-style="linear"] [data-slot="sheet-overlay"] {
+  background: rgb(15 15 18 / 0.28);
+}
+
+.dark[data-ui-style="linear"] [data-slot="dialog-overlay"],
+.dark[data-ui-style="linear"] [data-slot="alert-dialog-overlay"],
+.dark[data-ui-style="linear"] [data-slot="sheet-overlay"] {
+  background: rgb(0 0 0 / 0.52);
+}
+
+:root[data-ui-style="linear"] .shiro-panel-grid,
+:root[data-ui-style="linear"] .shiro-loading-pulse::after {
+  background-image: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-menu-button"] {
+  height: 30px;
+  min-height: 30px;
+  gap: 8px;
+  padding: 0 8px;
+  border-color: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--sidebar-foreground);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-group-label"] {
+  height: 24px;
+  padding-inline: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  color: color-mix(in oklab, var(--sidebar-foreground) 76%, transparent);
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-menu"] {
+  gap: 2px;
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-menu-button"]::before {
+  display: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-menu-button"]:hover {
+  background: color-mix(in oklab, var(--sidebar-accent) 62%, transparent);
+  color: var(--sidebar-accent-foreground);
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-menu-button"][data-active="true"] {
+  border-color: transparent;
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="sidebar-header"],
+:root[data-ui-style="linear"] [data-slot="sidebar-footer"] {
+  border-color: var(--sidebar-border);
+}
+
+:root[data-ui-style="linear"] [data-slot="button"],
+:root[data-ui-style="linear"] [data-slot="input"],
+:root[data-ui-style="linear"] [data-slot="textarea"],
+:root[data-ui-style="linear"] [data-slot="select-trigger"],
+:root[data-ui-style="linear"] [data-slot="tabs-list"],
+:root[data-ui-style="linear"] [data-slot="tabs-trigger"],
+:root[data-ui-style="linear"] [data-slot="badge"] {
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="button"],
+:root[data-ui-style="linear"] [data-slot="input"],
+:root[data-ui-style="linear"] [data-slot="textarea"],
+:root[data-ui-style="linear"] [data-slot="select-trigger"] {
+  border-radius: 6px;
+}
+
+:root[data-ui-style="linear"] [data-slot="button"]:active {
+  transform: none;
+}
+
+:root[data-ui-style="linear"] :is(
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="textarea"],
+  [data-slot="select-trigger"],
+  [data-slot="tabs-trigger"],
+  [data-slot="sidebar-menu-button"],
+  [data-slot="switch"],
+  [data-slot="badge"]
+):focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ring) 72%, transparent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-list"] {
+  min-height: 32px;
+  border-radius: 8px;
+  background: var(--control-fill);
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-trigger"] {
+  min-height: 26px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-trigger"][data-active]:not([data-active="false"]) {
+  border-color: var(--surface-border);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"]::before {
+  display: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="tabs-list"][data-variant="line"] [data-slot="tabs-trigger"][data-active]:not([data-active="false"]) {
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+:root[data-ui-style="linear"] [data-slot="card-title"] {
+  font-size: 0.875rem;
+  letter-spacing: 0;
+}
+
+:root[data-ui-style="linear"] [data-slot="badge"] {
+  height: 22px;
+  border-radius: 6px;
+  text-transform: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="card-description"] {
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+:root[data-ui-style="linear"] [data-slot="card-footer"],
+:root[data-ui-style="linear"] [data-slot="dialog-footer"],
+:root[data-ui-style="linear"] [data-slot="sheet-header"],
+:root[data-ui-style="linear"] [data-slot="sheet-footer"] {
+  background: color-mix(in oklab, var(--card) 64%, var(--muted) 36%);
+}
+
+:root[data-ui-style="linear"] [data-slot="table-container"] {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="table-head"] {
+  height: 32px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="table-cell"] {
+  padding-block: 0.625rem;
+}
+
+:root[data-ui-style="linear"] [data-slot="table-row"]:hover {
+  background: var(--state-hover);
+}
+
+:root[data-ui-style="linear"] [data-slot="switch"],
+:root[data-ui-style="linear"] [data-slot="switch-thumb"],
+:root[data-ui-style="linear"] [data-slot="progress"],
+:root[data-ui-style="linear"] [data-slot="progress-track"],
+:root[data-ui-style="linear"] [data-slot="progress-indicator"],
+:root[data-ui-style="linear"] .shiro-progress-track {
+  box-shadow: none;
+}
+
+:root[data-ui-style="linear"] [data-slot="progress-track"],
+:root[data-ui-style="linear"] .shiro-progress-track {
+  border-radius: 999px;
+  background: var(--control-fill);
+}
+
+:root[data-ui-style="linear"] [data-slot="select-item"] {
+  min-height: 30px;
+  border-radius: 6px;
+}
+
+:root[data-ui-style="linear"] [data-slot="separator"] {
+  background: var(--surface-border);
+}
+
+:root[data-ui-style="linear"] *::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--foreground) 16%, transparent) padding-box;
+}
+
+:root[data-ui-style="linear"] *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--foreground) 28%, transparent) padding-box;
+}
+
+:root[data-ui-style="linear"]::view-transition-new(root) {
+  animation: linear-theme-fade 220ms ease-out both;
+}
+
+@keyframes linear-theme-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 767px) {
+  :root[data-ui-style="linear"] [data-slot="sidebar-inset"] {
+    height: 100dvh !important;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
 }

@@ -80,10 +80,11 @@ const MOBILE_NAV = [
 ] as const
 
 type ThemeMode = "light" | "dark" | "system"
-type StyleMode = "shiro" | "polar"
+type StyleMode = "shiro" | "linear"
 
 const THEME_MODE_KEY = "lorahub.theme.mode"
-const STYLE_MODE_KEY = "lorahub.ui.style.v2"
+const STYLE_MODE_KEY = "lorahub.ui.style.v3"
+const PREVIOUS_STYLE_MODE_KEY = "lorahub.ui.style.v2"
 const LEGACY_STYLE_MODE_KEY = "lorahub.ui.style"
 
 export default function App() {
@@ -97,7 +98,9 @@ export default function App() {
   const [styleMode, setStyleMode] = useState<StyleMode>(() => {
     if (typeof window === "undefined") return "shiro"
     const stored = window.localStorage.getItem(STYLE_MODE_KEY)
-    return stored === "polar" || stored === "shiro" ? stored : "shiro"
+    if (stored === "linear" || stored === "shiro") return stored
+    const previous = window.localStorage.getItem(PREVIOUS_STYLE_MODE_KEY)
+    return previous && previous !== "shiro" ? "linear" : "shiro"
   })
 
   useEffect(() => {
@@ -124,6 +127,7 @@ export default function App() {
     const root = document.documentElement
     root.dataset.uiStyle = styleMode
     window.localStorage.setItem(STYLE_MODE_KEY, styleMode)
+    window.localStorage.removeItem(PREVIOUS_STYLE_MODE_KEY)
     window.localStorage.removeItem(LEGACY_STYLE_MODE_KEY)
   }, [styleMode])
 
@@ -279,6 +283,7 @@ export default function App() {
                 <button
                   key={value}
                   type="button"
+                  aria-pressed={mode === value}
                   onClick={(e) => runThemeChange(e, () => setMode(value))}
                   className={cn(
                     "h-7 rounded-[6px] border text-[11px] inline-flex items-center justify-center gap-1 transition-colors duration-150",
@@ -295,11 +300,12 @@ export default function App() {
             <div className="grid grid-cols-2 gap-1 pt-1">
               {([
                 { value: "shiro" as const, label: "Shiro" },
-                { value: "polar" as const, label: "Polar" },
+                { value: "linear" as const, label: "Linear" },
               ]).map(({ value, label }) => (
                 <button
                   key={value}
                   type="button"
+                  aria-pressed={styleMode === value}
                   onClick={(e) => runThemeChange(e, () => setStyleMode(value))}
                   className={cn(
                     "h-7 rounded-[6px] border px-2 text-[11px] font-medium transition-colors duration-150",
@@ -307,6 +313,7 @@ export default function App() {
                       ? "border-sidebar-primary/50 bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_0_rgba(255,255,255,0.08)_inset]"
                       : "border-sidebar-border/60 text-muted-foreground hover:border-sidebar-border hover:bg-sidebar-accent/60 hover:text-foreground",
                   )}
+                  title={label}
                 >
                   {label}
                 </button>

@@ -327,31 +327,31 @@ _LOGIN_PAGE_STYLE = """
   --panel-shadow: 0 22px 46px -30px rgb(0 0 0 / 0.66);
 }
 
-:root[data-ui-style="polar"] {
-  --background: oklch(0.985 0.002 248);
-  --foreground: oklch(0.21 0.034 264.665);
-  --card: oklch(1 0 0);
-  --muted-foreground: oklch(0.446 0.03 256.802);
-  --primary: oklch(0.52 0.165 258);
-  --primary-foreground: oklch(0.985 0.002 248);
-  --border: oklch(0.928 0.006 264.531);
-  --control-fill: oklch(0.978 0.003 264.542);
-  --ring: oklch(0.707 0.022 261.325);
-  --radius: 10px;
-  --panel-shadow: 0 0 18px rgb(15 23 42 / 0.032), 0 0 4px rgb(15 23 42 / 0.05);
+:root[data-ui-style="linear"] {
+  --background: oklch(0.972 0.003 285);
+  --foreground: oklch(0.205 0.008 285);
+  --card: oklch(0.995 0.002 285);
+  --muted-foreground: oklch(0.49 0.01 285);
+  --primary: oklch(0.57 0.18 278);
+  --primary-foreground: oklch(0.985 0.003 285);
+  --border: oklch(0.885 0.005 285);
+  --control-fill: oklch(0.952 0.004 285);
+  --ring: oklch(0.61 0.17 278);
+  --radius: 8px;
+  --panel-shadow: 0 18px 48px -24px rgb(20 20 24 / 0.28), 0 1px 3px rgb(20 20 24 / 0.08);
 }
 
-:root.dark[data-ui-style="polar"] {
-  --background: hsl(233 4% 8%);
-  --foreground: hsl(233 5% 88%);
-  --card: hsl(233 4% 11%);
-  --muted-foreground: hsl(233 4% 66%);
-  --primary: oklch(0.68 0.14 258);
-  --primary-foreground: hsl(233 5% 6%);
-  --border: hsl(233 4% 18%);
-  --control-fill: hsl(233 4% 14%);
-  --ring: hsl(233 4% 31%);
-  --panel-shadow: 0 0 22px rgb(0 0 0 / 0.22), 0 0 5px rgb(0 0 0 / 0.2);
+:root.dark[data-ui-style="linear"] {
+  --background: oklch(0.135 0.004 285);
+  --foreground: oklch(0.94 0.004 285);
+  --card: oklch(0.162 0.004 285);
+  --muted-foreground: oklch(0.68 0.008 285);
+  --primary: oklch(0.72 0.14 278);
+  --primary-foreground: oklch(0.145 0.01 285);
+  --border: oklch(0.265 0.006 285);
+  --control-fill: oklch(0.205 0.005 285);
+  --ring: oklch(0.72 0.14 278);
+  --panel-shadow: 0 20px 52px -24px rgb(0 0 0 / 0.72), 0 1px 3px rgb(0 0 0 / 0.48);
 }
 
 * { box-sizing: border-box; }
@@ -443,7 +443,7 @@ button {
 }
 
 button:hover { opacity: 0.92; }
-button:active { transform: translateY(1px); }
+button:active { opacity: 0.84; }
 button:focus-visible {
   outline: 0;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 34%, transparent);
@@ -476,8 +476,11 @@ _LOGIN_THEME_SCRIPT = """
     const dark = mode === "dark" ||
       (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", dark);
-    const style = localStorage.getItem("lorahub.ui.style.v2");
-    document.documentElement.dataset.uiStyle = style === "polar" ? "polar" : "shiro";
+    const style = localStorage.getItem("lorahub.ui.style.v3");
+    const previous = localStorage.getItem("lorahub.ui.style.v2");
+    document.documentElement.dataset.uiStyle = style === "linear" || style === "shiro"
+      ? style
+      : previous && previous !== "shiro" ? "linear" : "shiro";
   } catch {}
 })();
 """

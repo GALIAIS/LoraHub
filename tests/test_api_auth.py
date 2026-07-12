@@ -65,7 +65,8 @@ def test_remote_login_page_matches_app_theme_and_labels_token(monkeypatch) -> No
 
     assert response.status_code == 200
     assert "lorahub.theme.mode" in response.text
-    assert "lorahub.ui.style.v2" in response.text
+    assert "lorahub.ui.style.v3" in response.text
+    assert 'data-ui-style="linear"' in response.text
     assert "class=auth-panel" in response.text
     assert "<label for=access-token>访问令牌</label>" in response.text
     assert "aria-describedby=token-help" in response.text
