@@ -62,7 +62,11 @@ def setup_logging(args=None, log_level=None, reset=False):
             handler.propagate = False
 
     formatter = logging.Formatter(
-        fmt="%(message)s",
+        fmt=(
+            "%(levelname)s\t%(message)s\t%(filename)s:%(lineno)d"
+            if args is not None and args.console_log_simple
+            else "%(message)s"
+        ),
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     handler.setFormatter(formatter)

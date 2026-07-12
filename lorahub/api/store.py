@@ -237,6 +237,31 @@ def _pid_alive(pid: int) -> bool:
 
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        # ``os.kill(pid, 0)`` is not a reliable liveness probe on Windows:
+        # a terminated process object can remain addressable while another
+        # thread still owns its handle. psutil checks the actual process
+        # status, which prevents a completed ``taskkill`` from blocking job
+        # archival until every Python handle has been garbage-collected.
+        try:
+            import psutil  # noqa: PLC0415
+        except ImportError:
+            # Older minimal installations may not include the API extras.
+            # Fall through to the conservative stdlib probe in that case.
+            pass
+        else:
+            try:
+                process = psutil.Process(pid)
+                return (
+                    process.is_running()
+                    and process.status() != psutil.STATUS_ZOMBIE
+                )
+            except psutil.NoSuchProcess:
+                return False
+            except psutil.AccessDenied:
+                return True
+            except psutil.Error:
+                return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -295,6 +320,32 @@ def _pid_is_ours(pid: int, expected_create_time: float | None) -> bool:
     return abs(actual - expected_create_time) < 1.0
 
 
+def _wait_pid_exit(
+    pid: int,
+    expected_create_time: float | None,
+    *,
+    timeout: float,
+) -> bool:
+    """Wait until the recorded process exits or its PID is reused."""
+    import time  # noqa: PLC0415
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        if not _pid_alive(pid):
+            return True
+        if expected_create_time is not None:
+            actual_create_time = _pid_create_time(pid)
+            if (
+                actual_create_time is not None
+                and abs(actual_create_time - expected_create_time) >= 1.0
+            ):
+                return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
+
+
 def _reap_orphan(pid: int, expected_create_time: float | None = None) -> bool:
     """SIGKILL ``pid`` and its process group. Returns True on success.
 
@@ -328,7 +379,7 @@ def _reap_orphan(pid: int, expected_create_time: float | None = None) -> bool:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
-        return not _pid_alive(pid)
+        return _wait_pid_exit(pid, expected_create_time, timeout=5.0)
 
     # POSIX: prefer the process group so accelerate / deepspeed children
     # come along for the ride. Falls back to per-PID kills when getpgid

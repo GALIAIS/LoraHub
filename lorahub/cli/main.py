@@ -405,15 +405,34 @@ def info(
     backend = _backend_for(cfg)
 
     if cfg.backend.type == "anima_lora":
-        from lorahub.core.backends.anima_lora.compiler import compile_config as _compile
+        from lorahub.core.backends.anima_lora.compiler import (
+            compile_config as _compile,
+            compile_turbo_config,
+        )
+
+        opts = cfg.backend.anima_lora
+        if opts is not None and opts.turbo is not None:
+            _compile = compile_turbo_config
+            script = "scripts/distill_turbo.py"
+        else:
+            script = "train.py"
     elif cfg.backend.type == "ai_toolkit":
         from lorahub.core.backends.ai_toolkit.compiler import compile_config as _compile
+
+        script = "run.py"
     elif cfg.backend.type == "diffusion-pipe":
         from lorahub.core.backends.diffusion_pipe.compiler import compile_config as _compile
+
+        script = "train.py"
     else:
         _compile = compile_config
+        script, argv, _files, _env = _compile(
+            cfg,
+            workspace=Path.cwd() / "_dryrun",
+        )
 
-    script, argv, _files, _env = _compile(cfg, workspace=Path.cwd() / "_dryrun")
+    if cfg.backend.type != "kohya":
+        argv, _files = _compile(cfg, workspace=Path.cwd() / "_dryrun")
     est = backend.estimate_vram(cfg)
 
     table = Table(title=t("info.title"), show_header=False, expand=False)

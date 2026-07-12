@@ -1,44 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso"
 import type { TrainingEvent } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { Eraser } from "lucide-react"
+import { ArrowDown, Eraser } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { parseAnsi, stripAnsi } from "./ansi"
+import {
+  buildLogLines,
+  matchesLogFilter,
+  type LogFilter,
+  type LogTone,
+} from "./terminal-log-model"
 
 const MAX_LINES = 5000
-// Pixel slack for "is the user already at the bottom?" — anything within this
-// distance counts as following the tail.
-const STICK_TO_BOTTOM_PX = 4
 // Persist whether the user prefers the always-dark "terminal" look or the
 // theme-following look. Default is theme-following so the panel matches
 // the rest of LoraHub's surfaces in both themes.
 const STYLE_KEY = "lorahub.jobs.terminalLog.darkMode"
-
-interface LogLine {
-  ts: number
-  level: string
-  message: string
-  // Tone tokens stay theme-agnostic. We pick paired light/dark utilities
-  // (e.g. text-X-700 dark:text-X-400) so the same line renders legibly
-  // on both surfaces; the always-dark "terminal" look maps the same
-  // tokens to their dark variant via a wrapper class.
-  tone: LogTone
-  borderClass: string
-  // Original event index lets us key without identity drift on re-renders.
-  key: string
-}
-
-type LogTone =
-  | "default"
-  | "error"
-  | "warn"
-  | "step"
-  | "checkpoint"
-  | "sample"
-  | "epoch"
-  | "done"
 
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000)
@@ -48,89 +28,6 @@ function formatTime(ts: number): string {
   return `${h}:${m}:${s}`
 }
 
-function eventToLine(
-  event: TrainingEvent,
-  index: number,
-  fallbackTotalSteps: number | null,
-): LogLine {
-  const p = event.payload
-  const stepTotal =
-    typeof p.total_steps === "number" && p.total_steps > 0
-      ? (p.total_steps as number)
-      : fallbackTotalSteps
-  const rawMessage =
-    typeof p.message === "string"
-      ? (p.message as string)
-      : event.type === "step"
-        ? `第 ${p.step}/${stepTotal ?? "?"} 步${
-            typeof p.loss === "number"
-              ? ` · loss=${(p.loss as number).toFixed(4)}`
-              : ""
-          }`
-        : event.type === "epoch_end"
-          ? `第 ${p.epoch}/${p.total_epochs ?? "?"} 回合结束`
-          : event.type === "checkpoint_saved"
-            ? `保存检查点：${p.path ?? ""}`
-            : event.type === "sample_ready"
-              ? `生成样本：${p.path ?? ""}`
-              : event.type === "done"
-                ? `已结束 · 返回码=${p.returncode ?? "?"}`
-                : event.type === "start"
-                  ? "训练已启动"
-                  : event.type === "cancel"
-                    ? "已请求取消"
-                    : JSON.stringify(p)
-
-  // Resolve the level. We respect explicit `payload.level` (Python logging uses
-  // this for forwarded log lines), otherwise derive from event type or content.
-  const explicitLevel =
-    typeof p.level === "string" ? (p.level as string).toUpperCase() : null
-  let level = explicitLevel ?? event.type.toUpperCase()
-  // Cancel-shaped messages (Ctrl-C, sigkill_handler, deepspeed launch's
-  // `exits with return code = -2`) must NOT render red — they're a clean
-  // user stop, not a failure. We override `looksLikeError` for them.
-  const looksLikeCancel =
-    /\b(?:keyboardinterrupt|killing subprocess|exits with return code = -(?:2|9|15))\b/i.test(
-      rawMessage,
-    )
-  // `Traceback (most recent call last):` is only a banner — the exception
-  // summary that follows is the real error signal, and that summary has
-  // its own `XxxError`/`XxxException` keyword which matches below.
-  const looksLikeError =
-    !looksLikeCancel &&
-    (event.type === "error" ||
-      /\b(error|fail(ed|ure)?|fatal|exception)\b/i.test(rawMessage))
-
-  let toneVal: LogTone = "default"
-  let borderClass = "border-l-transparent"
-  if (looksLikeError || level === "ERROR" || level === "CRITICAL") {
-    toneVal = "error"
-    borderClass = "border-l-red-500/80"
-    if (level !== "ERROR" && level !== "CRITICAL") level = "ERROR"
-  } else if (event.type === "step") {
-    toneVal = "step"
-  } else if (event.type === "checkpoint_saved") {
-    toneVal = "checkpoint"
-  } else if (event.type === "sample_ready") {
-    toneVal = "sample"
-  } else if (event.type === "done") {
-    toneVal = "done"
-  } else if (event.type === "epoch_end") {
-    toneVal = "epoch"
-  } else if (level === "WARNING" || level === "WARN") {
-    toneVal = "warn"
-  }
-
-  return {
-    ts: event.timestamp,
-    level,
-    message: rawMessage,
-    tone: toneVal,
-    borderClass,
-    key: `${index}-${event.timestamp}-${event.type}`,
-  }
-}
-
 // Theme-following tone tokens (default look).
 //
 // Each tone keeps a hue used in both modes; light text uses the 700
@@ -138,9 +35,11 @@ function eventToLine(
 // 400 shade so it pops on the muted dark surface.
 const TONE_THEMED: Record<LogTone, string> = {
   default: "text-foreground/90",
+  debug: "text-muted-foreground/70",
   error: "text-red-700 dark:text-red-400",
   warn: "text-amber-700 dark:text-amber-300",
-  step: "text-cyan-700 dark:text-cyan-400",
+  progress: "text-cyan-700 dark:text-cyan-400",
+  gpu: "text-sky-700 dark:text-sky-400",
   checkpoint: "text-emerald-700 dark:text-emerald-400",
   sample: "text-fuchsia-700 dark:text-fuchsia-400",
   epoch: "text-violet-700 dark:text-violet-400",
@@ -151,14 +50,50 @@ const TONE_THEMED: Record<LogTone, string> = {
 // against a pinned zinc-950 background, regardless of the current theme.
 const TONE_TERMINAL: Record<LogTone, string> = {
   default: "text-zinc-100",
+  debug: "text-zinc-500",
   error: "text-red-400",
   warn: "text-amber-300",
-  step: "text-cyan-400",
+  progress: "text-cyan-400",
+  gpu: "text-sky-400",
   checkpoint: "text-emerald-400",
   sample: "text-fuchsia-400",
   epoch: "text-blue-300",
   done: "text-emerald-300",
 }
+
+const BORDER_TONE: Record<LogTone, string> = {
+  default: "border-l-transparent",
+  debug: "border-l-zinc-400/30",
+  error: "border-l-red-500/90",
+  warn: "border-l-amber-500/80",
+  progress: "border-l-cyan-500/70",
+  gpu: "border-l-sky-500/60",
+  checkpoint: "border-l-emerald-500/80",
+  sample: "border-l-fuchsia-500/80",
+  epoch: "border-l-violet-500/70",
+  done: "border-l-emerald-500/80",
+}
+
+const ROW_TONE: Record<LogTone, string> = {
+  default: "",
+  debug: "opacity-80",
+  error: "bg-red-500/[0.045]",
+  warn: "bg-amber-500/[0.04]",
+  progress: "bg-cyan-500/[0.035]",
+  gpu: "bg-sky-500/[0.03]",
+  checkpoint: "bg-emerald-500/[0.035]",
+  sample: "bg-fuchsia-500/[0.035]",
+  epoch: "bg-violet-500/[0.035]",
+  done: "bg-emerald-500/[0.04]",
+}
+
+const FILTERS: Array<{ value: LogFilter; label: string }> = [
+  { value: "training", label: "训练" },
+  { value: "all", label: "全部" },
+  { value: "warning", label: "警告" },
+  { value: "error", label: "错误" },
+  { value: "gpu", label: "GPU" },
+]
 
 function highlightChunk(
   text: string,
@@ -216,6 +151,7 @@ export function TerminalLog({
   fallbackTotalSteps?: number | null
 }) {
   const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<LogFilter>("training")
   const [autoScroll, setAutoScroll] = useState(true)
   const [clearAfter, setClearAfter] = useState(0)
   // `darkMode=true` pins the always-dark terminal look; `false` follows
@@ -229,11 +165,7 @@ export function TerminalLog({
     if (typeof window === "undefined") return
     window.localStorage.setItem(STYLE_KEY, darkMode ? "1" : "0")
   }, [darkMode])
-  const scrollerRef = useRef<HTMLDivElement | null>(null)
-  // True while the user is parked at the bottom; auto-follow only
-  // engages while this is set. We *don't* mirror the autoScroll
-  // toggle here — that's the user's stated intent; this is the
-  // runtime guard against fighting them mid-scroll.
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
   const [atBottom, setAtBottom] = useState(true)
 
   const visibleEvents = useMemo(() => {
@@ -246,31 +178,33 @@ export function TerminalLog({
       visibleEvents.length > MAX_LINES
         ? visibleEvents.slice(visibleEvents.length - MAX_LINES)
         : visibleEvents
-    return sliced.map((e, i) => eventToLine(e, i, fallbackTotalSteps))
+    return buildLogLines(sliced, fallbackTotalSteps)
   }, [visibleEvents, fallbackTotalSteps])
 
   const filteredLines = useMemo(() => {
-    if (!query) return lines
     const q = query.toLowerCase()
-    return lines.filter((l) => stripAnsi(l.message).toLowerCase().includes(q))
-  }, [lines, query])
-
-  useEffect(() => {
-    if (!autoScroll || !atBottom) return
-    const el = scrollerRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-  }, [filteredLines, autoScroll, atBottom])
-
-  function onScroll() {
-    const el = scrollerRef.current
-    if (!el) return
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_TO_BOTTOM_PX)
-  }
+    return lines.filter(
+      (line) =>
+        matchesLogFilter(line, filter) &&
+        (!q ||
+          stripAnsi(`${line.message} ${line.source ?? ""}`)
+            .toLowerCase()
+            .includes(q)),
+    )
+  }, [filter, lines, query])
 
   function clearScreen() {
     setClearAfter(events.length)
     setAtBottom(true)
+  }
+
+  function scrollToLatest() {
+    if (filteredLines.length === 0) return
+    virtuosoRef.current?.scrollToIndex({
+      index: filteredLines.length - 1,
+      align: "end",
+      behavior: "auto",
+    })
   }
 
   // Theme palette switch — `darkMode` pins a zinc-950 surface, otherwise
@@ -296,8 +230,11 @@ export function TerminalLog({
     ? "text-zinc-500 shrink-0 tabular-nums"
     : "text-muted-foreground/70 shrink-0 tabular-nums"
   const levelClass = darkMode
-    ? "min-w-[116px] text-zinc-400 tracking-wide"
-    : "min-w-[116px] text-muted-foreground/80 tracking-wide"
+    ? "text-zinc-400 font-semibold tracking-wide"
+    : "text-muted-foreground/80 font-semibold tracking-wide"
+  const sourceClass = darkMode
+    ? "text-zinc-600"
+    : "text-muted-foreground/55"
   const bodyTextDefault = darkMode
     ? "font-mono text-[12px] leading-[1.5] text-zinc-100"
     : "font-mono text-[12px] leading-[1.5] text-foreground/90"
@@ -308,7 +245,7 @@ export function TerminalLog({
   return (
     <div
       className={cn(
-        "h-full flex-1 min-h-0 flex flex-col rounded-[6px] border overflow-hidden",
+        "relative h-full flex-1 min-h-0 flex flex-col rounded-[6px] border overflow-hidden",
         surfaceClass,
       )}
     >
@@ -324,6 +261,32 @@ export function TerminalLog({
           placeholder="搜索日志…"
           className={toolbarInputClass}
         />
+        <div
+          className={cn(
+            "inline-flex h-7 items-center rounded-[4px] border p-[2px]",
+            darkMode ? "border-zinc-700 bg-zinc-900/70" : "border-border/60 bg-background/70",
+          )}
+          aria-label="日志筛选"
+        >
+          {FILTERS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => setFilter(item.value)}
+              className={cn(
+                "h-5 px-2 text-[10px] font-medium transition-colors",
+                filter === item.value
+                  ? darkMode
+                    ? "bg-zinc-700 text-zinc-50"
+                    : "bg-primary/12 text-primary"
+                  : toolbarMutedClass,
+              )}
+              aria-pressed={filter === item.value}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
         <label
           className={cn(
             "flex items-center gap-2 text-[11px] select-none cursor-pointer",
@@ -335,7 +298,10 @@ export function TerminalLog({
             checked={autoScroll}
             onCheckedChange={(v) => {
               setAutoScroll(v)
-              if (v) setAtBottom(true)
+              if (v) {
+                setAtBottom(true)
+                requestAnimationFrame(scrollToLatest)
+              }
             }}
           />
           自动滚到底
@@ -390,28 +356,42 @@ export function TerminalLog({
                 : "屏幕已清空，等待新日志…"}
           </div>
         ) : (
-          <div
-            ref={scrollerRef}
-            onScroll={onScroll}
-            className="min-h-0 flex-1 overflow-y-auto"
-          >
-            {filteredLines.map((line) => {
+          <Virtuoso
+            ref={virtuosoRef}
+            data={filteredLines}
+            className="min-h-0 flex-1"
+            atBottomThreshold={8}
+            atBottomStateChange={setAtBottom}
+            followOutput={(isAtBottom) =>
+              autoScroll && isAtBottom ? "auto" : false
+            }
+            computeItemKey={(_, line) => line.key}
+            increaseViewportBy={240}
+            itemContent={(_, line) => {
               const chunks = parseAnsi(line.message)
               const toneClass = tonePalette[line.tone]
               return (
                 <div
                   key={line.key}
                   className={cn(
-                    "grid grid-cols-[86px_minmax(116px,auto)_minmax(0,1fr)] items-baseline gap-2 border-l-2 px-3 py-[2px]",
-                    line.borderClass,
+                    "grid grid-cols-[64px_54px_minmax(0,1fr)] items-start gap-x-2 border-l-2 px-3 py-[3px] lg:grid-cols-[72px_64px_minmax(0,1fr)_minmax(72px,auto)]",
+                    BORDER_TONE[line.tone],
+                    ROW_TONE[line.tone],
                     rowHoverClass,
                   )}
                 >
                   <span className={timeClass}>[{formatTime(line.ts)}]</span>
-                  <span className={levelClass}>{line.level}</span>
                   <span
                     className={cn(
-                      "min-w-0 whitespace-pre-wrap break-all",
+                      levelClass,
+                      line.tone === "default" ? "" : toneClass,
+                    )}
+                  >
+                    {line.level}
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-0 whitespace-pre-wrap break-words",
                       toneClass,
                     )}
                   >
@@ -431,12 +411,40 @@ export function TerminalLog({
                           ),
                         )}
                   </span>
+                  <span
+                    className={cn(
+                      "hidden max-w-[180px] truncate text-right text-[10px] lg:block",
+                      sourceClass,
+                    )}
+                    title={line.source ?? line.stream ?? undefined}
+                  >
+                    {line.source ?? line.stream ?? ""}
+                  </span>
                 </div>
               )
-            })}
-          </div>
+            }}
+          />
         )}
       </div>
+      {!atBottom && filteredLines.length > 0 ? (
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          onClick={() => {
+            setAtBottom(true)
+            scrollToLatest()
+          }}
+          className={cn(
+            "absolute bottom-4 right-5 z-10 size-8 rounded-full",
+            darkMode && "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800",
+          )}
+          title="跳到最新日志"
+          aria-label="跳到最新日志"
+        >
+          <ArrowDown className="size-3.5" />
+        </Button>
+      ) : null}
     </div>
   )
 }

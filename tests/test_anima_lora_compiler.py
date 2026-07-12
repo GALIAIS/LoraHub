@@ -312,6 +312,7 @@ def test_lora_method_emits_default_stack(tmp_path: Path) -> None:
     assert len(files) == 1
     [only_path] = list(files.keys())
     assert only_path.name == "_lorahub_anima_config.toml"
+    assert "console_log_simple = true" in files[only_path]
 
 
 def test_lora_layer_range_emits_network_args(tmp_path: Path) -> None:

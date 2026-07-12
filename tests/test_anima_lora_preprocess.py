@@ -198,6 +198,38 @@ def test_ensure_cache_spawns_when_missing(tmp_path: Path) -> None:
     assert str(expected_cache) in spawned[2]
 
 
+def test_ensure_cache_uses_configured_standard_buckets(tmp_path: Path) -> None:
+    from lorahub.core.config.schema import AnimaLoraOptions, DatasetConfig
+
+    env = _env(tmp_path)
+    bm = _base_model(tmp_path)
+    image_dir = tmp_path / "raw"
+    image_dir.mkdir()
+    (image_dir / "a.jpg").write_bytes(b"")
+    workspace = tmp_path / "ws"
+    spawned: list[list[str]] = []
+
+    ensure_cache(
+        image_dir=image_dir,
+        workspace=workspace,
+        base_model=bm,
+        env=env,
+        runner_factory=_stub_runner_factory(spawned),
+        opts=AnimaLoraOptions(staticTokenCount=None, torchCompile=False),
+        dataset=DatasetConfig(
+            source=image_dir,
+            resolution=[768, 768],
+            bucket={"min": 384, "max": 1024, "step": 64},
+        ),
+    )
+
+    resize_argv = spawned[0]
+    assert "--no_constant_token_buckets" in resize_argv
+    assert resize_argv[resize_argv.index("--resolution") + 1] == "768"
+    assert resize_argv[resize_argv.index("--min_bucket_reso") + 1] == "384"
+    assert resize_argv[resize_argv.index("--max_bucket_reso") + 1] == "1024"
+
+
 def test_ensure_cache_fails_when_no_images(tmp_path: Path) -> None:
     """Empty raw image dir → PreprocessError raised before any spawn."""
     env = _env(tmp_path)

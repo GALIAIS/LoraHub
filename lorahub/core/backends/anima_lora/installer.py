@@ -198,8 +198,6 @@ def install_deepspeed(
 def install_bitsandbytes(
     plan: BootstrapPlan, *, progress: ProgressCallback | None = None
 ) -> None:
-    if sys.platform == "win32":
-        return
     try:
         _uv.pip_install(
             plan.venv_python,

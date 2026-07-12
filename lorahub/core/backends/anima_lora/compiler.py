@@ -276,6 +276,10 @@ def _render_full_config(
     # ---- Output ----
     cfg_dict["output_dir"] = str(output_dir)
     cfg_dict["output_name"] = opts.output_name
+    # Rich wraps records to an assumed terminal width before LoraHub can
+    # process them. Use one tab-delimited record per line so the event stream
+    # retains severity, message and source location without visual fragments.
+    cfg_dict["console_log_simple"] = True
 
     # ---- Model paths ----
     bm = cfg.base_model

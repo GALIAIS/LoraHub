@@ -2091,11 +2091,100 @@ def test_kill_dead_pid_still_flips_state_to_interrupted(
         refreshed = state.registry.get(job.id)
         assert refreshed is not None
         assert refreshed.state is state.JobState.interrupted
+        assert refreshed.pid is None
+        assert refreshed.pid_create_time is None
+        assert refreshed.handle is None
         reports = report_store.list(source="backend.job")
         assert any(
             r.category == "force_kill" and r.job_id == job.id
             for r in reports
         )
+
+
+def test_force_kill_waits_for_exit_before_marking_job_interrupted(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from lorahub.api.routers import jobs as jobs_router
+
+    workspace = tmp_path / "force-kill"
+    workspace.mkdir()
+    job = state.registry.create(workspace=workspace, config_snapshot={})
+    job.state = state.JobState.running
+    job.pid = 4323
+    job.pid_create_time = 100.0
+    state.registry.update(job)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(jobs_router, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(jobs_router, "_pid_is_ours", lambda _pid, _stamp: True)
+    monkeypatch.setattr(jobs_router, "_wait_pid_exit", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+        ),
+    )
+
+    response = client.post(f"/api/jobs/{job.id}/kill")
+
+    assert response.status_code == 500
+    assert "did not exit" in response.json()["detail"]
+    refreshed = state.registry.get(job.id)
+    assert refreshed is not None
+    assert refreshed.state is state.JobState.running
+    assert refreshed.pid == 4323
+
+
+def test_force_kill_clears_process_identity_before_archive(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+
+    from lorahub.api.routers import jobs as jobs_router
+
+    workspace = tmp_path / "force-kill-archive"
+    workspace.mkdir()
+    job = state.registry.create(workspace=workspace, config_snapshot={})
+    job.state = state.JobState.running
+    job.pid = 4324
+    job.pid_create_time = 100.0
+    state.registry.update(job)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(jobs_router, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(jobs_router, "_pid_is_ours", lambda _pid, _stamp: True)
+    monkeypatch.setattr(jobs_router, "_wait_pid_exit", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+        ),
+    )
+
+    killed = client.post(f"/api/jobs/{job.id}/kill")
+    assert killed.status_code == 200, killed.text
+    refreshed = state.registry.get(job.id)
+    assert refreshed is not None
+    assert refreshed.state is state.JobState.interrupted
+    assert refreshed.pid is None
+    assert refreshed.pid_create_time is None
+    assert refreshed.handle is None
+
+    archived = client.delete(f"/api/jobs/{job.id}", params={"archive": "true"})
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["archived"] is True
 
 
 def test_kill_reused_pid_never_signals_replacement_process(

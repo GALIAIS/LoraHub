@@ -35,7 +35,12 @@ from lorahub.api.jobs_helpers.resume_dispatch import ResumeTargetInvalid
 from lorahub.api.preflight import PreflightFinding, run_preflight
 from lorahub.api.paths import resolve_run_path
 from lorahub.api.state import JobState
-from lorahub.api.store import _pid_alive, _pid_create_time, _pid_is_ours
+from lorahub.api.store import (
+    _pid_alive,
+    _pid_create_time,
+    _pid_is_ours,
+    _wait_pid_exit,
+)
 from lorahub.core.config.schema import TrainingConfig
 
 router = APIRouter(prefix="/api")
@@ -986,17 +991,18 @@ def kill_job(job_id: str) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             error = repr(exc)
 
-    if not killed_group and not killed_pid and error is None:
-        # Process was already gone; that's fine, still flip the state so the
-        # UI doesn't keep showing a phantom running row. NOT an error —
-        # kill is idempotent: "the process you asked us to kill is no
-        # longer alive" should be a 200, not a 500.
-        already_gone = True
+    termination_requested = killed_group or killed_pid
+    if termination_requested:
+        exited = _wait_pid_exit(pid, job.pid_create_time, timeout=5.0)
     else:
-        already_gone = False
+        exited = not _pid_alive(pid)
+    already_gone = not termination_requested and exited
 
-    if error and not (killed_group or killed_pid) and not already_gone:
-        raise HTTPException(status_code=500, detail=error)
+    if not exited:
+        raise HTTPException(
+            status_code=500,
+            detail=error or f"job process pid={pid} did not exit after force stop",
+        )
 
     # Reset the live record. We pick `interrupted` rather than `canceled`
     # because the run did not request cancellation cleanly — kill is the
@@ -1006,6 +1012,12 @@ def kill_job(job_id: str) -> dict[str, Any]:
     job.finished_at = datetime.now(UTC)
     if job.error is None:
         job.error = "force-killed via /api/jobs/{id}/kill"
+    # The process is now observably gone. Clear all live identity fields in
+    # the same registry update as the terminal state so an immediate archive
+    # cannot race a stale Windows process handle or a later PID reuse.
+    job.pid = None
+    job.pid_create_time = None
+    job.handle = None
     state.registry.update(job)
     from lorahub.api.error_reporter import capture  # noqa: PLC0415
 

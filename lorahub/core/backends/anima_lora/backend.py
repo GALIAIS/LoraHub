@@ -199,6 +199,7 @@ class AnimaLoraBackend:
                 env=bootstrap_env,
                 on_event=on_event,
                 opts=cfg.backend.anima_lora,
+                dataset=cfg.dataset,
                 cancel_event=cancel_event,
             )
         except PreprocessCanceled as e:

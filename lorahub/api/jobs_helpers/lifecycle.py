@@ -313,6 +313,8 @@ def _enqueue_launch(
                 if j.finished_at is None:
                     j.finished_at = datetime.now(UTC)
                 j.handle = None
+                j.pid = None
+                j.pid_create_time = None
                 state.registry.update(j)
                 # Persist a structured failure report so the user can
                 # find this run in Settings → 错误上报 even after the
@@ -431,6 +433,8 @@ def _enqueue_launch(
                 j.error = None
                 j.finished_at = datetime.now(UTC)
                 j.handle = None
+                j.pid = None
+                j.pid_create_time = None
                 state.registry.update(j)
             close_sink()
             return

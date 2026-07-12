@@ -56,7 +56,7 @@ from lorahub.core.backends._common.runner import (
 )
 from lorahub.core.backends.anima_lora.bootstrap import AnimaLoraEnv
 from lorahub.core.backends.anima_lora.parser import parse_line
-from lorahub.core.config.schema import BaseModelConfig
+from lorahub.core.config.schema import BaseModelConfig, DatasetConfig
 from lorahub.core.events import EventType, TrainingEvent
 
 __all__ = [
@@ -151,7 +151,9 @@ def _default_runner_factory(**kwargs: object) -> SubprocessRunner:
     return SubprocessRunner(**kwargs)  # type: ignore[arg-type]
 
 
-def _bucket_fingerprint(opts: Any | None) -> dict[str, Any]:
+def _bucket_fingerprint(
+    opts: Any | None, dataset: DatasetConfig | None = None,
+) -> dict[str, Any]:
     """Snapshot of every option that influences the bucket selection.
 
     When any of these change, every ``.npz`` written by an earlier run
@@ -168,7 +170,7 @@ def _bucket_fingerprint(opts: Any | None) -> dict[str, Any]:
     """
     if opts is None:
         return {"version": 1, "_no_opts": True}
-    return {
+    fingerprint = {
         "version": 1,
         "static_token_count": getattr(opts, "static_token_count", None),
         "enable_native_flatten": bool(
@@ -176,6 +178,10 @@ def _bucket_fingerprint(opts: Any | None) -> dict[str, Any]:
         ),
         "bucket_table": getattr(opts, "bucket_table", None),
     }
+    if dataset is not None:
+        fingerprint["resolution"] = list(dataset.resolution)
+        fingerprint["bucket"] = dataset.bucket.model_dump()
+    return fingerprint
 
 
 def _fingerprint_path(cache_dir: Path) -> Path:
@@ -320,6 +326,7 @@ def _resize_argv(
     source: Path,
     resized: Path,
     opts: Any | None,
+    dataset: DatasetConfig | None = None,
 ) -> list[str]:
     """Build the argv for ``preprocess/resize_images.py``.
 
@@ -344,6 +351,19 @@ def _resize_argv(
         bucket_table = getattr(opts, "bucket_table", None)
         if bucket_table is not None and bucket_table != "default":
             argv += ["--bucket_table", str(bucket_table)]
+        if (
+            getattr(opts, "static_token_count", None) is None
+            and not getattr(opts, "enable_native_flatten", False)
+            and (bucket_table is None or bucket_table == "default")
+        ):
+            argv.append("--no_constant_token_buckets")
+            if dataset is not None:
+                argv += [
+                    "--resolution", str(max(dataset.resolution)),
+                    "--min_bucket_reso", str(dataset.bucket.min_size),
+                    "--max_bucket_reso", str(dataset.bucket.max_size),
+                    "--bucket_reso_steps", str(dataset.bucket.step),
+                ]
     return argv
 
 
@@ -396,6 +416,7 @@ def ensure_cache(
     on_event: EventListener | None = None,
     runner_factory: RunnerFactory | None = None,
     opts: Any | None = None,
+    dataset: DatasetConfig | None = None,
     cancel_event: threading.Event | None = None,
 ) -> None:
     """Bring ``<workspace>/post_image_dataset/lora`` up to date.
@@ -443,7 +464,7 @@ def ensure_cache(
     # the last run, every npz in the cache is keyed on stale shapes.
     # Wipe and rebuild rather than letting train.py crash mid-step on
     # a missing latents_HxW key.
-    new_fp = _bucket_fingerprint(opts)
+    new_fp = _bucket_fingerprint(opts, dataset)
     old_fp = _read_fingerprint(cache_dir)
     fingerprint_mismatch = old_fp is not None and old_fp != new_fp
 
@@ -524,7 +545,7 @@ def ensure_cache(
     # selects a different one, blowing up the dataloader on step 0.
     _run_step(
         label="resize",
-        argv=[python, *_resize_argv(repo, image_dir, resized_dir, opts)],
+        argv=[python, *_resize_argv(repo, image_dir, resized_dir, opts, dataset)],
         cwd=repo,
         workspace=workspace,
         on_event=on_event,

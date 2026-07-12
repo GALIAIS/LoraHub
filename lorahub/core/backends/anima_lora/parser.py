@@ -46,6 +46,12 @@ _NAN_LOSS_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SIMPLE_LOG_RE = re.compile(
+    r"^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)\t"
+    r"(?P<message>.*?)\t(?P<location>[^\t]+\.py:\d+)$",
+    re.DOTALL,
+)
+
 # Epoch transition: ``library/datasets/base.py:212`` logger.info.
 _EPOCH_RE = re.compile(
     r"epoch is incremented\.\s*current_epoch:\s*\d+,\s*epoch:\s*(?P<epoch>\d+)",
@@ -85,6 +91,12 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     stripped = line.rstrip("\r\n").strip()
     if not stripped:
         return None
+
+    structured = _SIMPLE_LOG_RE.match(stripped)
+    structured_level = structured.group("level").lower() if structured else None
+    structured_location = structured.group("location") if structured else None
+    if structured is not None:
+        stripped = structured.group("message").strip()
 
     # Order matters: validation-loss lines often co-occur with a step
     # number, but they're a different event type (``validation`` vs
@@ -143,10 +155,13 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
             job_id=job_id,
         )
 
-    level = "error" if _looks_like_error(stripped) else "info"
+    level = structured_level or ("error" if _looks_like_error(stripped) else "info")
+    payload: dict[str, object] = {"level": level, "message": stripped}
+    if structured_location is not None:
+        payload["location"] = structured_location
     return TrainingEvent(
         type=EventType.log,
-        payload={"level": level, "message": stripped},
+        payload=payload,
         job_id=job_id,
     )
 

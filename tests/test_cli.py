@@ -84,6 +84,16 @@ def test_version_command() -> None:
     assert "lorahub" in result.stdout
 
 
+def test_info_supports_anima_compiler_contract() -> None:
+    config = Path(__file__).resolve().parents[1] / "configs" / "anima_lora_8gb.yaml"
+
+    result = runner.invoke(app, ["info", str(config)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "train.py" in result.stdout
+    assert "--config_file" in result.stdout
+
+
 def test_root_no_args_prints_help_in_non_terminal() -> None:
     env = os.environ.copy()
     env["LORAHUB_LANG"] = "en"

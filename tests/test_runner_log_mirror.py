@@ -228,6 +228,7 @@ def test_windows_training_spawn_hides_console(
     monkeypatch.setattr(runner_mod.sys, "platform", "win32")
     monkeypatch.setattr(runner_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
     monkeypatch.setattr(runner_mod.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setenv("PYTHONUTF8", "1")
 
     class FakeProc:
         stdout = None
@@ -257,6 +258,47 @@ def test_windows_training_spawn_hides_console(
     assert isinstance(flags, int)
     assert flags & 0x200
     assert flags & 0x08000000
+    env = calls[0]["env"]
+    assert isinstance(env, dict)
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert "PYTHONUTF8" not in env
+
+
+def test_windows_training_spawn_allows_explicit_python_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runner_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runner_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+    monkeypatch.setattr(runner_mod.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    class FakeProc:
+        stdout = None
+        stderr = None
+        pid = 123
+
+        def __init__(self, _argv: list[str], **kwargs: object) -> None:
+            calls.append(kwargs)
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", FakeProc)
+    runner = SubprocessRunner(
+        argv=["python", "train.py"],
+        workspace=tmp_path,
+        on_event=lambda _ev: None,
+        parse_line=_identity_parser,
+        env={"PYTHONUTF8": "1"},
+    )
+    runner.start()
+
+    env = calls[0]["env"]
+    assert isinstance(env, dict)
+    assert env["PYTHONUTF8"] == "1"
 
 
 def test_windows_taskkill_hides_console(monkeypatch: pytest.MonkeyPatch) -> None:

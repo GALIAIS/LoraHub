@@ -293,22 +293,221 @@ def _safe_next(value: str) -> str:
     return "/"
 
 
+_LOGIN_PAGE_STYLE = """
+:root {
+  color-scheme: light;
+  --background: oklch(0.982 0.002 95);
+  --foreground: oklch(0.195 0.008 255);
+  --card: oklch(0.995 0.002 95);
+  --muted-foreground: oklch(0.505 0.01 255);
+  --primary: oklch(0.165 0.012 255);
+  --primary-foreground: oklch(0.985 0.001 95);
+  --border: oklch(0.865 0.005 255);
+  --control-fill: oklch(0.985 0.002 95);
+  --ring: oklch(0.575 0.016 250);
+  --danger: oklch(0.52 0.2 27);
+  --danger-fill: oklch(0.965 0.025 27);
+  --radius: 6px;
+  --panel-shadow: 0 18px 40px -30px rgb(15 23 42 / 0.22);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --background: oklch(0.145 0.008 255);
+  --foreground: oklch(0.965 0.004 95);
+  --card: oklch(0.182 0.01 255);
+  --muted-foreground: oklch(0.72 0.008 255);
+  --primary: oklch(0.955 0.004 95);
+  --primary-foreground: oklch(0.16 0.008 255);
+  --border: oklch(0.32 0.01 255);
+  --control-fill: oklch(0.205 0.01 255);
+  --ring: oklch(0.72 0.02 246);
+  --danger: oklch(0.76 0.16 22);
+  --danger-fill: oklch(0.24 0.06 22);
+  --panel-shadow: 0 22px 46px -30px rgb(0 0 0 / 0.66);
+}
+
+:root[data-ui-style="polar"] {
+  --background: oklch(0.985 0.002 248);
+  --foreground: oklch(0.21 0.034 264.665);
+  --card: oklch(1 0 0);
+  --muted-foreground: oklch(0.446 0.03 256.802);
+  --primary: oklch(0.52 0.165 258);
+  --primary-foreground: oklch(0.985 0.002 248);
+  --border: oklch(0.928 0.006 264.531);
+  --control-fill: oklch(0.978 0.003 264.542);
+  --ring: oklch(0.707 0.022 261.325);
+  --radius: 10px;
+  --panel-shadow: 0 0 18px rgb(15 23 42 / 0.032), 0 0 4px rgb(15 23 42 / 0.05);
+}
+
+:root.dark[data-ui-style="polar"] {
+  --background: hsl(233 4% 8%);
+  --foreground: hsl(233 5% 88%);
+  --card: hsl(233 4% 11%);
+  --muted-foreground: hsl(233 4% 66%);
+  --primary: oklch(0.68 0.14 258);
+  --primary-foreground: hsl(233 5% 6%);
+  --border: hsl(233 4% 18%);
+  --control-fill: hsl(233 4% 14%);
+  --ring: hsl(233 4% 31%);
+  --panel-shadow: 0 0 22px rgb(0 0 0 / 0.22), 0 0 5px rgb(0 0 0 / 0.2);
+}
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.auth-shell { width: min(100%, 400px); }
+
+.brand {
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.auth-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 26px;
+  box-shadow: var(--panel-shadow);
+}
+
+h1 {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.description {
+  margin: 8px 0 22px;
+  color: var(--muted-foreground);
+  line-height: 1.65;
+}
+
+.field { display: grid; gap: 7px; }
+
+label {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: 0;
+  background: var(--control-fill);
+  color: var(--foreground);
+  padding: 0 12px;
+  font: inherit;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+input:hover { border-color: color-mix(in oklab, var(--foreground) 20%, var(--border)); }
+
+input:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 28%, transparent);
+}
+
+button {
+  width: 100%;
+  height: 40px;
+  margin-top: 14px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+button:hover { opacity: 0.92; }
+button:active { transform: translateY(1px); }
+button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 34%, transparent);
+}
+
+.auth-error {
+  margin: 0 0 16px;
+  border: 1px solid color-mix(in oklab, var(--danger) 32%, transparent);
+  border-radius: var(--radius);
+  background: var(--danger-fill);
+  color: var(--danger);
+  padding: 9px 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  body { padding: 16px; }
+  .auth-panel { padding: 22px 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input, button { transition: none; }
+}
+"""
+
+_LOGIN_THEME_SCRIPT = """
+(() => {
+  try {
+    const mode = localStorage.getItem("lorahub.theme.mode") || "system";
+    const dark = mode === "dark" ||
+      (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.classList.toggle("dark", dark);
+    const style = localStorage.getItem("lorahub.ui.style.v2");
+    document.documentElement.dataset.uiStyle = style === "polar" ? "polar" : "shiro";
+  } catch {}
+})();
+"""
+
+
 def _login_page(next_path: str, *, error: str = "", status_code: int = 200) -> HTMLResponse:
     safe_next = html.escape(_safe_next(next_path), quote=True)
-    message = f'<p style="color:#b42318">{html.escape(error)}</p>' if error else ""
+    message = (
+        f'<div class="auth-error" role="alert">{html.escape(error)}</div>'
+        if error
+        else ""
+    )
     return HTMLResponse(
-        "<!doctype html><html><head><meta charset=utf-8>"
+        "<!doctype html><html lang=zh-CN><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>LoRaHub</title></head>"
-        "<body style='font:14px system-ui;max-width:360px;margin:12vh auto;padding:24px'>"
-        "<h1 style='font-size:20px'>LoRaHub</h1>"
-        "<p>输入启动日志所指令牌文件中的令牌，或已配置的访问令牌。</p>"
+        "<title>登录 · LoRaHub</title>"
+        f"<script>{_LOGIN_THEME_SCRIPT}</script>"
+        f"<style>{_LOGIN_PAGE_STYLE}</style></head><body>"
+        "<main class=auth-shell>"
+        "<div class=brand>LoRaHub</div>"
+        "<section class=auth-panel aria-labelledby=login-title>"
+        "<h1 id=login-title>远程访问</h1>"
+        "<p class=description id=token-help>输入启动日志中显示的访问令牌。</p>"
         f"{message}<form method=post>"
         f"<input type=hidden name=next value='{safe_next}'>"
-        "<input name=token type=password required autofocus autocomplete=current-password "
-        "style='box-sizing:border-box;width:100%;padding:10px'>"
-        "<button type=submit style='margin-top:12px;padding:9px 16px'>登录</button>"
-        "</form></body></html>",
+        "<div class=field><label for=access-token>访问令牌</label>"
+        "<input id=access-token name=token type=password required autofocus "
+        "autocomplete=current-password aria-describedby=token-help></div>"
+        "<button type=submit>登录</button>"
+        "</form></section></main></body></html>",
         status_code=status_code,
     )
 

@@ -54,6 +54,23 @@ def test_remote_session_cookie_authenticates_http(monkeypatch) -> None:
         assert client.get("/api/private").json() == {"ok": True}
 
 
+def test_remote_login_page_matches_app_theme_and_labels_token(monkeypatch) -> None:
+    monkeypatch.setenv("LORAHUB_API_TOKEN", "test-secret")
+    with TestClient(
+        _app(),
+        base_url="http://server.example",
+        client=("203.0.113.10", 50000),
+    ) as client:
+        response = client.get("/api/auth/session")
+
+    assert response.status_code == 200
+    assert "lorahub.theme.mode" in response.text
+    assert "lorahub.ui.style.v2" in response.text
+    assert "class=auth-panel" in response.text
+    assert "<label for=access-token>访问令牌</label>" in response.text
+    assert "aria-describedby=token-help" in response.text
+
+
 def test_remote_page_login_preserves_original_path_and_query(monkeypatch) -> None:
     monkeypatch.setenv("LORAHUB_API_TOKEN", "test-secret")
     with TestClient(

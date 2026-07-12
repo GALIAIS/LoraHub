@@ -124,11 +124,18 @@ class SubprocessRunner:
             # bar like ``Resizing: |█████| 1/1`` shows up as ``����``
             # the moment the child emits a non-ASCII byte. PEP 540
             # UTF-8 mode + PYTHONIOENCODING flips the child to plain
-            # UTF-8 unconditionally, matching what hatch / tox / uv /
-            # pdm all do for the same reason. ``setdefault`` lets
-            # callers still pin a specific encoding (e.g. for tests).
+            # UTF-8 unconditionally. On Windows, however, PYTHONUTF8 also
+            # makes ``subprocess(..., text=True)`` decode native tools as
+            # UTF-8. Tools such as vswhere still emit the active ANSI code
+            # page, which crashes Triton's MSVC probe on Chinese systems.
+            # PYTHONIOENCODING is sufficient for our Python pipe contract;
+            # leave locale decoding intact for native grandchildren.
             full_env.setdefault("PYTHONIOENCODING", "utf-8")
-            full_env.setdefault("PYTHONUTF8", "1")
+            if sys.platform == "win32":
+                if not self._env or "PYTHONUTF8" not in self._env:
+                    full_env.pop("PYTHONUTF8", None)
+            else:
+                full_env.setdefault("PYTHONUTF8", "1")
             # Strip stale Visual Studio env vars that confuse triton's
             # MSVC discovery on Windows.
             #

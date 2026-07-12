@@ -217,17 +217,30 @@ def test_installer_bitsandbytes_runs_on_linux(
     ]
 
 
-def test_installer_bitsandbytes_skips_on_windows(
+def test_installer_bitsandbytes_runs_on_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[Any] = []
+    calls: list[tuple[Path, list[str], str]] = []
     monkeypatch.setattr(al_installer.sys, "platform", "win32")
-    monkeypatch.setattr(al_installer._uv, "pip_install", lambda *a, **k: calls.append(a))
+
+    def fake_pip_install(
+        venv_py: Path,
+        args: list[str],
+        *,
+        step: str,
+        progress=None,
+        pypi_index=None,
+    ) -> None:
+        calls.append((venv_py, args, step))
+
+    monkeypatch.setattr(al_installer._uv, "pip_install", fake_pip_install)
     plan = al_installer.BootstrapPlan(target=tmp_path / "external" / "anima_lora")
 
     al_installer.install_bitsandbytes(plan)
 
-    assert calls == []
+    assert calls == [
+        (plan.venv_python, ["bitsandbytes"], "install anima_lora bitsandbytes")
+    ]
 
 
 def test_anima_model_download_uses_env_hf_endpoint(
@@ -402,6 +415,20 @@ def test_parser_unknown_line_falls_to_log() -> None:
     assert ev.type == EventType.log
     assert ev.payload["level"] == "info"
     assert "loaded 1024 captions" in ev.payload["message"]
+
+
+def test_parser_preserves_simple_log_level_and_location() -> None:
+    ev = parse_line(
+        "WARNING\tcheckpoint cache is stale\tcheckpoints.py:357",
+        job_id="job-1",
+    )
+    assert ev is not None
+    assert ev.type == EventType.log
+    assert ev.payload == {
+        "level": "warning",
+        "message": "checkpoint cache is stale",
+        "location": "checkpoints.py:357",
+    }
 
 
 def test_parser_error_line_marked_red() -> None:
