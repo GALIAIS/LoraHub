@@ -975,7 +975,10 @@ def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
     target = workspace / "prompts.txt"
     lines: list[str] = []
     for spec in sampling.prompts:
-        body = spec.prompt.strip()
+        # Trigger-word substitution happens after schema validation and may
+        # itself introduce whitespace. Fold again at the file boundary so one
+        # structured row can never become multiple physical prompt rows.
+        body = " ".join(spec.prompt.split())
         if not body:
             continue
         flags: list[str] = []
@@ -993,8 +996,9 @@ def _materialise_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
             flags.append(f"--ss {spec.sampler}")
         if spec.flow_shift is not None:
             flags.append(f"--fs {spec.flow_shift}")
-        if spec.negative:
-            flags.append(f"--n {spec.negative}")
+        negative = " ".join((spec.negative or "").split())
+        if negative:
+            flags.append(f"--n {negative}")
         line = body
         if flags:
             line = f"{body} {' '.join(flags)}"

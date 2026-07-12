@@ -262,6 +262,15 @@ interface FloatInputProps {
   placeholder?: string
 }
 
+const SCIENTIFIC_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+
+function parseFiniteFloat(raw: string): number | undefined {
+  const text = raw.trim()
+  if (!SCIENTIFIC_NUMBER_RE.test(text)) return undefined
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 export const FloatInput = memo(function FloatInput({
   id,
   value,
@@ -273,25 +282,70 @@ export const FloatInput = memo(function FloatInput({
   placeholder,
 }: FloatInputProps) {
   const readOnly = useReadOnly()
+  const externalText = value === null || value === undefined ? "" : String(value)
+  const [draft, setDraft] = useState(externalText)
+  const draftRef = useRef(draft)
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    const parsedDraft = parseFiniteFloat(draftRef.current)
+    const matchesExternal =
+      (value === null || value === undefined)
+        ? draftRef.current.trim() === ""
+        : parsedDraft === value
+
+    if (!focusedRef.current || !matchesExternal) {
+      draftRef.current = externalText
+      setDraft(externalText)
+    }
+  }, [externalText, value])
+
+  function resetDraft() {
+    draftRef.current = externalText
+    setDraft(externalText)
+  }
+
   return (
     <Input
       id={id}
-      type="number"
+      type="text"
       step={step ?? "any"}
       min={min}
       max={max}
       disabled={readOnly}
-      value={value === null || value === undefined ? "" : String(value)}
+      value={draft}
       placeholder={placeholder}
       className={cn("font-mono w-40", className)}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onBlur={() => {
+        focusedRef.current = false
+        if (draftRef.current.trim() === "") {
+          if (value === null || value === undefined) {
+            draftRef.current = ""
+            setDraft("")
+          } else {
+            resetDraft()
+          }
+          return
+        }
+        if (parseFiniteFloat(draftRef.current) === undefined) {
+          resetDraft()
+        }
+      }}
       onChange={(e) => {
         const raw = e.target.value
-        if (raw === "") {
+        draftRef.current = raw
+        setDraft(raw)
+        if (raw.trim() === "") {
           onChange(null)
           return
         }
-        const n = parseFloat(raw)
-        onChange(Number.isNaN(n) ? null : n)
+        const parsed = parseFiniteFloat(raw)
+        if (parsed !== undefined) {
+          onChange(parsed)
+        }
       }}
     />
   )

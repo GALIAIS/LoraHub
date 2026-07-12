@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ._shared import _CAMEL_CONFIG
 
@@ -58,6 +58,14 @@ class PromptSpec(BaseModel):
     sampler: str | None = Field(default=None, pattern=r"^(euler|er_sde|lcm)$")
     # Flow-matching schedule shift; upstream default 5.0.
     flow_shift: float | None = Field(default=None, gt=0)
+
+    @field_validator("prompt", "negative")
+    @classmethod
+    def fold_multiline_text(cls, value: str | None) -> str | None:
+        """Keep one structured row equal to one generated preview prompt."""
+        if value is None:
+            return None
+        return " ".join(value.split())
 
 
 class SamplingOutputs(BaseModel):

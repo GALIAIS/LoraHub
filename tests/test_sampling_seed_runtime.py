@@ -143,6 +143,37 @@ def test_materialised_prompts_emit_d_flag_when_seed_is_concrete(
     assert "--d 42" in body
 
 
+def test_materialised_multiline_prompt_remains_one_prompt(
+    tmp_path: Path,
+) -> None:
+    cfg = _kohya_cfg(
+        tmp_path,
+        prompts=[{"prompt": "placeholder"}],
+    )
+    # Runtime trigger substitution happens after schema validation, so guard
+    # the final file boundary independently from the schema normalizer.
+    cfg.sampling.prompts[0].prompt = "a detailed portrait\nwith dramatic lighting"
+    cfg.sampling.prompts[0].negative = "bad anatomy\nblurry"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _materialise_prompts_file(cfg, workspace)
+
+    lines = (workspace / "prompts.txt").read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "a detailed portrait with dramatic lighting --n bad anatomy blurry"
+    ]
+
+
+def test_prompt_schema_folds_multiline_text(tmp_path: Path) -> None:
+    cfg = _kohya_cfg(
+        tmp_path,
+        prompts=[{"prompt": "first\n  second", "negative": "bad\t anatomy"}],
+    )
+
+    assert cfg.sampling.prompts[0].prompt == "first second"
+    assert cfg.sampling.prompts[0].negative == "bad anatomy"
+
+
 def test_idempotent_resolve_runtime_seeds(tmp_path: Path) -> None:
     """Running the resolver twice must not bounce a None back to a
     drawn integer — once None always None for the prompt row."""

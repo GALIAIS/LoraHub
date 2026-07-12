@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import type { SamplingPromptValue } from "../types"
+import { FloatInput } from "../widgets"
 
 const SEED_MAX = 1_125_899_906_842_624
 
@@ -59,6 +60,10 @@ const SAMPLER_OPTIONS = [
 
 // 占位符与 SamplingConfig.trigger_word 的语义一致。
 const TRIGGER_PLACEHOLDER = "${TRIGGER}"
+
+function foldPromptText(value: string): string {
+  return value.split(/\s+/u).filter(Boolean).join(" ")
+}
 
 export interface PromptsDialogProps {
   open: boolean
@@ -95,7 +100,13 @@ export const PromptsDialog = memo(function PromptsDialog({
   }
 
   function commit() {
-    const cleaned = rows.filter((r) => r.prompt.trim().length > 0)
+    const cleaned = rows
+      .map((row) => {
+        const prompt = foldPromptText(row.prompt)
+        const negative = foldPromptText(row.negative ?? "")
+        return { ...row, prompt, negative: negative || null }
+      })
+      .filter((row) => row.prompt.length > 0)
     onSave(cleaned)
     onOpenChange(false)
   }
@@ -258,17 +269,11 @@ const PromptRow = memo(function PromptRow({
       {/* 基础参数行：CFG / Steps / W / H / Seed */}
       <div className="grid grid-cols-5 gap-2">
         <Field label="CFG">
-          <Input
-            type="number"
-            step="any"
-            value={value.cfg ?? ""}
+          <FloatInput
+            value={value.cfg ?? null}
             placeholder="默认"
-            onChange={(e) =>
-              onChange({
-                cfg: e.target.value === "" ? null : parseFloat(e.target.value),
-              })
-            }
-            className="h-7 font-mono text-[11px]"
+            onChange={(cfg) => onChange({ cfg })}
+            className="h-7 w-full text-[11px]"
           />
         </Field>
         <Field label="Steps">
@@ -400,19 +405,13 @@ const PromptRow = memo(function PromptRow({
             </Select>
           </Field>
           <Field label="Flow Shift">
-            <Input
-              type="number"
-              step="0.1"
+            <FloatInput
+              step={0.1}
               min={0.01}
-              value={value.flowShift ?? ""}
+              value={value.flowShift ?? null}
               placeholder="默认 5.0"
-              onChange={(e) =>
-                onChange({
-                  flowShift:
-                    e.target.value === "" ? null : parseFloat(e.target.value),
-                })
-              }
-              className="h-7 font-mono text-[11px]"
+              onChange={(flowShift) => onChange({ flowShift })}
+              className="h-7 w-full text-[11px]"
             />
           </Field>
         </div>
