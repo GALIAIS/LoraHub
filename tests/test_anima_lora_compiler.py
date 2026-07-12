@@ -165,6 +165,17 @@ def test_optimizer_and_scheduler_args_compile_to_anima_toml(tmp_path: Path) -> N
     assert toml["lr_warmup_steps"] == 0.1
 
 
+def test_training_cadence_compiles_to_anima_toml(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, AnimaLoraOptions(saveEveryNSteps=25))
+    cfg.schedule.grad_accum = 4
+
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    toml = _emitted_toml(argv, files)
+
+    assert toml["gradient_accumulation_steps"] == 4
+    assert toml["save_every_n_steps"] == 25
+
+
 # --------------------------------------------------------------------------- #
 # Method routing — every method must select itself + emit core knobs
 # --------------------------------------------------------------------------- #

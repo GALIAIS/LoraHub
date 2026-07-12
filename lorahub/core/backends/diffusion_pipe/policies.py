@@ -76,11 +76,12 @@ def _pipeline_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
 
     # blocks_to_swap 与 compile=true 同时开会让 cudagraph 反复重抓 swap
     # 进出的图,几乎不可能稳定。dp 文档建议二选一。
-    if opts.blocks_to_swap > 0 and opts.compile:
+    blocks_to_swap = cfg.optimization.blocks_to_swap or opts.blocks_to_swap
+    if blocks_to_swap > 0 and opts.compile:
         yield ValidationIssue(
             Severity.error,
             "backend.diffusionPipe.compile",
-            f"blocksToSwap={opts.blocks_to_swap} 与 compile=true 互斥。"
+            f"blocksToSwap={blocks_to_swap} 与 compile=true 互斥。"
             "torch.compile 的 cudagraph trace 与每步换 swap 进出的 transformer "
             "块冲突,实际跑会反复重 trace 或直接崩溃。二选一。",
         )

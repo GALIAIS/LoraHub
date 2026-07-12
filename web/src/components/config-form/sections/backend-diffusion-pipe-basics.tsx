@@ -45,19 +45,6 @@ export function DiffusionPipePerformanceSection({
         />
       </Row>
       <Row
-        label="Blocks To Swap"
-        description="CPU offload 的 transformer block 数；显存吃紧时调高。"
-        errors={errorMap.get("backend.diffusionPipe.blocksToSwap")}
-      >
-        <IntInput
-          min={0}
-          value={value.blocksToSwap ?? 0}
-          onChange={(next) =>
-            set(["backend", "diffusionPipe", "blocksToSwap"], next ?? 0)
-          }
-        />
-      </Row>
-      <Row
         label="Caching Batch Size"
         description="VAE / 文本嵌入预缓存阶段的批大小。"
         errors={errorMap.get("backend.diffusionPipe.cachingBatchSize")}

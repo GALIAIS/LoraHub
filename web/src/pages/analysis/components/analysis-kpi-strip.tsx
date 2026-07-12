@@ -24,13 +24,15 @@ import { api } from "@/lib/api"
 import type { JobMetricsResponse, JobSummary } from "@/lib/api"
 import { fmtDuration, TERMINAL_STATES } from "../../jobs/utils"
 import { cn } from "@/lib/utils"
+import type { AnalysisBackendInfo } from "./analysis-backend"
 
 interface Props {
   job: JobSummary | undefined
   fallbackTotalSteps: number | null
+  backend: AnalysisBackendInfo
 }
 
-export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
+export function AnalysisKpiStrip({ job, fallbackTotalSteps, backend }: Props) {
   const isTerminal = job ? TERMINAL_STATES.has(job.state) : false
   const metrics = useQuery({
     queryKey: ["job-metrics", job?.id],
@@ -131,9 +133,25 @@ export function AnalysisKpiStrip({ job, fallbackTotalSteps }: Props) {
               reason={
                 summary.nonfiniteValLoss
                   ? "后端上报 val_loss=NaN/Inf, 曲线会跳过该点"
-                  : "未配置验证集 (在 schedule 中开启 validate_every_n_epochs)"
+                  : backend.supportsValidation === false
+                    ? "ai_toolkit 当前未提供验证损失，采用单曲线分析"
+                    : backend.validationConfigured === false
+                      ? "当前配置未启用验证集"
+                      : backend.validationConfigured === true
+                        ? "验证已配置，但后端尚未上报 val_loss"
+                        : "后端尚未上报验证损失"
               }
-              label={summary.nonfiniteValLoss ? "NaN" : "未启用"}
+              label={
+                summary.nonfiniteValLoss
+                  ? "NaN"
+                  : backend.supportsValidation === false
+                    ? "未提供"
+                    : backend.validationConfigured === false
+                      ? "未启用"
+                      : backend.validationConfigured === true
+                        ? "等待"
+                        : "未上报"
+              }
             />
           )}
         </Stat>
@@ -263,10 +281,15 @@ function deriveKpis(
     m?.first_step_ts != null && m?.last_step_ts != null
       ? m.last_step_ts - m.first_step_ts
       : null
+  const reportedEta = [...(m?.loss ?? [])]
+    .reverse()
+    .find((point) => typeof point.eta_s === "number")?.eta_s
   const etaSec =
-    wallSec != null && lastStep != null && totalSteps != null && lastStep > 0
-      ? (wallSec / lastStep) * Math.max(0, totalSteps - lastStep)
-      : null
+    typeof reportedEta === "number"
+      ? reportedEta
+      : wallSec != null && lastStep != null && totalSteps != null && lastStep > 0
+        ? (wallSec / lastStep) * Math.max(0, totalSteps - lastStep)
+        : null
   const vals = m?.val_loss ?? []
   const valLatest =
     vals.length > 0

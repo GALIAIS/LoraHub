@@ -58,8 +58,8 @@ export const ResumeFields = memo(function ResumeFields({
         </>
       )}
       <Row
-        label="resumeFrom"
-        description="本地恢复路径（kohya `--resume`）。"
+        label="恢复检查点"
+        description={isDiffusionPipe ? "diffusion-pipe 检查点目录。" : "本地训练状态或检查点路径。"}
         errors={errorMap.get("resume.resumeFrom")}
       >
         <PathInput

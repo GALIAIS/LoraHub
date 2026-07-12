@@ -44,6 +44,7 @@ import {
   type StabilityVerdict,
 } from "./effectiveness-model"
 import { InsightCard, StageCard, type Tone } from "./effectiveness-cards"
+import type { AnalysisBackendInfo } from "./analysis-backend"
 
 interface Props {
   metrics: JobMetricsResponse | null
@@ -56,13 +57,14 @@ interface Props {
    * baseline.
    */
   progress?: number | null
+  backend: AnalysisBackendInfo
 }
 
 /* ---------------------------------------------------------------------- */
 /* component                                                              */
 /* ---------------------------------------------------------------------- */
 
-export function EffectivenessPanel({ metrics, progress }: Props) {
+export function EffectivenessPanel({ metrics, progress, backend }: Props) {
   const points = useMemo<{ step: number; loss: number }[]>(() => {
     return (metrics?.loss ?? [])
       .filter(
@@ -206,7 +208,9 @@ export function EffectivenessPanel({ metrics, progress }: Props) {
           icon={<ShieldAlert className="size-3.5" />}
           title="过拟合风险"
           tone={
-            overfit.severity === "warn"
+            overfit.gap == null
+              ? "neutral"
+              : overfit.severity === "warn"
               ? "negative"
               : overfit.severity === "watch"
                 ? "neutral"
@@ -226,7 +230,13 @@ export function EffectivenessPanel({ metrics, progress }: Props) {
               ? `train ${fmtFloat(overfit.trainLatest)} · val ${fmtFloat(overfit.valLatest)}${
                   overfit.trend ? ` · ${overfitTrendLabel(overfit.trend)}` : ""
                 }`
-              : "尚未产生验证 loss"
+              : backend.supportsValidation === false
+                ? "单曲线模式，ai_toolkit 未上报验证 loss"
+                : backend.validationConfigured === false
+                  ? "单曲线模式，当前配置未启用验证集"
+                  : backend.validationConfigured === true
+                    ? "等待验证 loss，暂时无法计算 train–val gap"
+                    : "后端未上报验证 loss，暂时采用单曲线模式"
           }
           fill={overfitFill}
           stagger={160}
@@ -237,7 +247,13 @@ export function EffectivenessPanel({ metrics, progress }: Props) {
               : "暂无 train 损失",
             overfit.valLatest != null
               ? `最新 val: ${fmtFloat(overfit.valLatest)}`
-              : "暂无 val 损失 — 请在配置中开启验证集",
+              : backend.supportsValidation === false
+                ? "ai_toolkit 当前没有 val_loss 数据源"
+                : backend.validationConfigured === false
+                  ? "当前配置未启用验证集"
+                  : backend.validationConfigured === true
+                    ? "验证已配置，等待后端上报"
+                    : "后端未上报验证损失",
             overfit.gap != null
               ? `gap = val − train = ${overfit.gap.toFixed(4)}`
               : "无法计算 gap",

@@ -53,6 +53,7 @@ from jobs.process import BaseTrainProcess
 from toolkit.metadata import get_meta_for_safetensors, load_metadata_from_safetensors, add_base_model_info_to_meta, \
     parse_metadata_from_safetensors
 from toolkit.train_tools import get_torch_dtype, LearnableSNRGamma, apply_learnable_snr_gos, apply_snr_weight
+from toolkit.training_cadence import epoch_cadence_due
 import gc
 
 from tqdm import tqdm
@@ -362,14 +363,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.adapter.is_sampling = True
         
         # send to be generated
-        self.sd.generate_images(gen_img_config_list, sampler=sample_config.sampler)
-
-        
-        if self.adapter is not None and isinstance(self.adapter, CustomAdapter):
-            self.adapter.is_sampling = False
-
-        if self.ema is not None:
-            self.ema.train()
+        try:
+            self.sd.generate_images(gen_img_config_list, sampler=sample_config.sampler)
+        except Exception as exc:
+            print_acc(f"LORAHUB_SAMPLE_FAILURE: {type(exc).__name__}: {exc}")
+            raise
+        finally:
+            if self.adapter is not None and isinstance(self.adapter, CustomAdapter):
+                self.adapter.is_sampling = False
+            if self.ema is not None:
+                self.ema.train()
 
     def update_training_metadata(self):
         o_dict = OrderedDict({
@@ -682,7 +685,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
             with open(path_to_save, 'w') as f:
                 json.dump(json_data, f, indent=4)
         
-        print_acc(f"Saved checkpoint to {file_path}")
+        if step is None:
+            print_acc(f"Saved checkpoint to {file_path}")
+        else:
+            print_acc(f"Saved checkpoint at step {step} to {file_path}")
 
         # save optimizer
         if self.optimizer is not None:
@@ -2366,11 +2372,18 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 # if is even step and we have a reg dataset, use that
                 # todo improve this logic to send one of each through if we can buckets and batch size might be an issue
                 is_reg_step = False
-                is_save_step = self.save_config.save_every and self.step_num % self.save_config.save_every == 0
-                is_sample_step = self.sample_config.sample_every and self.step_num % self.sample_config.sample_every == 0
+                is_save_step = bool(
+                    self.save_config.save_every
+                    and self.step_num % self.save_config.save_every == 0
+                )
+                is_sample_step = bool(
+                    self.sample_config.sample_every
+                    and self.step_num % self.sample_config.sample_every == 0
+                )
                 if self.train_config.disable_sampling:
                     is_sample_step = False
 
+                epoch_before_batch = self.epoch_num
                 batch_list = []
 
                 for b in range(self.train_config.gradient_accumulation):
@@ -2418,6 +2431,20 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         batch = None
                     batch_list.append(batch)
                     batch_step += 1
+
+                if epoch_cadence_due(
+                    epoch_before_batch,
+                    self.epoch_num,
+                    self.save_config.save_every_n_epochs,
+                ):
+                    is_save_step = True
+
+                if not self.train_config.disable_sampling and epoch_cadence_due(
+                    epoch_before_batch,
+                    self.epoch_num,
+                    self.sample_config.sample_every_n_epochs,
+                ):
+                    is_sample_step = True
 
                 # setup accumulation
                 if self.train_config.gradient_accumulation_steps == -1:
@@ -2497,7 +2524,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     else:
                         learning_rate = optimizer.param_groups[0]['lr']
 
-                    prog_bar_string = f"lr: {learning_rate:.1e}"
+                    prog_bar_string = f"epoch: {self.epoch_num + 1} lr: {learning_rate:.1e}"
                     for key, value in loss_dict.items():
                         prog_bar_string += f" {key}: {value:.3e}"
 

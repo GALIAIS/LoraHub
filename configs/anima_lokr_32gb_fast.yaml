@@ -1,0 +1,174 @@
+# Anima factorized LoKr 32GB — 冲 it/s 档（目标约 ≥1.5 it/s，争取摸 2）
+#
+# 硬件: RTX 4080 SUPER 32G 等。缓存热启动后看 tqdm「it/s」。
+# 原则: 小 micro-batch + 轻适配器 + 较低分辨率 + GC 关 + compile 开。
+# 有效 batch = 1×8 = 8（用 accum 补，不靠大 batch 堆 it 变慢）。
+#
+# 达不成 1.5 时再压: resolution 768 / dim 8 / layerStart 14 / 关采样
+# 仍 <1.0: 多半是采样/验证/冷启动，先看「纯训练步」窗口
+#
+# 严禁 learningRate 写成 2.0；prompt 每条单行
+
+schemaVersion: "1.0"
+
+_template:
+  name: Anima LoKr 32GB Fast
+  description: >
+    冲速度档。896、batch1×accum8、dim16、后半段 attention、compile on、无 GC。
+    目标约 1.5+ it/s（视数据与是否采样）。
+  arch: anima
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 1024
+
+dataset:
+  source: ./datasets/your_character
+  resolution: [896, 896]
+  bucket:
+    enabled: true
+    min: 512
+    max: 1152
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    dropRate: 0.12
+    keepTokens: 2
+  numRepeats: 3
+
+schedule:
+  epochs: 12
+  batchSize: 1
+  gradAccum: 8
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+gradientCheckpointing: false
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  # 冲 it/s 时采样很贵：默认稀疏；要纯测速可 enabled: false
+  enabled: true
+  everyNEpochs: 4
+  atFirst: false
+  resolution: [896, 896]
+  seed: -1
+  triggerWord: ""
+  inferenceSteps: 20
+  inferenceCfg: 4.5
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: false
+    crossCkptAnimation: false
+  prompts:
+    - prompt: "${TRIGGER}, 1girl, solo, upper body, looking at viewer, detailed face, simple background"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, watermark, text, photo, realistic"
+      cfg: 4.5
+      steps: 20
+      seed: 42
+      width: 896
+      height: 896
+
+    - prompt: "${TRIGGER}, 1girl, solo, full body, standing, detailed clothing, plain background"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, watermark, text, photo, realistic"
+      cfg: 4.5
+      steps: 20
+      seed: 1024
+      width: 768
+      height: 1152
+
+output:
+  name: anima-lokr-32gb-fast
+  saveEveryNEpochs: 3
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  gpuDispatch:
+    mode: one-job-per-gpu
+    numGpus: null
+  distributed:
+    strategy: ddp
+  animaLora:
+    method: lora
+    preset: default
+    outputName: anima-lokr-32gb-fast
+
+    lora:
+      algorithm: lokr_factorized
+      minRank: 4
+      useTimestepMask: false
+      lokrFactor: 8
+      channelScalingAlpha: 0.5
+
+    networkDim: 16
+    networkAlpha: 16.0
+    networkTrainUnetOnly: true
+    layerStart: 12
+    layerEnd: 28
+    targetPreset: attention
+
+    optimizerType: AdamW
+    lrScheduler: cosine
+    learningRate: 5.0e-05
+    lrWarmupRatio: 0.05
+    maxTrainEpochs: 12
+    saveEveryNEpochs: 3
+    checkpointingEpochs: 3
+    captionDropoutRate: 0.12
+
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    vaeChunkSize: 64
+    skipCacheCheck: true
+
+    attnMode: torch
+    compileMode: blocks
+    compileInductorMode: reduce-overhead
+    torchCompile: true
+    useCustomDownAutograd: true
+
+    blocksToSwap: 0
+    gradientCheckpointing: false
+    mixedPrecision: bf16
+    persistentDataLoaderWorkers: true
+    dataloaderPinMemory: true
+
+    ema: false
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    sampleGrid: true
+    useCmmd: false
+    validationSplitNum: 0
+    validationSeed: 42
+
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 10
+    keepTokens: 2
+    captionExtension: .txt
+    enableBucket: true
+    pathPattern: "*"

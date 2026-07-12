@@ -398,6 +398,14 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             min={1}
           />
         </Row>
+        <Row label="每 N 步保存" description="留空时仅按训练轮次保存。">
+          <IntInput
+            min={1}
+            value={v.saveEveryNSteps ?? null}
+            onChange={(n) => set(["backend", "animaLora", "saveEveryNSteps"], n)}
+            placeholder="（关闭）"
+          />
+        </Row>
         <Row label="检查点保存频率" description="optimizer state 保存频率。">
           <FloatInput
             value={v.checkpointingEpochs}
@@ -455,6 +463,21 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
             options={WEIGHTING_SCHEME_OPTIONS}
           />
         </Row>
+        {v.weightingScheme === "logit_normal" && (
+          <>
+            <Row label="Logit 均值" description="logit-normal 权重分布均值。">
+              <FloatInput value={v.logitMean ?? 0} onChange={(n) => set(["backend", "animaLora", "logitMean"], n)} step={0.1} />
+            </Row>
+            <Row label="Logit 标准差" description="logit-normal 权重分布标准差。">
+              <FloatInput value={v.logitStd ?? 1} onChange={(n) => set(["backend", "animaLora", "logitStd"], n)} min={0.0001} step={0.1} />
+            </Row>
+          </>
+        )}
+        {v.weightingScheme === "mode" && (
+          <Row label="Mode 缩放" description="mode 权重分布缩放系数。">
+            <FloatInput value={v.modeScale ?? 1.29} onChange={(n) => set(["backend", "animaLora", "modeScale"], n)} min={0} step={0.01} />
+          </Row>
+        )}
         <Row
           label="min_snr_gamma"
           description="min_snr_rf 的 γ 阈值。留空不写入。"

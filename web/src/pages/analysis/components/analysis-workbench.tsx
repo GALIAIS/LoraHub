@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type JobDetail, type JobSummary } from "@/lib/api"
 import { useAnimeAnalysisMotion } from "@/hooks/use-anime-analysis-motion"
 import { LossChart } from "../../jobs/components/loss-chart"
+import { MAX_POINTS } from "../../jobs/components/loss-chart-model"
 import { TERMINAL_STATES } from "../../jobs/utils"
 import {
   buildAllMarkers,
@@ -27,6 +28,8 @@ import {
   buildLossSeries,
 } from "./analysis-chart-model"
 import { AnalysisKpiStrip } from "./analysis-kpi-strip"
+import { deriveAnalysisBackendInfo } from "./analysis-backend"
+import { BackendContextStrip } from "./backend-context-strip"
 import { ViewModeSwitcher } from "./analysis-view-switcher"
 import { CheckpointPlayback } from "./checkpoint-playback"
 import { DiagnosisBanner } from "./diagnosis-banner"
@@ -86,6 +89,10 @@ export function AnalysisWorkbench({
     refetchInterval: isTerminal ? false : 8000,
     staleTime: 4_000,
   })
+  const backendInfo = useMemo(
+    () => deriveAnalysisBackendInfo(jobDetail),
+    [jobDetail],
+  )
 
   // View-mode (live / postmortem / custom). Defaults derive from the
   // job's terminal-ness; an explicit user toggle pins the choice.
@@ -164,6 +171,23 @@ export function AnalysisWorkbench({
     staleTime: 60_000,
     retry: false,
   })
+  const referenceDetail = useQuery({
+    queryKey: ["job", referenceRun?.jobId],
+    queryFn: () => api.getJob(referenceRun!.jobId),
+    enabled: !!referenceRun && !isCurrentReference,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const referenceBackendInfo = useMemo(
+    () => deriveAnalysisBackendInfo(referenceDetail.data),
+    [referenceDetail.data],
+  )
+  const crossBackendReference =
+    !!referenceRun &&
+    !isCurrentReference &&
+    backendInfo.type != null &&
+    referenceBackendInfo.type != null &&
+    backendInfo.type !== referenceBackendInfo.type
   function pinAsReference() {
     saveReferenceRun({
       jobId: job.id,
@@ -190,8 +214,18 @@ export function AnalysisWorkbench({
         xMode,
         referenceRun,
         referenceMetrics: referenceMetrics.data,
+        backendType: backendInfo.type,
+        referenceBackendType: referenceBackendInfo.type,
       }),
-    [metrics.data, job.id, xMode, referenceRun, referenceMetrics.data],
+    [
+      metrics.data,
+      job.id,
+      xMode,
+      referenceRun,
+      referenceMetrics.data,
+      backendInfo.type,
+      referenceBackendInfo.type,
+    ],
   )
 
   const checkpointMarkers = useMemo(
@@ -229,6 +263,13 @@ export function AnalysisWorkbench({
   )
 
   const totalPoints = metrics.data?.loss?.length ?? 0
+  const epochAvailable = (metrics.data?.loss ?? []).some(
+    (point) => typeof point.epoch === "number",
+  )
+  useEffect(() => {
+    if (xMode !== "epoch" || metrics.data == null || epochAvailable) return
+    selectXMode("step")
+  }, [epochAvailable, metrics.data, xMode])
   // Estimated training progress in [0..1] for context-aware tone
   // selection in the effectiveness panel. Prefers the trainer-reported
   // total_steps over the config-derived fallback.
@@ -340,9 +381,22 @@ export function AnalysisWorkbench({
         </div>
       ) : (
         <>
-          <AnalysisKpiStrip job={job} fallbackTotalSteps={fallbackTotalSteps} />
+          <AnalysisKpiStrip
+            job={job}
+            fallbackTotalSteps={fallbackTotalSteps}
+            backend={backendInfo}
+          />
 
       <div ref={analysisMotionRef} className="space-y-4 px-4 py-4 md:px-7">
+        <BackendContextStrip
+          backend={backendInfo}
+          metrics={metrics.data ?? null}
+        />
+        {crossBackendReference && (
+          <div className="border-l-2 border-amber-500/70 bg-amber-500/8 px-3 py-2 text-[11px] text-muted-foreground">
+            当前基线来自 {referenceBackendInfo.label}。不同后端的损失定义不可直接叠加；此处保留当前任务曲线，请在多任务对比中查看归一化形态。
+          </div>
+        )}
         {/* View-mode switcher: live / postmortem / custom. Mode picks
             sensible defaults for which heavy panels are open by
             default; manual toggles flip into custom and persist. */}
@@ -351,6 +405,7 @@ export function AnalysisWorkbench({
           panels={panels}
           isTerminal={isTerminal}
           xMode={xMode}
+          epochAvailable={epochAvailable}
           referenceRun={referenceRun}
           isCurrentReference={isCurrentReference}
           onSelectMode={selectMode}
@@ -371,6 +426,7 @@ export function AnalysisWorkbench({
         <EffectivenessPanel
           metrics={metrics.data ?? null}
           progress={progress}
+          backend={backendInfo}
         />
 
         {/* PELT-derived stage timeline — colour-coded segments + slope
@@ -399,7 +455,9 @@ export function AnalysisWorkbench({
                 : metrics.isError
                   ? "加载失败"
                   : `${totalPoints} 个采样点${
-                      totalPoints > 1000 ? "（已下采样到 1000）" : ""
+                      totalPoints > MAX_POINTS
+                        ? `（保真下采样到 ${MAX_POINTS}）`
+                        : ""
                     }${
                       checkpointMarkers.length > 0
                         ? ` · ${checkpointMarkers.length} 个检查点`
@@ -436,7 +494,12 @@ export function AnalysisWorkbench({
             <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground/80 mb-2 px-0.5">
               指标细分
             </div>
-            <MetricGrid metrics={metrics.data ?? null} jobId={job.id} xMode={xMode} />
+            <MetricGrid
+              metrics={metrics.data ?? null}
+              backend={backendInfo}
+              jobId={job.id}
+              xMode={xMode}
+            />
           </div>
         )}
 

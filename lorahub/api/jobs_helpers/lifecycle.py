@@ -544,6 +544,10 @@ def _gpu_dispatch_mode(cfg: TrainingConfig) -> str:
 
 def _apply_settings_gpu_dispatch_default(cfg: TrainingConfig) -> None:
     dispatch = cfg.backend.gpu_dispatch
+    if cfg.backend.type == "ai_toolkit":
+        dispatch.mode = "one-job-per-gpu"
+        dispatch.num_gpus = None
+        return
     explicit = "gpu_dispatch" in cfg.backend.model_fields_set
     if explicit and (
         dispatch.mode != "one-job-per-gpu" or dispatch.num_gpus is not None

@@ -15,6 +15,7 @@ from lorahub.core.backends.diffusion_pipe.compiler import (
     CompilationError,
     compile_config,
 )
+from lorahub.core.backends.diffusion_pipe.policies import check_cross_field_conflicts
 from lorahub.core.config.schema import TrainingConfig
 
 
@@ -520,6 +521,17 @@ def test_dp_blocks_to_swap_emitted_from_top_level() -> None:
     cfg = _config(optimization={"blocks_to_swap": 5})
     main = _main_toml(cfg)
     assert "blocks_to_swap = 5" in main
+
+
+def test_dp_compile_conflict_uses_top_level_blocks_to_swap() -> None:
+    cfg = _config(
+        optimization={"blocks_to_swap": 5},
+        backend={"type": "diffusion-pipe", "diffusion_pipe": {"compile": True}},
+    )
+
+    issues = check_cross_field_conflicts(cfg)
+
+    assert any(issue.field == "backend.diffusionPipe.compile" for issue in issues)
 
 
 def test_dp_torch_compile_optimization_field_is_noop() -> None:
@@ -1187,4 +1199,3 @@ def test_kohya_only_fields_logged_at_debug(caplog: pytest.LogCaptureFixture) -> 
     assert "loss.min_snr_gamma" in audit_msg
     assert "augmentation.flip" in audit_msg
     assert "optimization.fp8_base" in audit_msg
-

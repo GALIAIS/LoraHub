@@ -41,6 +41,11 @@ _TQDM_LOSS_RE = re.compile(rf"avr_loss=(?P<loss>{_FLOAT_RE})", re.IGNORECASE)
 _TQDM_LR_RE = re.compile(
     r"\blr=(?P<lr>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 )
+_TQDM_RATE_RE = re.compile(
+    r"(?P<rate>\d+(?:\.\d+)?)\s*(?P<unit>it/s|s/it)\b",
+    re.IGNORECASE,
+)
+_TQDM_ETA_RE = re.compile(r"\[[^<,\]]+<(?P<eta>[^,\]]+)")
 _NAN_LOSS_RE = re.compile(
     r"\b(?:non-finite\s+loss|loss\s+became\s+nan|nan_guard\s+recovery)\b",
     re.IGNORECASE,
@@ -151,6 +156,12 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
                 payload["loss"] = loss
         if (rm := _TQDM_LR_RE.search(stripped)) is not None:
             payload["lr"] = float(rm.group("lr"))
+        if (rate_match := _TQDM_RATE_RE.search(stripped)) is not None:
+            payload["rate"] = (
+                f"{rate_match.group('rate')}{rate_match.group('unit').lower()}"
+            )
+        if (eta_match := _TQDM_ETA_RE.search(stripped)) is not None:
+            payload["eta"] = eta_match.group("eta").strip()
         return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
 
     if _NAN_LOSS_RE.search(stripped):

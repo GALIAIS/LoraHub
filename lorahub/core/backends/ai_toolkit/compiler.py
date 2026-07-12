@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from lorahub.core.config.backends.ai_toolkit import AiToolkitOptions
 from lorahub.core.config.schema import TrainingConfig
 
 __all__ = ["CompilationError", "compile_config"]
@@ -39,6 +41,7 @@ def compile_config(
 
 
 def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
+    options = cfg.backend.ai_toolkit or AiToolkitOptions()
     output_name = cfg.output.name or "lorahub_ai_toolkit"
     model_name = str(cfg.base_model.checkpoint) if str(cfg.base_model.checkpoint) else "krea/Krea-2-Raw"
     if model_name in {".", ""}:
@@ -46,58 +49,31 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
 
     train_steps = cfg.schedule.max_steps or max(1, int(cfg.schedule.epochs) * 100)
     width, height = _resolution_pair(cfg.sampling.resolution or cfg.dataset.resolution)
-    dataset_width, dataset_height = _resolution_pair(cfg.dataset.resolution)
 
-    sample = _sample_section(cfg, width=width, height=height, train_steps=train_steps)
+    sample = _sample_section(cfg, options, width=width, height=height)
     process: dict[str, Any] = {
         "type": "diffusion_trainer",
         "training_folder": str(workspace / "ai_toolkit_output"),
         "device": "cuda",
-        "network": _network_section(cfg),
-        "save": {
-            "dtype": _dtype(cfg.output.save_dtype),
-            "save_every": int(cfg.output.save_every_n_steps or train_steps),
-            "max_step_saves_to_keep": int(cfg.output.save_last_n_steps or 4),
-            "push_to_hub": False,
-        },
-        "datasets": [
-            {
-                "folder_path": str(cfg.dataset.source),
-                "caption_ext": cfg.dataset.caption.ext.lstrip("."),
-                "caption_dropout_rate": float(cfg.dataset.caption.drop_rate),
-                "resolution": [int(dataset_width), int(dataset_height)],
-                "num_repeats": int(cfg.dataset.num_repeats),
-                "cache_latents_to_disk": bool(cfg.cache_latents_to_disk),
-            }
-        ],
-        "train": {
-            "batch_size": int(cfg.schedule.batch_size),
-            "steps": int(train_steps),
-            "gradient_accumulation": int(cfg.schedule.grad_accum),
-            "train_unet": bool(cfg.network.target_unet),
-            "train_text_encoder": bool(cfg.network.target_text_encoder),
-            "gradient_checkpointing": bool(cfg.gradient_checkpointing),
-            "disable_sampling": not bool(cfg.sampling.enabled),
-            "noise_scheduler": "flowmatch",
-            "optimizer": cfg.optimizer.type,
-            "lr": float(cfg.optimizer.lr.unet),
-            "dtype": _dtype(cfg.precision),
-        },
-        "model": {
-            "name_or_path": model_name,
-            "arch": "krea2",
-            "quantize": True,
-            "qtype": "qfloat8",
-            "quantize_te": True,
-            "qtype_te": "qfloat8",
-            "low_vram": False,
-            "compile": bool(cfg.optimization.torch_compile),
-        },
+        "network": _network_section(cfg, options),
+        "save": _save_section(cfg, options),
+        "datasets": _dataset_sections(cfg, options),
+        "train": _train_section(cfg, options, train_steps=train_steps),
+        "model": _model_section(cfg, options, model_name=model_name),
         "sample": sample,
-        "logging": {"log_every": 1, "use_ui_logger": False},
+        "logging": {
+            "log_every": int(options.logging.log_every),
+            "verbose": bool(options.logging.verbose),
+            "use_wandb": bool(options.logging.use_wandb),
+            "use_ui_logger": False,
+            "project_name": options.logging.project_name,
+            "run_name": options.logging.run_name,
+        },
     }
     if cfg.schedule.seed is not None:
         process["train"]["seed"] = int(cfg.schedule.seed)
+    if options.dataset.trigger_word:
+        process["trigger_word"] = options.dataset.trigger_word
     return {
         "job": "extension",
         "config": {"name": output_name, "process": [process]},
@@ -107,20 +83,28 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
 
 def _sample_section(
     cfg: TrainingConfig,
+    options: AiToolkitOptions,
     *,
     width: int,
     height: int,
-    train_steps: int,
 ) -> dict[str, Any]:
     sample: dict[str, Any] = {
         "sampler": "flowmatch",
-        "sample_every": int(cfg.sampling.every_n_steps or train_steps),
+        "sample_every": (
+            int(cfg.sampling.every_n_steps)
+            if cfg.sampling.every_n_steps is not None
+            else None
+        ),
+        "sample_every_n_epochs": int(cfg.sampling.every_n_epochs),
         "width": int(width),
         "height": int(height),
         "neg": "",
         "seed": int(cfg.sampling.seed),
         "sample_steps": int(cfg.sampling.inference_steps),
         "guidance_scale": float(cfg.sampling.inference_cfg),
+        "format": options.sample.format,
+        "walk_seed": bool(options.sample.walk_seed),
+        "network_multiplier": float(options.sample.network_multiplier),
     }
     prompt_rows = cfg.sampling.prompts
     if not prompt_rows:
@@ -154,8 +138,17 @@ def _resolution_pair(value: list[int] | tuple[int, ...]) -> tuple[int, int]:
     return int(value[0]), int(value[1])
 
 
-def _network_section(cfg: TrainingConfig) -> dict[str, Any]:
+def _network_section(
+    cfg: TrainingConfig,
+    options: AiToolkitOptions,
+) -> dict[str, Any]:
     n = cfg.network
+    if not n.target_unet:
+        raise CompilationError("ai_toolkit Krea2 requires network.target_unet=true")
+    if n.target_text_encoder:
+        raise CompilationError(
+            "ai_toolkit Krea2 does not support text-encoder LoRA training"
+        )
     if n.type not in _KREA2_NETWORK_TYPES:
         allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
         raise CompilationError(
@@ -168,13 +161,269 @@ def _network_section(cfg: TrainingConfig) -> dict[str, Any]:
     }
     if n.type == "lorm":
         network["lorm"] = {
-            "extract_mode": "fixed",
-            "extract_mode_param": int(n.rank),
-            "parameter_threshold": 0,
+            "extract_mode": options.network.lorm_extract_mode,
+            "extract_mode_param": (
+                options.network.lorm_extract_mode_param
+                if options.network.lorm_extract_mode_param is not None
+                else int(n.rank)
+            ),
+            "parameter_threshold": options.network.lorm_parameter_threshold,
         }
     if n.network_dropout > 0:
         network["dropout"] = float(n.network_dropout)
+    network_kwargs: dict[str, Any] = {}
+    if n.rank_dropout > 0:
+        network_kwargs["rank_dropout"] = float(n.rank_dropout)
+    if n.module_dropout > 0:
+        network_kwargs["module_dropout"] = float(n.module_dropout)
+    if network_kwargs:
+        network["network_kwargs"] = network_kwargs
+    if n.init_from is not None:
+        network["pretrained_lora_path"] = str(n.init_from)
+    if n.type == "lokr":
+        network["lokr_factor"] = int(options.network.lokr_factor)
+        network["lokr_full_rank"] = bool(options.network.lokr_full_rank)
+        network["old_lokr_format"] = bool(options.network.old_lokr_format)
     return network
+
+
+def _dataset_sections(
+    cfg: TrainingConfig,
+    options: AiToolkitOptions,
+) -> list[dict[str, Any]]:
+    dataset_options = options.dataset
+    resolutions = dataset_options.resolutions or [
+        _legacy_dataset_resolution(cfg.dataset.resolution)
+    ]
+    resolution: int | list[int]
+    resolution = resolutions[0] if len(resolutions) == 1 else list(resolutions)
+
+    shared: dict[str, Any] = {
+        "caption_ext": cfg.dataset.caption.ext.lstrip("."),
+        "caption_dropout_rate": float(cfg.dataset.caption.drop_rate),
+        "resolution": resolution,
+        "buckets": bool(dataset_options.buckets),
+        "random_crop": bool(dataset_options.random_crop),
+        "random_scale": bool(dataset_options.random_scale),
+        "scale": float(dataset_options.scale),
+        "flip_x": bool(dataset_options.flip_x),
+        "flip_y": bool(dataset_options.flip_y),
+        "shuffle_tokens": bool(dataset_options.shuffle_tokens),
+        "token_dropout_rate": float(dataset_options.token_dropout_rate),
+        "keep_tokens": int(dataset_options.keep_tokens),
+        "cache_latents": bool(dataset_options.cache_latents),
+        "cache_latents_to_disk": bool(cfg.cache_latents_to_disk),
+        "cache_text_embeddings": bool(dataset_options.cache_text_embeddings),
+        "load_image_when_caching_latents": bool(
+            dataset_options.load_image_when_caching_latents
+        ),
+        "num_workers": int(dataset_options.num_workers),
+        "prefetch_factor": int(dataset_options.prefetch_factor),
+    }
+    if dataset_options.default_caption:
+        shared["default_caption"] = dataset_options.default_caption
+    if dataset_options.trigger_word:
+        shared["trigger_word"] = dataset_options.trigger_word
+
+    datasets: list[dict[str, Any]] = []
+    if cfg.dataset.subsets:
+        for subset in cfg.dataset.subsets:
+            item = {
+                **shared,
+                "folder_path": str(subset.path),
+                "num_repeats": int(subset.num_repeats),
+            }
+            if subset.mask_path is not None:
+                item["mask_path"] = str(subset.mask_path)
+            datasets.append(item)
+    else:
+        datasets.append(
+            {
+                **shared,
+                "folder_path": str(cfg.dataset.source),
+                "num_repeats": int(cfg.dataset.num_repeats),
+            }
+        )
+
+    if cfg.dataset.reg_source is not None:
+        datasets.append(
+            {
+                **shared,
+                "folder_path": str(cfg.dataset.reg_source),
+                "num_repeats": 1,
+                "is_reg": True,
+            }
+        )
+    return datasets
+
+
+def _legacy_dataset_resolution(value: list[int] | tuple[int, ...]) -> int:
+    if len(value) == 1:
+        return int(value[0])
+    width, height = int(value[0]), int(value[1])
+    if width == height:
+        return width
+    # ai-toolkit accepts a square pixel budget and preserves aspect ratio via buckets.
+    return max(64, int(round(math.sqrt(width * height) / 16.0) * 16))
+
+
+def _train_section(
+    cfg: TrainingConfig,
+    options: AiToolkitOptions,
+    *,
+    train_steps: int,
+) -> dict[str, Any]:
+    train_options = options.train
+    optimizer_name = cfg.optimizer.type.lower()
+    optimizer_params: dict[str, Any] = {}
+    if optimizer_name in {
+        "adam",
+        "adam8bit",
+        "adamw",
+        "adamw8bit",
+        "prodigy",
+        "prodigy8bit",
+    }:
+        optimizer_params["betas"] = [float(value) for value in cfg.optimizer.betas]
+    elif optimizer_name in {"automagic", "automagic2", "automagic3"}:
+        optimizer_params["beta2"] = float(cfg.optimizer.betas[1])
+    optimizer_params["weight_decay"] = float(cfg.optimizer.weight_decay)
+    optimizer_params.update(
+        {key: _coerce(value) for key, value in cfg.optimizer.optimizer_args.items()}
+    )
+
+    if "lr_scheduler" in train_options.model_fields_set:
+        scheduler_name = train_options.lr_scheduler
+    elif "schedule" in cfg.optimizer.model_fields_set:
+        scheduler_name = cfg.optimizer.schedule
+    else:
+        scheduler_name = "constant"
+    scheduler_params = {
+        key: _coerce(value) for key, value in cfg.optimizer.scheduler_args.items()
+    }
+    if scheduler_name == "constant_with_warmup":
+        scheduler_params.setdefault("num_warmup_steps", int(cfg.optimizer.warmup_steps))
+    if cfg.schedule.lr_decay_steps is not None:
+        scheduler_params.setdefault("total_iters", int(cfg.schedule.lr_decay_steps))
+    elif scheduler_name == "cosine_with_restarts":
+        scheduler_params.setdefault(
+            "total_iters",
+            max(1, train_steps // int(cfg.optimizer.scheduler_num_cycles)),
+        )
+    if (
+        cfg.optimizer.scheduler_min_lr_ratio is not None
+        and scheduler_name in {"cosine", "cosine_with_restarts"}
+    ):
+        scheduler_params.setdefault(
+            "eta_min",
+            float(cfg.optimizer.lr.unet) * float(cfg.optimizer.scheduler_min_lr_ratio),
+        )
+
+    return {
+        "batch_size": int(cfg.schedule.batch_size),
+        "steps": int(train_steps),
+        "gradient_accumulation": int(cfg.schedule.grad_accum),
+        "train_unet": bool(cfg.network.target_unet),
+        "train_text_encoder": bool(cfg.network.target_text_encoder),
+        "gradient_checkpointing": bool(cfg.gradient_checkpointing),
+        "disable_sampling": not bool(cfg.sampling.enabled),
+        "noise_scheduler": "flowmatch",
+        "optimizer": cfg.optimizer.type,
+        "optimizer_params": optimizer_params,
+        "lr": float(cfg.optimizer.lr.unet),
+        "lr_scheduler": scheduler_name,
+        "lr_scheduler_params": scheduler_params,
+        "max_grad_norm": float(cfg.optimizer.max_grad_norm),
+        "dtype": _dtype(cfg.precision),
+        "content_or_style": train_options.content_or_style,
+        "timestep_type": train_options.timestep_type,
+        "loss_type": train_options.loss_type,
+        "min_denoising_steps": int(train_options.min_denoising_steps),
+        "max_denoising_steps": int(train_options.max_denoising_steps),
+        "min_snr_gamma": train_options.min_snr_gamma,
+        "noise_offset": float(train_options.noise_offset),
+        "prompt_dropout_prob": float(train_options.prompt_dropout_prob),
+        "skip_first_sample": bool(train_options.skip_first_sample),
+        "force_first_sample": bool(train_options.force_first_sample),
+        "unload_text_encoder": bool(train_options.unload_text_encoder),
+        "cache_text_embeddings": bool(options.dataset.cache_text_embeddings),
+        "ema_config": {
+            "use_ema": bool(train_options.use_ema),
+            "ema_decay": float(train_options.ema_decay),
+            "use_feedback": bool(train_options.ema_use_feedback),
+            "param_multiplier": float(train_options.ema_param_multiplier),
+        },
+        "max_loss": train_options.max_loss,
+    }
+
+
+def _model_section(
+    cfg: TrainingConfig,
+    options: AiToolkitOptions,
+    *,
+    model_name: str,
+) -> dict[str, Any]:
+    model_options = options.model
+    compile_model = (
+        bool(cfg.optimization.torch_compile)
+        if model_options.compile is None
+        else bool(model_options.compile)
+    )
+    model_kwargs: dict[str, Any] = {"max_text_length": model_options.max_text_length}
+    for key, value in (
+        ("checkpoint_filename", model_options.checkpoint_filename),
+        ("vae_path", model_options.vae_path),
+        ("text_encoder_path", model_options.text_encoder_path),
+    ):
+        if value:
+            model_kwargs[key] = value
+
+    model: dict[str, Any] = {
+        "name_or_path": model_name,
+        "arch": "krea2",
+        "quantize": bool(model_options.quantize),
+        "qtype": model_options.qtype,
+        "quantize_te": bool(model_options.quantize_text_encoder),
+        "qtype_te": model_options.qtype_text_encoder,
+        "low_vram": bool(model_options.low_vram),
+        "layer_offloading": bool(model_options.layer_offloading),
+        "layer_offloading_transformer_percent": float(
+            model_options.layer_offloading_transformer_percent
+        ),
+        "layer_offloading_text_encoder_percent": float(
+            model_options.layer_offloading_text_encoder_percent
+        ),
+        "compile": compile_model,
+        "block_compile": bool(model_options.block_compile),
+        "compile_mode": model_options.compile_mode,
+        "compile_fullgraph": bool(model_options.compile_fullgraph),
+        "compile_dynamic": bool(model_options.compile_dynamic),
+        "cache_size_limit": model_options.cache_size_limit,
+        "model_kwargs": model_kwargs,
+    }
+    if model_options.assistant_lora_path:
+        model["assistant_lora_path"] = model_options.assistant_lora_path
+    return model
+
+
+def _save_section(
+    cfg: TrainingConfig,
+    options: AiToolkitOptions,
+) -> dict[str, Any]:
+    save_options = options.save
+    return {
+        "dtype": _dtype(cfg.output.save_dtype),
+        "save_every": (
+            int(cfg.output.save_every_n_steps)
+            if cfg.output.save_every_n_steps is not None
+            else None
+        ),
+        "save_every_n_epochs": int(cfg.output.save_every_n_epochs),
+        "max_step_saves_to_keep": int(cfg.output.save_last_n_steps or 4),
+        "push_to_hub": bool(save_options.push_to_hub),
+        "hf_repo_id": save_options.hf_repo_id,
+        "hf_private": bool(save_options.hf_private),
+    }
 
 
 def _dtype(value: str) -> str:
@@ -187,7 +436,7 @@ def _dtype(value: str) -> str:
 
 def _overlay_extra_args(job: dict[str, Any], extra: dict[str, Any]) -> None:
     for raw_key, value in extra.items():
-        if value is None or value is False:
+        if value is None:
             continue
         key = raw_key.lstrip("-")
         parts = [p for p in key.split(".") if p]

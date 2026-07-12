@@ -38,7 +38,7 @@ optimizer:
     text_encoder: 5.0e-5
 
 schedule:
-  epochs: 10
+  max_steps: 1000
   batch_size: 1
   grad_accum: 1
 
@@ -48,6 +48,7 @@ cache_latents_to_disk: true
 
 sampling:
   enabled: true
+  every_n_epochs: 1
   every_n_steps: 250
   resolution: [1024, 1024]
   seed: 42
@@ -58,11 +59,13 @@ sampling:
 
 output:
   name: krea2_lorm
+  save_every_n_epochs: 1
   save_every_n_steps: 250
   save_last_n_steps: 4
   save_dtype: fp16
 
 backend:
   type: ai_toolkit
-  extra_args:
-    model.name_or_path: krea/Krea-2-Raw
+  ai_toolkit:
+    dataset:
+      resolutions: [1024]

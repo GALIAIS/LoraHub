@@ -98,6 +98,16 @@ export function AnimaLoraCacheSection({
           }
         />
       </Row>
+      <Row label="数据抽样比例" description="仅使用数据集的一部分；留空表示使用全部数据。">
+        <FloatInput
+          min={0.0001}
+          max={1}
+          step={0.05}
+          value={value.sampleRatio ?? null}
+          onChange={(next) => set(["backend", "animaLora", "sampleRatio"], next)}
+          placeholder="（全部）"
+        />
+      </Row>
       <Row
         label="静态 token 数"
         labelBadge={lockBadgeFor("staticTokenCount")}
@@ -157,6 +167,14 @@ export function AnimaLoraCompileSection({
           onChange={(next) => set(["backend", "animaLora", "attnMode"], next)}
           options={ATTN_OPTIONS}
         />
+      </Row>
+      {value.attnMode === "xformers" && (
+        <Row label="启用 xFormers" description="向训练脚本显式传递 xformers 开关。">
+          <ToggleSwitch checked={value.xformers ?? false} onCheckedChange={(checked) => set(["backend", "animaLora", "xformers"], checked)} />
+        </Row>
+      )}
+      <Row label="拆分注意力" description="分块计算注意力以降低峰值显存。">
+        <ToggleSwitch checked={value.splitAttn ?? false} onCheckedChange={(checked) => set(["backend", "animaLora", "splitAttn"], checked)} />
       </Row>
       <Row
         label="编译模式"

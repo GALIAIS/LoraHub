@@ -266,6 +266,14 @@ _PATTERNS: list[tuple[str, str, Severity, str, str]] = [
         "the NCCL_BLOCKING_WAIT / TORCH_NCCL_TIMEOUT_MS env vars.",
     ),
     (
+        "ai_toolkit_sample_failure",
+        r"LORAHUB_SAMPLE_FAILURE:\s*(.+)",
+        "error",
+        "ai-toolkit failed while generating a training preview.",
+        "Inspect the adjacent traceback and verify the sample prompt, sampler, "
+        "precision, and available VRAM before retrying.",
+    ),
+    (
         "ai_toolkit_sample_prompt_type",
         r"TypeError: can only concatenate str \(not [\"']bool[\"']\) to str",
         "error",

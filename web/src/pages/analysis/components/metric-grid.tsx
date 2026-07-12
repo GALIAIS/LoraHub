@@ -7,10 +7,9 @@
  *     wheel-zoom / pan / fullscreen / CSV stack we already built).
  *   - A single inline summary value (last point) on the header.
  *
- * Cards arranged in a responsive grid (1 / 2 / 3 columns). Cards whose
- * underlying series are empty are *omitted* — no "no data" placeholders
- * cluttering the page. The user can still see them once data starts
- * flowing.
+ * Cards arranged in a responsive grid (1 / 2 / 3 columns). Core metrics stay
+ * visible when a backend does not report them, with the exact reason shown in
+ * the card instead of making the surface look broken.
  *
  * Hardware-side metrics (gpu util / vram / temperature) live on the
  * dashboard's GPU page and the job-detail realtime tile; this grid is
@@ -21,6 +20,7 @@ import type { JobMetricsResponse } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { MultiLineChart, type MultiLineSeries } from "./multi-line-chart"
 import { xMapper, xModeLabel, type XMode } from "./x-axis-mode"
+import type { AnalysisBackendInfo } from "./analysis-backend"
 
 const EMA_ALPHA = 0.1
 
@@ -31,14 +31,17 @@ interface MetricCardSpec {
   /** Inline last-value chip rendered to the right of the title. */
   latest?: string
   xLabel?: string
+  unavailable?: string
 }
 
 export function MetricGrid({
   metrics,
+  backend,
   jobId,
   xMode = "step",
 }: {
   metrics: JobMetricsResponse | null
+  backend: AnalysisBackendInfo
   jobId: string
   xMode?: XMode
 }) {
@@ -46,6 +49,12 @@ export function MetricGrid({
     const out: MetricCardSpec[] = []
     const map = xMapper(xMode, metrics)
     const xUnit = xModeLabel(xMode)
+    const rawLossTitle =
+      backend.type === "anima_lora"
+        ? "loss/avr_loss"
+        : backend.type === "ai_toolkit"
+          ? "loss/step"
+          : "loss/raw"
     const losses =
       metrics?.loss?.filter(
         (p) => typeof p.loss === "number" && Number.isFinite(p.loss),
@@ -55,7 +64,7 @@ export function MetricGrid({
     if (losses.length > 0) {
       out.push({
         id: "loss-raw",
-        title: "loss/raw",
+        title: rawLossTitle,
         latest: fmtFloat(losses[losses.length - 1].loss as number, 4),
         xLabel: xUnit,
         series: [
@@ -69,6 +78,13 @@ export function MetricGrid({
             })),
           },
         ],
+      })
+    } else {
+      out.push({
+        id: "loss-raw",
+        title: rawLossTitle,
+        series: [],
+        unavailable: "等待后端上报首个有效 loss 点。",
       })
     }
 
@@ -125,7 +141,24 @@ export function MetricGrid({
             },
           ],
         })
+      } else {
+        out.push({
+          id: "loss-epoch",
+          title: "loss/epoch_avg",
+          series: [],
+          unavailable:
+            backend.type === "ai_toolkit"
+              ? "当前运行未上报 epoch，按 step 分析；新任务会在训练日志中记录 epoch。"
+              : "尚未收到至少两个 epoch 的有效 loss。",
+        })
       }
+    } else {
+      out.push({
+        id: "loss-epoch",
+        title: "loss/epoch_avg",
+        series: [],
+        unavailable: "尚无训练 loss，无法计算 epoch 均值。",
+      })
     }
 
     // ---------- val_loss (if any) ----------
@@ -147,6 +180,20 @@ export function MetricGrid({
             points: vals.map((p) => ({ x: p.epoch, y: p.val_loss })),
           },
         ],
+      })
+    } else {
+      out.push({
+        id: "loss-val",
+        title: "loss/val",
+        series: [],
+        unavailable:
+          backend.supportsValidation === false
+            ? "ai_toolkit 当前未提供验证损失，分析采用单曲线模式。"
+            : backend.validationConfigured === false
+              ? "当前配置未启用验证集。"
+              : backend.validationConfigured === true
+                ? "验证已配置，但后端尚未上报 val_loss。"
+                : "后端尚未上报验证损失。",
       })
     }
 
@@ -170,6 +217,34 @@ export function MetricGrid({
             points: lr.map((p) => ({ x: map(p), y: p.lr as number })),
           },
         ],
+      })
+    } else if (backend.configuredLr != null && losses.length > 0) {
+      const first = losses[0]
+      const last = losses[losses.length - 1]
+      out.push({
+        id: "lr",
+        title: "schedule/learning_rate",
+        latest: `${fmtSci(backend.configuredLr)} · 配置值`,
+        xLabel: xUnit,
+        series: [
+          {
+            id: "lr-plan",
+            label: "配置学习率（后端未上报实际值）",
+            color: "var(--muted-foreground)",
+            dashed: true,
+            points: [
+              { x: map(first), y: backend.configuredLr },
+              { x: map(last), y: backend.configuredLr },
+            ],
+          },
+        ],
+      })
+    } else {
+      out.push({
+        id: "lr",
+        title: "schedule/learning_rate",
+        series: [],
+        unavailable: "后端未上报实际学习率，配置中也没有可用回退值。",
       })
     }
 
@@ -198,6 +273,13 @@ export function MetricGrid({
           },
         ],
       })
+    } else {
+      out.push({
+        id: "iter-time",
+        title: "throughput/iter_time_s",
+        series: [],
+        unavailable: "等待后端进度行上报 it/s 或 s/it。",
+      })
     }
 
     // ---------- samples_per_sec ----------
@@ -221,6 +303,59 @@ export function MetricGrid({
             points: sps.map((p) => ({
               x: map(p),
               y: p.samples_per_sec as number,
+            })),
+          },
+        ],
+      })
+    } else {
+      out.push({
+        id: "sps",
+        title: "throughput/samples_per_sec",
+        series: [],
+        unavailable: "等待后端上报处理速率。",
+      })
+    }
+
+    const snr =
+      metrics?.loss?.filter(
+        (p) => typeof p.snr === "number" && Number.isFinite(p.snr),
+      ) ?? []
+    if (snr.length > 0) {
+      out.push({
+        id: "snr",
+        title: "training/snr",
+        latest: fmtFloat(snr[snr.length - 1].snr as number, 3),
+        xLabel: xUnit,
+        series: [
+          {
+            id: "snr",
+            label: "SNR",
+            color: "var(--chart-2)",
+            points: snr.map((p) => ({ x: map(p), y: p.snr as number })),
+          },
+        ],
+      })
+    }
+
+    const gradNorm =
+      metrics?.loss?.filter(
+        (p) =>
+          typeof p.grad_norm === "number" && Number.isFinite(p.grad_norm),
+      ) ?? []
+    if (gradNorm.length > 0) {
+      out.push({
+        id: "grad-norm",
+        title: "training/grad_norm",
+        latest: fmtFloat(gradNorm[gradNorm.length - 1].grad_norm as number, 3),
+        xLabel: xUnit,
+        series: [
+          {
+            id: "grad-norm",
+            label: "梯度范数",
+            color: "var(--chart-5)",
+            points: gradNorm.map((p) => ({
+              x: map(p),
+              y: p.grad_norm as number,
             })),
           },
         ],
@@ -310,7 +445,7 @@ export function MetricGrid({
     }
 
     return out
-  }, [metrics, xMode])
+  }, [backend, metrics, xMode])
 
   if (cards.length === 0) {
     return (
@@ -327,7 +462,7 @@ export function MetricGrid({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
       {cards.map((c) => (
-        <Card key={c.id}>
+        <Card key={c.id} className={c.unavailable ? "self-start" : undefined}>
           <CardHeader className="py-2 px-3.5 border-b border-border/60 bg-muted/40 flex-row items-center justify-between gap-2">
             <CardTitle className="text-[10.5px] tracking-[0.16em] text-foreground/85 font-mono">
               {c.title}
@@ -339,12 +474,18 @@ export function MetricGrid({
             )}
           </CardHeader>
           <CardContent className="p-3">
-            <MultiLineChart
-              series={c.series}
-              xLabel={c.xLabel}
-              persistKey={`${jobId}.${c.id}`}
-              title={c.title}
-            />
+            {c.unavailable ? (
+              <div className="flex min-h-[84px] items-center justify-center px-5 text-center text-[11px] leading-5 text-muted-foreground">
+                {c.unavailable}
+              </div>
+            ) : (
+              <MultiLineChart
+                series={c.series}
+                xLabel={c.xLabel}
+                persistKey={`${jobId}.${c.id}`}
+                title={c.title}
+              />
+            )}
           </CardContent>
         </Card>
       ))}

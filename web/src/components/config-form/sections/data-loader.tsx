@@ -6,19 +6,32 @@
  * and dp's caching_batch_size / map_num_proc.
  */
 import { memo } from "react"
-import type { ConfigFormValue, ErrorMap, Setter } from "../types"
+import type { BackendKey, ConfigFormValue, ErrorMap, Setter } from "../types"
 import { IntInput, Row, ToggleSwitch } from "../widgets"
 
 export const DataLoaderFields = memo(function DataLoaderFields({
   value = {},
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["dataloader"]
   set: Setter
   errorMap: ErrorMap
+  backendType?: BackendKey
 }) {
   const v = value ?? {}
+  if (backendType === "diffusion-pipe") {
+    return (
+      <Row
+        label="数据预处理进程数"
+        description="并行执行数据集 map 的进程数；留空使用后端默认值。"
+        errors={errorMap.get("dataloader.mapNumProc")}
+      >
+        <IntInput min={1} value={v.mapNumProc ?? null} onChange={(n) => set(["dataloader", "mapNumProc"], n)} placeholder="（默认）" />
+      </Row>
+    )
+  }
   return (
     <>
       <Row

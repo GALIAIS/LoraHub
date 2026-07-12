@@ -50,6 +50,9 @@ export const SamplingFields = memo(function SamplingFields({
   const prompts = v.prompts ?? []
   const outputs = v.outputs ?? {}
   const isAiToolkit = backendType === "ai_toolkit"
+  const isDiffusionPipe = backendType === "diffusion-pipe"
+  const isAnima = backendType === "anima_lora"
+  const defaultSampler = backendType === "kohya" ? "euler_a" : "ddim"
   const [promptsOpen, setPromptsOpen] = useState(false)
 
   // Resolution lives as an arbitrary-length list in yaml but the form
@@ -68,30 +71,41 @@ export const SamplingFields = memo(function SamplingFields({
           onCheckedChange={(b) => set(["sampling", "enabled"], b)}
         />
       </Row>
+      <Row label="检查点频谱分析" description="保存检查点后分析适配器权重频谱。">
+        <ToggleSwitch
+          checked={v.spectrumAnalysis ?? true}
+          onCheckedChange={(b) => set(["sampling", "spectrumAnalysis"], b)}
+        />
+      </Row>
       {enabled && (
         <>
-          {!isAiToolkit && (
-            <Row label="每 N 回合一次">
-              <IntInput
-                min={1}
-                value={v.everyNEpochs ?? 1}
-                onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)}
+          {isDiffusionPipe && (
+            <Row label="实时检查点预览" description="检测新检查点并在独立推理进程中生成预览图。">
+              <ToggleSwitch
+                checked={v.enableLiveInference ?? false}
+                onCheckedChange={(b) => set(["sampling", "enableLiveInference"], b)}
               />
             </Row>
           )}
-          <Row
-            label="每 N 步一次"
-            description={isAiToolkit ? "对应 ai-toolkit 的 sample.sample_every。" : "对应 --sample_every_n_steps；与回合采样不冲突。留空则仅按回合采样。"}
-            errors={errorMap.get("sampling.everyNSteps")}
-          >
-            <IntInput
-              min={1}
-              value={v.everyNSteps ?? null}
-              onChange={(n) => set(["sampling", "everyNSteps"], n)}
-              placeholder="默认"
-            />
-          </Row>
-          {!isAiToolkit && (
+          {!isDiffusionPipe && (
+            <>
+              <Row
+                label="每 N 回合一次"
+                description={isAiToolkit ? "每完成 N 个训练数据回合生成一次预览，可与按步采样同时使用。" : "每完成 N 个训练回合生成一次预览。"}
+                errors={errorMap.get("sampling.everyNEpochs")}
+              >
+                <IntInput min={1} value={v.everyNEpochs ?? 1} onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)} />
+              </Row>
+              <Row
+                label="每 N 步一次"
+                description={isAiToolkit ? "可选。与按回合采样同时使用；留空则仅按回合采样。" : "与回合采样并行生效；留空则仅按回合采样。"}
+                errors={errorMap.get("sampling.everyNSteps")}
+              >
+                <IntInput min={1} value={v.everyNSteps ?? null} onChange={(n) => set(["sampling", "everyNSteps"], n)} placeholder="默认" />
+              </Row>
+            </>
+          )}
+          {!isAiToolkit && !isDiffusionPipe && (
             <>
               <Row
                 label="训练前先采样"
@@ -108,8 +122,8 @@ export const SamplingFields = memo(function SamplingFields({
                 errors={errorMap.get("sampling.sampleSampler")}
               >
                 <EnumSelect
-                  value={v.sampleSampler ?? "ddim"}
-                  onChange={(s) => set(["sampling", "sampleSampler"], s === "ddim" ? null : s)}
+                  value={v.sampleSampler ?? defaultSampler}
+                  onChange={(s) => set(["sampling", "sampleSampler"], s)}
                   options={SAMPLE_SAMPLER_OPTIONS}
                 />
               </Row>
@@ -153,11 +167,11 @@ export const SamplingFields = memo(function SamplingFields({
               onChange={(r) => set(["sampling", "resolution"], r)}
             />
           </Row>
-          {isAiToolkit && (
+          {(isAiToolkit || isDiffusionPipe || isAnima) && (
             <>
               <Row
                 label="采样步数"
-                description="对应 ai-toolkit 的 sample.sample_steps。"
+                description="预览推理步数。"
                 errors={errorMap.get("sampling.inferenceSteps")}
               >
                 <IntInput
@@ -168,7 +182,7 @@ export const SamplingFields = memo(function SamplingFields({
               </Row>
               <Row
                 label="CFG"
-                description="对应 ai-toolkit 的 sample.guidance_scale。"
+                description="预览推理引导强度。"
                 errors={errorMap.get("sampling.inferenceCfg")}
               >
                 <FloatInput

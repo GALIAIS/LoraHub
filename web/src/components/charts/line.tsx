@@ -1,6 +1,6 @@
 "use client";
 
-import { curveBumpX } from "d3-shape";
+import { curveLinear } from "d3-shape";
 import { LinePath } from "@visx/shape";
 
 // CurveFactory type - simplified version compatible with visx
@@ -42,7 +42,7 @@ export interface LineProps {
   stroke?: string;
   /** Stroke width. Default: 2.5 */
   strokeWidth?: number;
-  /** Curve function. Default: smooth x-axis bump curve without y overshoot */
+  /** Curve function. Default: linear so rendered geometry preserves measured values. */
   curve?: CurveFactory;
   /** Whether to animate the line. Default: true */
   animate?: boolean;
@@ -92,7 +92,7 @@ export function Line({
   yAxisId,
   stroke = chartCssVars.linePrimary,
   strokeWidth = 2.5,
-  curve = curveBumpX,
+  curve = curveLinear,
   animate = true,
   fadeEdges = true,
   showHighlight = true,
@@ -114,7 +114,6 @@ export function Line({
   // level (`time-series-chart-shell.tsx`); we no longer render a per-line
   // `<ChartRevealClip>` or read `revealEpoch` here.
   const {
-    data,
     renderData,
     xScale,
     innerHeight,
@@ -151,9 +150,14 @@ export function Line({
     return index >= 0 ? index : 0;
   }, [lines, dataKey]);
 
+  const seriesRenderData = useMemo(
+    () => renderData.filter((datum) => typeof datum[dataKey] === "number"),
+    [dataKey, renderData]
+  );
+
   const pathRef = useRef<SVGPathElement>(null);
   const { pathLength, pathD } = usePathStrokeMetrics(pathRef, [
-    renderData,
+    seriesRenderData,
     innerWidth,
     dashFromIndex,
     animate,
@@ -170,7 +174,10 @@ export function Line({
     [dataKey, yScale]
   );
 
-  const hasDashTail = resolveDashTailBounds(dashFromIndex, data.length);
+  const hasDashTail = resolveDashTailBounds(
+    dashFromIndex,
+    seriesRenderData.length
+  );
   const fadeSides = resolveFadeSides(fadeEdges);
   const lineStroke = fadeSides.any ? `url(#${gradientId})` : stroke;
   const fadeStops = fadeSides.any ? fadeGradientStops(fadeSides) : null;
@@ -216,7 +223,7 @@ export function Line({
       >
         <LinePath
           curve={curve}
-          data={renderData}
+          data={seriesRenderData}
           innerRef={pathRef}
           stroke={visibleStroke}
           strokeLinecap="round"
@@ -229,7 +236,7 @@ export function Line({
         <SeriesDashTailOverlay
           dashArray={dashArray}
           dashFromIndex={dashFromIndex}
-          data={data}
+          data={seriesRenderData}
           innerHeight={innerHeight}
           innerWidth={innerWidth}
           pathD={pathD}

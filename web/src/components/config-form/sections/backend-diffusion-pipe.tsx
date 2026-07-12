@@ -4,7 +4,9 @@ import {
   FloatInput,
   IntInput,
   KeyValueTextArea,
+  PathInput,
   Row,
+  TextInput,
   ToggleSwitch,
 } from "../widgets"
 import {
@@ -33,6 +35,7 @@ export const BackendDiffusionPipeFields = memo(
   }) {
     const v = value ?? {}
     const evalEnabled = v.evalEveryNEpochs !== null && v.evalEveryNEpochs !== undefined
+    const multiNodeEnabled = v.multiNode !== null && v.multiNode !== undefined
     return (
       <>
         <DiffusionPipePerformanceSection
@@ -231,6 +234,40 @@ export const BackendDiffusionPipeFields = memo(
               placeholder="（默认）"
             />
           </Row>
+        </SubGroup>
+
+        <SubGroup label="多节点训练">
+          <Row label="启用多节点" description="使用 DeepSpeed hostfile 在多台主机启动同一训练任务。">
+            <ToggleSwitch
+              checked={multiNodeEnabled}
+              onCheckedChange={(enabled) =>
+                set(
+                  ["backend", "diffusionPipe", "multiNode"],
+                  enabled ? { hostfile: "", numNodes: 2 } : null,
+                )
+              }
+            />
+          </Row>
+          {multiNodeEnabled && (
+            <>
+              <Row label="Hostfile" description="DeepSpeed 主机清单文件。" errors={errorMap.get("backend.diffusionPipe.multiNode.hostfile")}>
+                <PathInput
+                  value={v.multiNode?.hostfile ?? ""}
+                  onChange={(next) => set(["backend", "diffusionPipe", "multiNode", "hostfile"], next)}
+                  placeholder="./hostfile"
+                />
+              </Row>
+              <Row label="节点数" errors={errorMap.get("backend.diffusionPipe.multiNode.numNodes")}>
+                <IntInput min={2} value={v.multiNode?.numNodes ?? 2} onChange={(next) => set(["backend", "diffusionPipe", "multiNode", "numNodes"], next ?? 2)} />
+              </Row>
+              <Row label="主节点地址" description="留空时由 DeepSpeed 自动确定。" errors={errorMap.get("backend.diffusionPipe.multiNode.masterAddr")}>
+                <TextInput value={v.multiNode?.masterAddr ?? ""} onChange={(next) => set(["backend", "diffusionPipe", "multiNode", "masterAddr"], next || null)} placeholder="（自动）" />
+              </Row>
+              <Row label="主节点端口" description="留空时使用启动器默认端口。" errors={errorMap.get("backend.diffusionPipe.multiNode.masterPort")}>
+                <IntInput min={1024} max={65535} value={v.multiNode?.masterPort ?? null} onChange={(next) => set(["backend", "diffusionPipe", "multiNode", "masterPort"], next)} placeholder="（默认）" />
+              </Row>
+            </>
+          )}
         </SubGroup>
 
         <SubGroup label="AR Bucket">

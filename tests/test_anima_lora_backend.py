@@ -329,6 +329,8 @@ def test_parser_tqdm_steps_emits_step_event() -> None:
     assert ev.payload["total_steps"] == 300
     assert ev.payload["loss"] == pytest.approx(0.243)
     assert ev.payload["lr"] == pytest.approx(5e-5)
+    assert ev.payload["rate"] == "1.67it/s"
+    assert ev.payload["eta"] == "02:30"
     assert ev.job_id == "job-1"
 
 

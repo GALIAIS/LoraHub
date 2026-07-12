@@ -4,6 +4,7 @@ import type { ErrorMap, ConfigFormValue, Setter } from "../types"
 import {
   EnumSelect,
   FloatInput,
+  IntInput,
   PathInput,
   Row,
   Section,
@@ -191,6 +192,15 @@ export function AnimaLoraLockedDefaultsSection({
           onCheckedChange={(c) => set(["backend", "animaLora", "useCmmd"], c)}
         />
       </Row>
+      <Row label="验证随机种子" description="留空时使用训练随机种子。">
+        <IntInput value={value.validationSeed ?? null} onChange={(n) => set(["backend", "animaLora", "validationSeed"], n)} placeholder="（训练种子）" />
+      </Row>
+      <Row label="验证采样步数">
+        <IntInput min={1} value={value.validationSampleSteps ?? null} onChange={(n) => set(["backend", "animaLora", "validationSampleSteps"], n)} placeholder="（默认）" />
+      </Row>
+      <Row label="验证 CFG">
+        <FloatInput min={0.1} step={0.1} value={value.validationCfgScale ?? null} onChange={(n) => set(["backend", "animaLora", "validationCfgScale"], n)} placeholder="（默认）" />
+      </Row>
       <Row
         label="多分辨率分桶"
         labelBadge={lockBadgeFor("enableBucket")}
@@ -237,13 +247,31 @@ export function AnimaLoraTurboSection({
             set(
               ["backend", "animaLora", "turbo"],
               c
-                ? {
-                    iterations: 1000,
-                    studentRank: 48,
-                    studentAlpha: 48,
-                    studentSteps: 4,
-                    teacherCfg: 4,
-                  }
+                  ? {
+                      iterations: 1000,
+                      batchSize: 1,
+                      seed: -1,
+                      useCustomDownAutograd: true,
+                      studentRank: 48,
+                      studentAlpha: 48,
+                      fakeRank: 64,
+                      fakeAlpha: 64,
+                      attnMode: "torch",
+                      studentSteps: 4,
+                      teacherCfg: 4,
+                      tauCaMinGap: 0.05,
+                      tauCaSkipAboveT: 0.95,
+                      studentLr: 5e-6,
+                      fakeLr: 5e-5,
+                      fakeStepsPerStudentStep: 2,
+                      alphaWarmupSteps: 100,
+                      weightDecay: 0,
+                      gradClip: 1,
+                      tDistribution: "uniform",
+                      sigmoidScale: 1,
+                      saveEvery: 250,
+                      logInterval: 5,
+                    }
                 : undefined,
             )
           }
@@ -252,7 +280,7 @@ export function AnimaLoraTurboSection({
       {value.turbo && (
         <>
           <Row label="迭代次数">
-            <FloatInput
+            <IntInput
               value={value.turbo.iterations}
               onChange={(n) =>
                 set(["backend", "animaLora", "turbo", "iterations"], n)
@@ -261,9 +289,18 @@ export function AnimaLoraTurboSection({
               min={1}
             />
           </Row>
+          <Row label="批大小">
+            <IntInput min={1} value={value.turbo.batchSize ?? 1} onChange={(n) => set(["backend", "animaLora", "turbo", "batchSize"], n ?? 1)} />
+          </Row>
+          <Row label="随机种子" description="-1 表示启动时随机生成。">
+            <IntInput value={value.turbo.seed ?? -1} onChange={(n) => set(["backend", "animaLora", "turbo", "seed"], n ?? -1)} />
+          </Row>
+          <Row label="自定义下投影 autograd">
+            <ToggleSwitch checked={value.turbo.useCustomDownAutograd ?? true} onCheckedChange={(checked) => set(["backend", "animaLora", "turbo", "useCustomDownAutograd"], checked)} />
+          </Row>
           <Row label="学生 rank / alpha" description="学生 LoRA 容量。">
             <div className="flex gap-2 items-center">
-              <FloatInput
+              <IntInput
                 value={value.turbo.studentRank}
                 onChange={(n) =>
                   set(["backend", "animaLora", "turbo", "studentRank"], n)
@@ -282,8 +319,28 @@ export function AnimaLoraTurboSection({
               />
             </div>
           </Row>
+          <Row label="Fake rank / alpha" description="辅助分布匹配 LoRA 容量。">
+            <div className="flex gap-2 items-center">
+              <IntInput min={1} value={value.turbo.fakeRank ?? 64} onChange={(n) => set(["backend", "animaLora", "turbo", "fakeRank"], n ?? 64)} />
+              <span className="text-muted-foreground">/</span>
+              <FloatInput min={0.0001} value={value.turbo.fakeAlpha ?? 64} onChange={(n) => set(["backend", "animaLora", "turbo", "fakeAlpha"], n ?? 64)} />
+            </div>
+          </Row>
+          <Row label="注意力模式">
+            <EnumSelect
+              value={value.turbo.attnMode ?? "torch"}
+              onChange={(next) => set(["backend", "animaLora", "turbo", "attnMode"], next)}
+              options={[
+                { value: "torch", label: "PyTorch SDPA · 默认" },
+                { value: "flash", label: "Flash Attention" },
+                { value: "flex", label: "Flex Attention" },
+                { value: "sageattn", label: "SageAttention" },
+                { value: "xformers", label: "xFormers" },
+              ]}
+            />
+          </Row>
           <Row label="学生推理步数" description="infer_steps。">
-            <FloatInput
+            <IntInput
               value={value.turbo.studentSteps}
               onChange={(n) =>
                 set(["backend", "animaLora", "turbo", "studentSteps"], n)
@@ -301,6 +358,12 @@ export function AnimaLoraTurboSection({
               placeholder="4"
               step={0.5}
             />
+          </Row>
+          <Row label="CA 最小时间步间隔">
+            <FloatInput min={0} max={0.9999} step={0.01} value={value.turbo.tauCaMinGap ?? 0.05} onChange={(n) => set(["backend", "animaLora", "turbo", "tauCaMinGap"], n ?? 0.05)} />
+          </Row>
+          <Row label="CA 跳过阈值">
+            <FloatInput min={0.0001} max={1} step={0.01} value={value.turbo.tauCaSkipAboveT ?? 0.95} onChange={(n) => set(["backend", "animaLora", "turbo", "tauCaSkipAboveT"], n ?? 0.95)} />
           </Row>
           <Row label="学生学习率">
             <FloatInput
@@ -322,8 +385,28 @@ export function AnimaLoraTurboSection({
               step={1e-6}
             />
           </Row>
+          <Row label="每次学生更新的 Fake 步数">
+            <IntInput min={1} value={value.turbo.fakeStepsPerStudentStep ?? 2} onChange={(n) => set(["backend", "animaLora", "turbo", "fakeStepsPerStudentStep"], n ?? 2)} />
+          </Row>
+          <Row label="Alpha 预热步数">
+            <IntInput min={0} value={value.turbo.alphaWarmupSteps ?? 100} onChange={(n) => set(["backend", "animaLora", "turbo", "alphaWarmupSteps"], n ?? 100)} />
+          </Row>
+          <Row label="权重衰减">
+            <FloatInput min={0} step={0.001} value={value.turbo.weightDecay ?? 0} onChange={(n) => set(["backend", "animaLora", "turbo", "weightDecay"], n ?? 0)} />
+          </Row>
+          <Row label="梯度裁剪">
+            <FloatInput min={0.0001} step={0.1} value={value.turbo.gradClip ?? 1} onChange={(n) => set(["backend", "animaLora", "turbo", "gradClip"], n ?? 1)} />
+          </Row>
+          <Row label="时间步分布">
+            <EnumSelect value={value.turbo.tDistribution ?? "uniform"} onChange={(next) => set(["backend", "animaLora", "turbo", "tDistribution"], next)} options={[{ value: "uniform", label: "Uniform · 默认" }, { value: "sigmoid", label: "Sigmoid" }]} />
+          </Row>
+          {value.turbo.tDistribution === "sigmoid" && (
+            <Row label="Sigmoid 缩放">
+              <FloatInput min={0.0001} step={0.1} value={value.turbo.sigmoidScale ?? 1} onChange={(n) => set(["backend", "animaLora", "turbo", "sigmoidScale"], n ?? 1)} />
+            </Row>
+          )}
           <Row label="保存间隔" description="每 N 次迭代保存一次。">
-            <FloatInput
+            <IntInput
               value={value.turbo.saveEvery}
               onChange={(n) =>
                 set(["backend", "animaLora", "turbo", "saveEvery"], n)
@@ -331,6 +414,9 @@ export function AnimaLoraTurboSection({
               placeholder="250"
               min={1}
             />
+          </Row>
+          <Row label="日志间隔" description="每 N 次迭代记录一次指标。">
+            <IntInput min={1} value={value.turbo.logInterval ?? 5} onChange={(n) => set(["backend", "animaLora", "turbo", "logInterval"], n ?? 5)} />
           </Row>
         </>
       )}

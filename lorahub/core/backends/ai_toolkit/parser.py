@@ -12,7 +12,11 @@ _STEP_RE = re.compile(
     r".*?\bloss[:= ]+(?P<loss>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)",
     re.IGNORECASE,
 )
-_SAVE_RE = re.compile(r"\bSaved checkpoint to\s+(?P<path>.+?)\s*$", re.IGNORECASE)
+_SAVE_RE = re.compile(
+    r"\bSaved checkpoint(?: at step (?P<step>\d+))? to\s+(?P<path>.+?)\s*$",
+    re.IGNORECASE,
+)
+_CHECKPOINT_STEP_RE = re.compile(r"_(?P<step>\d{9})(?:\.[^.]+)?$")
 _TQDM_RE = re.compile(
     r"^(?:(?P<label>[^:\n]+):\s*)?"
     r"(?P<percent>\d{1,3})%\|.*?\|\s*"
@@ -23,6 +27,13 @@ _TQDM_RE = re.compile(
     re.IGNORECASE,
 )
 _LR_RE = re.compile(r"\blr:\s*(?P<lr>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", re.IGNORECASE)
+_EPOCH_RE = re.compile(r"\bepoch:\s*(?P<epoch>\d+)\b", re.IGNORECASE)
+_SNR_RE = re.compile(r"\bsnr:\s*(?P<snr>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", re.IGNORECASE)
+_GRAD_NORM_RE = re.compile(
+    r"\bgrad(?:ient)?[_ ]?norm:\s*(?P<grad_norm>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)",
+    re.IGNORECASE,
+)
+_RATE_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:it/s|s/it)\b", re.IGNORECASE)
 
 _PHASE_LABELS = {
     "caching latents to disk": "缓存潜空间",
@@ -38,9 +49,14 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     if not stripped.strip():
         return None
     if (m := _SAVE_RE.search(stripped)) is not None:
+        payload: dict[str, object] = {"path": m.group("path")}
+        if m.group("step"):
+            payload["step"] = int(m.group("step"))
+        elif (path_step := _CHECKPOINT_STEP_RE.search(m.group("path"))) is not None:
+            payload["step"] = int(path_step.group("step"))
         return TrainingEvent(
             type=EventType.checkpoint_saved,
-            payload={"path": m.group("path")},
+            payload=payload,
             job_id=job_id,
         )
     if (m := _STEP_RE.search(stripped)) is not None:
@@ -50,8 +66,16 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
         }
         if m.group("total"):
             payload["total_steps"] = int(m.group("total"))
-        if lr := _extract_lr(stripped):
+        if (lr := _extract_lr(stripped)) is not None:
             payload["lr"] = lr
+        if (epoch := _extract_float(stripped, _EPOCH_RE, "epoch")) is not None:
+            payload["epoch"] = int(epoch)
+        if (snr := _extract_float(stripped, _SNR_RE, "snr")) is not None:
+            payload["snr"] = snr
+        if (
+            grad_norm := _extract_float(stripped, _GRAD_NORM_RE, "grad_norm")
+        ) is not None:
+            payload["grad_norm"] = grad_norm
         if rate := _extract_tqdm_field(stripped, "rate"):
             payload["rate"] = rate
         if eta := _extract_tqdm_field(stripped, "eta"):
@@ -80,7 +104,12 @@ def _parse_progress(
     done_raw = match.group("done")
     total_raw = match.group("total")
 
+    cache_phase = None
     if "caching latents" in lower:
+        cache_phase = "latents"
+    elif "caching text" in lower or "text embedding" in lower:
+        cache_phase = "text_encoder"
+    if cache_phase is not None:
         done = _parse_int(done_raw)
         total = _parse_int(total_raw)
         if done is None or total is None:
@@ -88,7 +117,7 @@ def _parse_progress(
         return TrainingEvent(
             type=EventType.cache_progress,
             payload={
-                "phase": "latents",
+                "phase": cache_phase,
                 "done": done,
                 "total": total,
                 "percent": int(match.group("percent")),
@@ -149,13 +178,19 @@ def _extract_lr(line: str) -> float | None:
     return float(match.group("lr")) if match else None
 
 
+def _extract_float(line: str, pattern: re.Pattern[str], group: str) -> float | None:
+    match = pattern.search(line)
+    return float(match.group(group)) if match else None
+
+
 def _extract_tqdm_field(line: str, name: str) -> str | None:
     match = _TQDM_RE.search(line)
     if not match:
         return None
     value = (match.group(name) or "").strip()
     if name == "rate":
-        value = value.split(", lr:", 1)[0].strip()
+        rate = _RATE_RE.search(value)
+        value = rate.group(0).replace(" ", "") if rate else ""
     return value or None
 
 

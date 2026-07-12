@@ -12,6 +12,8 @@
  */
 import type { ValidationFieldError } from "@/lib/api"
 
+export type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
+
 export interface ArchPathsValue {
   // FLUX / SD3 / FLUX2 component checkpoints
   clipL?: string | null
@@ -266,6 +268,8 @@ export interface ConfigFormValue {
     seed?: number
     inferenceSteps?: number
     inferenceCfg?: number
+    enableLiveInference?: boolean
+    spectrumAnalysis?: boolean
     triggerWord?: string | null
     outputs?: SamplingOutputsValue
   }
@@ -351,6 +355,112 @@ export interface ConfigFormValue {
       // TOML, which expects literal snake_case (transformer_path / vae_path /
       // llm_path / ...). Do NOT rename these or dp won't recognise them.
       modelPaths?: Record<string, string>
+      multiNode?: {
+        hostfile?: string
+        numNodes?: number
+        masterAddr?: string | null
+        masterPort?: number | null
+      } | null
+    }
+    aiToolkit?: {
+      model?: {
+        quantize?: boolean
+        qtype?: "qfloat8" | "float8" | "int8" | "uint8" | "uint4"
+        quantizeTextEncoder?: boolean
+        qtypeTextEncoder?: "qfloat8" | "qint8" | "qint4"
+        lowVram?: boolean
+        layerOffloading?: boolean
+        layerOffloadingTransformerPercent?: number
+        layerOffloadingTextEncoderPercent?: number
+        assistantLoraPath?: string | null
+        checkpointFilename?: string | null
+        vaePath?: string | null
+        textEncoderPath?: string | null
+        maxTextLength?: number
+        compile?: boolean | null
+        blockCompile?: boolean
+        compileMode?: "default" | "reduce-overhead" | "max-autotune"
+        compileFullgraph?: boolean
+        compileDynamic?: boolean
+        cacheSizeLimit?: number | null
+      }
+      dataset?: {
+        resolutions?: number[] | null
+        buckets?: boolean
+        randomCrop?: boolean
+        randomScale?: boolean
+        scale?: number
+        flipX?: boolean
+        flipY?: boolean
+        shuffleTokens?: boolean
+        tokenDropoutRate?: number
+        keepTokens?: number
+        cacheLatents?: boolean
+        cacheTextEmbeddings?: boolean
+        loadImageWhenCachingLatents?: boolean
+        numWorkers?: number
+        prefetchFactor?: number
+        defaultCaption?: string | null
+        triggerWord?: string | null
+      }
+      network?: {
+        lokrFactor?: number
+        lokrFullRank?: boolean
+        oldLokrFormat?: boolean
+        lormExtractMode?: "ratio" | "fixed"
+        lormExtractModeParam?: number
+        lormParameterThreshold?: number
+      }
+      train?: {
+        lrScheduler?:
+          | "constant"
+          | "constant_with_warmup"
+          | "linear"
+          | "cosine"
+          | "cosine_with_restarts"
+        contentOrStyle?: "balanced" | "style" | "content"
+        timestepType?:
+          | "sigmoid"
+          | "linear"
+          | "lognorm_blend"
+          | "next_sample"
+          | "weighted"
+          | "one_step"
+          | "two_step"
+          | "four_step"
+          | "eight_step"
+        lossType?: "mse" | "mae" | "wavelet" | "mean_flow" | "pseudo_huber"
+        minDenoisingSteps?: number
+        maxDenoisingSteps?: number
+        minSnrGamma?: number | null
+        noiseOffset?: number
+        promptDropoutProb?: number
+        skipFirstSample?: boolean
+        forceFirstSample?: boolean
+        unloadTextEncoder?: boolean
+        useEma?: boolean
+        emaDecay?: number
+        emaUseFeedback?: boolean
+        emaParamMultiplier?: number
+        maxLoss?: number | null
+      }
+      sample?: {
+        format?: "jpg" | "png" | "webp"
+        walkSeed?: boolean
+        networkMultiplier?: number
+      }
+      save?: {
+        pushToHub?: boolean
+        hfRepoId?: string | null
+        hfPrivate?: boolean
+      }
+      logging?: {
+        logEvery?: number
+        verbose?: boolean
+        useWandb?: boolean
+        projectName?: string
+        runName?: string | null
+      }
     }
     /**
      * anima_lora-specific knobs. Mirrors `AnimaLoraOptions` in
@@ -429,6 +539,7 @@ export interface ConfigFormValue {
       lrWarmupRatio?: number | null
       maxTrainEpochs?: number
       saveEveryNEpochs?: number
+      saveEveryNSteps?: number | null
       checkpointingEpochs?: number
       captionDropoutRate?: number
       timestepSampling?: "sigmoid" | "uniform" | "logit_normal"

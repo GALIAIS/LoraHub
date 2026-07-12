@@ -28,14 +28,16 @@ export const OutputFields = memo(function OutputFields({
   const isAiToolkit = backendType === "ai_toolkit"
   return (
     <>
-      <Row label="名称" description="作为 LoRA 文件名和任务标识。">
-        <Input
-          value={v.name ?? ""}
-          className="font-mono w-64"
-          onChange={(e) => set(["output", "name"], e.target.value)}
-          placeholder="my_character"
-        />
-      </Row>
+      {!isDiffusionPipe && (
+        <Row label="名称" description="作为 LoRA 文件名和任务标识。">
+          <Input
+            value={v.name ?? ""}
+            className="font-mono w-64"
+            onChange={(e) => set(["output", "name"], e.target.value)}
+            placeholder="my_character"
+          />
+        </Row>
+      )}
       <Row label="每 N 回合保存一次">
         <IntInput
           min={1}

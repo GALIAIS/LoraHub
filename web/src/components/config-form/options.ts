@@ -86,6 +86,17 @@ export const OPTIMIZER_OPTIONS = [
   { value: "dadaptation", label: "D-Adaptation" },
 ] as const
 
+export const DIFFUSION_PIPE_OPTIMIZER_OPTIONS = [
+  { value: "adamw", label: "AdamW" },
+  { value: "adamw8bit", label: "AdamW 8-bit" },
+  { value: "adamw_optimi", label: "AdamW · Optimi" },
+  { value: "adamw8bitkahan", label: "AdamW 8-bit Kahan" },
+  { value: "lion", label: "Lion" },
+  { value: "lion8bit", label: "Lion 8-bit" },
+  { value: "prodigy", label: "Prodigy" },
+  { value: "automagic", label: "Automagic" },
+] as const
+
 export const LR_SCHEDULE_OPTIONS = [
   { value: "cosine_with_restarts", label: "cosine_with_restarts" },
   { value: "cosine", label: "cosine" },
@@ -93,6 +104,12 @@ export const LR_SCHEDULE_OPTIONS = [
   { value: "constant", label: "constant" },
   { value: "constant_with_warmup", label: "constant_with_warmup" },
   { value: "polynomial", label: "polynomial" },
+] as const
+
+export const DIFFUSION_PIPE_LR_SCHEDULE_OPTIONS = [
+  { value: "constant", label: "constant" },
+  { value: "linear", label: "linear" },
+  { value: "cosine", label: "cosine" },
 ] as const
 
 export const PRECISION_OPTIONS = [

@@ -216,6 +216,19 @@ def test_sampling_args_only_when_prompts_present() -> None:
     )
 
 
+def test_sampling_uses_selected_sampler() -> None:
+    args = _argv(
+        _config(
+            sampling={
+                "prompts_file": "/p/eval.txt",
+                "sample_sampler": "heun",
+            }
+        )
+    )
+
+    assert "--sample_sampler=heun" in args
+
+
 def test_sampling_attention_legacy_field_silently_ignored() -> None:
     """The ``sampling.attention`` field was removed (schema-only knob,
     no compiler ever wired it). Legacy YAML files carrying it must

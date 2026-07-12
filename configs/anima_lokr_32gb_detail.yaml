@@ -1,0 +1,184 @@
+# Anima factorized LoKr 32GB — 细节优先档（墙钟可控，不追求 2 it/s）
+#
+# 目标: 角色/高细节；期望稳态约 0.3–0.8 it/s（4080 SUPER），
+#       12 epoch 比 16×1024×dim32×all 的 30h 量级短很多。
+# 原则: 1024 细节 + 中等 batch + 关 GC + compile + 不全开 MLP
+# 有效 batch = 4×2 = 8
+#
+# 与 fast 档: 更高分辨率/更大 dim/更早层/更勤采样
+# 与「16×1 顶满」: 显存留余量换图/秒，通常更快完工
+#
+# OOM: batch 4→2；compile 关；layerStart 6→10；preset all→attention
+# 严禁 learningRate 2.0；prompt 单行
+
+schemaVersion: "1.0"
+
+_template:
+  name: Anima LoKr 32GB Detail
+  description: >
+    细节优先。1024、batch4×accum2、dim24、层 6–28 attention、compile on、无 GC。
+    稳态约 0.3–0.8 it/s，细节与墙钟折中。
+  arch: anima
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 1024
+
+dataset:
+  source: ./datasets/your_character
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    min: 576
+    max: 1344
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    dropRate: 0.10
+    keepTokens: 2
+  numRepeats: 3
+
+schedule:
+  epochs: 12
+  batchSize: 4
+  gradAccum: 2
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+gradientCheckpointing: false
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  enabled: true
+  everyNEpochs: 3
+  atFirst: true
+  resolution: [1024, 1024]
+  seed: -1
+  triggerWord: ""
+  inferenceSteps: 24
+  inferenceCfg: 4.5
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: false
+    crossCkptAnimation: false
+  prompts:
+    - prompt: "${TRIGGER}, 1girl, solo, upper body, looking at viewer, detailed face, detailed eyes, clean lineart, simple background"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 4.5
+      steps: 24
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 1girl, solo, full body, standing, intricate outfit, fabric folds, accessories, detailed clothing, plain background"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic"
+      cfg: 4.5
+      steps: 24
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "${TRIGGER}, 1girl, solo, three quarter view, soft studio lighting, skin texture, hair strands, high detail, neutral background"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 24
+      seed: 31415
+      width: 896
+      height: 1152
+
+output:
+  name: anima-lokr-32gb-detail
+  saveEveryNEpochs: 2
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  gpuDispatch:
+    mode: one-job-per-gpu
+    numGpus: null
+  distributed:
+    strategy: ddp
+  animaLora:
+    method: lora
+    preset: default
+    outputName: anima-lokr-32gb-detail
+
+    lora:
+      algorithm: lokr_factorized
+      minRank: 4
+      useTimestepMask: false
+      lokrFactor: 8
+      channelScalingAlpha: 0.5
+
+    networkDim: 24
+    networkAlpha: 24.0
+    networkTrainUnetOnly: true
+    layerStart: 6
+    layerEnd: 28
+    # attention 已够角色细节；要再猛可改 all（会变慢、更吃显存）
+    targetPreset: attention
+
+    optimizerType: AdamW
+    lrScheduler: cosine
+    learningRate: 4.0e-05
+    lrWarmupRatio: 0.06
+    maxTrainEpochs: 12
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.10
+
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    vaeChunkSize: 64
+    skipCacheCheck: true
+
+    attnMode: torch
+    compileMode: blocks
+    compileInductorMode: reduce-overhead
+    torchCompile: true
+    useCustomDownAutograd: true
+
+    blocksToSwap: 0
+    gradientCheckpointing: false
+    mixedPrecision: bf16
+    persistentDataLoaderWorkers: true
+    dataloaderPinMemory: true
+
+    ema: false
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    sampleGrid: true
+    useCmmd: true
+    validationSplitNum: 8
+    validationSeed: 42
+
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 5
+    keepTokens: 2
+    captionExtension: .txt
+    enableBucket: true
+    pathPattern: "*"

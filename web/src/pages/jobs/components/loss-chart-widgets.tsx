@@ -1,7 +1,11 @@
 import { AlertTriangle, Eye, EyeOff } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { formatLoss, type LossSeries } from "./loss-chart-model"
+import {
+  formatLoss,
+  type ChartBand,
+  type LossSeries,
+} from "./loss-chart-model"
 
 type TrendTone = "ok" | "muted" | "danger"
 
@@ -79,6 +83,7 @@ export function TooltipCard({ tooltip }: { tooltip: LossTooltip | null }) {
 }
 
 export function LegendRow({
+  bands,
   series,
   hidden,
   markersCount,
@@ -90,6 +95,7 @@ export function LegendRow({
   onToggleSeries,
   onReset,
 }: {
+  bands: ChartBand[]
   series: LossSeries[]
   hidden: Record<string, boolean>
   markersCount: number
@@ -122,8 +128,11 @@ export function LegendRow({
               <EyeOff className="size-3" />
             ) : (
               <span
-                className="inline-block h-[2px] w-3 align-middle"
-                style={{ background: s.color }}
+                className="inline-block w-3 border-t-2 align-middle"
+                style={{
+                  borderColor: s.color,
+                  borderTopStyle: s.dashed ? "dashed" : "solid",
+                }}
                 aria-hidden
               />
             )}
@@ -131,6 +140,21 @@ export function LegendRow({
           </button>
         )
       })}
+      {bands.map((band) =>
+        band.label ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-muted-foreground"
+            key={band.id}
+          >
+            <span
+              aria-hidden
+              className="h-2 w-3 rounded-[2px] border border-border/50"
+              style={{ background: band.color }}
+            />
+            {band.label}
+          </span>
+        ) : null,
+      )}
       {markersCount > 0 && (
         <span className="text-[10px] text-muted-foreground/70">
           · {markersCount} 个检查点标记

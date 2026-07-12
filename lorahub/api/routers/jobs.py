@@ -674,6 +674,8 @@ def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, An
     cfg = job.config_snapshot or {}
     backend = _cfg_get(cfg, "backend") or {}
     anima = _cfg_get(backend, "animaLora") or {}
+    ai_toolkit = _cfg_get(backend, "aiToolkit") or {}
+    ai_toolkit_train = _cfg_get(ai_toolkit, "train") or {}
     network = _cfg_get(cfg, "network") or {}
     optimizer = _cfg_get(cfg, "optimizer") or {}
     schedule = _cfg_get(cfg, "schedule") or {}
@@ -683,6 +685,11 @@ def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, An
     output = _cfg_get(cfg, "output") or {}
     loss = metrics.get("loss") or []
     val_loss = metrics.get("val_loss") or []
+    configured_lr = _cfg_get(optimizer, "lr")
+    if isinstance(configured_lr, dict):
+        configured_lr = _cfg_get(configured_lr, "unet")
+    prompts = _cfg_get(sampling, "prompts") or []
+    first_prompt = prompts[0] if isinstance(prompts, list) and prompts else {}
 
     def sample(seq: list[Any], n: int = 40) -> list[Any]:
         if len(seq) <= n:
@@ -711,10 +718,11 @@ def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, An
             "alpha": _first_not_none(
                 _cfg_get(anima, "networkAlpha"), _cfg_get(network, "alpha")
             ),
-            "algorithm": _cfg_get(_cfg_get(anima, "lora") or {}, "algorithm"),
-            "lr": _first_not_none(
-                _cfg_get(anima, "learningRate"), _cfg_get(optimizer, "lr")
+            "algorithm": _first_not_none(
+                _cfg_get(_cfg_get(anima, "lora") or {}, "algorithm"),
+                _cfg_get(network, "type"),
             ),
+            "lr": _first_not_none(_cfg_get(anima, "learningRate"), configured_lr),
             "lr_scheduler": _first_not_none(
                 _cfg_get(anima, "lrScheduler"), _cfg_get(optimizer, "schedule")
             ),
@@ -732,6 +740,29 @@ def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, An
             ),
             "validation_split_num": _cfg_get(anima, "validationSplitNum"),
             "sampling_enabled": _cfg_get(sampling, "enabled"),
+            "min_snr_gamma": _first_not_none(
+                _cfg_get(ai_toolkit_train, "minSnrGamma"),
+                _cfg_get(anima, "minSnrGamma"),
+                _cfg_get(_cfg_get(cfg, "loss") or {}, "minSnrGamma"),
+            ),
+            "flow_shift": _first_not_none(
+                _cfg_get(first_prompt, "flowShift"),
+                _cfg_get(anima, "discreteFlowShift"),
+                _cfg_get(sampling, "flowShift"),
+            ),
+            "sample_sampler": _first_not_none(
+                _cfg_get(first_prompt, "sampler"),
+                _cfg_get(sampling, "sampleSampler"),
+                _cfg_get(sampling, "sampler"),
+            ),
+            "sample_steps": _first_not_none(
+                _cfg_get(first_prompt, "steps"),
+                _cfg_get(sampling, "inferenceSteps"),
+            ),
+            "sample_cfg": _first_not_none(
+                _cfg_get(first_prompt, "cfg"),
+                _cfg_get(sampling, "inferenceCfg"),
+            ),
         },
         "metrics": {
             "total_loss_points": len(loss),
@@ -740,6 +771,8 @@ def _analysis_summary_payload(job: Any, metrics: dict[str, Any]) -> dict[str, An
             "epochs": metrics.get("epochs") or [],
             "checkpoints": metrics.get("checkpoints") or [],
             "gpu_samples": sample(metrics.get("gpu_samples") or [], 20),
+            "cache_progress": sample(metrics.get("cache_progress") or [], 20),
+            "diagnostics": (metrics.get("diagnostics") or [])[-20:],
             "lora_spectrum": sample(metrics.get("lora_spectrum") or [], 20),
             "overfit_signal": metrics.get("overfit_signal"),
             "total_steps": metrics.get("total_steps"),

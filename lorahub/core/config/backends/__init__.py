@@ -12,9 +12,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from .._shared import _CAMEL_CONFIG
+from .ai_toolkit import AiToolkitOptions
 from .anima_lora import (
     AnimaLoraMethodChimeraConfig,
     AnimaLoraMethodEasyControlConfig,
@@ -101,6 +102,14 @@ class BackendConfig(BaseModel):
     # Optional, anima_lora-specific knobs. None means "use anima_lora's own
     # base.toml defaults so kohya / dp users never need to touch this.
     anima_lora: AnimaLoraOptions | None = None
+    # Optional, ai-toolkit-specific Krea2 configuration.
+    ai_toolkit: AiToolkitOptions | None = None
+
+    @model_validator(mode="after")
+    def _initialize_selected_backend_options(self) -> BackendConfig:
+        if self.type == "ai_toolkit" and self.ai_toolkit is None:
+            self.ai_toolkit = AiToolkitOptions()
+        return self
 
 
 __all__ = [
@@ -111,6 +120,7 @@ __all__ = [
     "AnimaLoraMethodPostfixConfig",
     "AnimaLoraOptions",
     "AnimaLoraTurboConfig",
+    "AiToolkitOptions",
     "BackendConfig",
     "DeepSpeedZeroConfig",
     "DistributedTrainingConfig",

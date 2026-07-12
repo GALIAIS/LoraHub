@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ import pytest
 import yaml
 
 from lorahub.api.jobs_helpers import _select_backend
+from lorahub.api.jobs_helpers.lifecycle import _apply_settings_gpu_dispatch_default
 from lorahub.api.settings import Settings, probe_ai_toolkit_backend
 from lorahub.api.terminal_runner import resolve_backend_session
 from lorahub.core.backends._common import bootstrap as common_bootstrap
@@ -92,6 +94,7 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
             "backend": {"type": "ai_toolkit"},
             "sampling": {
                 "enabled": True,
+                "everyNEpochs": 2,
                 "everyNSteps": 250,
                 "resolution": [832, 1216],
                 "seed": 123,
@@ -119,6 +122,7 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
     assert process["train"]["disable_sampling"] is False
     assert process["sample"] == {
         "sample_every": 250,
+        "sample_every_n_epochs": 2,
         "sampler": "flowmatch",
         "width": 832,
         "height": 1216,
@@ -126,6 +130,9 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
         "seed": 123,
         "sample_steps": 28,
         "guidance_scale": 4.5,
+        "format": "jpg",
+        "walk_seed": False,
+        "network_multiplier": 1.0,
         "prompts": ["test prompt"],
         "samples": [
             {
@@ -139,6 +146,296 @@ def test_ai_toolkit_compiler_maps_visible_sampling_fields(tmp_path: Path) -> Non
             }
         ],
     }
+
+
+def test_ai_toolkit_compiler_supports_epoch_only_sampling(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+            "sampling": {"enabled": True, "everyNEpochs": 3},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    data = yaml.safe_load(next(iter(files.values())))
+    sample = data["config"]["process"][0]["sample"]
+
+    assert sample["sample_every_n_epochs"] == 3
+    assert sample["sample_every"] is None
+
+
+def test_ai_toolkit_scheduler_default_survives_normalized_round_trip(
+    tmp_path: Path,
+) -> None:
+    original = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+    normalized = original.model_dump(mode="json", by_alias=True)
+    reloaded = TrainingConfig.model_validate(normalized)
+
+    _, files = compile_config(reloaded, tmp_path)
+    train = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["train"]
+
+    assert train["lr_scheduler"] == "constant"
+
+
+def test_ai_toolkit_rejects_incompatible_text_encoder_qtype() -> None:
+    with pytest.raises(ValueError, match="qtypeTextEncoder"):
+        TrainingConfig.model_validate(
+            {
+                "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+                "dataset": {"source": ".", "resolution": [1024, 1024]},
+                "backend": {
+                    "type": "ai_toolkit",
+                    "aiToolkit": {
+                        "model": {"qtypeTextEncoder": "float8"},
+                    },
+                },
+            }
+        )
+
+
+def test_ai_toolkit_compiler_maps_dedicated_options(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {
+                "source": ".",
+                "resolution": [832, 1216],
+                "caption": {"ext": ".txt", "dropRate": 0.1},
+            },
+            "network": {
+                "type": "lokr",
+                "rank": 8,
+                "alpha": 8,
+                "networkDropout": 0.1,
+                "rankDropout": 0.2,
+                "moduleDropout": 0.3,
+                "initFrom": "seed.safetensors",
+            },
+            "optimizer": {
+                "type": "adamw8bit",
+                "lr": {"unet": 2e-5},
+                "schedule": "constant_with_warmup",
+                "warmupSteps": 50,
+                "weightDecay": 0.01,
+                "maxGradNorm": 0.5,
+            },
+            "schedule": {"maxSteps": 777, "batchSize": 2, "gradAccum": 3},
+            "output": {
+                "saveEveryNEpochs": 2,
+                "saveEveryNSteps": None,
+                "saveLastNSteps": 3,
+            },
+            "backend": {
+                "type": "ai_toolkit",
+                "aiToolkit": {
+                    "model": {
+                        "quantize": False,
+                        "quantizeTextEncoder": False,
+                        "lowVram": True,
+                        "vaePath": "Qwen/Qwen-Image",
+                    },
+                    "dataset": {
+                        "resolutions": [512, 768],
+                        "shuffleTokens": True,
+                        "tokenDropoutRate": 0.2,
+                        "cacheTextEmbeddings": True,
+                    },
+                    "network": {"lokrFactor": 8},
+                    "train": {
+                        "contentOrStyle": "style",
+                        "timestepType": "linear",
+                        "lossType": "pseudo_huber",
+                    },
+                    "sample": {"format": "png", "networkMultiplier": 0.8},
+                    "logging": {"logEvery": 5, "projectName": "test-project"},
+                },
+            },
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    process = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]
+
+    assert process["model"]["quantize"] is False
+    assert process["model"]["quantize_te"] is False
+    assert process["model"]["low_vram"] is True
+    assert process["model"]["model_kwargs"]["vae_path"] == "Qwen/Qwen-Image"
+    assert process["datasets"][0]["resolution"] == [512, 768]
+    assert process["datasets"][0]["shuffle_tokens"] is True
+    assert process["datasets"][0]["token_dropout_rate"] == 0.2
+    assert process["network"]["pretrained_lora_path"] == "seed.safetensors"
+    assert process["network"]["lokr_factor"] == 8
+    assert process["network"]["network_kwargs"] == {
+        "rank_dropout": 0.2,
+        "module_dropout": 0.3,
+    }
+    assert process["train"]["steps"] == 777
+    assert process["train"]["lr_scheduler"] == "constant_with_warmup"
+    assert process["train"]["lr_scheduler_params"]["num_warmup_steps"] == 50
+    assert process["train"]["content_or_style"] == "style"
+    assert process["train"]["timestep_type"] == "linear"
+    assert process["train"]["loss_type"] == "pseudo_huber"
+    assert process["save"]["save_every"] is None
+    assert process["save"]["save_every_n_epochs"] == 2
+    assert process["sample"]["format"] == "png"
+    assert process["sample"]["network_multiplier"] == 0.8
+    assert process["logging"]["log_every"] == 5
+
+
+def test_ai_toolkit_compiler_converts_legacy_width_height_to_pixel_budget(
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [832, 1216]},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    datasets = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["datasets"]
+
+    assert len(datasets) == 1
+    assert datasets[0]["resolution"] == 1008
+
+
+def test_ai_toolkit_extra_args_can_override_boolean_with_false(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {
+                "type": "ai_toolkit",
+                "extraArgs": {"model.quantize": False},
+            },
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    model = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["model"]
+
+    assert model["quantize"] is False
+
+
+@pytest.mark.parametrize(
+    ("network", "message"),
+    [
+        ({"targetUnet": False}, "requires network.target_unet=true"),
+        ({"targetTextEncoder": True}, "does not support text-encoder"),
+    ],
+)
+def test_ai_toolkit_rejects_unsupported_training_targets(
+    network: dict[str, bool],
+    message: str,
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "network": network,
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    with pytest.raises(ValueError, match=message):
+        compile_config(cfg, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("optimizer", "expected"),
+    [
+        ("adamw", {"betas": [0.9, 0.999], "weight_decay": 0.01}),
+        ("adagrad", {"weight_decay": 0.01}),
+        ("automagic3", {"beta2": 0.999, "weight_decay": 0.01}),
+    ],
+)
+def test_ai_toolkit_emits_only_supported_optimizer_defaults(
+    optimizer: str,
+    expected: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "optimizer": {"type": optimizer, "weightDecay": 0.01},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    process = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]
+
+    assert process["train"]["optimizer_params"] == expected
+
+
+def test_ai_toolkit_forces_single_gpu_dispatch() -> None:
+    cfg = _cfg()
+    cfg.backend.gpu_dispatch.mode = "distributed"
+    cfg.backend.gpu_dispatch.num_gpus = 2
+
+    _apply_settings_gpu_dispatch_default(cfg)
+
+    assert cfg.backend.gpu_dispatch.mode == "one-job-per-gpu"
+    assert cfg.backend.gpu_dispatch.num_gpus is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ai_toolkit_krea2",
+        "ai_toolkit_krea2_dora",
+        "ai_toolkit_krea2_loha",
+        "ai_toolkit_krea2_lokr",
+        "ai_toolkit_krea2_lorm",
+    ],
+)
+def test_builtin_ai_toolkit_templates_compile(name: str, tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "configs" / f"{name}.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw.pop("_template", None)
+    raw.pop("_placeholders", None)
+
+    cfg = TrainingConfig.model_validate(raw)
+    _, files = compile_config(cfg, tmp_path)
+    process = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]
+
+    assert process["train"]["steps"] == 1000
+    assert process["datasets"][0]["resolution"] == 1024
+
+
+def test_ai_toolkit_epoch_sampling_detects_crossed_boundaries() -> None:
+    cadence_path = (
+        Path(__file__).resolve().parents[1]
+        / "external"
+        / "ai_toolkit"
+        / "toolkit"
+        / "training_cadence.py"
+    )
+    spec = importlib.util.spec_from_file_location("ai_toolkit_training_cadence", cadence_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.epoch_cadence_due(0, 1, 1) is True
+    assert module.epoch_cadence_due(1, 2, 2) is True
+    assert module.epoch_cadence_due(2, 3, 2) is False
+    assert module.epoch_cadence_due(2, 6, 2) is True
+    assert module.epoch_cadence_due(3, 3, 1) is False
+    assert module.epoch_cadence_due(0, 1, None) is False
 
 
 def test_ai_toolkit_compiler_honors_disabled_sampling(tmp_path: Path) -> None:
@@ -206,10 +503,18 @@ def test_ai_toolkit_parser_summarizes_progress_lines() -> None:
     assert ev.payload["done"] == 70
     assert ev.payload["total"] == 280
 
+    text_ev = parse_line(
+        "Caching text embeddings: 50%|█████| 10/20 [00:02<00:02, 5.00it/s]"
+    )
+    assert text_ev is not None
+    assert text_ev.type is EventType.cache_progress
+    assert text_ev.payload["phase"] == "text_encoder"
+
 
 def test_ai_toolkit_parser_reads_tqdm_training_steps() -> None:
     ev = parse_line(
-        "krea2_real:  27%|██▋| 27/100 [03:04<08:18, 6.83s/it, lr: 1.0e-04 loss: 1.964e-01]"
+        "krea2_real:  27%|██▋| 27/100 [03:04<08:18, 6.83s/it, "
+        "epoch: 3 lr: 1.0e-04 loss: 1.964e-01 snr: 2.5 grad_norm: 0.75]"
     )
 
     assert ev is not None
@@ -218,8 +523,24 @@ def test_ai_toolkit_parser_reads_tqdm_training_steps() -> None:
     assert ev.payload["total_steps"] == 100
     assert ev.payload["loss"] == 0.1964
     assert ev.payload["lr"] == 1.0e-04
+    assert ev.payload["epoch"] == 3
+    assert ev.payload["snr"] == 2.5
+    assert ev.payload["grad_norm"] == 0.75
     assert ev.payload["rate"] == "6.83s/it"
     assert ev.payload["eta"] == "08:18"
+
+
+def test_ai_toolkit_parser_keeps_checkpoint_step() -> None:
+    ev = parse_line("Saved checkpoint at step 250 to /tmp/krea2_000000250.safetensors")
+
+    assert ev is not None
+    assert ev.type is EventType.checkpoint_saved
+    assert ev.payload["step"] == 250
+    assert ev.payload["path"] == "/tmp/krea2_000000250.safetensors"
+
+    legacy = parse_line("Saved checkpoint to /tmp/krea2_000000500.safetensors")
+    assert legacy is not None
+    assert legacy.payload["step"] == 500
 
 
 def test_ai_toolkit_sample_scan_emits_relative_sample_ready(tmp_path: Path) -> None:

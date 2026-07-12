@@ -1,10 +1,14 @@
-import type { JobMetricsResponse } from "@/lib/api"
+import type { BackendId, JobMetricsResponse } from "@/lib/api"
 import type {
   ChartBand,
   ChartMarker,
   LossSeries,
 } from "../../jobs/components/loss-chart-model"
-import { rollingQuartiles, type BandPoint } from "./loss-stats"
+import {
+  defaultRollingWindow,
+  rollingQuartiles,
+  type BandPoint,
+} from "./loss-stats"
 import { analyseChangepoints } from "./pelt"
 import type { ReferenceRun } from "./reference-run"
 import { xMapper, type XMode } from "./x-axis-mode"
@@ -17,12 +21,16 @@ export function buildLossSeries({
   xMode,
   referenceRun,
   referenceMetrics,
+  backendType,
+  referenceBackendType,
 }: {
   metrics: JobMetricsResponse | null | undefined
   jobId: string
   xMode: XMode
   referenceRun: ReferenceRun | null
   referenceMetrics: JobMetricsResponse | null | undefined
+  backendType: BackendId | null
+  referenceBackendType: BackendId | null
 }): LossSeries[] {
   const allLossPoints = (metrics?.loss ?? []).filter(
     (p): p is { step: number; loss: number; epoch?: number | null; ts: number } =>
@@ -39,28 +47,24 @@ export function buildLossSeries({
   }))
   const out: LossSeries[] = []
   if (trainPoints.length > 0) {
+    out.push({
+      id: `${jobId}-train-raw`,
+      label: "原始 loss · 每步",
+      color: "var(--chart-1)",
+      points: trainPoints,
+    })
+    const rollingWindow = defaultRollingWindow(trainPoints.length)
     const robust =
-      trainPoints.length >= 8 ? rollingQuartiles(trainPoints) : null
+      trainPoints.length >= 8
+        ? rollingQuartiles(trainPoints, rollingWindow)
+        : null
     if (robust) {
       out.push({
         id: `${jobId}-train-median`,
-        label: "训练 loss · 中位数",
-        color: "var(--chart-1)",
-        points: robust.median,
-      })
-      out.push({
-        id: `${jobId}-train-raw`,
-        label: "原始采样",
-        color: "var(--chart-3)",
+        label: `滚动中位数 · ${rollingWindow} 步`,
+        color: "var(--chart-2)",
         dashed: true,
-        points: trainPoints,
-      })
-    } else {
-      out.push({
-        id: `${jobId}-train`,
-        label: "训练 loss",
-        color: "var(--chart-1)",
-        points: trainPoints,
+        points: robust.median,
       })
     }
     if (trainPoints.length >= 6) {
@@ -72,7 +76,7 @@ export function buildLossSeries({
       out.push({
         id: `${jobId}-train-ema`,
         label: `EMA α=${EMA_ALPHA}`,
-        color: "var(--chart-4)",
+        color: "var(--chart-3)",
         dashed: true,
         points: ema,
       })
@@ -113,7 +117,16 @@ export function buildLossSeries({
     })
   }
 
-  if (referenceRun && referenceRun.jobId !== jobId && referenceMetrics) {
+  const comparableReference =
+    backendType != null &&
+    referenceBackendType != null &&
+    backendType === referenceBackendType
+  if (
+    referenceRun &&
+    referenceRun.jobId !== jobId &&
+    referenceMetrics &&
+    comparableReference
+  ) {
     const refMap = xMapper(xMode, referenceMetrics)
     const refPoints = (referenceMetrics.loss ?? [])
       .filter(
@@ -129,6 +142,47 @@ export function buildLossSeries({
         dashed: true,
         points: refPoints,
       })
+    }
+    if (comparableReference) {
+      const refEpochToStep = new Map<number, number>()
+      for (const point of referenceMetrics.loss ?? []) {
+        if (typeof point.epoch === "number" && typeof point.step === "number") {
+          refEpochToStep.set(point.epoch, point.step)
+        }
+      }
+      const refLastStep = referenceMetrics.last_step ?? 0
+      const refVal = (referenceMetrics.val_loss ?? [])
+        .filter(
+          (point): point is {
+            epoch: number
+            val_loss: number
+            step?: number | null
+            ts: number
+          } =>
+            typeof point.val_loss === "number" &&
+            Number.isFinite(point.val_loss),
+        )
+        .map((point) => ({
+          step: refMap({
+            step:
+              typeof point.step === "number"
+                ? point.step
+                : (refEpochToStep.get(point.epoch) ??
+                  (refLastStep || point.epoch)),
+            epoch: point.epoch,
+            ts: point.ts,
+          }),
+          loss: point.val_loss,
+        }))
+      if (refVal.length > 0) {
+        out.push({
+          id: `${jobId}-ref-val`,
+          label: `参考 ${referenceRun.label} · 验证`,
+          color: "var(--chart-4)",
+          dashed: true,
+          points: refVal,
+        })
+      }
     }
   }
   return out
@@ -166,7 +220,8 @@ export function buildLossBands(
   return [
     {
       id: "train-iqr",
-      color: "color-mix(in oklch, var(--chart-1) 18%, transparent)",
+      label: "局部 loss 分布 · Q25–Q75",
+      color: "color-mix(in oklch, var(--chart-1) 14%, transparent)",
       points: series,
     },
   ]
@@ -208,6 +263,22 @@ export function buildAllMarkers({
   for (const s of changepointSteps) {
     const sample = stepToSample.get(s) ?? { step: s, ts: 0 }
     out.push({ step: map(sample), color: "var(--chart-2)" })
+  }
+  for (const point of metrics?.nonfinite_loss ?? []) {
+    if (typeof point.step !== "number") continue
+    out.push({
+      step: map({ step: point.step, ts: point.ts ?? undefined }),
+      label: "训练 loss 为 NaN/Inf",
+      color: "var(--destructive)",
+    })
+  }
+  for (const point of metrics?.nonfinite_val_loss ?? []) {
+    if (typeof point.step !== "number") continue
+    out.push({
+      step: map({ step: point.step, ts: point.ts ?? undefined }),
+      label: "验证 loss 为 NaN/Inf",
+      color: "var(--destructive)",
+    })
   }
   return out
 }

@@ -25,6 +25,7 @@ export interface MultiLineSeries {
   color: string
   unit?: string
   axis?: "left" | "right"
+  dashed?: boolean
   points: MultiLinePoint[]
 }
 
@@ -227,6 +228,8 @@ function Core({
               }}
               stroke={s.color || `var(--chart-${(index % 5) + 1})`}
               strokeWidth={1.8}
+              dashFromIndex={s.dashed ? 0 : undefined}
+              dashArray={s.dashed ? "5,4" : undefined}
             />
           ))}
           <ChartNumericYAxis format={fmtNum} />

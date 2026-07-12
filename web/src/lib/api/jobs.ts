@@ -46,13 +46,14 @@ export interface JobMetricPoint {
   step: number
   epoch?: number | null
   loss?: number | null
-  // Optional per-step metrics forwarded by the diffusion-pipe parser:
-  // learning rate from the deepspeed engine line, plus iteration time
-  // and samples-per-second from dp's own per-step summary. Absent when
-  // the upstream backend doesn't emit them (older kohya releases).
+  // Optional per-step telemetry normalized across backend parsers. Absent
+  // when the trainer does not emit the corresponding signal.
   lr?: number | null
   iter_time_s?: number | null
   samples_per_sec?: number | null
+  eta_s?: number | null
+  snr?: number | null
+  grad_norm?: number | null
   ts: number
 }
 
@@ -119,6 +120,25 @@ export interface JobMetricsResponse {
   last_step: number | null
   last_nonfinite_loss: { step: number | null; loss: number | null; ts: number | null } | null
   last_nonfinite_val_loss: { step: number | null; loss: number | null; ts: number | null } | null
+  nonfinite_loss: Array<{ step: number | null; loss: null; ts: number | null }>
+  nonfinite_val_loss: Array<{ step: number | null; loss: null; ts: number | null }>
+  cache_progress: Array<{
+    phase: string | null
+    done: number | null
+    total: number | null
+    percent: number | null
+    rate: string | null
+    eta_s: number | null
+    ts: number
+  }>
+  diagnostics: Array<{
+    category: string | null
+    severity: string | null
+    message: string | null
+    remediation: string | null
+    evidence: string | null
+    ts: number
+  }>
   first_step_ts: number | null
   last_step_ts: number | null
   duration_s: number | null

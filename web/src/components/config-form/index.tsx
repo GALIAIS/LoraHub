@@ -55,30 +55,31 @@ import { MonitoringFields } from "./sections/monitoring"
 import { OutputFields } from "./sections/output"
 import { BackendFields } from "./sections/backend"
 import { BackendAnimaLoraFields } from "./sections/backend-anima-lora"
+import { BackendAiToolkitFields } from "./sections/backend-ai-toolkit"
 import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
 import { ValidationFields } from "./sections/validation"
 import { ResumeFields } from "./sections/resume"
 import { FLOW_MATCH_ARCHES } from "./options"
 import { defaultArchFor, isArchSupported } from "./backend-meta"
 import { buildErrorMap, setIn } from "./types"
-import type { ConfigFormValue } from "./types"
+import type { BackendKey, ConfigFormValue } from "./types"
 import { ReadOnlyProvider, Section } from "./widgets"
 
 export type { ConfigFormValue } from "./types"
 
-export type BackendKey = "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
+export type { BackendKey } from "./types"
 const AI_TOOLKIT_DEFAULT_CHECKPOINT = "krea/Krea-2-Raw"
 const AI_TOOLKIT_KREA_CHECKPOINTS = new Set([
   "krea/Krea-2-Raw",
   "krea/Krea-2-Turbo",
 ])
+const AI_TOOLKIT_NETWORK_TYPES = new Set(["lora", "dora", "loha", "lokr", "lorm"])
 
 const UNUSED_SECTIONS: Record<BackendKey, readonly string[]> = {
   kohya: [],
   "diffusion-pipe": [],
   anima_lora: [
     "network",
-    "optimizer",
     "loss",
     "advancedLoss",
     "flowMatch",
@@ -159,6 +160,14 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         if (archChanged || !checkpoint || !AI_TOOLKIT_KREA_CHECKPOINTS.has(checkpoint)) {
           next = setIn(next, ["baseModel", "checkpoint"], AI_TOOLKIT_DEFAULT_CHECKPOINT)
         }
+        if (!AI_TOOLKIT_NETWORK_TYPES.has(String(next.network?.type ?? "lora"))) {
+          next = setIn(next, ["network", "type"], "lora")
+          next = setIn(next, ["network", "convDim"], null)
+          next = setIn(next, ["network", "convAlpha"], null)
+        }
+        next = setIn(next, ["backend", "gpuDispatch"], {
+          mode: "one-job-per-gpu",
+        })
       }
       onChange(next)
     },
@@ -262,7 +271,7 @@ function KohyaForm({ value, set, errorMap, arch = "", flowMatchVisible = false }
   )
 }
 
-function DiffusionPipeForm({ value, set, errorMap, arch = "", flowMatchVisible = false }: BackendFormProps) {
+function DiffusionPipeForm({ value, set, errorMap, arch = "" }: BackendFormProps) {
   return (
     <>
       <Section icon={<Workflow className="size-3.5" />} title="diffusion-pipe 选项" subtitle="diffusion-pipe 后端配置">
@@ -272,17 +281,13 @@ function DiffusionPipeForm({ value, set, errorMap, arch = "", flowMatchVisible =
       <ArchPathsSection value={value} set={set} errorMap={errorMap} arch={arch} backendType="diffusion-pipe" />
       <DatasetSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <NetworkSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
-      <OptimizerSection value={value} set={set} errorMap={errorMap} />
+      <OptimizerSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <LossSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
-      {flowMatchVisible && (
-        <FlowMatchSection value={value} set={set} errorMap={errorMap} arch={arch} />
-      )}
-      <ScheduleSection value={value} set={set} errorMap={errorMap} />
-      <AttentionSection value={value} set={set} errorMap={errorMap} />
+      <ScheduleSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <PrecisionSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
-      <OptimizationSection value={value} set={set} errorMap={errorMap} />
-      <DataLoaderSection value={value} set={set} errorMap={errorMap} />
-      <ValidationSection value={value} set={set} errorMap={errorMap} />
+      <OptimizationSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
+      <DataLoaderSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
+      <SamplingSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <OutputSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <ResumeSection value={value} set={set} errorMap={errorMap} backendType="diffusion-pipe" />
       <MonitoringSection value={value} set={set} errorMap={errorMap} />
@@ -304,7 +309,7 @@ function AnimaLoraForm({ value, set, errorMap, arch = "" }: BackendFormProps) {
       <BaseModelSection value={value} set={set} errorMap={errorMap} backendType="anima_lora" />
       <ArchPathsSection value={value} set={set} errorMap={errorMap} arch={arch} backendType="anima_lora" />
       <DatasetSection value={value} set={set} errorMap={errorMap} backendType="anima_lora" />
-      <ScheduleSection value={value} set={set} errorMap={errorMap} />
+      <ScheduleSection value={value} set={set} errorMap={errorMap} backendType="anima_lora" />
       <SamplingSection value={value} set={set} errorMap={errorMap} backendType="anima_lora" />
       <ResumeSection value={value} set={set} errorMap={errorMap} backendType="anima_lora" />
       <MonitoringSection value={value} set={set} errorMap={errorMap} />
@@ -313,19 +318,7 @@ function AnimaLoraForm({ value, set, errorMap, arch = "" }: BackendFormProps) {
 }
 
 function AiToolkitForm({ value, set, errorMap }: BackendFormProps) {
-  return (
-    <>
-      <BaseModelSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-      <DatasetSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-      <NetworkSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-      <OptimizerSection value={value} set={set} errorMap={errorMap} />
-      <ScheduleSection value={value} set={set} errorMap={errorMap} />
-      <PrecisionSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-      <OptimizationSection value={value} set={set} errorMap={errorMap} />
-      <SamplingSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-      <OutputSection value={value} set={set} errorMap={errorMap} backendType="ai_toolkit" />
-    </>
-  )
+  return <BackendAiToolkitFields value={value} set={set} errorMap={errorMap} />
 }
 
 function BaseModelSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType: BackendKey }) {
@@ -366,10 +359,10 @@ function NetworkSection({ value, set, errorMap, backendType }: BackendFormProps 
   )
 }
 
-function OptimizerSection({ value, set, errorMap }: BackendFormProps) {
+function OptimizerSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType?: BackendKey }) {
   return (
     <Section icon={<SlidersHorizontal className="size-3.5" />} title="优化器与学习率" subtitle="权重更新策略">
-      <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} />
+      <OptimizerFields value={value.optimizer} set={set} errorMap={errorMap} backendType={backendType} />
     </Section>
   )
 }
@@ -398,10 +391,10 @@ function FlowMatchSection({ value, set, errorMap, arch = "" }: BackendFormProps)
   )
 }
 
-function ScheduleSection({ value, set, errorMap }: BackendFormProps) {
+function ScheduleSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType?: BackendKey }) {
   return (
     <Section icon={<Settings2 className="size-3.5" />} title="训练计划" subtitle="回合数、批大小、梯度累积">
-      <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} />
+      <ScheduleFields value={value.schedule} set={set} errorMap={errorMap} backendType={backendType} />
     </Section>
   )
 }
@@ -422,18 +415,18 @@ function PrecisionSection({ value, set, errorMap, backendType }: BackendFormProp
   )
 }
 
-function OptimizationSection({ value, set, errorMap }: BackendFormProps) {
+function OptimizationSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType?: BackendKey }) {
   return (
     <Section icon={<Rocket className="size-3.5" />} title="训练优化" subtitle="速度与显存开关">
-      <OptimizationFields value={value.optimization} set={set} errorMap={errorMap} />
+      <OptimizationFields value={value.optimization} set={set} errorMap={errorMap} backendType={backendType} />
     </Section>
   )
 }
 
-function DataLoaderSection({ value, set, errorMap }: BackendFormProps) {
+function DataLoaderSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType?: BackendKey }) {
   return (
     <Section icon={<Database className="size-3.5" />} title="DataLoader" subtitle="加载与缓存批大小">
-      <DataLoaderFields value={value.dataloader} set={set} errorMap={errorMap} />
+      <DataLoaderFields value={value.dataloader} set={set} errorMap={errorMap} backendType={backendType} />
     </Section>
   )
 }

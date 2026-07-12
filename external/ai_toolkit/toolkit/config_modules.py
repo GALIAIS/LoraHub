@@ -22,7 +22,16 @@ else:
 
 class SaveConfig:
     def __init__(self, **kwargs):
-        self.save_every: int = kwargs.get('save_every', 1000)
+        raw_save_every = kwargs.get('save_every', 1000)
+        self.save_every: Optional[int] = int(raw_save_every) if raw_save_every else None
+        raw_save_every_n_epochs = kwargs.get('save_every_n_epochs', None)
+        self.save_every_n_epochs: Optional[int] = (
+            int(raw_save_every_n_epochs) if raw_save_every_n_epochs else None
+        )
+        if self.save_every is not None and self.save_every < 1:
+            raise ValueError('save_every must be at least 1')
+        if self.save_every_n_epochs is not None and self.save_every_n_epochs < 1:
+            raise ValueError('save_every_n_epochs must be at least 1')
         self.dtype: str = kwargs.get('dtype', 'float16')
         self.max_step_saves_to_keep: int = kwargs.get('max_step_saves_to_keep', 5)
         self.save_format: SaveFormat = kwargs.get('save_format', 'safetensors')
@@ -79,7 +88,16 @@ class SampleItem:
 class SampleConfig:
     def __init__(self, **kwargs):
         self.sampler: str = kwargs.get('sampler', 'ddpm')
-        self.sample_every: int = kwargs.get('sample_every', 100)
+        raw_sample_every = kwargs.get('sample_every', 100)
+        self.sample_every: Optional[int] = int(raw_sample_every) if raw_sample_every else None
+        raw_sample_every_n_epochs = kwargs.get('sample_every_n_epochs', None)
+        self.sample_every_n_epochs: Optional[int] = (
+            int(raw_sample_every_n_epochs) if raw_sample_every_n_epochs else None
+        )
+        if self.sample_every is not None and self.sample_every < 1:
+            raise ValueError('sample_every must be at least 1')
+        if self.sample_every_n_epochs is not None and self.sample_every_n_epochs < 1:
+            raise ValueError('sample_every_n_epochs must be at least 1')
         self.width: int = kwargs.get('width', 512)
         self.height: int = kwargs.get('height', 512)
         self.neg = kwargs.get('neg', False)

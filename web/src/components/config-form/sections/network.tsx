@@ -68,17 +68,19 @@ export const NetworkFields = memo(function NetworkFields({
           onChange={(n) => set(["network", "rank"], n ?? 32)}
         />
       </Row>
-      <Row
-        label="Alpha（缩放）"
-        description="实际学习率缩放因子。常见做法是 alpha = rank / 2。"
-        errors={errorMap.get("network.alpha")}
-      >
-        <IntInput
-          min={1}
-          value={v.alpha ?? 16}
-          onChange={(n) => set(["network", "alpha"], n ?? 16)}
-        />
-      </Row>
+      {!isDiffusionPipe && (
+        <Row
+          label="Alpha（缩放）"
+          description="实际学习率缩放因子。常见做法是 alpha = rank / 2。"
+          errors={errorMap.get("network.alpha")}
+        >
+          <IntInput
+            min={1}
+            value={v.alpha ?? 16}
+            onChange={(n) => set(["network", "alpha"], n ?? 16)}
+          />
+        </Row>
+      )}
       {!isDiffusionPipe && (
         <>
           <Row label="训练 U-Net" description="训练视觉网络。">
@@ -202,17 +204,19 @@ export const NetworkFields = memo(function NetworkFields({
               placeholder="（可选）"
             />
           </Row>
-          <Row
-            label="dimFromWeights"
-            description="kohya 从已加载权重读取 rank。"
-            errors={errorMap.get("network.dimFromWeights")}
-          >
-            <PathInput
-              value={v.dimFromWeights ?? ""}
-              onChange={(s) => set(["network", "dimFromWeights"], s || null)}
-              placeholder="（可选）"
-            />
-          </Row>
+          {!isDiffusionPipe && (
+            <Row
+              label="dimFromWeights"
+              description="从已加载权重读取 rank。"
+              errors={errorMap.get("network.dimFromWeights")}
+            >
+              <PathInput
+                value={v.dimFromWeights ?? ""}
+                onChange={(s) => set(["network", "dimFromWeights"], s || null)}
+                placeholder="（可选）"
+              />
+            </Row>
+          )}
           {isDiffusionPipe && (
             <Row label="dtype" description="LoRA 参数 dtype。">
               <EnumSelect

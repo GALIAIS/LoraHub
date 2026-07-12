@@ -26,6 +26,7 @@ export interface ChartMarker {
 // legend and doesn't carry tooltip values.
 export interface ChartBand {
   id: string
+  label?: string
   color: string
   /** Same step axis as the series. lo/hi are absolute loss values. */
   points: { step: number; lo: number; hi: number }[]

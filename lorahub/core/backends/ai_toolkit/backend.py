@@ -42,6 +42,30 @@ class AIToolkitBackend:
 
     def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
+        if cfg.backend.gpu_dispatch.mode == "distributed":
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "backend.gpu_dispatch.mode",
+                    "ai_toolkit currently supports one GPU per training process.",
+                )
+            )
+        if not cfg.network.target_unet:
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "network.target_unet",
+                    "ai_toolkit Krea2 requires DiT LoRA training.",
+                )
+            )
+        if cfg.network.target_text_encoder:
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "network.target_text_encoder",
+                    "ai_toolkit Krea2 does not support text-encoder LoRA training.",
+                )
+            )
         if cfg.base_model.arch not in {a.value for a in _SUPPORTED}:
             issues.append(
                 ValidationIssue(

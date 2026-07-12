@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import type { CSSProperties, WheelEvent } from "react"
 import { ChartTooltip } from "@/components/charts/tooltip"
+import { decimateTimeSeries } from "@/components/charts/decimate-time-series"
 import { Grid } from "@/components/charts/grid"
 import { Line } from "@/components/charts/line"
 import { LineChart as BklitLineChart } from "@/components/charts/line-chart"
@@ -13,7 +14,6 @@ import { cn } from "@/lib/utils"
 import { FullscreenModal } from "./loss-chart-fullscreen"
 import { LegendRow, TrendBadge } from "./loss-chart-widgets"
 import { ChartToolbar } from "./chart-toolbar"
-import { downsamplePoints } from "../utils"
 import {
   MAX_POINTS,
   formatLoss,
@@ -74,22 +74,34 @@ function LossChartCore({
     })
   }, [series])
 
-  const prepared = useMemo(
-    () =>
-      series.map((s) => ({
-        ...s,
-        points: downsamplePoints(s.points, MAX_POINTS),
+  const { prepared, preparedBands } = useMemo(() => {
+    const anchor = series[0]?.points ?? []
+    const sampledAnchor = decimateTimeSeries(anchor, MAX_POINTS, ["loss"])
+    const indexByPoint = new Map(anchor.map((point, index) => [point, index]))
+    const sampledIndices = sampledAnchor
+      .map((point) => indexByPoint.get(point))
+      .filter((index): index is number => index != null)
+    const sample = <T extends { step: number }>(
+      points: T[],
+      valueKeys: string[],
+    ) => {
+      if (points.length <= MAX_POINTS) return points
+      if (sameStepGrid(anchor, points)) {
+        return sampledIndices.map((index) => points[index]).filter(Boolean)
+      }
+      return decimateTimeSeries(points, MAX_POINTS, valueKeys)
+    }
+    return {
+      prepared: series.map((item) => ({
+        ...item,
+        points: sample(item.points, ["loss"]),
       })),
-    [series],
-  )
-  const preparedBands = useMemo(
-    () =>
-      bands.map((band) => ({
+      preparedBands: bands.map((band) => ({
         ...band,
-        points: downsamplePoints(band.points, MAX_POINTS),
+        points: sample(band.points, ["lo", "hi"]),
       })),
-    [bands],
-  )
+    }
+  }, [bands, series])
   const visibleSeries = prepared.filter((s) => !hidden[s.id])
   const data = useMemo(
     () => mergeLossData(visibleSeries, preparedBands),
@@ -231,7 +243,8 @@ function LossChartCore({
               key={s.id}
               dataKey={s.id}
               stroke={s.color || `var(--chart-${(index % 5) + 1})`}
-              strokeWidth={s.dashed ? 1.8 : 2.4}
+              strokeWidth={s.dashed ? 2 : 1.6}
+              dashFromIndex={s.dashed ? 0 : undefined}
               dashArray={s.dashed ? "5,4" : undefined}
               animate={!heavyChart}
               fadeEdges={!heavyChart}
@@ -298,6 +311,7 @@ function LossChartCore({
       )}
 
       <LegendRow
+        bands={preparedBands}
         series={prepared}
         hidden={hidden}
         markersCount={markers.length}
@@ -319,6 +333,17 @@ function formatAxisValue(
 ) {
   if (typeof value !== "number") return "?"
   return formatter ? formatter(value) : String(Math.round(value))
+}
+
+function sameStepGrid(
+  anchor: { step: number }[],
+  points: { step: number }[],
+) {
+  return (
+    anchor.length > 0 &&
+    anchor.length === points.length &&
+    anchor.every((point, index) => point.step === points[index].step)
+  )
 }
 
 function mergeLossData(

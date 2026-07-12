@@ -14,6 +14,7 @@ export const PrecisionFields = memo(function PrecisionFields({
   backendType?: "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
 }) {
   const isAiToolkit = backendType === "ai_toolkit"
+  const isDiffusionPipe = backendType === "diffusion-pipe"
   return (
     <>
       <Row label="精度" description="bf16 需要 Ampere 及以上（RTX 30/40、A100、H100）。">
@@ -32,7 +33,7 @@ export const PrecisionFields = memo(function PrecisionFields({
           onCheckedChange={(b) => set(["gradientCheckpointing"], b)}
         />
       </Row>
-      {!isAiToolkit && (
+      {!isAiToolkit && !isDiffusionPipe && (
         <Row
           label="缓存潜变量"
           description="提前用 VAE 编码图片并缓存。"
@@ -43,16 +44,18 @@ export const PrecisionFields = memo(function PrecisionFields({
           />
         </Row>
       )}
-      <Row
-        label="潜变量缓存到磁盘"
-        description="把 VAE 潜变量缓存写到磁盘。"
-      >
-        <ToggleSwitch
-          checked={value.cacheLatentsToDisk ?? false}
-          onCheckedChange={(b) => set(["cacheLatentsToDisk"], b)}
-        />
-      </Row>
-      {!isAiToolkit && (
+      {!isDiffusionPipe && (
+        <Row
+          label="潜变量缓存到磁盘"
+          description="把 VAE 潜变量缓存写到磁盘。"
+        >
+          <ToggleSwitch
+            checked={value.cacheLatentsToDisk ?? false}
+            onCheckedChange={(b) => set(["cacheLatentsToDisk"], b)}
+          />
+        </Row>
+      )}
+      {!isAiToolkit && !isDiffusionPipe && (
         <>
           <Row
             label="跳过缓存检查"

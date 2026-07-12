@@ -62,10 +62,47 @@ export function buildDefaults(backend?: BackendId): ConfigFormValue {
         ...base.baseModel,
         checkpoint: "krea/Krea-2-Raw",
       },
+      network: {
+        type: "lora",
+        rank: 16,
+        alpha: 16,
+        targetUnet: true,
+        targetTextEncoder: false,
+      },
+      optimizer: {
+        type: "adamw8bit",
+        lr: { unet: 1e-4, textEncoder: 5e-5 },
+      },
+      schedule: {
+        maxSteps: 1000,
+        batchSize: 1,
+        gradAccum: 1,
+      },
+      precision: "bf16",
+      gradientCheckpointing: true,
+      sampling: {
+        enabled: true,
+        everyNEpochs: 1,
+        everyNSteps: null,
+        resolution: [1024, 1024],
+        seed: 42,
+        inferenceSteps: 28,
+        inferenceCfg: 4.5,
+        prompts: [{ prompt: "a high quality image" }],
+      },
+      output: {
+        name: "krea2_lora",
+        saveEveryNEpochs: 1,
+        saveEveryNSteps: null,
+        saveLastNSteps: 4,
+        saveDtype: "fp16",
+      },
       backend: {
         ...base.backend,
-        extraArgs: {
-          "model.name_or_path": "krea/Krea-2-Raw",
+        gpuDispatch: { mode: "one-job-per-gpu" },
+        aiToolkit: {
+          dataset: { resolutions: [1024] },
+          train: { lrScheduler: "constant" },
         },
       },
     }

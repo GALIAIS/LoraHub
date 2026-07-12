@@ -11,6 +11,7 @@ Three layers:
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -143,7 +144,8 @@ def test_compile_turbo_emits_distill_turbo_argv(tmp_path: Path) -> None:
     argv, files = compile_turbo_config(cfg, tmp_path / "ws")
     pairs = _argv_pairs(argv)
 
-    assert files == {}, "turbo compiler must not emit any files"
+    config_path = Path(pairs["--config"][0])
+    assert config_path in files
     # Critical turbo-only flags must be present.
     assert pairs["--iterations"] == ["1000"]
     assert pairs["--batch_size"] == ["1"]
@@ -160,6 +162,50 @@ def test_compile_turbo_emits_distill_turbo_argv(tmp_path: Path) -> None:
     assert pairs["--log_interval"] == ["5"]
     # Output dir routes into the workspace.
     assert pairs["--output_dir"][0].endswith("ckpt")
+
+
+def test_compile_turbo_writes_complete_override_toml(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, with_turbo=True)
+    turbo = cfg.backend.anima_lora.turbo
+    assert turbo is not None
+    turbo.student_alpha = 24
+    turbo.fake_alpha = 80
+    turbo.tau_ca_min_gap = 0.1
+    turbo.weight_decay = 0.01
+    turbo.grad_clip = 0.5
+    turbo.t_distribution = "sigmoid"
+    turbo.sigmoid_scale = 1.5
+
+    argv, files = compile_turbo_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+    config_path = Path(pairs["--config"][0])
+    body = tomllib.loads(files[config_path])
+
+    assert body["network"]["student_alpha"] == 24
+    assert body["network"]["fake_alpha"] == 80
+    assert body["dmd"]["tau_ca_min_gap"] == 0.1
+    assert body["optim"]["weight_decay"] == 0.01
+    assert body["optim"]["grad_clip"] == 0.5
+    assert body["sampling"]["t_distribution"] == "sigmoid"
+    assert body["sampling"]["sigmoid_scale"] == 1.5
+
+
+def test_compile_turbo_forwards_shared_memory_controls(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, with_turbo=True)
+    opts = cfg.backend.anima_lora
+    assert opts is not None
+    opts.blocks_to_swap = 6
+    opts.gradient_checkpointing = True
+    opts.torch_compile = False
+    opts.sample_ratio = 0.25
+
+    argv, _files = compile_turbo_config(cfg, tmp_path / "ws")
+    pairs = _argv_pairs(argv)
+
+    assert pairs["--blocks_to_swap"] == ["6"]
+    assert "--grad_ckpt" in pairs
+    assert "--no_torch_compile" in pairs
+    assert pairs["--sample_ratio"] == ["0.25"]
 
 
 def test_compile_turbo_no_method_or_preset_flags(tmp_path: Path) -> None:

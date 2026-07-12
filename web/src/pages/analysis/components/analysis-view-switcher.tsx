@@ -31,6 +31,7 @@ export function ViewModeSwitcher({
   panels,
   isTerminal,
   xMode,
+  epochAvailable,
   referenceRun,
   isCurrentReference,
   onSelectMode,
@@ -43,6 +44,7 @@ export function ViewModeSwitcher({
   panels: PanelState
   isTerminal: boolean
   xMode: XMode
+  epochAvailable: boolean
   referenceRun: ReferenceRun | null
   isCurrentReference: boolean
   onSelectMode: (mode: ViewMode) => void
@@ -94,13 +96,16 @@ export function ViewModeSwitcher({
         </span>
         {(["step", "epoch", "wallclock"] as XMode[]).map((m) => {
           const active = xMode === m
+          const disabled = m === "epoch" && !epochAvailable
           return (
             <button
               key={m}
               type="button"
+              disabled={disabled}
               onClick={() => onSelectXMode(m)}
+              title={disabled ? "当前后端运行未上报 epoch，使用 step 或时长轴" : undefined}
               className={cn(
-                "rounded-[3px] border px-2 py-0.5 text-[10.5px] tracking-wide transition-colors",
+                "rounded-[3px] border px-2 py-0.5 text-[10.5px] tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-45",
                 active
                   ? "border-primary/45 bg-primary/10 text-foreground"
                   : "border-border/55 bg-background/60 text-muted-foreground hover:text-foreground",

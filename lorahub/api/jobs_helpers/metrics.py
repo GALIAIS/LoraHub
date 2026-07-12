@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,10 @@ _METRICS_DOWNSAMPLE_THRESHOLD = _METRICS_MAX_POINTS
 # Slope thresholds (loss units per index) used to bucket the heuristic.
 # A series whose absolute slope falls below this is considered "flat".
 _OVERFIT_FLAT_EPS = 1e-4
+_RATE_RE = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>it/s|s/it)\b",
+    re.IGNORECASE,
+)
 
 _MetricsCacheKey = tuple[str, int, int]
 _METRICS_CACHE: dict[_MetricsCacheKey, dict[str, Any]] = {}
@@ -212,6 +217,10 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "last_step": None,
         "last_nonfinite_loss": None,
         "last_nonfinite_val_loss": None,
+        "nonfinite_loss": [],
+        "nonfinite_val_loss": [],
+        "cache_progress": [],
+        "diagnostics": [],
         "first_step_ts": None,
         "last_step_ts": None,
         "duration_s": None,
@@ -239,6 +248,10 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
     gpu_samples: list[dict[str, Any]] = []
     lora_spectrum: list[dict[str, Any]] = []
     forgetting_probe: list[dict[str, Any]] = []
+    nonfinite_loss: list[dict[str, Any]] = []
+    nonfinite_val_loss: list[dict[str, Any]] = []
+    cache_progress: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
     last_step: int | None = None
     last_step_ts: float | None = None
     last_nonfinite_loss: dict[str, Any] | None = None
@@ -280,35 +293,35 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                             "loss": None,
                             "ts": ts,
                         }
+                        nonfinite_loss.append(last_nonfinite_loss)
                         continue
                     raw_epoch = payload.get("epoch")
-                    epoch_value = (
-                        int(raw_epoch)
-                        if isinstance(raw_epoch, (int, float))
-                        else max(epoch_counter, 1)
-                    )
                     point: dict[str, Any] = {
                         "step": payload.get("step"),
-                        "epoch": epoch_value,
                         "loss": payload.get("loss"),
                         "ts": ts,
                     }
-                    # dp emits lr/iter_time/samples_per_sec alongside loss;
-                    # forward them so the front-end can render LR + throughput
-                    # charts without a second request.
-                    for k_src, k_out in (
-                        ("lr", "lr"),
-                        ("iter_time_s", "iter_time_s"),
-                        ("samples_per_sec", "samples_per_sec"),
-                    ):
-                        if k_src in payload and isinstance(
-                            payload[k_src], (int, float)
-                        ):
-                            point[k_out] = payload[k_src]
+                    if isinstance(raw_epoch, (int, float)):
+                        point["epoch"] = int(raw_epoch)
+                    elif epoch_counter > 0:
+                        point["epoch"] = epoch_counter
+                    point.update(_extract_step_telemetry(payload))
                     loss.append(point)
+            elif etype == EventType.epoch_start.value:
+                raw_epoch = payload.get("epoch")
+                if isinstance(raw_epoch, (int, float)):
+                    epoch_counter = int(raw_epoch)
+                    if not epochs or epochs[-1].get("epoch") != epoch_counter:
+                        epochs.append({"epoch": epoch_counter, "ts": ts})
             elif etype == EventType.epoch_end.value:
-                epoch_counter += 1
-                epochs.append({"epoch": payload.get("epoch"), "ts": ts})
+                raw_epoch = payload.get("epoch")
+                epoch_counter = (
+                    int(raw_epoch)
+                    if isinstance(raw_epoch, (int, float))
+                    else epoch_counter + 1
+                )
+                if not epochs or epochs[-1].get("epoch") != epoch_counter:
+                    epochs.append({"epoch": epoch_counter, "ts": ts})
             elif etype == EventType.validation.value:
                 if "val_loss" in payload:
                     if not _finite_number(payload.get("val_loss")):
@@ -317,6 +330,7 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                             "loss": None,
                             "ts": ts,
                         }
+                        nonfinite_val_loss.append(last_nonfinite_val_loss)
                         continue
                     entry: dict[str, Any] = {
                         "epoch": payload.get("epoch", epoch_counter),
@@ -346,6 +360,40 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
                         "vram_used_mib": payload.get("vram_used_mib"),
                         "vram_total_mib": payload.get("vram_total_mib"),
                         "temperature_c": payload.get("temperature_c"),
+                        "ts": ts,
+                    }
+                )
+            elif etype == EventType.cache_progress.value:
+                cache_progress.append(
+                    {
+                        "phase": payload.get("phase"),
+                        "done": payload.get("done"),
+                        "total": payload.get("total"),
+                        "percent": payload.get("percent"),
+                        "rate": payload.get("rate"),
+                        "eta_s": _parse_duration_seconds(payload.get("eta")),
+                        "ts": ts,
+                    }
+                )
+            elif etype == EventType.diagnostic_warning.value:
+                diagnostics.append(
+                    {
+                        "category": payload.get("category"),
+                        "severity": payload.get("severity"),
+                        "message": payload.get("message"),
+                        "remediation": payload.get("remediation"),
+                        "evidence": payload.get("evidence"),
+                        "ts": ts,
+                    }
+                )
+            elif etype == EventType.preview_unavailable.value:
+                diagnostics.append(
+                    {
+                        "category": "preview_unavailable",
+                        "severity": "warn",
+                        "message": payload.get("reason"),
+                        "remediation": None,
+                        "evidence": payload.get("arch"),
                         "ts": ts,
                     }
                 )
@@ -387,6 +435,13 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         val_loss = _downsample(val_loss, _METRICS_MAX_POINTS)
     if len(gpu_samples) > _METRICS_DOWNSAMPLE_THRESHOLD:
         gpu_samples = _downsample(gpu_samples, _METRICS_MAX_POINTS)
+    if len(cache_progress) > _METRICS_DOWNSAMPLE_THRESHOLD:
+        cache_progress = _downsample(cache_progress, _METRICS_MAX_POINTS)
+    if len(nonfinite_loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
+        nonfinite_loss = _downsample(nonfinite_loss, _METRICS_MAX_POINTS)
+    if len(nonfinite_val_loss) > _METRICS_DOWNSAMPLE_THRESHOLD:
+        nonfinite_val_loss = _downsample(nonfinite_val_loss, _METRICS_MAX_POINTS)
+    diagnostics = diagnostics[-200:]
 
     overfit_signal = _compute_overfit_signal(loss, val_loss)
 
@@ -402,6 +457,10 @@ def _read_metrics(workspace: Path) -> dict[str, Any]:
         "last_step": last_step,
         "last_nonfinite_loss": last_nonfinite_loss,
         "last_nonfinite_val_loss": last_nonfinite_val_loss,
+        "nonfinite_loss": nonfinite_loss,
+        "nonfinite_val_loss": nonfinite_val_loss,
+        "cache_progress": cache_progress,
+        "diagnostics": diagnostics,
         "first_step_ts": first_ts,
         "last_step_ts": last_ts,
         "duration_s": duration,
@@ -433,6 +492,51 @@ def _empty_overfit_signal() -> dict[str, Any]:
 
 def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _extract_step_telemetry(payload: dict[str, Any]) -> dict[str, float]:
+    telemetry: dict[str, float] = {}
+    for key in ("lr", "iter_time_s", "samples_per_sec", "eta_s", "snr", "grad_norm"):
+        value = payload.get(key)
+        if _finite_number(value):
+            telemetry[key] = float(value)
+
+    rate = payload.get("rate")
+    if isinstance(rate, str) and (match := _RATE_RE.search(rate)) is not None:
+        value = float(match.group("value"))
+        if value > 0:
+            if match.group("unit").lower() == "s/it":
+                telemetry.setdefault("iter_time_s", value)
+                telemetry.setdefault("samples_per_sec", 1.0 / value)
+            else:
+                telemetry.setdefault("iter_time_s", 1.0 / value)
+                telemetry.setdefault("samples_per_sec", value)
+
+    eta_s = _parse_duration_seconds(payload.get("eta"))
+    if eta_s is not None:
+        telemetry.setdefault("eta_s", eta_s)
+    return telemetry
+
+
+def _parse_duration_seconds(value: Any) -> float | None:
+    if _finite_number(value):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if not parts or len(parts) > 3 or any(not part.isdigit() for part in parts):
+        return None
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+    elif len(numbers) == 2:
+        hours = 0
+        minutes, seconds = numbers
+    else:
+        hours, minutes, seconds = 0, 0, numbers[0]
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return float(hours * 3600 + minutes * 60 + seconds)
 
 
 def _compute_overfit_signal(

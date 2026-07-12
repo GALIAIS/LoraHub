@@ -566,7 +566,7 @@ def _emit_sampling_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -
     args += [
         f"--sample_every_n_epochs={s.every_n_epochs}",
         f"--sample_prompts={s.prompts_file}",
-        "--sample_sampler=euler_a",
+        f"--sample_sampler={s.sample_sampler or 'euler_a'}",
     ]
     if s.every_n_steps is not None:
         args.append(f"--sample_every_n_steps={s.every_n_steps}")

@@ -1,5 +1,5 @@
 import { memo } from "react"
-import type { ErrorMap, ConfigFormValue, Setter } from "../types"
+import type { BackendKey, ErrorMap, ConfigFormValue, Setter } from "../types"
 import { IntInput, Row, ToggleSwitch } from "../widgets"
 
 /**
@@ -14,12 +14,26 @@ export const OptimizationFields = memo(function OptimizationFields({
   value,
   set,
   errorMap,
+  backendType,
 }: {
   value: ConfigFormValue["optimization"]
   set: Setter
   errorMap: ErrorMap
+  backendType?: BackendKey
 }) {
   const v = value ?? {}
+  if (backendType === "diffusion-pipe") {
+    return (
+      <>
+        <Row label="完整 BF16" description="模型、梯度与优化器状态使用 bf16。">
+          <ToggleSwitch checked={v.fullBf16 ?? false} onCheckedChange={(b) => set(["optimization", "fullBf16"], b)} />
+        </Row>
+        <Row label="交换 Block 数" description="将 transformer block 换出到 CPU 以降低显存占用。" errors={errorMap.get("optimization.blocksToSwap")}>
+          <IntInput min={0} value={v.blocksToSwap ?? 0} onChange={(n) => set(["optimization", "blocksToSwap"], n ?? 0)} />
+        </Row>
+      </>
+    )
+  }
   return (
     <>
       <Row

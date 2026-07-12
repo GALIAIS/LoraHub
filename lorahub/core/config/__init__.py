@@ -49,6 +49,7 @@ from pydantic.alias_generators import to_camel
 
 from ._shared import _CAMEL_CONFIG
 from .backends import (
+    AiToolkitOptions,
     AnimaLoraMethodChimeraConfig,
     AnimaLoraMethodEasyControlConfig,
     AnimaLoraMethodIPAdapterConfig,
@@ -126,6 +127,7 @@ class TrainingConfig(BaseModel):
 
 
 __all__ = [
+    "AiToolkitOptions",
     "AnimaLoraMethodChimeraConfig",
     "AnimaLoraMethodEasyControlConfig",
     "AnimaLoraMethodIPAdapterConfig",

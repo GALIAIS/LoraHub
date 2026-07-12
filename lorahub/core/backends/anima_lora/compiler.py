@@ -302,6 +302,7 @@ def _render_full_config(
     cfg_dict["optimizer_type"] = opts.optimizer_type
     cfg_dict["lr_scheduler"] = opts.lr_scheduler
     cfg_dict["learning_rate"] = float(opts.learning_rate)
+    cfg_dict["gradient_accumulation_steps"] = int(cfg.schedule.grad_accum)
     if cfg.optimizer.max_grad_norm != 1.0:
         cfg_dict["max_grad_norm"] = float(cfg.optimizer.max_grad_norm)
     if cfg.optimizer.optimizer_args:
@@ -1224,7 +1225,50 @@ def compile_turbo_config(
     output_dir = workspace / "ckpt"
     log_dir = workspace / "logs" / "turbo"
 
-    argv: list[str] = []
+    config_path = workspace / "_lorahub_anima_turbo.toml"
+    config = {
+        "output_name": opts.output_name,
+        "dit_path": str(cfg.base_model.checkpoint),
+        "data_dir": str((workspace / "post_image_dataset" / "lora").resolve()),
+        "output_dir": str(output_dir),
+        "iterations": turbo.iterations,
+        "batch_size": turbo.batch_size,
+        "seed": turbo.seed,
+        "use_custom_down_autograd": turbo.use_custom_down_autograd,
+        "network": {
+            "student_rank": turbo.student_rank,
+            "student_alpha": turbo.student_alpha,
+            "fake_rank": turbo.fake_rank,
+            "fake_alpha": turbo.fake_alpha,
+            "attn_mode": turbo.attn_mode,
+        },
+        "dmd": {
+            "student_steps": turbo.student_steps,
+            "teacher_cfg": turbo.teacher_cfg,
+            "tau_ca_strategy": turbo.tau_ca_strategy,
+            "tau_dm_strategy": turbo.tau_dm_strategy,
+            "tau_ca_min_gap": turbo.tau_ca_min_gap,
+            "tau_ca_skip_above_t": turbo.tau_ca_skip_above_t,
+        },
+        "optim": {
+            "student_lr": turbo.student_lr,
+            "fake_lr": turbo.fake_lr,
+            "fake_steps_per_student_step": turbo.fake_steps_per_student_step,
+            "alpha_warmup_steps": turbo.alpha_warmup_steps,
+            "weight_decay": turbo.weight_decay,
+            "grad_clip": turbo.grad_clip,
+        },
+        "sampling": {
+            "t_distribution": turbo.t_distribution,
+            "sigmoid_scale": turbo.sigmoid_scale,
+        },
+        "io": {
+            "save_every": turbo.save_every,
+            "log_interval": turbo.log_interval,
+            "log_dir": str(log_dir),
+        },
+    }
+    argv: list[str] = ["--config", str(config_path)]
 
     # ---- Top-level scalars ----
     bm = cfg.base_model
@@ -1254,13 +1298,9 @@ def compile_turbo_config(
     # ---- Network ----
     argv += ["--student_rank", str(turbo.student_rank)]
     argv += ["--fake_rank", str(turbo.fake_rank)]
-    # student_alpha / fake_alpha aren't standalone CLI flags upstream
-    # (see distill_turbo.py:140-189) — they're TOML-only. The script
-    # reads them through `pick("network.student_alpha", default=rank)`
-    # so passing them as a [network] override would need a config TOML
-    # write. For cut4 we skip the override path: defaulting alpha=rank
-    # matches our schema defaults (48/48, 64/64). Future cut4.B can
-    # emit a turbo override TOML if users start needing alpha != rank.
+    # Alpha and the DMD-only scalar controls are TOML-only; the generated
+    # override file above carries them while CLI flags remain authoritative
+    # for fields supported by distill_turbo.py.
 
     # ---- Optimization ----
     argv += ["--student_lr", _fmt_float(turbo.student_lr)]
@@ -1274,13 +1314,16 @@ def compile_turbo_config(
     argv += ["--student_steps", str(turbo.student_steps)]
 
     # ---- Memory / kernels ----
-    argv += ["--blocks_to_swap", str(0)]  # turbo defaults to 0; no schema knob yet
+    argv += ["--blocks_to_swap", str(opts.blocks_to_swap)]
     argv += ["--attn_mode", turbo.attn_mode]
+    argv += ["--grad_ckpt" if opts.gradient_checkpointing else "--no_grad_ckpt"]
+    argv += ["--torch_compile" if opts.torch_compile else "--no_torch_compile"]
+    argv += ["--sample_ratio", _fmt_float(opts.sample_ratio or 1.0)]
 
     # ---- I/O cadence ----
     argv += ["--save_every", str(turbo.save_every)]
     argv += ["--log_interval", str(turbo.log_interval)]
     argv += ["--log_dir", str(log_dir)]
 
-    files: dict[Path, str] = {}
+    files = {config_path: _dump_toml(config)}
     return argv, files

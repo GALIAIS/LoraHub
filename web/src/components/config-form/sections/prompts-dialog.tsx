@@ -72,6 +72,7 @@ export interface PromptsDialogProps {
   defaultResolution?: [number, number] | undefined
   /** Trigger word from sampling.triggerWord; null = 留空（启动时自动推断/剥离）。*/
   triggerWord?: string | null
+  showAdvanced?: boolean
   onSave: (next: SamplingPromptValue[]) => void
 }
 
@@ -81,6 +82,7 @@ export const PromptsDialog = memo(function PromptsDialog({
   initial,
   defaultResolution,
   triggerWord,
+  showAdvanced = true,
   onSave,
 }: PromptsDialogProps) {
   const [rows, setRows] = useState<SamplingPromptValue[]>(initial)
@@ -143,6 +145,7 @@ export const PromptsDialog = memo(function PromptsDialog({
                 value={row}
                 defaultResolution={defaultResolution}
                 triggerWord={triggerWord ?? null}
+                showAdvanced={showAdvanced}
                 onChange={(p) => patchRow(idx, p)}
                 onDelete={() => deleteRow(idx)}
               />
@@ -184,6 +187,7 @@ interface PromptRowProps {
   value: SamplingPromptValue
   defaultResolution?: [number, number] | undefined
   triggerWord?: string | null
+  showAdvanced: boolean
   onChange: (patch: Partial<SamplingPromptValue>) => void
   onDelete: () => void
 }
@@ -193,6 +197,7 @@ const PromptRow = memo(function PromptRow({
   value,
   defaultResolution,
   triggerWord,
+  showAdvanced,
   onChange,
   onDelete,
 }: PromptRowProps) {
@@ -212,7 +217,7 @@ const PromptRow = memo(function PromptRow({
     return body.replace(/(,\s*)?\$\{TRIGGER\}(\s*,)?/g, "").replace(/^,\s*|,\s*$/g, "")
   }, [value.prompt, triggerWord])
 
-  const [showAdvanced, setShowAdvanced] = useState(
+  const [advancedOpen, setAdvancedOpen] = useState(
     value.sampler != null || value.flowShift != null,
   )
 
@@ -354,67 +359,71 @@ const PromptRow = memo(function PromptRow({
       </div>
 
       {/* 高级参数：sampler + flow_shift（默认折叠） */}
-      <button
-        type="button"
-        onClick={() => setShowAdvanced((v) => !v)}
-        className={cn(
-          "flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wider",
-          "text-muted-foreground hover:text-foreground transition-colors",
-        )}
-      >
-        {showAdvanced ? (
-          <ChevronDown className="size-3" />
-        ) : (
-          <ChevronRight className="size-3" />
-        )}
-        高级 · sampler / flow_shift
-        {(value.sampler != null || value.flowShift != null) && !showAdvanced && (
-          <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-px text-[9px] text-primary">
-            已设置
-          </span>
-        )}
-      </button>
-
       {showAdvanced && (
-        <div className="grid grid-cols-2 gap-2 pt-0.5">
-          <Field label="Sampler">
-            <Select
-              value={value.sampler ?? "_default"}
-              onValueChange={(s) =>
-                onChange({
-                  sampler:
-                    s === "_default"
-                      ? null
-                      : (s as "euler" | "er_sde" | "lcm"),
-                })
-              }
-            >
-              <SelectTrigger className="h-7 text-[11px] font-mono">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="_default" className="text-[11px]">
-                  默认（euler）
-                </SelectItem>
-                {SAMPLER_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value} className="text-[11px]">
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Flow Shift">
-            <FloatInput
-              step={0.1}
-              min={0.01}
-              value={value.flowShift ?? null}
-              placeholder="默认 5.0"
-              onChange={(flowShift) => onChange({ flowShift })}
-              className="h-7 w-full text-[11px]"
-            />
-          </Field>
-        </div>
+        <>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className={cn(
+              "flex items-center gap-1 text-[10.5px] font-medium uppercase tracking-wider",
+              "text-muted-foreground hover:text-foreground transition-colors",
+            )}
+          >
+            {advancedOpen ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+            高级 · sampler / flow_shift
+            {(value.sampler != null || value.flowShift != null) && !advancedOpen && (
+              <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-px text-[9px] text-primary">
+                已设置
+              </span>
+            )}
+          </button>
+
+          {advancedOpen && (
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
+              <Field label="Sampler">
+                <Select
+                  value={value.sampler ?? "_default"}
+                  onValueChange={(s) =>
+                    onChange({
+                      sampler:
+                        s === "_default"
+                          ? null
+                          : (s as "euler" | "er_sde" | "lcm"),
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-7 text-[11px] font-mono">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_default" className="text-[11px]">
+                      默认（euler）
+                    </SelectItem>
+                    {SAMPLER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value} className="text-[11px]">
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Flow Shift">
+                <FloatInput
+                  step={0.1}
+                  min={0.01}
+                  value={value.flowShift ?? null}
+                  placeholder="默认 5.0"
+                  onChange={(flowShift) => onChange({ flowShift })}
+                  className="h-7 w-full text-[11px]"
+                />
+              </Field>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

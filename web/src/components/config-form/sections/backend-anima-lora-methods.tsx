@@ -137,9 +137,6 @@ function LoraMethodConfig({
     isTlora || (showTimestepMaskControls && (value.lora?.useTimestepMask ?? true))
   const setAlgorithm = (next: string) => {
     set(["backend", "animaLora", "lora", "algorithm"], next)
-    if (["tlora", "asr_tlora"].includes(canonicalAlgorithm(next as LoraAlgorithm))) {
-      set(["backend", "animaLora", "lora", "useTimestepMask"], true)
-    }
   }
 
   return (
@@ -158,6 +155,18 @@ function LoraMethodConfig({
           options={LORA_ALGORITHM_OPTIONS}
         />
       </Row>
+      {["lora", "tlora", "asr_tlora"].includes(canonical) && (
+        <Row label="下投影初始化" description="Kaiming 随机初始化，或从基础权重 SVD 初始化。">
+          <EnumSelect
+            value={value.lora?.downInit ?? "kaiming"}
+            onChange={(next) => set(["backend", "animaLora", "lora", "downInit"], next)}
+            options={[
+              { value: "kaiming", label: "Kaiming · 默认" },
+              { value: "weight_svd", label: "基础权重 SVD" },
+            ]}
+          />
+        </Row>
+      )}
       {(canonical === "lokr" || canonical === "lokr_factorized") && (
         <Row
           label="LoKr factor"
@@ -203,6 +212,14 @@ function LoraMethodConfig({
               set(["backend", "animaLora", "lora", "useTimestepMask"], c)
             }
             disabled={isTlora}
+          />
+        </Row>
+      )}
+      {timestepMaskEnabled && (
+        <Row label="逐样本时间步 mask" description="批内每个样本按自身时间步选择有效 rank。">
+          <ToggleSwitch
+            checked={value.lora?.perSampleTimestepMask ?? canonical === "asr_tlora"}
+            onCheckedChange={(checked) => set(["backend", "animaLora", "lora", "perSampleTimestepMask"], checked)}
           />
         </Row>
       )}
@@ -286,6 +303,27 @@ function PostfixMethodConfig({
           min={1}
         />
       </Row>
+      <Row label="拼接位置">
+        <EnumSelect
+          value={value.postfix?.splicePosition ?? "front_of_padding"}
+          onChange={(next) => set(["backend", "animaLora", "postfix", "splicePosition"], next)}
+          options={[
+            { value: "front_of_padding", label: "Padding 前" },
+            { value: "after_padding", label: "Padding 后" },
+          ]}
+        />
+      </Row>
+      <Row label="正交基">
+        <EnumSelect
+          value={value.postfix?.orthoBasis ?? "svd_te"}
+          onChange={(next) => set(["backend", "animaLora", "postfix", "orthoBasis"], next)}
+          options={[
+            { value: "svd_te", label: "文本编码器 SVD" },
+            { value: "random", label: "随机正交基" },
+            { value: "identity", label: "单位基" },
+          ]}
+        />
+      </Row>
       <Row label="lambda 初始值">
         <FloatInput
           value={value.postfix?.lambdaInit}
@@ -305,6 +343,14 @@ function PostfixMethodConfig({
           placeholder="post_image_dataset/lora"
         />
       </Row>
+      {value.postfix?.orthoBasis === "svd_te" && (
+        <Row label="SVD 文件数">
+          <IntInput min={1} value={value.postfix?.svdNumFiles ?? 100} onChange={(n) => set(["backend", "animaLora", "postfix", "svdNumFiles"], n ?? 100)} />
+        </Row>
+      )}
+      <Row label="正交基随机种子">
+        <IntInput value={value.postfix?.orthoBasisSeed ?? 42} onChange={(n) => set(["backend", "animaLora", "postfix", "orthoBasisSeed"], n ?? 42)} />
+      </Row>
     </Section>
   )
 }
@@ -318,6 +364,12 @@ function ChimeraMethodConfig({
 }) {
   return (
     <Section title="chimera 配置">
+      <Row label="FEI 特征维度">
+        <IntInput min={1} value={value.chimera?.feiFeatureDim ?? 64} onChange={(n) => set(["backend", "animaLora", "chimera", "feiFeatureDim"], n ?? 64)} />
+      </Row>
+      <Row label="Sigma 特征维度">
+        <IntInput min={1} value={value.chimera?.sigmaFeatureDim ?? 64} onChange={(n) => set(["backend", "animaLora", "chimera", "sigmaFeatureDim"], n ?? 64)} />
+      </Row>
       <Row label="内容平衡权重">
         <FloatInput
           value={value.chimera?.balanceWContent}
@@ -379,6 +431,9 @@ function EasyControlMethodConfig({
           step={0.5}
         />
       </Row>
+      <Row label="条件缩放">
+        <FloatInput value={value.easycontrol?.condScale ?? 1} onChange={(n) => set(["backend", "animaLora", "easycontrol", "condScale"], n ?? 1)} min={0} step={0.1} />
+      </Row>
       <Row label="条件 token 数">
         <FloatInput
           value={value.easycontrol?.condTokenCount}
@@ -409,6 +464,9 @@ function EasyControlMethodConfig({
           max={1}
         />
       </Row>
+      <Row label="条件噪声上限" description="条件图像注入的最大噪声强度。">
+        <FloatInput value={value.easycontrol?.condNoiseMax ?? 0} onChange={(n) => set(["backend", "animaLora", "easycontrol", "condNoiseMax"], n ?? 0)} min={0} step={0.01} />
+      </Row>
     </Section>
   )
 }
@@ -433,6 +491,12 @@ function IpAdapterMethodConfig({
             { value: "PE-Core-G14-448", label: "PE-Core-G14-448" },
           ]}
         />
+      </Row>
+      <Row label="Resampler 层数">
+        <IntInput min={1} value={value.ipAdapter?.resamplerLayers ?? 4} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerLayers"], n ?? 4)} />
+      </Row>
+      <Row label="Resampler 注意力头数">
+        <IntInput min={1} value={value.ipAdapter?.resamplerHeads ?? 12} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerHeads"], n ?? 12)} />
       </Row>
       <Row label="IP 缩放系数">
         <FloatInput
@@ -465,6 +529,9 @@ function IpAdapterMethodConfig({
           min={0}
           max={1}
         />
+      </Row>
+      <Row label="特征缓存写盘" description="将图像编码器特征缓存到磁盘。">
+        <ToggleSwitch checked={value.ipAdapter?.featuresCacheToDisk ?? true} onCheckedChange={(checked) => set(["backend", "animaLora", "ipAdapter", "featuresCacheToDisk"], checked)} />
       </Row>
     </Section>
   )

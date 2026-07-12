@@ -97,8 +97,15 @@ export const BackendFields = memo(function BackendFields({
     BACKEND_DESCRIPTIONS[type] ?? BACKEND_DESCRIPTIONS.kohya
   const repoLabel = REPO_LABEL[type] ?? "仓库路径"
   const repoPlaceholder = REPO_PLACEHOLDER[type] ?? "（使用设置中的默认值)"
-  const isDistributed = v.gpuDispatch?.mode === "distributed"
+  const supportsDistributed = type !== "ai_toolkit" && type !== "kohya"
+  const isDistributed = supportsDistributed && v.gpuDispatch?.mode === "distributed"
   const distributedStrategy = v.distributed?.strategy ?? "ddp"
+  const gpuDispatchOptions =
+    type === "ai_toolkit"
+      ? GPU_DISPATCH_OPTIONS.filter((option) => option.value === "one-job-per-gpu")
+      : supportsDistributed
+        ? GPU_DISPATCH_OPTIONS
+        : GPU_DISPATCH_OPTIONS.filter((option) => option.value !== "distributed")
 
   return (
     <>
@@ -142,13 +149,21 @@ export const BackendFields = memo(function BackendFields({
         description={
           type === "kohya"
             ? "kohya 使用一任务一 GPU。"
-            : "选择任务到 GPU 的分配方式。"
+            : type === "ai_toolkit"
+              ? "ai-toolkit 当前使用单进程单 GPU。"
+              : "选择任务到 GPU 的分配方式。"
         }
         errors={errorMap.get("backend.gpuDispatch.mode")}
       >
         <div className="flex flex-wrap items-center gap-2">
           <EnumSelect
-            value={v.gpuDispatch?.mode ?? "settings"}
+            value={
+              type === "ai_toolkit"
+                ? "one-job-per-gpu"
+                : !supportsDistributed && v.gpuDispatch?.mode === "distributed"
+                ? "one-job-per-gpu"
+                : (v.gpuDispatch?.mode ?? "settings")
+            }
             onChange={(mode) => {
               if (mode === "settings") {
                 set(["backend", "gpuDispatch"], undefined)
@@ -160,7 +175,7 @@ export const BackendFields = memo(function BackendFields({
                 }
               }
             }}
-            options={GPU_DISPATCH_OPTIONS}
+            options={gpuDispatchOptions}
           />
           {v.gpuDispatch?.mode === "distributed" && (
             <IntInput

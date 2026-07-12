@@ -181,8 +181,14 @@ def main():
         "--torch_compile",
         action="store_true",
         default=True,
-        help="Compile block._forward. Off by default — multiple forwards per step "
-        "are not yet validated under cudagraphs; turn on once Phase 0 is green.",
+        help="Compile block._forward. Enabled by default; use "
+        "--no_torch_compile to disable it.",
+    )
+    parser.add_argument(
+        "--no_torch_compile",
+        dest="torch_compile",
+        action="store_false",
+        help="Disable torch.compile for the turbo student and fake networks.",
     )
     parser.add_argument("--save_every", type=int, default=-1)
     parser.add_argument("--log_interval", type=int, default=-1)

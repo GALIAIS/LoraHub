@@ -1,0 +1,216 @@
+# Anima factorized LoKr 32GB — 细节 + 速度「吃满显存」激进档
+#
+# 实测若训练中峰值只到 ~10GB / 32GB，说明原 balance 档过保守。
+# 本文件在细节与吞吐两端一起加压，目标吃到约 18–26GB（仍留采样/峰值余量）。
+#
+# 相对保守 balance 档（旧 detail_speed）:
+#   细节: dim 16→24 · layer 8→4–28 · preset attention→all(含 MLP)
+#         bucket max 1344→1536 · resolution 1024
+#   速度: batch 2→4 · accum 4→2（有效 batch 仍 8）
+#         gradientCheckpointing OFF · torch compile blocks ON
+#         采样仍减负（3 条 / 每 3 epoch / 24 step）
+#
+# OOM 回退顺序（从快到慢）:
+#   1) batchSize 4→2，gradAccum 2→4
+#   2) compileMode→null，torchCompile→false
+#   3) gradientCheckpointing→true
+#   4) targetPreset all→attention
+#   5) networkDim 24→16 或 layerStart 4→8
+#   6) bucket max 1536→1344
+#
+# 严禁: learningRate 写成 2.0（应为 5e-5 量级）；prompt 中间换行
+
+schemaVersion: "1.0"
+
+_template:
+  name: Anima LoKr 32GB Detail+Speed Aggressive
+  description: >
+    32GB 吃满档 factorized LoKr。dim24、层 4–28 全 Linear、1024、batch4×accum2、
+    compile on、无 checkpointing。适合峰值显存远低于 32G 时冲细节与速度。
+  arch: anima
+
+baseModel:
+  arch: anima
+  checkpoint: ./models/diffusion_models/anima-base-v1.0.safetensors
+  archPaths:
+    qwen3: ./models/text_encoders/qwen_3_06b_base.safetensors
+    ae: ./models/vae/qwen_image_vae.safetensors
+    qwen3MaxTokenLength: 1024
+
+dataset:
+  source: ./datasets/your_character
+  resolution: [1024, 1024]
+  bucket:
+    enabled: true
+    min: 576
+    # 更大宽高比桶 → 全身/横构图细节更好；顶满显存时改回 1344
+    max: 1536
+    step: 64
+  caption:
+    strategy: tag_file
+    ext: .txt
+    shuffle: true
+    dropRate: 0.10
+    keepTokens: 2
+  numRepeats: 3
+
+schedule:
+  epochs: 12
+  # 有效 batch = 4×2 = 8（与 1×8 / 2×4 同量级，墙钟通常更快）
+  batchSize: 4
+  gradAccum: 2
+  seed: 42
+  maxSteps: null
+
+precision: bf16
+# 顶层与 animaLora 内均关 GC：换吞吐；OOM 时两边改回 true
+gradientCheckpointing: false
+cacheLatents: true
+cacheLatentsToDisk: true
+skipCacheCheck: true
+
+sampling:
+  enabled: true
+  everyNEpochs: 3
+  atFirst: true
+  resolution: [1024, 1024]
+  seed: -1
+  triggerWord: ""
+  inferenceSteps: 24
+  inferenceCfg: 4.5
+  outputs:
+    gridStitching: true
+    pngMetadata: true
+    baseCompare: false
+    crossCkptAnimation: false
+  # 每条必须单行（anima 按行拆 prompt）
+  prompts:
+    - prompt: "${TRIGGER}, 1girl, solo, upper body, looking at viewer, detailed face, detailed eyes, clean lineart, simple background"
+      negative: "lowres, worst quality, bad anatomy, bad hands, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 4.5
+      steps: 24
+      seed: 42
+      width: 1024
+      height: 1024
+
+    - prompt: "${TRIGGER}, 1girl, solo, full body, standing, intricate outfit, fabric folds, accessories, detailed clothing, plain background"
+      negative: "lowres, worst quality, bad anatomy, bad hands, missing fingers, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic"
+      cfg: 4.5
+      steps: 24
+      seed: 1024
+      width: 832
+      height: 1216
+
+    - prompt: "${TRIGGER}, 1girl, solo, three quarter view, soft studio lighting, skin texture, hair strands, high detail, neutral background"
+      negative: "lowres, worst quality, bad anatomy, blurry, jpeg artifacts, deformed, watermark, text, photo, realistic, 3d"
+      cfg: 5.0
+      steps: 24
+      seed: 31415
+      width: 896
+      height: 1152
+
+output:
+  name: anima-lokr-32gb-detail-speed
+  saveEveryNEpochs: 2
+  saveDtype: bf16
+
+backend:
+  type: anima_lora
+  gpuDispatch:
+    mode: one-job-per-gpu
+    numGpus: null
+  distributed:
+    strategy: ddp
+    fsdp:
+      shardingStrategy: full_shard
+      autoWrapPolicy: size_based
+      minNumParams: 100000000
+      stateDictType: full_state_dict
+      cpuOffload: false
+    zero:
+      stage: 2
+      offloadOptimizer: none
+      offloadParam: none
+      overlapComm: true
+  animaLora:
+    method: lora
+    preset: default
+    outputName: anima-lokr-32gb-detail-speed
+
+    lora:
+      algorithm: lokr_factorized
+      minRank: 4
+      useTimestepMask: false
+      lokrFactor: 8
+      channelScalingAlpha: 0.5
+
+    # dim24：细节明显高于 16；全层 Linear 时文件会到数 MB～十余 MB 量级仍正常
+    networkDim: 24
+    networkAlpha: 24.0
+    networkTrainUnetOnly: true
+    # 几乎全深度（Anima 28 block）；0 起步若显存紧改 4
+    layerStart: 4
+    layerEnd: 28
+    # all = attention + MLP，细节上限最高；要省再改回 attention
+    targetPreset: all
+
+    optimizerType: AdamW
+    lrScheduler: cosine
+    # 容量上去略降 LR；禁止 2.0 这种误填
+    learningRate: 4.0e-05
+    lrWarmupRatio: 0.08
+    maxTrainEpochs: 12
+    saveEveryNEpochs: 2
+    checkpointingEpochs: 2
+    captionDropoutRate: 0.10
+
+    timestepSampling: sigmoid
+    sigmoidScale: 1.0
+    discreteFlowShift: 1.0
+    weightingScheme: min_snr_rf
+    minSnrGamma: 5.0
+
+    cacheLatents: true
+    cacheLatentsToDisk: true
+    cacheTextEncoderOutputs: true
+    cacheTextEncoderOutputsToDisk: true
+    cacheLlmAdapterOutputs: true
+    useShuffledCaptionVariants: true
+    staticTokenCount: 4096
+    vaeChunkSize: 64
+    skipCacheCheck: true
+
+    attnMode: torch
+
+    # 吞吐主开关：32G 空很多时打开；首步 capture 若 OOM 整段关掉
+    compileMode: blocks
+    compileInductorMode: reduce-overhead
+    torchCompile: true
+    useCustomDownAutograd: true
+
+    blocksToSwap: 0
+    gradientCheckpointing: false
+    unslothOffloadCheckpointing: false
+    cpuOffloadCheckpointing: false
+    mixedPrecision: bf16
+    persistentDataLoaderWorkers: true
+    dataloaderPinMemory: true
+
+    ema: false
+    nanGuard: true
+    nanGuardRecover: true
+    nanGuardMaxConsecutive: 5
+
+    sampleGrid: true
+
+    useCmmd: true
+    validationSplitNum: 12
+    validationSeed: 42
+
+    saveModelAs: safetensors
+    savePrecision: bf16
+    logEveryNSteps: 5
+    keepTokens: 2
+    captionExtension: .txt
+    enableBucket: true
+    pathPattern: "*"

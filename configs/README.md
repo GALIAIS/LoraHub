@@ -11,6 +11,9 @@ LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 sc
 | `anima_lora_v100_fp16.yaml` | anima_lora | LoRA + OrthoLoRA + T-LoRA | V100 32GB | Tesla V100 兼容档:fp16、PyTorch SDPA、batch=1/accum=2、缓存落盘,避开 bf16/flash 路径。 |
 | `anima_loha_32gb.yaml` | anima_lora | LoHA | 32GB | LoHA 高吞吐档,batchSize 2、rank 16、compile on。输出名为 `anima-loha-32gb`。 |
 | `anima_lokr_32gb.yaml` | anima_lora | factorized LoKr | 32GB | LoKr 省显存档,batchSize 1、rank 8、checkpointing on、compile off,forward 不 materialize 完整 ΔW。输出名为 `anima-lokr-32gb`。 |
+| `anima_lokr_32gb_detail_speed.yaml` | anima_lora | factorized LoKr | 32GB | 旧「吃满」实验档（偏重，易 0.05 it/s）。新项目请改用下方 fast / detail。 |
+| `anima_lokr_32gb_fast.yaml` | anima_lora | factorized LoKr | 32GB | **冲 it/s**：896、b1×a8、dim16、后半 attention、compile、无 GC。目标约 ≥1.5 it/s。输出 `anima-lokr-32gb-fast`。 |
+| `anima_lokr_32gb_detail.yaml` | anima_lora | factorized LoKr | 32GB | **细节优先墙钟可控**：1024、b4×a2、dim24、层6–28 attention、compile、无 GC。约 0.3–0.8 it/s。输出 `anima-lokr-32gb-detail`。 |
 
 ## 命名约定
 
@@ -54,6 +57,8 @@ lorahub train configs/my_config.yaml
 | V100 训练 bf16/flash 报错 | 改用 `anima_lora_v100_fp16.yaml`；V100 无原生 bf16,优先 fp16 + `attnMode: torch` |
 | 24GB 想用 32gb 配置 | `compileMode` 设为 null(或删该字段) / `validationSplitNum` 16 → 8 |
 | 训练时间太长 | `numRepeats` 或 `epochs` 降一半 / 从 `default` 切到 `8gb`(epochs 已经更短) |
+| 32GB LoKr 要更细但仍想快 | 用 `anima_lokr_32gb_detail_speed.yaml`；OOM 则 `batchSize: 1` + `gradAccum: 8` 或 `layerStart: 10` |
+| 预览雪花/绿屏 | 检查 `learningRate` 是否误成 `2.0`（应为 `5e-5` 量级）；prompt 每条必须单行 |
 
 ## 不再保留的旧配置
 
