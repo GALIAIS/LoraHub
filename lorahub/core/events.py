@@ -22,6 +22,7 @@ from typing import Any, Self
 
 class EventType(StrEnum):
     step = "step"
+    epoch_start = "epoch_start"
     epoch_end = "epoch_end"
     sample_ready = "sample_ready"
     checkpoint_saved = "checkpoint_saved"

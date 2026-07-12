@@ -33,13 +33,27 @@ const PROGRESS_RE = /^(.{1,80}?):\s+(\d+)%\|.*?\|\s*(\d+)\/(\d+)\s*\[([^\]]+)\]/
 const TRACEBACK_START_RE = /^(?:Exception in thread\b|Traceback \(most recent call last\):)/
 const TRACEBACK_END_RE = /^(?:[A-Za-z_][\w.]*?(?:Error|Exception|Interrupt)|SystemExit):\s*/
 
+const EVENT_LEVEL: Record<string, string> = {
+  step: "STEP",
+  epoch_start: "EPOCH",
+  epoch_end: "EPOCH",
+  checkpoint_saved: "SAVE",
+  sample_ready: "SAMPLE",
+  cache_progress: "CACHE",
+  gpu_sample: "GPU",
+  diagnostic_warning: "DIAG",
+  preview_unavailable: "PREVIEW",
+  done: "DONE",
+  error: "ERROR",
+}
+
 function number(payload: Record<string, unknown>, key: string): number | null {
   const value = payload[key]
   return typeof value === "number" && Number.isFinite(value) ? value : null
 }
 
-function gib(mib: number | null): string {
-  return mib === null ? "--" : (mib / 1024).toFixed(1)
+function gib(mib: number | null, digits = 1): string {
+  return mib === null ? "--" : (mib / 1024).toFixed(digits)
 }
 
 function eventMessage(event: TrainingEvent, fallbackTotalSteps: number | null): string {
@@ -51,13 +65,16 @@ function eventMessage(event: TrainingEvent, fallbackTotalSteps: number | null): 
     const used = number(p, "vram_used_mib")
     const total = number(p, "vram_total_mib")
     const temperature = number(p, "temperature_c")
-    return `GPU ${index ?? "?"} · 利用率 ${util?.toFixed(0) ?? "--"}% · 显存 ${gib(used)} / ${gib(total)} GiB · ${temperature?.toFixed(0) ?? "--"}°C`
+    return `GPU ${index ?? "?"} · 利用率 ${util?.toFixed(0) ?? "--"}% · 显存 ${gib(used, 3)} / ${gib(total)} GiB · ${temperature?.toFixed(0) ?? "--"}°C`
   }
   if (event.type === "step") {
     const total = number(p, "total_steps") ?? fallbackTotalSteps
     const loss = number(p, "loss")
     const lr = number(p, "lr")
     return `第 ${number(p, "step") ?? "?"} / ${total ?? "?"} 步${loss === null ? "" : ` · loss ${loss.toFixed(4)}`}${lr === null ? "" : ` · lr ${lr.toExponential(2)}`}`
+  }
+  if (event.type === "epoch_start") {
+    return `第 ${number(p, "epoch") ?? "?"} / ${number(p, "total_epochs") ?? "?"} 回合开始`
   }
   if (event.type === "epoch_end") return `第 ${number(p, "epoch") ?? "?"} 回合结束`
   if (event.type === "checkpoint_saved") return `检查点已保存 · ${String(p.path ?? "")}`
@@ -73,7 +90,7 @@ function toneFor(event: TrainingEvent, level: string, message: string): LogTone 
   if (event.type === "step") return "progress"
   if (event.type === "checkpoint_saved") return "checkpoint"
   if (event.type === "sample_ready") return "sample"
-  if (event.type === "epoch_end") return "epoch"
+  if (event.type === "epoch_start" || event.type === "epoch_end") return "epoch"
   if (event.type === "done") return "done"
   if (level === "DEBUG") return "debug"
   if (level === "WARNING" || level === "WARN") return "warn"
@@ -97,11 +114,12 @@ function toLine(
   const plain = stripAnsi(raw)
   const legacy = event.type === "log" ? LEGACY_RICH_RE.exec(plain) : null
   const explicitLevel = typeof p.level === "string" ? p.level.toUpperCase() : null
-  let level = legacy?.[1] ?? explicitLevel ?? event.type.toUpperCase()
+  let level = legacy?.[1] ?? explicitLevel ?? EVENT_LEVEL[event.type] ?? event.type.toUpperCase()
   const message = legacy?.[2]?.trim() ?? raw
   const source = legacy?.[3] ?? (typeof p.location === "string" ? p.location : null)
   const stream = typeof p.source === "string" ? p.source : null
   const progress = PROGRESS_RE.exec(stripAnsi(message))
+  const progressKey = event.type === "step" ? "training-step" : progress?.[1] ?? null
   const normalizedMessage = progress
     ? `${progress[1]} · ${progress[3]} / ${progress[4]} · ${progress[2]}% · ${progress[5]}`
     : message
@@ -118,8 +136,8 @@ function toLine(
     stream,
     tone,
     eventType: event.type,
-    key: `${index}-${event.timestamp}-${event.type}`,
-    progressKey: progress?.[1] ?? null,
+    key: progressKey ? `progress-${progressKey}` : `${index}-${event.timestamp}-${event.type}`,
+    progressKey,
     legacyRich: legacy !== null,
   }
 }
@@ -178,17 +196,28 @@ function groupTracebacks(lines: LogLine[]): LogLine[] {
 
 function collapseProgress(lines: LogLine[]): LogLine[] {
   const output: LogLine[] = []
-  const positions = new Map<string, number>()
-  for (const line of lines) {
+  const seen = new Set<string>()
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]
     if (line.progressKey) {
-      const position = positions.get(line.progressKey)
-      if (position !== undefined) {
-        output[position] = line
-        continue
-      }
-      positions.set(line.progressKey, output.length)
+      if (seen.has(line.progressKey)) continue
+      seen.add(line.progressKey)
     }
     output.push(line)
+  }
+  return output.reverse()
+}
+
+function collapseLifecycleDuplicates(lines: LogLine[]): LogLine[] {
+  const output: LogLine[] = []
+  for (const line of lines) {
+    const previous = output[output.length - 1]
+    const duplicateEpoch =
+      (line.eventType === "epoch_start" || line.eventType === "epoch_end") &&
+      previous?.eventType === line.eventType &&
+      previous.message === line.message &&
+      line.ts - previous.ts <= 2
+    if (!duplicateEpoch) output.push(line)
   }
   return output
 }
@@ -198,7 +227,9 @@ export function buildLogLines(
   fallbackTotalSteps: number | null,
 ): LogLine[] {
   const lines = events.map((event, index) => toLine(event, index, fallbackTotalSteps))
-  return collapseProgress(groupTracebacks(mergeWrappedRich(lines)))
+  return collapseProgress(
+    collapseLifecycleDuplicates(groupTracebacks(mergeWrappedRich(lines))),
+  )
 }
 
 export function matchesLogFilter(line: LogLine, filter: LogFilter): boolean {

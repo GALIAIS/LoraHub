@@ -94,13 +94,13 @@ export function buildMilestones(events: TrainingEvent[]): Milestone[] {
       for (const name of Array.from(openCachePhases.keys())) flushCachePhase(name)
     }
 
-    if (e.type === "epoch_end") {
+    if (e.type === "epoch_start" || e.type === "epoch_end") {
       out.push({
         kind: "epoch",
         ts: e.timestamp,
         anchorIndex: idx,
         id: `epoch-${idx}`,
-        data: { ...p },
+        data: { ...p, phase: e.type },
       })
     } else if (e.type === "validation") {
       out.push({
@@ -175,7 +175,7 @@ export function milestoneTitle(m: Milestone): string {
       return `${cachePhaseLabel(phase)} ${done}/${total || "?"}`
     }
     case "epoch":
-      return `第 ${m.data.epoch ?? "?"}/${m.data.total_epochs ?? "?"} 回合结束`
+      return `第 ${m.data.epoch ?? "?"}/${m.data.total_epochs ?? "?"} 回合${m.data.phase === "epoch_start" ? "开始" : "结束"}`
     case "validation": {
       const v = m.data.val_loss
       return `验证 loss = ${typeof v === "number" ? v.toFixed(4) : "?"}`
@@ -234,6 +234,7 @@ function enrichCheckpoint(
 
 export const EVENT_LEVEL: Record<string, string> = {
   step: "STEP",
+  epoch_start: "EPOCH",
   epoch_end: "EPOCH",
   validation: "VAL",
   checkpoint_saved: "CKPT",
@@ -257,7 +258,8 @@ export function toneFor(e: TrainingEvent): string {
     return "text-emerald-700 dark:text-emerald-400"
   if (e.type === "sample_ready")
     return "text-fuchsia-700 dark:text-fuchsia-400"
-  if (e.type === "epoch_end") return "text-violet-700 dark:text-violet-400"
+  if (e.type === "epoch_start" || e.type === "epoch_end")
+    return "text-violet-700 dark:text-violet-400"
   if (e.type === "validation") return "text-cyan-700 dark:text-cyan-400"
   if (e.type === "preview_unavailable")
     return "text-amber-700 dark:text-amber-300"
@@ -288,6 +290,8 @@ export function renderInlineSummary(
       return `util=${p.util_percent ?? "—"}% · vram=${p.vram_used_mib ?? "—"}/${p.vram_total_mib ?? "—"}MiB · ${p.temperature_c ?? "—"}°C`
     case "epoch_end":
       return `第 ${p.epoch ?? "?"}/${p.total_epochs ?? "?"} 回合结束`
+    case "epoch_start":
+      return `第 ${p.epoch ?? "?"}/${p.total_epochs ?? "?"} 回合开始`
     case "validation":
       return `验证 loss=${
         typeof p.val_loss === "number" ? (p.val_loss as number).toFixed(4) : "?"

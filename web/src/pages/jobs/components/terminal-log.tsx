@@ -374,7 +374,7 @@ export function TerminalLog({
                 <div
                   key={line.key}
                   className={cn(
-                    "grid grid-cols-[64px_54px_minmax(0,1fr)] items-start gap-x-2 border-l-2 px-3 py-[3px] lg:grid-cols-[72px_64px_minmax(0,1fr)_minmax(72px,auto)]",
+                    "grid grid-cols-[64px_64px_minmax(0,1fr)] items-start gap-x-2 border-l-2 px-3 py-[3px] lg:grid-cols-[72px_64px_minmax(0,1fr)_minmax(72px,auto)]",
                     BORDER_TONE[line.tone],
                     ROW_TONE[line.tone],
                     rowHoverClass,
@@ -383,6 +383,7 @@ export function TerminalLog({
                   <span className={timeClass}>[{formatTime(line.ts)}]</span>
                   <span
                     className={cn(
+                      "min-w-0 truncate",
                       levelClass,
                       line.tone === "default" ? "" : toneClass,
                     )}

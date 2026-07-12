@@ -9,6 +9,7 @@ export const TERMINAL_STATES = new Set([
 
 export const EVENT_TYPE_LABELS: Record<string, string> = {
   step: "训练步",
+  epoch_start: "回合开始",
   epoch_end: "回合结束",
   checkpoint_saved: "保存检查点",
   sample_ready: "样本生成",

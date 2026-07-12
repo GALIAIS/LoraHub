@@ -52,8 +52,14 @@ _SIMPLE_LOG_RE = re.compile(
     re.DOTALL,
 )
 
-# Epoch transition: ``library/datasets/base.py:212`` logger.info.
-_EPOCH_RE = re.compile(
+# The training loop prints this once from the main process. DataLoader workers
+# separately emit the second form below, once per worker, so those internal
+# duplicate notices are discarded rather than exposed as fake epoch-end rows.
+_EPOCH_START_RE = re.compile(
+    r"^epoch\s+(?P<epoch>\d+)\s*/\s*(?P<total>\d+)\s*$",
+    re.IGNORECASE,
+)
+_WORKER_EPOCH_RE = re.compile(
     r"epoch is incremented\.\s*current_epoch:\s*\d+,\s*epoch:\s*(?P<epoch>\d+)",
     re.IGNORECASE,
 )
@@ -85,8 +91,8 @@ _VAL_LOSS_RE = re.compile(
 def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     """Return a `TrainingEvent` for `line`, or `None` to drop it.
 
-    `None` is reserved for empty / whitespace-only lines so callers can
-    cheaply skip them without allocating an event.
+    `None` drops empty lines and internal worker chatter that would duplicate
+    a main-process lifecycle event.
     """
     stripped = line.rstrip("\r\n").strip()
     if not stripped:
@@ -115,12 +121,17 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
             type=EventType.validation, payload=payload, job_id=job_id
         )
 
-    if (m := _EPOCH_RE.search(stripped)) is not None:
+    if (m := _EPOCH_START_RE.match(stripped)) is not None:
         return TrainingEvent(
-            type=EventType.epoch_end,
-            payload={"epoch": int(m.group("epoch"))},
+            type=EventType.epoch_start,
+            payload={
+                "epoch": int(m.group("epoch")),
+                "total_epochs": int(m.group("total")),
+            },
             job_id=job_id,
         )
+    if _WORKER_EPOCH_RE.search(stripped) is not None:
+        return None
 
     if (m := _SAVE_RE.search(stripped)) is not None:
         return TrainingEvent(

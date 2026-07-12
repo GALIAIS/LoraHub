@@ -153,6 +153,20 @@ export function classifyEvent(
         epoch,
         artifactPath: null,
       }
+    case "epoch_start":
+      return {
+        id: `${index}-${event.timestamp}-epoch-start`,
+        event,
+        index,
+        stage: "train",
+        severity: "info",
+        status: "运行中",
+        title: "回合开始",
+        summary: renderInlineSummary(event, fallbackTotalSteps),
+        step,
+        epoch,
+        artifactPath: null,
+      }
     case "validation":
       return {
         id: `${index}-${event.timestamp}-validation`,

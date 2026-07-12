@@ -17,6 +17,8 @@ function renderPayload(e: TrainingEvent, fallbackTotalSteps: number | null): str
     }
     case "epoch_end":
       return `第 ${p.epoch}/${p.total_epochs ?? "?"} 回合结束`
+    case "epoch_start":
+      return `第 ${p.epoch}/${p.total_epochs ?? "?"} 回合开始`
     case "checkpoint_saved":
       return String(p.path ?? "")
     case "sample_ready":
@@ -55,6 +57,7 @@ export function EventRow({
       done: "text-emerald-600 dark:text-emerald-400",
       checkpoint_saved: "text-cyan-700 dark:text-cyan-400",
       sample_ready: "text-fuchsia-700 dark:text-fuchsia-400",
+      epoch_start: "text-primary",
       epoch_end: "text-primary",
       diagnostic_warning: "text-amber-700 dark:text-amber-400",
     }[event.type] ?? "text-foreground"

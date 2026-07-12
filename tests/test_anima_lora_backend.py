@@ -353,12 +353,17 @@ def test_parser_nan_guard_emits_diagnostic_warning() -> None:
     assert ev.payload["category"] == "nan_loss"
 
 
-def test_parser_epoch_increment_emits_epoch_end() -> None:
+def test_parser_epoch_banner_emits_epoch_start() -> None:
+    ev = parse_line("epoch 2/19")
+    assert ev is not None
+    assert ev.type == EventType.epoch_start
+    assert ev.payload == {"epoch": 2, "total_epochs": 19}
+
+
+def test_parser_drops_duplicate_worker_epoch_increment() -> None:
     line = "epoch is incremented. current_epoch: 1, epoch: 2"
     ev = parse_line(line)
-    assert ev is not None
-    assert ev.type == EventType.epoch_end
-    assert ev.payload["epoch"] == 2
+    assert ev is None
 
 
 def test_parser_save_checkpoint_emits_checkpoint_saved() -> None:
