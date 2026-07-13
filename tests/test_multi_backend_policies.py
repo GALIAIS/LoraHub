@@ -145,6 +145,17 @@ def test_kohya_save_every_exceeds_epochs_warns() -> None:
     )
 
 
+def test_kohya_persistent_workers_requires_worker_processes() -> None:
+    cfg = _kohya_cfg(
+        **{"dataloader.numWorkers": 0, "dataloader.persistentWorkers": True},
+    )
+
+    assert any(
+        i.severity == "error" and i.field == "dataloader.persistentWorkers"
+        for i in kohya_check(cfg)
+    )
+
+
 def test_kohya_attention_overlap_warns() -> None:
     cfg = _kohya_cfg(
         **{"backend.extraArgs": {"xformers": True, "sdpa": True}},
@@ -154,6 +165,25 @@ def test_kohya_attention_overlap_warns() -> None:
         or "extraArgs" in i.field
         for i in kohya_check(cfg)
     )
+
+
+def test_kohya_unsupported_conditioning_and_subset_fields_are_rejected() -> None:
+    cfg = _kohya_cfg(
+        **{
+            "dataset.conditioningDir": "/tmp/reference",
+            "dataset.subsets": [
+                {
+                    "path": "/tmp/subset",
+                    "conditioningDataDir": "/tmp/reference",
+                    "maskPath": "/tmp/masks",
+                    "arBuckets": [1.0],
+                }
+            ],
+        }
+    )
+    issues = kohya_check(cfg)
+    assert any(i.severity == "error" and i.field == "dataset.conditioningDir" for i in issues)
+    assert sum(i.severity == "error" and i.field == "dataset.subsets" for i in issues) == 3
 
 
 def test_kohya_skips_when_backend_is_anima() -> None:
@@ -203,6 +233,7 @@ def test_dp_partition_split_length_mismatch_is_error() -> None:
         **{
             "backend.diffusionPipe": {
                 "pipelineStages": 4,
+                "partitionMethod": "manual",
                 "partitionSplit": [1, 2],  # 2 entries, expected 3
                 "reentrantActivationCheckpointing": True,
             }
@@ -210,6 +241,52 @@ def test_dp_partition_split_length_mismatch_is_error() -> None:
     )
     assert any(
         i.severity == "error" and "partitionSplit" in i.field
+        for i in dp_check(cfg)
+    )
+
+
+def test_dp_manual_partition_requires_split() -> None:
+    cfg = _dp_cfg(
+        **{
+            "backend.diffusionPipe": {
+                "pipelineStages": 2,
+                "partitionMethod": "manual",
+                "reentrantActivationCheckpointing": True,
+            }
+        }
+    )
+    assert any(
+        i.severity == "error" and i.field == "backend.diffusionPipe.partitionSplit"
+        for i in dp_check(cfg)
+    )
+
+
+def test_dp_partition_split_requires_manual_mode() -> None:
+    cfg = _dp_cfg(**{"backend.diffusionPipe": {"partitionSplit": [10]}})
+    assert any(
+        i.severity == "error" and i.field == "backend.diffusionPipe.partitionSplit"
+        for i in dp_check(cfg)
+    )
+
+
+def test_dp_unsupported_conditioning_and_regularization_data_are_rejected() -> None:
+    cfg = _dp_cfg(
+        **{
+            "dataset.regSource": "/tmp/reg",
+            "dataset.subsets": [
+                {"path": "/tmp/subset", "conditioningDataDir": "/tmp/reference"}
+            ],
+        }
+    )
+    issues = dp_check(cfg)
+    assert any(i.severity == "error" and i.field == "dataset.regSource" for i in issues)
+    assert any(i.severity == "error" and i.field == "dataset.subsets" for i in issues)
+
+
+def test_dp_val_split_is_rejected_instead_of_silently_ignored() -> None:
+    cfg = _dp_cfg(**{"dataset.valSplit": 0.1})
+    assert any(
+        i.severity == "error" and i.field == "dataset.valSplit"
         for i in dp_check(cfg)
     )
 

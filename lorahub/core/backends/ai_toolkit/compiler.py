@@ -21,6 +21,26 @@ class CompilationError(ValueError):
 _KREA2_NETWORK_TYPES = {"lora", "dora", "loha", "lokr", "lorm"}
 
 
+def _require_training_dataset(cfg: TrainingConfig) -> None:
+    """Reject incomplete form state before it turns into a YAML path string."""
+    if cfg.dataset.subsets:
+        missing = [
+            str(index + 1)
+            for index, subset in enumerate(cfg.dataset.subsets)
+            if subset.path is None
+        ]
+        if missing:
+            raise CompilationError(
+                "ai_toolkit requires dataset.subsets[].path for every active subset "
+                f"(missing: {', '.join(missing)})"
+            )
+        return
+    if cfg.dataset.source is None:
+        raise CompilationError(
+            "ai_toolkit requires dataset.source when no dataset subsets are configured"
+        )
+
+
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
@@ -29,6 +49,7 @@ def compile_config(
         raise CompilationError(f"ai_toolkit compiler got backend.type={cfg.backend.type!r}")
     if cfg.base_model.arch != "krea2":
         raise CompilationError("ai_toolkit currently supports arch='krea2' in LoraHub")
+    _require_training_dataset(cfg)
 
     workspace = workspace.resolve()
     config_path = workspace / "_lorahub_ai_toolkit.yaml"
@@ -94,7 +115,11 @@ def _sample_section(
             if cfg.sampling.every_n_steps is not None
             else None
         ),
-        "sample_every_n_epochs": int(cfg.sampling.every_n_epochs),
+        "sample_every_n_epochs": (
+            int(cfg.sampling.every_n_epochs)
+            if cfg.sampling.every_n_epochs is not None
+            else None
+        ),
         "width": int(width),
         "height": int(height),
         "neg": "",
@@ -217,8 +242,9 @@ def _dataset_sections(
             dataset_options.load_image_when_caching_latents
         ),
         "num_workers": int(dataset_options.num_workers),
-        "prefetch_factor": int(dataset_options.prefetch_factor),
     }
+    if dataset_options.prefetch_factor is not None:
+        shared["prefetch_factor"] = int(dataset_options.prefetch_factor)
     if dataset_options.default_caption:
         shared["default_caption"] = dataset_options.default_caption
     if dataset_options.trigger_word:

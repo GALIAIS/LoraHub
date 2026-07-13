@@ -1,7 +1,6 @@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  CAPTION_STRATEGY_OPTIONS,
   MAX_TOKEN_LENGTH_OPTIONS,
   RESIZE_INTERPOLATION_OPTIONS,
 } from "../options"
@@ -30,6 +29,13 @@ export function BucketSection({
 }) {
   const isKohya = backendType === "kohya"
   const isDiffusionPipe = backendType === "diffusion-pipe"
+  const skipImageResolution = bucket.skipImageResolution
+  const skipWidth = Array.isArray(skipImageResolution)
+    ? skipImageResolution[0]
+    : (skipImageResolution ?? null)
+  const skipHeight = Array.isArray(skipImageResolution)
+    ? skipImageResolution[1]
+    : null
   return (
     <div className="rounded-[4px] border border-border/40 bg-muted/20 p-3 space-y-3">
       <div className="flex items-center justify-between">
@@ -43,38 +49,40 @@ export function BucketSection({
       </div>
       {bucket.enabled !== false && (
         <>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <Label className="text-[11px] text-muted-foreground">最小边</Label>
-              <IntInput
-                min={64}
-                value={bucket.min ?? 256}
-                onChange={(value) =>
-                  set(["dataset", "bucket", "min"], value ?? 256)
-                }
-              />
+          {!isDiffusionPipe && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label className="text-[11px] text-muted-foreground">最小边</Label>
+                <IntInput
+                  min={64}
+                  value={bucket.min ?? 256}
+                  onChange={(value) =>
+                    set(["dataset", "bucket", "min"], value ?? 256)
+                  }
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] text-muted-foreground">最大边</Label>
+                <IntInput
+                  min={64}
+                  value={bucket.max ?? 2048}
+                  onChange={(value) =>
+                    set(["dataset", "bucket", "max"], value ?? 2048)
+                  }
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] text-muted-foreground">步长</Label>
+                <IntInput
+                  min={8}
+                  value={bucket.step ?? 64}
+                  onChange={(value) =>
+                    set(["dataset", "bucket", "step"], value ?? 64)
+                  }
+                />
+              </div>
             </div>
-            <div>
-              <Label className="text-[11px] text-muted-foreground">最大边</Label>
-              <IntInput
-                min={64}
-                value={bucket.max ?? 2048}
-                onChange={(value) =>
-                  set(["dataset", "bucket", "max"], value ?? 2048)
-                }
-              />
-            </div>
-            <div>
-              <Label className="text-[11px] text-muted-foreground">步长</Label>
-              <IntInput
-                min={8}
-                value={bucket.step ?? 64}
-                onChange={(value) =>
-                  set(["dataset", "bucket", "step"], value ?? 64)
-                }
-              />
-            </div>
-          </div>
+          )}
           {isKohya && (
             <>
               <Row label="noUpscale" description="不要把小图放大到桶尺寸。">
@@ -85,13 +93,48 @@ export function BucketSection({
                   }
                 />
               </Row>
-              <Row label="skipImageResolution" description="跳过图像分辨率检查。">
-                <ToggleSwitch
-                  checked={bucket.skipImageResolution ?? false}
-                  onCheckedChange={(value) =>
-                    set(["dataset", "bucket", "skipImageResolution"], value)
-                  }
-                />
+              <Row
+                label="跳过图像分辨率"
+                description="可选阈值。单值按正方形处理；填写宽高可保留非方形图像。"
+              >
+                <div className="flex items-center gap-2">
+                  <IntInput
+                    min={1}
+                    value={skipWidth}
+                    onChange={(width) => {
+                      if (width === null) {
+                        set(["dataset", "bucket", "skipImageResolution"], null)
+                        return
+                      }
+                      set(
+                        ["dataset", "bucket", "skipImageResolution"],
+                        skipHeight === null ? width : [width, skipHeight],
+                      )
+                    }}
+                    placeholder="单边 / 宽"
+                    className="w-28"
+                  />
+                  <span className="text-xs text-muted-foreground">×</span>
+                  <IntInput
+                    min={1}
+                    value={skipHeight}
+                    onChange={(height) => {
+                      if (height === null) {
+                        set(
+                          ["dataset", "bucket", "skipImageResolution"],
+                          skipWidth,
+                        )
+                        return
+                      }
+                      set(
+                        ["dataset", "bucket", "skipImageResolution"],
+                        [skipWidth ?? height, height],
+                      )
+                    }}
+                    placeholder="高（可选）"
+                    className="w-28"
+                  />
+                </div>
               </Row>
               <Row label="resizeInterpolation" description="PIL 重采样核。">
                 <EnumSelect
@@ -107,7 +150,7 @@ export function BucketSection({
           {isDiffusionPipe && (
             <Row
               label="arBuckets"
-              description="显式宽高比列表，逗号分隔。"
+              description="显式宽高比列表，逗号分隔；填写后覆盖后端设置中的最小/最大宽高比与桶数。"
               errors={errorMap.get("dataset.bucket.arBuckets")}
             >
               <TextInput
@@ -155,49 +198,46 @@ export function CaptionSection({
       <div className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em]">
         标注 Caption
       </div>
-      {isKohya && (
-        <Row label="策略">
-          <EnumSelect
-            value={caption.strategy ?? "tag_file"}
-            onChange={(value) => set(["dataset", "caption", "strategy"], value)}
-            options={CAPTION_STRATEGY_OPTIONS}
-          />
-        </Row>
+      {!isAnimaLora && (
+        <>
+          <Row label="标注扩展名" description="训练 caption 文件后缀。">
+            <Input
+              value={caption.ext ?? ".txt"}
+              className="font-mono w-32"
+              onChange={(event) =>
+                set(["dataset", "caption", "ext"], event.target.value)
+              }
+            />
+          </Row>
+          {isKohya && (
+            <Row label="打乱标签" description="每步随机打乱以逗号分隔的标签。">
+              <ToggleSwitch
+                checked={caption.shuffle ?? true}
+                onCheckedChange={(value) =>
+                  set(["dataset", "caption", "shuffle"], value)
+                }
+              />
+            </Row>
+          )}
+          {!isDiffusionPipe && (
+            <Row
+              label="丢弃概率"
+              description="0-1 之间，每步随机丢弃单个标签的概率。"
+              errors={errorMap.get("dataset.caption.dropRate")}
+            >
+              <FloatInput
+                step={0.05}
+                value={caption.dropRate ?? 0}
+                onChange={(value) =>
+                  set(["dataset", "caption", "dropRate"], value ?? 0)
+                }
+              />
+            </Row>
+          )}
+        </>
       )}
-      <Row label="标注扩展名" description=".txt 是 kohya 默认值。">
-        <Input
-          value={caption.ext ?? ".txt"}
-          className="font-mono w-32"
-          onChange={(event) =>
-            set(["dataset", "caption", "ext"], event.target.value)
-          }
-        />
-      </Row>
-      {isKohya && (
-        <Row label="打乱标签" description="每步随机打乱以逗号分隔的标签。">
-          <ToggleSwitch
-            checked={caption.shuffle ?? true}
-            onCheckedChange={(value) =>
-              set(["dataset", "caption", "shuffle"], value)
-            }
-          />
-        </Row>
-      )}
-      <Row
-        label="丢弃概率"
-        description="0-1 之间，每步随机丢弃单个标签的概率。"
-        errors={errorMap.get("dataset.caption.dropRate")}
-      >
-        <FloatInput
-          step={0.05}
-          value={caption.dropRate ?? 0}
-          onChange={(value) =>
-            set(["dataset", "caption", "dropRate"], value ?? 0)
-          }
-        />
-      </Row>
 
-      {(isKohya || isDiffusionPipe) && (
+      {(isKohya || isDiffusionPipe || isAiToolkit) && (
       <details className="rounded-[4px] border border-border/40 bg-muted/10 px-3 py-2 group">
         <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.18em]">
           高级 Caption 选项
@@ -282,7 +322,7 @@ export function CaptionSection({
               <Row label="suffix" description="所有 caption 之后追加的后缀。">
                 <TextInput className="w-64" value={caption.suffix ?? ""} onChange={(value) => set(["dataset", "caption", "suffix"], value || null)} placeholder="（可选）" />
               </Row>
-              <Row label="maxTokenLength" description="75 / 150 / 225。">
+              <Row label="maxTokenLength" description="默认 75；可选 150 / 225。">
                 <EnumSelect
                   value={caption.maxTokenLength === null || caption.maxTokenLength === undefined ? "" : String(caption.maxTokenLength)}
                   onChange={(value) => set(["dataset", "caption", "maxTokenLength"], value ? parseInt(value, 10) : null)}
@@ -313,7 +353,27 @@ export function CaptionSection({
         </div>
       </details>
       )}
-      {(isAnimaLora || isAiToolkit) && null}
+      {isAnimaLora && (
+        <Row
+          label="清理标签"
+          description="每行一个，训练前从 caption 中移除；源文件不会改动。"
+          errors={errorMap.get("dataset.caption.dropTokens")}
+        >
+          <textarea
+            className="w-full max-w-2xl rounded-[4px] border border-input bg-background px-3 py-2 text-sm font-mono outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60"
+            rows={4}
+            placeholder={"1girl\nlooking at viewer\n2d, anime style"}
+            value={(caption.dropTokens ?? []).join("\n")}
+            onChange={(event) => {
+              const lines = event.target.value
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0)
+              set(["dataset", "caption", "dropTokens"], lines)
+            }}
+          />
+        </Row>
+      )}
     </div>
   )
 }

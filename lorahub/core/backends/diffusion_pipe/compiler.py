@@ -106,6 +106,26 @@ _SCHEDULER_MAP: dict[str, str] = {
 }
 
 
+def _require_training_dataset(cfg: TrainingConfig) -> None:
+    """Reject an incomplete source/subset selection before rendering TOML."""
+    if cfg.dataset.subsets:
+        missing = [
+            str(index + 1)
+            for index, subset in enumerate(cfg.dataset.subsets)
+            if subset.path is None
+        ]
+        if missing:
+            raise CompilationError(
+                "diffusion-pipe requires dataset.subsets[].path for every active "
+                f"subset (missing: {', '.join(missing)})"
+            )
+        return
+    if cfg.dataset.source is None:
+        raise CompilationError(
+            "diffusion-pipe requires dataset.source when no dataset subsets are configured"
+        )
+
+
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
@@ -124,6 +144,9 @@ def compile_config(
             f"supported: {sorted(_SUPPORTED_ARCHS)}. Use the kohya backend instead."
         )
         raise CompilationError(msg)
+
+    _validate_pipeline_partition(_dp_options(cfg))
+    _require_training_dataset(cfg)
 
     workspace = workspace.resolve()
     config_path = workspace / "diffusion_pipe.toml"
@@ -189,6 +212,31 @@ def _log_attention_choice(cfg: TrainingConfig) -> None:
 def _dp_options(cfg: TrainingConfig) -> DiffusionPipeOptions:
     """Return the dp options block, falling back to defaults when unset."""
     return cfg.backend.diffusion_pipe or DiffusionPipeOptions()
+
+
+def _validate_pipeline_partition(opts: DiffusionPipeOptions) -> None:
+    """Reject partition states that diffusion-pipe would assert at startup."""
+    if opts.partition_method == "manual":
+        if opts.pipeline_stages < 2:
+            raise CompilationError(
+                "partitionMethod='manual' requires pipelineStages >= 2"
+            )
+        if opts.partition_split is None:
+            raise CompilationError(
+                "partitionMethod='manual' requires partitionSplit"
+            )
+        expected = opts.pipeline_stages - 1
+        if len(opts.partition_split) != expected:
+            raise CompilationError(
+                "partitionSplit length must equal pipelineStages - 1 "
+                f"({expected}), got {len(opts.partition_split)}"
+            )
+        return
+
+    if opts.partition_split is not None:
+        raise CompilationError(
+            "partitionSplit is only valid when partitionMethod='manual'"
+        )
 
 
 def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -> str:
@@ -292,8 +340,8 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
         "",
     ]
 
-    # Manual partition split (used with partition_method='manual').
-    if opts.partition_split is not None:
+    # The compiler validated that manual mode has a matching split above.
+    if opts.partition_method == "manual":
         parts.append(
             f"partition_split = [{', '.join(str(n) for n in opts.partition_split)}]"
         )

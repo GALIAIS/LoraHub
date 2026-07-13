@@ -38,7 +38,7 @@ export function AnimaLoraLockedDefaultsSection({
         description="Anima masked loss。"
       >
         <ToggleSwitch
-          checked={value.maskedLoss ?? true}
+          checked={value.maskedLoss ?? false}
           onCheckedChange={(c) => set(["backend", "animaLora", "maskedLoss"], c)}
         />
       </Row>
@@ -82,7 +82,7 @@ export function AnimaLoraLockedDefaultsSection({
         description="persistent_workers。"
       >
         <ToggleSwitch
-          checked={value.persistentDataLoaderWorkers ?? false}
+          checked={value.persistentDataLoaderWorkers ?? true}
           onCheckedChange={(c) =>
             set(["backend", "animaLora", "persistentDataLoaderWorkers"], c)
           }
@@ -101,9 +101,9 @@ export function AnimaLoraLockedDefaultsSection({
         />
       </Row>
       <Row
-        label="半精度 VAE"
+        label="禁用半精度 VAE"
         labelBadge={lockBadgeFor("noHalfVae")}
-        description="启用 half VAE。"
+        description="VAE 改用 fp32，显存占用更高。"
       >
         <ToggleSwitch
           checked={value.noHalfVae ?? false}
@@ -137,7 +137,7 @@ export function AnimaLoraLockedDefaultsSection({
         />
       </Row>
       <Row label="日志记录步数" description="每 N 步记录一次训练日志。">
-        <FloatInput
+        <IntInput
           value={value.logEveryNSteps}
           onChange={(n) => set(["backend", "animaLora", "logEveryNSteps"], n)}
           placeholder="2"
@@ -150,7 +150,7 @@ export function AnimaLoraLockedDefaultsSection({
         labelBadge={lockBadgeFor("keepTokens")}
         description="caption shuffle 时保留前 N 个 token。"
       >
-        <FloatInput
+        <IntInput
           value={value.keepTokens}
           onChange={(n) => set(["backend", "animaLora", "keepTokens"], n)}
           placeholder="3"
@@ -175,7 +175,7 @@ export function AnimaLoraLockedDefaultsSection({
         labelBadge={lockBadgeFor("validationSplitNum")}
         description="验证集样本数。0 表示关闭。"
       >
-        <FloatInput
+        <IntInput
           value={value.validationSplitNum}
           onChange={(n) => set(["backend", "animaLora", "validationSplitNum"], n)}
           placeholder="0"
@@ -259,6 +259,8 @@ export function AnimaLoraTurboSection({
                       attnMode: "torch",
                       studentSteps: 4,
                       teacherCfg: 4,
+                      tauCaStrategy: "above_t",
+                      tauDmStrategy: "uniform",
                       tauCaMinGap: 0.05,
                       tauCaSkipAboveT: 0.95,
                       studentLr: 5e-6,
@@ -357,6 +359,30 @@ export function AnimaLoraTurboSection({
               }
               placeholder="4"
               step={0.5}
+            />
+          </Row>
+          <Row label="CA 时间步策略">
+            <EnumSelect
+              value={value.turbo.tauCaStrategy ?? "above_t"}
+              onChange={(next) =>
+                set(["backend", "animaLora", "turbo", "tauCaStrategy"], next)
+              }
+              options={[
+                { value: "above_t", label: "above_t · 默认" },
+                { value: "uniform", label: "uniform" },
+              ]}
+            />
+          </Row>
+          <Row label="DM 时间步策略">
+            <EnumSelect
+              value={value.turbo.tauDmStrategy ?? "uniform"}
+              onChange={(next) =>
+                set(["backend", "animaLora", "turbo", "tauDmStrategy"], next)
+              }
+              options={[
+                { value: "uniform", label: "uniform · 默认" },
+                { value: "above_t", label: "above_t" },
+              ]}
             />
           </Row>
           <Row label="CA 最小时间步间隔">

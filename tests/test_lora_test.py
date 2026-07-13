@@ -279,9 +279,11 @@ def test_lora_test_dedupes_loras_and_collects_anima_directory_output(
     lora_test._run_anima_inference(resolved, req, cases[0], out_path, cancel_evt=SimpleNamespace(is_set=lambda: False))
 
     assert out_path.read_bytes() == b"png"
-    assert not out_path.with_suffix("").exists()
+    inference_dir = Path(calls[0][calls[0].index("--save_path") + 1])
+    assert inference_dir.parent == out_path.parent
+    assert inference_dir.name.startswith(".lorahub-lora-test-")
+    assert not inference_dir.exists()
     assert calls[0].count(str(output / "style.safetensors")) == 1
-    assert calls[0][calls[0].index("--save_path") + 1] == str(out_path.with_suffix(""))
     assert popen_kwargs[0]["creationflags"] == 0x08000000
 
 

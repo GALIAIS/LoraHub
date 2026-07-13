@@ -704,9 +704,11 @@ def get_dataloader_from_datasets(
     dataloader_kwargs = {}
     
     if is_native_windows() or is_macos():
-        dataloader_kwargs['num_workers'] = 0
+        num_workers = 0
     else:
-        dataloader_kwargs['num_workers'] = dataset_config_list[0].num_workers
+        num_workers = dataset_config_list[0].num_workers
+    dataloader_kwargs['num_workers'] = num_workers
+    if num_workers > 0:
         dataloader_kwargs['prefetch_factor'] = dataset_config_list[0].prefetch_factor
 
     if has_buckets:

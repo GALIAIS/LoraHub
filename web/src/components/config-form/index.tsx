@@ -169,6 +169,18 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
           mode: "one-job-per-gpu",
         })
       }
+      if (nextBackend === "diffusion-pipe" && !next.backend?.diffusionPipe) {
+        next = setIn(next, ["backend", "diffusionPipe"], {})
+      }
+      if (nextBackend === "anima_lora" && !next.backend?.animaLora) {
+        next = setIn(next, ["backend", "animaLora"], { method: "lora" })
+      }
+      if (nextBackend === "ai_toolkit" && !next.backend?.aiToolkit) {
+        next = setIn(next, ["backend", "aiToolkit"], {})
+      }
+      if (nextBackend !== "anima_lora") {
+        next = setIn(next, ["backend", "distributed", "strategy"], "ddp")
+      }
       onChange(next)
     },
     [value, onChange],
@@ -344,9 +356,60 @@ function ArchPathsSection({ value, set, errorMap, arch = "", backendType }: Back
 }
 
 function DatasetSection({ value, set, errorMap, backendType }: BackendFormProps & { backendType: BackendKey }) {
+  const onAnimaDatasetSourceChange = useCallback(
+    (source: string) => {
+      let next = setIn(value, ["dataset", "source"], source)
+      const subsets = value.dataset?.subsets ?? []
+      if (subsets.some((subset) => subset.conditioningDataDir)) {
+        next = setIn(
+          next,
+          ["dataset", "subsets"],
+          subsets.map((subset) =>
+            subset.conditioningDataDir ? { ...subset, path: source } : subset,
+          ),
+        )
+      }
+      set([], next)
+    },
+    [set, value],
+  )
+
+  const onAnimaConditioningDirectoryChange = useCallback(
+    (directory: string) => {
+      let next = setIn(
+        value,
+        ["dataset", "subsets"],
+        directory
+          ? [
+              {
+                path: value.dataset?.source ?? "",
+                numRepeats: value.dataset?.numRepeats ?? 1,
+                conditioningDataDir: directory,
+              },
+            ]
+          : [],
+      )
+      next = setIn(next, ["backend", "animaLora", "conditioning"], Boolean(directory))
+      set([], next)
+    },
+    [set, value],
+  )
+
   return (
     <Section icon={<FileImage className="size-3.5" />} title="数据集" subtitle={`${backendType} 数据集配置`}>
-      <DatasetFields value={value.dataset} set={set} errorMap={errorMap} backendType={backendType} />
+      <DatasetFields
+        value={value.dataset}
+        set={set}
+        errorMap={errorMap}
+        backendType={backendType}
+        animaOptions={value.backend?.animaLora}
+        onAnimaDatasetSourceChange={
+          backendType === "anima_lora" ? onAnimaDatasetSourceChange : undefined
+        }
+        onAnimaConditioningDirectoryChange={
+          backendType === "anima_lora" ? onAnimaConditioningDirectoryChange : undefined
+        }
+      />
     </Section>
   )
 }

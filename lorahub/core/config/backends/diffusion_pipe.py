@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .._shared import _CAMEL_CONFIG
 from ..monitoring import MultiNodeConfig
@@ -25,10 +25,23 @@ class DiffusionPipeOptions(BaseModel):
     pipeline_stages: int = Field(1, ge=1)
     gradient_clipping: float = Field(1.0, gt=0)
     partition_method: Literal[
-        "parameters", "uniform", "type:transformer_layer"
+        "parameters", "uniform", "manual", "type:transformer_layer"
     ] = "parameters"
     # Manual layer-split when partition_method=manual; len = pipeline_stages-1.
     partition_split: list[int] | None = None
+
+    @field_validator("partition_split")
+    @classmethod
+    def _validate_partition_split(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if any(item < 1 for item in value):
+            raise ValueError("partition_split values must be positive")
+        if any(
+            right <= left for left, right in zip(value, value[1:], strict=False)
+        ):
+            raise ValueError("partition_split values must be strictly increasing")
+        return value
     caching_batch_size: int = Field(1, ge=1)
     steps_per_print: int = Field(1, ge=1)
     blocks_to_swap: int = Field(0, ge=0)
@@ -55,7 +68,9 @@ class DiffusionPipeOptions(BaseModel):
     # Independent eval datasets — each entry: {name, config_path}.
     eval_datasets: list[dict[str, str]] = Field(default_factory=list)
     # Video clip extraction strategy.
-    video_clip_mode: Literal["single_beginning", "single_middle"] = "single_beginning"
+    video_clip_mode: Literal[
+        "single_beginning", "single_middle", "multiple_overlapping"
+    ] = "single_beginning"
 
     # ---- [eval] section ----
     eval_every_n_epochs: int | None = Field(default=None, ge=1)

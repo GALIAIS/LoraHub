@@ -91,14 +91,14 @@ export const SamplingFields = memo(function SamplingFields({
             <>
               <Row
                 label="每 N 回合一次"
-                description={isAiToolkit ? "每完成 N 个训练数据回合生成一次预览，可与按步采样同时使用。" : "每完成 N 个训练回合生成一次预览。"}
+                description={isAiToolkit ? "可选；每完成 N 个训练数据回合生成一次预览，可与按步采样同时使用。" : "可选；每完成 N 个训练回合生成一次预览。"}
                 errors={errorMap.get("sampling.everyNEpochs")}
               >
-                <IntInput min={1} value={v.everyNEpochs ?? 1} onChange={(n) => set(["sampling", "everyNEpochs"], n ?? 1)} />
+                <IntInput min={1} value={v.everyNEpochs ?? null} onChange={(n) => set(["sampling", "everyNEpochs"], n)} placeholder="关闭" />
               </Row>
               <Row
                 label="每 N 步一次"
-                description={isAiToolkit ? "可选。与按回合采样同时使用；留空则仅按回合采样。" : "与回合采样并行生效；留空则仅按回合采样。"}
+                description={isAiToolkit ? "可选；与按回合采样同时使用。" : "可选；与回合采样并行生效。"}
                 errors={errorMap.get("sampling.everyNSteps")}
               >
                 <IntInput min={1} value={v.everyNSteps ?? null} onChange={(n) => set(["sampling", "everyNSteps"], n)} placeholder="默认" />
@@ -194,15 +194,17 @@ export const SamplingFields = memo(function SamplingFields({
               </Row>
             </>
           )}
-          <Row
-            label="随机种子"
-            description="-1 = 每次训练随机抽取（与 ComfyUI 同义）；填具体数字即固定种子；骰子按钮会立刻生成新值并固定。"
-          >
-            <SeedInput
-              value={v.seed ?? -1}
-              onChange={(n) => set(["sampling", "seed"], n)}
-            />
-          </Row>
+          {isAnima && (
+            <Row
+              label="随机种子"
+              description="-1 = 每次训练随机抽取；填具体数字即固定预览种子。"
+            >
+              <SeedInput
+                value={v.seed ?? -1}
+                onChange={(n) => set(["sampling", "seed"], n)}
+              />
+            </Row>
+          )}
 
           {!isAiToolkit && (
             <Row
@@ -218,10 +220,10 @@ export const SamplingFields = memo(function SamplingFields({
             </Row>
           )}
 
-          {!isAiToolkit && (
+          {isDiffusionPipe && (
             <Row
               label="预览输出"
-              description="训练过程中附加生成的预览图产物。"
+              description="实时检查点预览的附加产物。"
             >
               <div className="flex flex-col gap-1.5 text-[12px]">
                 <OutputToggle

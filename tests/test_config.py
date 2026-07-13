@@ -91,6 +91,51 @@ def test_invalid_resolution_rejected() -> None:
         TrainingConfig.model_validate(bad)
 
 
+def test_blank_dataset_paths_stay_empty_instead_of_becoming_project_root() -> None:
+    cfg = TrainingConfig.model_validate(
+        {"base_model": {"checkpoint": "./model.safetensors"}, "dataset": {"source": ""}}
+    )
+
+    assert cfg.dataset.source is None
+    assert cfg.model_dump(mode="json", by_alias=True)["dataset"]["source"] == ""
+
+
+@pytest.mark.parametrize(
+    ("dataset", "message"),
+    [
+        ({"source": "./x", "frameBuckets": [0]}, "frame_buckets"),
+        ({"source": "./x", "bucket": {"step": 0}}, "step"),
+        ({"source": "./x", "bucket": {"arBuckets": [0.0]}}, "aspect-ratio"),
+        ({"source": "./x", "subsets": [{"path": "", "arBuckets": [-1.0]}]}, "aspect-ratio"),
+    ],
+)
+def test_invalid_dataset_bucket_values_are_rejected(
+    dataset: dict[str, object], message: str
+) -> None:
+    with pytest.raises(Exception, match=message):
+        TrainingConfig.model_validate(
+            {"base_model": {"checkpoint": "./model.safetensors"}, "dataset": dataset}
+        )
+
+
+def test_caption_extension_is_normalized_for_all_backends() -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "base_model": {"checkpoint": "./model.safetensors"},
+            "dataset": {"source": "./x", "caption": {"ext": "txt"}},
+        }
+    )
+
+    assert cfg.dataset.caption.ext == ".txt"
+    with pytest.raises(Exception, match="caption extension"):
+        TrainingConfig.model_validate(
+            {
+                "base_model": {"checkpoint": "./model.safetensors"},
+                "dataset": {"source": "./x", "caption": {"ext": "."}},
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "name",
     ["../escape", r"nested\escape", "CON", "bad:name", "trailing."],

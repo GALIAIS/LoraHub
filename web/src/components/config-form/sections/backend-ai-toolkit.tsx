@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { DatasetSourceSelect } from "../dataset-source-select"
 import type {
   ConfigFormValue,
@@ -280,7 +281,16 @@ function AiToolkitDatasetFields({ value, set, errorMap }: Props) {
   )
   return (
     <Section icon={<Database className="size-3.5" />} title="ai-toolkit 数据集" subtitle="分桶、标注与缓存">
-      <Row label="主数据集" required errors={errorMap.get("dataset.source")}>
+      <Row
+        label="主数据集"
+        required={subsets.length === 0}
+        description={
+          subsets.length > 0
+            ? "当前训练使用下方多数据集；此路径不会参与本次训练。"
+            : undefined
+        }
+        errors={errorMap.get("dataset.source")}
+      >
         <DatasetSourceSelect value={dataset.source} onChange={(next) => set(["dataset", "source"], next)} />
       </Row>
       <Row label="目标分辨率" description="单个值或逗号分隔列表；表示分桶像素预算，不是宽×高。">
@@ -302,6 +312,25 @@ function AiToolkitDatasetFields({ value, set, errorMap }: Props) {
         <TextInput value={options.triggerWord ?? ""} onChange={(next) => set(["backend", "aiToolkit", "dataset", "triggerWord"], next || null)} placeholder="可选" />
       </Row>
       <AiDetails title="标注、增强与缓存">
+        <Row
+          label="清理标签"
+          description="每行一个。训练前生成过滤后的 caption 镜像，源标注文件不变。"
+          errors={errorMap.get("dataset.caption.dropTokens")}
+        >
+          <Textarea
+            className="max-w-2xl font-mono"
+            rows={4}
+            placeholder={"1girl\nlooking at viewer\n2d, anime style"}
+            value={(dataset.caption?.dropTokens ?? []).join("\n")}
+            onChange={(event) => {
+              const dropTokens = event.target.value
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+              set(["dataset", "caption", "dropTokens"], dropTokens)
+            }}
+          />
+        </Row>
         <Row label="默认标注" description="图片缺少标注文件时使用。">
           <TextInput value={options.defaultCaption ?? ""} onChange={(next) => set(["backend", "aiToolkit", "dataset", "defaultCaption"], next || null)} placeholder="可选" />
         </Row>
@@ -347,11 +376,25 @@ function AiToolkitDatasetFields({ value, set, errorMap }: Props) {
           <ToggleSwitch checked={options.cacheTextEmbeddings ?? false} onCheckedChange={(next) => set(["backend", "aiToolkit", "dataset", "cacheTextEmbeddings"], next)} />
         </Row>
         <Row label="数据加载进程">
-          <IntInput min={0} value={options.numWorkers ?? 2} onChange={(next) => set(["backend", "aiToolkit", "dataset", "numWorkers"], next ?? 2)} />
+          <IntInput
+            min={0}
+            value={options.numWorkers ?? 2}
+            onChange={(next) => {
+              const numWorkers = next ?? 2
+              set(["backend", "aiToolkit", "dataset"], {
+                ...options,
+                numWorkers,
+                prefetchFactor:
+                  numWorkers === 0 ? null : (options.prefetchFactor ?? 2),
+              })
+            }}
+          />
         </Row>
-        <Row label="预取批数">
-          <IntInput min={1} value={options.prefetchFactor ?? 2} onChange={(next) => set(["backend", "aiToolkit", "dataset", "prefetchFactor"], next ?? 2)} />
-        </Row>
+        {(options.numWorkers ?? 2) > 0 && (
+          <Row label="预取批数">
+            <IntInput min={1} value={options.prefetchFactor ?? 2} onChange={(next) => set(["backend", "aiToolkit", "dataset", "prefetchFactor"], next ?? 2)} />
+          </Row>
+        )}
       </AiDetails>
       <Row label="正则化数据集" description="可选。作为 is_reg 数据集加入训练。">
         <PathInput value={dataset.regSource ?? ""} onChange={(next) => set(["dataset", "regSource"], next || null)} placeholder="可选" />
@@ -396,16 +439,12 @@ function AiToolkitNetworkFields({ value, set, errorMap }: Props) {
       <Row label="网络类型">
         <EnumSelect value={type} onChange={(next) => set(["network", "type"], next)} options={NETWORK_TYPES} />
       </Row>
-      {type !== "lorm" && (
-        <>
-          <Row label="Rank" errors={errorMap.get("network.rank")}>
-            <IntInput min={1} max={512} value={network.rank ?? 16} onChange={(next) => set(["network", "rank"], next ?? 16)} />
-          </Row>
-          <Row label="Alpha" errors={errorMap.get("network.alpha")}>
-            <IntInput min={1} value={network.alpha ?? 16} onChange={(next) => set(["network", "alpha"], next ?? 16)} />
-          </Row>
-        </>
-      )}
+      <Row label="Rank" errors={errorMap.get("network.rank")}>
+        <IntInput min={1} max={512} value={network.rank ?? 16} onChange={(next) => set(["network", "rank"], next ?? 16)} />
+      </Row>
+      <Row label="Alpha" errors={errorMap.get("network.alpha")}>
+        <IntInput min={1} value={network.alpha ?? 16} onChange={(next) => set(["network", "alpha"], next ?? 16)} />
+      </Row>
       <Row label="Network Dropout">
         <FloatInput min={0} max={0.99} step={0.05} value={network.networkDropout ?? 0} onChange={(next) => set(["network", "networkDropout"], next ?? 0)} />
       </Row>
@@ -601,10 +640,10 @@ function AiToolkitSamplingFields({ value, set, errorMap }: Props) {
       </Row>
       {sampling.enabled !== false && (
         <>
-          <Row label="每 N 回合采样" errors={errorMap.get("sampling.everyNEpochs")}>
-            <IntInput min={1} value={sampling.everyNEpochs ?? 1} onChange={(next) => set(["sampling", "everyNEpochs"], next ?? 1)} />
+          <Row label="每 N 回合采样" description="可选；与按步采样并行。留空可只按步采样。" errors={errorMap.get("sampling.everyNEpochs")}>
+            <IntInput min={1} value={sampling.everyNEpochs ?? null} onChange={(next) => set(["sampling", "everyNEpochs"], next)} placeholder="关闭" />
           </Row>
-          <Row label="每 N 步采样" description="可选；留空仅按回合采样。">
+          <Row label="每 N 步采样" description="可选；留空则不按步采样。">
             <IntInput min={1} value={sampling.everyNSteps ?? null} onChange={(next) => set(["sampling", "everyNSteps"], next)} placeholder="关闭" />
           </Row>
           <Row label="训练前基线采样">

@@ -115,7 +115,7 @@ export interface ConfigFormValue {
       max?: number
       step?: number
       noUpscale?: boolean
-      skipImageResolution?: boolean
+      skipImageResolution?: number | [number, number] | null
       resizeInterpolation?: string | null
       arBuckets?: number[] | null
     }
@@ -241,7 +241,7 @@ export interface ConfigFormValue {
   trainInpainting?: boolean
   sampling?: {
     enabled?: boolean
-    everyNEpochs?: number
+    everyNEpochs?: number | null
     everyNSteps?: number | null
     atFirst?: boolean
     promptsFile?: string | null
@@ -399,7 +399,7 @@ export interface ConfigFormValue {
         cacheTextEmbeddings?: boolean
         loadImageWhenCachingLatents?: boolean
         numWorkers?: number
-        prefetchFactor?: number
+        prefetchFactor?: number | null
         defaultCaption?: string | null
         triggerWord?: string | null
       }

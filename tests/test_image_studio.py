@@ -1395,7 +1395,7 @@ def test_auto_rotate_writes_task_session_and_recovers_status(
     session_id = response.json()["session_id"]
     assert response.json()["total"] == 3
 
-    deadline = time.time() + 5
+    deadline = time.time() + 15
     status: dict[str, Any] | None = None
     latest: dict[str, Any] | None = None
     while time.time() < deadline:

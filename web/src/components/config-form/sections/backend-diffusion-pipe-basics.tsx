@@ -82,7 +82,12 @@ export function DiffusionPipePerformanceSection({
         <EnumSelect
           value={value.partitionMethod ?? "parameters"}
           onChange={(next) =>
-            set(["backend", "diffusionPipe", "partitionMethod"], next)
+            set(["backend", "diffusionPipe"], {
+              ...value,
+              partitionMethod: next,
+              partitionSplit:
+                next === "manual" ? (value.partitionSplit ?? null) : null,
+            })
           }
           options={PARTITION_METHOD_OPTIONS}
         />
@@ -100,29 +105,31 @@ export function DiffusionPipePerformanceSection({
           }
         />
       </Row>
-      <Row
-        label="Partition Split"
-        description="manual 切分时各 stage 的层数列表，逗号分隔（长度 = pipelineStages - 1）。"
-        errors={errorMap.get("backend.diffusionPipe.partitionSplit")}
-      >
-        <TextInput
-          className="w-64"
-          value={(value.partitionSplit ?? []).join(",")}
-          onChange={(raw) => {
-            const list = raw
-              .split(",")
-              .map((part) => part.trim())
-              .filter((part) => part.length > 0)
-              .map((part) => parseInt(part, 10))
-              .filter((next) => !Number.isNaN(next))
-            set(
-              ["backend", "diffusionPipe", "partitionSplit"],
-              list.length ? list : null,
-            )
-          }}
-          placeholder="（默认）"
-        />
-      </Row>
+      {value.partitionMethod === "manual" && (
+        <Row
+          label="Partition Split"
+          description="各 stage 的层分界，逗号分隔（长度 = pipelineStages - 1）。"
+          errors={errorMap.get("backend.diffusionPipe.partitionSplit")}
+        >
+          <TextInput
+            className="w-64"
+            value={(value.partitionSplit ?? []).join(",")}
+            onChange={(raw) => {
+              const list = raw
+                .split(",")
+                .map((part) => part.trim())
+                .filter((part) => part.length > 0)
+                .map((part) => parseInt(part, 10))
+                .filter((next) => !Number.isNaN(next))
+              set(
+                ["backend", "diffusionPipe", "partitionSplit"],
+                list.length ? list : null,
+              )
+            }}
+            placeholder="例如 10,20"
+          />
+        </Row>
+      )}
       <Row
         label="Reentrant Activation Checkpointing"
         description="管线并行 + 重入式激活检查点（dp 限定场景）。"

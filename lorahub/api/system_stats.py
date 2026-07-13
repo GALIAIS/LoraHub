@@ -84,7 +84,7 @@ _HOST_INFO = HostInfo(
 
 def _run_hidden(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     if platform.system() == "Windows":
-        kwargs.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)  # type: ignore[attr-defined]
+        kwargs.setdefault("creationflags", getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return subprocess.run(cmd, **kwargs)
 
 

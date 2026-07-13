@@ -21,6 +21,7 @@ export const DataLoaderFields = memo(function DataLoaderFields({
   backendType?: BackendKey
 }) {
   const v = value ?? {}
+  const hasWorkerProcesses = (v.numWorkers ?? 8) > 0
   if (backendType === "diffusion-pipe") {
     return (
       <Row
@@ -42,18 +43,28 @@ export const DataLoaderFields = memo(function DataLoaderFields({
         <IntInput
           min={0}
           value={v.numWorkers ?? 8}
-          onChange={(n) => set(["dataloader", "numWorkers"], n ?? 0)}
+          onChange={(n) => {
+            const numWorkers = n ?? 0
+            set(["dataloader"], {
+              ...v,
+              numWorkers,
+              persistentWorkers:
+                numWorkers === 0 ? false : (v.persistentWorkers ?? false),
+            })
+          }}
         />
       </Row>
-      <Row
-        label="persistentWorkers"
-        description="跨 epoch 保持 worker 进程，省启动开销。"
-      >
-        <ToggleSwitch
-          checked={v.persistentWorkers ?? false}
-          onCheckedChange={(b) => set(["dataloader", "persistentWorkers"], b)}
-        />
-      </Row>
+      {hasWorkerProcesses && (
+        <Row
+          label="persistentWorkers"
+          description="跨 epoch 保持 worker 进程，省启动开销。"
+        >
+          <ToggleSwitch
+            checked={v.persistentWorkers ?? false}
+            onCheckedChange={(b) => set(["dataloader", "persistentWorkers"], b)}
+          />
+        </Row>
+      )}
       <Row
         label="vaeBatchSize"
         description="VAE 编码阶段的批大小。"
@@ -74,29 +85,6 @@ export const DataLoaderFields = memo(function DataLoaderFields({
           min={1}
           value={v.textEncoderBatchSize ?? null}
           onChange={(n) => set(["dataloader", "textEncoderBatchSize"], n)}
-          placeholder="（默认）"
-        />
-      </Row>
-      <Row
-        label="cacheShuffleNum"
-        description="预缓存阶段打乱样本数；0 保持原顺序。"
-        errors={errorMap.get("dataloader.cacheShuffleNum")}
-      >
-        <IntInput
-          min={0}
-          value={v.cacheShuffleNum ?? 0}
-          onChange={(n) => set(["dataloader", "cacheShuffleNum"], n ?? 0)}
-        />
-      </Row>
-      <Row
-        label="mapNumProc"
-        description="dp 数据集 map 的并行进程数。留空使用默认。"
-        errors={errorMap.get("dataloader.mapNumProc")}
-      >
-        <IntInput
-          min={1}
-          value={v.mapNumProc ?? null}
-          onChange={(n) => set(["dataloader", "mapNumProc"], n)}
           placeholder="（默认）"
         />
       </Row>

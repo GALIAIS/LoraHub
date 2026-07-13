@@ -125,12 +125,13 @@ class AnimaLoraBackend:
                     f"checkpoint file does not exist: {cfg.base_model.checkpoint}",
                 )
             )
-        if not cfg.dataset.source.exists():
+        source = cfg.dataset.source
+        if source is None or not source.exists():
             issues.append(
                 ValidationIssue(
                     Severity.warning,
                     "dataset.source",
-                    f"dataset directory does not exist: {cfg.dataset.source}",
+                    f"dataset directory does not exist: {source}",
                 )
             )
 
@@ -183,6 +184,9 @@ class AnimaLoraBackend:
             apply_caption_dropouts,
         )
         apply_caption_dropouts(cfg, workspace)
+        source = cfg.dataset.source
+        if source is None:
+            raise CompilationError("anima_lora requires dataset.source")
 
         # Auto-preprocess: ensure the LoRA cache under
         # <workspace>/post_image_dataset/lora is populated before the
@@ -193,7 +197,7 @@ class AnimaLoraBackend:
         # error rather than a half-running training subprocess.
         try:
             ensure_cache(
-                image_dir=cfg.dataset.source,
+                image_dir=source,
                 workspace=workspace,
                 base_model=cfg.base_model,
                 env=bootstrap_env,
@@ -670,8 +674,11 @@ def _ensure_sample_prompts_file(cfg: TrainingConfig, workspace: Path) -> None:
     sampling = cfg.sampling
     target = workspace / DEFAULT_SAMPLE_PROMPTS_FILENAME
 
-    captions = _gather_dataset_captions(
-        Path(str(cfg.dataset.source)), _MAX_FALLBACK_PROMPTS
+    source = cfg.dataset.source
+    captions = (
+        _gather_dataset_captions(source, _MAX_FALLBACK_PROMPTS)
+        if source is not None
+        else []
     )
     if not captions:
         captions = [_FALLBACK_PROMPT]

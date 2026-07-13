@@ -124,12 +124,6 @@ export const SAVE_DTYPE_OPTIONS = [
   { value: "float", label: "float32" },
 ] as const
 
-export const CAPTION_STRATEGY_OPTIONS = [
-  { value: "tag_file", label: "tag_file · 同名 .txt 描述文件" },
-  { value: "filename", label: "filename · 文件名作为描述" },
-  { value: "none", label: "none · 不使用描述" },
-] as const
-
 export const BACKEND_OPTIONS = [
   { value: "kohya", label: "kohya-ss / sd-scripts" },
   { value: "diffusion-pipe", label: "tdrussell / diffusion-pipe" },
@@ -146,6 +140,7 @@ export const LOSS_TYPE_OPTIONS = [
 export const PARTITION_METHOD_OPTIONS = [
   { value: "parameters", label: "parameters · 按参数数均分" },
   { value: "uniform", label: "uniform · 按层数均分" },
+  { value: "manual", label: "manual · 手动层切分" },
   { value: "type:transformer_layer", label: "type:transformer_layer" },
 ] as const
 
@@ -197,7 +192,6 @@ export const RESIZE_INTERPOLATION_OPTIONS = [
 // CaptionConfig.max_token_length
 export const MAX_TOKEN_LENGTH_OPTIONS = [
   { value: "", label: "默认 · 75" },
-  { value: "75", label: "75" },
   { value: "150", label: "150" },
   { value: "225", label: "225" },
 ] as const
@@ -247,6 +241,7 @@ export const DP_TIMESTEP_SAMPLE_OPTIONS = [
 export const DP_VIDEO_CLIP_MODE_OPTIONS = [
   { value: "single_beginning", label: "single_beginning" },
   { value: "single_middle", label: "single_middle" },
+  { value: "multiple_overlapping", label: "multiple_overlapping" },
 ] as const
 
 // Architectures that consume FlowMatchConfig knobs.

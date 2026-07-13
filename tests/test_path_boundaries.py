@@ -16,6 +16,7 @@ from lorahub.api.jobs_helpers.resume_dispatch import (
     ResumeTargetInvalid,
     _validate_resume_target,
 )
+from lorahub.api.jobs_helpers.paths_norm import _normalize_config_paths
 from lorahub.core.config.schema import TrainingConfig
 
 
@@ -196,3 +197,29 @@ def test_model_paths_require_project_or_explicit_model_root(
     assert paths.resolve_model_path(external / "model") == (external / "model").resolve()
     with pytest.raises(ValueError, match="outside configured model roots"):
         paths.resolve_model_path(outside / "model")
+
+
+def test_normalize_config_paths_absolutizes_anima_conditioning_reference(
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "anima", "checkpoint": "models/anima.safetensors"},
+            "dataset": {
+                "source": "datasets/train",
+                "subsets": [
+                    {
+                        "conditioningDataDir": "datasets/reference",
+                    }
+                ],
+            },
+            "backend": {"type": "anima_lora"},
+        }
+    )
+
+    _normalize_config_paths(cfg, tmp_path)
+
+    assert cfg.dataset.source == (tmp_path / "datasets" / "train").resolve()
+    assert cfg.dataset.subsets[0].conditioning_data_dir == (
+        tmp_path / "datasets" / "reference"
+    ).resolve()

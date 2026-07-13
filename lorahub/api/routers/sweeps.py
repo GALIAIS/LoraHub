@@ -282,6 +282,11 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
         bootstrap path raises HTTPException so the user sees a 400.
         """
         try:
+            workspace_v = resolve_sweep_variant_path(workspace_root, variant_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
             cfg_v = TrainingConfig.model_validate(variant_config)
         except Exception as exc:  # noqa: BLE001
             # Re-raise on the synchronous path so callers see a 400;
@@ -293,11 +298,6 @@ def create_sweep(req: CreateSweepRequest) -> dict[str, Any]:
                     f"(an axis value likely violates a pydantic constraint): {exc}"
                 ),
             ) from exc
-
-        try:
-            workspace_v = resolve_sweep_variant_path(workspace_root, variant_name)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         metadata = {
             "sweep_id": sweep_id,
             "variant_name": variant_name,

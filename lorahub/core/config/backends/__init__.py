@@ -107,6 +107,10 @@ class BackendConfig(BaseModel):
 
     @model_validator(mode="after")
     def _initialize_selected_backend_options(self) -> BackendConfig:
+        if self.type == "diffusion-pipe" and self.diffusion_pipe is None:
+            self.diffusion_pipe = DiffusionPipeOptions()
+        if self.type == "anima_lora" and self.anima_lora is None:
+            self.anima_lora = AnimaLoraOptions()
         if self.type == "ai_toolkit" and self.ai_toolkit is None:
             self.ai_toolkit = AiToolkitOptions()
         return self

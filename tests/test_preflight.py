@@ -88,6 +88,7 @@ def fresh_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[state.JobRegistr
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from lorahub.api import app as app_mod
+    from lorahub.api import paths as api_paths
     from lorahub.api.settings import SettingsStore
 
     monkeypatch.setattr(
@@ -99,6 +100,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(app_mod, "_sweep_store", None)
     monkeypatch.setattr(app_mod, "_session_store", None)
     monkeypatch.setattr(app_mod, "_ai_store", None)
+    monkeypatch.setattr(api_paths, "runs_dir", lambda: tmp_path)
     monkeypatch.chdir(tmp_path)
     return TestClient(app_mod.app)
 
@@ -476,6 +478,35 @@ def test_preflight_conditioning_requires_same_stem_pairs(tmp_path: Path) -> None
         and f.field == "dataset.subsets.conditioningDataDir"
         and f.severity == "error"
         for f in findings
+    ), findings
+
+
+def test_preflight_anima_reference_row_keeps_source_as_training_root(
+    tmp_path: Path,
+) -> None:
+    anima = _stub_anima_repo(tmp_path / "anima_lora")
+    data = tmp_path / "data"
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "anima",
+            "dataset.source": str(data),
+            "dataset.subsets": [{"conditioningDataDir": str(reference)}],
+            "backend.type": "anima_lora",
+            "backend.repo_path": str(anima),
+            "backend.animaLora": {"conditioning": True},
+        },
+    )
+    (data / "train.png").write_bytes(b"")
+    (reference / "train.png").write_bytes(b"")
+
+    findings = run_preflight(cfg, tmp_path / "ws", skip=("disk_low", "path_encoding"))
+
+    assert not any(
+        finding.field == "dataset.subsets[0].path" and finding.severity == "error"
+        for finding in findings
     ), findings
 
 

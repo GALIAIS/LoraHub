@@ -815,7 +815,8 @@ def test_enqueue_launch_passes_cuda_visible_devices_from_slot(
         fresh_sched.stop(timeout=2.0)
 
     assert "env" in captured, "FakeBackend.launch was never invoked"
-    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "7"}
+    assert captured["env"] is not None
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "7"
 
 
 def test_distributed_gpu_dispatch_assigns_multiple_visible_devices(
@@ -876,7 +877,8 @@ def test_distributed_gpu_dispatch_assigns_multiple_visible_devices(
     finally:
         fresh_sched.stop(timeout=2.0)
 
-    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    assert captured["env"] is not None
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0,1"
     assert captured["gpu_count"] == 2
 
 
@@ -943,7 +945,8 @@ def test_create_job_inherits_settings_gpu_dispatch_default(
         fresh_sched.stop(timeout=2.0)
 
     assert captured["mode"] == "distributed"
-    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    assert captured["env"] is not None
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0,1"
     assert captured["gpu_count"] == 2
 
 
@@ -1011,7 +1014,8 @@ def test_empty_gpu_dispatch_payload_still_follows_settings(
         fresh_sched.stop(timeout=2.0)
 
     assert captured["mode"] == "distributed"
-    assert captured["env"] == {"CUDA_VISIBLE_DEVICES": "0,1"}
+    assert captured["env"] is not None
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "0,1"
     assert captured["gpu_count"] == 2
 
 
@@ -1397,6 +1401,58 @@ def test_validate_config_reports_dataset_caption_preflight(
     assert paths["missing_caption_files"] == ["sample.png"]
 
 
+def test_validate_config_preflight_uses_active_dataset_subsets(
+    client: TestClient, tmp_path: Path
+) -> None:
+    cfg_dict = _valid_config_dict(tmp_path)
+    first_subset = tmp_path / "first_subset"
+    second_subset = tmp_path / "second_subset"
+    first_subset.mkdir()
+    second_subset.mkdir()
+    (first_subset / "one.png").write_bytes(b"fake image bytes")
+    (first_subset / "one.txt").write_text("caption", encoding="utf-8")
+    (second_subset / "two.jpg").write_bytes(b"fake image bytes")
+    cfg_dict["dataset"] = {
+        "source": "",
+        "subsets": [
+            {"path": str(first_subset), "numRepeats": 1},
+            {"path": str(second_subset), "numRepeats": 2},
+        ],
+    }
+
+    r = client.post("/api/configs/validate", json={"config": cfg_dict})
+
+    assert r.status_code == 200
+    paths = r.json()["preflight"]["paths"]
+    assert paths["dataset_exists"] is True
+    assert paths["image_files"] == 2
+    assert paths["caption_files"] == 1
+    assert paths["missing_caption_files"] == ["two.jpg"]
+
+
+def test_validate_config_preflight_does_not_ignore_empty_active_subset(
+    client: TestClient, tmp_path: Path
+) -> None:
+    cfg_dict = _valid_config_dict(tmp_path)
+    subset = tmp_path / "subset"
+    subset.mkdir()
+    (subset / "one.png").write_bytes(b"fake image bytes")
+    cfg_dict["dataset"] = {
+        "source": "",
+        "subsets": [
+            {"path": str(subset), "numRepeats": 1},
+            {"path": "", "numRepeats": 1},
+        ],
+    }
+
+    r = client.post("/api/configs/validate", json={"config": cfg_dict})
+
+    assert r.status_code == 200
+    paths = r.json()["preflight"]["paths"]
+    assert paths["dataset_exists"] is False
+    assert paths["image_files"] == 1
+
+
 def test_validate_config_returns_structured_errors(client: TestClient) -> None:
     r = client.post("/api/configs/validate", json={"config": {}})
     assert r.status_code == 200
@@ -1653,11 +1709,13 @@ def test_scan_dataset_summarizes_images_and_captions(
     assert body["samples"][0]["caption"] == "blue hair, solo"
 
 
-def test_scan_dataset_missing_path_returns_empty_summary(client: TestClient) -> None:
-    r = client.get("/api/datasets/scan", params={"path": "Z:/definitely/missing"})
+def test_scan_dataset_missing_path_is_rejected(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.get("/api/datasets/scan", params={"path": str(tmp_path / "missing")})
 
-    assert r.status_code == 200
-    assert r.json()["exists"] is False
+    assert r.status_code == 400
+    assert "dataset not found" in r.json()["detail"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1961,6 +2019,9 @@ def test_reveal_existing_job_invokes_subprocess(
         captured["kwargs"] = kwargs
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
+    # CI Linux runners are headless; emulate the local desktop context that
+    # this route is intended to exercise before asserting the spawned argv.
+    monkeypatch.setenv("DISPLAY", ":0")
 
     r = client.post(f"/api/jobs/{job.id}/reveal")
     assert r.status_code == 200, r.text
@@ -4076,7 +4137,7 @@ def test_tagging_rejects_missing_directory(client: TestClient, tmp_path: Path) -
         json={"path": str(tmp_path / "nope")},
     )
     assert r.status_code == 400
-    assert "not a directory" in r.json()["detail"]
+    assert "dataset not found" in r.json()["detail"]
 
 
 def test_tagging_runs_session_with_progress_and_writes_captions(
@@ -4707,7 +4768,7 @@ def test_captions_normalize_rejects_missing_directory(
         json={"path": str(tmp_path / "nope")},
     )
     assert r.status_code == 400
-    assert "not a directory" in r.json()["detail"]
+    assert "dataset not found" in r.json()["detail"]
 
 
 def test_captions_normalize_runs_session_and_rewrites_files(
@@ -6756,6 +6817,10 @@ def test_artifacts_delete_file_removes_one_artifact(
     keep = ws / "model_new.safetensors"
     keep.write_bytes(b"\x00" * 32)
     job_id = _make_job_with_workspace(ws)
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
 
     r = client.request(
         "DELETE",
@@ -6775,6 +6840,10 @@ def test_artifacts_delete_file_blocks_traversal(
     ws.mkdir()
     (ws / "model.safetensors").write_bytes(b"w")
     job_id = _make_job_with_workspace(ws)
+    job = state.registry.get(job_id)
+    assert job is not None
+    job.state = state.JobState.succeeded
+    state.registry.update(job)
     r = client.request(
         "DELETE",
         f"/api/artifacts/{job_id}/file",

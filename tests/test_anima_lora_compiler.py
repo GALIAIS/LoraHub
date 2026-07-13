@@ -33,6 +33,7 @@ from lorahub.core.config.schema import (
     AnimaLoraMethodIPAdapterConfig,
     AnimaLoraMethodPostfixConfig,
     AnimaLoraOptions,
+    DatasetSubsetConfig,
     TrainingConfig,
 )
 
@@ -762,8 +763,10 @@ def test_compile_rejects_non_anima_lora_config(tmp_path: Path) -> None:
         compile_config(cfg, tmp_path / "ws")
 
 
-def test_compile_rejects_anima_lora_with_no_options(tmp_path: Path) -> None:
-    """type='anima_lora' but animaLora field absent — clear error, not crash."""
+def test_compile_initializes_default_anima_lora_options_when_omitted(
+    tmp_path: Path,
+) -> None:
+    """Selecting anima_lora without an options block produces a runnable default."""
     ckpt = tmp_path / "m.safetensors"
     ckpt.write_bytes(b"")
     data = tmp_path / "data"
@@ -780,7 +783,48 @@ def test_compile_rejects_anima_lora_with_no_options(tmp_path: Path) -> None:
             "backend": {"type": "anima_lora"},  # animaLora omitted
         }
     )
-    with pytest.raises(CompilationError, match="anima_lora"):
+    assert cfg.backend.anima_lora is not None
+    argv, files = compile_config(cfg, tmp_path / "ws")
+    emitted = _emitted_toml(argv, files)
+    assert emitted["network_module"] == "networks.lora_anima"
+
+
+def test_compile_rejects_blank_dataset_source(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, AnimaLoraOptions())
+    cfg.dataset.source = None
+
+    with pytest.raises(CompilationError, match="requires dataset.source"):
+        compile_config(cfg, tmp_path / "ws")
+
+
+def test_compile_rejects_conditioning_without_reference_directory(tmp_path: Path) -> None:
+    cfg = _config(tmp_path, AnimaLoraOptions(conditioning=True))
+
+    with pytest.raises(CompilationError, match="conditioning=true"):
+        compile_config(cfg, tmp_path / "ws")
+
+
+def test_compile_rejects_multiple_conditioning_directories(tmp_path: Path) -> None:
+    opts = AnimaLoraOptions(conditioning=True)
+    cfg = _config(tmp_path, opts)
+    first = tmp_path / "reference-a"
+    second = tmp_path / "reference-b"
+    first.mkdir()
+    second.mkdir()
+    cfg.dataset.subsets = [
+        DatasetSubsetConfig(
+            path=cfg.dataset.source,
+            num_repeats=1,
+            conditioning_data_dir=first,
+        ),
+        DatasetSubsetConfig(
+            path=cfg.dataset.source,
+            num_repeats=1,
+            conditioning_data_dir=second,
+        ),
+    ]
+
+    with pytest.raises(CompilationError, match="one conditioningDataDir"):
         compile_config(cfg, tmp_path / "ws")
 
 

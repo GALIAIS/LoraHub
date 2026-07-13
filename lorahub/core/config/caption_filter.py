@@ -96,12 +96,14 @@ def sanitise_dataset(
     source: Path,
     drop_tokens: list[str],
     workspace: Path,
+    target_dir: Path | None = None,
 ) -> Path:
-    """Mirror ``source`` into ``workspace/captions_sanitized/`` with caption filters.
+    """Mirror ``source`` into a generated workspace directory with caption filters.
 
     No-op when ``drop_tokens`` is empty: returns ``source`` unchanged
     so callers can wire this in front of every backend without
-    branching themselves.
+    branching themselves. ``target_dir`` is optional for multi-directory
+    recipes; when supplied it must remain inside ``workspace``.
 
     Returns the path the trainer's ``image_dir`` should point to.
     """
@@ -109,7 +111,7 @@ def sanitise_dataset(
     if not cleaned:
         return source
 
-    source = source.resolve()
+    source = source.expanduser().resolve()
     if not source.is_dir():
         logger.warning(
             "caption_filter: dataset.source %s is not a directory — skipping mirror",
@@ -118,23 +120,43 @@ def sanitise_dataset(
         return source
 
     workspace = workspace.expanduser().resolve()
-    target = workspace / "captions_sanitized"
+    raw_target = target_dir or workspace / "captions_sanitized"
+    target_candidate = (
+        raw_target.expanduser()
+        if raw_target.is_absolute()
+        else workspace / raw_target.expanduser()
+    )
+    if _is_link_like(target_candidate):
+        raise RuntimeError(f"caption mirror cannot be a link: {target_candidate}")
+    target = target_candidate.resolve()
+    try:
+        target.relative_to(workspace)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"caption mirror target must stay under workspace: {target}"
+        ) from exc
+    if target == workspace:
+        raise RuntimeError("caption mirror target must be a child of workspace")
+    if source == target:
+        # Launch code may be retried with a config already rebound to its
+        # generated mirror. Rebuilding it from itself risks deleting the
+        # only complete copy, while the filtered data is already correct.
+        return source
     if _paths_overlap(source, target):
         raise RuntimeError(
             "caption source and generated mirror must be separate directories: "
             f"source={source}, target={target}"
         )
     workspace.mkdir(parents=True, exist_ok=True)
-    if _is_link_like(target):
-        raise RuntimeError(f"caption mirror cannot be a link: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not target.is_dir():
         raise RuntimeError(f"caption mirror path is not a directory: {target}")
 
     # Build beside the destination, then swap it into place. A failed read or
     # disk-full error leaves the previous complete mirror available instead of
     # exposing a half-written dataset to a resumed training job.
-    stage = Path(tempfile.mkdtemp(prefix=".captions_sanitized-", dir=workspace))
-    backup = workspace / f".captions_sanitized-backup-{uuid.uuid4().hex}"
+    stage = Path(tempfile.mkdtemp(prefix=f".{target.name}-", dir=target.parent))
+    backup = target.parent / f".{target.name}-backup-{uuid.uuid4().hex}"
 
     image_count = 0
     caption_count = 0

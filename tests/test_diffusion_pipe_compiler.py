@@ -172,6 +172,13 @@ def test_dataset_directory_section_includes_path_and_repeats() -> None:
     assert "num_repeats = 3" in ds
 
 
+def test_compile_rejects_blank_dataset_source(tmp_path: Path) -> None:
+    cfg = _config(dataset={"source": ""})
+
+    with pytest.raises(CompilationError, match="requires dataset.source"):
+        _compile(cfg, tmp_path)
+
+
 def test_dataset_ar_bucket_toggle() -> None:
     on = _dataset_toml(_config())
     assert "enable_ar_bucket = true" in on
@@ -241,6 +248,23 @@ def test_partition_method_uniform_overrides_default() -> None:
     )
     main = _main_toml(cfg)
     assert 'partition_method = "uniform"' in main
+
+
+@pytest.mark.parametrize("partition_split", [[0], [12, 12], [20, 10]])
+def test_manual_partition_split_must_be_positive_and_increasing(
+    partition_split: list[int],
+) -> None:
+    with pytest.raises(Exception, match="partition_split"):
+        _config(
+            backend={
+                "type": "diffusion-pipe",
+                "diffusion_pipe": {
+                    "partition_method": "manual",
+                    "pipeline_stages": 2,
+                    "partition_split": partition_split,
+                },
+            }
+        )
 
 
 def test_eval_section_absent_by_default() -> None:
@@ -676,11 +700,50 @@ def test_partition_split_emitted() -> None:
     cfg = _config(
         backend={
             "type": "diffusion-pipe",
-            "diffusion_pipe": {"partition_split": [10, 20]},
+            "diffusion_pipe": {
+                "partition_method": "manual",
+                "pipeline_stages": 3,
+                "partition_split": [10, 20],
+            },
         }
     )
     main = _main_toml(cfg)
     assert "partition_split = [10, 20]" in main
+
+
+def test_manual_partition_requires_a_complete_split() -> None:
+    missing = _config(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"partition_method": "manual", "pipeline_stages": 2},
+        }
+    )
+    with pytest.raises(CompilationError, match="requires partitionSplit"):
+        _compile(missing)
+
+    mismatch = _config(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {
+                "partition_method": "manual",
+                "pipeline_stages": 3,
+                "partition_split": [10],
+            },
+        }
+    )
+    with pytest.raises(CompilationError, match="length must equal"):
+        _compile(mismatch)
+
+
+def test_partition_split_is_rejected_outside_manual_mode() -> None:
+    cfg = _config(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"partition_split": [10]},
+        }
+    )
+    with pytest.raises(CompilationError, match="only valid"):
+        _compile(cfg)
 
 
 def test_reentrant_activation_checkpointing_emitted() -> None:
@@ -779,6 +842,15 @@ def test_video_clip_mode_emitted_only_when_non_default() -> None:
     )
     main2 = _main_toml(cfg)
     assert 'video_clip_mode = "single_middle"' in main2
+
+    overlapping = _config(
+        backend={
+            "type": "diffusion-pipe",
+            "diffusion_pipe": {"video_clip_mode": "multiple_overlapping"},
+        }
+    )
+    main3 = _main_toml(overlapping)
+    assert 'video_clip_mode = "multiple_overlapping"' in main3
 
 
 def test_map_num_proc_emitted_from_dataloader() -> None:

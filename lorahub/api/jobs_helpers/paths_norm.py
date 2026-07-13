@@ -70,6 +70,10 @@ def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
         sub.path = _absolutise(sub.path, base_dir)  # type: ignore[assignment]
         if sub.mask_path is not None:
             sub.mask_path = _absolutise(sub.mask_path, base_dir)
+        if sub.conditioning_data_dir is not None:
+            sub.conditioning_data_dir = _absolutise(
+                sub.conditioning_data_dir, base_dir
+            )
 
     if cfg.output.output_dir is not None:
         cfg.output.output_dir = _absolutise(cfg.output.output_dir, base_dir)

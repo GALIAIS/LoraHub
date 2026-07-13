@@ -15,7 +15,7 @@ from lorahub.core.backends.ai_toolkit import backend as ai_backend
 from lorahub.core.backends.ai_toolkit import bootstrap as ai_bootstrap
 from lorahub.core.backends.ai_toolkit import installer
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
-from lorahub.core.backends.ai_toolkit.compiler import compile_config
+from lorahub.core.backends.ai_toolkit.compiler import CompilationError, compile_config
 from lorahub.core.backends.ai_toolkit.parser import parse_line
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType
@@ -45,6 +45,14 @@ def test_ai_toolkit_compiler_emits_krea2_yaml(tmp_path: Path) -> None:
     assert process["model"]["arch"] == "krea2"
     assert process["model"]["name_or_path"] == "krea/Krea-2-Turbo"
     assert process["model"]["assistant_lora_path"] == "adapter.safetensors"
+
+
+def test_ai_toolkit_compiler_rejects_blank_dataset_source(tmp_path: Path) -> None:
+    cfg = _cfg()
+    cfg.dataset.source = None
+
+    with pytest.raises(CompilationError, match="requires dataset.source"):
+        compile_config(cfg, tmp_path)
 
 
 def test_ai_toolkit_compiler_emits_supported_krea2_network_types(tmp_path: Path) -> None:
@@ -164,6 +172,50 @@ def test_ai_toolkit_compiler_supports_epoch_only_sampling(tmp_path: Path) -> Non
 
     assert sample["sample_every_n_epochs"] == 3
     assert sample["sample_every"] is None
+
+
+def test_ai_toolkit_compiler_supports_step_only_sampling(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+            "sampling": {
+                "enabled": True,
+                "everyNEpochs": None,
+                "everyNSteps": 250,
+            },
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    sample = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["sample"]
+
+    assert sample["sample_every_n_epochs"] is None
+    assert sample["sample_every"] == 250
+
+
+def test_ai_toolkit_no_worker_loader_omits_prefetch_factor(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {
+                "type": "ai_toolkit",
+                "aiToolkit": {
+                    "dataset": {"numWorkers": 0, "prefetchFactor": 8},
+                },
+            },
+        }
+    )
+
+    assert cfg.backend.ai_toolkit is not None
+    assert cfg.backend.ai_toolkit.dataset.prefetch_factor is None
+    _, files = compile_config(cfg, tmp_path)
+    dataset = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["datasets"][0]
+
+    assert dataset["num_workers"] == 0
+    assert "prefetch_factor" not in dataset
 
 
 @pytest.mark.parametrize(
@@ -474,6 +526,10 @@ def test_builtin_ai_toolkit_templates_compile(name: str, tmp_path: Path) -> None
     )
     raw.pop("_template", None)
     raw.pop("_placeholders", None)
+    # Built-in templates intentionally leave the user-owned dataset path
+    # blank. Compiler tests provide a concrete path because launch-time
+    # compilation correctly rejects incomplete form state.
+    raw["dataset"]["source"] = str(tmp_path / "dataset")
 
     cfg = TrainingConfig.model_validate(raw)
     _, files = compile_config(cfg, tmp_path)
@@ -728,6 +784,43 @@ def test_select_backend_returns_ai_toolkit_backend() -> None:
     backend = _select_backend(_cfg())
     assert isinstance(backend, AIToolkitBackend)
     assert backend.name == "ai_toolkit"
+
+
+def test_ai_toolkit_validate_rejects_conditioning_dataset_fields() -> None:
+    cfg = _cfg()
+    cfg.dataset.conditioning_dir = Path("reference")
+
+    issues = AIToolkitBackend().validate(cfg)
+
+    assert any(
+        issue.field == "dataset.subsets" and "conditioning" in issue.message
+        for issue in issues
+    )
+
+
+def test_ai_toolkit_validate_rejects_uncompiled_dataset_fields() -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {
+                "source": ".",
+                "valSplit": 0.1,
+                "subsets": [
+                    {
+                        "path": ".",
+                        "captionPrefix": "trigger",
+                        "arBuckets": [1.0],
+                    }
+                ],
+            },
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    issues = AIToolkitBackend().validate(cfg)
+
+    assert any(issue.field == "dataset.valSplit" for issue in issues)
+    assert any(issue.field == "dataset.subsets" and "captionPrefix" in issue.message for issue in issues)
 
 
 def test_ai_toolkit_default_repo_uses_project_root(monkeypatch, tmp_path: Path) -> None:

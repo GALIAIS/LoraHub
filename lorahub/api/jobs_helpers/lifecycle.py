@@ -931,10 +931,8 @@ def _resolve_trigger_word(cfg: TrainingConfig) -> None:
         # Try dataset recovery. ``cfg.dataset.source`` can be missing
         # / a non-existent path during preflight; ``_scan_dataset_for_trigger``
         # tolerates both.
-        try:
-            ds_path = Path(str(cfg.dataset.source)).expanduser()
-        except (TypeError, AttributeError):
-            ds_path = None
+        source = cfg.dataset.source
+        ds_path = source.expanduser() if source is not None else None
         if ds_path is not None:
             trigger = _scan_dataset_for_trigger(ds_path) or ""
         if trigger:

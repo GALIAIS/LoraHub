@@ -57,6 +57,48 @@ function lockBadgeFor(field: string) {
   return meta ? <LockBadge meta={meta} /> : null
 }
 
+const METHOD_SUBCONFIG_KEYS: Record<string, string> = {
+  postfix: "postfix",
+  chimera: "chimera",
+  easycontrol: "easycontrol",
+  ip_adapter: "ipAdapter",
+}
+
+const METHOD_DEFAULTS: Record<string, Record<string, unknown>> = {
+  postfix: {
+    mode: "cond",
+    condHiddenDim: 1024,
+    splicePosition: "front_of_padding",
+    orthoBasis: "svd_te",
+    svdNumFiles: 1024,
+    orthoBasisSeed: 0,
+    lambdaInit: 0.3,
+  },
+  chimera: {
+    balanceWContent: 2e-7,
+    balanceWFreq: 5e-7,
+    balanceLossWarmupRatio: 0.4,
+    feiFeatureDim: 2,
+    sigmaFeatureDim: 16,
+  },
+  easycontrol: {
+    bCondInit: -10,
+    condScale: 1,
+    applyFfnLora: true,
+    condTokenCount: 4096,
+    dropP: 0.1,
+    condNoiseMax: 0.3,
+  },
+  ip_adapter: {
+    encoder: "PE-Core-L14-336",
+    resamplerLayers: 2,
+    resamplerHeads: 8,
+    ipScale: 1,
+    imageDropP: 0.05,
+    gateLr: 1e-3,
+    featuresCacheToDisk: true,
+  },
+}
 
 export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
   value = {},
@@ -83,14 +125,19 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
   const method = v.method ?? "lora"
   const isFullFinetune = method === "full_finetune"
 
-  // Switching method clears the previously-active sub-config so the
-  // model_validator on the Python side doesn't reject "method=postfix
-  // but ipAdapter sub-config also set" (it'd accept it but it's noise).
+  // Non-LoRA methods require a matching sub-config in the backend schema.
+  // Initialise it atomically with the method change so the next validation
+  // request never sees an invalid intermediate form state.
   const onMethodChange = useCallback(
     (next: string) => {
-      set(["backend", "animaLora", "method"], next)
+      const nextOptions: Record<string, unknown> = { ...v, method: next }
+      const subconfigKey = METHOD_SUBCONFIG_KEYS[next]
+      if (subconfigKey && nextOptions[subconfigKey] == null) {
+        nextOptions[subconfigKey] = METHOD_DEFAULTS[next]
+      }
+      set(["backend", "animaLora"], nextOptions)
     },
-    [set],
+    [set, v],
   )
 
   return (
@@ -147,7 +194,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
         {!isFullFinetune && (
           <>
             <Row label="网络维度 (rank)" errors={errorMap.get("backend.animaLora.networkDim")}>
-              <FloatInput
+              <IntInput
                 value={v.networkDim}
                 onChange={(n) => set(["backend", "animaLora", "networkDim"], n)}
                 placeholder="16"
@@ -383,7 +430,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row label="最大训练轮数">
-          <FloatInput
+          <IntInput
             value={v.maxTrainEpochs}
             onChange={(n) => set(["backend", "animaLora", "maxTrainEpochs"], n)}
             placeholder="8"
@@ -391,7 +438,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row label="每 N 轮保存">
-          <FloatInput
+          <IntInput
             value={v.saveEveryNEpochs}
             onChange={(n) => set(["backend", "animaLora", "saveEveryNEpochs"], n)}
             placeholder="2"
@@ -407,7 +454,7 @@ export const BackendAnimaLoraFields = memo(function BackendAnimaLoraFields({
           />
         </Row>
         <Row label="检查点保存频率" description="optimizer state 保存频率。">
-          <FloatInput
+          <IntInput
             value={v.checkpointingEpochs}
             onChange={(n) => set(["backend", "animaLora", "checkpointingEpochs"], n)}
             placeholder="2"

@@ -16,7 +16,7 @@ combination still raises a clear ``CompilationError``.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.config.schema import TrainingConfig
@@ -86,25 +86,35 @@ def _pipeline_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
             "块冲突,实际跑会反复重 trace 或直接崩溃。二选一。",
         )
 
-    # partition_method=manual 时必须给 partition_split。
-    if opts.partition_method == "type:transformer_layer" and opts.partition_split:
-        yield ValidationIssue(
-            Severity.warning,
-            "backend.diffusionPipe.partitionSplit",
-            "partitionMethod='type:transformer_layer' 时 partitionSplit 字段会被忽略 — "
-            "DeepSpeed 自己按 transformer 层数算切分。把 partitionSplit 留空 (None) 更清晰。",
-        )
-
-    if opts.partition_split is not None:
-        n = len(opts.partition_split)
-        expected = opts.pipeline_stages - 1
-        if n != expected:
+    if opts.partition_method == "manual":
+        if opts.pipeline_stages < 2:
+            yield ValidationIssue(
+                Severity.error,
+                "backend.diffusionPipe.pipelineStages",
+                "partitionMethod='manual' 需要至少两个 pipeline stage。",
+            )
+        elif opts.partition_split is None:
             yield ValidationIssue(
                 Severity.error,
                 "backend.diffusionPipe.partitionSplit",
-                f"partitionSplit 长度 {n} 与 pipelineStages-1={expected} 不一致。"
-                "DeepSpeed 启动会 assert,训练直接退出。",
+                "partitionMethod='manual' 时必须填写 partitionSplit。",
             )
+        else:
+            expected = opts.pipeline_stages - 1
+            if len(opts.partition_split) != expected:
+                yield ValidationIssue(
+                    Severity.error,
+                    "backend.diffusionPipe.partitionSplit",
+                    f"partitionSplit 长度 {len(opts.partition_split)} 与 pipelineStages-1={expected} 不一致。"
+                    "DeepSpeed 启动会 assert,训练直接退出。",
+                )
+    elif opts.partition_split is not None:
+        yield ValidationIssue(
+            Severity.error,
+            "backend.diffusionPipe.partitionSplit",
+            f"partitionMethod={opts.partition_method!r} 不读取 partitionSplit。"
+            "清空该字段，或将分片方式改为 manual。",
+        )
 
 
 # ---------------------------------------------------------------------- #
@@ -224,6 +234,28 @@ def _dataset_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
     opts = cfg.backend.diffusion_pipe if cfg.backend else None
     if opts is None:
         return
+
+    if cfg.dataset.reg_source is not None:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.regSource",
+            "diffusion-pipe 不读取 regSource；请将需要训练的数据集作为目录 Subsets 配置。",
+        )
+    if cfg.dataset.conditioning_dir is not None or any(
+        subset.conditioning_data_dir is not None for subset in cfg.dataset.subsets
+    ):
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "diffusion-pipe 不支持 conditioningDir / conditioningDataDir；这些字段不会进入生成的 TOML。",
+        )
+    if cfg.dataset.val_split > 0:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.valSplit",
+            "diffusion-pipe 不会从 valSplit 自动拆分验证集；请配置独立 evalDatasets 与 evalEveryN*，"
+            "或将 valSplit 设为 0。",
+        )
 
     # min_ar / max_ar inversion
     if opts.min_ar > 0 and opts.max_ar > 0 and opts.min_ar > opts.max_ar:

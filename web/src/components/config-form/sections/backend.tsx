@@ -97,7 +97,8 @@ export const BackendFields = memo(function BackendFields({
     BACKEND_DESCRIPTIONS[type] ?? BACKEND_DESCRIPTIONS.kohya
   const repoLabel = REPO_LABEL[type] ?? "仓库路径"
   const repoPlaceholder = REPO_PLACEHOLDER[type] ?? "（使用设置中的默认值)"
-  const supportsDistributed = type !== "ai_toolkit" && type !== "kohya"
+  const supportsDistributed = type === "anima_lora" || type === "diffusion-pipe"
+  const supportsShardedDistributed = type === "anima_lora"
   const isDistributed = supportsDistributed && v.gpuDispatch?.mode === "distributed"
   const distributedStrategy = v.distributed?.strategy ?? "ddp"
   const gpuDispatchOptions =
@@ -151,6 +152,8 @@ export const BackendFields = memo(function BackendFields({
             ? "kohya 使用一任务一 GPU。"
             : type === "ai_toolkit"
               ? "ai-toolkit 当前使用单进程单 GPU。"
+              : type === "diffusion-pipe"
+                ? "diffusion-pipe 使用原生 DeepSpeed pipeline parallelism。"
               : "选择任务到 GPU 的分配方式。"
         }
         errors={errorMap.get("backend.gpuDispatch.mode")}
@@ -177,7 +180,7 @@ export const BackendFields = memo(function BackendFields({
             }}
             options={gpuDispatchOptions}
           />
-          {v.gpuDispatch?.mode === "distributed" && (
+          {isDistributed && (
             <IntInput
               value={v.gpuDispatch?.numGpus ?? null}
               min={1}
@@ -188,15 +191,11 @@ export const BackendFields = memo(function BackendFields({
           )}
         </div>
       </Row>
-      {isDistributed && (
+      {isDistributed && supportsShardedDistributed && (
         <>
           <Row
             label="分布式策略"
-            description={
-              type === "anima_lora"
-                ? "DDP 复制模型；FSDP/ZeRO 分片参数或优化器状态。"
-                : "当前后端使用 DDP。"
-            }
+            description="DDP 复制模型；FSDP/ZeRO 分片参数或优化器状态。"
             errors={errorMap.get("backend.distributed.strategy")}
           >
             <EnumSelect

@@ -39,7 +39,7 @@ def test_resolve_with_explicit_config_path(tmp_path: Path) -> None:
     env = resolve(config_path=sd)
     assert isinstance(env, KohyaEnv)
     assert env.sd_scripts_path == sd.resolve()
-    assert env.python_executable == Path(sys.executable).resolve()
+    assert env.python_executable == Path(sys.executable).absolute()
 
 
 def test_resolve_with_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,19 +91,26 @@ def test_kohya_env_script_returns_absolute_path(tmp_path: Path) -> None:
     assert script.exists()
 
 
-def test_resolve_picks_up_local_venv_python(tmp_path: Path) -> None:
+def test_resolve_picks_up_local_venv_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
     venv_python = sd / "venv" / ("Scripts" if sys.platform == "win32" else "bin") / (
         "python.exe" if sys.platform == "win32" else "python"
     )
     venv_python.parent.mkdir(parents=True, exist_ok=True)
     venv_python.write_text("# pretend interpreter\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "lorahub.core.backends._common.bootstrap.check_python", lambda _python: None
+    )
 
     env = resolve(config_path=sd)
     assert env.python_executable == venv_python.absolute()
 
 
-def test_resolve_does_not_follow_venv_symlink(tmp_path: Path) -> None:
+def test_resolve_does_not_follow_venv_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """venv `bin/python` is usually a symlink to /usr/bin/python — we must
     keep the venv path or the spawned process loses access to the venv's
     site-packages (e.g. `import wandb` fails).
@@ -116,6 +123,9 @@ def test_resolve_does_not_follow_venv_symlink(tmp_path: Path) -> None:
     venv_python = sd / "venv" / "bin" / "python"
     venv_python.parent.mkdir(parents=True, exist_ok=True)
     venv_python.symlink_to(real_python)
+    monkeypatch.setattr(
+        "lorahub.core.backends._common.bootstrap.check_python", lambda _python: None
+    )
 
     env = resolve(config_path=sd)
     # We should keep the venv path, not collapse it onto real_python.
@@ -123,7 +133,9 @@ def test_resolve_does_not_follow_venv_symlink(tmp_path: Path) -> None:
     assert env.python_executable != real_python.resolve()
 
 
-def test_config_python_overrides_venv(tmp_path: Path) -> None:
+def test_config_python_overrides_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sd = _make_fake_sd_scripts(tmp_path / "sd-scripts")
     venv_python = sd / "venv" / ("Scripts" if sys.platform == "win32" else "bin") / (
         "python.exe" if sys.platform == "win32" else "python"
@@ -133,6 +145,9 @@ def test_config_python_overrides_venv(tmp_path: Path) -> None:
 
     other = tmp_path / "other_python"
     other.write_text("# other\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "lorahub.core.backends._common.bootstrap.check_python", lambda _python: None
+    )
 
     env = resolve(config_path=sd, config_python=other)
     assert env.python_executable == other.absolute()

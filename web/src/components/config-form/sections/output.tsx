@@ -57,18 +57,20 @@ export const OutputFields = memo(function OutputFields({
           placeholder="（默认）"
         />
       </Row>
-      <Row
-        label="每 N 样本保存"
-        description="dp examples 级保存频率。"
-        errors={errorMap.get("output.saveEveryNExamples")}
-      >
-        <IntInput
-          min={1}
-          value={v.saveEveryNExamples ?? null}
-          onChange={(n) => set(["output", "saveEveryNExamples"], n)}
-          placeholder="（默认）"
-        />
-      </Row>
+      {isDiffusionPipe && (
+        <Row
+          label="每 N 样本保存"
+          description="dp examples 级保存频率。"
+          errors={errorMap.get("output.saveEveryNExamples")}
+        >
+          <IntInput
+            min={1}
+            value={v.saveEveryNExamples ?? null}
+            onChange={(n) => set(["output", "saveEveryNExamples"], n)}
+            placeholder="（默认）"
+          />
+        </Row>
+      )}
       {!isDiffusionPipe && (
         <>
           <Row

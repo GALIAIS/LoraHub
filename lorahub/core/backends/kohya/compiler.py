@@ -99,6 +99,26 @@ class CompilationError(ValueError):
     """Raised when a config cannot be expressed in kohya's argument vocabulary."""
 
 
+def _require_training_dataset(cfg: TrainingConfig) -> None:
+    """Reject an incomplete source/subset selection before writing dataset.toml."""
+    if cfg.dataset.subsets:
+        missing = [
+            str(index + 1)
+            for index, subset in enumerate(cfg.dataset.subsets)
+            if subset.path is None
+        ]
+        if missing:
+            raise CompilationError(
+                "kohya requires dataset.subsets[].path for every active subset "
+                f"(missing: {', '.join(missing)})"
+            )
+        return
+    if cfg.dataset.source is None:
+        raise CompilationError(
+            "kohya requires dataset.source when no dataset subsets are configured"
+        )
+
+
 def compile_config(
     cfg: TrainingConfig,
     workspace: Path,
@@ -116,6 +136,7 @@ def compile_config(
     to substitute. Always a dict; empty when no overrides are needed.
     """
     script = _pick_script(cfg.base_model.arch)
+    _require_training_dataset(cfg)
     args: list[str] = []
     files: dict[Path, str] = {}
     env: dict[str, str] = {}
@@ -212,7 +233,7 @@ def _build_dataset_toml(cfg: TrainingConfig) -> str:
         "[general]",
         f"shuffle_caption = {str(ds.caption.shuffle).lower()}",
         f'caption_extension = "{ds.caption.ext}"',
-        "keep_tokens = 0",
+        f"keep_tokens = {ds.caption.keep_tokens}",
         "",
         "[[datasets]]",
         f"resolution = {res}",
@@ -225,21 +246,51 @@ def _build_dataset_toml(cfg: TrainingConfig) -> str:
             f"max_bucket_reso = {ds.bucket.max_size}",
             f"bucket_reso_steps = {ds.bucket.step}",
         ]
+        if ds.bucket.skip_image_resolution is not None:
+            skip_resolution = ds.bucket.skip_image_resolution
+            if isinstance(skip_resolution, tuple):
+                rendered = f"[{skip_resolution[0]}, {skip_resolution[1]}]"
+            else:
+                rendered = str(skip_resolution)
+            parts.append(f"skip_image_resolution = {rendered}")
     if ds.caption.drop_rate > 0:
         parts.append(f"caption_dropout_rate = {ds.caption.drop_rate}")
 
-    parts += [
-        "",
-        "  [[datasets.subsets]]",
-        f'  image_dir = "{_toml_escape(ds.source)}"',
-        f"  num_repeats = {ds.num_repeats}",
-        f'  caption_extension = "{ds.caption.ext}"',
-        "",
-    ]
+    subset_rows: list[tuple[Path, int, str | None]]
+    if ds.subsets:
+        subset_rows = [
+            (subset.path, subset.num_repeats, subset.caption_prefix)
+            for subset in ds.subsets
+        ]
+    else:
+        subset_rows = [(ds.source, ds.num_repeats, None)]
+
+    for image_dir, num_repeats, caption_prefix in subset_rows:
+        parts += [
+            "",
+            "  [[datasets.subsets]]",
+            f'  image_dir = "{_toml_escape(image_dir)}"',
+            f"  num_repeats = {num_repeats}",
+            f'  caption_extension = "{ds.caption.ext}"',
+        ]
+        if caption_prefix:
+            parts.append(f'  caption_prefix = "{_toml_escape(caption_prefix)}"')
+
+    if ds.reg_source is not None:
+        parts += [
+            "",
+            "  [[datasets.subsets]]",
+            f'  image_dir = "{_toml_escape(ds.reg_source)}"',
+            "  num_repeats = 1",
+            "  is_reg = true",
+            f'  caption_extension = "{ds.caption.ext}"',
+        ]
+
+    parts.append("")
     return "\n".join(parts)
 
 
-def _toml_escape(path: Path) -> str:
+def _toml_escape(path: Path | str) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
@@ -564,10 +615,11 @@ def _emit_sampling_args(cfg: TrainingConfig, workspace: Path, args: list[str]) -
     if not s.enabled or s.prompts_file is None:
         return
     args += [
-        f"--sample_every_n_epochs={s.every_n_epochs}",
         f"--sample_prompts={s.prompts_file}",
         f"--sample_sampler={s.sample_sampler or 'euler_a'}",
     ]
+    if s.every_n_epochs is not None:
+        args.append(f"--sample_every_n_epochs={s.every_n_epochs}")
     if s.every_n_steps is not None:
         args.append(f"--sample_every_n_steps={s.every_n_steps}")
     if s.at_first:
@@ -1070,7 +1122,7 @@ def _emit_dataloader_args(cfg: TrainingConfig, args: list[str]) -> None:
     d = cfg.dataloader
     if d.num_workers != 8:
         args.append(f"--max_data_loader_n_workers={d.num_workers}")
-    if d.persistent_workers:
+    if d.persistent_workers and d.num_workers > 0:
         args.append("--persistent_data_loader_workers")
     if d.vae_batch_size != 1:
         args.append(f"--vae_batch_size={d.vae_batch_size}")
@@ -1156,23 +1208,16 @@ def _emit_caption_args(cfg: TrainingConfig, args: list[str]) -> None:
 def _emit_bucket_args(cfg: TrainingConfig, args: list[str]) -> None:
     """Bucket-related kohya argv that aren't inside dataset.toml.
 
-    `enable_bucket`, `min_bucket_reso`, `max_bucket_reso`, `bucket_reso_steps`
-    are emitted via dataset.toml. The remaining knobs (`bucket_no_upscale`,
-    `skip_image_resolution`, `resize_interpolation`) are top-level CLI flags
-    that the trainer consumes alongside the toml.
+    `enable_bucket`, `min_bucket_reso`, `max_bucket_reso`, `bucket_reso_steps`,
+    and `skip_image_resolution` are emitted via dataset.toml. The remaining
+    knobs (`bucket_no_upscale`, `resize_interpolation`) are top-level CLI
+    flags that the trainer consumes alongside the toml.
     """
     b = cfg.dataset.bucket
     if not b.enabled:
         return
     if b.no_upscale:
         args.append("--bucket_no_upscale")
-    if b.skip_image_resolution:
-        # kohya expects a string ("size" or "width,height"). Emit a flag-only
-        # form when the user opted in but didn't set a resolution; this is
-        # what the upstream parser treats as "skip if image equals base reso".
-        # (Trainer accepts None default; passing the flag with no value would
-        # be a parse error, so we emit the most permissive value.)
-        args.append("--skip_image_resolution=0")
     if b.resize_interpolation is not None:
         args.append(f"--resize_interpolation={b.resize_interpolation}")
 

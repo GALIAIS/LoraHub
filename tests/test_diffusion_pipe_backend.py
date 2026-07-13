@@ -140,6 +140,22 @@ def test_validate_passes_for_good_config(
     assert errors == []
 
 
+def test_validate_rejects_lorahub_sharded_strategy(
+    tmp_path: Path, backend: DiffusionPipeBackend
+) -> None:
+    repo = _make_stub_repo(tmp_path / "dp")
+    config = _make_config(tmp_path, repo, arch="flux")
+    config.backend.distributed.strategy = "fsdp"
+
+    issues = backend.validate(config)
+
+    assert any(
+        issue.severity is Severity.error
+        and issue.field == "backend.distributed.strategy"
+        for issue in issues
+    )
+
+
 def test_validate_reports_missing_repo(
     tmp_path: Path, backend: DiffusionPipeBackend
 ) -> None:

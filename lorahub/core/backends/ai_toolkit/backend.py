@@ -66,6 +66,37 @@ class AIToolkitBackend:
                     "ai_toolkit Krea2 does not support text-encoder LoRA training.",
                 )
             )
+        if cfg.dataset.conditioning_dir is not None or any(
+            subset.conditioning_data_dir is not None
+            for subset in cfg.dataset.subsets
+        ):
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "dataset.subsets",
+                    "ai_toolkit Krea2 不支持 conditioningDir / conditioningDataDir；这些字段不会进入训练 YAML。",
+                )
+            )
+        if cfg.dataset.val_split > 0:
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "dataset.valSplit",
+                    "ai_toolkit Krea2 没有 valSplit 自动验证集；请将 valSplit 设为 0。",
+                )
+            )
+        if any(
+            subset.caption_prefix is not None or subset.ar_buckets is not None
+            for subset in cfg.dataset.subsets
+        ):
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "dataset.subsets",
+                    "ai_toolkit Krea2 不读取子集的 captionPrefix / arBuckets；"
+                    "请使用 ai-toolkit 数据集自身的标注与分桶选项。",
+                )
+            )
         if cfg.base_model.arch not in {a.value for a in _SUPPORTED}:
             issues.append(
                 ValidationIssue(
@@ -85,12 +116,13 @@ class AIToolkitBackend:
             compile_config(cfg, workspace=Path("/"))
         except CompilationError as exc:
             issues.append(ValidationIssue(Severity.error, "recipe", str(exc)))
-        if not cfg.dataset.source.exists():
+        source = cfg.dataset.source
+        if not cfg.dataset.subsets and (source is None or not source.exists()):
             issues.append(
                 ValidationIssue(
                     Severity.warning,
                     "dataset.source",
-                    f"dataset directory does not exist: {cfg.dataset.source}",
+                    f"dataset directory does not exist: {source}",
                 )
             )
         return issues

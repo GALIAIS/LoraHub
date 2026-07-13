@@ -79,6 +79,13 @@ def _config_path(name: str) -> Path:
     raise HTTPException(status_code=404, detail="config not found")
 
 
+def _training_dataset_roots(cfg: TrainingConfig) -> list[Path | None]:
+    """Return the directories the selected backend will actually train from."""
+    if cfg.backend.type != "anima_lora" and cfg.dataset.subsets:
+        return [subset.path for subset in cfg.dataset.subsets]
+    return [cfg.dataset.source] if cfg.dataset.source is not None else []
+
+
 def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
     backend = get_backend(cfg.backend.type).backend_class()
     issues = [
@@ -93,13 +100,17 @@ def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
     image_files: list[Path] = []
     caption_files = 0
     missing_caption_files: list[str] = []
-    if cfg.dataset.source.is_dir():
-        image_files = sorted(
+    dataset_roots = _training_dataset_roots(cfg)
+    for source in dataset_roots:
+        if source is None or not source.is_dir():
+            continue
+        source_images = sorted(
             p
-            for p in cfg.dataset.source.iterdir()
+            for p in source.iterdir()
             if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
         )
-        for image in image_files:
+        image_files.extend(source_images)
+        for image in source_images:
             if image.with_suffix(".txt").is_file():
                 caption_files += 1
             else:
@@ -117,7 +128,9 @@ def _preflight_config(cfg: TrainingConfig) -> dict[str, Any]:
         },
         "paths": {
             "checkpoint_exists": cfg.base_model.checkpoint.is_file(),
-            "dataset_exists": cfg.dataset.source.is_dir(),
+            "dataset_exists": bool(dataset_roots) and all(
+                source is not None and source.is_dir() for source in dataset_roots
+            ),
             "image_files": len(image_files),
             "caption_files": caption_files,
             "missing_caption_files": missing_caption_files[:20],

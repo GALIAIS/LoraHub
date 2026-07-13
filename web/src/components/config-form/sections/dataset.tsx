@@ -15,11 +15,17 @@ export const DatasetFields = memo(function DatasetFields({
   set,
   errorMap,
   backendType,
+  animaOptions,
+  onAnimaDatasetSourceChange,
+  onAnimaConditioningDirectoryChange,
 }: {
   value: ConfigFormValue["dataset"]
   set: Setter
   errorMap: ErrorMap
   backendType?: "kohya" | "diffusion-pipe" | "anima_lora" | "ai_toolkit"
+  animaOptions?: NonNullable<ConfigFormValue["backend"]>["animaLora"]
+  onAnimaDatasetSourceChange?: (source: string) => void
+  onAnimaConditioningDirectoryChange?: (directory: string) => void
 }) {
   const bucket = value.bucket ?? {}
   const caption = value.caption ?? {}
@@ -27,12 +33,40 @@ export const DatasetFields = memo(function DatasetFields({
   const isKohya = backendType === "kohya"
   const isDiffusionPipe = backendType === "diffusion-pipe"
   const isAnimaLora = backendType === "anima_lora"
+  const sourceRequired = isAnimaLora || subsets.length === 0
+  const animaUsesStandardBuckets =
+    isAnimaLora &&
+    !animaOptions?.enableNativeFlatten &&
+    animaOptions?.staticTokenCount === null &&
+    (animaOptions?.bucketTable ?? "default") === "default"
+  const animaConditioningDir =
+    subsets.find((subset) => subset.conditioningDataDir)?.conditioningDataDir ?? ""
+  const animaConditioningErrors = [
+    ...(errorMap.get("dataset.subsets") ?? []),
+    ...(errorMap.get("dataset.subsets.conditioningDataDir") ?? []),
+    ...(errorMap.get("dataset.subsets.0.conditioningDataDir") ?? []),
+  ]
   return (
     <>
-      <Row label="数据集" required errors={errorMap.get("dataset.source")}>
+      <Row
+        label="数据集"
+        required={sourceRequired}
+        description={
+          sourceRequired
+            ? undefined
+            : "当前训练使用下方子集；此路径不会参与本次训练。"
+        }
+        errors={errorMap.get("dataset.source")}
+      >
         <DatasetSourceSelect
           value={value.source}
-          onChange={(v) => set(["dataset", "source"], v)}
+          onChange={(v) => {
+            if (isAnimaLora && onAnimaDatasetSourceChange) {
+              onAnimaDatasetSourceChange(v)
+              return
+            }
+            set(["dataset", "source"], v)
+          }}
           placeholder="./datasets/my_character"
         />
       </Row>
@@ -51,17 +85,6 @@ export const DatasetFields = memo(function DatasetFields({
       </Row>
       {isKohya && (
         <>
-          <Row
-            label="conditioningDir"
-            description="条件图目录。"
-            errors={errorMap.get("dataset.conditioningDir")}
-          >
-            <PathInput
-              value={value.conditioningDir ?? ""}
-              onChange={(v) => set(["dataset", "conditioningDir"], v || null)}
-              placeholder="（可选）"
-            />
-          </Row>
           <Row
             label="regSource"
             description="正则化数据集。"
@@ -98,15 +121,56 @@ export const DatasetFields = memo(function DatasetFields({
         </Row>
       )}
 
-      {(isKohya || isDiffusionPipe) && (
+      {(isKohya || isDiffusionPipe || animaUsesStandardBuckets) && (
         <BucketSection bucket={bucket} set={set} errorMap={errorMap} backendType={backendType} />
       )}
       <CaptionSection caption={caption} set={set} errorMap={errorMap} backendType={backendType} />
-      {(isDiffusionPipe || isAnimaLora) && (
+      {isAnimaLora && (
+        <div className="rounded-[4px] border border-border/40 bg-muted/20 p-3">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em]">
+            差异训练
+          </div>
+          <div className="mt-3">
+            <Row
+              label="参考图目录"
+              description="与训练图按同名文件配对。留空关闭。"
+              errors={animaConditioningErrors}
+            >
+              <PathInput
+                value={animaConditioningDir}
+                onChange={(dir) => {
+                  if (onAnimaConditioningDirectoryChange) {
+                    onAnimaConditioningDirectoryChange(dir)
+                    return
+                  }
+                  set(
+                    ["dataset", "subsets"],
+                    dir
+                      ? [
+                          {
+                            path: value.source ?? "",
+                            numRepeats: value.numRepeats ?? 1,
+                            conditioningDataDir: dir,
+                          },
+                        ]
+                      : [],
+                  )
+                }}
+                placeholder="（可选）"
+              />
+            </Row>
+          </div>
+        </div>
+      )}
+      {(isKohya || isDiffusionPipe) && (
       <div className="rounded-[4px] border border-border/40 bg-muted/20 p-3 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em]">
-            {isDiffusionPipe ? "目录 Subsets（覆盖 source）" : "参考图目录"}
+            {isDiffusionPipe
+              ? "目录 Subsets（覆盖 source）"
+              : isKohya
+                ? "训练 Subsets（覆盖 source）"
+                : "参考图目录"}
           </span>
           <button
             type="button"
@@ -125,7 +189,9 @@ export const DatasetFields = memo(function DatasetFields({
           <div className="text-[11px] text-muted-foreground/80">
             {isDiffusionPipe
               ? "未填则使用上方单一 source；填写则每条生成一个 directory。"
-              : "差异训练需要在这里配置参考图目录。"}
+              : isKohya
+                ? "未填则使用上方单一 source；可为每个子集设置重复次数与 caption 前缀。"
+                : "差异训练需要在这里配置参考图目录。"}
           </div>
         )}
         {subsets.map((sub, idx) => (
@@ -149,7 +215,7 @@ export const DatasetFields = memo(function DatasetFields({
                 删除
               </button>
             </div>
-            {isDiffusionPipe && (
+            {(isKohya || isDiffusionPipe) && (
               <>
                 <Row label="path" required errors={errorMap.get(`dataset.subsets.${idx}.path`)}>
                   <PathInput value={sub.path ?? ""} onChange={(s) => set(["dataset", "subsets", idx, "path"], s)} placeholder="./datasets/subset" />
@@ -157,43 +223,33 @@ export const DatasetFields = memo(function DatasetFields({
                 <Row label="numRepeats">
                   <IntInput min={1} value={sub.numRepeats ?? 1} onChange={(n) => set(["dataset", "subsets", idx, "numRepeats"], n ?? 1)} />
                 </Row>
-                <Row label="maskPath" description="可选。掩码目录与图像目录布局一致。">
-                  <PathInput value={sub.maskPath ?? ""} onChange={(s) => set(["dataset", "subsets", idx, "maskPath"], s || null)} placeholder="（可选）" />
-                </Row>
                 <Row label="captionPrefix">
                   <TextInput className="w-64" value={sub.captionPrefix ?? ""} onChange={(s) => set(["dataset", "subsets", idx, "captionPrefix"], s || null)} placeholder="（可选）" />
                 </Row>
-                <Row label="arBuckets" description="子集级 arBuckets，逗号分隔。">
-                  <TextInput
-                    className="w-64"
-                    value={(sub.arBuckets ?? []).join(",")}
-                    onChange={(s) => {
-                      const list = s
-                        .split(",")
-                        .map((x) => x.trim())
-                        .filter((x) => x.length > 0)
-                        .map((x) => parseFloat(x))
-                        .filter((n) => !Number.isNaN(n))
-                      set(["dataset", "subsets", idx, "arBuckets"], list.length ? list : null)
-                    }}
-                    placeholder="（默认）"
-                  />
-                </Row>
+                {isDiffusionPipe && (
+                  <>
+                    <Row label="maskPath" description="可选。掩码目录与图像目录布局一致。">
+                      <PathInput value={sub.maskPath ?? ""} onChange={(s) => set(["dataset", "subsets", idx, "maskPath"], s || null)} placeholder="（可选）" />
+                    </Row>
+                    <Row label="arBuckets" description="子集级 arBuckets，逗号分隔。">
+                      <TextInput
+                        className="w-64"
+                        value={(sub.arBuckets ?? []).join(",")}
+                        onChange={(s) => {
+                          const list = s
+                            .split(",")
+                            .map((x) => x.trim())
+                            .filter((x) => x.length > 0)
+                            .map((x) => parseFloat(x))
+                            .filter((n) => !Number.isNaN(n))
+                          set(["dataset", "subsets", idx, "arBuckets"], list.length ? list : null)
+                        }}
+                        placeholder="（默认）"
+                      />
+                    </Row>
+                  </>
+                )}
               </>
-            )}
-            {isAnimaLora && (
-            <Row label="参考图目录" description="conditioning 训练使用。">
-              <PathInput
-                value={sub.conditioningDataDir ?? ""}
-                onChange={(s) =>
-                  set(
-                    ["dataset", "subsets", idx, "conditioningDataDir"],
-                    s || null,
-                  )
-                }
-                placeholder="（可选）"
-              />
-            </Row>
             )}
           </div>
         ))}

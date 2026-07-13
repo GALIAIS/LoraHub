@@ -124,12 +124,13 @@ class KohyaBackend:
                     f"checkpoint file does not exist: {cfg.base_model.checkpoint}",
                 )
             )
-        if not cfg.dataset.source.exists():
+        source = cfg.dataset.source
+        if not cfg.dataset.subsets and (source is None or not source.exists()):
             issues.append(
                 ValidationIssue(
                     Severity.warning,
                     "dataset.source",
-                    f"dataset directory does not exist: {cfg.dataset.source}",
+                    f"dataset directory does not exist: {source}",
                 )
             )
 

@@ -1,6 +1,13 @@
 import type { ReactNode } from "react"
 import type { ConfigFormValue, Setter } from "../types"
-import { EnumSelect, FloatInput, Row, Section, ToggleSwitch } from "../widgets"
+import {
+  EnumSelect,
+  FloatInput,
+  IntInput,
+  Row,
+  Section,
+  ToggleSwitch,
+} from "../widgets"
 import {
   ATTN_OPTIONS,
   BUCKET_TABLE_OPTIONS,
@@ -113,7 +120,7 @@ export function AnimaLoraCacheSection({
         labelBadge={lockBadgeFor("staticTokenCount")}
         description="static_token_count。native-flatten 开启时不读取。"
       >
-        <FloatInput
+        <IntInput
           value={value.staticTokenCount}
           onChange={(next) =>
             set(["backend", "animaLora", "staticTokenCount"], next)
@@ -127,7 +134,7 @@ export function AnimaLoraCacheSection({
         labelBadge={lockBadgeFor("vaeChunkSize")}
         description="VAE chunk size。"
       >
-        <FloatInput
+        <IntInput
           value={value.vaeChunkSize}
           onChange={(next) =>
             set(["backend", "animaLora", "vaeChunkSize"], next)
@@ -245,7 +252,7 @@ export function AnimaLoraMemorySection({
   return (
     <Section title="显存 / offload" subtitle="block swap 与 checkpointing">
       <Row label="块交换数" description="blocks_to_swap。0 表示关闭。">
-        <FloatInput
+        <IntInput
           value={value.blocksToSwap}
           onChange={(next) =>
             set(["backend", "animaLora", "blocksToSwap"], next)

@@ -44,8 +44,8 @@ class DataLoaderConfig(BaseModel):
     """DataLoader / cache pipeline knobs.
 
     kohya: --max_data_loader_n_workers, --persistent_data_loader_workers,
-    --vae_batch_size, --text_encoder_batch_size. dp: caching_batch_size,
-    map_num_proc.
+    --vae_batch_size, --text_encoder_batch_size. diffusion-pipe uses
+    its dedicated ``backend.diffusionPipe`` settings for cache batching.
     """
 
     model_config = _CAMEL_CONFIG
@@ -54,6 +54,8 @@ class DataLoaderConfig(BaseModel):
     persistent_workers: bool = False
     vae_batch_size: int = Field(1, ge=1)
     text_encoder_batch_size: int | None = Field(default=None, ge=1)
+    # Kept only to load older shared recipes. No active backend consumes this
+    # field; diffusion-pipe uses backend.diffusionPipe.cacheShuffleNum.
     cache_shuffle_num: int = Field(0, ge=0)
     map_num_proc: int | None = Field(default=None, ge=1)
 

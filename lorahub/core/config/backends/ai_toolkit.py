@@ -50,7 +50,9 @@ class AiToolkitDatasetOptions(BaseModel):
     cache_text_embeddings: bool = False
     load_image_when_caching_latents: bool = False
     num_workers: int = Field(2, ge=0)
-    prefetch_factor: int = Field(2, ge=1)
+    # PyTorch rejects prefetch_factor when num_workers=0. Keep the field
+    # nullable so the compiler can omit it for synchronous loading.
+    prefetch_factor: int | None = Field(2, ge=1)
     default_caption: str | None = None
     trigger_word: str | None = None
 
@@ -60,6 +62,14 @@ class AiToolkitDatasetOptions(BaseModel):
         if value is not None and (not value or any(item < 64 for item in value)):
             raise ValueError("ai_toolkit dataset resolutions must be at least 64")
         return list(dict.fromkeys(value)) if value is not None else None
+
+    @model_validator(mode="after")
+    def _normalise_prefetch_for_worker_mode(self) -> AiToolkitDatasetOptions:
+        if self.num_workers == 0:
+            self.prefetch_factor = None
+        elif self.prefetch_factor is None:
+            self.prefetch_factor = 2
+        return self
 
 
 class AiToolkitNetworkOptions(BaseModel):

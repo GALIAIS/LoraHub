@@ -25,6 +25,7 @@ from lorahub.api.config_advisor_llm import (
     run_advisor,
 )
 from lorahub.core.backends.anima_lora.policies import check_cross_field_conflicts
+from lorahub.core.config.loader import strip_template_metadata
 from lorahub.core.config.schema import TrainingConfig
 
 
@@ -47,7 +48,7 @@ def _base_cfg(**override: Any) -> TrainingConfig:
         for p in parts[:-1]:
             target = target.setdefault(p, {})
         target[parts[-1]] = value
-    return TrainingConfig.model_validate(raw)
+    return TrainingConfig.model_validate(strip_template_metadata(raw))
 
 
 # --------------------------------------------------------------------- #
@@ -120,6 +121,14 @@ def test_policy_caption_dropout_too_high() -> None:
     cfg = _base_cfg(**{"backend.animaLora.captionDropoutRate": 0.7})
     issues = check_cross_field_conflicts(cfg)
     assert any("captionDropoutRate" in i.field for i in issues)
+
+
+def test_policy_anima_rejects_generic_val_split() -> None:
+    cfg = _base_cfg(**{"dataset.valSplit": 0.1})
+    assert any(
+        issue.severity == "error" and issue.field == "dataset.valSplit"
+        for issue in check_cross_field_conflicts(cfg)
+    )
 
 
 def test_policy_save_every_n_exceeds_max_epochs() -> None:

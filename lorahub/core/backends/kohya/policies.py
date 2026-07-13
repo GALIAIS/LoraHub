@@ -17,7 +17,7 @@ hits "save".
 from __future__ import annotations
 
 import importlib.util
-from typing import Iterable
+from collections.abc import Iterable
 
 from lorahub.core.backends.base import Severity, ValidationIssue
 from lorahub.core.config.schema import TrainingConfig
@@ -44,6 +44,7 @@ def check_cross_field_conflicts(cfg: TrainingConfig) -> list[ValidationIssue]:
     issues.extend(_network_conflicts(cfg))
     issues.extend(_optimizer_conflicts(cfg))
     issues.extend(_schedule_conflicts(cfg))
+    issues.extend(_dataloader_conflicts(cfg))
     issues.extend(_dataset_conflicts(cfg))
     issues.extend(_precision_conflicts(cfg))
     issues.extend(_attention_conflicts(cfg))
@@ -181,6 +182,22 @@ def _schedule_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
 
 
 # ---------------------------------------------------------------------- #
+# DataLoader
+# ---------------------------------------------------------------------- #
+
+
+def _dataloader_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
+    dataloader = cfg.dataloader
+    if dataloader.persistent_workers and dataloader.num_workers == 0:
+        yield ValidationIssue(
+            Severity.error,
+            "dataloader.persistentWorkers",
+            "persistentWorkers 需要 numWorkers >= 1；numWorkers=0 使用主进程，"
+            "PyTorch 会拒绝 persistent workers。",
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Dataset / bucket / caption
 # ---------------------------------------------------------------------- #
 
@@ -234,6 +251,32 @@ def _dataset_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
                 f"dataset.caption.dropRate={drop_rate} 过高,每步至少一半样本完全丢弃 "
                 "caption,模型会迅速忘掉 trigger word。常用值在 0.05-0.15。",
             )
+
+    if ds.conditioning_dir is not None:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.conditioningDir",
+            "kohya LoRA 启动器不支持通用 conditioningDir；该字段此前会被静默忽略。"
+            "移除它，或改用 anima_lora 的差异训练数据集子集。",
+        )
+    if any(subset.conditioning_data_dir is not None for subset in ds.subsets):
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "kohya LoRA 不消费子集的 conditioningDataDir；该字段仅用于 anima_lora 差异训练。",
+        )
+    if any(subset.mask_path is not None for subset in ds.subsets):
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "kohya LoRA 不消费子集的 maskPath；请使用 kohya 支持的 alpha/masked-loss 数据布局。",
+        )
+    if any(subset.ar_buckets is not None for subset in ds.subsets):
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "kohya LoRA 不消费子集级 arBuckets；请改用全局 bucket 设置。",
+        )
 
 
 # ---------------------------------------------------------------------- #

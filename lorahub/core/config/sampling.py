@@ -89,7 +89,9 @@ class SamplingConfig(BaseModel):
     model_config = _CAMEL_CONFIG
 
     enabled: bool = True
-    every_n_epochs: int = Field(1, ge=1)
+    # Keep the historic epoch cadence by default, but allow step-only or
+    # baseline-only sampling when a backend supports those modes.
+    every_n_epochs: int | None = Field(default=1, ge=1)
     # Step-level sampling cadence (kohya: --sample_every_n_steps).
     every_n_steps: int | None = Field(default=None, ge=1)
     # Generate a baseline before training starts (kohya: --sample_at_first).

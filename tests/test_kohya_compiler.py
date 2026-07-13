@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -146,12 +147,54 @@ def test_dataset_subset_includes_image_dir_and_repeats(tmp_path: Path) -> None:
     assert "num_repeats = 5" in toml
 
 
+def test_dataset_toml_preserves_subsets_reg_data_and_bucket_threshold(
+    tmp_path: Path,
+) -> None:
+    cfg = _config(
+        dataset={
+            "source": str(tmp_path / "source"),
+            "caption": {"keep_tokens": 3},
+            "subsets": [
+                {
+                    "path": str(tmp_path / "subset_a"),
+                    "num_repeats": 2,
+                    "caption_prefix": "subject_a",
+                },
+                {"path": str(tmp_path / "subset_b"), "num_repeats": 4},
+            ],
+            "reg_source": str(tmp_path / "regularization"),
+            "bucket": {"skip_image_resolution": [512, 768]},
+        }
+    )
+
+    document = tomllib.loads(_dataset_toml(cfg))
+    dataset = document["datasets"][0]
+    subsets = dataset["subsets"]
+
+    assert document["general"]["keep_tokens"] == 3
+    assert dataset["skip_image_resolution"] == [512, 768]
+    assert Path(subsets[0]["image_dir"]).name == "subset_a"
+    assert subsets[0]["num_repeats"] == 2
+    assert subsets[0]["caption_prefix"] == "subject_a"
+    assert Path(subsets[1]["image_dir"]).name == "subset_b"
+    assert subsets[1]["num_repeats"] == 4
+    assert Path(subsets[2]["image_dir"]).name == "regularization"
+    assert subsets[2]["is_reg"] is True
+
+
 def test_dataset_toml_path_is_under_workspace(tmp_path: Path) -> None:
     files = _files(_config(), ws=tmp_path)
     assert len(files) == 1
     toml_path = next(iter(files.keys()))
     assert toml_path.name == "dataset.toml"
     assert tmp_path.resolve() in toml_path.parents
+
+
+def test_compile_rejects_blank_dataset_source(tmp_path: Path) -> None:
+    cfg = _config(dataset={"source": ""})
+
+    with pytest.raises(CompilationError, match="requires dataset.source"):
+        compile_config(cfg, tmp_path)
 
 
 def test_network_lora_default() -> None:
@@ -1069,6 +1112,20 @@ def test_b1_sampling_step_cadence_and_at_first() -> None:
     assert "--sample_at_first" in args
 
 
+def test_sampling_supports_step_only_cadence() -> None:
+    cfg = _config(
+        sampling={
+            "prompts_file": "/p/eval.txt",
+            "every_n_epochs": None,
+            "every_n_steps": 50,
+        }
+    )
+    args = _argv(cfg)
+
+    assert "--sample_every_n_steps=50" in args
+    assert not any(arg.startswith("--sample_every_n_epochs=") for arg in args)
+
+
 # --- DataLoaderConfig -----------------------------------------------------
 
 
@@ -1084,6 +1141,20 @@ def test_b1_dataloader_overrides_emit() -> None:
     assert "--max_data_loader_n_workers=2" in args
     assert "--persistent_data_loader_workers" in args
     assert "--vae_batch_size=4" in args
+
+
+def test_b1_dataloader_omits_persistent_workers_without_workers() -> None:
+    cfg = _config(
+        dataloader={
+            "num_workers": 0,
+            "persistent_workers": True,
+        }
+    )
+
+    args = _argv(cfg)
+
+    assert "--max_data_loader_n_workers=0" in args
+    assert "--persistent_data_loader_workers" not in args
 
 
 def test_b1_dataloader_text_encoder_batch_size_sdxl() -> None:
@@ -1183,15 +1254,26 @@ def test_b1_bucket_extra_argv() -> None:
             "source": "/d",
             "bucket": {
                 "no_upscale": True,
-                "skip_image_resolution": True,
+                "skip_image_resolution": [512, 768],
                 "resize_interpolation": "lanczos",
             },
         }
     )
     args = _argv(cfg)
     assert "--bucket_no_upscale" in args
-    assert "--skip_image_resolution=0" in args
+    assert not any(arg.startswith("--skip_image_resolution=") for arg in args)
+    assert "skip_image_resolution = [512, 768]" in _dataset_toml(cfg)
     assert "--resize_interpolation=lanczos" in args
+
+
+def test_legacy_boolean_skip_image_resolution_is_ignored() -> None:
+    cfg = _config(
+        dataset={
+            "source": "/d",
+            "bucket": {"skip_image_resolution": True},
+        }
+    )
+    assert "skip_image_resolution" not in _dataset_toml(cfg)
 
 
 def test_b1_bucket_extra_argv_silent_when_bucket_disabled() -> None:

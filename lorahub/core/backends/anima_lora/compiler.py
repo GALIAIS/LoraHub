@@ -211,6 +211,8 @@ def compile_config(
             "with at least default options; populate it in the recipe"
         )
         raise CompilationError(msg)
+    if cfg.dataset.source is None:
+        raise CompilationError("anima_lora requires dataset.source")
 
     opts = cfg.backend.anima_lora
     if opts.turbo is not None:
@@ -749,20 +751,26 @@ def _render_dataset(
         ],
     }
 
-    # Conditioning training (差异训练): forward the master switch and
-    # the per-subset reference dir so train.py picks them up. The
-    # conditioning_data_dir is read from the first DatasetSubsetConfig
-    # that supplies one; cfg.dataset.subsets is otherwise unused on
-    # the anima_lora backend (LoraHub renders a single resized subset).
+    # Conditioning training (差异训练) has one resized target subset, so
+    # it can only pair with one same-stem reference directory. Reject an
+    # ambiguous or incomplete config here as well as in preflight policy;
+    # direct compiler callers must not silently train without conditioning.
+    conditioning_dirs = [
+        str(Path(str(subset.conditioning_data_dir)).resolve())
+        for subset in cfg.dataset.subsets
+        if subset.conditioning_data_dir is not None
+    ]
     if opts.conditioning:
+        if not conditioning_dirs:
+            raise CompilationError(
+                "anima_lora conditioning=true requires dataset.subsets[].conditioningDataDir"
+            )
+        if len(conditioning_dirs) > 1:
+            raise CompilationError(
+                "anima_lora supports one conditioningDataDir per training run"
+            )
         cfg_dict["conditioning"] = True
-    cond_dir: str | None = None
-    for subset in cfg.dataset.subsets:
-        if subset.conditioning_data_dir is not None:
-            cond_dir = str(Path(str(subset.conditioning_data_dir)).resolve())
-            break
-    if cond_dir is not None:
-        dataset_entry["subsets"][0]["conditioning_data_dir"] = cond_dir
+        dataset_entry["subsets"][0]["conditioning_data_dir"] = conditioning_dirs[0]
     cfg_dict["datasets"] = [dataset_entry]
 
 
@@ -1217,6 +1225,8 @@ def compile_turbo_config(
             "use compile_config for the standard training path"
         )
         raise CompilationError(msg)
+    if cfg.dataset.source is None:
+        raise CompilationError("anima_lora turbo requires dataset.source")
 
     opts = cfg.backend.anima_lora
     turbo = opts.turbo

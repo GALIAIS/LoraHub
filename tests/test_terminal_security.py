@@ -94,6 +94,7 @@ def test_restricted_terminal_allows_supported_diagnostics(
         "lorahub.api.routers.terminal._venv_has_pip",
         lambda _path: True,
     )
+    monkeypatch.setattr("lorahub.api.routers.terminal._find_uv", lambda: "uv")
     result = _enforce_command_policy(
         argv,
         python_path=python_path,

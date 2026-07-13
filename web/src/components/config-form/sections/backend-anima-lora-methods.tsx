@@ -226,11 +226,11 @@ function LoraMethodConfig({
       {timestepMaskEnabled && (
         <Row label="T-mask 最小 rank">
           <IntInput
-            value={value.lora?.minRank}
+            value={value.lora?.minRank ?? 16}
             onChange={(n) =>
-              set(["backend", "animaLora", "lora", "minRank"], n ?? 8)
+              set(["backend", "animaLora", "lora", "minRank"], n ?? 16)
             }
-            placeholder="8"
+            placeholder="16"
             min={1}
           />
         </Row>
@@ -294,7 +294,7 @@ function PostfixMethodConfig({
         />
       </Row>
       <Row label="条件隐藏维度">
-        <FloatInput
+        <IntInput
           value={value.postfix?.condHiddenDim}
           onChange={(n) =>
             set(["backend", "animaLora", "postfix", "condHiddenDim"], n)
@@ -343,13 +343,13 @@ function PostfixMethodConfig({
           placeholder="post_image_dataset/lora"
         />
       </Row>
-      {value.postfix?.orthoBasis === "svd_te" && (
+      {(value.postfix?.orthoBasis ?? "svd_te") === "svd_te" && (
         <Row label="SVD 文件数">
-          <IntInput min={1} value={value.postfix?.svdNumFiles ?? 100} onChange={(n) => set(["backend", "animaLora", "postfix", "svdNumFiles"], n ?? 100)} />
+          <IntInput min={1} value={value.postfix?.svdNumFiles ?? 1024} onChange={(n) => set(["backend", "animaLora", "postfix", "svdNumFiles"], n ?? 1024)} />
         </Row>
       )}
       <Row label="正交基随机种子">
-        <IntInput value={value.postfix?.orthoBasisSeed ?? 42} onChange={(n) => set(["backend", "animaLora", "postfix", "orthoBasisSeed"], n ?? 42)} />
+        <IntInput value={value.postfix?.orthoBasisSeed ?? 0} onChange={(n) => set(["backend", "animaLora", "postfix", "orthoBasisSeed"], n ?? 0)} />
       </Row>
     </Section>
   )
@@ -365,10 +365,10 @@ function ChimeraMethodConfig({
   return (
     <Section title="chimera 配置">
       <Row label="FEI 特征维度">
-        <IntInput min={1} value={value.chimera?.feiFeatureDim ?? 64} onChange={(n) => set(["backend", "animaLora", "chimera", "feiFeatureDim"], n ?? 64)} />
+        <IntInput min={1} value={value.chimera?.feiFeatureDim ?? 2} onChange={(n) => set(["backend", "animaLora", "chimera", "feiFeatureDim"], n ?? 2)} />
       </Row>
       <Row label="Sigma 特征维度">
-        <IntInput min={1} value={value.chimera?.sigmaFeatureDim ?? 64} onChange={(n) => set(["backend", "animaLora", "chimera", "sigmaFeatureDim"], n ?? 64)} />
+        <IntInput min={1} value={value.chimera?.sigmaFeatureDim ?? 16} onChange={(n) => set(["backend", "animaLora", "chimera", "sigmaFeatureDim"], n ?? 16)} />
       </Row>
       <Row label="内容平衡权重">
         <FloatInput
@@ -435,7 +435,7 @@ function EasyControlMethodConfig({
         <FloatInput value={value.easycontrol?.condScale ?? 1} onChange={(n) => set(["backend", "animaLora", "easycontrol", "condScale"], n ?? 1)} min={0} step={0.1} />
       </Row>
       <Row label="条件 token 数">
-        <FloatInput
+        <IntInput
           value={value.easycontrol?.condTokenCount}
           onChange={(n) =>
             set(["backend", "animaLora", "easycontrol", "condTokenCount"], n)
@@ -465,7 +465,7 @@ function EasyControlMethodConfig({
         />
       </Row>
       <Row label="条件噪声上限" description="条件图像注入的最大噪声强度。">
-        <FloatInput value={value.easycontrol?.condNoiseMax ?? 0} onChange={(n) => set(["backend", "animaLora", "easycontrol", "condNoiseMax"], n ?? 0)} min={0} step={0.01} />
+        <FloatInput value={value.easycontrol?.condNoiseMax ?? 0.3} onChange={(n) => set(["backend", "animaLora", "easycontrol", "condNoiseMax"], n ?? 0.3)} min={0} step={0.01} />
       </Row>
     </Section>
   )
@@ -493,10 +493,10 @@ function IpAdapterMethodConfig({
         />
       </Row>
       <Row label="Resampler 层数">
-        <IntInput min={1} value={value.ipAdapter?.resamplerLayers ?? 4} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerLayers"], n ?? 4)} />
+        <IntInput min={1} value={value.ipAdapter?.resamplerLayers ?? 2} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerLayers"], n ?? 2)} />
       </Row>
       <Row label="Resampler 注意力头数">
-        <IntInput min={1} value={value.ipAdapter?.resamplerHeads ?? 12} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerHeads"], n ?? 12)} />
+        <IntInput min={1} value={value.ipAdapter?.resamplerHeads ?? 8} onChange={(n) => set(["backend", "animaLora", "ipAdapter", "resamplerHeads"], n ?? 8)} />
       </Row>
       <Row label="IP 缩放系数">
         <FloatInput

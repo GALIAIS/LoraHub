@@ -59,6 +59,17 @@ class DiffusionPipeBackend:
     def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
 
+        if cfg.backend.distributed.strategy != "ddp":
+            issues.append(
+                ValidationIssue(
+                    Severity.error,
+                    "backend.distributed.strategy",
+                    "diffusion-pipe 使用原生 DeepSpeed pipeline parallelism；"
+                    "不支持 LoraHub 的 FSDP 或 ZeRO 策略。请使用 DDP，并通过 "
+                    "pipelineStages 配置模型切分。",
+                )
+            )
+
         if cfg.base_model.arch not in {a.value for a in _SUPPORTED}:
             issues.append(
                 ValidationIssue(
@@ -102,12 +113,13 @@ class DiffusionPipeBackend:
                     f"checkpoint file does not exist: {cfg.base_model.checkpoint}",
                 )
             )
-        if not cfg.dataset.source.exists():
+        source = cfg.dataset.source
+        if not cfg.dataset.subsets and (source is None or not source.exists()):
             issues.append(
                 ValidationIssue(
                     Severity.warning,
                     "dataset.source",
-                    f"dataset directory does not exist: {cfg.dataset.source}",
+                    f"dataset directory does not exist: {source}",
                 )
             )
 

@@ -259,9 +259,14 @@ def _check_dataset(cfg: TrainingConfig) -> list[PreflightFinding]:
     out: list[PreflightFinding] = []
     ds = cfg.dataset
 
-    # When subsets is non-empty it overrides .source — we still warn on
-    # missing .source because the form often leaves both populated.
-    if not ds.subsets:
+    # Kohya, diffusion-pipe, and ai-toolkit use an explicit subset list in
+    # place of source. Anima reuses the same schema field only to carry its
+    # conditioning reference directory, while its trainer always consumes
+    # source. Treating Anima's reference row as a training subset made a
+    # valid source look missing and rejected imported recipes with no
+    # redundant subset.path.
+    use_subset_roots = bool(ds.subsets) and cfg.backend.type != "anima_lora"
+    if not use_subset_roots:
         if ds.source is None or not Path(str(ds.source)).is_dir():
             out.append(
                 PreflightFinding(
@@ -271,12 +276,16 @@ def _check_dataset(cfg: TrainingConfig) -> list[PreflightFinding]:
                     message=(
                         f"Dataset directory not found: {ds.source!s}"
                         if ds.source is not None
-                        else "dataset.source is empty and no subsets configured"
+                        else "dataset.source is empty"
                     ),
                     remediation=(
-                        "Pick an existing image directory in the dataset "
-                        "field, or add at least one entry under "
-                        "dataset.subsets."
+                        "Pick an existing image directory in the dataset field."
+                        if cfg.backend.type == "anima_lora"
+                        else (
+                            "Pick an existing image directory in the dataset "
+                            "field, or add at least one entry under "
+                            "dataset.subsets."
+                        )
                     ),
                 )
             )
@@ -336,7 +345,7 @@ def _check_dataset_has_samples(cfg: TrainingConfig) -> list[PreflightFinding]:
     out: list[PreflightFinding] = []
     candidates: list[tuple[str, Path]] = []
 
-    if cfg.dataset.subsets:
+    if cfg.dataset.subsets and cfg.backend.type != "anima_lora":
         for idx, subset in enumerate(cfg.dataset.subsets):
             if subset.path is not None:
                 candidates.append((f"dataset.subsets[{idx}].path", Path(str(subset.path))))
@@ -1136,7 +1145,7 @@ def _count_with_extensions(
 
 
 def _dataset_image_count(cfg: TrainingConfig, *, limit: int) -> int | None:
-    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    roots = _active_training_roots(cfg)
     total = 0
     for raw in roots:
         if raw is None:
@@ -1151,7 +1160,7 @@ def _dataset_image_count(cfg: TrainingConfig, *, limit: int) -> int | None:
 
 
 def _dataset_image_paths(cfg: TrainingConfig, *, limit: int) -> list[Path]:
-    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    roots = _active_training_roots(cfg)
     out: list[Path] = []
     for raw in roots:
         if raw is None:
@@ -1220,7 +1229,7 @@ def _check_conditioning_pairs(
 
 def _has_conditioning_pair(image_path: Path, cfg: TrainingConfig, cond_dir: Path) -> bool:
     rel_dir = Path()
-    roots = [subset.path for subset in cfg.dataset.subsets] or [cfg.dataset.source]
+    roots = _active_training_roots(cfg)
     for raw in roots:
         if raw is None:
             continue
@@ -1240,6 +1249,13 @@ def _has_conditioning_pair(image_path: Path, cfg: TrainingConfig, cond_dir: Path
         if (cond_dir / rel_dir / f"{image_path.stem}{ext}").is_file():
             return True
     return False
+
+
+def _active_training_roots(cfg: TrainingConfig) -> list[Path | None]:
+    """Return the directories a backend actually feeds to its trainer."""
+    if cfg.dataset.subsets and cfg.backend.type != "anima_lora":
+        return [subset.path for subset in cfg.dataset.subsets]
+    return [cfg.dataset.source]
 
 
 def _is_pre_ampere(compute_capability: str | None) -> bool:

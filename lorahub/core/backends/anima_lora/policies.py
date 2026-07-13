@@ -50,6 +50,7 @@ def check_cross_field_conflicts(cfg: TrainingConfig) -> list[ValidationIssue]:
     issues.extend(_fp16_conflicts(cfg, opts))
     issues.extend(_validation_conflicts(opts))
     issues.extend(_caption_conflicts(cfg, opts))
+    issues.extend(_dataset_conflicts(cfg, opts))
     return issues
 
 
@@ -483,6 +484,85 @@ def _caption_conflicts(
             "backend.animaLora.captionDropoutRate",
             f"captionDropoutRate={drop_rate} 过高,意味着每步至少一半的样本"
             "完全丢弃 caption。这会让模型迅速忘掉 trigger word。常用值在 0.05-0.15。",
+        )
+
+
+def _dataset_conflicts(
+    cfg: TrainingConfig, opts: AnimaLoraOptions,
+) -> Iterable[ValidationIssue]:
+    """Guard dataset fields that anima_lora cannot consume.
+
+    The backend preprocesses one training source into one resized subset.
+    ``DatasetConfig.subsets`` is therefore reserved solely for the optional
+    same-stem conditioning directory; treating it like kohya/dp multi-dataset
+    input used to produce configurations that looked valid but were ignored.
+    """
+    dataset = cfg.dataset
+    conditioning_dirs = [
+        subset.conditioning_data_dir
+        for subset in dataset.subsets
+        if subset.conditioning_data_dir is not None
+    ]
+
+    if opts.conditioning and not conditioning_dirs:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "conditioning=true 需要填写一个参考图目录；否则训练器没有可配对的条件图。",
+        )
+    if len(conditioning_dirs) > 1:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "anima_lora 每个训练任务只支持一个参考图目录；多个目录不会被合并。",
+        )
+    if not opts.conditioning and conditioning_dirs:
+        yield ValidationIssue(
+            Severity.warning,
+            "backend.animaLora.conditioning",
+            "已填写参考图目录但 conditioning=false；该目录不会参与训练。",
+        )
+
+    if dataset.conditioning_dir is not None:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.conditioningDir",
+            "anima_lora 不读取旧的 conditioningDir；请使用差异训练中的参考图目录。",
+        )
+    if dataset.reg_source is not None:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.regSource",
+            "anima_lora 不支持正则化数据集；该目录不会被编译进训练配置。",
+        )
+    if dataset.val_split > 0:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.valSplit",
+            "anima_lora 不读取 valSplit；请使用 backend.animaLora.validationSplitNum 配置验证样本数。",
+        )
+
+    if dataset.source is None:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.source",
+            "anima_lora 需要一个训练数据集目录。",
+        )
+        return
+
+    unsupported_subset_fields = False
+    for subset in dataset.subsets:
+        if (
+            subset.mask_path is not None
+            or subset.ar_buckets is not None
+            or subset.caption_prefix is not None
+        ):
+            unsupported_subset_fields = True
+    if unsupported_subset_fields:
+        yield ValidationIssue(
+            Severity.error,
+            "dataset.subsets",
+            "anima_lora 只训练 dataset.source；子集掩码、分桶与 caption 前缀不会生效。",
         )
 
 

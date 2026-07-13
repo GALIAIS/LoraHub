@@ -8,8 +8,9 @@ edited without touching Python; each one is parsed and validated with
 logged and skipped so a typo in one file can't take the whole endpoint down.
 
 Path-bearing fields (``checkpoint`` / ``dataset.source``) are intentionally
-left blank: ``pathlib.Path("")`` is a valid Path, so the schema accepts it,
-and the user is expected to fill the real path in the form before saving.
+left blank. Optional dataset paths are normalised to ``None`` so preflight
+reports the unfilled field instead of treating the project directory as
+training data.
 
 Each template YAML may carry two optional top-level metadata blocks:
 

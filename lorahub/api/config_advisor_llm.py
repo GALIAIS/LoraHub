@@ -54,6 +54,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from lorahub.api.ai_store import AIStore
 from lorahub.core.ai.client import AIError, invoke
+from lorahub.core.config.loader import strip_template_metadata
 from lorahub.core.config.schema import TrainingConfig
 
 log = logging.getLogger(__name__)
@@ -365,7 +366,7 @@ class AdvisorPatch(BaseModel):
 class AdvisorResponse(BaseModel):
     rationale: str = Field(default="", max_length=4000)
     patches: list[AdvisorPatch] = Field(default_factory=list, max_length=80)
-    fullConfig: dict[str, Any] = Field(default_factory=dict)
+    full_config: dict[str, Any] = Field(default_factory=dict, alias="fullConfig")
 
 
 def parse_response(text: str) -> AdvisorResponse:
@@ -536,9 +537,14 @@ def run_advisor(
     # told to stay within — running anima rules on a kohya proposal
     # would emit nonsense.
     validation_issues: list[dict[str, Any]] = []
-    if response.fullConfig:
+    if response.full_config:
         try:
-            cfg = TrainingConfig.model_validate(response.fullConfig)
+            # Built-in templates carry UI-only metadata at the top level.
+            # The normal config load/save routes remove it before schema
+            # validation, so advisor proposals must use the same boundary.
+            cfg = TrainingConfig.model_validate(
+                strip_template_metadata(response.full_config)
+            )
             proposal_backend = (
                 cfg.backend.type if cfg.backend and cfg.backend.type else (backend_type or "")
             )
@@ -568,7 +574,7 @@ def run_advisor(
     return AdvisorOutcome(
         rationale=response.rationale,
         patches=[p.model_dump() for p in response.patches],
-        full_config=response.fullConfig,
+        full_config=response.full_config,
         validation_issues=validation_issues,
         provider_id=route.provider_id,
         model_id=route.model_id,
@@ -595,8 +601,6 @@ def _resolve_policy_check(backend_type: str):
     selecting the right module up-front keeps imports targeted (no
     sense paying the kohya-policies import cost on an anima route).
     """
-    from typing import Callable  # noqa: PLC0415
-
     key = (backend_type or "anima_lora").strip()
     if key == "diffusion_pipe":
         key = "diffusion-pipe"

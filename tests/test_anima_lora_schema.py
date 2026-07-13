@@ -213,6 +213,12 @@ def test_backend_config_accepts_anima_lora_type() -> None:
     assert BackendConfig(type="diffusion-pipe").anima_lora is None
 
 
+def test_backend_config_initializes_selected_backend_options() -> None:
+    assert BackendConfig(type="anima_lora").anima_lora is not None
+    assert BackendConfig(type="diffusion-pipe").diffusion_pipe is not None
+    assert BackendConfig(type="ai_toolkit").ai_toolkit is not None
+
+
 def test_backend_distributed_strategy_accepts_camel_case() -> None:
     bc = BackendConfig.model_validate(
         {
