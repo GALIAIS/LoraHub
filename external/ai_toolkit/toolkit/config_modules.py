@@ -377,7 +377,22 @@ class TrainConfig:
         self.noise_scheduler = kwargs.get('noise_scheduler', 'ddpm')
         self.content_or_style: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')
         self.content_or_style_reg: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')
-        self.steps: int = kwargs.get('steps', 1000)
+        raw_steps = kwargs.get('steps', None)
+        self.steps: Optional[int] = int(raw_steps) if raw_steps is not None else None
+        raw_epochs = kwargs.get('epochs', None)
+        self.epochs: Optional[int] = int(raw_epochs) if raw_epochs is not None else None
+        raw_max_steps = kwargs.get('max_steps', None)
+        self.max_steps: Optional[int] = (
+            int(raw_max_steps) if raw_max_steps is not None else None
+        )
+        if self.steps is not None and self.steps < 1:
+            raise ValueError('steps must be at least 1')
+        if self.epochs is not None and self.epochs < 1:
+            raise ValueError('epochs must be at least 1')
+        if self.max_steps is not None and self.max_steps < 1:
+            raise ValueError('max_steps must be at least 1')
+        if self.steps is None and self.epochs is None:
+            self.steps = 1000
         self.lr = kwargs.get('lr', 1e-6)
         self.unet_lr = kwargs.get('unet_lr', self.lr)
         self.text_encoder_lr = kwargs.get('text_encoder_lr', self.lr)

@@ -74,7 +74,8 @@ export function buildDefaults(backend?: BackendId): ConfigFormValue {
         lr: { unet: 1e-4, textEncoder: 5e-5 },
       },
       schedule: {
-        maxSteps: 1000,
+        epochs: 10,
+        maxSteps: null,
         batchSize: 1,
         gradAccum: 1,
       },

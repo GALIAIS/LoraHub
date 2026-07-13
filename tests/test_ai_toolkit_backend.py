@@ -166,6 +166,72 @@ def test_ai_toolkit_compiler_supports_epoch_only_sampling(tmp_path: Path) -> Non
     assert sample["sample_every"] is None
 
 
+@pytest.mark.parametrize(
+    ("at_first", "skip_first_sample"),
+    [(True, False), (False, True)],
+)
+def test_ai_toolkit_compiler_honors_sampling_at_first(
+    at_first: bool,
+    skip_first_sample: bool,
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "sampling": {"atFirst": at_first},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    train = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["train"]
+
+    assert train["skip_first_sample"] is skip_first_sample
+
+
+def test_ai_toolkit_compiler_uses_epochs_with_max_steps_as_cap(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "schedule": {
+                "epochs": 10,
+                "maxSteps": 200000,
+                "batchSize": 1,
+                "gradAccum": 4,
+            },
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    train = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["train"]
+
+    assert train["epochs"] == 10
+    assert train["max_steps"] == 200000
+    assert "steps" not in train
+
+
+def test_ai_toolkit_epoch_schedule_defers_cosine_length_to_runtime(
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "schedule": {"epochs": 10, "maxSteps": 200000},
+            "optimizer": {"schedule": "cosine_with_restarts"},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _, files = compile_config(cfg, tmp_path)
+    train = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]["train"]
+
+    assert "total_iters" not in train["lr_scheduler_params"]
+
+
 def test_ai_toolkit_scheduler_default_survives_normalized_round_trip(
     tmp_path: Path,
 ) -> None:
@@ -413,7 +479,8 @@ def test_builtin_ai_toolkit_templates_compile(name: str, tmp_path: Path) -> None
     _, files = compile_config(cfg, tmp_path)
     process = yaml.safe_load(next(iter(files.values())))["config"]["process"][0]
 
-    assert process["train"]["steps"] == 1000
+    assert process["train"]["epochs"] == 10
+    assert "steps" not in process["train"]
     assert process["datasets"][0]["resolution"] == 1024
 
 
@@ -436,6 +503,18 @@ def test_ai_toolkit_epoch_sampling_detects_crossed_boundaries() -> None:
     assert module.epoch_cadence_due(2, 6, 2) is True
     assert module.epoch_cadence_due(3, 3, 1) is False
     assert module.epoch_cadence_due(0, 1, None) is False
+    assert module.epoch_training_plan(
+        epochs=10,
+        batches_per_epoch=860,
+        gradient_accumulation=4,
+        max_steps=None,
+    ) == (215, 2150)
+    assert module.epoch_training_plan(
+        epochs=10,
+        batches_per_epoch=860,
+        gradient_accumulation=4,
+        max_steps=1000,
+    ) == (215, 1000)
 
 
 def test_ai_toolkit_compiler_honors_disabled_sampling(tmp_path: Path) -> None:

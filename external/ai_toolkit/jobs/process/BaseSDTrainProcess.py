@@ -53,7 +53,7 @@ from jobs.process import BaseTrainProcess
 from toolkit.metadata import get_meta_for_safetensors, load_metadata_from_safetensors, add_base_model_info_to_meta, \
     parse_metadata_from_safetensors
 from toolkit.train_tools import get_torch_dtype, LearnableSNRGamma, apply_learnable_snr_gos, apply_snr_weight
-from toolkit.training_cadence import epoch_cadence_due
+from toolkit.training_cadence import epoch_cadence_due, epoch_training_plan
 import gc
 
 from tqdm import tqdm
@@ -403,6 +403,36 @@ class BaseSDTrainProcess(BaseTrainProcess):
             'epoch': self.epoch_num,
         })
         return info
+
+    def resolve_epoch_training_steps(self):
+        """Resolve an epoch-based job after the actual dataloader exists."""
+        epochs = self.train_config.epochs
+        if epochs is None:
+            if self.train_config.steps is None:
+                raise ValueError("ai-toolkit training requires steps or epochs")
+            return
+        if self.data_loader is None:
+            raise ValueError("epoch-based training requires a training dataset")
+
+        batches_per_epoch = len(self.data_loader)
+        accumulation = int(self.train_config.gradient_accumulation)
+        cap = self.train_config.max_steps
+        steps_per_epoch, total_steps = epoch_training_plan(
+            epochs=int(epochs),
+            batches_per_epoch=batches_per_epoch,
+            gradient_accumulation=accumulation,
+            max_steps=cap,
+        )
+
+        self.train_config.steps = total_steps
+        self.train_config.steps_per_epoch = steps_per_epoch
+        cap_text = f" max_steps={cap}" if cap is not None else ""
+        print_acc(
+            "LORAHUB_TRAIN_PLAN: "
+            f"epochs={epochs} dataloader_batches={batches_per_epoch} "
+            f"gradient_accumulation={accumulation} "
+            f"steps_per_epoch={steps_per_epoch} total_steps={total_steps}{cap_text}"
+        )
 
     def clean_up_saves(self):
         if not self.accelerator.is_main_process:
@@ -2059,19 +2089,6 @@ class BaseSDTrainProcess(BaseTrainProcess):
         # set up the ema now that the optimizer (and its params) are ready
         self.setup_ema()
 
-        lr_scheduler_params = self.train_config.lr_scheduler_params
-
-        # make sure it had bare minimum
-        if 'max_iterations' not in lr_scheduler_params:
-            lr_scheduler_params['total_iters'] = self.train_config.steps
-
-        lr_scheduler = get_lr_scheduler(
-            self.train_config.lr_scheduler,
-            optimizer,
-            **lr_scheduler_params
-        )
-        self.lr_scheduler = lr_scheduler
-
         ### HOOk ###
         self.before_dataset_load()
         # load datasets if passed in the root process
@@ -2080,6 +2097,21 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.datasets_reg is not None:
             self.data_loader_reg = get_dataloader_from_datasets(self.datasets_reg, self.train_config.batch_size,
                                                                 self.sd)
+
+        self.resolve_epoch_training_steps()
+        lr_scheduler_params = self.train_config.lr_scheduler_params
+
+        # The total is now exact for epoch-driven jobs because the actual
+        # dataloader, including buckets and repeats, has been constructed.
+        if 'total_iters' not in lr_scheduler_params:
+            lr_scheduler_params['total_iters'] = self.train_config.steps
+
+        lr_scheduler = get_lr_scheduler(
+            self.train_config.lr_scheduler,
+            optimizer,
+            **lr_scheduler_params
+        )
+        self.lr_scheduler = lr_scheduler
 
         flush()
         self.last_save_step = self.step_num

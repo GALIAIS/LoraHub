@@ -47,7 +47,6 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
     if model_name in {".", ""}:
         model_name = "krea/Krea-2-Raw"
 
-    train_steps = cfg.schedule.max_steps or max(1, int(cfg.schedule.epochs) * 100)
     width, height = _resolution_pair(cfg.sampling.resolution or cfg.dataset.resolution)
 
     sample = _sample_section(cfg, options, width=width, height=height)
@@ -58,7 +57,7 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
         "network": _network_section(cfg, options),
         "save": _save_section(cfg, options),
         "datasets": _dataset_sections(cfg, options),
-        "train": _train_section(cfg, options, train_steps=train_steps),
+        "train": _train_section(cfg, options),
         "model": _model_section(cfg, options, model_name=model_name),
         "sample": sample,
         "logging": {
@@ -270,10 +269,14 @@ def _legacy_dataset_resolution(value: list[int] | tuple[int, ...]) -> int:
 def _train_section(
     cfg: TrainingConfig,
     options: AiToolkitOptions,
-    *,
-    train_steps: int,
 ) -> dict[str, Any]:
     train_options = options.train
+    skip_first_sample = bool(train_options.skip_first_sample)
+    if (
+        "at_first" in cfg.sampling.model_fields_set
+        or "skip_first_sample" not in train_options.model_fields_set
+    ):
+        skip_first_sample = not bool(cfg.sampling.at_first)
     optimizer_name = cfg.optimizer.type.lower()
     optimizer_params: dict[str, Any] = {}
     if optimizer_name in {
@@ -305,10 +308,14 @@ def _train_section(
         scheduler_params.setdefault("num_warmup_steps", int(cfg.optimizer.warmup_steps))
     if cfg.schedule.lr_decay_steps is not None:
         scheduler_params.setdefault("total_iters", int(cfg.schedule.lr_decay_steps))
-    elif scheduler_name == "cosine_with_restarts":
+    elif (
+        scheduler_name == "cosine_with_restarts"
+        and cfg.schedule.max_steps is not None
+        and not _uses_epoch_schedule(cfg)
+    ):
         scheduler_params.setdefault(
             "total_iters",
-            max(1, train_steps // int(cfg.optimizer.scheduler_num_cycles)),
+            max(1, int(cfg.schedule.max_steps) // int(cfg.optimizer.scheduler_num_cycles)),
         )
     if (
         cfg.optimizer.scheduler_min_lr_ratio is not None
@@ -319,9 +326,8 @@ def _train_section(
             float(cfg.optimizer.lr.unet) * float(cfg.optimizer.scheduler_min_lr_ratio),
         )
 
-    return {
+    train: dict[str, Any] = {
         "batch_size": int(cfg.schedule.batch_size),
-        "steps": int(train_steps),
         "gradient_accumulation": int(cfg.schedule.grad_accum),
         "train_unet": bool(cfg.network.target_unet),
         "train_text_encoder": bool(cfg.network.target_text_encoder),
@@ -343,7 +349,7 @@ def _train_section(
         "min_snr_gamma": train_options.min_snr_gamma,
         "noise_offset": float(train_options.noise_offset),
         "prompt_dropout_prob": float(train_options.prompt_dropout_prob),
-        "skip_first_sample": bool(train_options.skip_first_sample),
+        "skip_first_sample": skip_first_sample,
         "force_first_sample": bool(train_options.force_first_sample),
         "unload_text_encoder": bool(train_options.unload_text_encoder),
         "cache_text_embeddings": bool(options.dataset.cache_text_embeddings),
@@ -355,6 +361,24 @@ def _train_section(
         },
         "max_loss": train_options.max_loss,
     }
+    if _uses_epoch_schedule(cfg):
+        # ai-toolkit derives the exact step count only after it has built the
+        # real dataloader. This accounts for repeats, buckets, batch size, and
+        # gradient accumulation instead of guessing from a fixed multiplier.
+        train["epochs"] = int(cfg.schedule.epochs)
+        if cfg.schedule.max_steps is not None:
+            train["max_steps"] = int(cfg.schedule.max_steps)
+    else:
+        train["steps"] = int(cfg.schedule.max_steps)
+    return train
+
+
+def _uses_epoch_schedule(cfg: TrainingConfig) -> bool:
+    """Use epochs unless the config explicitly selects a step-only run."""
+    return (
+        cfg.schedule.max_steps is None
+        or "epochs" in cfg.schedule.model_fields_set
+    )
 
 
 def _model_section(

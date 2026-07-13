@@ -38,7 +38,7 @@ optimizer:
     text_encoder: 5.0e-5
 
 schedule:
-  max_steps: 1000
+  epochs: 10
   batch_size: 1
   grad_accum: 1
 
@@ -49,7 +49,6 @@ cache_latents_to_disk: true
 sampling:
   enabled: true
   every_n_epochs: 1
-  every_n_steps: 250
   resolution: [1024, 1024]
   seed: 42
   inference_steps: 28
@@ -60,7 +59,6 @@ sampling:
 output:
   name: krea2_lorm
   save_every_n_epochs: 1
-  save_every_n_steps: 250
   save_last_n_steps: 4
   save_dtype: fp16
 

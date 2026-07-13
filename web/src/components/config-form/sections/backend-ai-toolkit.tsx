@@ -456,12 +456,15 @@ function AiToolkitTrainFields({ value, set, errorMap }: Props) {
   const optimizer = value.optimizer ?? {}
   const train = value.backend?.aiToolkit?.train ?? {}
   const [beta1 = 0.9, beta2 = 0.999] = optimizer.betas ?? []
-  const totalSteps = schedule.maxSteps ?? Math.max(1, (schedule.epochs ?? 10) * 100)
+  const epochs = schedule.epochs ?? 10
   const lrScheduler = train.lrScheduler ?? optimizer.schedule ?? "constant"
   return (
     <Section icon={<Gauge className="size-3.5" />} title="训练参数" subtitle="步数、优化器与损失策略">
-      <Row label="总训练步数" description="ai-toolkit 原生按步训练；不再把该字段显示为 Epoch。" errors={errorMap.get("schedule.maxSteps")}>
-        <IntInput min={1} value={totalSteps} onChange={(next) => set(["schedule", "maxSteps"], next ?? totalSteps)} />
+      <Row label="训练回合" description="启动后按实际数据集、重复、批大小与梯度累积计算总步数。" errors={errorMap.get("schedule.epochs")}>
+        <IntInput min={1} value={epochs} onChange={(next) => set(["schedule", "epochs"], next ?? epochs)} />
+      </Row>
+      <Row label="最大训练步数" description="可选上限；达到上限会提前结束，不会覆盖训练回合。" errors={errorMap.get("schedule.maxSteps")}>
+        <IntInput min={1} value={schedule.maxSteps ?? null} onChange={(next) => set(["schedule", "maxSteps"], next)} placeholder="不限制" />
       </Row>
       <Row label="批大小">
         <IntInput min={1} value={schedule.batchSize ?? 1} onChange={(next) => set(["schedule", "batchSize"], next ?? 1)} />
@@ -605,7 +608,7 @@ function AiToolkitSamplingFields({ value, set, errorMap }: Props) {
             <IntInput min={1} value={sampling.everyNSteps ?? null} onChange={(next) => set(["sampling", "everyNSteps"], next)} placeholder="关闭" />
           </Row>
           <Row label="训练前基线采样">
-            <ToggleSwitch checked={!(train.skipFirstSample ?? false)} onCheckedChange={(next) => set(["backend", "aiToolkit", "train", "skipFirstSample"], !next)} />
+            <ToggleSwitch checked={sampling.atFirst ?? false} onCheckedChange={(next) => set(["sampling", "atFirst"], next)} />
           </Row>
           <Row label="提示词">
             <Button type="button" variant="outline" size="sm" onClick={() => setPromptsOpen(true)}>
@@ -666,7 +669,7 @@ function AiToolkitOutputFields({ value, set, errorMap }: Props) {
       <Row label="每 N 步保存" description="可选；可与回合保存同时使用。">
         <IntInput min={1} value={output.saveEveryNSteps ?? null} onChange={(next) => set(["output", "saveEveryNSteps"], next)} placeholder="关闭" />
       </Row>
-      <Row label="保留最近 N 个检查点">
+      <Row label="保留最近 N 个检查点" description="更早的阶段检查点会清理；最终模型始终单独保留。">
         <IntInput min={1} value={output.saveLastNSteps ?? 4} onChange={(next) => set(["output", "saveLastNSteps"], next)} />
       </Row>
       <Row label="保存精度">
