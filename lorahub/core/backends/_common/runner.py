@@ -30,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, TextIO
+from typing import IO, Any, TextIO, cast
 
 from lorahub.core.events import EventType, TrainingEvent
 from lorahub.core.redaction import redact_argv, redact_command_text
@@ -480,12 +480,16 @@ class SubprocessRunner:
         a process exit — that scenario is benign (the child already died).
         """
         assert self._proc is not None
+        get_process_group = cast(Callable[[int], int], getattr(os, "getpgid"))
+        kill_process_group = cast(
+            Callable[[int, int], None], getattr(os, "killpg")
+        )
         try:
-            pgid = os.getpgid(self._proc.pid)
+            pgid = get_process_group(self._proc.pid)
         except ProcessLookupError:
             return
         try:
-            os.killpg(pgid, sig)
+            kill_process_group(pgid, sig)
         except ProcessLookupError:
             pass
 

@@ -341,9 +341,10 @@ def _build_main_toml(cfg: TrainingConfig, workspace: Path, dataset_path: Path) -
     ]
 
     # The compiler validated that manual mode has a matching split above.
-    if opts.partition_method == "manual":
+    partition_split = opts.partition_split
+    if opts.partition_method == "manual" and partition_split is not None:
         parts.append(
-            f"partition_split = [{', '.join(str(n) for n in opts.partition_split)}]"
+            f"partition_split = [{', '.join(str(n) for n in partition_split)}]"
         )
 
     # Output cadence at step / examples granularity (kohya parity).

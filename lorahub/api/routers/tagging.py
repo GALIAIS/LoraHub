@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -107,7 +107,12 @@ class _TaggingSession:
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            event = {"ts": ts, "message": message, "percent": self.percent, "image": image}
+            event: dict[str, Any] = {
+                "ts": ts,
+                "message": message,
+                "percent": self.percent,
+                "image": image,
+            }
             self.events.append(event)
             self.events = self.events[-200:]
         if self.task_kind:
@@ -223,8 +228,8 @@ def _tagging_snapshot_from_task(session_id: str) -> dict[str, Any] | None:
     if isinstance(task.result, dict):
         return task.result
     metadata = task.metadata
-    status: _TaggingStatus = (
-        task.status
+    status = (
+        cast(_TaggingStatus, task.status)
         if task.status
         in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"
@@ -578,7 +583,12 @@ class _AnimaSession:
         with self.lock:
             if percent is not None:
                 self.percent = max(self.percent, min(100.0, float(percent)))
-            event = {"ts": ts, "message": message, "percent": self.percent, "file": file}
+            event: dict[str, Any] = {
+                "ts": ts,
+                "message": message,
+                "percent": self.percent,
+                "file": file,
+            }
             self.events.append(event)
             self.events = self.events[-200:]
         if self.task_kind:

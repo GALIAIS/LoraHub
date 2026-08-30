@@ -167,20 +167,20 @@ def _compile_conflicts(opts: AnimaLoraOptions) -> Iterable[ValidationIssue]:
             or opts.blocks_to_swap > 0
         )
     ):
-        offenders: list[str] = []
+        memory_offenders: list[str] = []
         if opts.gradient_checkpointing:
-            offenders.append("gradient_checkpointing")
+            memory_offenders.append("gradient_checkpointing")
         if opts.unsloth_offload_checkpointing:
-            offenders.append("unsloth_offload_checkpointing")
+            memory_offenders.append("unsloth_offload_checkpointing")
         if opts.cpu_offload_checkpointing:
-            offenders.append("cpu_offload_checkpointing")
+            memory_offenders.append("cpu_offload_checkpointing")
         if opts.blocks_to_swap > 0:
-            offenders.append(f"blocks_to_swap={opts.blocks_to_swap}")
+            memory_offenders.append(f"blocks_to_swap={opts.blocks_to_swap}")
         yield ValidationIssue(
             Severity.warning,
             "backend.animaLora.enableNativeFlatten",
             "enableNativeFlatten=true + compileInductorMode='reduce-overhead' + "
-            + ", ".join(offenders)
+            + ", ".join(memory_offenders)
             + " — CUDA Graphs 与 block swap / grad ckpt 互斥(cudagraph slot "
             "无法跨 swap 边界稳定捕获)。建议把 compileInductorMode 改为 "
             "'default',或关掉 swap / 显存优化字段以拿回完整 reduce-overhead 加速。",

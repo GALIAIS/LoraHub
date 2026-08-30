@@ -127,7 +127,9 @@ def _pid_alive(pid: int) -> bool:
         except ImportError:
             return False
         try:
-            return psutil.pid_exists(pid) and psutil.Process(pid).is_running()
+            return bool(
+                psutil.pid_exists(pid) and psutil.Process(pid).is_running()
+            )
         except Exception:  # noqa: BLE001
             return False
     try:
@@ -206,7 +208,7 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        return int(s.getsockname()[1])
 
 
 def _venv_python() -> Path:
@@ -452,8 +454,6 @@ def stop(
 
     if sys.platform == "win32":
         try:
-            import psutil  # noqa: PLC0415
-
             _terminate_windows_process_tree(pid, timeout)
         except Exception as exc:  # noqa: BLE001
             err_console.print(t("service.stop.failed", pid=pid, err=exc))

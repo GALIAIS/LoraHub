@@ -478,6 +478,75 @@ def test_modelscope_download_fails_when_any_selected_file_fails(
     assert any("failed" in event.message for event in events)
 
 
+def test_modelscope_single_file_download_reuses_safe_resumable_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        downloader,
+        "_ms_list_files",
+        lambda repo_id, revision, token: [{"Path": "model.onnx", "Size": 5, "Type": "blob"}],
+    )
+    observed: dict[str, Any] = {}
+
+    def fake_download(
+        repo_id: str,
+        revision: str,
+        file_path: str,
+        target: Path,
+        token: str | None,
+        cancel_event: Any = None,
+        *,
+        expected_size: int = 0,
+        on_progress: Any = None,
+    ) -> int:
+        observed.update(
+            repo_id=repo_id,
+            revision=revision,
+            file_path=file_path,
+            target=target,
+            token=token,
+            cancel_event=cancel_event,
+            expected_size=expected_size,
+        )
+        target.write_bytes(b"model")
+        on_progress(2, 5)
+        on_progress(5, 5)
+        return 5
+
+    monkeypatch.setattr(downloader, "_ms_download_file", fake_download)
+    progress: list[tuple[int, int]] = []
+
+    path = downloader.modelscope_download_file(
+        "owner/name",
+        "model.onnx",
+        target_dir=tmp_path / "cache",
+        token="secret",
+        on_progress=lambda downloaded, total: progress.append((downloaded, total)),
+    )
+
+    assert path == str(tmp_path / "cache" / "model.onnx")
+    assert observed["repo_id"] == "owner/name"
+    assert observed["revision"] == "master"
+    assert observed["token"] == "secret"
+    assert observed["expected_size"] == 5
+    assert progress == [(2, 5), (5, 5)]
+
+
+def test_modelscope_single_file_download_rejects_missing_remote_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(downloader, "_ms_list_files", lambda *_args: [])
+
+    with pytest.raises(FileNotFoundError, match="has no file 'model.onnx'"):
+        downloader.modelscope_download_file(
+            "owner/name",
+            "model.onnx",
+            target_dir=tmp_path / "cache",
+        )
+
+
 def test_modelscope_file_download_keeps_resumable_partial_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -49,38 +49,40 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     if not stripped.strip():
         return None
     if (m := _SAVE_RE.search(stripped)) is not None:
-        payload: dict[str, object] = {"path": m.group("path")}
+        checkpoint_payload: dict[str, object] = {"path": m.group("path")}
         if m.group("step"):
-            payload["step"] = int(m.group("step"))
+            checkpoint_payload["step"] = int(m.group("step"))
         elif (path_step := _CHECKPOINT_STEP_RE.search(m.group("path"))) is not None:
-            payload["step"] = int(path_step.group("step"))
+            checkpoint_payload["step"] = int(path_step.group("step"))
         return TrainingEvent(
             type=EventType.checkpoint_saved,
-            payload=payload,
+            payload=checkpoint_payload,
             job_id=job_id,
         )
     if (m := _STEP_RE.search(stripped)) is not None:
-        payload: dict[str, object] = {
+        step_payload: dict[str, object] = {
             "step": int(m.group("step") or m.group("step2")),
             "loss": float(m.group("loss")),
         }
         if m.group("total"):
-            payload["total_steps"] = int(m.group("total"))
+            step_payload["total_steps"] = int(m.group("total"))
         if (lr := _extract_lr(stripped)) is not None:
-            payload["lr"] = lr
+            step_payload["lr"] = lr
         if (epoch := _extract_float(stripped, _EPOCH_RE, "epoch")) is not None:
-            payload["epoch"] = int(epoch)
+            step_payload["epoch"] = int(epoch)
         if (snr := _extract_float(stripped, _SNR_RE, "snr")) is not None:
-            payload["snr"] = snr
+            step_payload["snr"] = snr
         if (
             grad_norm := _extract_float(stripped, _GRAD_NORM_RE, "grad_norm")
         ) is not None:
-            payload["grad_norm"] = grad_norm
+            step_payload["grad_norm"] = grad_norm
         if rate := _extract_tqdm_field(stripped, "rate"):
-            payload["rate"] = rate
+            step_payload["rate"] = rate
         if eta := _extract_tqdm_field(stripped, "eta"):
-            payload["eta"] = eta
-        return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+            step_payload["eta"] = eta
+        return TrainingEvent(
+            type=EventType.step, payload=step_payload, job_id=job_id
+        )
     if (m := _TQDM_RE.search(stripped)) is not None:
         return _parse_progress(m, stripped, job_id=job_id)
 

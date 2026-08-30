@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PIL import Image
 
-from lorahub.core.net import hf_download
+from lorahub.core.models.downloader import modelscope_download_file
+from lorahub.core.net import DownloadPreferences, download_preferences, hf_download
+from lorahub.core.redaction import redact_command_text
 
 if TYPE_CHECKING:
     import onnxruntime as ort
@@ -56,6 +58,23 @@ WD14_MODEL_CATALOG: tuple[tuple[str, str], ...] = (
     ("SmilingWolf/wd-v1-4-vit-tagger", "v1 · ViT"),
 )
 WD14_MODEL_IDS: tuple[str, ...] = tuple(repo for repo, _ in WD14_MODEL_CATALOG)
+WD14_MODELSCOPE_REPOS: dict[str, str] = {
+    "SmilingWolf/wd-eva02-large-tagger-v3": "fireicewolf/wd-eva02-large-tagger-v3",
+    "SmilingWolf/wd-vit-large-tagger-v3": "fireicewolf/wd-vit-large-tagger-v3",
+    "SmilingWolf/wd-swinv2-tagger-v3": "fireicewolf/wd-swinv2-tagger-v3",
+    "SmilingWolf/wd-vit-tagger-v3": "fireicewolf/wd-vit-tagger-v3",
+    "SmilingWolf/wd-convnext-tagger-v3": "fireicewolf/wd-convnext-tagger-v3",
+    "SmilingWolf/wd-v1-4-moat-tagger-v2": "fireicewolf/wd-v1-4-moat-tagger-v2",
+    "SmilingWolf/wd-v1-4-swinv2-tagger-v2": "fireicewolf/wd-v1-4-swinv2-tagger-v2",
+    "SmilingWolf/wd-v1-4-convnextv2-tagger-v2": (
+        "fireicewolf/wd-v1-4-convnextv2-tagger-v2"
+    ),
+    "SmilingWolf/wd-v1-4-convnext-tagger-v2": "fireicewolf/wd-v1-4-convnext-tagger-v2",
+    "SmilingWolf/wd-v1-4-vit-tagger-v2": "fireicewolf/wd-v1-4-vit-tagger-v2",
+    "SmilingWolf/wd-v1-4-convnext-tagger": "fireicewolf/wd-v1-4-convnext-tagger",
+    "SmilingWolf/wd-v1-4-vit-tagger": "fireicewolf/wd-v1-4-vit-tagger",
+}
+WD14_DOWNLOAD_SOURCES = frozenset({"auto", "huggingface", "modelscope"})
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _RATING_CATEGORY = 9
@@ -67,6 +86,43 @@ _CPU_PROVIDER = "CPUExecutionProvider"
 
 class CudaUnavailableError(RuntimeError):
     """Raised when CUDA execution was requested explicitly but isn't available."""
+
+
+class TaggerModelDownloadError(RuntimeError):
+    """Raised when every configured source fails to provide a tagger asset."""
+
+
+def resolve_download_sources(
+    model_id: str,
+    source: str,
+    *,
+    preferences: DownloadPreferences | None = None,
+) -> tuple[str, ...]:
+    """Return the ordered source candidates for one WD14 model.
+
+    ``auto`` honors Settings -> Network -> Prefer ModelScope, but retains a
+    Hugging Face fallback. Explicit source selection never silently changes
+    providers. ModelScope ids are mapped only for the curated mirrors verified
+    to contain both ``model.onnx`` and ``selected_tags.csv``.
+    """
+    requested = source.strip().lower()
+    if requested not in WD14_DOWNLOAD_SOURCES:
+        expected = ", ".join(sorted(WD14_DOWNLOAD_SOURCES))
+        raise ValueError(f"unknown download source {source!r}; expected one of: {expected}")
+    has_modelscope_mirror = model_id in WD14_MODELSCOPE_REPOS
+    if requested == "modelscope":
+        if not has_modelscope_mirror:
+            raise TaggerModelDownloadError(
+                f"no verified ModelScope mirror is configured for WD14 model {model_id!r}; "
+                "use a model from the built-in catalogue or select Hugging Face"
+            )
+        return ("modelscope",)
+    if requested == "huggingface":
+        return ("huggingface",)
+    prefs = preferences or download_preferences()
+    if prefs.prefer_modelscope and has_modelscope_mirror:
+        return ("modelscope", "huggingface")
+    return ("huggingface",)
 
 
 def _resolve_providers(device: str, available: list[str]) -> list[str]:
@@ -125,6 +181,7 @@ class WD14Tagger:
     general_threshold: float = 0.35
     character_threshold: float = 0.85
     device: str = "auto"  # auto | cpu | cuda
+    source: str = "auto"  # auto | huggingface | modelscope
 
     _session: ort.InferenceSession | None = field(default=None, init=False, repr=False)
     _input_name: str = field(default="", init=False, repr=False)
@@ -134,11 +191,109 @@ class WD14Tagger:
         default_factory=lambda: np.zeros(0, dtype=np.int32), init=False, repr=False
     )
     _active_provider: str = field(default="", init=False, repr=False)
+    _active_download_source: str = field(default="", init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.source = self.source.strip().lower()
+        if self.source not in WD14_DOWNLOAD_SOURCES:
+            expected = ", ".join(sorted(WD14_DOWNLOAD_SOURCES))
+            raise ValueError(
+                f"unknown download source {self.source!r}; expected one of: {expected}"
+            )
 
     @property
     def active_provider(self) -> str:
         """Which ExecutionProvider the loaded session is actually using."""
         return self._active_provider
+
+    @property
+    def active_download_source(self) -> str:
+        """Source that supplied the loaded checkpoint assets."""
+        return self._active_download_source
+
+    def _download_asset(
+        self,
+        filename: str,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> str:
+        """Download one required file with configured source preference/fallback."""
+        from lorahub.core.tagging import download_status  # noqa: PLC0415
+
+        preferences = download_preferences()
+        resolved_candidates = resolve_download_sources(
+            self.model_id,
+            self.source,
+            preferences=preferences,
+        )
+        if self._active_download_source:
+            candidates = (
+                self._active_download_source,
+                *(
+                    source
+                    for source in resolved_candidates
+                    if source != self._active_download_source
+                ),
+            )
+        else:
+            candidates = resolved_candidates
+        failures: list[tuple[str, str]] = []
+        for source in candidates:
+            if should_stop is not None and should_stop():
+                raise InterruptedError("stopped by user")
+            download_status.mark_start(self.model_id, filename)
+            try:
+                if source == "modelscope":
+                    repo_id = WD14_MODELSCOPE_REPOS[self.model_id]
+
+                    def report(downloaded: int, total: int) -> None:
+                        if total > 0:
+                            download_status.mark_total(self.model_id, filename, total)
+                        download_status.mark_downloaded(self.model_id, filename, downloaded)
+
+                    path = modelscope_download_file(
+                        repo_id,
+                        filename,
+                        token=preferences.modelscope_token,
+                        proxy=preferences.proxy,
+                        should_stop=should_stop,
+                        on_progress=report,
+                    )
+                else:
+                    path = hf_download(
+                        repo_id=self.model_id,
+                        filename=filename,
+                        tqdm_class=download_status.tqdm_class_for(
+                            self.model_id,
+                            filename,
+                            should_stop,
+                        ),
+                    )
+            except InterruptedError as exc:
+                download_status.mark_error(self.model_id, filename, exc)
+                raise InterruptedError("stopped by user") from exc
+            except Exception as exc:  # noqa: BLE001
+                download_status.mark_error(self.model_id, filename, exc)
+                detail = redact_command_text(str(exc)).strip() or type(exc).__name__
+                failures.append((source, detail))
+                continue
+            download_status.mark_done(self.model_id, filename)
+            self._active_download_source = source
+            return path
+
+        details = "; ".join(f"{source}: {error}" for source, error in failures)
+        if self.source == "modelscope":
+            hint = "Verify ModelScope connectivity, proxy, and access token settings."
+        elif self.source == "huggingface":
+            hint = "Verify Hugging Face endpoint, proxy, and access token settings."
+        else:
+            hint = (
+                "Set Settings -> Network -> Prefer ModelScope or pass "
+                "'--source modelscope' when Hugging Face is unavailable."
+            )
+        raise TaggerModelDownloadError(
+            f"failed to download {self.model_id}/{filename}. {details}. {hint}"
+        )
 
     def load(self, *, should_stop: Callable[[], bool] | None = None) -> None:
         """Eagerly download and warm up the model. Called automatically on first tag."""
@@ -148,41 +303,12 @@ class WD14Tagger:
             raise InterruptedError("stopped by user")
         import onnxruntime as ort  # noqa: PLC0415
 
-        from lorahub.core.tagging import download_status  # noqa: PLC0415
-
-        # Wire the HF download progress through the in-process status
-        # board so the web UI's floating download toast can show the
-        # actual byte count instead of an indeterminate spinner. The
-        # ONNX file is the heavy one (~700MB for eva02-large); the
-        # tags CSV is tiny but reported anyway for completeness.
-        try:
-            model_path = hf_download(
-                repo_id=self.model_id,
-                filename="model.onnx",
-                tqdm_class=download_status.tqdm_class_for(
-                    self.model_id,
-                    "model.onnx",
-                    should_stop,
-                ),
-            )
-        except BaseException as exc:
-            download_status.mark_error(self.model_id, "model.onnx", exc)
-            raise
+        # The ONNX file is the heavy one (~1.3GB for eva02-large); the tags
+        # CSV is tiny but follows the same source and progress path.
+        model_path = self._download_asset("model.onnx", should_stop=should_stop)
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")
-        try:
-            labels_path = hf_download(
-                repo_id=self.model_id,
-                filename="selected_tags.csv",
-                tqdm_class=download_status.tqdm_class_for(
-                    self.model_id,
-                    "selected_tags.csv",
-                    should_stop,
-                ),
-            )
-        except BaseException as exc:
-            download_status.mark_error(self.model_id, "selected_tags.csv", exc)
-            raise
+        labels_path = self._download_asset("selected_tags.csv", should_stop=should_stop)
 
         if should_stop is not None and should_stop():
             raise InterruptedError("stopped by user")

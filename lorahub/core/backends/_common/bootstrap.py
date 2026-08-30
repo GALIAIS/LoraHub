@@ -24,7 +24,7 @@ _log = logging.getLogger(__name__)
 
 def _subprocess_no_window() -> int:
     if sys.platform == "win32":
-        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        return subprocess.CREATE_NO_WINDOW
     return 0
 
 

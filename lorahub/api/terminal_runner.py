@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+from typing import Any, Callable, TextIO, cast
 
 from lorahub.api.settings import Settings
 from lorahub.core.backends._common.bootstrap import venv_python
@@ -315,13 +315,13 @@ def _resolve_lorahub(settings: Settings) -> TerminalSession:  # noqa: ARG001
     # both ordered to prefer ``.venv`` last). Reuse it instead of
     # re-rolling our own four-way path probe.
     if py_path is None:
-        candidate = venv_python(repo)
-        if candidate is not None:
-            py_path = candidate
+        venv_candidate = venv_python(repo)
+        if venv_candidate is not None:
+            py_path = venv_candidate
             # Walk back up to the venv root for VIRTUAL_ENV. The helper
             # returns the python binary under either Scripts/ or bin/,
             # so the venv root is python.parent.parent.
-            venv_root = candidate.parent.parent
+            venv_root = venv_candidate.parent.parent
 
     # 3. Bundled embedded python (Windows installer drops it here).
     if py_path is None:
@@ -404,7 +404,7 @@ def stream_command(
     if os.name == "nt":
         # CREATE_NO_WINDOW so spawning ``python -m pip`` from the API
         # process doesn't briefly flash a console window.
-        creationflags = (  # type: ignore[attr-defined]
+        creationflags = (
             subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         )
 
@@ -473,8 +473,12 @@ def stream_command(
         return
 
     queue: Queue[tuple[str, str | None]] = Queue()
+    stdout = proc.stdout
+    stderr = proc.stderr
+    assert stdout is not None  # noqa: S101
+    assert stderr is not None  # noqa: S101
 
-    def pump(stream, label: str) -> None:
+    def pump(stream: TextIO, label: str) -> None:
         try:
             for line in iter(stream.readline, ""):
                 queue.put((label, line))
@@ -484,13 +488,13 @@ def stream_command(
     threads = [
         threading.Thread(
             target=pump,
-            args=(proc.stdout, "stdout"),
+            args=(stdout, "stdout"),
             daemon=True,
             name="terminal-stdout",
         ),
         threading.Thread(
             target=pump,
-            args=(proc.stderr, "stderr"),
+            args=(stderr, "stderr"),
             daemon=True,
             name="terminal-stderr",
         ),
@@ -554,14 +558,19 @@ def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
             proc.kill()
         return
 
+    get_process_group = cast(Callable[[int], int], getattr(os, "getpgid"))
+    kill_process_group = cast(
+        Callable[[int, int], None], getattr(os, "killpg")
+    )
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        kill_process_group(get_process_group(proc.pid), signal.SIGTERM)
         proc.wait(timeout=2)
     except ProcessLookupError:
         return
     except (PermissionError, subprocess.TimeoutExpired):
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            sigkill = cast(int, getattr(signal, "SIGKILL", signal.SIGTERM))
+            kill_process_group(get_process_group(proc.pid), sigkill)
         except (ProcessLookupError, PermissionError):
             proc.kill()
 

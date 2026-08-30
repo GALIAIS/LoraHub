@@ -42,6 +42,7 @@ from lorahub.api.system_stats import (
     collect_snapshot,
     collect_snapshot_shared,
 )
+from lorahub.api.system_update_types import ChannelName
 from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSessionStore,
@@ -168,6 +169,11 @@ _VALID_CHANNELS = ("dev", "tag", "main")
 _UPDATE_LOCK = threading.Lock()
 _UPDATE_SSE_PING_INTERVAL = 15.0
 _KIND_SYSTEM_UPDATE = "system_update"
+_UpdateChannel = Literal["dev", "tag", "main"]
+
+
+def _normalize_update_channel(channel: _UpdateChannel) -> ChannelName:
+    return "dev" if channel == "main" else channel
 
 
 def _task_store() -> TaskSessionStore:
@@ -180,7 +186,7 @@ def _task_store() -> TaskSessionStore:
 
 @router.get("/system/version")
 def system_version(
-    channel: Literal["dev", "tag", "main"] = "tag",
+    channel: _UpdateChannel = "tag",
     force: bool = False,
 ) -> dict[str, Any]:
     """Resolve current vs remote for the given channel.
@@ -190,7 +196,7 @@ def system_version(
     so the UI can render "offline, last seen v1.0.5" rather than
     nothing.
     """
-    info = system_update.check(channel=channel, force=force)
+    info = system_update.check(channel=_normalize_update_channel(channel), force=force)
     return info.to_dict()
 
 
@@ -204,7 +210,7 @@ def system_releases(limit: int = 6) -> dict[str, Any]:
 
 
 class _UpdateRequest(BaseModel):
-    channel: Literal["dev", "tag", "main"] = "tag"
+    channel: _UpdateChannel = "tag"
     build: bool = True
     restart: bool = True
     target_tag: str | None = None
@@ -320,7 +326,7 @@ async def system_update_apply(req: _UpdateRequest) -> StreamingResponse:
         try:
             _task_store().update(task.id, status="running", percent=0)
             system_update.apply(
-                channel=req.channel,
+                channel=_normalize_update_channel(req.channel),
                 build=req.build,
                 progress=emit,
                 force=req.force,

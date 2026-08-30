@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -254,7 +254,7 @@ _anima_active_session: str | None = None
 
 def _anima_session_from_task(task: TaskSession) -> _AnimaModelSession:
     status: _ToolTaskStatus = (
-        task.status
+        cast(_ToolTaskStatus, task.status)
         if task.status
         in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"
@@ -510,7 +510,7 @@ _msvc_active_session: str | None = None
 
 def _msvc_session_from_task(task: TaskSession) -> _MsvcInstallSession:
     status: _ToolTaskStatus = (
-        task.status
+        cast(_ToolTaskStatus, task.status)
         if task.status in {"succeeded", "failed", "interrupted", "canceled"}
         else "running"
     )

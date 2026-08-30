@@ -10,8 +10,9 @@ import os
 import shutil
 import tempfile
 import threading
+from collections.abc import AsyncIterator
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -564,7 +565,12 @@ def _extract_archive(
             errors.append(f"bad zip: {e}")
     elif suffix in (".tar", ".gz", ".tgz") or name_lower.endswith(".tar.gz"):
         try:
-            mode = "r:gz" if suffix in (".gz", ".tgz") or name_lower.endswith(".tar.gz") else "r"
+            mode: Literal["r:gz", "r"] = (
+                "r:gz"
+                if suffix in (".gz", ".tgz")
+                or name_lower.endswith(".tar.gz")
+                else "r"
+            )
             with tarfile.open(archive_path, mode) as tf:
                 members = tf.getmembers()
                 _validate_archive_budget(
@@ -744,7 +750,7 @@ async def upload_to_dataset(
                 _clear_dataset_view_caches(ds_path)
             _release_dataset_upload(ds_path)
 
-    async def _generate_inner():
+    async def _generate_inner() -> AsyncIterator[str]:
         nonlocal extract_task
         total_files = len(files)
         total_extracted = 0
@@ -841,7 +847,7 @@ async def upload_to_dataset(
                     "message": message,
                 })
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 log.exception("dataset upload failed for %s", filename)
                 message = f"upload failed while processing {filename}"
                 all_errors.append(message)
@@ -874,7 +880,7 @@ async def upload_to_dataset(
             "errors": all_errors,
         })
 
-    async def _generate():
+    async def _generate() -> AsyncIterator[str]:
         nonlocal extract_task
         release_deferred = False
         try:

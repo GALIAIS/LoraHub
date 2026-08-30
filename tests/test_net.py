@@ -99,6 +99,29 @@ def test_hf_download_keeps_explicit_cache_dir(
     assert seen["cache_dir"] == str(explicit)
 
 
+def test_download_preferences_resolve_modelscope_settings_and_env_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.api import app as app_module
+
+    monkeypatch.setenv("MODELSCOPE_API_TOKEN", "env-token")
+    monkeypatch.setattr(
+        app_module._settings_store,
+        "load",
+        lambda: SimpleNamespace(
+            modelscope_enabled=True,
+            modelscope_token="saved-token",
+            download_proxy="http://proxy.example",
+        ),
+    )
+
+    preferences = net.download_preferences()
+
+    assert preferences.prefer_modelscope is True
+    assert preferences.modelscope_token == "env-token"
+    assert preferences.proxy == "http://proxy.example"
+
+
 def test_proxy_env_restores_previous_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://old")
     monkeypatch.delenv("HTTP_PROXY", raising=False)

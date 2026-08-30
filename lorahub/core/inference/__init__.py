@@ -34,9 +34,9 @@ import queue
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable, Iterator, Protocol
 
 from lorahub.core.events import EventType, TrainingEvent
 
@@ -548,7 +548,7 @@ class PreviewWorker:
         can show grids alongside per-prompt frames.
         """
         try:
-            from PIL import Image, ImageDraw, ImageFont  # noqa: PLC0415
+            from PIL import Image, ImageDraw  # noqa: PLC0415
         except ImportError:
             return
         tile_h = 512
@@ -559,10 +559,10 @@ class PreviewWorker:
         for spec, path in rendered:
             try:
                 with Image.open(path) as src:
-                    src = src.convert("RGB")
-                    ratio = tile_h / src.height
-                    tile = src.resize(
-                        (max(1, int(src.width * ratio)), tile_h),
+                    converted = src.convert("RGB")
+                    ratio = tile_h / converted.height
+                    tile = converted.resize(
+                        (max(1, int(converted.width * ratio)), tile_h),
                         Image.Resampling.LANCZOS,
                     )
                     tiles.append(tile.copy())
@@ -697,7 +697,7 @@ def _format_grid_caption(spec: PromptSpec) -> str:
     return "    ".join(pieces)
 
 
-def _load_caption_font():
+def _load_caption_font() -> Any:
     """Best-effort caption font; falls back to PIL's default if no
     DejaVuSans is available (Windows installs sometimes lack it)."""
     try:
@@ -779,7 +779,7 @@ import contextlib
 
 
 @contextlib.contextmanager
-def _drain_queue(q: "queue.Queue[str]"):
+def _drain_queue(q: "queue.Queue[str]") -> Iterator[None]:
     """Drop any pending items from `q` without blocking. Used after a
     notify to coalesce a burst of `checkpoint_saved` signals into one
     `_tick` call (which scans the whole output dir anyway)."""

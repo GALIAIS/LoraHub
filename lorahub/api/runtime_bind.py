@@ -140,12 +140,12 @@ def read_runtime_bind() -> RuntimeBind | None:
         return None
     if port <= 0:
         return None
-    pid: int | None = None
+    legacy_pid: int | None = None
     try:
-        pid = int(_read_state_text(pid_file()).strip())
+        legacy_pid = int(_read_state_text(pid_file()).strip())
     except (OSError, RuntimeError, ValueError):
         pass
-    return RuntimeBind(host="127.0.0.1", port=port, pid=pid)
+    return RuntimeBind(host="127.0.0.1", port=port, pid=legacy_pid)
 
 
 def clear_runtime_bind(*, keep_bind: bool = False) -> None:
@@ -199,18 +199,26 @@ def spawn_service_restart(bind: RuntimeBind, *, cwd: Path | None = None) -> bool
     log.parent.mkdir(parents=True, exist_ok=True)
     try:
         with log.open("ab") as fh:
-            kwargs: dict[str, object] = {
-                "stdin": subprocess.DEVNULL,
-                "stdout": fh,
-                "stderr": fh,
-                "cwd": str(cwd or Path.cwd()),
-                "close_fds": True,
-            }
             if sys.platform == "win32":
-                kwargs["creationflags"] = 0x00000008 | 0x08000000
+                subprocess.Popen(  # noqa: S603
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=fh,
+                    stderr=fh,
+                    cwd=str(cwd or Path.cwd()),
+                    close_fds=True,
+                    creationflags=0x00000008 | 0x08000000,
+                )
             else:
-                kwargs["start_new_session"] = True
-            subprocess.Popen(cmd, **kwargs)  # noqa: S603
+                subprocess.Popen(  # noqa: S603
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=fh,
+                    stderr=fh,
+                    cwd=str(cwd or Path.cwd()),
+                    close_fds=True,
+                    start_new_session=True,
+                )
     except OSError:
         return False
     return True

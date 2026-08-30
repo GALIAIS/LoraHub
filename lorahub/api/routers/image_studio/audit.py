@@ -43,7 +43,7 @@ returns the cache as-is; ``POST /scan`` re-runs and overwrites it.
 from __future__ import annotations
 
 import json
-import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,7 +193,10 @@ class _Report:
         }
 
 
-def _bucket_for(value: int | float, edges: list[tuple]) -> str:
+def _bucket_for(
+    value: int | float,
+    edges: Sequence[tuple[int | float, int | float, str]],
+) -> str:
     for low, high, label in edges:
         if low <= value <= high:
             return label
@@ -413,11 +416,12 @@ def audit_scan(req: ScanRequest) -> dict[str, Any]:
     report.ar_histogram = list(ar_buckets.values())
     report.filesize_histogram = list(fs_buckets.values())
     report.caption_length_histogram = list(cl_buckets.values())
-    report.tag_vocab = sorted(
-        ({"tag": t, "count": c} for t, c in tag_count.items()),
-        key=lambda r: r["count"],
-        reverse=True,
-    )[:50]
+    report.tag_vocab = [
+        {"tag": tag, "count": count}
+        for tag, count in sorted(
+            tag_count.items(), key=lambda item: item[1], reverse=True
+        )[:50]
+    ]
     report.duration_s = time.time() - started
 
     # Cache.
@@ -440,11 +444,9 @@ def audit_report(dataset_path: str) -> dict[str, Any]:
             "no audit report cached for this dataset; run POST /audit/scan first",
         )
     try:
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        payload: Any = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(500, f"failed to read audit cache: {exc}") from None
-
-
-# Suppress unused-import warning.
-_ = IMAGE_SUFFIXES
-_ = math
+    if not isinstance(payload, dict):
+        raise HTTPException(500, "audit cache has an invalid top-level shape")
+    return payload

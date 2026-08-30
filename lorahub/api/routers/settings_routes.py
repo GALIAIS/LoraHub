@@ -7,6 +7,7 @@ sibling `lorahub.api.settings` module that holds the `Settings` dataclass and
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import fields, replace
 from typing import Any
 
@@ -214,7 +215,7 @@ def get_settings() -> SettingsResponse:
     return _to_response(store.load(), str(store.path))
 
 
-def _validate_choice(name: str, value: str, allowed: set[str]) -> str:
+def _validate_choice(name: str, value: str, allowed: Collection[str]) -> str:
     """Reject anything outside the allowed set with a structured 422."""
     if value not in allowed:
         raise HTTPException(

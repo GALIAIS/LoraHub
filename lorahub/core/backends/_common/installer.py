@@ -57,21 +57,42 @@ class BootstrapPlanLike(Protocol):
     backend-agnostic.
     """
 
-    target: Path
-    cuda_version: str
-    torch_version: str
-    torchvision_version: str
-    git_depth: int
-    github_proxy: str | None
-    base_python: Path | None
-    pypi_index: str | None
-    torch_index_base: str | None
+    @property
+    def target(self) -> Path: ...
+
+    @property
+    def cuda_version(self) -> str: ...
+
+    @property
+    def torch_version(self) -> str: ...
+
+    @property
+    def torchvision_version(self) -> str: ...
+
+    @property
+    def base_python(self) -> Path | None: ...
+
+    @property
+    def pypi_index(self) -> str | None: ...
+
+    @property
+    def torch_index_base(self) -> str | None: ...
 
     @property
     def venv_python(self) -> Path: ...
 
     @property
     def torch_index(self) -> str: ...
+
+
+class ClonePlanLike(BootstrapPlanLike, Protocol):
+    """Additional fields required only by remote repository clones."""
+
+    @property
+    def git_depth(self) -> int: ...
+
+    @property
+    def github_proxy(self) -> str | None: ...
 
 
 def run_step(
@@ -189,7 +210,7 @@ def clear_install_marker(target: Path, repo_url: str) -> None:
 
 
 def clone_repo(
-    plan: BootstrapPlanLike,
+    plan: ClonePlanLike,
     *,
     repo_url: str,
     label: str,

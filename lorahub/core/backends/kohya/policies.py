@@ -208,8 +208,8 @@ def _dataset_conflicts(cfg: TrainingConfig) -> Iterable[ValidationIssue]:
         return
 
     res = ds.resolution
-    if isinstance(res, (list, tuple)) and len(res) == 2:
-        long_edge = max(int(res[0]), int(res[1]))
+    if isinstance(res, (list, tuple)):
+        long_edge = max((int(value) for value in res), default=0)
     else:
         long_edge = int(res or 0)
 

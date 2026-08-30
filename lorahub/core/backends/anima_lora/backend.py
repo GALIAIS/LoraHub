@@ -446,15 +446,16 @@ def _fsdp_payload(cfg: TrainingConfig) -> dict[str, object]:
 def _deepspeed_payload(cfg: TrainingConfig, workspace: Path) -> dict[str, object]:
     opts = cfg.backend.distributed.zero
     mixed_precision = _distributed_mixed_precision(cfg)
-    ds_config = {
+    zero_optimization: dict[str, object] = {
+        "stage": int(opts.stage),
+        "overlap_comm": bool(opts.overlap_comm),
+        "offload_optimizer": {"device": opts.offload_optimizer},
+        "offload_param": {"device": opts.offload_param},
+    }
+    ds_config: dict[str, object] = {
         "bf16": {"enabled": mixed_precision == "bf16"},
         "fp16": {"enabled": mixed_precision == "fp16"},
-        "zero_optimization": {
-            "stage": int(opts.stage),
-            "overlap_comm": bool(opts.overlap_comm),
-            "offload_optimizer": {"device": opts.offload_optimizer},
-            "offload_param": {"device": opts.offload_param},
-        },
+        "zero_optimization": zero_optimization,
         "train_batch_size": "auto",
         "train_micro_batch_size_per_gpu": "auto",
         "gradient_accumulation_steps": "auto",
@@ -462,9 +463,7 @@ def _deepspeed_payload(cfg: TrainingConfig, workspace: Path) -> dict[str, object
         "steps_per_print": 1000000000,
     }
     if opts.stage == 3:
-        ds_config["zero_optimization"][
-            "stage3_gather_16bit_weights_on_model_save"
-        ] = True
+        zero_optimization["stage3_gather_16bit_weights_on_model_save"] = True
 
     target = workspace / _DEEPSPEED_CONFIG_NAME
     import json  # noqa: PLC0415

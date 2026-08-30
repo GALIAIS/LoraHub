@@ -646,22 +646,22 @@ def _render_method(opts: AnimaLoraOptions, cfg_dict: dict[str, Any]) -> None:
         pieces.extend(_chimera_network_args(opts))
     elif method == "easycontrol":
         cfg_dict["use_easycontrol"] = True
-        sub = opts.easycontrol
-        if sub is None:
+        easycontrol = opts.easycontrol
+        if easycontrol is None:
             msg = "method='easycontrol' missing sub-config"
             raise CompilationError(msg)
-        cfg_dict["easycontrol_drop_p"] = float(sub.drop_p)
-        cfg_dict["easycontrol_cond_noise_max"] = float(sub.cond_noise_max)
+        cfg_dict["easycontrol_drop_p"] = float(easycontrol.drop_p)
+        cfg_dict["easycontrol_cond_noise_max"] = float(easycontrol.cond_noise_max)
         pieces.extend(_easycontrol_network_args(opts))
     elif method == "ip_adapter":
         cfg_dict["use_ip_adapter"] = True
-        sub = opts.ip_adapter
-        if sub is None:
+        ip_adapter = opts.ip_adapter
+        if ip_adapter is None:
             msg = "method='ip_adapter' missing sub-config"
             raise CompilationError(msg)
-        cfg_dict["ip_encoder"] = sub.encoder
-        cfg_dict["ip_image_drop_p"] = float(sub.image_drop_p)
-        if sub.features_cache_to_disk:
+        cfg_dict["ip_encoder"] = ip_adapter.encoder
+        cfg_dict["ip_image_drop_p"] = float(ip_adapter.image_drop_p)
+        if ip_adapter.features_cache_to_disk:
             cfg_dict["ip_features_cache_to_disk"] = True
         pieces.extend(_ip_adapter_network_args(opts))
     elif method == "full_finetune":
@@ -708,7 +708,10 @@ def _render_dataset(
     template substitution (``{resized_image_dir}`` etc.) inside the
     blueprint resolves to the LoraHub-managed dirs.
     """
-    src = cfg.dataset.source.resolve()
+    source = cfg.dataset.source
+    if source is None:
+        raise CompilationError("anima_lora requires dataset.source")
+    src = source.resolve()
     resized = (workspace / "post_image_dataset" / "resized").resolve()
     cache = (workspace / "post_image_dataset" / "lora").resolve()
 
@@ -1219,7 +1222,8 @@ def compile_turbo_config(
             "this is a programming error in the dispatch path"
         )
         raise CompilationError(msg)
-    if cfg.backend.anima_lora is None or cfg.backend.anima_lora.turbo is None:
+    opts = cfg.backend.anima_lora
+    if opts is None or opts.turbo is None:
         msg = (
             "compile_turbo_config requires backend.animaLora.turbo to be set; "
             "use compile_config for the standard training path"
@@ -1228,7 +1232,6 @@ def compile_turbo_config(
     if cfg.dataset.source is None:
         raise CompilationError("anima_lora turbo requires dataset.source")
 
-    opts = cfg.backend.anima_lora
     turbo = opts.turbo
 
     workspace = workspace.resolve()

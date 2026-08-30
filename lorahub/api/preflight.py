@@ -37,7 +37,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -84,10 +84,10 @@ class PreflightFinding:
     field: str  # camelCase cfg path, e.g. "baseModel.checkpoint"
     message: str
     remediation: str
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        d = {
+        d: dict[str, Any] = {
             "category": self.category,
             "severity": self.severity,
             "field": self.field,
@@ -436,49 +436,60 @@ def _check_backend_repo(cfg: TrainingConfig) -> list[PreflightFinding]:
 def _check_python_executable(cfg: TrainingConfig) -> list[PreflightFinding]:
     """Ensure the backend's resolved Python environment can start."""
     from lorahub.core.backends._common import bootstrap as common  # noqa: PLC0415
+    from lorahub.core.backends.errors import BootstrapError  # noqa: PLC0415
 
     out: list[PreflightFinding] = []
     if cfg.backend.type == "kohya":
-        from lorahub.core.backends.kohya import bootstrap  # noqa: PLC0415
+        from lorahub.core.backends.kohya import bootstrap as kohya_bootstrap  # noqa: PLC0415
 
         repo = (
             cfg.backend.repo_path
-            or common.path_from_env(bootstrap._ENV_SD_SCRIPTS)
-            or bootstrap.default_sd_scripts_path()
+            or common.path_from_env(kohya_bootstrap._ENV_SD_SCRIPTS)
+            or kohya_bootstrap.default_sd_scripts_path()
         )
+        python_env_var = kohya_bootstrap._ENV_PYTHON
     elif cfg.backend.type == "diffusion-pipe":
-        from lorahub.core.backends.diffusion_pipe import bootstrap  # noqa: PLC0415
+        from lorahub.core.backends.diffusion_pipe import (  # noqa: PLC0415
+            bootstrap as dp_bootstrap,
+        )
 
         repo = (
             cfg.backend.repo_path
-            or common.path_from_env(bootstrap._ENV_REPO)
-            or bootstrap.default_repo_path()
+            or common.path_from_env(dp_bootstrap._ENV_REPO)
+            or dp_bootstrap.default_repo_path()
         )
+        python_env_var = dp_bootstrap._ENV_PYTHON
     elif cfg.backend.type == "anima_lora":
-        from lorahub.core.backends.anima_lora import bootstrap  # noqa: PLC0415
+        from lorahub.core.backends.anima_lora import (  # noqa: PLC0415
+            bootstrap as anima_bootstrap,
+        )
 
         repo = (
             cfg.backend.repo_path
-            or common.path_from_env(bootstrap._ENV_REPO)
-            or bootstrap.default_repo_path()
+            or common.path_from_env(anima_bootstrap._ENV_REPO)
+            or anima_bootstrap.default_repo_path()
         )
+        python_env_var = anima_bootstrap._ENV_PYTHON
     else:
-        from lorahub.core.backends.ai_toolkit import bootstrap  # noqa: PLC0415
+        from lorahub.core.backends.ai_toolkit import (  # noqa: PLC0415
+            bootstrap as toolkit_bootstrap,
+        )
 
         repo = (
             cfg.backend.repo_path
-            or common.path_from_env(bootstrap._ENV_REPO)
-            or bootstrap.default_repo_path()
+            or common.path_from_env(toolkit_bootstrap._ENV_REPO)
+            or toolkit_bootstrap.default_repo_path()
         )
+        python_env_var = toolkit_bootstrap._ENV_PYTHON
 
     try:
         python = common.resolve_python(
             repo,
             config_python=cfg.backend.python_executable,
-            env_var=bootstrap._ENV_PYTHON,
+            env_var=python_env_var,
         )
         common.check_python(python)
-    except common.BootstrapError as exc:
+    except BootstrapError as exc:
         out.append(
             PreflightFinding(
                 category="venv_missing",

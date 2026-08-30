@@ -237,7 +237,7 @@ def _read_user_path_windows() -> str:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
             value, _ = winreg.QueryValueEx(key, "PATH")
-            return value
+            return value if isinstance(value, str) else str(value)
     except FileNotFoundError:
         return ""
     except OSError:

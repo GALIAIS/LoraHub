@@ -25,6 +25,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
+from typing import Iterator
 
 from PIL import Image, UnidentifiedImageError
 
@@ -223,7 +224,7 @@ def iter_safe_files(
     *,
     recursive: bool,
     skip_dirs: frozenset[str] = frozenset(),
-):
+) -> Iterator[Path]:
     """Yield files without following links or leaving the resolved root."""
     resolved_root = root.resolve()
     if recursive:
@@ -394,9 +395,8 @@ def get_or_build_thumbnail(image: Path, size: int) -> Path:
                 # Convert away from palette / grayscale modes so WEBP encoding
                 # stays predictable; we deliberately drop alpha to keep thumbs
                 # compact and consistent across sources.
-                if im.mode not in ("RGB",):
-                    im = im.convert("RGB")
-                im.thumbnail((size, size))
+                converted = im if im.mode == "RGB" else im.convert("RGB")
+                converted.thumbnail((size, size))
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 fd, raw_temp = tempfile.mkstemp(
                     dir=cache.parent,
@@ -406,7 +406,7 @@ def get_or_build_thumbnail(image: Path, size: int) -> Path:
                 os.close(fd)
                 temp_path = Path(raw_temp)
                 try:
-                    im.save(temp_path, format="WEBP", quality=82, method=4)
+                    converted.save(temp_path, format="WEBP", quality=82, method=4)
                     temp_path.replace(cache)
                 finally:
                     temp_path.unlink(missing_ok=True)

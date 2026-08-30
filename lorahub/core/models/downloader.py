@@ -11,14 +11,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from lorahub.core.net import hf_api, hf_download, hf_endpoint, proxy_env
+from lorahub.core.paths import project_root
 from lorahub.core.redaction import redact_command_text
 
 ProgressCallback = Callable[["DownloadProgress"], None]
+FileProgressCallback = Callable[[int, int], None]
 Source = Literal["huggingface", "modelscope"]
 
 DEFAULT_ALLOW_PATTERNS: tuple[str, ...] = (
@@ -105,6 +107,10 @@ class DownloadCanceledError(InterruptedError):
     """Raised when a caller cancels an in-flight model download."""
 
 
+class CancelSignal(Protocol):
+    def is_set(self) -> bool: ...
+
+
 @dataclass(slots=True)
 class _PathLockState:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -171,7 +177,7 @@ def _cancel_tqdm_class(cancel_event: threading.Event) -> type[Any]:
         def update(self, n: int | float = 1) -> bool | None:
             if cancel_event.is_set():
                 raise DownloadCanceledError("download canceled by user")
-            return super().update(n)
+            return cast(bool | None, super().update(n))
 
     return _CancelAwareTqdm
 
@@ -482,9 +488,10 @@ def _ms_download_file_unlocked(
     file_path: str,
     target: Path,
     token: str | None,
-    cancel_event: threading.Event | None = None,
+    cancel_event: CancelSignal | None = None,
     *,
     expected_size: int = 0,
+    on_progress: FileProgressCallback | None = None,
 ) -> int:
     url = (
         f"{_MS_BASE}/{repo_id}/repo?Revision={quote(revision)}"
@@ -497,6 +504,8 @@ def _ms_download_file_unlocked(
     if _is_link(target):
         raise ValueError(f"download target is a linked file: {target.name}")
     if expected_size > 0 and target.is_file() and target.stat().st_size == expected_size:
+        if on_progress is not None:
+            on_progress(expected_size, expected_size)
         return expected_size
 
     partial = target.with_name(f".{target.name}.lorahub.part")
@@ -510,7 +519,11 @@ def _ms_download_file_unlocked(
         offset = 0
     if expected_size > 0 and offset == expected_size and offset > 0:
         partial.replace(target)
+        if on_progress is not None:
+            on_progress(expected_size, expected_size)
         return expected_size
+    if on_progress is not None:
+        on_progress(offset, expected_size)
     if offset > 0:
         headers["Range"] = f"bytes={offset}-"
 
@@ -540,6 +553,8 @@ def _ms_download_file_unlocked(
                     break
                 fh.write(chunk)
                 bytes_written += len(chunk)
+                if on_progress is not None:
+                    on_progress(bytes_written, expected_size)
             fh.flush()
             os.fsync(fh.fileno())
 
@@ -558,9 +573,10 @@ def _ms_download_file(
     file_path: str,
     target: Path,
     token: str | None,
-    cancel_event: threading.Event | None = None,
+    cancel_event: CancelSignal | None = None,
     *,
     expected_size: int = 0,
+    on_progress: FileProgressCallback | None = None,
 ) -> int:
     with _download_path_lock(target):
         return _ms_download_file_unlocked(
@@ -571,7 +587,79 @@ def _ms_download_file(
             token,
             cancel_event,
             expected_size=expected_size,
+            on_progress=on_progress,
         )
+
+
+def modelscope_download_file(
+    repo_id: str,
+    filename: str,
+    *,
+    revision: str = "master",
+    target_dir: Path | None = None,
+    token: str | None = None,
+    proxy: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    on_progress: FileProgressCallback | None = None,
+) -> str:
+    """Download one ModelScope model file into LoraHub's resumable cache.
+
+    This is the single-file counterpart to :func:`download`, intended for
+    runtime assets such as WD14's ONNX checkpoint and tag vocabulary. It uses
+    the same path validation, linked-path protection, partial-file resume, and
+    size verification as the model management API.
+    """
+    safe_repo_id = validate_repo_id(repo_id)
+    safe_filename = _normalise_path(filename)
+    if safe_filename is None or safe_filename != filename.replace("\\", "/"):
+        raise ValueError(f"invalid ModelScope file path: {filename!r}")
+    if should_stop is not None and should_stop():
+        raise DownloadCanceledError("download canceled by user")
+
+    class _CallbackCancelSignal:
+        def is_set(self) -> bool:
+            return bool(should_stop is not None and should_stop())
+
+    root = target_dir or (
+        project_root() / "models" / "modelscope" / "hub" / Path(*safe_repo_id.split("/"))
+    )
+    if _is_link(root):
+        raise ValueError("download target root must not be a symlink or junction")
+    root.mkdir(parents=True, exist_ok=True)
+
+    with proxy_env(proxy):
+        listed = _ms_list_files(safe_repo_id, revision, token)
+    if should_stop is not None and should_stop():
+        raise DownloadCanceledError("download canceled by user")
+    match = next(
+        (
+            item
+            for item in listed
+            if _normalise_path(str(item.get("Path") or item.get("FilePath") or "")) == safe_filename
+        ),
+        None,
+    )
+    if match is None:
+        raise FileNotFoundError(
+            f"ModelScope repository {safe_repo_id!r} has no file {safe_filename!r} "
+            f"at revision {revision!r}"
+        )
+    target = _safe_download_target(root, safe_filename)
+    cancel_signal = _CallbackCancelSignal() if should_stop is not None else None
+    with proxy_env(proxy):
+        _ms_download_file(
+            safe_repo_id,
+            revision,
+            safe_filename,
+            target,
+            token,
+            cancel_signal,
+            expected_size=_file_size(match),
+            on_progress=on_progress,
+        )
+    if should_stop is not None and should_stop():
+        raise DownloadCanceledError("download canceled by user")
+    return str(target)
 
 
 def _ms_download(req: DownloadRequest, progress: ProgressCallback | None) -> DownloadResult:

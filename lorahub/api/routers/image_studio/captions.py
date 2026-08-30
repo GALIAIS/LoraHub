@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -47,7 +48,9 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 # --------------------------------------------------------------------------- #
 
 
-def _walk_caption_files(root: Path, recursive: bool):
+def _walk_caption_files(
+    root: Path, recursive: bool
+) -> Iterator[tuple[Path, Path]]:
     """Yield (image_path, caption_path) for every captioned image."""
     for image in iter_safe_files(
         root,
@@ -88,7 +91,7 @@ def captions_vocab(
     recursive: bool = True,
     limit: int = 200,
     case_sensitive: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Return ``[{tag, count}, ...]`` sorted by frequency.
 
     Used by the Annotate stage's vocab pane to drive the bar list and
@@ -150,7 +153,7 @@ class _Diff:
 
 
 @router.post("/captions/find-replace")
-def captions_find_replace(req: FindReplaceRequest) -> dict:
+def captions_find_replace(req: FindReplaceRequest) -> dict[str, Any]:
     """Global find / replace across captions.
 
     Tag-aware (default): the pattern is matched per individual tag,
@@ -176,7 +179,7 @@ def captions_find_replace(req: FindReplaceRequest) -> dict:
         {str(Path(p).resolve()) for p in req.paths} if req.paths else None
     )
 
-    diffs: list[dict] = []
+    diffs: list[dict[str, Any]] = []
     written: list[str] = []
     matched_files = 0
     matched_count = 0
@@ -261,7 +264,7 @@ class InjectTriggerRequest(BaseModel):
 
 
 @router.post("/captions/inject-trigger")
-def captions_inject_trigger(req: InjectTriggerRequest) -> dict:
+def captions_inject_trigger(req: InjectTriggerRequest) -> dict[str, Any]:
     """Add a trigger word to every caption (idempotent by default).
 
     With ``skip_existing=True``, captions already containing the
@@ -331,7 +334,7 @@ class BlacklistRequest(BaseModel):
 
 
 @router.post("/captions/blacklist")
-def captions_blacklist(req: BlacklistRequest) -> dict:
+def captions_blacklist(req: BlacklistRequest) -> dict[str, Any]:
     """Remove every occurrence of the listed tags from all captions.
 
     Comparison is per-tag (a blacklisted ``"smile"`` won't strip

@@ -34,7 +34,6 @@ from lorahub.api.ai_store import (
     AIModel,
     AIProvider,
     AIProviderKey,
-    AIProviderKeyRuntime,
     AIRoute,
     AIStore,
     default_ai_store_path,
@@ -96,7 +95,7 @@ def _store() -> AIStore:
     store = getattr(app_module, "_ai_store", None)
     if store is None:
         store = AIStore(default_ai_store_path())
-        app_module._ai_store = store  # type: ignore[attr-defined]
+        app_module._ai_store = store
     return store
 
 

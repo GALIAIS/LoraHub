@@ -57,7 +57,7 @@ def sinusoidal_position_embedding(
     return embedding.type(dtype)
 
 
-class StochDepth(nn.Module):
+class StochDepth(nn.Module):  # type: ignore[misc]
     """Row-wise stochastic depth. Acts as identity in eval mode."""
 
     def __init__(self, drop_rate: float, scale_by_keep: bool = False) -> None:
@@ -77,7 +77,7 @@ class StochDepth(nn.Module):
         return x * binary
 
 
-class SkipInitChannelwise(nn.Module):
+class SkipInitChannelwise(nn.Module):  # type: ignore[misc]
     """LayerScale-style learned per-channel skip multiplier."""
 
     def __init__(self, channels: int, init_val: float = 1e-6) -> None:
@@ -90,7 +90,7 @@ class SkipInitChannelwise(nn.Module):
         return x * self.skip
 
 
-class PosEmbedding(nn.Module):
+class PosEmbedding(nn.Module):  # type: ignore[misc]
     """Sine or learned positional embedding. Sine is parameter-free."""
 
     def __init__(self, d_model: int, max_len: int, use_sine: bool, patch_size: int) -> None:
@@ -117,7 +117,7 @@ class PosEmbedding(nn.Module):
         return x + position_embeddings
 
 
-class MLPBlock(nn.Module):
+class MLPBlock(nn.Module):  # type: ignore[misc]
     def __init__(self, d_model: int, d_ff: int, stochdepth_rate: float) -> None:
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff)
@@ -135,7 +135,7 @@ class MLPBlock(nn.Module):
         return self.linear2(x)
 
 
-class ViTBlock(nn.Module):
+class ViTBlock(nn.Module):  # type: ignore[misc]
     """Pre-norm ViT block with fused QKV, scaled dot-product attention,
     LayerScale, and optional stochastic depth.
 
@@ -201,7 +201,7 @@ class ViTBlock(nn.Module):
         return out + x
 
 
-class CNNLayerNorm(nn.Module):
+class CNNLayerNorm(nn.Module):  # type: ignore[misc]
     """Channels-first ``LayerNorm`` for 4-D image tensors."""
 
     def __init__(self, d_model: int) -> None:
@@ -214,7 +214,7 @@ class CNNLayerNorm(nn.Module):
         return x.transpose(1, 3)
 
 
-class CNNStem(nn.Module):
+class CNNStem(nn.Module):  # type: ignore[misc]
     """Mini DSL parser for upstream's ``cnn_stem`` config string.
 
     The string is ``;``-separated layers; each layer is ``<type>:<options>``
@@ -273,7 +273,7 @@ def _cait_layerscale_init(network_depth: int) -> float:
     return 1e-6
 
 
-class JoyTagViT(nn.Module):
+class JoyTagViT(nn.Module):  # type: ignore[misc]
     """Inference-only port of ``Models.ViT`` from fancyfeast/joytag.
 
     The ``forward`` signature is simplified to a plain image tensor (instead

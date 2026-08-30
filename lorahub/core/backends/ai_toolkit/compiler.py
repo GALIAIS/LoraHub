@@ -321,6 +321,7 @@ def _train_section(
         {key: _coerce(value) for key, value in cfg.optimizer.optimizer_args.items()}
     )
 
+    scheduler_name: str
     if "lr_scheduler" in train_options.model_fields_set:
         scheduler_name = train_options.lr_scheduler
     elif "schedule" in cfg.optimizer.model_fields_set:
@@ -395,7 +396,10 @@ def _train_section(
         if cfg.schedule.max_steps is not None:
             train["max_steps"] = int(cfg.schedule.max_steps)
     else:
-        train["steps"] = int(cfg.schedule.max_steps)
+        max_steps = cfg.schedule.max_steps
+        if max_steps is None:
+            raise CompilationError("ai-toolkit step schedule requires max_steps")
+        train["steps"] = int(max_steps)
     return train
 
 

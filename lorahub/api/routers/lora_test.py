@@ -125,15 +125,19 @@ def _store() -> TaskSessionStore:
 
 def _cfg_output_name(cfg: dict[str, Any]) -> str | None:
     output = cfg.get("output") if isinstance(cfg, dict) else None
-    if isinstance(output, dict) and isinstance(output.get("name"), str):
-        return output["name"]
+    if isinstance(output, dict):
+        name = output.get("name")
+        if isinstance(name, str):
+            return name
     return None
 
 
 def _cfg_backend(cfg: dict[str, Any]) -> str | None:
     backend = cfg.get("backend") if isinstance(cfg, dict) else None
-    if isinstance(backend, dict) and isinstance(backend.get("type"), str):
-        return backend["type"]
+    if isinstance(backend, dict):
+        backend_type = backend.get("type")
+        if isinstance(backend_type, str):
+            return backend_type
     return None
 
 

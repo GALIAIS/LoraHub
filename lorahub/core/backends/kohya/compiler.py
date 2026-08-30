@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from lorahub.core.config.base import ArchPathsConfig
 from lorahub.core.config.schema import TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -256,14 +257,18 @@ def _build_dataset_toml(cfg: TrainingConfig) -> str:
     if ds.caption.drop_rate > 0:
         parts.append(f"caption_dropout_rate = {ds.caption.drop_rate}")
 
-    subset_rows: list[tuple[Path, int, str | None]]
+    subset_rows: list[tuple[Path, int, str | None]] = []
     if ds.subsets:
-        subset_rows = [
-            (subset.path, subset.num_repeats, subset.caption_prefix)
-            for subset in ds.subsets
-        ]
+        for subset in ds.subsets:
+            if subset.path is None:
+                raise CompilationError("kohya dataset subset requires path")
+            subset_rows.append(
+                (subset.path, subset.num_repeats, subset.caption_prefix)
+            )
     else:
-        subset_rows = [(ds.source, ds.num_repeats, None)]
+        if ds.source is None:
+            raise CompilationError("kohya dataset requires source")
+        subset_rows.append((ds.source, ds.num_repeats, None))
 
     for image_dir, num_repeats, caption_prefix in subset_rows:
         parts += [
@@ -917,7 +922,7 @@ def _emit_arch_paths_args(cfg: TrainingConfig, args: list[str]) -> None:
     _warn_unused_arch_paths(arch, p)
 
 
-def _emit_flux_paths(p, args: list[str]) -> None:
+def _emit_flux_paths(p: ArchPathsConfig, args: list[str]) -> None:
     """FLUX argv: --clip_l, --t5xxl, --ae, plus the encoder dropout / mask /
     guidance scale knobs added by `library.flux_train_utils`."""
     if p.clip_l is not None:
@@ -938,7 +943,7 @@ def _emit_flux_paths(p, args: list[str]) -> None:
         args.append(f"--clip_l_dropout_rate={p.clip_l_dropout_rate}")
 
 
-def _emit_sd3_paths(p, args: list[str]) -> None:
+def _emit_sd3_paths(p: ArchPathsConfig, args: list[str]) -> None:
     """SD3 argv: --clip_l, --clip_g, --t5xxl, the encoder masks/dropouts and
     SD3.5-specific positional-embed knobs."""
     if p.clip_l is not None:
@@ -969,7 +974,7 @@ def _emit_sd3_paths(p, args: list[str]) -> None:
         args.append(f"--t5xxl_dtype={p.t5xxl_dtype}")
 
 
-def _emit_anima_paths(p, args: list[str]) -> None:
+def _emit_anima_paths(p: ArchPathsConfig, args: list[str]) -> None:
     """Anima argv: --qwen3, --llm_adapter_path, --t5_tokenizer_path, plus
     the Qwen3/T5 max-token-length knobs and the VAE memory tweaks. Note the
     upstream spelling differs from our schema field names (e.g. `llm_adapter`
@@ -990,7 +995,7 @@ def _emit_anima_paths(p, args: list[str]) -> None:
         args.append("--vae_disable_cache")
 
 
-def _emit_hunyuan_image_paths(p, args: list[str]) -> None:
+def _emit_hunyuan_image_paths(p: ArchPathsConfig, args: list[str]) -> None:
     """Hunyuan Image argv: --text_encoder, --byt5, --text_encoder_cpu,
     --vae_chunk_size."""
     if p.text_encoder is not None:
@@ -1003,7 +1008,7 @@ def _emit_hunyuan_image_paths(p, args: list[str]) -> None:
         args.append(f"--vae_chunk_size={p.vae_chunk_size}")
 
 
-def _warn_unused_arch_paths(arch: str, p) -> None:
+def _warn_unused_arch_paths(arch: str, p: ArchPathsConfig) -> None:
     """Surface a single warning when the user filled an arch-only path field
     that doesn't apply to the chosen arch.
 

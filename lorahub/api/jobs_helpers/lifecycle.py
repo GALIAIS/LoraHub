@@ -23,7 +23,7 @@ import threading
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from lorahub.api import scheduler as sched
 from lorahub.api import state
@@ -371,19 +371,19 @@ def _enqueue_launch(
         state.registry.update(current)
         try:
             sink.__enter__()
-            kwargs = {
+            launch_kwargs: dict[str, Any] = {
                 "extra_argv": extra_argv,
                 "env": slot_env,
             }
             if _backend_accepts_gpu_count(backend):
-                kwargs["gpu_count"] = len(assigned_slots)
+                launch_kwargs["gpu_count"] = len(assigned_slots)
             if _backend_accepts_cancel_event(backend):
-                kwargs["cancel_event"] = launch_cancel
+                launch_kwargs["cancel_event"] = launch_cancel
             handle = backend.launch(
                 cfg,
                 workspace=workspace,
                 on_event=on_event,
-                **kwargs,
+                **launch_kwargs,
             )
         except Exception as exc:  # noqa: BLE001
             j = state.registry.get(job.id)
@@ -559,7 +559,11 @@ def _apply_settings_gpu_dispatch_default(cfg: TrainingConfig) -> None:
         settings = _app._settings_store.load()
     except Exception:  # noqa: BLE001
         return
-    dispatch.mode = settings.gpu_dispatch_mode
+    if settings.gpu_dispatch_mode in {"one-job-per-gpu", "distributed"}:
+        dispatch.mode = cast(
+            Literal["one-job-per-gpu", "distributed"],
+            settings.gpu_dispatch_mode,
+        )
     dispatch.num_gpus = settings.gpu_dispatch_num_gpus
 
 
@@ -777,13 +781,17 @@ def _report_job_failure(job: JobRecord, *, returncode: int | None) -> None:
         message = "\n".join(msg_parts) or (
             f"trainer exit code {returncode}; no log excerpt was reachable."
         )
+        raw_log_excerpt = (
+            diag.get("log_excerpt") if isinstance(diag, dict) else ""
+        )
+        log_excerpt = (
+            raw_log_excerpt if isinstance(raw_log_excerpt, str) else ""
+        )
         ctx: dict[str, Any] = {
             "returncode": returncode,
             "workspace": str(workspace) if workspace else None,
             "log_path": diag.get("log_path") if isinstance(diag, dict) else None,
-            "log_excerpt": (
-                diag.get("log_excerpt") if isinstance(diag, dict) else ""
-            )[:8000],
+            "log_excerpt": log_excerpt[:8000],
             "findings": diag.get("findings") if isinstance(diag, dict) else [],
         }
         capture(

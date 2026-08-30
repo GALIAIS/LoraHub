@@ -202,6 +202,8 @@ def _gpu_sampler_loop(
             if gpu_slot < 0 or gpu_slot >= len(gpus):
                 continue
             g = gpus[gpu_slot]
+            memory_used_bytes = g.memory_used_bytes
+            memory_total_bytes = g.memory_total_bytes
             try:
                 on_event(
                     TrainingEvent(
@@ -211,13 +213,13 @@ def _gpu_sampler_loop(
                             "gpu_index": gpu_slot,
                             "util_percent": g.utilization_percent,
                             "vram_used_mib": (
-                                int(g.memory_used_bytes // (1024 * 1024))
-                                if getattr(g, "memory_used_bytes", None) is not None
+                                int(memory_used_bytes // (1024 * 1024))
+                                if memory_used_bytes is not None
                                 else None
                             ),
                             "vram_total_mib": (
-                                int(g.memory_total_bytes // (1024 * 1024))
-                                if getattr(g, "memory_total_bytes", None) is not None
+                                int(memory_total_bytes // (1024 * 1024))
+                                if memory_total_bytes is not None
                                 else None
                             ),
                             "temperature_c": g.temperature_c,

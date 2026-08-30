@@ -30,7 +30,7 @@ import os
 import re
 from collections import Counter
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -68,6 +68,8 @@ from lorahub.api.error_upstream import (
     UpstreamDispatcher,
     build_sink_from_settings,
 )
+from lorahub.api.error_upstream.sinks import SinkChannel
+from lorahub.api.system_update_types import ChannelName
 from lorahub.api.image_studio_store import (
     ImageStudioStore,
     default_image_studio_store_path,
@@ -422,7 +424,14 @@ def _sink_config_from_settings(settings: Any) -> SinkConfig:
     settings.json that might live in a synced directory while still
     letting users seed credentials at boot via env vars.
     """
-    channel = getattr(settings, "error_upstream_channel", "off") or "off"
+    raw_channel = str(
+        getattr(settings, "error_upstream_channel", "off") or "off"
+    )
+    channel: SinkChannel = (
+        cast(SinkChannel, raw_channel)
+        if raw_channel in {"off", "gitlab", "gitea", "webhook"}
+        else "off"
+    )
     token = getattr(settings, "error_upstream_gitlab_token", "") or ""
     if not token:
         env_keys = (
@@ -492,7 +501,8 @@ async def _update_check_loop() -> None:
         # Both channels eagerly so the first UI render has both numbers
         # ready (they're cached separately and this only costs two HTTP
         # GETs to api.github.com).
-        for chan in ("tag", "main"):
+        update_channels: tuple[ChannelName, ...] = ("tag", "dev")
+        for chan in update_channels:
             try:
                 await _asyncio.to_thread(
                     system_update.check, chan, force=False
@@ -503,7 +513,7 @@ async def _update_check_loop() -> None:
                 pass
         while True:
             await _asyncio.sleep(6 * 60 * 60)
-            for chan in ("tag", "main"):
+            for chan in update_channels:
                 try:
                     await _asyncio.to_thread(
                         system_update.check, chan, force=True

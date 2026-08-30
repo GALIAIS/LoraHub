@@ -38,8 +38,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
 from lorahub.core.events import EventType, TrainingEvent
 
 _log = logging.getLogger(__name__)
@@ -197,8 +195,8 @@ def _dhash(path: Path) -> str | None:
         _log.debug("forgetting-probe: Pillow not installed, skipping")
         return None
     with Image.open(path) as im:
-        im = im.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
-        pixels = list(im.getdata())
+        converted = im.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+        pixels = list(converted.getdata())
     bits = 0
     for row in range(8):
         row_off = row * 9

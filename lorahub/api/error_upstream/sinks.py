@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from lorahub.api.error_reports import ErrorReport
 from lorahub.core.redaction import redact_command_text, redact_data
@@ -139,7 +139,7 @@ def _repo_path_error(value: str, *, exact_parts: int | None = None) -> str | Non
 
 
 def _read_limited(stream: Any) -> bytes:
-    raw = stream.read(_MAX_HTTP_RESPONSE_BYTES + 1)
+    raw = cast(bytes, stream.read(_MAX_HTTP_RESPONSE_BYTES + 1))
     if len(raw) <= _MAX_HTTP_RESPONSE_BYTES:
         return raw
     return raw[:_MAX_HTTP_RESPONSE_BYTES] + _TRUNCATED_RESPONSE_MARKER
@@ -328,7 +328,8 @@ class GitLabIssueSink:
         url = f"{self._project_url()}/issues?{params}"
         status, body = _http(url, headers=self._headers(), timeout_s=self.timeout_s)
         if status == 200 and isinstance(body, list) and body:
-            return body[0]
+            issue = body[0]
+            return cast(dict[str, Any], issue) if isinstance(issue, dict) else None
         return None
 
     def _open_new_issue(self, report: ErrorReport, fp: str) -> SendResult:

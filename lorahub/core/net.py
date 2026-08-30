@@ -11,7 +11,8 @@ import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from lorahub.core.paths import project_root
 
@@ -19,6 +20,15 @@ _PROXY_ENV_LOCK = threading.RLock()
 _PROXY_STATE_LOCK = threading.Lock()
 _PROXY_NAMES = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
 _PROXY_BASELINE: dict[str, str | None] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadPreferences:
+    """In-process model download preferences resolved from env and settings."""
+
+    prefer_modelscope: bool = False
+    modelscope_token: str | None = None
+    proxy: str | None = None
 
 
 def _clean_endpoint(value: str | None) -> str | None:
@@ -49,15 +59,37 @@ def _hf_endpoint(explicit: str | None = None) -> str | None:
     return hf_endpoint(explicit)
 
 
-def _download_proxy() -> str | None:
-    """Read the configured download proxy from settings."""
+def download_preferences() -> DownloadPreferences:
+    """Resolve ModelScope preference, token, and proxy for library downloads.
+
+    Environment credentials win over the saved token, matching the way
+    ``huggingface_hub`` handles ``HF_TOKEN``. The ModelScope preference itself
+    remains an explicit LoraHub setting so enabling it never happens merely
+    because a token exists in the parent shell.
+    """
+    prefer_modelscope = False
+    saved_token: str | None = None
+    proxy: str | None = None
     try:
         from lorahub.api import app as _app  # noqa: PLC0415
 
         settings = _app._settings_store.load()
-        return (settings.download_proxy or "").strip() or None
+        prefer_modelscope = bool(getattr(settings, "modelscope_enabled", False))
+        saved_token = (getattr(settings, "modelscope_token", None) or "").strip() or None
+        proxy = (getattr(settings, "download_proxy", None) or "").strip() or None
     except Exception:  # noqa: BLE001
-        return None
+        pass
+    token = (os.environ.get("MODELSCOPE_API_TOKEN") or "").strip() or saved_token
+    return DownloadPreferences(
+        prefer_modelscope=prefer_modelscope,
+        modelscope_token=token,
+        proxy=proxy,
+    )
+
+
+def _download_proxy() -> str | None:
+    """Read the configured download proxy from settings."""
+    return download_preferences().proxy
 
 
 def hf_api(**kwargs: Any) -> Any:
@@ -109,7 +141,7 @@ def hf_download(
         kw["cache_dir"] = _default_hf_cache_dir()
     if tqdm_class is not None:
         kw["tqdm_class"] = tqdm_class
-    return hf_hub_download(**kw)
+    return cast(str, hf_hub_download(**kw))
 
 
 def _default_hf_cache_dir() -> str:

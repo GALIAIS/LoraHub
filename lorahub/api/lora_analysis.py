@@ -190,7 +190,13 @@ def analyse_checkpoint(path: Path) -> LoraSpectrum | None:
             pairs.append((base, up_key, down_key))
         # Deduplicate — a layer is registered from both halves.
         seen: set[str] = set()
-        pairs = [p for p in pairs if not (p[0] in seen or seen.add(p[0]))]
+        unique_pairs: list[tuple[str, str, str]] = []
+        for pair in pairs:
+            if pair[0] in seen:
+                continue
+            seen.add(pair[0])
+            unique_pairs.append(pair)
+        pairs = unique_pairs
         if not pairs:
             return None
 

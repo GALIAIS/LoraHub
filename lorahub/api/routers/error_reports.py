@@ -21,7 +21,8 @@ routes when LoraHub binds beyond loopback. Egress remains opt-in.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -37,9 +38,14 @@ from lorahub.api.error_reports import (
     MAX_ERROR_STACK_CHARS,
     MAX_ERROR_TITLE_CHARS,
     ErrorReport,
+    ErrorReportStore,
     ResolutionStatus,
     Severity,
 )
+from lorahub.api.error_upstream.sinks import SinkChannel
+
+if TYPE_CHECKING:
+    from lorahub.api.error_upstream import UpstreamDispatcher
 
 router = APIRouter(prefix="/api")
 _LIMIT_QUERY = Query(default=100, ge=1, le=1000)
@@ -126,11 +132,11 @@ class _CreateResponse(BaseModel):
     id: str
 
 
-def _store():
+def _store() -> ErrorReportStore:
     store = getattr(app_module, "_error_report_store", None)
     if store is None:
         raise HTTPException(status_code=503, detail="error-report store not ready")
-    return store
+    return cast(ErrorReportStore, store)
 
 
 @router.get("/error-reports", response_model=_ListOut)
@@ -203,7 +209,7 @@ def export_reports() -> StreamingResponse:
     import json
 
     store = _store()
-    def _gen():  # type: ignore[no-untyped-def]
+    def _gen() -> Iterator[str]:
         for r in store.iter_all():
             yield json.dumps(r.to_dict(), ensure_ascii=False, default=str) + "\n"
 
@@ -310,7 +316,7 @@ class _UpstreamSendOut(BaseModel):
     error: str | None = None
 
 
-def _dispatcher():
+def _dispatcher() -> UpstreamDispatcher:
     from lorahub.api import app as app_module  # noqa: PLC0415
 
     dispatcher = getattr(app_module, "_error_upstream_dispatcher", None)
@@ -318,7 +324,7 @@ def _dispatcher():
         raise HTTPException(
             status_code=503, detail="error-upstream dispatcher not ready",
         )
-    return dispatcher
+    return cast(UpstreamDispatcher, dispatcher)
 
 
 @router.post("/error-reports/{report_id}/send", response_model=_UpstreamSendOut)
@@ -362,7 +368,7 @@ class _UpstreamHealthIn(BaseModel):
     and probe with that, so the user can validate a token before
     committing it to settings.json.
     """
-    channel: str | None = None
+    channel: SinkChannel | None = None
     gitlab_base_url: str | None = None
     gitlab_repo: str | None = None
     gitlab_token: str | None = None
@@ -408,7 +414,7 @@ def upstream_health(body: _UpstreamHealthIn | None = None) -> _UpstreamHealthOut
         #      first-time setup with token-via-env works.
         from lorahub.api.routers.settings_routes import _mask_secret  # noqa: PLC0415
 
-        settings_store = app_module._settings_store  # type: ignore[attr-defined]
+        settings_store = app_module._settings_store
         persisted = settings_store.load()
         persisted_token = persisted.error_upstream_gitlab_token or ""
         masked_persisted = _mask_secret(persisted_token) or ""
@@ -429,19 +435,21 @@ def upstream_health(body: _UpstreamHealthIn | None = None) -> _UpstreamHealthOut
                 token = ""
             if not token:
                 token = os.environ.get("LORAHUB_REPORT_TOKEN", "")
-        cfg = SinkConfig(
-            channel=body.channel,  # type: ignore[arg-type]
+        draft_config = SinkConfig(
+            channel=body.channel,
             gitlab_base_url=body.gitlab_base_url or "",
             gitlab_repo=body.gitlab_repo or "",
             gitlab_token=token,
             webhook_url=body.webhook_url or "",
             webhook_auth_header=body.webhook_auth_header or "",
         )
-        sink = build_sink_from_settings(cfg)
+        sink = build_sink_from_settings(draft_config)
     else:
-        settings_store = app_module._settings_store  # type: ignore[attr-defined]
-        cfg = settings_store.load()
-        sink = build_sink_from_settings(app_module._sink_config_from_settings(cfg))
+        settings_store = app_module._settings_store
+        persisted_settings = settings_store.load()
+        sink = build_sink_from_settings(
+            app_module._sink_config_from_settings(persisted_settings)
+        )
     if sink is None:
         return _UpstreamHealthOut(
             ok=False,

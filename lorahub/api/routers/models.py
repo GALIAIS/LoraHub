@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -202,7 +202,7 @@ def _latest_session() -> _DownloadSession | None:
 def _session_from_task(task: TaskSession) -> _DownloadSession:
     metadata = task.metadata
     status: _DownloadStatus = (
-        task.status
+        cast(_DownloadStatus, task.status)
         if task.status
         in {"stop_requested", "succeeded", "failed", "interrupted", "canceled"}
         else "running"

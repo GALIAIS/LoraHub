@@ -140,7 +140,7 @@ def _pick_best_keep(members: list[dict[str, Any]]) -> str:
                 best = m
         except OSError:
             pass
-    return best["path"]
+    return str(best["path"])
 
 
 class BatchDeleteSelectInput(BaseModel):

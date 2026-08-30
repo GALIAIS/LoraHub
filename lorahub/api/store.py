@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 def _subprocess_no_window() -> int:
     if sys.platform == "win32":
-        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        return subprocess.CREATE_NO_WINDOW
     return 0
 
 
@@ -161,8 +161,6 @@ class JobStore:
         hook re-enqueues them into the scheduler so they pick up where
         they were waiting (see ``requeue_pending`` below).
         """
-        import os  # noqa: PLC0415
-
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, pid, metadata FROM jobs WHERE state IN ({})".format(  # noqa: S608, UP032
@@ -252,7 +250,7 @@ def _pid_alive(pid: int) -> bool:
         else:
             try:
                 process = psutil.Process(pid)
-                return (
+                return bool(
                     process.is_running()
                     and process.status() != psutil.STATUS_ZOMBIE
                 )

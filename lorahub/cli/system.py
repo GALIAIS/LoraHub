@@ -13,6 +13,7 @@ registry as ndjson.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -45,7 +46,7 @@ def system_gpu(
     """Print one-shot GPU info: name, memory, utilisation, temp, processes."""
     snap = collect_snapshot()
     if raw:
-        console.print_json(data={"gpus": [g.to_dict() for g in snap.gpus]})
+        console.print_json(data={"gpus": [asdict(g) for g in snap.gpus]})
         return
 
     if not snap.gpus:

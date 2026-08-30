@@ -37,7 +37,7 @@ import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -85,7 +85,8 @@ _ARCHIVE_MEDIA_TYPES: dict[str, str] = {
     "tar.bz2": "application/x-bzip2",
     "tar.xz": "application/x-xz",
 }
-_TAR_MODES: dict[str, str] = {
+_TarWriteMode = Literal["w:", "w:gz", "w:bz2", "w:xz"]
+_TAR_MODES: dict[str, _TarWriteMode] = {
     "tar": "w:",
     "tar.gz": "w:gz",
     "tar.bz2": "w:bz2",
@@ -474,7 +475,7 @@ def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConf
             ]
             if not global_steps:
                 continue
-            entry: dict[str, Any] = {
+            dp_entry: dict[str, Any] = {
                 "kind": "dp-run-dir",
                 "path": str(child.resolve()),
                 "basename": child.name,
@@ -485,10 +486,10 @@ def _list_state_candidates(workspace: Path, backend_type: str, cfg: TrainingConf
             try:
                 tag = latest.read_text(encoding="utf-8").strip()
                 if tag.startswith("global_step"):
-                    entry["latest_step"] = int(tag.removeprefix("global_step"))
+                    dp_entry["latest_step"] = int(tag.removeprefix("global_step"))
             except (OSError, ValueError):
                 pass
-            candidates.append(entry)
+            candidates.append(dp_entry)
         candidates.sort(key=lambda e: e["basename"], reverse=True)
         return candidates
 

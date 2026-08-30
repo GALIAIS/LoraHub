@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import threading
 import time as _time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +47,7 @@ from lorahub.api.task_sessions import (
     TaskEvent,
     TaskSession,
     TaskSessionStore,
+    TaskStatus,
     default_task_store_path,
     persist_stop_request,
     prune_terminal_session_cache,
@@ -379,7 +380,7 @@ class _AutoRotateSession:
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
-        task_status = (
+        task_status: TaskStatus = (
             "succeeded"
             if status == "succeeded"
             else "canceled"
@@ -1106,7 +1107,7 @@ class _BatchResizeSession:
             self.status = status
             self.finished_at = _time.time()
         self._append_task_event(f"finished: {status}", percent=self.percent)
-        task_status = (
+        task_status: TaskStatus = (
             "succeeded"
             if status == "succeeded"
             else "canceled"
@@ -1543,7 +1544,7 @@ def curate_restore_backup(req: RestoreBackupRequest) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def _walk_images(root: Path, recursive: bool):
+def _walk_images(root: Path, recursive: bool) -> Iterator[Path]:
     """Yield image files inside root, skipping the .workbench tree."""
     for path in iter_safe_files(
         root,

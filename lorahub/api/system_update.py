@@ -143,7 +143,7 @@ _VERSION_SOURCES = ("env", "git-describe", "hatch-vcs", "dist-metadata", "change
 
 def _subprocess_no_window() -> int:
     if sys.platform == "win32":
-        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        return subprocess.CREATE_NO_WINDOW
     return 0
 
 
@@ -1050,7 +1050,7 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     # Old clients / cached payloads still carry the pre-v1.0.4
     # ``main`` channel name. Translate so they keep working without
     # forcing the user to clear the on-disk cache.
-    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
+    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)
     cwd = _git_root()
     is_dirty = _detect_dirty(cwd) if cwd else False
     current, version_source = _resolve_version()
@@ -1061,10 +1061,16 @@ def check(channel: ChannelName = "tag", *, force: bool = False) -> UpdateInfo:
     blob = _read_cache()
     cached = blob.data.get(channel)
     fresh_enough = not force and _cache_entry_is_fresh(cached, blob.updated_at)
-    if fresh_enough and channel == "tag" and cached.get("tag_name") and not cached.get("latest_commit"):
+    if (
+        fresh_enough
+        and cached is not None
+        and channel == "tag"
+        and cached.get("tag_name")
+        and not cached.get("latest_commit")
+    ):
         fresh_enough = False
 
-    if fresh_enough:
+    if fresh_enough and cached is not None:
         cached_latest = cached.get("latest")
         cached_latest_commit = cached.get("latest_commit")
         if channel == "tag":
@@ -1277,7 +1283,7 @@ def apply(
     # Translate legacy ``main`` channel name (pre-v1.0.4 callers) so
     # tests / old scripts / cached UI state keep working without a
     # forced rename pass.
-    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)  # type: ignore[arg-type]
+    channel = _LEGACY_CHANNEL_ALIASES.get(channel, channel)
     if target_tag and (channel != "tag" or not is_release_tag(target_tag)):
         raise ValueError("target_tag must be a stable vX.Y.Z tag on the formal channel")
     cwd = _git_root()
@@ -2360,12 +2366,13 @@ def _stream_subprocess(
         env=env,
         creationflags=_subprocess_no_window(),
     )
-    assert proc.stdout is not None  # noqa: S101
+    stdout = proc.stdout
+    assert stdout is not None  # noqa: S101
     lines: queue.Queue[str | None] = queue.Queue()
 
     def _reader() -> None:
         try:
-            for raw in proc.stdout:
+            for raw in stdout:
                 lines.put(raw.rstrip())
         finally:
             lines.put(None)

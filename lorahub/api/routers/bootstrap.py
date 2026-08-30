@@ -203,7 +203,9 @@ def _build_deps_runner(
     settings = _app._settings_store.load()
 
     if req.backend == "diffusion-pipe":
-        from lorahub.core.backends.diffusion_pipe import installer  # noqa: PLC0415
+        from lorahub.core.backends.diffusion_pipe import (  # noqa: PLC0415
+            installer as dp_installer,
+        )
         from lorahub.core.backends.diffusion_pipe.bootstrap import (  # noqa: PLC0415
             _venv_python,
             default_repo_path,
@@ -222,7 +224,7 @@ def _build_deps_runner(
                 status_code=400,
                 detail=f"No venv found at {repo_path}. Run a full install first.",
             )
-        plan = installer.BootstrapPlan(
+        dp_plan = dp_installer.BootstrapPlan(
             target=repo_path,
             cuda_version="cu124",
             torch_version="2.6.0",
@@ -235,7 +237,7 @@ def _build_deps_runner(
         )
 
         def runner(progress: Callable[[str], None]) -> None:
-            installer.install_requirements(plan, progress=progress)
+            dp_installer.install_requirements(dp_plan, progress=progress)
 
     elif req.backend == "anima_lora":
         # anima_lora doesn't have a "requirements only" install step —
@@ -258,7 +260,7 @@ def _build_deps_runner(
                 ),
             )
         torch_option = recommended_torch_option()
-        plan = al_installer.BootstrapPlan(
+        anima_plan = al_installer.BootstrapPlan(
             target=target_path,
             base_python=None,
             pypi_index=settings.pypi_index_url,
@@ -271,10 +273,10 @@ def _build_deps_runner(
         )
 
         def runner(progress: Callable[[str], None]) -> None:
-            al_installer.sync(plan, progress=progress)
-            al_installer.install_torch_override(plan, progress=progress)
-            al_installer.install_bitsandbytes(plan, progress=progress)
-            al_installer.install_deepspeed(plan, progress=progress)
+            al_installer.sync(anima_plan, progress=progress)
+            al_installer.install_torch_override(anima_plan, progress=progress)
+            al_installer.install_bitsandbytes(anima_plan, progress=progress)
+            al_installer.install_deepspeed(anima_plan, progress=progress)
 
     elif req.backend == "ai_toolkit":
         from lorahub.core.backends.ai_toolkit import (  # noqa: PLC0415
@@ -295,7 +297,7 @@ def _build_deps_runner(
                 status_code=400,
                 detail=f"No venv found at {repo_path}. Run a full install first.",
             )
-        plan = at_installer.BootstrapPlan(
+        toolkit_plan = at_installer.BootstrapPlan(
             target=repo_path,
             cuda_version="cu124",
             torch_version="2.6.0",
@@ -306,10 +308,12 @@ def _build_deps_runner(
         )
 
         def runner(progress: Callable[[str], None]) -> None:
-            at_installer.install_requirements(plan, progress=progress)
+            at_installer.install_requirements(toolkit_plan, progress=progress)
 
     else:
-        from lorahub.core.backends.kohya import installer  # noqa: PLC0415
+        from lorahub.core.backends.kohya import (  # noqa: PLC0415
+            installer as kohya_installer,
+        )
         from lorahub.core.backends.kohya.bootstrap import (  # noqa: PLC0415
             _venv_python,
             default_sd_scripts_path,
@@ -328,7 +332,7 @@ def _build_deps_runner(
                 status_code=400,
                 detail=f"No venv found at {sd_path}. Run a full install first.",
             )
-        plan = installer.BootstrapPlan(
+        kohya_plan = kohya_installer.BootstrapPlan(
             target=sd_path,
             cuda_version="cu124",
             torch_version="2.6.0",
@@ -341,7 +345,7 @@ def _build_deps_runner(
         )
 
         def runner(progress: Callable[[str], None]) -> None:
-            installer.install_requirements(plan, progress=progress)
+            kohya_installer.install_requirements(kohya_plan, progress=progress)
 
     return runner
 

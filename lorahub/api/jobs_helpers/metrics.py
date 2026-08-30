@@ -15,7 +15,7 @@ import math
 import re
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from lorahub.api import state
 from lorahub.api.dataset_files import is_link_like, iter_safe_files
@@ -490,7 +490,7 @@ def _empty_overfit_signal() -> dict[str, Any]:
     }
 
 
-def _finite_number(value: Any) -> bool:
+def _finite_number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 

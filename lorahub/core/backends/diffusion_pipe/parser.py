@@ -89,23 +89,27 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     # Try this BEFORE _STEP_RE so a `steps: ...` line never falls
     # through to the deepspeed-style branch (which can't see loss).
     if (m := _STEPS_LOSS_RE.match(stripped)) is not None:
-        payload: dict[str, object] = {
+        progress_payload: dict[str, object] = {
             "step": int(m.group("step")),
             "loss": float(m.group("loss")),
         }
         if (it := m.group("iter")) is not None:
-            payload["iter_time_s"] = float(it)
+            progress_payload["iter_time_s"] = float(it)
         if (sps := m.group("sps")) is not None:
-            payload["samples_per_sec"] = float(sps)
-        return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+            progress_payload["samples_per_sec"] = float(sps)
+        return TrainingEvent(
+            type=EventType.step, payload=progress_payload, job_id=job_id
+        )
 
     if (m := _STEP_RE.search(stripped)) is not None:
-        payload: dict[str, object] = {"step": int(m.group("step"))}
+        step_payload: dict[str, object] = {"step": int(m.group("step"))}
         if (lr := m.group("lr")) is not None:
-            payload["lr"] = float(lr)
+            step_payload["lr"] = float(lr)
         if (loss_match := _LOSS_RE.search(stripped)) is not None:
-            payload["loss"] = float(loss_match.group("loss"))
-        return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+            step_payload["loss"] = float(loss_match.group("loss"))
+        return TrainingEvent(
+            type=EventType.step, payload=step_payload, job_id=job_id
+        )
 
     level = "error" if _looks_like_error(stripped) else "info"
     return TrainingEvent(

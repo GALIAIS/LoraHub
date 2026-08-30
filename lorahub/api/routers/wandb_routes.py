@@ -91,7 +91,7 @@ def _resolve_run_url(job_id: str) -> str:
     return url
 
 
-def _wandb_api():  # noqa: ANN202 — wandb types only available on demand
+def _wandb_api() -> Any:
     """Construct ``wandb.Api`` lazily.
 
     Raises ``HTTPException`` with structured ``code`` so the UI can

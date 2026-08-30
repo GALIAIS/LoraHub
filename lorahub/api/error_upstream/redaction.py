@@ -21,11 +21,10 @@ goes through every regex once. Order matters only for the path rules
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from lorahub.api.error_reports import ErrorReport
 
@@ -207,7 +206,7 @@ def redact_report(report: ErrorReport) -> ErrorReport:
 
 def redact_dict(payload: dict[str, Any]) -> dict[str, Any]:
     """Public hook for the webhook sink's freeform payload bag."""
-    return _redact_value(payload)
+    return cast(dict[str, Any], _redact_value(payload))
 
 
 def _self_test() -> bool:

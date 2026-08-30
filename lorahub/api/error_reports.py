@@ -25,6 +25,7 @@ Layout decisions:
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import math
@@ -145,59 +146,65 @@ def _normalise_context_value(value: Any, state: _ContextBudget, depth: int) -> A
         if identity in state.seen:
             return "[circular reference]"
         state.seen.add(identity)
-        output: dict[str, Any] = {}
+        mapping_output: dict[str, Any] = {}
         try:
             iterator = iter(value.items())
         except Exception:  # noqa: BLE001
             return {"_lorahub_truncated": "could not iterate mapping"}
         for index in range(_CONTEXT_MAX_COLLECTION_ITEMS + 1):
             if state.remaining <= 0:
-                output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
+                mapping_output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
                 break
             try:
                 key, item = next(iterator)
             except StopIteration:
                 break
             except Exception:  # noqa: BLE001
-                output["_lorahub_truncated"] = "mapping changed during capture"
+                mapping_output["_lorahub_truncated"] = (
+                    "mapping changed during capture"
+                )
                 break
             if index == _CONTEXT_MAX_COLLECTION_ITEMS:
-                output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
+                mapping_output["_lorahub_truncated"] = _CONTEXT_TRUNCATED
                 break
             try:
                 key_text = str(key)
             except Exception:  # noqa: BLE001
                 key_text = f"<{type(key).__name__}>"
             safe_key = state.text(key_text, per_value=512)
-            output[safe_key] = _normalise_context_value(item, state, depth + 1)
-        return output
+            mapping_output[safe_key] = _normalise_context_value(
+                item, state, depth + 1
+            )
+        return mapping_output
 
     if isinstance(value, (list, tuple, set, frozenset)):
         identity = id(value)
         if identity in state.seen:
             return "[circular reference]"
         state.seen.add(identity)
-        output: list[Any] = []
+        collection_output: list[Any] = []
         try:
             iterator = iter(value)
         except Exception:  # noqa: BLE001
             return ["could not iterate collection"]
         for index in range(_CONTEXT_MAX_COLLECTION_ITEMS + 1):
             if state.remaining <= 0:
-                output.append(_CONTEXT_TRUNCATED)
+                collection_output.append(_CONTEXT_TRUNCATED)
                 break
             try:
                 item = next(iterator)
             except StopIteration:
                 break
             except Exception:  # noqa: BLE001
-                output.append("collection changed during capture")
+                collection_output.append("collection changed during capture")
                 break
             if index == _CONTEXT_MAX_COLLECTION_ITEMS:
-                output.append(_CONTEXT_TRUNCATED)
+                collection_output.append(_CONTEXT_TRUNCATED)
                 break
-            output.append(_normalise_context_value(item, state, depth + 1))
-        return output
+            collection_output.append(
+                _normalise_context_value(item, state, depth + 1)
+            )
+        return collection_output
 
     try:
         rendered = repr(value)
@@ -712,7 +719,7 @@ class ErrorReportStore:
             last_timestamp = str(rows[-1]["timestamp"])
             last_id = str(rows[-1]["id"])
 
-    def list_pending_upstream(self) -> list[ErrorReport]:
+    def list_pending_upstream(self) -> builtins.list[ErrorReport]:
         """Return durable outbound work left queued by an earlier process."""
         with self._lock, self._connect() as conn:
             rows = conn.execute(
@@ -874,9 +881,9 @@ class ErrorReportStore:
         fingerprint: str | None = None,
         resolution_status: ResolutionStatus | None = None,
         q: str | None = None,
-    ) -> tuple[list[str], list[Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
+    ) -> tuple[builtins.list[str], builtins.list[Any]]:
+        clauses: builtins.list[str] = []
+        params: builtins.list[Any] = []
         if severity is not None:
             clauses.append("severity = ?")
             params.append(severity)
@@ -954,7 +961,7 @@ def _row_to_report(row: sqlite3.Row) -> ErrorReport:
     return ErrorReport(
         id=row["id"],
         timestamp=datetime.fromisoformat(row["timestamp"]),
-        severity=row["severity"],  # type: ignore[arg-type]
+        severity=row["severity"],
         source=row["source"],
         category=row["category"],
         title=row["title"],

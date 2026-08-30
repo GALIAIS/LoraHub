@@ -71,9 +71,16 @@ lorahub tag ./datasets/akagi
 # 全部重打、阈值收紧、递归
 lorahub tag ./datasets/akagi --overwrite --general 0.45 -r
 
+# Hugging Face 不可达时，直接使用内置 WD14 模型的 ModelScope 镜像
+lorahub tag ./datasets/akagi --source modelscope
+
 # JoyTag 后端(需 pip install lorahub[tagging])
 lorahub tag ./datasets/akagi --tagger joytag --joytag-threshold 0.4
 ```
+
+`--source auto`（默认）遵循「设置 → 网络加速 → 优先 ModelScope」并在首选源失败时
+回退 Hugging Face；`--source modelscope` / `--source huggingface` 会固定下载源。
+ModelScope 映射只对内置 WD14 模型目录生效，自定义 Hugging Face 模型 id 不会被猜测映射。
 
 `--device auto` 在 `onnxruntime-gpu` 可用时挑 GPU;`--device cuda` 强制 GPU,
 `--device cpu` 强制 CPU。

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -95,6 +95,14 @@ def mark_chunk(repo_id: str, filename: str, n: int) -> None:
         job = _jobs.get(_key(repo_id, filename))
         if job is not None and job.status == "running":
             job.downloaded += max(0, int(n))
+
+
+def mark_downloaded(repo_id: str, filename: str, downloaded: int) -> None:
+    """Set the absolute byte count, used by resumable non-tqdm downloads."""
+    with _lock:
+        job = _jobs.get(_key(repo_id, filename))
+        if job is not None and job.status == "running":
+            job.downloaded = max(0, int(downloaded))
 
 
 def mark_done(repo_id: str, filename: str) -> None:
@@ -203,7 +211,7 @@ def tqdm_class_for(
         def refresh(self) -> None:
             pass
 
-        def __iter__(self):  # pragma: no cover — tqdm's iter wrapping
+        def __iter__(self) -> Iterator[Any]:  # pragma: no cover — tqdm's iter wrapping
             return iter(())
 
     return _ReportingTqdm
@@ -211,6 +219,7 @@ def tqdm_class_for(
 
 __all__ = [
     "mark_chunk",
+    "mark_downloaded",
     "mark_done",
     "mark_error",
     "mark_start",

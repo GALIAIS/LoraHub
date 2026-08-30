@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
 import typer
 from rich.console import Console
@@ -33,6 +34,9 @@ from rich.progress import (
 )
 
 from lorahub.cli._i18n import t
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -76,15 +80,17 @@ def _output_path(img: Path, src: Path, dst: Path, recursive: bool) -> Path:
     return out_dir / f"{img.stem}.png"
 
 
-def _build_canny(low: int, high: int):
+def _build_canny(
+    low: int, high: int
+) -> Callable[[Image.Image], Image.Image]:
     try:
-        import cv2  # noqa: PLC0415
+        import cv2  # noqa: PLC0415, F401
         import numpy as np  # noqa: PLC0415, F401
         from PIL import Image  # noqa: PLC0415
     except ImportError as exc:
         raise _missing_dep(exc, "opencv-python") from exc
 
-    def _run(img):
+    def _run(img: Image.Image) -> Image.Image:
         import cv2  # noqa: PLC0415
         import numpy as np  # noqa: PLC0415
 
@@ -168,8 +174,8 @@ def ref_extract(
             try:
                 from PIL import Image  # noqa: PLC0415
 
-                img = Image.open(img_path).convert("RGB")
-                result = runner(img)
+                source_image = Image.open(img_path).convert("RGB")
+                result = runner(source_image)
                 if not isinstance(result, Image.Image):
                     result = Image.fromarray(result)
                 result.save(out_path)

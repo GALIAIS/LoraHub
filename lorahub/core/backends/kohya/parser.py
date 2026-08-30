@@ -194,13 +194,15 @@ class KohyaLineParser:
             )
 
         if (m := _STEP_RE.search(stripped)) is not None:
-            payload: dict[str, object] = {
+            step_payload: dict[str, object] = {
                 "step": int(m.group("cur")),
                 "total_steps": int(m.group("total")),
             }
             if (loss := m.group("loss")) is not None:
-                payload["loss"] = float(loss)
-            return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+                step_payload["loss"] = float(loss)
+            return TrainingEvent(
+                type=EventType.step, payload=step_payload, job_id=job_id
+            )
 
         if (m := _EPOCH_RE.match(stripped)) is not None:
             return TrainingEvent(
@@ -248,13 +250,17 @@ class KohyaLineParser:
         # Validation loss matching runs after the step regex so the train-loss
         # `avr_loss=` postfix on the progress bar wins for the common case.
         if (m := _VAL_LOSS_RE.search(stripped)) is not None:
-            payload: dict[str, object] = {"val_loss": float(m.group("val"))}
+            validation_payload: dict[str, object] = {
+                "val_loss": float(m.group("val"))
+            }
             if (em := _VAL_EPOCH_HINT_RE.search(stripped)) is not None:
-                payload["epoch"] = int(em.group("epoch"))
+                validation_payload["epoch"] = int(em.group("epoch"))
             if (sm := _VAL_STEP_HINT_RE.search(stripped)) is not None:
-                payload["step"] = int(sm.group("step"))
+                validation_payload["step"] = int(sm.group("step"))
             return TrainingEvent(
-                type=EventType.validation, payload=payload, job_id=job_id
+                type=EventType.validation,
+                payload=validation_payload,
+                job_id=job_id,
             )
 
         level = "error" if _looks_like_error(stripped) else "info"

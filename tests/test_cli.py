@@ -84,6 +84,46 @@ def test_version_command() -> None:
     assert "lorahub" in result.stdout
 
 
+def test_tag_passes_explicit_modelscope_source_to_wd14(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.core.tagging import wd14
+
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    seen: dict[str, object] = {}
+
+    class FakeTagger:
+        active_provider = "CPUExecutionProvider"
+
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+        def load(self) -> None:
+            return None
+
+        def tag_directory(self, *_args: object, **_kwargs: object) -> list[object]:
+            return []
+
+    monkeypatch.setattr(wd14, "WD14Tagger", FakeTagger)
+
+    result = runner.invoke(app, ["tag", str(dataset), "--source", "modelscope"])
+
+    assert result.exit_code == 0, result.stdout
+    assert seen["source"] == "modelscope"
+
+
+def test_tag_rejects_unknown_download_source(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    result = runner.invoke(app, ["tag", str(dataset), "--source", "other"])
+
+    assert result.exit_code == 1
+    assert "unknown download source" in result.stderr
+
+
 def test_info_supports_anima_compiler_contract() -> None:
     config = Path(__file__).resolve().parents[1] / "configs" / "anima_lora_8gb.yaml"
 

@@ -11,8 +11,17 @@ the API server's cwd before the cfg ever reaches a compiler.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import overload
 
 from lorahub.core.config.schema import TrainingConfig
+
+
+@overload
+def _absolutise(p: None, base: Path) -> None: ...
+
+
+@overload
+def _absolutise(p: Path | str, base: Path) -> Path: ...
 
 
 def _absolutise(p: Path | str | None, base: Path) -> Path | None:
@@ -49,7 +58,7 @@ def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
     """
     base_dir = (base or Path.cwd()).resolve()
 
-    cfg.base_model.checkpoint = _absolutise(cfg.base_model.checkpoint, base_dir)  # type: ignore[assignment]
+    cfg.base_model.checkpoint = _absolutise(cfg.base_model.checkpoint, base_dir)
     if cfg.base_model.vae is not None:
         cfg.base_model.vae = _absolutise(cfg.base_model.vae, base_dir)
     paths = cfg.base_model.arch_paths
@@ -61,13 +70,13 @@ def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
         if cur is not None:
             setattr(paths, fname, _absolutise(cur, base_dir))
 
-    cfg.dataset.source = _absolutise(cfg.dataset.source, base_dir)  # type: ignore[assignment]
+    cfg.dataset.source = _absolutise(cfg.dataset.source, base_dir)
     if cfg.dataset.conditioning_dir is not None:
         cfg.dataset.conditioning_dir = _absolutise(cfg.dataset.conditioning_dir, base_dir)
     if cfg.dataset.reg_source is not None:
         cfg.dataset.reg_source = _absolutise(cfg.dataset.reg_source, base_dir)
     for sub in cfg.dataset.subsets:
-        sub.path = _absolutise(sub.path, base_dir)  # type: ignore[assignment]
+        sub.path = _absolutise(sub.path, base_dir)
         if sub.mask_path is not None:
             sub.mask_path = _absolutise(sub.mask_path, base_dir)
         if sub.conditioning_data_dir is not None:
@@ -91,7 +100,7 @@ def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
     if cfg.network.dim_from_weights is not None:
         cfg.network.dim_from_weights = _absolutise(cfg.network.dim_from_weights, base_dir)
     cfg.network.base_weights = [
-        _absolutise(p, base_dir) for p in cfg.network.base_weights  # type: ignore[misc]
+        _absolutise(p, base_dir) for p in cfg.network.base_weights
     ]
 
     if cfg.resume.resume_from is not None:

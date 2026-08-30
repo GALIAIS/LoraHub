@@ -20,7 +20,7 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from dotenv import load_dotenv
@@ -29,8 +29,7 @@ from rich.table import Table
 
 from lorahub import __version__
 from lorahub.cli._i18n import set_lang, t
-from lorahub.core.backends.base import Severity, ValidationIssue
-from lorahub.core.backends.kohya.backend import KohyaBackend
+from lorahub.core.backends.base import Severity, TrainingBackend, ValidationIssue
 from lorahub.core.backends.registry import get_backend
 from lorahub.core.backends.kohya.compiler import compile_config
 from lorahub.core.config.loader import load_config
@@ -403,36 +402,45 @@ def info(
     """Show what a config would compile to, plus VRAM estimate (no training)."""
     cfg = load_config(config)
     backend = _backend_for(cfg)
+    dryrun_workspace = Path.cwd() / "_dryrun"
 
     if cfg.backend.type == "anima_lora":
         from lorahub.core.backends.anima_lora.compiler import (
-            compile_config as _compile,
+            compile_config as compile_anima_config,
             compile_turbo_config,
         )
 
         opts = cfg.backend.anima_lora
         if opts is not None and opts.turbo is not None:
-            _compile = compile_turbo_config
             script = "scripts/distill_turbo.py"
+            argv, _files = compile_turbo_config(
+                cfg, workspace=dryrun_workspace
+            )
         else:
             script = "train.py"
+            argv, _files = compile_anima_config(
+                cfg, workspace=dryrun_workspace
+            )
     elif cfg.backend.type == "ai_toolkit":
-        from lorahub.core.backends.ai_toolkit.compiler import compile_config as _compile
-
-        script = "run.py"
-    elif cfg.backend.type == "diffusion-pipe":
-        from lorahub.core.backends.diffusion_pipe.compiler import compile_config as _compile
-
-        script = "train.py"
-    else:
-        _compile = compile_config
-        script, argv, _files, _env = _compile(
-            cfg,
-            workspace=Path.cwd() / "_dryrun",
+        from lorahub.core.backends.ai_toolkit.compiler import (
+            compile_config as compile_toolkit_config,
         )
 
-    if cfg.backend.type != "kohya":
-        argv, _files = _compile(cfg, workspace=Path.cwd() / "_dryrun")
+        script = "run.py"
+        argv, _files = compile_toolkit_config(
+            cfg, workspace=dryrun_workspace
+        )
+    elif cfg.backend.type == "diffusion-pipe":
+        from lorahub.core.backends.diffusion_pipe.compiler import (
+            compile_config as compile_dp_config,
+        )
+
+        script = "train.py"
+        argv, _files = compile_dp_config(cfg, workspace=dryrun_workspace)
+    else:
+        script, argv, _files, _env = compile_config(
+            cfg, workspace=dryrun_workspace
+        )
     est = backend.estimate_vram(cfg)
 
     table = Table(title=t("info.title"), show_header=False, expand=False)
@@ -510,8 +518,9 @@ def train(
     console.print(t("train.ok"))
 
 
-def _backend_for(cfg):
-    return get_backend(cfg.backend.type or "kohya").backend_class()
+def _backend_for(cfg: TrainingConfig) -> TrainingBackend:
+    backend = get_backend(cfg.backend.type or "kohya").backend_class()
+    return cast(TrainingBackend, backend)
 
 
 @app.command(help=t("sweep.help"))
@@ -631,12 +640,13 @@ def sweep(
     target_dir = (output_dir / sweep_dir_name).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    manifest_variants: list[dict[str, object]] = []
     manifest: dict[str, object] = {
         "base_config": str(config.resolve()),
         "name_template": name_template,
         "workspace_root": str(workspace_root.resolve()),
         "axes": [{"path": a.path, "values": list(a.values)} for a in axes],
-        "variants": [],
+        "variants": manifest_variants,
     }
     for i, (variant_name, variant_config) in enumerate(variants, start=1):
         # `dump_config` requires a TrainingConfig — round-trip through validation
@@ -644,7 +654,7 @@ def sweep(
         cfg_v = TrainingConfig.model_validate(variant_config)
         variant_path = target_dir / f"variant_{i:03d}.yaml"
         dump_config(cfg_v, variant_path)
-        manifest["variants"].append(  # type: ignore[union-attr]
+        manifest_variants.append(
             {
                 "name": variant_name,
                 "path": str(variant_path),
@@ -951,6 +961,13 @@ def tag(
     model: Annotated[
         str, typer.Option(help=t("tag.model_help"))
     ] = "SmilingWolf/wd-eva02-large-tagger-v3",
+    source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help=t("tag.source_help"),
+        ),
+    ] = "auto",
     general_threshold: Annotated[
         float, typer.Option("--general", help=t("tag.general_help"))
     ] = 0.35,
@@ -1003,6 +1020,10 @@ def tag(
     if kind not in {"wd14", "joytag"}:
         err_console.print(t("tag.unknown_tagger", name=tagger))
         raise typer.Exit(code=1)
+    source_name = source.strip().lower()
+    if source_name not in {"auto", "huggingface", "modelscope"}:
+        err_console.print(t("tag.unknown_source", name=source))
+        raise typer.Exit(code=1)
 
     instance: BaseTagger
     if kind == "joytag":
@@ -1016,18 +1037,23 @@ def tag(
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1) from exc
     else:
-        from lorahub.core.tagging.wd14 import CudaUnavailableError, WD14Tagger  # noqa: PLC0415
+        from lorahub.core.tagging.wd14 import (  # noqa: PLC0415
+            CudaUnavailableError,
+            TaggerModelDownloadError,
+            WD14Tagger,
+        )
 
         instance = WD14Tagger(
             model_id=model,
             general_threshold=general_threshold,
             character_threshold=character_threshold,
             device=device,
+            source=source_name,
         )
-        console.print(t("tag.loading_wd", model=model))
+        console.print(t("tag.loading_wd", model=model, source=source_name))
         try:
             instance.load()
-        except CudaUnavailableError as e:
+        except (CudaUnavailableError, TaggerModelDownloadError) as e:
             err_console.print(f"[red]{e}[/red]")
             raise typer.Exit(code=1) from e
 

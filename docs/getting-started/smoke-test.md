@@ -67,11 +67,19 @@ lorahub tag ./datasets/akagi --overwrite --general 0.45
 # 训风格 / 概念 LoRA 时跳过 character 标签
 lorahub tag ./datasets/akagi --no-include-character
 
+# 国内网络无法访问 Hugging Face 时使用已验证的 ModelScope 镜像
+lorahub tag ./datasets/akagi --source modelscope
+
 # JoyTag 后端（PyTorch，~5800 标签词表，默认 0.4 阈值）
 lorahub tag ./datasets/akagi --tagger joytag --joytag-threshold 0.4
 ```
 
 WD14 默认模型是 `SmilingWolf/wd-eva02-large-tagger-v3`。CPU 推理几百张图按约 1 秒每张算够用；批量吞吐想再快就装 GPU 运行时：
+
+`--source auto`（默认）会读取「设置 → 网络加速 → 优先 ModelScope」。启用后，
+内置 WD14 模型先从 `fireicewolf/*` 魔搭镜像下载，失败再回退 Hugging Face；
+命令行可用 `--source modelscope` 固定走魔搭。模型保存到项目内
+`models/modelscope/hub/`，中断后会从 `.lorahub.part` 断点续传。
 
 ```powershell
 pip uninstall onnxruntime

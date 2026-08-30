@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from rich.console import Console
@@ -69,7 +69,10 @@ def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
-            return json.loads(resp.read().decode("utf-8"))
+            result: Any = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(result, dict):
+                raise ValueError("API response is not a JSON object")
+            return result
     except urllib.error.HTTPError as exc:
         body_txt = exc.read().decode("utf-8", errors="replace")
         console.print(t("jobs.http_error", code=exc.code, url=url, body=body_txt))
@@ -206,7 +209,8 @@ def jobs_kill(
         console.print(t("jobs.kill.marked"))
         return
     pid = rec.pid
-    sig = signal.SIGKILL if force else signal.SIGTERM
+    sigkill = cast(signal.Signals, getattr(signal, "SIGKILL", signal.SIGTERM))
+    sig = sigkill if force else signal.SIGTERM
     try:
         os.kill(pid, sig)
         console.print(t("jobs.kill.sent", sig=sig.name, pid=pid))
@@ -227,7 +231,7 @@ def jobs_kill(
         else:
             console.print(t("jobs.kill.escalating"))
             with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+                os.kill(pid, sigkill)
 
     rec.state = JobState.canceled
     store.upsert(rec)

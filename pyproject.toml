@@ -159,6 +159,11 @@ module = [
     "optuna.*",
     "safetensors.*",
     "PIL.*",
+    "cv2.*",
+    "diffusers.*",
+    "py7zr.*",
+    "tqdm.*",
+    "wandb.*",
     "yaml",
 ]
 ignore_missing_imports = true

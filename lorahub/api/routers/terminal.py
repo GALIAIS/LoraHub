@@ -31,6 +31,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -249,7 +250,7 @@ def exec_command(req: TerminalExecRequest) -> StreamingResponse:
     timeout_s = max(5, int(settings.terminal_command_timeout_s))
     display_argv = redact_argv(argv)
 
-    def event_stream():
+    def event_stream() -> Iterator[str]:
         # Announce the resolved process up-front so the UI can render the
         # canonical `(backend) cwd$ argv` line before any output lands.
         yield _sse(

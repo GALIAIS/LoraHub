@@ -193,7 +193,8 @@ export function NetworkTab() {
             ModelScope（魔搭）
           </CardTitle>
           <CardDescription>
-            ModelScope 模型源。可在「模型下载」标签直接拉取。私有模型需填写访问令牌。
+            ModelScope 模型源。启用后，内置 WD14 打标模型优先从已验证的魔搭镜像下载，
+            其他模型也可在「模型下载」标签直接拉取。私有模型需填写访问令牌。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

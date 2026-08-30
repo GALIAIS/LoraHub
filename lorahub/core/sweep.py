@@ -380,7 +380,7 @@ def _params_match(a: Any, b: Any) -> bool:
         return a is b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-12)
-    return a == b
+    return bool(a == b)
 
 
 # --------------------------------------------------------------------------- #

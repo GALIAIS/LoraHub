@@ -33,7 +33,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -85,7 +85,7 @@ def _walk_dataset_files(
     *,
     include_backups: bool = False,
     include_quarantine: bool = False,
-):
+) -> Iterator[tuple[Path, Path]]:
     """Yield (Path, arcname) pairs covering every file we should ship.
 
     ``arcname`` is the relative path inside the zip / new dataset.

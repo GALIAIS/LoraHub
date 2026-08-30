@@ -164,4 +164,5 @@ __all__ = [
     "ScheduleConfig",
     "TrainingConfig",
     "ValidationConfig",
+    "_CAMEL_CONFIG",
 ]

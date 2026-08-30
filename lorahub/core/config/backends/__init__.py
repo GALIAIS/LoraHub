@@ -84,7 +84,7 @@ class BackendConfig(BaseModel):
     #     on serialization via the model's _CAMEL_CONFIG alias generator)
     # All four read into the same field; ``cfg.backend.repo_path`` is
     # the canonical access in code.
-    repo_path: Path | None = Field(
+    repo_path: Path | None = Field(  # type: ignore[pydantic-alias]
         default=None,
         validation_alias=AliasChoices(
             "repo_path", "repoPath", "sd_scripts_path", "sdScriptsPath",

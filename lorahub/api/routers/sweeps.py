@@ -61,7 +61,7 @@ import dataclasses
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import ulid
 from fastapi import APIRouter, HTTPException
@@ -71,6 +71,7 @@ from lorahub.api import state
 from lorahub.api.jobs_helpers import _TERMINAL_STATES, _launch_job
 from lorahub.api.paths import resolve_sweep_variant_path
 from lorahub.api.state import JobRecord, JobState
+from lorahub.api.sweep_store import SweepRecord, SweepStore
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.sweep import (
     SamplerUnavailableError,
@@ -665,7 +666,7 @@ def _read_final_score(workspace: Path) -> float:
     return _impl(workspace)
 
 
-def _load_sweep_record(sweep_id: str):  # type: ignore[no-untyped-def]
+def _load_sweep_record(sweep_id: str) -> SweepRecord | None:
     """Best-effort SweepStore lookup; tolerates store=None for tests."""
     from lorahub.api import app as app_module  # noqa: PLC0415
 
@@ -673,18 +674,18 @@ def _load_sweep_record(sweep_id: str):  # type: ignore[no-untyped-def]
     if store is None:
         return None
     try:
-        return store.get(sweep_id)
+        return cast(SweepStore, store).get(sweep_id)
     except Exception:  # noqa: BLE001
         return None
 
 
-def _list_sweep_records():  # type: ignore[no-untyped-def]
+def _list_sweep_records() -> list[SweepRecord]:
     from lorahub.api import app as app_module  # noqa: PLC0415
 
     store = getattr(app_module, "_sweep_store", None)
     if store is None:
         return []
     try:
-        return store.list()
+        return cast(SweepStore, store).list()
     except Exception:  # noqa: BLE001
         return []

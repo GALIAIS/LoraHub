@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from lorahub.core.net import DownloadPreferences
 from lorahub.core.tagging import wd14
 
 
@@ -34,6 +35,95 @@ def test_download_progress_honors_stop_request() -> None:
 
     with pytest.raises(InterruptedError, match="stopped by user"):
         progress.update(1)
+
+
+def test_resolve_download_sources_prefers_modelscope_with_hf_fallback() -> None:
+    sources = wd14.resolve_download_sources(
+        wd14.DEFAULT_MODEL,
+        "auto",
+        preferences=DownloadPreferences(prefer_modelscope=True),
+    )
+
+    assert sources == ("modelscope", "huggingface")
+
+
+def test_every_curated_wd14_model_has_an_explicit_modelscope_mapping() -> None:
+    assert set(wd14.WD14_MODELSCOPE_REPOS) == set(wd14.WD14_MODEL_IDS)
+
+
+def test_explicit_modelscope_rejects_unmapped_custom_model() -> None:
+    with pytest.raises(wd14.TaggerModelDownloadError, match="no verified ModelScope mirror"):
+        wd14.resolve_download_sources("owner/custom-wd14", "modelscope")
+
+
+def test_modelscope_asset_download_uses_verified_mirror_and_reports_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lorahub.core.tagging import download_status
+
+    output = tmp_path / "model.onnx"
+    seen: dict[str, Any] = {}
+
+    def fake_download(repo_id: str, filename: str, **kwargs: Any) -> str:
+        seen.update(repo_id=repo_id, filename=filename, **kwargs)
+        kwargs["on_progress"](4, 10)
+        kwargs["on_progress"](10, 10)
+        return str(output)
+
+    download_status.reset()
+    monkeypatch.setattr(wd14, "modelscope_download_file", fake_download)
+    monkeypatch.setattr(
+        wd14,
+        "download_preferences",
+        lambda: DownloadPreferences(
+            prefer_modelscope=True,
+            modelscope_token="secret",
+            proxy="http://proxy.example",
+        ),
+    )
+
+    tagger = wd14.WD14Tagger(source="modelscope")
+    assert tagger._download_asset("model.onnx") == str(output)
+
+    assert seen["repo_id"] == "fireicewolf/wd-eva02-large-tagger-v3"
+    assert seen["filename"] == "model.onnx"
+    assert seen["token"] == "secret"
+    assert seen["proxy"] == "http://proxy.example"
+    assert tagger.active_download_source == "modelscope"
+    job = download_status.snapshot()["jobs"][0]
+    assert job["status"] == "done"
+    assert job["downloaded"] == 10
+    assert job["total"] == 10
+
+
+def test_auto_source_falls_back_to_huggingface_after_modelscope_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    output = tmp_path / "selected_tags.csv"
+
+    def fail_modelscope(*_args: Any, **_kwargs: Any) -> str:
+        calls.append("modelscope")
+        raise RuntimeError("modelscope unavailable")
+
+    def fake_hf_download(**_kwargs: Any) -> str:
+        calls.append("huggingface")
+        return str(output)
+
+    monkeypatch.setattr(wd14, "modelscope_download_file", fail_modelscope)
+    monkeypatch.setattr(wd14, "hf_download", fake_hf_download)
+    monkeypatch.setattr(
+        wd14,
+        "download_preferences",
+        lambda: DownloadPreferences(prefer_modelscope=True),
+    )
+
+    tagger = wd14.WD14Tagger(source="auto")
+    assert tagger._download_asset("selected_tags.csv") == str(output)
+    assert calls == ["modelscope", "huggingface"]
+    assert tagger.active_download_source == "huggingface"
 
 
 @dataclass

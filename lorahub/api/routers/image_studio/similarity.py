@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,9 +28,9 @@ router = APIRouter(prefix="/api/image-studio", tags=["image-studio"])
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
+    dot = math.fsum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(math.fsum(x * x for x in a))
+    norm_b = math.sqrt(math.fsum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)

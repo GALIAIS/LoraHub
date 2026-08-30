@@ -30,6 +30,7 @@ import os
 import shutil
 import tempfile
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +72,7 @@ def _resolve_external(p: str) -> Path:
     return out
 
 
-def _walk_images(root: Path, recursive: bool):
+def _walk_images(root: Path, recursive: bool) -> Iterator[Path]:
     for path in iter_safe_files(
         root,
         recursive=recursive,

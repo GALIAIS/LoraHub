@@ -265,7 +265,9 @@ class RemoteAccessMiddleware:
                 if token
                 else "remote access is disabled; set LORAHUB_API_TOKEN or use an SSH tunnel"
             )
-            response = JSONResponse({"detail": detail}, status_code=401 if token else 403)
+            response: Response = JSONResponse(
+                {"detail": detail}, status_code=401 if token else 403
+            )
         elif token:
             query = bytes(scope.get("query_string", b"")).decode("latin-1")
             next_path = f"{path}?{query}" if query else path

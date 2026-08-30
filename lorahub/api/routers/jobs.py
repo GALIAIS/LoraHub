@@ -60,7 +60,7 @@ def _job_process_may_still_own_pid(job: Any) -> bool:
     expected = job.pid_create_time
     actual = _pid_create_time(pid)
     if expected is not None and actual is not None:
-        return abs(actual - expected) < 1.0
+        return abs(float(actual) - float(expected)) < 1.0
     # Missing identity data cannot justify killing the process, but it must
     # still block an archive that would move files out from under it.
     return True
@@ -897,10 +897,7 @@ def recommend_hyperparams_endpoint(req: _RecommendInput) -> dict[str, Any]:
     response carries both the concrete numbers and a list of one-line
     rationales so a power user can see why we picked each value.
     """
-    from lorahub.api.training_assistant import (  # noqa: PLC0415
-        BackendName,
-        recommend_hyperparams,
-    )
+    from lorahub.api.training_assistant import recommend_hyperparams  # noqa: PLC0415
 
     backend = req.backend if req.backend in ("kohya", "diffusion-pipe", "anima_lora") else "anima_lora"
     target = req.target if req.target in ("character", "style", "concept") else "character"

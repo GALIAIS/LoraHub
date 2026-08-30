@@ -114,16 +114,18 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
     # ``step``). Match them first so a val pass doesn't get filed as a
     # training step.
     if (m := _VAL_LOSS_RE.search(stripped)) is not None:
-        payload: dict[str, object] = {}
+        validation_payload: dict[str, object] = {}
         val_loss = float(m.group("loss"))
         if math.isfinite(val_loss):
-            payload["val_loss"] = val_loss
+            validation_payload["val_loss"] = val_loss
         if (epoch := m.group("epoch")) is not None:
-            payload["epoch"] = int(epoch)
+            validation_payload["epoch"] = int(epoch)
         if (step := m.group("step")) is not None:
-            payload["step"] = int(step)
+            validation_payload["step"] = int(step)
         return TrainingEvent(
-            type=EventType.validation, payload=payload, job_id=job_id
+            type=EventType.validation,
+            payload=validation_payload,
+            job_id=job_id,
         )
 
     if (m := _EPOCH_START_RE.match(stripped)) is not None:
@@ -146,23 +148,25 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
         )
 
     if (m := _TQDM_STEPS_RE.search(stripped)) is not None:
-        payload = {
+        step_payload: dict[str, object] = {
             "step": int(m.group("step")),
             "total_steps": int(m.group("total")),
         }
         if (lm := _TQDM_LOSS_RE.search(stripped)) is not None:
             loss = float(lm.group("loss"))
             if math.isfinite(loss):
-                payload["loss"] = loss
+                step_payload["loss"] = loss
         if (rm := _TQDM_LR_RE.search(stripped)) is not None:
-            payload["lr"] = float(rm.group("lr"))
+            step_payload["lr"] = float(rm.group("lr"))
         if (rate_match := _TQDM_RATE_RE.search(stripped)) is not None:
-            payload["rate"] = (
+            step_payload["rate"] = (
                 f"{rate_match.group('rate')}{rate_match.group('unit').lower()}"
             )
         if (eta_match := _TQDM_ETA_RE.search(stripped)) is not None:
-            payload["eta"] = eta_match.group("eta").strip()
-        return TrainingEvent(type=EventType.step, payload=payload, job_id=job_id)
+            step_payload["eta"] = eta_match.group("eta").strip()
+        return TrainingEvent(
+            type=EventType.step, payload=step_payload, job_id=job_id
+        )
 
     if _NAN_LOSS_RE.search(stripped):
         return TrainingEvent(
@@ -178,12 +182,12 @@ def parse_line(line: str, *, job_id: str | None = None) -> TrainingEvent | None:
         )
 
     level = structured_level or ("error" if _looks_like_error(stripped) else "info")
-    payload: dict[str, object] = {"level": level, "message": stripped}
+    log_payload: dict[str, object] = {"level": level, "message": stripped}
     if structured_location is not None:
-        payload["location"] = structured_location
+        log_payload["location"] = structured_location
     return TrainingEvent(
         type=EventType.log,
-        payload=payload,
+        payload=log_payload,
         job_id=job_id,
     )
 

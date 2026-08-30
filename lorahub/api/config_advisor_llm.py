@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -55,6 +56,7 @@ from pydantic import BaseModel, Field, ValidationError
 from lorahub.api.ai_store import AIStore
 from lorahub.core.ai.client import AIError, invoke
 from lorahub.core.config.loader import strip_template_metadata
+from lorahub.core.backends.base import ValidationIssue
 from lorahub.core.config.schema import TrainingConfig
 
 log = logging.getLogger(__name__)
@@ -477,7 +479,9 @@ def run_advisor(
         if isinstance(request.current_config, dict) else None
     )
     if isinstance(cfg_backend, dict):
-        backend_type = (cfg_backend.get("type") or None)  # type: ignore[assignment]
+        raw_backend_type = cfg_backend.get("type")
+        if isinstance(raw_backend_type, str):
+            backend_type = raw_backend_type
     system_prompt = _system_prompt_for_route(route, backend_type)
     user_prompt = build_user_prompt(request)
 
@@ -528,7 +532,11 @@ def run_advisor(
         raise AdvisorError(msg) from exc
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    response = parse_response(result.text or "")
+    response_text = getattr(result, "content", None)
+    if not isinstance(response_text, str):
+        legacy_text = getattr(result, "text", "")
+        response_text = legacy_text if isinstance(legacy_text, str) else ""
+    response = parse_response(response_text)
 
     # Round-trip the proposed full config through schema + cross-field
     # rule set. The route handler / UI surfaces these as warnings
@@ -593,7 +601,9 @@ def _system_prompt_for_route(route: Any, backend_type: str | None = None) -> str
     return _system_prompt_for_backend(backend_type)
 
 
-def _resolve_policy_check(backend_type: str):
+def _resolve_policy_check(
+    backend_type: str,
+) -> Callable[[TrainingConfig], list[ValidationIssue]]:
     """Pick the cross-field rule set that matches ``backend_type``.
 
     Each backend module owns its own policies and gates them on

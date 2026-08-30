@@ -206,6 +206,8 @@ def _collect_cpu_frequency() -> tuple[float | None, float | None, float | None, 
     if per:
         for entry in per:
             current = getattr(entry, "current", None)
+            if current is None:
+                continue
             try:
                 per_core.append(float(current))
             except (TypeError, ValueError):
@@ -416,7 +418,7 @@ def _collect_summary_memory() -> MemoryStats:
 
         stat = _MemoryStatusEx()
         stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
             total = int(stat.ullTotalPhys)
             available = int(stat.ullAvailPhys)
             used = max(total - available, 0)
@@ -1120,7 +1122,8 @@ def _collect_amd_amdgpu_top_gpus(start_index: int = 0) -> list[GpuStats]:
     for device in devices:
         if not isinstance(device, dict):
             continue
-        info = device.get("Info") if isinstance(device.get("Info"), dict) else {}
+        raw_info = device.get("Info")
+        info = raw_info if isinstance(raw_info, dict) else {}
         name = str(info.get("DeviceName") or info.get("MarketingName") or info.get("Name") or "AMD GPU")
         total = _amdgpu_top_bytes(device, ("VRAM", "vram"), ("Total", "total"))
         used = _amdgpu_top_bytes(device, ("VRAM", "vram"), ("Usage", "Used", "used", "usage"))
@@ -1902,8 +1905,12 @@ def _collect_disk_io() -> DiskIoStats | None:
 
     per_device: list[DiskIoDevice] = []
     new_perdisk: dict[str, tuple[int, int, int, int]] = {}
-    prev_t = prev_sample[0] if prev_sample is not None else None
-    dt = (now - prev_t) if (prev_t is not None and now > prev_t) else 0.0
+    previous_timestamp = prev_sample[0] if prev_sample is not None else None
+    dt = (
+        (now - previous_timestamp)
+        if previous_timestamp is not None and now > previous_timestamp
+        else 0.0
+    )
     for device, counters in perdisk.items():
         rb = int(getattr(counters, "read_bytes", 0))
         wb = int(getattr(counters, "write_bytes", 0))

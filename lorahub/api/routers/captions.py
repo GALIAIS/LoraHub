@@ -115,7 +115,7 @@ class _CaptionsSession:
                     TaskEvent(
                         level="info",
                         message=message,
-                        percent=event["percent"],
+                        percent=self.percent,
                         payload=event,
                         ts=ts,
                     ),
