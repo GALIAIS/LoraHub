@@ -223,3 +223,40 @@ def test_normalize_config_paths_absolutizes_anima_conditioning_reference(
     assert cfg.dataset.subsets[0].conditioning_data_dir == (
         tmp_path / "datasets" / "reference"
     ).resolve()
+
+
+@pytest.mark.parametrize(
+    ("arch", "checkpoint"),
+    [("krea2", "krea/Krea-2-Raw"), ("moss_image", "OpenMOSS-Team/MOSS-Image-Base")],
+)
+def test_normalize_config_paths_keeps_ai_toolkit_hub_ids(
+    tmp_path: Path, arch: str, checkpoint: str
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": arch, "checkpoint": checkpoint},
+            "dataset": {"source": "datasets/train"},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _normalize_config_paths(cfg, tmp_path)
+
+    assert cfg.base_model.checkpoint.as_posix() == checkpoint
+    assert cfg.dataset.source == (tmp_path / "datasets" / "train").resolve()
+
+
+def test_normalize_config_paths_absolutizes_local_ai_toolkit_checkpoint(
+    tmp_path: Path,
+) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "moss_image", "checkpoint": "models/moss.safetensors"},
+            "dataset": {"source": "datasets/train"},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    _normalize_config_paths(cfg, tmp_path)
+
+    assert cfg.base_model.checkpoint == (tmp_path / "models" / "moss.safetensors").resolve()

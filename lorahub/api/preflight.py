@@ -251,14 +251,10 @@ def _checkpoint_is_remote_model(cfg: TrainingConfig, ckpt: Path) -> bool:
     if cfg.backend.type != "ai_toolkit":
         return False
     from lorahub.core.backends.ai_toolkit.compiler import (  # noqa: PLC0415
-        ARCH_PROFILES,
+        is_remote_checkpoint,
     )
 
-    profile = ARCH_PROFILES.get(cfg.base_model.arch)
-    if profile is None:
-        return False
-    value = str(ckpt).strip().replace("\\", "/")
-    return value in profile.remote_checkpoints
+    return is_remote_checkpoint(cfg.base_model.arch, ckpt)
 
 
 def _check_dataset(cfg: TrainingConfig) -> list[PreflightFinding]:

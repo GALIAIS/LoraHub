@@ -13,7 +13,13 @@ import yaml
 from lorahub.core.config.backends.ai_toolkit import AiToolkitOptions
 from lorahub.core.config.schema import TrainingConfig
 
-__all__ = ["ARCH_PROFILES", "ArchProfile", "CompilationError", "compile_config"]
+__all__ = [
+    "ARCH_PROFILES",
+    "ArchProfile",
+    "CompilationError",
+    "compile_config",
+    "is_remote_checkpoint",
+]
 
 
 class CompilationError(ValueError):
@@ -77,6 +83,14 @@ ARCH_PROFILES: dict[str, ArchProfile] = {
         ignore_if_contains=("layers.22.",),
     ),
 }
+
+
+def is_remote_checkpoint(arch: str, checkpoint: object) -> bool:
+    """Whether ``checkpoint`` is a hub id that ai-toolkit resolves for ``arch``."""
+    profile = ARCH_PROFILES.get(arch)
+    if profile is None:
+        return False
+    return str(checkpoint).strip().replace("\\", "/") in profile.remote_checkpoints
 
 
 def _profile(cfg: TrainingConfig) -> ArchProfile:
