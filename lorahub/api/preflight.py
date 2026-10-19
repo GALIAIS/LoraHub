@@ -247,11 +247,18 @@ def _check_model_files(cfg: TrainingConfig) -> list[PreflightFinding]:
 
 
 def _checkpoint_is_remote_model(cfg: TrainingConfig, ckpt: Path) -> bool:
-    """ai-toolkit Krea2 accepts Hugging Face repo IDs as model.name_or_path."""
-    if cfg.backend.type != "ai_toolkit" or cfg.base_model.arch != "krea2":
+    """ai-toolkit accepts Hugging Face repo IDs as model.name_or_path."""
+    if cfg.backend.type != "ai_toolkit":
+        return False
+    from lorahub.core.backends.ai_toolkit.compiler import (  # noqa: PLC0415
+        ARCH_PROFILES,
+    )
+
+    profile = ARCH_PROFILES.get(cfg.base_model.arch)
+    if profile is None:
         return False
     value = str(ckpt).strip().replace("\\", "/")
-    return value in {"krea/Krea-2-Raw", "krea/Krea-2-Turbo"}
+    return value in profile.remote_checkpoints
 
 
 def _check_dataset(cfg: TrainingConfig) -> list[PreflightFinding]:

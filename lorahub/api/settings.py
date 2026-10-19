@@ -61,7 +61,7 @@ class Settings:
     anima_lora_python: str | None = None
 
     # ai_toolkit backend (vendored under external/ai_toolkit). Used for
-    # Krea2 training through ostris/ai-toolkit.
+    # Krea2 / MOSS-Image training through ostris/ai-toolkit.
     ai_toolkit_repo_path: str | None = None
     ai_toolkit_python: str | None = None
 

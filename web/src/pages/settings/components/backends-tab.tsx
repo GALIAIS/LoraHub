@@ -292,7 +292,7 @@ export function BackendsTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">AI Toolkit 后端 (vendored)</CardTitle>
           <CardDescription>
-            ostris/ai-toolkit 已随 LoraHub 一起分发，当前用于 Krea2 训练。
+            ostris/ai-toolkit 已随 LoraHub 一起分发，当前用于 Krea2 / MOSS-Image 训练。
             下方字段用于覆盖默认路径。
           </CardDescription>
         </CardHeader>

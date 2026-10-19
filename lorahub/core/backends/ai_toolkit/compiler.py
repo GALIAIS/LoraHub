@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +13,81 @@ import yaml
 from lorahub.core.config.backends.ai_toolkit import AiToolkitOptions
 from lorahub.core.config.schema import TrainingConfig
 
-__all__ = ["CompilationError", "compile_config"]
+__all__ = ["ARCH_PROFILES", "ArchProfile", "CompilationError", "compile_config"]
 
 
 class CompilationError(ValueError):
     """Raised when a config cannot be expressed as an ai-toolkit job."""
 
 
-_KREA2_NETWORK_TYPES = {"lora", "dora", "loha", "lokr", "lorm"}
+@dataclass(frozen=True, slots=True)
+class ArchProfile:
+    """Per-arch values for options the config leaves unset (None).
+
+    Mirrors the model card defaults in ai-toolkit's
+    ``extensions_built_in/diffusion_models/ui.tsx``.
+    """
+
+    label: str
+    default_checkpoint: str
+    # Hub ids ai-toolkit downloads itself; preflight skips the file check.
+    remote_checkpoints: frozenset[str]
+    network_types: frozenset[str]
+    qtype: str
+    qtype_text_encoder: str
+    timestep_type: str
+    max_text_length: int
+    model_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    # LoRA targets left out unless network_kwargs.ignore_if_contains is set.
+    ignore_if_contains: tuple[str, ...] = ()
+
+
+ARCH_PROFILES: dict[str, ArchProfile] = {
+    "krea2": ArchProfile(
+        label="Krea2",
+        default_checkpoint="krea/Krea-2-Raw",
+        remote_checkpoints=frozenset({"krea/Krea-2-Raw", "krea/Krea-2-Turbo"}),
+        network_types=frozenset({"lora", "dora", "loha", "lokr", "lorm"}),
+        qtype="qfloat8",
+        qtype_text_encoder="qfloat8",
+        timestep_type="sigmoid",
+        max_text_length=512,
+    ),
+    "moss_image": ArchProfile(
+        label="MOSS-Image",
+        # OpenMOSS recommends Base for LoRA training; the LoRA loads on SFT.
+        default_checkpoint="OpenMOSS-Team/MOSS-Image-Base",
+        remote_checkpoints=frozenset(
+            {
+                "OpenMOSS-Team/MOSS-Image-Base",
+                "OpenMOSS-Team/MOSS-Image-SFT",
+                "Comfy-Org/MOSS-Image",
+            }
+        ),
+        # ai-toolkit splits the fused qkv LoRA into q/k/v for ComfyUI but
+        # keeps other tensors (DoRA magnitude, LoHa factors) fused.
+        network_types=frozenset({"lora", "lokr"}),
+        qtype="convrot8",
+        qtype_text_encoder="convrot8",
+        timestep_type="shift",
+        max_text_length=4096,
+        # CFG's negative branch skips block 22. Keeping the LoRA off that
+        # block keeps the skipped-block contrast the base model's.
+        model_kwargs={"uncond_skip_layers": [22]},
+        ignore_if_contains=("layers.22.",),
+    ),
+}
+
+
+def _profile(cfg: TrainingConfig) -> ArchProfile:
+    try:
+        return ARCH_PROFILES[cfg.base_model.arch]
+    except KeyError:
+        supported = ", ".join(sorted(ARCH_PROFILES))
+        raise CompilationError(
+            f"ai_toolkit supports arch in {{{supported}}} in LoraHub; "
+            f"got {cfg.base_model.arch!r}"
+        ) from None
 
 
 def _require_training_dataset(cfg: TrainingConfig) -> None:
@@ -47,28 +116,31 @@ def compile_config(
 ) -> tuple[list[str], dict[Path, str]]:
     if cfg.backend.type != "ai_toolkit":
         raise CompilationError(f"ai_toolkit compiler got backend.type={cfg.backend.type!r}")
-    if cfg.base_model.arch != "krea2":
-        raise CompilationError("ai_toolkit currently supports arch='krea2' in LoraHub")
+    profile = _profile(cfg)
     _require_training_dataset(cfg)
 
     workspace = workspace.resolve()
     config_path = workspace / "_lorahub_ai_toolkit.yaml"
-    job = _build_job(cfg, workspace)
+    job = _build_job(cfg, workspace, profile)
     _overlay_extra_args(job, cfg.backend.extra_args)
-    _sanitize_job(job)
+    _sanitize_job(job, cfg.base_model.arch, profile)
     return [str(config_path)], {
         config_path: yaml.safe_dump(job, sort_keys=False, allow_unicode=True)
     }
 
 
-def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
+def _build_job(
+    cfg: TrainingConfig,
+    workspace: Path,
+    profile: ArchProfile,
+) -> dict[str, Any]:
     options = cfg.backend.ai_toolkit or AiToolkitOptions()
     output_name = cfg.output.name or "lorahub_ai_toolkit"
     # as_posix: on Windows str() turns a hub id like "krea/Krea-2-Raw" into
     # "krea\Krea-2-Raw", which ai-toolkit then treats as a local path.
     model_name = cfg.base_model.checkpoint.as_posix()
     if model_name in {".", ""}:
-        model_name = "krea/Krea-2-Raw"
+        model_name = profile.default_checkpoint
 
     width, height = _resolution_pair(cfg.sampling.resolution or cfg.dataset.resolution)
 
@@ -77,11 +149,11 @@ def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
         "type": "diffusion_trainer",
         "training_folder": str(workspace / "ai_toolkit_output"),
         "device": "cuda",
-        "network": _network_section(cfg, options),
+        "network": _network_section(cfg, options, profile),
         "save": _save_section(cfg, options),
         "datasets": _dataset_sections(cfg, options),
-        "train": _train_section(cfg, options),
-        "model": _model_section(cfg, options, model_name=model_name),
+        "train": _train_section(cfg, options, profile),
+        "model": _model_section(cfg, options, profile, model_name=model_name),
         "sample": sample,
         "logging": {
             "log_every": int(options.logging.log_every),
@@ -167,19 +239,18 @@ def _resolution_pair(value: list[int] | tuple[int, ...]) -> tuple[int, int]:
 def _network_section(
     cfg: TrainingConfig,
     options: AiToolkitOptions,
+    profile: ArchProfile,
 ) -> dict[str, Any]:
     n = cfg.network
     if not n.target_unet:
-        raise CompilationError("ai_toolkit Krea2 requires network.target_unet=true")
+        raise CompilationError(
+            f"ai_toolkit {profile.label} requires network.target_unet=true"
+        )
     if n.target_text_encoder:
         raise CompilationError(
-            "ai_toolkit Krea2 does not support text-encoder LoRA training"
+            f"ai_toolkit {profile.label} does not support text-encoder LoRA training"
         )
-    if n.type not in _KREA2_NETWORK_TYPES:
-        allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
-        raise CompilationError(
-            f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {n.type!r}"
-        )
+    _check_network_type(n.type, cfg.base_model.arch, profile)
     network: dict[str, Any] = {
         "type": n.type,
         "linear": int(n.rank),
@@ -202,6 +273,8 @@ def _network_section(
         network_kwargs["rank_dropout"] = float(n.rank_dropout)
     if n.module_dropout > 0:
         network_kwargs["module_dropout"] = float(n.module_dropout)
+    if profile.ignore_if_contains:
+        network_kwargs["ignore_if_contains"] = list(profile.ignore_if_contains)
     if network_kwargs:
         network["network_kwargs"] = network_kwargs
     if n.init_from is not None:
@@ -297,6 +370,7 @@ def _legacy_dataset_resolution(value: list[int] | tuple[int, ...]) -> int:
 def _train_section(
     cfg: TrainingConfig,
     options: AiToolkitOptions,
+    profile: ArchProfile,
 ) -> dict[str, Any]:
     train_options = options.train
     skip_first_sample = bool(train_options.skip_first_sample)
@@ -370,7 +444,7 @@ def _train_section(
         "max_grad_norm": float(cfg.optimizer.max_grad_norm),
         "dtype": _dtype(cfg.precision),
         "content_or_style": train_options.content_or_style,
-        "timestep_type": train_options.timestep_type,
+        "timestep_type": _or_default(train_options.timestep_type, profile.timestep_type),
         "loss_type": train_options.loss_type,
         "min_denoising_steps": int(train_options.min_denoising_steps),
         "max_denoising_steps": int(train_options.max_denoising_steps),
@@ -412,6 +486,7 @@ def _uses_epoch_schedule(cfg: TrainingConfig) -> bool:
 def _model_section(
     cfg: TrainingConfig,
     options: AiToolkitOptions,
+    profile: ArchProfile,
     *,
     model_name: str,
 ) -> dict[str, Any]:
@@ -421,7 +496,12 @@ def _model_section(
         if model_options.compile is None
         else bool(model_options.compile)
     )
-    model_kwargs: dict[str, Any] = {"max_text_length": model_options.max_text_length}
+    model_kwargs: dict[str, Any] = {
+        "max_text_length": _or_default(
+            model_options.max_text_length, profile.max_text_length
+        ),
+        **profile.model_kwargs,
+    }
     for key, value in (
         ("checkpoint_filename", model_options.checkpoint_filename),
         ("vae_path", model_options.vae_path),
@@ -432,11 +512,13 @@ def _model_section(
 
     model: dict[str, Any] = {
         "name_or_path": model_name,
-        "arch": "krea2",
+        "arch": cfg.base_model.arch,
         "quantize": bool(model_options.quantize),
-        "qtype": model_options.qtype,
+        "qtype": _or_default(model_options.qtype, profile.qtype),
         "quantize_te": bool(model_options.quantize_text_encoder),
-        "qtype_te": model_options.qtype_text_encoder,
+        "qtype_te": _or_default(
+            model_options.qtype_text_encoder, profile.qtype_text_encoder
+        ),
         "low_vram": bool(model_options.low_vram),
         "layer_offloading": bool(model_options.layer_offloading),
         "layer_offloading_transformer_percent": float(
@@ -506,7 +588,7 @@ def _overlay_extra_args(job: dict[str, Any], extra: dict[str, Any]) -> None:
                 cursor[parts[-1]] = _coerce(value)
 
 
-def _sanitize_job(job: dict[str, Any]) -> None:
+def _sanitize_job(job: dict[str, Any], arch: str, profile: ArchProfile) -> None:
     process = job["config"]["process"][0]
     sample = process.setdefault("sample", {})
     if not isinstance(sample, dict):
@@ -549,12 +631,21 @@ def _sanitize_job(job: dict[str, Any]) -> None:
     network = process.get("network", {})
     if isinstance(network, dict):
         ntype = str(network.get("type", "lora")).lower()
-        if ntype not in _KREA2_NETWORK_TYPES:
-            allowed = ", ".join(sorted(_KREA2_NETWORK_TYPES))
-            raise CompilationError(
-                f"ai_toolkit krea2 supports network.type in {{{allowed}}}; got {ntype!r}"
-            )
+        _check_network_type(ntype, arch, profile)
         network["type"] = ntype
+
+
+def _check_network_type(ntype: str, arch: str, profile: ArchProfile) -> None:
+    if ntype not in profile.network_types:
+        allowed = ", ".join(sorted(profile.network_types))
+        raise CompilationError(
+            f"ai_toolkit {arch} supports network.type in {{{allowed}}}; got {ntype!r}"
+        )
+
+
+def _or_default(value: Any, default: Any) -> Any:
+    """The configured option, or the arch default when it is unset (None)."""
+    return default if value is None else value
 
 
 def _coerce(value: Any) -> Any:

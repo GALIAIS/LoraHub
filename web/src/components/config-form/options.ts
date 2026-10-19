@@ -13,6 +13,7 @@ export const ARCH_OPTIONS = [
   { value: "sd3", label: "SD 3 · Stable Diffusion 3" },
   { value: "flux", label: "FLUX.1 · black-forest-labs" },
   { value: "krea2", label: "Krea 2 · krea/Krea-2-Raw" },
+  { value: "moss_image", label: "MOSS-Image · OpenMOSS" },
   // 其他主流静态图
   { value: "sd2", label: "SD 2 · Stable Diffusion 2.x" },
   { value: "flux2", label: "FLUX 2 · black-forest-labs (next-gen)" },
@@ -64,6 +65,64 @@ export const AI_TOOLKIT_NETWORK_TYPE_OPTIONS = [
   { value: "lokr", label: "LoKr" },
   { value: "lorm", label: "LoRM" },
 ] as const
+
+export type AiToolkitArch = "krea2" | "moss_image"
+
+export interface AiToolkitArchDefaults {
+  label: string
+  /** Hub id filled in when the arch is picked. */
+  checkpoint: string
+  /** Hub ids that belong to this arch (swapped out on an arch change). */
+  checkpoints: readonly string[]
+  networkTypes: readonly string[]
+  qtype: string
+  qtypeTextEncoder: string
+  timestepType: string
+  maxTextLength: number
+  sampleSteps: number
+  sampleCfg: number
+}
+
+// Mirrors ARCH_PROFILES in lorahub/core/backends/ai_toolkit/compiler.py:
+// the compiler applies these when the config leaves the field unset.
+export const AI_TOOLKIT_ARCH_DEFAULTS: Record<AiToolkitArch, AiToolkitArchDefaults> = {
+  krea2: {
+    label: "Krea2",
+    checkpoint: "krea/Krea-2-Raw",
+    checkpoints: ["krea/Krea-2-Raw", "krea/Krea-2-Turbo"],
+    networkTypes: ["lora", "dora", "loha", "lokr", "lorm"],
+    qtype: "qfloat8",
+    qtypeTextEncoder: "qfloat8",
+    timestepType: "sigmoid",
+    maxTextLength: 512,
+    sampleSteps: 28,
+    sampleCfg: 4.5,
+  },
+  moss_image: {
+    label: "MOSS-Image",
+    checkpoint: "OpenMOSS-Team/MOSS-Image-Base",
+    checkpoints: [
+      "OpenMOSS-Team/MOSS-Image-Base",
+      "OpenMOSS-Team/MOSS-Image-SFT",
+      "Comfy-Org/MOSS-Image",
+    ],
+    networkTypes: ["lora", "lokr"],
+    qtype: "convrot8",
+    qtypeTextEncoder: "convrot8",
+    timestepType: "shift",
+    maxTextLength: 4096,
+    sampleSteps: 30,
+    sampleCfg: 3,
+  },
+}
+
+export const AI_TOOLKIT_ARCH_OPTIONS = ARCH_OPTIONS.filter((option) =>
+  Object.hasOwn(AI_TOOLKIT_ARCH_DEFAULTS, option.value),
+)
+
+export function aiToolkitArchDefaults(arch: string | undefined): AiToolkitArchDefaults {
+  return AI_TOOLKIT_ARCH_DEFAULTS[(arch ?? "") as AiToolkitArch] ?? AI_TOOLKIT_ARCH_DEFAULTS.krea2
+}
 
 export const KOHYA_NETWORK_TYPE_OPTIONS = [
   { value: "lora", label: "LoRA" },

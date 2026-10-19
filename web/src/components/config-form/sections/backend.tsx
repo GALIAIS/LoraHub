@@ -22,7 +22,7 @@ const BACKEND_DESCRIPTIONS: Record<string, string> = {
   anima_lora:
     "sorryhyun/anima_lora。Anima DiT 训练后端。",
   ai_toolkit:
-    "ostris/ai-toolkit。Krea2 等模型训练后端。",
+    "ostris/ai-toolkit。Krea2 / MOSS-Image 等模型训练后端。",
 }
 
 const REPO_LABEL: Record<string, string> = {

@@ -17,6 +17,7 @@ from lorahub.core.backends.ai_toolkit import installer
 from lorahub.core.backends.ai_toolkit.backend import AIToolkitBackend
 from lorahub.core.backends.ai_toolkit.compiler import CompilationError, compile_config
 from lorahub.core.backends.ai_toolkit.parser import parse_line
+from lorahub.core.config.loader import dump_config, load_config
 from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType
 
@@ -93,6 +94,129 @@ def test_ai_toolkit_compiler_emits_supported_krea2_network_types(tmp_path: Path)
         if network_type == "lorm":
             assert network["lorm"]["extract_mode"] == "fixed"
             assert network["lorm"]["extract_mode_param"] == 12
+
+
+def _moss_cfg(**overrides: object) -> TrainingConfig:
+    data: dict[str, object] = {
+        "baseModel": {
+            "arch": "moss_image",
+            "checkpoint": "OpenMOSS-Team/MOSS-Image-Base",
+        },
+        "dataset": {"source": ".", "resolution": [1024, 1024]},
+        "backend": {"type": "ai_toolkit"},
+    }
+    data.update(overrides)
+    return TrainingConfig.model_validate(data)
+
+
+def _process(cfg: TrainingConfig, tmp_path: Path) -> dict:
+    _, files = compile_config(cfg, tmp_path)
+    return yaml.safe_load(next(iter(files.values())))["config"]["process"][0]
+
+
+def test_ai_toolkit_compiler_emits_moss_image_defaults(tmp_path: Path) -> None:
+    process = _process(_moss_cfg(), tmp_path)
+
+    model = process["model"]
+    assert model["arch"] == "moss_image"
+    assert model["name_or_path"] == "OpenMOSS-Team/MOSS-Image-Base"
+    assert model["qtype"] == "convrot8"
+    assert model["qtype_te"] == "convrot8"
+    assert model["model_kwargs"] == {
+        "max_text_length": 4096,
+        "uncond_skip_layers": [22],
+    }
+    assert process["train"]["timestep_type"] == "shift"
+    assert process["network"]["network_kwargs"]["ignore_if_contains"] == ["layers.22."]
+
+
+def test_ai_toolkit_saved_moss_config_keeps_arch_defaults(tmp_path: Path) -> None:
+    # The API saves every field; unset arch-specific options must stay unset.
+    path = tmp_path / "moss.yaml"
+    dump_config(_moss_cfg(), path)
+
+    process = _process(load_config(path), tmp_path)
+
+    assert process["model"]["qtype"] == "convrot8"
+    assert process["model"]["qtype_te"] == "convrot8"
+    assert process["model"]["model_kwargs"]["max_text_length"] == 4096
+    assert process["train"]["timestep_type"] == "shift"
+
+
+def test_ai_toolkit_compiler_defaults_blank_moss_checkpoint_to_base(
+    tmp_path: Path,
+) -> None:
+    cfg = _moss_cfg()
+    cfg.base_model.checkpoint = Path()
+
+    assert _process(cfg, tmp_path)["model"]["name_or_path"] == (
+        "OpenMOSS-Team/MOSS-Image-Base"
+    )
+
+
+def test_ai_toolkit_compiler_prefers_explicit_options_over_arch_defaults(
+    tmp_path: Path,
+) -> None:
+    cfg = _moss_cfg(
+        backend={
+            "type": "ai_toolkit",
+            "aiToolkit": {
+                "model": {
+                    "qtype": "qfloat8",
+                    "qtypeTextEncoder": "qint8",
+                    "maxTextLength": 1024,
+                },
+                "train": {"timestepType": "sigmoid"},
+            },
+            "extraArgs": {"network.network_kwargs.ignore_if_contains": []},
+        }
+    )
+
+    process = _process(cfg, tmp_path)
+
+    assert process["model"]["qtype"] == "qfloat8"
+    assert process["model"]["qtype_te"] == "qint8"
+    assert process["model"]["model_kwargs"]["max_text_length"] == 1024
+    assert process["train"]["timestep_type"] == "sigmoid"
+    assert process["network"]["network_kwargs"]["ignore_if_contains"] == []
+
+
+def test_ai_toolkit_compiler_keeps_krea2_defaults(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+
+    process = _process(cfg, tmp_path)
+
+    assert process["model"]["qtype"] == "qfloat8"
+    assert process["model"]["qtype_te"] == "qfloat8"
+    assert process["model"]["model_kwargs"] == {"max_text_length": 512}
+    assert process["train"]["timestep_type"] == "sigmoid"
+    assert "network_kwargs" not in process["network"]
+
+
+@pytest.mark.parametrize("network_type", ["dora", "loha", "lorm"])
+def test_ai_toolkit_compiler_rejects_unsupported_moss_image_network_type(
+    tmp_path: Path, network_type: str
+) -> None:
+    cfg = _moss_cfg(network={"type": network_type})
+
+    with pytest.raises(ValueError, match="ai_toolkit moss_image supports"):
+        compile_config(cfg, tmp_path)
+
+
+def test_ai_toolkit_backend_accepts_moss_image() -> None:
+    backend = AIToolkitBackend()
+    cfg = _moss_cfg(network={"targetTextEncoder": True})
+
+    assert "moss_image" in {arch.value for arch in backend.supported_archs}
+    messages = [issue.message for issue in backend.validate(cfg)]
+    assert "ai_toolkit MOSS-Image does not support text-encoder LoRA training." in messages
+    assert not [m for m in messages if "currently supports arch" in m]
 
 
 def test_ai_toolkit_compiler_rejects_unsupported_krea2_network_type(
@@ -533,6 +657,7 @@ def test_ai_toolkit_forces_single_gpu_dispatch() -> None:
         "ai_toolkit_krea2_loha",
         "ai_toolkit_krea2_lokr",
         "ai_toolkit_krea2_lorm",
+        "ai_toolkit_moss_image",
     ],
 )
 def test_builtin_ai_toolkit_templates_compile(name: str, tmp_path: Path) -> None:

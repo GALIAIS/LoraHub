@@ -19,6 +19,7 @@ import type {
   SamplingPromptValue,
   Setter,
 } from "../types"
+import { setIn } from "../types"
 import {
   EnumSelect,
   FloatInput,
@@ -33,6 +34,7 @@ import {
   ToggleSwitch,
 } from "../widgets"
 import { ModelPathPicker } from "../widgets-model-picker"
+import { AI_TOOLKIT_ARCH_OPTIONS, aiToolkitArchDefaults } from "../options"
 import { PromptsDialog } from "./prompts-dialog"
 
 const NETWORK_TYPES = [
@@ -88,12 +90,14 @@ const MODEL_QTYPES = [
   { value: "int8", label: "int8" },
   { value: "uint8", label: "uint8" },
   { value: "uint4", label: "uint4" },
+  { value: "convrot8", label: "convrot8" },
 ] as const
 
 const TEXT_ENCODER_QTYPES = [
   { value: "qfloat8", label: "qfloat8" },
   { value: "qint8", label: "qint8" },
   { value: "qint4", label: "qint4" },
+  { value: "convrot8", label: "convrot8" },
 ] as const
 
 const CONTENT_MODES = [
@@ -105,6 +109,7 @@ const CONTENT_MODES = [
 const TIMESTEP_TYPES = [
   { value: "sigmoid", label: "sigmoid" },
   { value: "linear", label: "linear" },
+  { value: "shift", label: "shift" },
   { value: "lognorm_blend", label: "lognorm_blend" },
   { value: "weighted", label: "weighted" },
   { value: "next_sample", label: "next_sample" },
@@ -157,15 +162,60 @@ export const BackendAiToolkitFields = memo(function BackendAiToolkitFields({
   )
 })
 
+/**
+ * Switch the ai-toolkit arch in one update. Values that still hold the old
+ * arch's defaults follow the new arch; anything the user changed is kept.
+ */
+function switchAiToolkitArch(value: ConfigFormValue, nextArch: string): ConfigFormValue {
+  const prev = aiToolkitArchDefaults(value.baseModel?.arch)
+  const next = aiToolkitArchDefaults(nextArch)
+  let out = setIn(value, ["baseModel", "arch"], nextArch)
+  const checkpoint = String(value.baseModel?.checkpoint ?? "").trim()
+  if (!checkpoint || prev.checkpoints.includes(checkpoint)) {
+    out = setIn(out, ["baseModel", "checkpoint"], next.checkpoint)
+  }
+  if (!next.networkTypes.includes(String(value.network?.type ?? "lora"))) {
+    out = setIn(out, ["network", "type"], "lora")
+  }
+  const model = value.backend?.aiToolkit?.model ?? {}
+  const train = value.backend?.aiToolkit?.train ?? {}
+  // null = follow the arch default (the compiler fills it in)
+  if (model.qtype === prev.qtype) out = setIn(out, ["backend", "aiToolkit", "model", "qtype"], null)
+  if (model.qtypeTextEncoder === prev.qtypeTextEncoder) {
+    out = setIn(out, ["backend", "aiToolkit", "model", "qtypeTextEncoder"], null)
+  }
+  if (model.maxTextLength === prev.maxTextLength) {
+    out = setIn(out, ["backend", "aiToolkit", "model", "maxTextLength"], null)
+  }
+  if (train.timestepType === prev.timestepType) {
+    out = setIn(out, ["backend", "aiToolkit", "train", "timestepType"], null)
+  }
+  if (value.sampling?.inferenceSteps === prev.sampleSteps) {
+    out = setIn(out, ["sampling", "inferenceSteps"], next.sampleSteps)
+  }
+  if (value.sampling?.inferenceCfg === prev.sampleCfg) {
+    out = setIn(out, ["sampling", "inferenceCfg"], next.sampleCfg)
+  }
+  return out
+}
+
 function AiToolkitModelFields({ value, set, errorMap }: Props) {
   const model = value.backend?.aiToolkit?.model ?? {}
+  const defaults = aiToolkitArchDefaults(value.baseModel?.arch)
   return (
-    <Section icon={<Cpu className="size-3.5" />} title="Krea2 模型" subtitle="检查点、组件与显存策略">
+    <Section icon={<Cpu className="size-3.5" />} title={`${defaults.label} 模型`} subtitle="检查点、组件与显存策略">
+      <Row label="架构" required errors={errorMap.get("baseModel.arch")}>
+        <EnumSelect
+          value={value.baseModel?.arch ?? "krea2"}
+          onChange={(next) => set([], switchAiToolkitArch(value, next))}
+          options={AI_TOOLKIT_ARCH_OPTIONS}
+        />
+      </Row>
       <Row label="基础模型" required errors={errorMap.get("baseModel.checkpoint")}>
         <ModelPathPicker
           value={value.baseModel?.checkpoint ?? ""}
           onChange={(next) => set(["baseModel", "checkpoint"], next)}
-          placeholder="krea/Krea-2-Raw"
+          placeholder={defaults.checkpoint}
         />
       </Row>
       <Row label="Assistant LoRA" description="可选。本地文件或 owner/repo/file 格式。">
@@ -183,7 +233,7 @@ function AiToolkitModelFields({ value, set, errorMap }: Props) {
           />
           {(model.quantize ?? true) && (
             <EnumSelect
-              value={model.qtype ?? "qfloat8"}
+              value={model.qtype ?? defaults.qtype}
               onChange={(next) => set(["backend", "aiToolkit", "model", "qtype"], next)}
               options={MODEL_QTYPES}
             />
@@ -198,7 +248,7 @@ function AiToolkitModelFields({ value, set, errorMap }: Props) {
           />
           {(model.quantizeTextEncoder ?? true) && (
             <EnumSelect
-              value={model.qtypeTextEncoder ?? "qfloat8"}
+              value={model.qtypeTextEncoder ?? defaults.qtypeTextEncoder}
               onChange={(next) => set(["backend", "aiToolkit", "model", "qtypeTextEncoder"], next)}
               options={TEXT_ENCODER_QTYPES}
             />
@@ -238,7 +288,7 @@ function AiToolkitModelFields({ value, set, errorMap }: Props) {
           <PathInput value={model.textEncoderPath ?? ""} onChange={(next) => set(["backend", "aiToolkit", "model", "textEncoderPath"], next || null)} placeholder="使用后端默认值" />
         </Row>
         <Row label="最大文本长度">
-          <IntInput min={1} max={4096} value={model.maxTextLength ?? 512} onChange={(next) => set(["backend", "aiToolkit", "model", "maxTextLength"], next ?? 512)} />
+          <IntInput min={1} max={4096} value={model.maxTextLength ?? defaults.maxTextLength} onChange={(next) => set(["backend", "aiToolkit", "model", "maxTextLength"], next ?? defaults.maxTextLength)} />
         </Row>
         <Row label="torch.compile">
           <ToggleSwitch checked={model.compile ?? value.optimization?.torchCompile ?? false} onCheckedChange={(next) => set(["backend", "aiToolkit", "model", "compile"], next)} />
@@ -434,10 +484,15 @@ function AiToolkitNetworkFields({ value, set, errorMap }: Props) {
   const network = value.network ?? {}
   const options = value.backend?.aiToolkit?.network ?? {}
   const type = network.type ?? "lora"
+  const archNetworkTypes = aiToolkitArchDefaults(value.baseModel?.arch).networkTypes
+  const networkTypes = useMemo(
+    () => NETWORK_TYPES.filter((item) => archNetworkTypes.includes(item.value)),
+    [archNetworkTypes],
+  )
   return (
     <Section icon={<Boxes className="size-3.5" />} title="训练网络" subtitle="LoRA、LyCORIS 与续训">
-      <Row label="网络类型">
-        <EnumSelect value={type} onChange={(next) => set(["network", "type"], next)} options={NETWORK_TYPES} />
+      <Row label="网络类型" errors={errorMap.get("network.type")}>
+        <EnumSelect value={type} onChange={(next) => set(["network", "type"], next)} options={networkTypes} />
       </Row>
       <Row label="Rank" errors={errorMap.get("network.rank")}>
         <IntInput min={1} max={512} value={network.rank ?? 16} onChange={(next) => set(["network", "rank"], next ?? 16)} />
@@ -538,7 +593,7 @@ function AiToolkitTrainFields({ value, set, errorMap }: Props) {
         <EnumSelect value={train.contentOrStyle ?? "balanced"} onChange={(next) => set(["backend", "aiToolkit", "train", "contentOrStyle"], next)} options={CONTENT_MODES} />
       </Row>
       <Row label="时间步分布">
-        <EnumSelect value={train.timestepType ?? "sigmoid"} onChange={(next) => set(["backend", "aiToolkit", "train", "timestepType"], next)} options={TIMESTEP_TYPES} />
+        <EnumSelect value={train.timestepType ?? aiToolkitArchDefaults(value.baseModel?.arch).timestepType} onChange={(next) => set(["backend", "aiToolkit", "train", "timestepType"], next)} options={TIMESTEP_TYPES} />
       </Row>
       <Row label="损失类型">
         <EnumSelect value={train.lossType ?? "mse"} onChange={(next) => set(["backend", "aiToolkit", "train", "lossType"], next)} options={LOSS_TYPES} />
@@ -628,13 +683,14 @@ function AiToolkitSamplingFields({ value, set, errorMap }: Props) {
   const sampling = value.sampling ?? {}
   const sampleOptions = value.backend?.aiToolkit?.sample ?? {}
   const train = value.backend?.aiToolkit?.train ?? {}
+  const defaults = aiToolkitArchDefaults(value.baseModel?.arch)
   const prompts = sampling.prompts ?? []
   const [promptsOpen, setPromptsOpen] = useState(false)
   const resolution: [number, number] = Array.isArray(sampling.resolution) && sampling.resolution.length >= 2
     ? [sampling.resolution[0]!, sampling.resolution[1]!]
     : [1024, 1024]
   return (
-    <Section icon={<Image className="size-3.5" />} title="采样预览" subtitle="按回合或步数生成 Krea2 预览">
+    <Section icon={<Image className="size-3.5" />} title="采样预览" subtitle={`按回合或步数生成 ${defaults.label} 预览`}>
       <Row label="启用采样">
         <ToggleSwitch checked={sampling.enabled ?? true} onCheckedChange={(next) => set(["sampling", "enabled"], next)} />
       </Row>
@@ -658,10 +714,10 @@ function AiToolkitSamplingFields({ value, set, errorMap }: Props) {
             <ResolutionInput value={resolution} onChange={(next) => set(["sampling", "resolution"], next)} />
           </Row>
           <Row label="采样步数">
-            <IntInput min={1} value={sampling.inferenceSteps ?? 28} onChange={(next) => set(["sampling", "inferenceSteps"], next ?? 28)} />
+            <IntInput min={1} value={sampling.inferenceSteps ?? defaults.sampleSteps} onChange={(next) => set(["sampling", "inferenceSteps"], next ?? defaults.sampleSteps)} />
           </Row>
           <Row label="CFG">
-            <FloatInput min={0} step={0.1} value={sampling.inferenceCfg ?? 4.5} onChange={(next) => set(["sampling", "inferenceCfg"], next ?? 4.5)} />
+            <FloatInput min={0} step={0.1} value={sampling.inferenceCfg ?? defaults.sampleCfg} onChange={(next) => set(["sampling", "inferenceCfg"], next ?? defaults.sampleCfg)} />
           </Row>
           <Row label="随机种子">
             <SeedInput value={sampling.seed ?? -1} onChange={(next) => set(["sampling", "seed"], next)} />

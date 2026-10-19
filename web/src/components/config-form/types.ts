@@ -365,9 +365,9 @@ export interface ConfigFormValue {
     aiToolkit?: {
       model?: {
         quantize?: boolean
-        qtype?: "qfloat8" | "float8" | "int8" | "uint8" | "uint4"
+        qtype?: "qfloat8" | "float8" | "int8" | "uint8" | "uint4" | "convrot8" | null
         quantizeTextEncoder?: boolean
-        qtypeTextEncoder?: "qfloat8" | "qint8" | "qint4"
+        qtypeTextEncoder?: "qfloat8" | "qint8" | "qint4" | "convrot8" | null
         lowVram?: boolean
         layerOffloading?: boolean
         layerOffloadingTransformerPercent?: number
@@ -376,7 +376,7 @@ export interface ConfigFormValue {
         checkpointFilename?: string | null
         vaePath?: string | null
         textEncoderPath?: string | null
-        maxTextLength?: number
+        maxTextLength?: number | null
         compile?: boolean | null
         blockCompile?: boolean
         compileMode?: "default" | "reduce-overhead" | "max-autotune"
@@ -422,6 +422,7 @@ export interface ConfigFormValue {
         timestepType?:
           | "sigmoid"
           | "linear"
+          | "shift"
           | "lognorm_blend"
           | "next_sample"
           | "weighted"
@@ -429,6 +430,7 @@ export interface ConfigFormValue {
           | "two_step"
           | "four_step"
           | "eight_step"
+          | null
         lossType?: "mse" | "mae" | "wavelet" | "mean_flow" | "pseudo_huber"
         minDenoisingSteps?: number
         maxDenoisingSteps?: number

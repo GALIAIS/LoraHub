@@ -160,6 +160,39 @@ def test_preflight_allows_ai_toolkit_krea2_repo_id(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "repo_id",
+    ["OpenMOSS-Team/MOSS-Image-Base", "OpenMOSS-Team/MOSS-Image-SFT"],
+)
+def test_preflight_allows_ai_toolkit_moss_image_repo_id(
+    tmp_path: Path, repo_id: str
+) -> None:
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "base_model.arch": "moss_image",
+            "base_model.checkpoint": repo_id,
+            "backend.type": "ai_toolkit",
+        },
+    )
+    findings = run_preflight(
+        cfg,
+        tmp_path / "ws",
+        skip=(
+            "backend_repo_missing",
+            "venv_missing",
+            "disk_low",
+            "path_encoding",
+            "optional_dependencies",
+        ),
+    )
+    assert not [
+        f
+        for f in findings
+        if f.category == "model_missing" and f.field == "baseModel.checkpoint"
+    ]
+
+
 def test_preflight_blocks_unusable_ai_toolkit_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
