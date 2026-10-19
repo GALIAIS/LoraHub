@@ -1,6 +1,6 @@
 import importlib.util
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -45,6 +45,23 @@ def test_ai_toolkit_compiler_emits_krea2_yaml(tmp_path: Path) -> None:
     assert process["model"]["arch"] == "krea2"
     assert process["model"]["name_or_path"] == "krea/Krea-2-Turbo"
     assert process["model"]["assistant_lora_path"] == "adapter.safetensors"
+
+
+def test_ai_toolkit_compiler_keeps_hub_repo_id_slashes(tmp_path: Path) -> None:
+    cfg = TrainingConfig.model_validate(
+        {
+            "baseModel": {"arch": "krea2", "checkpoint": "krea/Krea-2-Raw"},
+            "dataset": {"source": ".", "resolution": [1024, 1024]},
+            "backend": {"type": "ai_toolkit"},
+        }
+    )
+    # What a Windows host holds for the same YAML value.
+    cfg.base_model.checkpoint = PureWindowsPath("krea\\Krea-2-Raw")  # type: ignore[assignment]
+
+    _, files = compile_config(cfg, tmp_path)
+    data = yaml.safe_load(next(iter(files.values())))
+
+    assert data["config"]["process"][0]["model"]["name_or_path"] == "krea/Krea-2-Raw"
 
 
 def test_ai_toolkit_compiler_rejects_blank_dataset_source(tmp_path: Path) -> None:

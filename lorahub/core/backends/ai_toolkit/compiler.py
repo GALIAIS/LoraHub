@@ -64,7 +64,9 @@ def compile_config(
 def _build_job(cfg: TrainingConfig, workspace: Path) -> dict[str, Any]:
     options = cfg.backend.ai_toolkit or AiToolkitOptions()
     output_name = cfg.output.name or "lorahub_ai_toolkit"
-    model_name = str(cfg.base_model.checkpoint) if str(cfg.base_model.checkpoint) else "krea/Krea-2-Raw"
+    # as_posix: on Windows str() turns a hub id like "krea/Krea-2-Raw" into
+    # "krea\Krea-2-Raw", which ai-toolkit then treats as a local path.
+    model_name = cfg.base_model.checkpoint.as_posix()
     if model_name in {".", ""}:
         model_name = "krea/Krea-2-Raw"
 
