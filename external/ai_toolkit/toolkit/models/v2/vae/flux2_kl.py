@@ -1,4 +1,13 @@
-"""Flux2 KL autoencoder."""
+"""The BFL-style Flux2 KL autoencoder (32ch latents, 2x2 pixel-shuffle
+packing to 128ch), shared by the flux2 family and ideogram4.
+
+flux2 loads the raw BFL ae.safetensors layout and uses encode/decode (with the
+BatchNorm running-stats latent normalization); ideogram4 loads diffusers-format
+checkpoints via convert_diffusers_state_dict and drives encoder/decoder
+directly with its own patchify + latent-norm tables. The two models pack the
+128 latent channels in different orders — the packing/normalization stays
+per-model.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +20,25 @@ import torch.utils.checkpoint as ckpt
 from einops import rearrange
 from torch import Tensor, nn
 
+from .._mixin import OstrisModelMixin
+
 
 @dataclass
 class AutoEncoderParams:
     resolution: int = 256
     in_channels: int = 3
     ch: int = 128
+    out_ch: int = 3
+    ch_mult: list[int] = field(default_factory=lambda: [1, 2, 4, 4])
+    num_res_blocks: int = 2
+    z_channels: int = 32
+
+@dataclass
+class AutoEncoderSmallDecoderParams:
+    resolution: int = 256
+    in_channels: int = 3
+    ch: int = 128
+    ch_encoder: int = 96
     out_ch: int = 3
     ch_mult: list[int] = field(default_factory=lambda: [1, 2, 4, 4])
     num_res_blocks: int = 2
@@ -194,30 +216,30 @@ class Encoder(nn.Module):
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 if torch.is_grad_enabled() and self.gradient_checkpointing:
-                    h = ckpt.checkpoint(self.down[i_level].block[i_block], hs[-1])  # type: ignore[index, operator]
-                    if len(self.down[i_level].attn) > 0:  # type: ignore[arg-type]
-                        h = ckpt.checkpoint(self.down[i_level].attn[i_block], h)  # type: ignore[index, operator]
+                    h = ckpt.checkpoint(self.down[i_level].block[i_block], hs[-1])
+                    if len(self.down[i_level].attn) > 0:
+                        h = ckpt.checkpoint(self.down[i_level].attn[i_block], h)
                 else:
-                    h = self.down[i_level].block[i_block](hs[-1])  # type: ignore[index, operator]
-                    if len(self.down[i_level].attn) > 0:  # type: ignore[arg-type]
-                        h = self.down[i_level].attn[i_block](h)  # type: ignore[index, operator]
+                    h = self.down[i_level].block[i_block](hs[-1])
+                    if len(self.down[i_level].attn) > 0:
+                        h = self.down[i_level].attn[i_block](h)
                 hs.append(h)
             if i_level != self.num_resolutions - 1:
                 if torch.is_grad_enabled() and self.gradient_checkpointing:
-                    hs.append(ckpt.checkpoint(self.down[i_level].downsample, hs[-1]))  # type: ignore[operator]
+                    hs.append(ckpt.checkpoint(self.down[i_level].downsample, hs[-1]))
                 else:
-                    hs.append(self.down[i_level].downsample(hs[-1]))  # type: ignore[operator]
+                    hs.append(self.down[i_level].downsample(hs[-1]))
 
         # middle
         h = hs[-1]
         if torch.is_grad_enabled() and self.gradient_checkpointing:
-            h = ckpt.checkpoint(self.mid.block_1, h)  # type: ignore[operator]
-            h = ckpt.checkpoint(self.mid.attn_1, h)  # type: ignore[operator]
-            h = ckpt.checkpoint(self.mid.block_2, h)  # type: ignore[operator]
+            h = ckpt.checkpoint(self.mid.block_1, h)
+            h = ckpt.checkpoint(self.mid.attn_1, h)
+            h = ckpt.checkpoint(self.mid.block_2, h)
         else:
-            h = self.mid.block_1(h)  # type: ignore[operator]
-            h = self.mid.attn_1(h)  # type: ignore[operator]
-            h = self.mid.block_2(h)  # type: ignore[operator]
+            h = self.mid.block_1(h)
+            h = self.mid.attn_1(h)
+            h = self.mid.block_2(h)
         # end
         h = self.norm_out(h)
         h = swish(h)
@@ -300,13 +322,13 @@ class Decoder(nn.Module):
 
         # middle
         if torch.is_grad_enabled() and self.gradient_checkpointing:
-            h = ckpt.checkpoint(self.mid.block_1, h)  # type: ignore[operator]
-            h = ckpt.checkpoint(self.mid.attn_1, h)  # type: ignore[operator]
-            h = ckpt.checkpoint(self.mid.block_2, h)  # type: ignore[operator]
+            h = ckpt.checkpoint(self.mid.block_1, h)
+            h = ckpt.checkpoint(self.mid.attn_1, h)
+            h = ckpt.checkpoint(self.mid.block_2, h)
         else:
-            h = self.mid.block_1(h)  # type: ignore[operator]
-            h = self.mid.attn_1(h)  # type: ignore[operator]
-            h = self.mid.block_2(h)  # type: ignore[operator]
+            h = self.mid.block_1(h)
+            h = self.mid.attn_1(h)
+            h = self.mid.block_2(h)
 
         # cast to proper dtype
         h = h.to(upscale_dtype)
@@ -314,18 +336,18 @@ class Decoder(nn.Module):
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks + 1):
                 if torch.is_grad_enabled() and self.gradient_checkpointing:
-                    h = ckpt.checkpoint(self.up[i_level].block[i_block], h)  # type: ignore[index, operator]
-                    if len(self.up[i_level].attn) > 0:  # type: ignore[arg-type]
-                        h = ckpt.checkpoint(self.up[i_level].attn[i_block], h)  # type: ignore[index, operator]
+                    h = ckpt.checkpoint(self.up[i_level].block[i_block], h)
+                    if len(self.up[i_level].attn) > 0:
+                        h = ckpt.checkpoint(self.up[i_level].attn[i_block], h)
                 else:
-                    h = self.up[i_level].block[i_block](h)  # type: ignore[index, operator]
-                    if len(self.up[i_level].attn) > 0:  # type: ignore[arg-type]
-                        h = self.up[i_level].attn[i_block](h)  # type: ignore[index, operator]
+                    h = self.up[i_level].block[i_block](h)
+                    if len(self.up[i_level].attn) > 0:
+                        h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
                 if torch.is_grad_enabled() and self.gradient_checkpointing:
-                    h = ckpt.checkpoint(self.up[i_level].upsample, h)  # type: ignore[operator]
+                    h = ckpt.checkpoint(self.up[i_level].upsample, h)
                 else:
-                    h = self.up[i_level].upsample(h)  # type: ignore[operator]
+                    h = self.up[i_level].upsample(h)
 
         # end
         h = self.norm_out(h)
@@ -334,7 +356,14 @@ class Decoder(nn.Module):
         return h
 
 
-class AutoEncoder(nn.Module):
+class AutoEncoder(nn.Module, OstrisModelMixin):
+    @classmethod
+    def aitk_config_from_state_dict(cls, state_dict):
+        # small decoder builds report 96ch at the first decoder block
+        if state_dict["decoder.up.0.block.0.conv1.bias"].shape[0] == 96:
+            return AutoEncoderSmallDecoderParams()
+        return AutoEncoderParams()
+
     def __init__(self, params: AutoEncoderParams):
         super().__init__()
         self.params = params
@@ -346,10 +375,13 @@ class AutoEncoder(nn.Module):
             num_res_blocks=params.num_res_blocks,
             z_channels=params.z_channels,
         )
+        decoder_ch = params.ch
+        if hasattr(params, "ch_encoder"):
+            decoder_ch = params.ch_encoder
         self.decoder = Decoder(
             resolution=params.resolution,
             in_channels=params.in_channels,
-            ch=params.ch,
+            ch=decoder_ch,
             out_ch=params.out_ch,
             ch_mult=params.ch_mult,
             num_res_blocks=params.num_res_blocks,
@@ -369,7 +401,7 @@ class AutoEncoder(nn.Module):
         self._gradient_checkpointing = False
 
     @property
-    def gradient_checkpointing(self) -> bool:
+    def gradient_checkpointing(self):
         return self._gradient_checkpointing
 
     @gradient_checkpointing.setter
@@ -378,18 +410,52 @@ class AutoEncoder(nn.Module):
         self.encoder.gradient_checkpointing = value
         self.decoder.gradient_checkpointing = value
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    @property
+    def dtype(self):
+        return next(self.parameters()).dtype
+
     def enable_gradient_checkpointing(self):
         self.gradient_checkpointing = True
         self.encoder.enable_gradient_checkpointing()
         self.decoder.enable_gradient_checkpointing()
 
-    @property
-    def device(self) -> torch.device:
-        return next(self.parameters()).device
+    def normalize(self, z):
+        self.bn.eval()
+        return self.bn(z)
 
-    @property
-    def dtype(self) -> torch.dtype:
-        return next(self.parameters()).dtype
+    def inv_normalize(self, z):
+        self.bn.eval()
+        s = torch.sqrt(self.bn.running_var.view(1, -1, 1, 1) + self.bn_eps)
+        m = self.bn.running_mean.view(1, -1, 1, 1)
+        return z * s + m
+
+    def encode(self, x: Tensor) -> Tensor:
+        moments = self.encoder(x)
+        mean = torch.chunk(moments, 2, dim=1)[0]
+
+        z = rearrange(
+            mean,
+            "... c (i pi) (j pj)  -> ... (c pi pj) i j",
+            pi=self.ps[0],
+            pj=self.ps[1],
+        )
+        z = self.normalize(z)
+        return z
+
+    def decode(self, z: Tensor) -> Tensor:
+        z = self.inv_normalize(z)
+        z = rearrange(
+            z,
+            "... (c pi pj) i j -> ... c (i pi) (j pj)",
+            pi=self.ps[0],
+            pj=self.ps[1],
+        )
+        dec = self.decoder(z)
+        return dec
 
 
 _NUM_RESOLUTIONS = 4
