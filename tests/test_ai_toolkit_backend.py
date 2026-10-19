@@ -1066,3 +1066,31 @@ def test_terminal_resolves_ai_toolkit_session(tmp_path: Path) -> None:
     assert session.repo_path == repo
     assert session.python_path == py
     assert session.ready is True
+
+
+def test_ai_toolkit_resume_spec_continues_from_saved_checkpoint(tmp_path: Path) -> None:
+    from lorahub.api.jobs_helpers.resume_dispatch import _dispatch_resume_spec
+
+    cfg = _moss_cfg(output={"name": "moss_run"})
+    save_root = tmp_path / "ai_toolkit_output" / "moss_run"
+    save_root.mkdir(parents=True)
+    (save_root / "moss_run_000000500.safetensors").write_bytes(b"")
+
+    spec = _dispatch_resume_spec(cfg, tmp_path)
+
+    # ai-toolkit finds the newest checkpoint and optimizer.pt itself.
+    assert spec.extra_argv == []
+    assert spec.cfg_overrides == {}
+
+
+def test_ai_toolkit_resume_spec_requires_a_checkpoint(tmp_path: Path) -> None:
+    from lorahub.api.jobs_helpers.resume_dispatch import (
+        ResumeNotReady,
+        _dispatch_resume_spec,
+    )
+
+    cfg = _moss_cfg(output={"name": "moss_run"})
+    (tmp_path / "ai_toolkit_output" / "moss_run" / "samples").mkdir(parents=True)
+
+    with pytest.raises(ResumeNotReady, match="no ai-toolkit checkpoint"):
+        _dispatch_resume_spec(cfg, tmp_path)
