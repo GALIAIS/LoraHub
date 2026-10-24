@@ -99,7 +99,7 @@ _BACKENDS: dict[str, BackendDescriptor] = {
         name="ostris/ai-toolkit (vendored)",
         description=(
             "Vendored ostris/ai-toolkit backend. LoraHub currently exposes "
-            "the Krea2 training path through backend.type='ai_toolkit'."
+            "Krea2 and MOSS-Image training through backend.type='ai_toolkit'."
         ),
         repo_url=ai_toolkit_installer.AI_TOOLKIT_REPO_URL,
         default_path_func=ai_toolkit_bootstrap.default_repo_path,

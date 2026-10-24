@@ -102,7 +102,7 @@ class BackendConfig(BaseModel):
     # Optional, anima_lora-specific knobs. None means "use anima_lora's own
     # base.toml defaults so kohya / dp users never need to touch this.
     anima_lora: AnimaLoraOptions | None = None
-    # Optional, ai-toolkit-specific Krea2 configuration.
+    # Optional, ai-toolkit-specific Krea2 / MOSS-Image configuration.
     ai_toolkit: AiToolkitOptions | None = None
 
     @model_validator(mode="after")

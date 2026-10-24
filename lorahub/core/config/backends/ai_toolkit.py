@@ -1,4 +1,9 @@
-"""ai-toolkit options used by the vendored Krea2 training backend."""
+"""ai-toolkit options used by the vendored training backend (Krea2, MOSS-Image).
+
+Fields that default to ``None`` take the per-arch value from
+``lorahub.core.backends.ai_toolkit.compiler.ARCH_PROFILES``. Saved configs
+drop ``None`` fields, so they keep following the arch.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +18,9 @@ class AiToolkitModelOptions(BaseModel):
     model_config = _CAMEL_CONFIG
 
     quantize: bool = True
-    qtype: Literal["qfloat8", "float8", "int8", "uint8", "uint4"] = "qfloat8"
+    qtype: Literal["qfloat8", "float8", "int8", "uint8", "uint4", "convrot8"] | None = None
     quantize_text_encoder: bool = True
-    qtype_text_encoder: Literal["qfloat8", "qint8", "qint4"] = "qfloat8"
+    qtype_text_encoder: Literal["qfloat8", "qint8", "qint4", "convrot8"] | None = None
     low_vram: bool = False
     layer_offloading: bool = False
     layer_offloading_transformer_percent: float = Field(1.0, ge=0.0, le=1.0)
@@ -24,7 +29,7 @@ class AiToolkitModelOptions(BaseModel):
     checkpoint_filename: str | None = None
     vae_path: str | None = None
     text_encoder_path: str | None = None
-    max_text_length: int = Field(512, ge=1, le=4096)
+    max_text_length: int | None = Field(default=None, ge=1, le=4096)
     compile: bool | None = None
     block_compile: bool = False
     compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
@@ -104,6 +109,7 @@ class AiToolkitTrainOptions(BaseModel):
     timestep_type: Literal[
         "sigmoid",
         "linear",
+        "shift",
         "lognorm_blend",
         "next_sample",
         "weighted",
@@ -111,7 +117,7 @@ class AiToolkitTrainOptions(BaseModel):
         "two_step",
         "four_step",
         "eight_step",
-    ] = "sigmoid"
+    ] | None = None
     loss_type: Literal[
         "mse", "mae", "wavelet", "mean_flow", "pseudo_huber"
     ] = "mse"

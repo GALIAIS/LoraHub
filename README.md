@@ -169,7 +169,7 @@ lorahub serve    --port 18765                   # 启动 Web UI + REST API（可
 | `kohya`          | [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)           | SD1.5、SDXL、SD3、FLUX、Lumina、HunyuanImage、Anima                    | 适合经典 LoRA / LoCon / LoHa / DoRA 工作流。      |
 | `diffusion-pipe` | [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) | Wan、HunyuanVideo、LTX、Cosmos、Flux2、Chroma、Qwen-Image 等            | DeepSpeed / pipeline 训练后端。                   |
 | `anima_lora`     | [sorryhyun/anima_lora](https://github.com/sorryhyun/anima_lora)         | Anima DiT                                                               | vendored 在 `external/anima_lora/`。              |
-| `ai_toolkit`     | [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit)               | Krea2                                                                  | vendored 在 `external/ai_toolkit/`。              |
+| `ai_toolkit`     | [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit)               | Krea2、MOSS-Image                                                      | vendored 在 `external/ai_toolkit/`。              |
 
 每个后端的字段映射在 `lorahub/core/backends/<name>/compiler.py`。前端配置表单按后端拆分，不再展示无关字段。
 

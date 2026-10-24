@@ -59,7 +59,7 @@ import { BackendAiToolkitFields } from "./sections/backend-ai-toolkit"
 import { BackendDiffusionPipeFields } from "./sections/backend-diffusion-pipe"
 import { ValidationFields } from "./sections/validation"
 import { ResumeFields } from "./sections/resume"
-import { FLOW_MATCH_ARCHES } from "./options"
+import { FLOW_MATCH_ARCHES, aiToolkitArchDefaults } from "./options"
 import { defaultArchFor, isArchSupported } from "./backend-meta"
 import { buildErrorMap, setIn } from "./types"
 import type { BackendKey, ConfigFormValue } from "./types"
@@ -68,12 +68,6 @@ import { ReadOnlyProvider, Section } from "./widgets"
 export type { ConfigFormValue } from "./types"
 
 export type { BackendKey } from "./types"
-const AI_TOOLKIT_DEFAULT_CHECKPOINT = "krea/Krea-2-Raw"
-const AI_TOOLKIT_KREA_CHECKPOINTS = new Set([
-  "krea/Krea-2-Raw",
-  "krea/Krea-2-Turbo",
-])
-const AI_TOOLKIT_NETWORK_TYPES = new Set(["lora", "dora", "loha", "lokr", "lorm"])
 
 const UNUSED_SECTIONS: Record<BackendKey, readonly string[]> = {
   kohya: [],
@@ -156,11 +150,12 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
         }
       }
       if (nextBackend === "ai_toolkit") {
+        const archDefaults = aiToolkitArchDefaults(next.baseModel?.arch)
         const checkpoint = String(next.baseModel?.checkpoint ?? "").trim()
-        if (archChanged || !checkpoint || !AI_TOOLKIT_KREA_CHECKPOINTS.has(checkpoint)) {
-          next = setIn(next, ["baseModel", "checkpoint"], AI_TOOLKIT_DEFAULT_CHECKPOINT)
+        if (archChanged || !checkpoint || !archDefaults.checkpoints.includes(checkpoint)) {
+          next = setIn(next, ["baseModel", "checkpoint"], archDefaults.checkpoint)
         }
-        if (!AI_TOOLKIT_NETWORK_TYPES.has(String(next.network?.type ?? "lora"))) {
+        if (!archDefaults.networkTypes.includes(String(next.network?.type ?? "lora"))) {
           next = setIn(next, ["network", "type"], "lora")
           next = setIn(next, ["network", "convDim"], null)
           next = setIn(next, ["network", "convAlpha"], null)

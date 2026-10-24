@@ -44,6 +44,7 @@ class ModelArch(enum.StrEnum):
     z_image = "z_image"
     ernie_image = "ernie_image"
     krea2 = "krea2"
+    moss_image = "moss_image"
 
 
 class Severity(enum.StrEnum):

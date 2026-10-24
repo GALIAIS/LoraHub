@@ -101,6 +101,8 @@ class BaseModelConfig(BaseModel):
         "z_image",
         "ernie_image",
         "krea2",
+        # ai-toolkit only
+        "moss_image",
     ] = "sdxl"
     # SDXL sub-architectures sharing the SDXL backbone but trained on
     # different finetune lineages (Pony/Illustrious/NoobAI/Animagine).
