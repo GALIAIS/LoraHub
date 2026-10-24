@@ -13,6 +13,18 @@ class AceStepCaptionerExtension(Extension):
         return AceStepCaptioner
 
 
+class MossMusicCaptionerExtension(Extension):
+    uid = "MossMusicCaptioner"
+    name = "MOSS-Music Captioner"
+
+    @classmethod
+    def get_process(cls):
+        # import your process class here so it is only loaded when needed and return it
+        from .MossMusicCaptioner import MossMusicCaptioner
+
+        return MossMusicCaptioner
+
+
 class Qwen3VLCaptionerExtension(Extension):
     uid = "Qwen3VLCaptioner"
     name = "Qwen 3VL Captioner"
@@ -23,6 +35,42 @@ class Qwen3VLCaptionerExtension(Extension):
         from .Qwen3VLCaptioner import Qwen3VLCaptioner
 
         return Qwen3VLCaptioner
+
+
+class Qwen3OmniCaptionerExtension(Extension):
+    uid = "Qwen3OmniCaptioner"
+    name = "Qwen 3 Omni Captioner"
+
+    @classmethod
+    def get_process(cls):
+        # import your process class here so it is only loaded when needed and return it
+        from .Qwen3OmniCaptioner import Qwen3OmniCaptioner
+
+        return Qwen3OmniCaptioner
+
+
+class Qwen25OmniCaptionerExtension(Extension):
+    uid = "Qwen25OmniCaptioner"
+    name = "Qwen 2.5 Omni Captioner"
+
+    @classmethod
+    def get_process(cls):
+        # import your process class here so it is only loaded when needed and return it
+        from .Qwen25OmniCaptioner import Qwen25OmniCaptioner
+
+        return Qwen25OmniCaptioner
+
+
+class Qwen38CaptionerExtension(Extension):
+    uid = "Qwen38Captioner"
+    name = "Qwen 3.8 Captioner"
+
+    @classmethod
+    def get_process(cls):
+        # import your process class here so it is only loaded when needed and return it
+        from .Qwen38Captioner import Qwen38Captioner
+
+        return Qwen38Captioner
 
 
 class Ideogram4CaptionerExtension(Extension):
@@ -39,6 +87,10 @@ class Ideogram4CaptionerExtension(Extension):
 
 AI_TOOLKIT_EXTENSIONS = [
     AceStepCaptionerExtension,
+    MossMusicCaptionerExtension,
     Qwen3VLCaptionerExtension,
+    Qwen3OmniCaptionerExtension,
+    Qwen25OmniCaptionerExtension,
+    Qwen38CaptionerExtension,
     Ideogram4CaptionerExtension,
 ]
