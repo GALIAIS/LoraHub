@@ -3,7 +3,6 @@ from typing import List, Optional
 
 import huggingface_hub
 import torch
-import yaml
 from toolkit.config_modules import GenerateImageConfig, ModelConfig, NetworkConfig
 from toolkit.lora_special import LoRASpecialNetwork
 from toolkit.models.base_model import BaseModel
@@ -13,23 +12,19 @@ from toolkit.samplers.custom_flowmatch_sampler import (
     CustomFlowMatchEulerDiscreteScheduler,
 )
 from toolkit.accelerator import unwrap_model
-from optimum.quanto import freeze
-from toolkit.util.quantize import (
-    quantize,
-    get_qtype,
-    quantize_model,
-    dequantize_if_quantized,
-)
 from toolkit.memory_management import MemoryManager
 from toolkit.metadata import get_meta_for_safetensors
-from safetensors.torch import load_file, save_file
+from toolkit.models.v2.text_encoders.qwen3 import Qwen3TextEncoder
+from toolkit.models.v2.vae.autoencoder_kl import KLVAE
+from safetensors.torch import load_file
 
-from transformers import AutoTokenizer, Qwen3ForCausalLM
-from diffusers import AutoencoderKL
 
 try:
     from diffusers import ZImagePipeline
-    from diffusers.models.transformers import ZImageTransformer2DModel
+
+    # our subclass of the diffusers transformer with the universal loading /
+    # quantization mixin (see toolkit/models/v2/_mixin.py)
+    from toolkit.models.v2.diffusion_models.z_image import ZImageTransformer2DModel
 except ImportError:
     raise ImportError(
         "Diffusers is out of date. Update diffusers to the latest version by doing pip uninstall diffusers and then pip install -r requirements.txt"
@@ -45,73 +40,6 @@ scheduler_config = {
 # repo to pull the vae / text encoder / tokenizer / config from when loading a
 # single-file checkpoint
 SINGLE_FILE_EXTRAS_REPO = "Tongyi-MAI/Z-Image-Turbo"
-
-
-def convert_single_file_to_diffusers(state_dict):
-    """Convert a single-file Z-Image checkpoint to diffusers transformer keys."""
-    new_sd = {}
-    for key, value in state_dict.items():
-        k = key
-        if k.endswith(".attention.qkv.weight"):
-            # the single file fuses q,k,v into one tensor (in that order); diffusers keeps them split
-            prefix = k[: -len(".attention.qkv.weight")]
-            q, k_proj, v = torch.chunk(value, 3, dim=0)
-            new_sd[prefix + ".attention.to_q.weight"] = q
-            new_sd[prefix + ".attention.to_k.weight"] = k_proj
-            new_sd[prefix + ".attention.to_v.weight"] = v
-            continue
-        k = k.replace(".attention.out.weight", ".attention.to_out.0.weight")
-        k = k.replace(".attention.q_norm.weight", ".attention.norm_q.weight")
-        k = k.replace(".attention.k_norm.weight", ".attention.norm_k.weight")
-        if k.startswith("x_embedder."):
-            k = "all_x_embedder.2-1." + k[len("x_embedder.") :]
-        elif k.startswith("final_layer."):
-            k = "all_final_layer.2-1." + k[len("final_layer.") :]
-        new_sd[k] = value
-    return new_sd
-
-
-def convert_diffusers_to_single_file(state_dict):
-    """Convert a diffusers transformer state dict back to the single-file layout."""
-    new_sd = {}
-    qkv_cache = {}
-    for key, value in state_dict.items():
-        k = key
-        matched = False
-        for suffix in (
-            ".attention.to_q.weight",
-            ".attention.to_k.weight",
-            ".attention.to_v.weight",
-        ):
-            if k.endswith(suffix):
-                prefix = k[: -len(suffix)]
-                cache = qkv_cache.setdefault(prefix, {})
-                cache[suffix] = value
-                if len(cache) == 3:
-                    # the single file expects q,k,v fused in that order
-                    qkv = torch.cat(
-                        [
-                            cache[".attention.to_q.weight"],
-                            cache[".attention.to_k.weight"],
-                            cache[".attention.to_v.weight"],
-                        ],
-                        dim=0,
-                    )
-                    new_sd[prefix + ".attention.qkv.weight"] = qkv
-                    del qkv_cache[prefix]
-                matched = True
-                break
-        if matched:
-            continue
-        k = k.replace(".attention.to_out.0.weight", ".attention.out.weight")
-        k = k.replace(".attention.norm_q.weight", ".attention.q_norm.weight")
-        k = k.replace(".attention.norm_k.weight", ".attention.k_norm.weight")
-        if k.startswith("all_x_embedder.2-1."):
-            k = "x_embedder." + k[len("all_x_embedder.2-1.") :]
-        elif k.startswith("all_final_layer.2-1."):
-            k = "final_layer." + k[len("all_final_layer.2-1.") :]
-        new_sd[k] = value
-    return new_sd
 
 
 class ZImageModel(BaseModel):
@@ -229,9 +157,10 @@ class ZImageModel(BaseModel):
         self.invert_assistant_lora = True
 
     def load_transformer(self, model_path, base_model_path, dtype):
-        """Load the ZImage transformer from either a diffusers folder/repo or a
-        single-file checkpoint. Returns (transformer, base_model_path) since the base
-        path may be redirected to the hub repo for single-file checkpoints."""
+        """Load the ZImage transformer through the OstrisModelMixin universal loader
+        (diffusers folder/repo, local or hub single-file checkpoint, pre-quantized
+        checkpoint). Returns (transformer, base_model_path) since the base path may
+        be redirected to the hub repo for single-file checkpoints."""
         if model_path.endswith(".safetensors"):
             # single-file checkpoint. Load the weights from the file and pull the
             # vae / text encoder / tokenizer / config from the base diffusers repo.
@@ -242,36 +171,29 @@ class ZImageModel(BaseModel):
             if base_model_path == model_path:
                 # extras default to name_or_path which is the single file, fall back to the hub repo
                 base_model_path = self.single_file_extras_repo
+        elif os.path.exists(model_path):
+            # check if the path is a full checkpoint.
+            te_folder_path = os.path.join(model_path, "text_encoder")
+            # if we have the te, this folder is a full checkpoint, use it as the base
+            if os.path.exists(te_folder_path):
+                base_model_path = model_path
 
-            state_dict = load_file(model_path)
-            state_dict = convert_single_file_to_diffusers(state_dict)
-            for key, value in state_dict.items():
-                state_dict[key] = value.to(dtype=dtype)
-
-            config = ZImageTransformer2DModel.load_config(
-                base_model_path, subfolder="transformer"
-            )
-            with torch.device("meta"):
-                transformer = ZImageTransformer2DModel.from_config(config)
-            transformer.load_state_dict(state_dict, assign=True)
-            transformer.to(dtype=dtype)
-            del state_dict
-            flush()
-        else:
-            transformer_path = model_path
-            transformer_subfolder = "transformer"
-            if os.path.exists(transformer_path):
-                transformer_subfolder = None
-                transformer_path = os.path.join(transformer_path, "transformer")
-                # check if the path is a full checkpoint.
-                te_folder_path = os.path.join(model_path, "text_encoder")
-                # if we have the te, this folder is a full checkpoint, use it as the base
-                if os.path.exists(te_folder_path):
-                    base_model_path = model_path
-
-            transformer = ZImageTransformer2DModel.from_pretrained(
-                transformer_path, subfolder=transformer_subfolder, torch_dtype=dtype
-            )
+        # quantization happens inside load_model unless an adapter has to be merged
+        # into the full precision weights first (assistant lora / accuracy recovery
+        # adapter); those paths quantize after the merge via quantize_model
+        transformer = ZImageTransformer2DModel.load_model(
+            model_path,
+            dtype=dtype,
+            config_path=base_model_path if self.is_single_file else None,
+            use_comfy_weights=self.model_config.model_kwargs.get(
+                "use_comfy_weights", True
+            ),
+            # comfy candidate ranking hint only (aitk_post_load quantizes):
+            # a matching pre-quantized file loads with no requant work
+            qtype=self.model_config.qtype if self.model_config.quantize else None,
+            quantize_on_load=False,
+        )
+        flush()
 
         return transformer, base_model_path
 
@@ -294,62 +216,18 @@ class ZImageModel(BaseModel):
             if self.model_config.qtype == "qfloat8":
                 self.model_config.qtype = "float8"
 
-        if self.model_config.quantize:
-            self.print_and_status_update("Quantizing Transformer")
-            quantize_model(self, transformer)
-            flush()
-
-        if (
-            self.model_config.layer_offloading
-            and self.model_config.layer_offloading_transformer_percent > 0
-        ):
-            MemoryManager.attach(
-                transformer,
-                self.device_torch,
-                offload_percent=self.model_config.layer_offloading_transformer_percent,
-                ignore_modules=[
-                    transformer.x_pad_token,
-                    transformer.cap_pad_token,
-                ],
-            )
-
-        if self.model_config.low_vram:
-            self.print_and_status_update("Moving transformer to CPU")
-            transformer.to("cpu")
-
+        # quantize + offload + placement, all driven by model_config
+        transformer.aitk_post_load(**self.component_load_kwargs("transformer"))
         flush()
 
         self.print_and_status_update("Text Encoder")
-        tokenizer = AutoTokenizer.from_pretrained(
-            base_model_path, subfolder="tokenizer", torch_dtype=dtype
+        tokenizer = Qwen3TextEncoder.load_tokenizer(base_model_path)
+        text_encoder = Qwen3TextEncoder.load(
+            base_model_path, **self.component_load_kwargs("te")
         )
-        text_encoder = Qwen3ForCausalLM.from_pretrained(
-            base_model_path, subfolder="text_encoder", torch_dtype=dtype
-        )
-
-        if (
-            self.model_config.layer_offloading
-            and self.model_config.layer_offloading_text_encoder_percent > 0
-        ):
-            MemoryManager.attach(
-                text_encoder,
-                self.device_torch,
-                offload_percent=self.model_config.layer_offloading_text_encoder_percent,
-            )
-
-        text_encoder.to(self.device_torch, dtype=dtype)
-        flush()
-
-        if self.model_config.quantize_te:
-            self.print_and_status_update("Quantizing Text Encoder")
-            quantize(text_encoder, weights=get_qtype(self.model_config.qtype_te))
-            freeze(text_encoder)
-            flush()
 
         self.print_and_status_update("Loading VAE")
-        vae = AutoencoderKL.from_pretrained(
-            base_model_path, subfolder="vae", torch_dtype=dtype
-        )
+        vae = KLVAE.load_model(base_model_path, dtype=dtype)
 
         self.noise_scheduler = ZImageModel.get_train_scheduler()
 
@@ -423,13 +301,17 @@ class ZImageModel(BaseModel):
         sc = self.get_bucket_divisibility()
         gen_config.width = int(gen_config.width // sc * sc)
         gen_config.height = int(gen_config.height // sc * sc)
+
+        # CFG is 0 normalized for this model
+        guidance = max(0.0, gen_config.guidance_scale - 1.0)
+
         img = pipeline(
             prompt_embeds=conditional_embeds.text_embeds,
             negative_prompt_embeds=unconditional_embeds.text_embeds,
             height=gen_config.height,
             width=gen_config.width,
             num_inference_steps=gen_config.num_inference_steps,
-            guidance_scale=gen_config.guidance_scale,
+            guidance_scale=guidance,
             latents=gen_config.latents,
             generator=generator,
             **extra,
@@ -482,32 +364,23 @@ class ZImageModel(BaseModel):
     def get_te_has_grad(self):
         return False
 
+    def get_quantization_exclude_modules(self):
+        # the patterns live on the transformer class so the mixin quantization
+        # uses them too (see toolkit/models/classes/z_image.py)
+        return ZImageTransformer2DModel.get_quantization_exclude_modules()
+
     def save_model(self, output_path, meta, save_dtype):
+        # comfy-format single-file save (the standard save format regardless
+        # of how the model was loaded); prequantized layers keep their
+        # quantized storage
         transformer: ZImageTransformer2DModel = unwrap_model(self.model)
-        if self.is_single_file:
-            # loaded from a single-file checkpoint, save back in that format
-            sd = transformer.state_dict()
-            save_dict = {}
-            for key, value in sd.items():
-                # dequantize any quantized (e.g. torchao) weights so we save plain tensors
-                save_dict[key] = (
-                    dequantize_if_quantized(value).clone().to("cpu", dtype=save_dtype)
-                )
-            save_dict = convert_diffusers_to_single_file(save_dict)
-
-            if not output_path.endswith(".safetensors"):
-                output_path += ".safetensors"
-            meta = get_meta_for_safetensors(meta, name=self.arch)
-            save_file(save_dict, output_path, metadata=meta)
-        else:
-            transformer.save_pretrained(
-                save_directory=os.path.join(output_path, "transformer"),
-                safe_serialization=True,
-            )
-
-            meta_path = os.path.join(output_path, "aitk_meta.yaml")
-            with open(meta_path, "w") as f:
-                yaml.dump(meta, f)
+        if not output_path.endswith(".safetensors"):
+            output_path += ".safetensors"
+        transformer.save_model(
+            output_path,
+            dtype=save_dtype,
+            metadata=get_meta_for_safetensors(meta, name=self.arch),
+        )
 
     def get_loss_target(self, *args, **kwargs):
         noise = kwargs.get("noise")
@@ -520,16 +393,5 @@ class ZImageModel(BaseModel):
     def get_transformer_block_names(self) -> Optional[List[str]]:
         return ["layers"]
 
-    def convert_lora_weights_before_save(self, state_dict):
-        new_sd = {}
-        for key, value in state_dict.items():
-            new_key = key.replace("transformer.", "diffusion_model.")
-            new_sd[new_key] = value
-        return new_sd
+    lora_keys_use_comfy_prefix = True
 
-    def convert_lora_weights_before_load(self, state_dict):
-        new_sd = {}
-        for key, value in state_dict.items():
-            new_key = key.replace("diffusion_model.", "transformer.")
-            new_sd[new_key] = value
-        return new_sd

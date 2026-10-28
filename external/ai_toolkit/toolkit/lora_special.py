@@ -30,6 +30,7 @@ LINEAR_MODULES = [
     'Linear',
     'LoRACompatibleLinear',
     'QLinear',
+    'OstrisLinear',
     # 'GroupNorm',
 ]
 CONV_MODULES = [
@@ -68,8 +69,7 @@ class LoRAModule(ToolkitModuleMixin, ExtractableModuleMixin, torch.nn.Module):
         torch.nn.Module.__init__(self)
         self.lora_name = lora_name
         self.orig_module_ref = weakref.ref(org_module)
-        self.scalar = torch.tensor(1.0, device=org_module.weight.device)
-        
+
         # if is ara lora module, mark it on the layer so memory manager can handle it
         if is_ara:
             org_module.ara_lora_ref = weakref.ref(self)
@@ -111,9 +111,9 @@ class LoRAModule(ToolkitModuleMixin, ExtractableModuleMixin, torch.nn.Module):
                 self.lora_up = torch.nn.Linear(self.lora_dim, out_dim, bias=use_bias)
 
         if type(alpha) == torch.Tensor:
-            alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
+            alpha = float(alpha.detach().float().item())
         alpha = self.lora_dim if alpha is None or alpha == 0 else alpha
-        self.scale = alpha / self.lora_dim
+        self._set_runtime_scale(float(alpha) / self.lora_dim)
         self.register_buffer("alpha", torch.tensor(alpha))  # 定数として扱える
 
         # same as microsoft's
@@ -181,8 +181,9 @@ class FullModule(ToolkitModuleMixin, torch.nn.Module):
 
         # trainable delta, zero initialized so an untrained layer is a no-op (zero diff)
         # dequantize first so the delta is full precision and shaped like the real (unpacked) weight
-        self.weight_is_quantized = _is_quantized_tensor(org_module.weight)
-        ref_weight = _dequantize_if_needed(org_module.weight)
+        org_weight = org_module.weight  # single access: dequantizes on OstrisLinear
+        self.weight_is_quantized = _is_quantized_tensor(org_weight)
+        ref_weight = _dequantize_if_needed(org_weight)
         self.diff = torch.nn.Parameter(torch.zeros_like(ref_weight))
         # some modules (e.g. Embedding) have no bias attribute at all
         org_bias = getattr(org_module, 'bias', None)
@@ -234,20 +235,33 @@ class FullModule(ToolkitModuleMixin, torch.nn.Module):
     def merge_in(self: 'FullModule', merge_weight=1.0):
         if not self.can_merge_in:
             return
-        om = self.org_module[0]
-        if 'weight._data' in om.state_dict():
-            # quanto quantized weight, can't merge
+        # a zero diff merges to identity: skip entirely (a quantized base would
+        # otherwise still get requantized, which is not lossless)
+        if not self.diff.any() and (self.diff_b is None or not self.diff_b.any()):
             return
-        org_weight = om.weight
-        orig_dtype = org_weight.dtype
-        # dequantize torchao weights so we can fold the full precision delta in
-        merged_weight = _dequantize_if_needed(org_weight).float() + merge_weight * self.diff.float().to(org_weight.device)
+        om = self.org_module[0]
+        if getattr(om, "is_ostris_quantized", False):
+            # fp32 dequant straight from the backend; the bf16 weight property
+            # would resample the quant scales on every merge cycle
+            orig_dtype = om.ostris_orig_dtype
+            base_weight = om.ostris_quantizer.dequantize(om)
+            weight_device = base_weight.device
+        else:
+            if 'weight._data' in om.state_dict():
+                # quanto quantized weight, can't merge
+                return
+            org_weight = om.weight
+            orig_dtype = org_weight.dtype
+            base_weight = _dequantize_if_needed(org_weight).float()
+            weight_device = org_weight.device
+        # fold the full precision delta in
+        merged_weight = base_weight + merge_weight * self.diff.float().to(weight_device)
         if self.weight_is_quantized:
             # re-quantize so the model stays quantized across continuous merge/reset cycles
             from toolkit.util.quantize import get_torchao_config, requantize_module_weight
             requantize_module_weight(om, merged_weight, orig_dtype, get_torchao_config(self._get_base_qtype()))
         else:
-            om.weight.data = merged_weight.to(org_weight.device, orig_dtype)
+            om.weight.data = merged_weight.to(weight_device, orig_dtype)
         # bias is never quantized
         if self.diff_b is not None and getattr(om, 'bias', None) is not None:
             om.bias.data = (om.bias.data.float() + merge_weight * self.diff_b.float().to(om.bias.device)).to(om.bias.dtype)

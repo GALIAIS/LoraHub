@@ -12,6 +12,8 @@ from typing import Union, List, Optional
 
 import numpy as np
 import yaml
+from PIL import Image, ImageOps
+from torchvision import transforms
 from diffusers import T2IAdapter, ControlNetModel
 from diffusers.training_utils import compute_density_for_timestep_sampling
 from safetensors.torch import save_file, load_file
@@ -23,6 +25,7 @@ from huggingface_hub import HfApi, interpreter_login
 from toolkit.memory_management import MemoryManager
 
 from toolkit.basic import value_map
+from toolkit.buckets import get_bucket_for_image_size
 from toolkit.clip_vision_adapter import ClipVisionAdapter
 from toolkit.custom_adapter import CustomAdapter
 from toolkit.data_loader import get_dataloader_from_datasets, trigger_dataloader_setup_epoch
@@ -40,6 +43,7 @@ from toolkit.network_mixins import Network
 from toolkit.optimizer import get_optimizer
 from toolkit.paths import CONFIG_ROOT
 from toolkit.progress_bar import ToolkitProgressBar
+from toolkit.prompt_utils import concat_prompt_embeds
 from toolkit.reference_adapter import ReferenceAdapter
 from toolkit.sampler import get_sampler
 from toolkit.saving import save_t2i_from_diffusers, load_t2i_model, save_ip_adapter_from_diffusers, \
@@ -47,7 +51,7 @@ from toolkit.saving import save_t2i_from_diffusers, load_t2i_model, save_ip_adap
 
 from toolkit.scheduler import get_lr_scheduler
 from toolkit.sd_device_states_presets import get_train_sd_device_state_preset
-from toolkit.stable_diffusion_model import StableDiffusion
+from toolkit.stable_diffusion_model import StableDiffusion, BlankNetwork
 
 from jobs.process import BaseTrainProcess
 from toolkit.metadata import get_meta_for_safetensors, load_metadata_from_safetensors, add_base_model_info_to_meta, \
@@ -150,6 +154,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.train_config.cache_text_embeddings:
             for raw_dataset in raw_datasets:
                 raw_dataset['cache_text_embeddings'] = True
+
+        # pass diff output preservation to the datasets so the data loader can build
+        # and cache the DOP caption (dataset trigger word replaced with the class)
+        if self.train_config.diff_output_preservation and raw_datasets is not None:
+            for raw_dataset in raw_datasets:
+                raw_dataset['diff_output_preservation'] = True
+                raw_dataset['diff_output_preservation_class'] = self.train_config.diff_output_preservation_class
         
         if raw_datasets is not None and len(raw_datasets) > 0:
             for raw_dataset in raw_datasets:
@@ -262,6 +273,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.steps_this_boundary = 0
         self.num_consecutive_oom = 0
         self.additional_logs = {}
+        # cached latents, prompt embeds, and fixed noise for validation
+        self._validation_cache = None
 
     def post_process_generate_image_config_list(self, generate_image_config_list: List[GenerateImageConfig]):
         # override in subclass
@@ -342,6 +355,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 logger=self.logger,
                 num_frames=sample_item.num_frames,
                 fps=sample_item.fps,
+                duration=sample_item.duration,
                 ctrl_img=sample_item.ctrl_img,
                 ctrl_idx=sample_item.ctrl_idx,
                 ctrl_img_1=sample_item.ctrl_img_1,
@@ -373,6 +387,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 self.adapter.is_sampling = False
             if self.ema is not None:
                 self.ema.train()
+        print_acc("") # add a line break
 
     def update_training_metadata(self):
         o_dict = OrderedDict({
@@ -768,7 +783,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.accelerator.even_batches=False
         
         # # prepare all the models stuff for accelerator (hopefully we dont miss any)
-        self.sd.vae = self.accelerator.prepare(self.sd.vae)
+        if self.sd.vae is not None:
+            self.sd.vae = self.accelerator.prepare(self.sd.vae)
         if self.sd.unet is not None:
             self.sd.unet = self.accelerator.prepare(self.sd.unet)
             # todo always tdo it?
@@ -821,8 +837,12 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 params,
                 decay=self.train_config.ema_config.ema_decay,
                 use_feedback=self.train_config.ema_config.use_feedback,
+                feedback_rate=self.train_config.ema_config.feedback_rate,
                 param_multiplier=self.train_config.ema_config.param_multiplier,
             )
+            # expose to the model: models that run an EMA-teacher forward during training
+            # (e.g. wan21_pixel self_flow) read it from here
+            self.sd.ema = self.ema
 
     def before_dataset_load(self):
         pass
@@ -1116,7 +1136,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 is_reg = any(batch.get_is_reg_list())
                 if batch.tensor is not None:
                     imgs = batch.tensor
-                    imgs = imgs.to(self.device_torch, dtype=dtype)
+                    # waveforms stay fp32 into the audio encoder
+                    imgs = imgs.to(self.device_torch, dtype=torch.float32 if getattr(self.sd, 'is_audio_model', False) else dtype)
                     # dont adjust for regs.
                     if self.train_config.img_multiplier is not None and not is_reg:
                         # do it ad contrast
@@ -1152,34 +1173,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     latents = self.sd.encode_images(imgs)
                     batch.latents = latents
 
-                if self.train_config.standardize_latents:
-                    if self.sd.is_xl or self.sd.is_vega or self.sd.is_ssd:
-                        target_mean_list = [-0.1075, 0.0231, -0.0135, 0.2164]
-                        target_std_list = [0.8979, 0.7505, 0.9150, 0.7451]
-                    else:
-                        target_mean_list = [0.2949, -0.3188, 0.0807, 0.1929]
-                        target_std_list = [0.8560, 0.9629, 0.7778, 0.6719]
-
-                    latents_channel_mean = latents.mean(dim=(2, 3), keepdim=True)
-                    latents_channel_std = latents.std(dim=(2, 3), keepdim=True)
-                    latents = (latents - latents_channel_mean) / latents_channel_std
-                    target_mean = torch.tensor(target_mean_list, device=self.device_torch, dtype=dtype)
-                    target_std = torch.tensor(target_std_list, device=self.device_torch, dtype=dtype)
-                    # expand them to match dim
-                    target_mean = target_mean.unsqueeze(0).unsqueeze(2).unsqueeze(3)
-                    target_std = target_std.unsqueeze(0).unsqueeze(2).unsqueeze(3)
-
-                    latents = latents * target_std + target_mean
-                    batch.latents = latents
-
-                    # show_latents(latents, self.sd.vae, 'latents')
-
-
                 if batch.unconditional_tensor is not None and batch.unconditional_latents is None:
                     unconditional_imgs = batch.unconditional_tensor
                     unconditional_imgs = unconditional_imgs.to(self.device_torch, dtype=dtype)
                     unconditional_latents = self.sd.encode_images(unconditional_imgs)
-                    batch.unconditional_latents = unconditional_latents * self.train_config.latent_multiplier
+                    batch.unconditional_latents = unconditional_latents
 
                 unaugmented_latents = None
                 if self.train_config.loss_target == 'differential_noise':
@@ -1337,6 +1335,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     timestep_indices = timestep_indices.long()
                 else:
                     raise ValueError(f"Unknown content_or_style {content_or_style}")
+
+                if self.train_config.first_timestep_chance > 0.0:
+                    # index 0 is full noise; per-sample chance to force it
+                    force_first = torch.rand((batch_size,), device=timestep_indices.device) < self.train_config.first_timestep_chance
+                    timestep_indices = torch.where(force_first, torch.zeros_like(timestep_indices), timestep_indices)
             with self.timer('convert_timestep_indices_to_timesteps'):
                 # convert the timestep_indices to a timestep
                 timesteps = self.sd.noise_scheduler.timesteps[timestep_indices.long()]
@@ -1397,7 +1400,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 if self.train_config.random_noise_shift > 0.0:
                     # get random noise -1 to 1
                     noise_shift = torch.randn(
-                        batch_size, latents.shape[1], 1, 1,
+                        s,
                         device=noise.device,
                         dtype=noise.dtype
                     ) * self.train_config.random_noise_shift
@@ -1410,32 +1413,23 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     noise = noise * noise_multiplier
             with self.timer('make_noisy_latents'):
 
-                latent_multiplier = self.train_config.latent_multiplier
-
                 # handle adaptive scaling mased on std
                 if self.train_config.adaptive_scaling_factor:
                     std = latents.std(dim=(2, 3), keepdim=True)
-                    normalizer = 1 / (std + 1e-6)
-                    latent_multiplier = normalizer
+                    latents = latents * (1 / (std + 1e-6))
 
-                latents = latents * latent_multiplier
-                
                 if self.train_config.do_blank_stabilization:
                     # zero out latents with blank prompts
                     blank_latent = torch.zeros_like(latents)
                     for i, prompt in enumerate(conditioned_prompts):
                         if prompt.strip() == '':
                             latents[i] = blank_latent[i]
-                
+
                 batch.latents = latents
 
                 # normalize latents to a mean of 0 and an std of 1
                 # mean_zero_latents = latents - latents.mean()
                 # latents = mean_zero_latents / mean_zero_latents.std()
-
-                if batch.unconditional_latents is not None:
-                    batch.unconditional_latents = batch.unconditional_latents * self.train_config.latent_multiplier
-
 
                 noisy_latents = self.sd.add_noise(latents, noise, timesteps)
 
@@ -1605,6 +1599,161 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.load_training_state_from_metadata(latest_save_path)
         # set trainable params
         self.sd.adapter = self.adapter
+    
+    def setup_validation(self):
+        # caches everything needed for validation (latents, prompt embeds, fixed noise)
+        # must be called while the vae and text encoder are still loaded, they may be
+        # dumped later to save memory
+        val_config = self.train_config.validation_config
+        if val_config is None:
+            return
+        if not self.accelerator.is_main_process:
+            return
+        validation_items = []
+        for item in val_config.validation_items:
+            if not item.image_path:
+                print_acc("Skipping validation item with no image")
+                continue
+            if not os.path.exists(item.image_path):
+                print_acc(f"Skipping validation item, image not found: {item.image_path}")
+                continue
+            validation_items.append(item)
+        if len(validation_items) == 0:
+            print_acc("Validation config has no valid validation_items, skipping validation")
+            return
+        print_acc(f"Caching validation latents and embeddings for {len(validation_items)} images")
+        device = self.device_torch
+        dtype = get_torch_dtype(self.train_config.dtype)
+        resolution = val_config.resolution
+
+        divisibility = self.sd.get_bucket_divisibility()
+
+        image_list = []
+        prompt_list = []
+        for item in validation_items:
+            img = Image.open(item.image_path)
+            img = ImageOps.exif_transpose(img).convert('RGB')
+            # deterministic resize that keeps the aspect ratio, matches the pixel budget
+            # of the resolution and the bucket divisibility of the model
+            bucket = get_bucket_for_image_size(
+                img.width, img.height,
+                resolution=resolution,
+                divisibility=divisibility,
+            )
+            img = img.resize((bucket['width'], bucket['height']), Image.BICUBIC)
+            tensor = transforms.ToTensor()(img) * 2.0 - 1.0
+            image_list.append(tensor)
+            prompt = item.prompt
+            if self.trigger_word is not None:
+                prompt = self.sd.inject_trigger_into_prompt(
+                    prompt,
+                    trigger=self.trigger_word,
+                    add_if_not_present=False,
+                )
+            prompt_list.append(prompt)
+
+        fork_devices = [device] if device.type == 'cuda' else []
+        with torch.no_grad(), torch.random.fork_rng(devices=fork_devices):
+            # encode the prompts one at a time so they can be reassembled per sigma later
+            te = self.sd.text_encoder
+            te_list = te if isinstance(te, list) else ([te] if te is not None else [])
+            orig_te_devices = [next(t.parameters()).device for t in te_list]
+            self.sd.text_encoder_to(device)
+            embeds_list = [
+                self.sd.encode_prompt([prompt]).to('cpu', dtype=torch.float32).detach()
+                for prompt in prompt_list
+            ]
+            for t, te_device in zip(te_list, orig_te_devices):
+                t.to(te_device)
+
+            # seed so the vae latent dist sampling is always identical
+            torch.manual_seed(42)
+            orig_vae_device = self.sd.vae.device
+            # images can have different aspect ratios so they are encoded one at a time
+            latent_list = [
+                self.sd.encode_images([image], device=device, dtype=dtype).to('cpu', dtype=torch.float32)
+                for image in image_list
+            ]
+            self.sd.vae.to(orig_vae_device)
+
+            # fixed noise per image, seeds start at 42 and increment for each image
+            noise_list = []
+            for i, latent in enumerate(latent_list):
+                generator = torch.Generator(device='cpu').manual_seed(42 + i)
+                noise_list.append(
+                    torch.randn(latent.shape, generator=generator, dtype=torch.float32)
+                )
+
+        self._validation_cache = {
+            'latents': latent_list,
+            'noise': noise_list,
+            'embeds': embeds_list,
+        }
+        flush()
+
+    def validate(self):
+        val_config = self.train_config.validation_config
+        if val_config is None or self._validation_cache is None:
+            return
+        if not self.accelerator.is_main_process:
+            return
+        device = self.device_torch
+        dtype = get_torch_dtype(self.train_config.dtype)
+        sigmas = val_config.validation_sigmas
+        cache = self._validation_cache
+
+        was_unet_training = self.sd.unet.training
+        self.sd.unet.eval()
+        # the network is only active inside its context, without this the base model is validated
+        network = self.network if self.network is not None else BlankNetwork()
+        start_multiplier = network.multiplier
+        network.multiplier = 1.0
+        with torch.no_grad(), network:
+            if self.sd.is_flow_matching:
+                timestep_values = [sigma * 1000.0 for sigma in sigmas]
+            else:
+                num_train_timesteps = self.sd.noise_scheduler.config.num_train_timesteps
+                timestep_values = [
+                    min(int(round(sigma * num_train_timesteps)), num_train_timesteps - 1)
+                    for sigma in sigmas
+                ]
+            timesteps = torch.tensor(timestep_values, device=device)
+
+            # images can have different aspect ratios, so each image is predicted as its
+            # own batch with all sigmas at once
+            losses = []
+            for latents_cpu, noise_cpu, embeds_cpu in zip(cache['latents'], cache['noise'], cache['embeds']):
+                latents = latents_cpu.to(device, dtype=dtype)
+                noise = noise_cpu.to(device, dtype=dtype)
+                batch_latents = torch.cat([latents] * len(sigmas), dim=0)
+                batch_noise = torch.cat([noise] * len(sigmas), dim=0)
+                batch_embeds = concat_prompt_embeds([embeds_cpu.clone().to(device, dtype=dtype)] * len(sigmas))
+
+                noisy_latents = self.sd.add_noise(batch_latents, batch_noise, timesteps).detach()
+
+                noise_pred = self.sd.predict_noise(
+                    latents=noisy_latents.to(device, dtype=dtype),
+                    conditional_embeddings=batch_embeds,
+                    timestep=timesteps,
+                    guidance_scale=1.0,
+                    guidance_embedding_scale=self.train_config.cfg_scale,
+                    bypass_guidance_embedding=self.train_config.bypass_guidance_embedding,
+                )
+
+                if self.sd.is_flow_matching:
+                    target = batch_noise - batch_latents
+                elif self.sd.prediction_type == 'v_prediction':
+                    target = self.sd.noise_scheduler.get_velocity(batch_latents, batch_noise, timesteps)
+                else:
+                    target = batch_noise
+
+                losses.append(torch.nn.functional.mse_loss(noise_pred.float(), target.float()))
+
+            val_loss = torch.stack(losses).mean()
+            self.additional_logs['val/loss'] = val_loss.item()
+        network.multiplier = start_multiplier
+        if was_unet_training:
+            self.sd.unet.train()
 
     def run(self):
         # torch.autograd.set_detect_anomaly(True)
@@ -1681,7 +1830,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         noise_scheduler = self.sd.noise_scheduler
 
         if self.train_config.xformers:
-            vae.enable_xformers_memory_efficient_attention()
+            if vae is not None:
+                vae.enable_xformers_memory_efficient_attention()
             unet.enable_xformers_memory_efficient_attention()
             if isinstance(text_encoder, list):
                 for te in text_encoder:
@@ -1757,15 +1907,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
             for te in text_encoder:
                 te.requires_grad_(False)
                 te.eval()
-        else:
+        elif text_encoder is not None:
             text_encoder.requires_grad_(False)
             text_encoder.eval()
         unet.to(self.device_torch, dtype=dtype)
         unet.requires_grad_(False)
         unet.eval()
-        vae = vae.to(torch.device('cpu'), dtype=dtype)
-        vae.requires_grad_(False)
-        vae.eval()
+        if vae is not None:
+            vae = vae.to(torch.device('cpu'), dtype=dtype)
+            vae.requires_grad_(False)
+            vae.eval()
         if self.train_config.learnable_snr_gos:
             self.snr_gos = LearnableSNRGamma(
                 self.sd.noise_scheduler, device=self.device_torch
@@ -1861,7 +2012,12 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 # we cannot merge in if quantized or offloading. note: torchao quantized weights can
                 # still be force merged at save time for the merge-and-reset method (see save logic),
                 # but we keep can_merge_in False here so sampling never merges in/out.
-                if self.model_config.quantize or self.model_config.layer_offloading:
+                # models loaded from pre-quantized checkpoints (e.g. comfy convrot/nvfp4
+                # imports) never set model_config.quantize, so detect their layers too
+                model_is_prequantized = any(
+                    getattr(m, 'is_ostris_quantized', False) for m in unet.modules()
+                ) if unet is not None else False
+                if self.model_config.quantize or self.model_config.layer_offloading or model_is_prequantized:
                     # todo find a way around this
                     self.network.can_merge_in = False
 
@@ -2089,14 +2245,49 @@ class BaseSDTrainProcess(BaseTrainProcess):
         # set up the ema now that the optimizer (and its params) are ready
         self.setup_ema()
 
+        # cache validation latents and embeddings now, the vae and text encoder
+        # may be dumped before the train loop starts
+        self.setup_validation()
+
         ### HOOk ###
         self.before_dataset_load()
+        if getattr(self.sd, 'require_pixel_tensor_cache', False):
+            # model needs pixel tensors at train time even with cached latents;
+            # storing them changes the latent cache key (first run re-caches)
+            for ds_list in [self.datasets, self.datasets_reg]:
+                if ds_list is None:
+                    continue
+                for ds in ds_list:
+                    if not (ds.cache_latents or ds.cache_latents_to_disk):
+                        # live-loading datasets already have pixels on the batch
+                        continue
+                    if not ds.cache_tensors_to_disk:
+                        print_acc(
+                            f"Model requires cached pixel tensors: forcing "
+                            f"cache_tensors_to_disk on dataset {ds.folder_path}"
+                        )
+                        ds.cache_tensors_to_disk = True
         # load datasets if passed in the root process
         if self.datasets is not None:
-            self.data_loader = get_dataloader_from_datasets(self.datasets, self.train_config.batch_size, self.sd)
+            self.data_loader = get_dataloader_from_datasets(
+                self.datasets, self.train_config.batch_size, self.sd,
+                pool_datasets=self.train_config.pool_datasets,
+            )
         if self.datasets_reg is not None:
-            self.data_loader_reg = get_dataloader_from_datasets(self.datasets_reg, self.train_config.batch_size,
-                                                                self.sd)
+            self.data_loader_reg = get_dataloader_from_datasets(
+                self.datasets_reg, self.train_config.batch_size, self.sd,
+                pool_datasets=self.train_config.pool_datasets,
+            )
+
+        # a fresh text-embedding cache leaves the text encoder on the gpu (the
+        # datasets don't restore placement: that would bounce it per dataset).
+        # Park it once here, before accelerator.prepare brings the unet up.
+        if (
+            self.is_caching_text_embeddings
+            and self.model_config.low_vram
+            and self.sd.text_encoder is not None
+        ):
+            self.sd.text_encoder_to('cpu')
 
         self.resolve_epoch_training_steps()
         lr_scheduler_params = self.train_config.lr_scheduler_params
@@ -2149,6 +2340,12 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 if user_set_cache_limit:
                     torch._dynamo.config.cache_size_limit = cache_size_limit
                 torch._dynamo.config.suppress_errors = False
+                # torch 2.9 inductor bug: the new memory-coalescing tiling analysis
+                # crashes on some dynamic-shape index expressions (sympy PowByNatural
+                # "assert p >= 0", seen with Qwen Image). The analysis doesn't apply
+                # to dynamic shapes anyway, so turn it off.
+                if hasattr(torch._inductor.config.triton, 'coalesce_tiling_analysis'):
+                    torch._inductor.config.triton.coalesce_tiling_analysis = False
 
                 compile_mode = getattr(self.model_config, 'compile_mode', 'default')
                 compile_dynamic = getattr(self.model_config, 'compile_dynamic', True)
@@ -2410,6 +2607,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 )
                 is_sample_step = bool(
                     self.sample_config.sample_every
+                    and self.step_num >= self.sample_config.sample_start_step
                     and self.step_num % self.sample_config.sample_every == 0
                 )
                 if self.train_config.disable_sampling:
@@ -2429,15 +2627,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         except StopIteration:
                             with self.timer('reset_batch:reg'):
                                 # hit the end of an epoch, reset
-                                if self.progress_bar is not None:
-                                    self.progress_bar.pause()
                                 dataloader_iterator_reg = iter(dataloader_reg)
                                 trigger_dataloader_setup_epoch(dataloader_reg)
 
                             with self.timer('get_batch:reg'):
                                 batch = next(dataloader_iterator_reg)
-                            if self.progress_bar is not None:
-                                self.progress_bar.unpause()
                         is_reg_step = True
                     elif dataloader is not None:
                         try:
@@ -2446,8 +2640,6 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         except StopIteration:
                             with self.timer('reset_batch'):
                                 # hit the end of an epoch, reset
-                                if self.progress_bar is not None:
-                                    self.progress_bar.pause()
                                 dataloader_iterator = iter(dataloader)
                                 trigger_dataloader_setup_epoch(dataloader)
                                 self.epoch_num += 1
@@ -2457,8 +2649,6 @@ class BaseSDTrainProcess(BaseTrainProcess):
                                     self.grad_accumulation_step = 0
                             with self.timer('get_batch'):
                                 batch = next(dataloader_iterator)
-                            if self.progress_bar is not None:
-                                self.progress_bar.unpause()
                     else:
                         batch = None
                     batch_list.append(batch)
@@ -2530,6 +2720,18 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 print("\n==== Profile Results ====")
                 print(self.torch_profiler.key_averages().table(sort_by="cpu_time_total", row_limit=1000))
             self.timer.stop('train_loop')
+
+            # run validation before any possible sampling/logging for this step
+            if not did_oom and self.train_config.validation_config is not None:
+                val_config = self.train_config.validation_config
+                is_validate_step = (
+                    self.step_num == self.start_step
+                    or (val_config.validate_every_n_steps and self.step_num % val_config.validate_every_n_steps == 0)
+                )
+                if is_validate_step:
+                    with self.timer('validate'):
+                        self.validate()
+
             if not did_first_flush:
                 flush()
                 did_first_flush = True
@@ -2606,8 +2808,6 @@ class BaseSDTrainProcess(BaseTrainProcess):
                             self.progress_bar.unpause()
 
                     if self.logging_config.log_every and self.step_num % self.logging_config.log_every == 0:
-                        if self.progress_bar is not None:
-                            self.progress_bar.pause()
                         with self.timer('log_to_tensorboard'):
                             # log to tensorboard
                             if self.accelerator.is_main_process:
@@ -2616,9 +2816,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                                         for key, value in loss_dict.items():
                                             self.writer.add_scalar(f"{key}", value, self.step_num)
                                         self.writer.add_scalar(f"lr", learning_rate, self.step_num)
-                                if self.progress_bar is not None:
-                                    self.progress_bar.unpause()
-                        
+
                         if self.accelerator.is_main_process:
                             # log to logger
                             self.logger.log({
@@ -2654,22 +2852,18 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
 
                     if self.performance_log_every > 0 and self.step_num % self.performance_log_every == 0:
-                        if self.progress_bar is not None:
-                            self.progress_bar.pause()
                         # print the timers and clear them
                         self.timer.print()
                         self.timer.reset()
-                        if self.progress_bar is not None:
-                            self.progress_bar.unpause()
                 
                 # commit log
                 if self.accelerator.is_main_process:
                     with self.timer('commit_logger'):
                         self.logger.commit(step=self.step_num)
 
-                # sets progress bar to match out step
+                # sets progress bar to match our step (step is complete, so completed count is step + 1)
                 if self.progress_bar is not None:
-                    self.progress_bar.update(step - self.progress_bar.n)
+                    self.progress_bar.update(step + 1 - self.progress_bar.n)
 
                 #############################
                 # End of step
