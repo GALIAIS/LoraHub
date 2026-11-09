@@ -555,6 +555,8 @@ def _model_section(
     }
     if model_options.assistant_lora_path:
         model["assistant_lora_path"] = model_options.assistant_lora_path
+    if cfg.base_model.arch == "moss_image" and model_options.vae_path:
+        model["vae_path"] = model_kwargs.pop("vae_path")
     return model
 
 
