@@ -170,7 +170,7 @@ function switchAiToolkitArch(value: ConfigFormValue, nextArch: string): ConfigFo
   const prev = aiToolkitArchDefaults(value.baseModel?.arch)
   const next = aiToolkitArchDefaults(nextArch)
   let out = setIn(value, ["baseModel", "arch"], nextArch)
-  const checkpoint = String(value.baseModel?.checkpoint ?? "").trim()
+  const checkpoint = String(value.baseModel?.checkpoint ?? "").trim().replace(/\\/g, "/")
   if (!checkpoint || prev.checkpoints.includes(checkpoint)) {
     out = setIn(out, ["baseModel", "checkpoint"], next.checkpoint)
   }

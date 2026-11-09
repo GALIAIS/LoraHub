@@ -150,9 +150,13 @@ def _build_job(
 ) -> dict[str, Any]:
     options = cfg.backend.ai_toolkit or AiToolkitOptions()
     output_name = cfg.output.name or "lorahub_ai_toolkit"
-    # as_posix: on Windows str() turns a hub id like "krea/Krea-2-Raw" into
-    # "krea\Krea-2-Raw", which ai-toolkit then treats as a local path.
-    model_name = cfg.base_model.checkpoint.as_posix()
+    # Linux 的 Path.as_posix() 不会转换 Windows 配置中保存的反斜杠。
+    checkpoint = cfg.base_model.checkpoint
+    model_name = (
+        str(checkpoint).strip().replace("\\", "/")
+        if is_remote_checkpoint(cfg.base_model.arch, checkpoint)
+        else checkpoint.as_posix()
+    )
     if model_name in {".", ""}:
         model_name = profile.default_checkpoint
 

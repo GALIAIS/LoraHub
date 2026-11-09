@@ -151,7 +151,7 @@ export function ConfigForm({ value, onChange, errors, readOnly = false }: Config
       }
       if (nextBackend === "ai_toolkit") {
         const archDefaults = aiToolkitArchDefaults(next.baseModel?.arch)
-        const checkpoint = String(next.baseModel?.checkpoint ?? "").trim()
+        const checkpoint = String(next.baseModel?.checkpoint ?? "").trim().replace(/\\/g, "/")
         if (archChanged || !checkpoint || !archDefaults.checkpoints.includes(checkpoint)) {
           next = setIn(next, ["baseModel", "checkpoint"], archDefaults.checkpoint)
         }
