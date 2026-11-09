@@ -14,6 +14,7 @@ LoraHub 自带的训练配置目录。每份 YAML 都已经端到端验证过 sc
 | `anima_lokr_32gb_detail_speed.yaml` | anima_lora | factorized LoKr | 32GB | 旧「吃满」实验档（偏重，易 0.05 it/s）。新项目请改用下方 fast / detail。 |
 | `anima_lokr_32gb_fast.yaml` | anima_lora | factorized LoKr | 32GB | **冲 it/s**：896、b1×a8、dim16、后半 attention、compile、无 GC。目标约 ≥1.5 it/s。输出 `anima-lokr-32gb-fast`。 |
 | `anima_lokr_32gb_detail.yaml` | anima_lora | factorized LoKr | 32GB | **细节优先墙钟可控**：1024、b4×a2、dim24、层6–28 attention、compile、无 GC。约 0.3–0.8 it/s。输出 `anima-lokr-32gb-detail`。 |
+| `ai_toolkit_moss_image.yaml` | ai_toolkit | LoRA | 24GB | MOSS-Image Base（OpenMOSS 推荐的 LoRA 底模，训练结果也可加载到 SFT）。convrot8 量化 DiT 与 Qwen3.5-9B 文本编码器、缓存文本嵌入、rank 32、1024²。输出名为 `moss_image_lora`。 |
 
 ## 命名约定
 

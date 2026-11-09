@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from lorahub.core.backends.ai_toolkit.compiler import is_remote_checkpoint
 from lorahub.core.config.schema import TrainingConfig
 
 
@@ -49,7 +50,13 @@ def _normalize_config_paths(cfg: TrainingConfig, base: Path | None = None) -> Tr
     """
     base_dir = (base or Path.cwd()).resolve()
 
-    cfg.base_model.checkpoint = _absolutise(cfg.base_model.checkpoint, base_dir)  # type: ignore[assignment]
+    # ai-toolkit downloads hub ids such as krea/Krea-2-Raw itself; anchoring
+    # one at the project root turns it into a missing local folder.
+    if not (
+        cfg.backend.type == "ai_toolkit"
+        and is_remote_checkpoint(cfg.base_model.arch, cfg.base_model.checkpoint)
+    ):
+        cfg.base_model.checkpoint = _absolutise(cfg.base_model.checkpoint, base_dir)  # type: ignore[assignment]
     if cfg.base_model.vae is not None:
         cfg.base_model.vae = _absolutise(cfg.base_model.vae, base_dir)
     paths = cfg.base_model.arch_paths

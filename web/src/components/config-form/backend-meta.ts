@@ -41,6 +41,7 @@ export type Arch =
   | "z_image"
   | "ernie_image"
   | "krea2"
+  | "moss_image"
 
 /**
  * Per-backend supported arch sets. Mirrors:
@@ -86,7 +87,7 @@ export const SUPPORTED_ARCHS_BY_BACKEND: Record<BackendId, ReadonlySet<Arch>> = 
     "ernie_image",
   ]),
   anima_lora: new Set<Arch>(["anima"]),
-  ai_toolkit: new Set<Arch>(["krea2"]),
+  ai_toolkit: new Set<Arch>(["krea2", "moss_image"]),
 }
 
 /** Default arch when the user picks a backend on a fresh config. */
@@ -130,7 +131,7 @@ export const BACKEND_BADGE: Record<BackendId, BackendBadge> = {
   ai_toolkit: {
     label: "ai_toolkit",
     toneClass: "border-slate-500/40 bg-slate-500/10 text-slate-700 dark:text-slate-300",
-    description: "ostris/ai-toolkit — Krea2 等模型训练后端",
+    description: "ostris/ai-toolkit — Krea2 / MOSS-Image 等模型训练后端",
   },
 }
 

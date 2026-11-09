@@ -12,7 +12,11 @@ import ulid
 from lorahub.core.backends._common.bootstrap import ensure_models_link
 from lorahub.core.backends._common.vram import estimate_vram as _shared_estimate_vram
 from lorahub.core.backends.ai_toolkit import bootstrap as _bootstrap
-from lorahub.core.backends.ai_toolkit.compiler import CompilationError, compile_config
+from lorahub.core.backends.ai_toolkit.compiler import (
+    ARCH_PROFILES,
+    CompilationError,
+    compile_config,
+)
 from lorahub.core.backends.ai_toolkit.runner import AIToolkitRunner
 from lorahub.core.backends.base import (
     ModelArch,
@@ -25,7 +29,7 @@ from lorahub.core.config.schema import TrainingConfig
 from lorahub.core.events import EventType, TrainingEvent
 from lorahub.core.paths import project_root
 
-_SUPPORTED: set[ModelArch] = {ModelArch.krea2}
+_SUPPORTED: set[ModelArch] = {ModelArch.krea2, ModelArch.moss_image}
 _SAMPLE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 _SAMPLE_POLL_INTERVAL = 3.0
 _SAMPLE_GRACE_AFTER_EXIT = 8.0
@@ -42,6 +46,8 @@ class AIToolkitBackend:
 
     def validate(self, cfg: TrainingConfig) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
+        profile = ARCH_PROFILES.get(cfg.base_model.arch)
+        label = profile.label if profile is not None else cfg.base_model.arch
         if cfg.backend.gpu_dispatch.mode == "distributed":
             issues.append(
                 ValidationIssue(
@@ -55,7 +61,7 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "network.target_unet",
-                    "ai_toolkit Krea2 requires DiT LoRA training.",
+                    f"ai_toolkit {label} requires DiT LoRA training.",
                 )
             )
         if cfg.network.target_text_encoder:
@@ -63,7 +69,7 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "network.target_text_encoder",
-                    "ai_toolkit Krea2 does not support text-encoder LoRA training.",
+                    f"ai_toolkit {label} does not support text-encoder LoRA training.",
                 )
             )
         if cfg.dataset.conditioning_dir is not None or any(
@@ -74,7 +80,7 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "dataset.subsets",
-                    "ai_toolkit Krea2 不支持 conditioningDir / conditioningDataDir；这些字段不会进入训练 YAML。",
+                    f"ai_toolkit {label} 不支持 conditioningDir / conditioningDataDir；这些字段不会进入训练 YAML。",
                 )
             )
         if cfg.dataset.val_split > 0:
@@ -82,7 +88,7 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "dataset.valSplit",
-                    "ai_toolkit Krea2 没有 valSplit 自动验证集；请将 valSplit 设为 0。",
+                    f"ai_toolkit {label} 没有 valSplit 自动验证集；请将 valSplit 设为 0。",
                 )
             )
         if any(
@@ -93,7 +99,7 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "dataset.subsets",
-                    "ai_toolkit Krea2 不读取子集的 captionPrefix / arBuckets；"
+                    f"ai_toolkit {label} 不读取子集的 captionPrefix / arBuckets；"
                     "请使用 ai-toolkit 数据集自身的标注与分桶选项。",
                 )
             )
@@ -102,7 +108,8 @@ class AIToolkitBackend:
                 ValidationIssue(
                     Severity.error,
                     "base_model.arch",
-                    "ai_toolkit currently supports arch='krea2'.",
+                    "ai_toolkit currently supports arch in "
+                    f"{{{', '.join(sorted(a.value for a in _SUPPORTED))}}}.",
                 )
             )
         try:

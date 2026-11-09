@@ -4,7 +4,7 @@ Three interlocking responsibilities live here:
 
 1. **Per-backend resume specs** — given a workspace, find the most
    recent state-dir / safetensors / dp run-dir and pack the matching
-   resume argv (kohya, diffusion-pipe, anima_lora). ``ResumeNotReady``
+   resume argv (kohya, diffusion-pipe, anima_lora, ai_toolkit). ``ResumeNotReady``
    surfaces "no checkpoint yet" through a single exception type so
    the router and the auto-resume hook can treat it uniformly.
 
@@ -290,8 +290,45 @@ def _dispatch_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
         return _dp_resume_spec(cfg, workspace)
     if backend_type == "anima_lora":
         return _anima_lora_resume_spec(workspace)
+    if backend_type == "ai_toolkit":
+        return _ai_toolkit_resume_spec(cfg, workspace)
     raise ResumeNotReady(
         f"resume not implemented for backend.type={backend_type!r}"
+    )
+
+
+def _ai_toolkit_resume_spec(cfg: TrainingConfig, workspace: Path) -> ResumeSpec:
+    """Check that ai-toolkit left a checkpoint to continue from.
+
+    ai-toolkit resumes on its own: relaunched with the same training folder
+    and job name, it loads the newest ``<name>_<step>.safetensors``, takes
+    the step and epoch from its metadata and reloads ``optimizer.pt``. The
+    compiler pins both to the workspace, so no extra argv is needed.
+    """
+    output_name = cfg.output.name or "lorahub_ai_toolkit"
+    output_root = workspace / "ai_toolkit_output"
+    save_root = output_root / output_name
+    if any(_is_link(path) for path in (workspace, output_root, save_root)):
+        raise ResumeNotReady(
+            f"ai-toolkit checkpoint directory contains a symlink or junction: {save_root}"
+        )
+    try:
+        if (
+            save_root.is_dir()
+            and any(
+                p.name.startswith(output_name) and not _is_link(p) and p.is_file()
+                for p in save_root.glob("*.safetensors")
+            )
+        ):
+            return ResumeSpec(extra_argv=[])
+    except OSError as exc:
+        raise ResumeNotReady(
+            f"could not inspect ai-toolkit checkpoints under {save_root}: {exc}"
+        ) from exc
+    raise ResumeNotReady(
+        f"no ai-toolkit checkpoint under {save_root}; the run never saved. "
+        "Wait for the first save_every / save_every_n_epochs checkpoint "
+        "before resuming."
     )
 
 

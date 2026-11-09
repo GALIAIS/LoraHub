@@ -1,0 +1,80 @@
+# Built-in config template: MOSS-Image LoRA via ostris/ai-toolkit.
+#
+# Trains on MOSS-Image Base, which OpenMOSS recommends for LoRA work; the
+# result also loads on MOSS-Image SFT. The compiler fills in ai-toolkit's
+# MOSS defaults for anything left unset here: convrot8 DiT / text encoder
+# quantization, shift timesteps, 4096 text tokens, and no LoRA on block 22
+# (the block CFG's negative branch skips).
+#
+# Text embeddings are cached so the Qwen3.5-9B text encoder only runs once
+# per caption. Captions are natural language; keep a trigger word at the
+# start of each one.
+
+_template:
+  name: AI Toolkit MOSS-Image
+  description: MOSS-Image Base LoRA training through the vendored ai-toolkit backend.
+  arch: moss_image
+
+_placeholders:
+  - key: name
+    label: Config / output name
+    path_field: output.name
+    placeholder: moss_image_lora_v1
+  - key: dataset
+    label: Dataset directory
+    path_field: dataset.source
+    placeholder: ./datasets/my_dataset
+
+base_model:
+  arch: moss_image
+  checkpoint: OpenMOSS-Team/MOSS-Image-Base
+
+dataset:
+  source: ""
+  resolution: [1024, 1024]
+  num_repeats: 1
+
+network:
+  type: lora
+  rank: 32
+  alpha: 32
+  target_unet: true
+  target_text_encoder: false
+
+optimizer:
+  type: adamw8bit
+  lr:
+    unet: 1.0e-4
+    text_encoder: 5.0e-5
+
+schedule:
+  epochs: 10
+  batch_size: 1
+  grad_accum: 1
+
+precision: bf16
+gradient_checkpointing: true
+cache_latents_to_disk: true
+
+sampling:
+  enabled: true
+  every_n_epochs: 1
+  resolution: [1024, 1024]
+  seed: 42
+  inference_steps: 30
+  inference_cfg: 3.0
+  prompts:
+    - prompt: "a high quality image"
+
+output:
+  name: moss_image_lora
+  save_every_n_epochs: 1
+  save_last_n_steps: 10
+  save_dtype: bf16
+
+backend:
+  type: ai_toolkit
+  ai_toolkit:
+    dataset:
+      resolutions: [1024]
+      cache_text_embeddings: true
